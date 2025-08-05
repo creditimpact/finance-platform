@@ -8,10 +8,10 @@ def collect_all_files(folder: Path):
     return [str(p) for p in folder.glob("*.pdf") if p.is_file()]
 
 def send_email_with_attachment(receiver_email, subject, body, files):
-    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    sender_email = os.getenv("SMTP_USERNAME", "CREDITIMPACT1@gmail.com")
-    sender_password = os.getenv("SMTP_PASSWORD")  # ⚠️ שמור באופן מאובטח
+    smtp_server = os.getenv("SMTP_SERVER", "localhost")
+    smtp_port = int(os.getenv("SMTP_PORT", "1025"))
+    sender_email = os.getenv("SMTP_USERNAME", "noreply@example.com")
+    sender_password = os.getenv("SMTP_PASSWORD", "")  # local dev default
 
     msg = EmailMessage()
     msg["From"] = sender_email
@@ -30,7 +30,11 @@ def send_email_with_attachment(receiver_email, subject, body, files):
             msg.add_attachment(file_data, maintype="application", subtype="octet-stream", filename=file_name)
 
     with smtplib.SMTP(smtp_server, smtp_port) as smtp:
-        smtp.starttls()
-        smtp.login(sender_email, sender_password)
+        try:
+            smtp.starttls()
+            if sender_password:
+                smtp.login(sender_email, sender_password)
+        except Exception:
+            pass
         smtp.send_message(msg)
         print(f"📧 Email sent to {receiver_email}")

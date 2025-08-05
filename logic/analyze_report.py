@@ -14,7 +14,10 @@ from logic.utils import (
 from .utils import normalize_bureau_name, has_late_indicator, enforce_collection_status
 
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY", "local-api-key"),
+    base_url=os.getenv("OPENAI_BASE_URL", "http://localhost:8000/v1"),
+)
 
 def extract_text_from_pdf(pdf_path):
     """Extract text using a robust multi-engine approach."""

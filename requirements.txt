@@ -1,6 +1,4 @@
 flask
-gunicorn
-requests
 pdfplumber
 python-docx
 pydantic

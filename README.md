@@ -18,3 +18,17 @@ Accounts may contain an `action_tag` field used to control which letters are gen
 Accounts with derogatory statuses are automatically tagged for dispute. Both `process_analyzed_report()` and `merge_strategy_data()` assign `action_tag: "dispute"` whenever the status text contains keywords such as "collection", "chargeoff"/"charge off", "repossession", "repos", "delinquent", or "late payments", or when a `dispute_type` is present. This prevents obvious dispute items from being skipped even if the strategist omits a tag.
 
 Goodwill letters are only generated for late-payment accounts that are not in collections, chargeoff, repossession, or other clearly derogatory statuses.
+
+## Frontend
+
+A React-based client is available in the `frontend/` directory for uploading PDF credit reports and tracking processing status.
+
+### Running the frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The app runs on http://localhost:5173 and communicates with the Flask backend at http://localhost:5000.

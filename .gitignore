@@ -1,0 +1,64 @@
+# קבצים זמניים של פייתון
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# קבצים בינאריים / קומפילציה
+*.exe
+*.dll
+*.obj
+*.o
+*.a
+*.out
+
+# קבצים שקשורים למערכות הפעלה
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# קבצי לוג או טמפ
+*.log
+*.tmp
+temp/
+logs/
+output/
+*.bak
+nohup.out
+
+# קבצים רגישים או מקומיים
+.env
+.env.*
+*.sqlite3
+*.db
+config.py  # אם הוא מכיל סודות – השארת רק גרסת example
+
+# קבצים שנוצרים על ידי הפרויקט שלך
+client_report.pdf
+instructions.pdf
+Start_Here - Instructions.pdf
+*.zip
+*.pdf  # כל PDF שנוצר אוטומטית
+
+# ספריות עזר/חיצוניות
+venv/
+env/
+ENV/
+node_modules/
+
+# דוחות או נתונים שהוזנו
+uploads/
+data/raw/
+Clients/
+analytics_data/
+
+# קבצים שקשורים ל־IDE / עריכת קוד
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# קבצי גיבוי
+*.bak
+*~

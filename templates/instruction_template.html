@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Start Here - Instructions</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 40px;
+      @bottom-center {
+        content: "Page " counter(page) " of " counter(pages) " • Generated {{ date }}";
+        font-size: 9pt;
+        color: #888;
+      }
+    }
+
+    body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      background-color: #fff;
+      max-width: 750px;
+      margin: 0 auto;
+      padding: 30px;
+      line-height: 1.75;
+      color: #2c2c2c;
+      font-size: 12pt;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 20px;
+      margin-bottom: 25px;
+    }
+
+    header img {
+      max-height: 55px;
+      max-width: 150px;
+    }
+
+    h1 {
+      color: #1a3c7c;
+      font-size: 22pt;
+      margin: 0;
+    }
+
+    h2 {
+      color: #1a3c7c;
+      font-size: 16pt;
+      margin: 35px 0 10px;
+    }
+
+    p {
+      margin: 10px 0;
+    }
+
+    ul {
+      padding-left: 22px;
+      margin: 10px 0;
+    }
+
+    li {
+      margin-bottom: 8px;
+    }
+
+    .section {
+      margin-bottom: 30px;
+    }
+
+    .instructions {
+      background-color: #f7f9fc;
+      padding: 20px 25px;
+      border-radius: 6px;
+      white-space: pre-line;
+    }
+
+    .footer {
+      font-size: 10pt;
+      color: #888;
+      margin-top: 60px;
+      border-top: 1px solid #ccc;
+      padding-top: 10px;
+      text-align: center;
+    }
+
+    .identity-theft {
+      background-color: #fff8e1;
+      padding: 15px 20px;
+      margin-top: 20px;
+      border-radius: 4px;
+    }
+
+    .account-box {
+      background: #fff;
+      padding: 14px 18px;
+      border-radius: 8px;
+      border: 1px solid #e0e0e0;
+      margin-bottom: 18px;
+    }
+
+    .account-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+
+    .account-table th,
+    .account-table td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .account-table th {
+      background: #f0f0f0;
+    }
+
+    .category-title {
+      font-size: 18pt;
+      font-weight: bold;
+      margin: 35px 0 15px;
+    }
+
+    .problematic-title { color: #d9534f; }
+    .improve-title { color: #f0ad4e; }
+    .positive-title { color: #5cb85c; }
+
+    .support {
+      background: #f7f9fc;
+      padding: 15px 20px;
+      border-radius: 6px;
+      margin-top: 25px;
+    }
+
+    .advisory {
+      background: #fff8e1;
+      border: 1px solid #f0ad4e;
+      padding: 15px 20px;
+      border-radius: 6px;
+      margin-top: 20px;
+    }
+
+    .category {
+      padding: 15px;
+      border-radius: 6px;
+      margin-bottom: 25px;
+    }
+
+    .problematic { background: #fff4f4; }
+    .improve { background: #fff8ef; }
+    .positive { background: #f3f9f4; }
+
+    .account-box strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13pt;
+    }
+
+    a {
+      color: #1a3c7c;
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <img src="{{ logo_base64 }}" alt="Credit Impact Logo">
+    <h1>Instructions for {{ client_name }}</h1>
+  </header>
+
+  <div class="section">
+    <p>
+      Welcome {{ client_name }},<br>
+      This personalized guide will help you fix your credit. Each letter you received has a purpose – some are meant to fix mistakes, some are goodwill requests, and others explain your situation. Don’t worry – we’ll guide you step by step.
+    </p>
+  </div>
+
+  <div class="section">
+    <p><strong>Date:</strong> {{ date }}</p>
+  </div>
+
+  <div class="section">
+    <p>This report includes all your dispute and goodwill letters, a breakdown of accounts on your credit report, and personalized recommendations to improve your credit.</p>
+    <p><strong>Please read the instructions below carefully. Each step is your responsibility.</strong></p>
+    <table style="width:100%; border-collapse: collapse; margin-top: 15px;">
+      <tr>
+        <th style="text-align:left; border-bottom:1px solid #ccc; padding-bottom:4px;">Letter Type</th>
+        <th style="text-align:left; border-bottom:1px solid #ccc; padding-bottom:4px;">Who to Send To</th>
+        <th style="text-align:left; border-bottom:1px solid #ccc; padding-bottom:4px;">When</th>
+        <th style="text-align:left; border-bottom:1px solid #ccc; padding-bottom:4px;">How</th>
+      </tr>
+      <tr>
+        <td>📄 Dispute Letter</td>
+        <td>Credit Bureaus</td>
+        <td>Right away</td>
+        <td>Certified mail + Photo ID</td>
+      </tr>
+      <tr>
+        <td>💌 Goodwill Letter</td>
+        <td>Creditors</td>
+        <td>After a few days</td>
+        <td>Mail with signature</td>
+      </tr>
+      <tr>
+        <td>📝 Explanation Letter</td>
+        <td>Financial institutions (if requested)</td>
+        <td>On demand</td>
+        <td>Save for later use</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="section instructions">
+    {{ instructions }}
+
+    <h2>Your Next Steps</h2>
+    <ol>
+      <li>Print each letter in this package.</li>
+      <li>Sign every letter with a pen.</li>
+      <li>If a goodwill letter shows "Address not provided — please enter manually," look up the creditor's billing or dispute mailing address online and type it into the PDF.</li>
+      <li>Include a photo ID and recent utility bill. If your dispute is related to identity theft, also include a photo of your Social Security card.</li>
+      <li>Mail via certified mail with tracking.</li>
+    </ol>
+
+    <p>We’ve highlighted below all the actions you should take for each of your credit accounts.</p>
+
+    <h3>Your Final Checklist</h3>
+    <ul style="list-style:none; padding-left:0;">
+      <li>☐ Printed all letters</li>
+      <li>☐ Signed each letter with a pen</li>
+      <li>☐ Attached a copy of your Photo ID + utility bill</li>
+      <li>☐ Sent via certified mail with tracking</li>
+    </ul>
+    <p>
+      🎯 You’re taking real steps toward improving your credit – great job!<br>
+      If you feel stuck or want help mailing your letters, simply reply to this email with your request and phone number, and one of our team members will contact you shortly.
+    </p>
+  </div>
+
+  <div class="footer">
+    Prepared with the assistance of <strong>CREDIT IMPACT</strong><br>
+  </div>
+
+</body>
+</html>

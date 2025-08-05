@@ -1,0 +1,14 @@
+[Unit]
+Description=Celery Worker Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/credit-analyzer
+EnvironmentFile=/opt/credit-analyzer/.env
+ExecStart=/opt/credit-analyzer/venv/bin/celery -A tasks worker --loglevel=info
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

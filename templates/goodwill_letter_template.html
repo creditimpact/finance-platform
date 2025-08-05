@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Goodwill Letter</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            line-height: 1.6;
+            color: #333;
+        }
+        h1 {
+            color: #2e5b9c;
+            font-size: 20pt;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 5px;
+        }
+        .section {
+            margin-bottom: 25px;
+        }
+        .account-block {
+            margin-bottom: 20px;
+            padding-left: 10px;
+            background: #f0f7ff;
+            border-left: 4px solid #2e5b9c;
+        }
+        .signature {
+            margin-top: 50px;
+            padding-top: 20px;
+            border-top: 1px dashed #aaa;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="section">
+        <p><strong>{{ client_name }}</strong>{% for line in client_address_lines %}<br>{{ line }}{% endfor %}{% if not client_address_lines %}<br>__________________________{% endif %}</p>
+        <p>{{ date }}</p>
+        <p><strong>To:</strong> {{ creditor }}<br>
+        {{ creditor_address }}</p>
+        <p>Dear {{ creditor or 'To whom it may concern' }},</p>
+    </div>
+
+    <div class="section">
+        <p>{{ intro_paragraph }}</p>
+    </div>
+
+    <div class="section">
+        <p>{{ hardship_paragraph }}</p>
+    </div>
+
+    <div class="section">
+        <p>{{ recovery_paragraph }}</p>
+    </div>
+
+    {% if accounts %}
+    <div class="section">
+        <h1>Relevant Account(s)</h1>
+        {% for acc in accounts %}
+        <div class="account-block">
+            <p><strong>{{ acc.name }}</strong> — Account #: {{ acc.account_number }} — Status: {{ acc.status }}</p>
+            {% if acc.paragraph %}
+              <p>{{ acc.paragraph }}</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="section">
+        <p>{{ closing_paragraph }}</p>
+    </div>
+
+    {% if supporting_docs %}
+    <div class="section">
+        <p><strong>Supporting Documents:</strong></p>
+        <ul>
+        {% for doc in supporting_docs %}
+            <li>{{ doc }}</li>
+        {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <div class="section">
+        <p>To assist with the verification process, I have included a copy of my government-issued photo ID and proof of address.</p>
+    </div>
+
+    <div class="signature">
+        <p>Sincerely,</p>
+        <p><strong>{{ client_name }}</strong></p>
+        <p style="margin-top: 40px;">__________________________<br>Signature</p>
+    </div>
+
+</body>
+</html>

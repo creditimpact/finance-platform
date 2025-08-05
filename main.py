@@ -18,25 +18,23 @@ load_dotenv()
 
 def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
     def validate_env_variables():
-        REQUIRED_ENV_VARS = {
-            "OPENAI_API_KEY": "Used for GPT analysis.",
-            "SMTP_SERVER": "Mail server for sending emails (e.g., smtp.gmail.com).",
-            "SMTP_PORT": "Port for mail server (usually 587).",
-            "SMTP_USERNAME": "Email address used to send messages.",
-            "SMTP_PASSWORD": "App password for sending email via SMTP."
+        defaults = {
+            "OPENAI_API_KEY": "local-api-key",
+            "OPENAI_BASE_URL": "http://localhost:8000/v1",
+            "SMTP_SERVER": "localhost",
+            "SMTP_PORT": "1025",
+            "SMTP_USERNAME": "noreply@example.com",
+            "SMTP_PASSWORD": "",
         }
 
         print("🔍 Validating environment configuration...\n")
-        missing = []
-        for var, desc in REQUIRED_ENV_VARS.items():
+        for var, default in defaults.items():
             if not os.getenv(var):
-                print(f"❌ {var} is missing!\n   → {desc}")
-                missing.append(var)
+                print(f"⚠️ {var} not set, using default '{default}'")
+                os.environ[var] = default
             else:
                 print(f"✅ {var} is set.")
-        if missing:
-            raise EnvironmentError(f"Missing required environment variables: {', '.join(missing)}")
-        print("✅ All environment variables validated.\n")
+        print("✅ Environment variables configured.\n")
 
     validate_env_variables()
 

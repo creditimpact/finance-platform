@@ -1,0 +1,8 @@
+not_mine:
+  - "I do not recognize this account and request full validation."
+inaccurate_reporting:
+  - "The reported details appear to be inaccurate; please validate and correct as necessary."
+identity_theft:
+  - "This account appears to result from identity theft; please block it under FCRA §605B."
+inconsistency_across_bureaus:
+  - "I have noted discrepancies across credit bureaus and request correction."

@@ -1,0 +1,18 @@
+- id: RULE_NO_ADMISSION
+  severity: critical
+  description: Never admit fault or debt ownership
+  block_patterns:
+    - "\\bI admit\\b"
+    - "\\bmy fault\\b"
+    - "\\bI promise to pay\\b"
+    - "\\bI forgot\\b"
+    - "\\bI was late\\b"
+    - "\\bit was my account\\b"
+  fix_template: "I dispute the accuracy of this information and request validation."
+
+- id: RULE_PII_LIMIT
+  severity: critical
+  description: Mask PII; allow only name, address, DOB, last 4 SSN
+  block_patterns:
+    - "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+    - "\\b\\d{9}\\b"

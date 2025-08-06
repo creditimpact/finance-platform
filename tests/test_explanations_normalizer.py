@@ -71,3 +71,33 @@ def test_extract_structured_pii_flag(monkeypatch):
     monkeypatch.setattr(client.responses, "create", fake_create)
     result = extract_structured(safe_text, account_ctx)
     assert result["risk_flags"].get("contains_pii") is True
+
+
+def test_extract_structured_filters_personal_emotional(monkeypatch):
+    raw = (
+        "I'm so sorry, I forgot to pay because my dog died and I was overwhelmed."
+        " Please forgive me."
+    )
+    safe_text = sanitize(raw)
+    account_ctx = {"account_id": "789", "dispute_type": "late_payment"}
+    payload = {
+        "account_id": "789",
+        "dispute_type": "late_payment",
+        "facts_summary": "Payment missed during personal hardship.",
+        "claimed_errors": [],
+        "dates": {},
+        "evidence": [],
+        "risk_flags": {},
+    }
+
+    def fake_create(*args, **kwargs):
+        return DummyResponse(payload)
+
+    monkeypatch.setattr(client.responses, "create", fake_create)
+    result = extract_structured(safe_text, account_ctx)
+    import re
+
+    summary = result["facts_summary"].lower()
+    for term in ["sorry", "forgive", "dog"]:
+        assert term not in summary
+    assert re.search(r"\bi\b", summary) is None

@@ -47,6 +47,10 @@ env/
 ENV/
 node_modules/
 
+# npm cache
+npm-cache/
+**/npm-cache/
+
 # דוחות או נתונים שהוזנו
 uploads/
 data/raw/

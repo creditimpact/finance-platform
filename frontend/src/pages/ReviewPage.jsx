@@ -1,12 +1,22 @@
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
-import { submitExplanations } from '../api';
+import { useState, useEffect } from 'react';
+import { submitExplanations, getSummaries } from '../api';
 
 export default function ReviewPage() {
   const { state } = useLocation();
   const navigate = useNavigate();
   const uploadData = state?.uploadData;
   const [explanations, setExplanations] = useState({});
+  const [summaries, setSummaries] = useState({});
+  const [showSummary, setShowSummary] = useState({});
+
+  useEffect(() => {
+    if (uploadData?.session_id) {
+      getSummaries(uploadData.session_id)
+        .then((res) => setSummaries(res.summaries || {}))
+        .catch(() => {});
+    }
+  }, [uploadData?.session_id]);
 
   if (!uploadData) {
     return <p>No upload data available.</p>;
@@ -87,6 +97,27 @@ export default function ReviewPage() {
               onChange={(e) => handleChange(acc.name, e.target.value)}
               placeholder="Your explanation"
             />
+            <small className="helper-text">
+              We’ll use your explanation as context to better understand your case. It will
+              not be copied word-for-word into your dispute letter.
+            </small>
+            <div className="summary-toggle">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={!!showSummary[acc.account_id]}
+                  onChange={(e) =>
+                    setShowSummary((prev) => ({ ...prev, [acc.account_id]: e.target.checked }))
+                  }
+                />
+                Show how the system understood your explanation
+              </label>
+            </div>
+            {showSummary[acc.account_id] && summaries[acc.account_id] && (
+              <pre className="summary-box">
+                {JSON.stringify(summaries[acc.account_id], null, 2)}
+              </pre>
+            )}
           </div>
         );
       })}

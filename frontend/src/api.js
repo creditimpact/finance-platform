@@ -28,3 +28,11 @@ export async function submitExplanations(payload) {
   }
   return response.json();
 }
+
+export async function getSummaries(sessionId) {
+  const response = await fetch(`${API_BASE_URL}/api/summaries/${sessionId}`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch summaries');
+  }
+  return response.json();
+}

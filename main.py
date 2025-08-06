@@ -156,6 +156,7 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
                                 print(
                                     f"[⚠️] Unrecognised strategist action '{raw_action}' for {src.get('name')}"
                                 )
+                                acc["fallback_unrecognized_action"] = True
                             if tag:
                                 acc["action_tag"] = tag
                                 acc["recommended_action"] = action

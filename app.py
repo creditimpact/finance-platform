@@ -126,16 +126,22 @@ def explanations_endpoint():
         return jsonify({"status": "error", "message": "Invalid input"}), 400
 
     structured: list[dict] = []
+    raw_store: list[dict] = []
     for item in explanations:
         text = item.get("text", "")
         ctx = {
             "account_id": item.get("account_id", ""),
             "dispute_type": item.get("dispute_type", ""),
         }
+        raw_store.append({"account_id": ctx["account_id"], "text": text})
         safe = sanitize(text)
         structured.append(extract_structured(safe, ctx))
 
-    update_session(session_id, structured_summaries=structured)
+    update_session(
+        session_id,
+        structured_summaries=structured,
+        raw_explanations=raw_store,
+    )
     return jsonify({"status": "ok", "structured": structured})
 
 

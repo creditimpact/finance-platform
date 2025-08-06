@@ -95,6 +95,7 @@ def test_goodwill_letter_ignores_emotional_text(monkeypatch, tmp_path):
         tone="neutral",
         session_id=None,
         structured_summaries=None,
+        state=None,
     ):
         assert "devastated" not in (personal_story or "")
         return {

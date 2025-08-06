@@ -18,6 +18,7 @@ from logic.utils import (
 )
 from .json_utils import parse_json
 from .strategy_engine import generate_strategy
+from .summary_classifier import classify_client_summary
 from logic.guardrails import fix_draft_with_guardrails
 
 
@@ -106,13 +107,20 @@ def call_gpt_dispute_letter(client_info, bureau_name, disputes, inquiries, is_id
 
     dispute_blocks = []
     for acc in disputes:
+        struct = structured_summaries.get(acc.get("account_id"), {})
+        classification = classify_client_summary(struct, state)
         block = {
             "name": acc.get("name", "Unknown"),
             "account_number": acc.get("account_number", "").replace("*", "") or "N/A",
             "status": acc.get("reported_status") or acc.get("status", "N/A"),
-            "dispute_type": acc.get("dispute_type", "unspecified"),
-            "structured_summary": structured_summaries.get(acc.get("account_id"), {}),
+            "dispute_type": classification.get("category", acc.get("dispute_type", "unspecified")),
+            "legal_hook": classification.get("legal_tag"),
+            "tone": classification.get("tone"),
+            "dispute_approach": classification.get("dispute_approach"),
+            "structured_summary": struct,
         }
+        if classification.get("state_hook"):
+            block["state_hook"] = classification["state_hook"]
         if acc.get("advisor_comment"):
             block["advisor_comment"] = acc.get("advisor_comment")
         if acc.get("action_tag"):
@@ -156,7 +164,7 @@ Credit Bureau: {bureau_name}
 State: {state}
 Identity Theft (confirmed by client): {"Yes" if is_identity_theft else "No"}
 
-Each disputed account below includes a dispute_type — identity_theft / unauthorized_or_unverified / inaccurate_reporting. Write a short custom paragraph per account referencing the appropriate FCRA section (e.g. 611 or 609(a)(1)) and any personal notes. Include a clear requested action such as deletion or correction.
+Each disputed account below includes a dispute_type classification along with a suggested legal_hook and tone. Write a short custom paragraph per account referencing the provided legal_hook and any personal notes. Include a clear requested action such as deletion or correction.
 
 Disputed Accounts:
 {json.dumps(dispute_blocks, indent=2)}

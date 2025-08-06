@@ -67,6 +67,8 @@ Your task: deeply analyze the following SmartCredit report text and extract a st
 Client goal: "{client_goal}"
 Identity theft case: {"Yes" if is_identity_theft else "No"}
 
+Return only valid JSON with all property names in double quotes. No comments or extra text outside the JSON object.
+
 Return this exact JSON structure:
 
 1. personal_info_issues: List of inconsistencies or mismatches in personal info (name, address, DOB) across bureaus.

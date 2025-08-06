@@ -13,3 +13,6 @@ def test_parse_trailing_comma():
 
 def test_parse_single_quotes():
     assert parse_json("{'a': 'b'}") == {"a": "b"}
+
+def test_parse_unquoted_keys():
+    assert parse_json('{advisor_comment: "text here"}') == {"advisor_comment": "text here"}

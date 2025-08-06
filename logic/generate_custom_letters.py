@@ -1,17 +1,15 @@
 import os
-from openai import OpenAI
+import json
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader
 import pdfkit
 from logic.utils import gather_supporting_docs
+from session_manager import get_session
+from logic.guardrails import generate_letter_with_guardrails
 
 load_dotenv()
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-)
 
 WKHTMLTOPDF_PATH = os.getenv("WKHTMLTOPDF_PATH", "wkhtmltopdf")
 pdf_config = pdfkit.configuration(wkhtmltopdf=WKHTMLTOPDF_PATH)
@@ -23,29 +21,31 @@ template = env.get_template("general_letter_template.html")
 def call_gpt_for_custom_letter(
     client_name: str,
     recipient_name: str,
-    purpose: str,
     account_name: str,
     account_number: str,
     docs_text: str,
+    structured_summary: dict,
+    state: str,
+    session_id: str,
 ) -> str:
     docs_line = f"Supporting documents summary:\n{docs_text}" if docs_text else ""
     prompt = f"""
-You are a professional credit repair assistant helping a client draft a formal custom letter. Write the body **in the first person** as if the client wrote it. Provide a clear 1-2 paragraph message with a polite tone and direct request for action.
+Here is the structured summary for the account:
+{json.dumps(structured_summary, indent=2)}
 Client name: {client_name}
 Recipient: {recipient_name}
-Purpose: {purpose}
+State: {state}
 Account: {account_name} {account_number}
 {docs_line}
-Respond only with the letter body.
+Please draft a compliant letter body following the systemic rules.
 """
-    response = client.chat.completions.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
+    body, _, _ = generate_letter_with_guardrails(
+        prompt,
+        state,
+        {"debt_type": structured_summary.get("debt_type")},
+        session_id,
+        "custom",
     )
-    body = response.choices[0].message.content.strip()
-    if body.startswith("```"):
-        body = body.replace("```", "").strip()
     return body
 
 
@@ -53,16 +53,15 @@ def generate_custom_letter(account: dict, client_info: dict, output_path: Path, 
     client_name = client_info.get("legal_name") or client_info.get("name", "Client")
     date_str = run_date or datetime.now().strftime("%B %d, %Y")
     recipient = account.get("name", "")
-    note = account.get("custom_letter_note", "")
-    if account.get("advisor_comment"):
-        note += f"\nAdvisor: {account['advisor_comment']}"
-    if account.get("action_tag"):
-        note += f"\nStrategist tag: {account['action_tag']}"
-    if account.get("recommended_action"):
-        note += f"\nStrategist recommends: {account['recommended_action']}"
     acc_name = account.get("name", "")
     acc_number = account.get("account_number", "")
     session_id = client_info.get("session_id", "")
+    state = client_info.get("state", "")
+
+    session = get_session(session_id) or {}
+    structured_summary = (
+        session.get("structured_summaries", {}).get(account.get("account_id"), {})
+    )
 
     docs_text, doc_names, _ = gather_supporting_docs(session_id)
     if docs_text:
@@ -71,10 +70,12 @@ def generate_custom_letter(account: dict, client_info: dict, output_path: Path, 
     body_paragraph = call_gpt_for_custom_letter(
         client_name,
         recipient,
-        note,
         acc_name,
         acc_number,
         docs_text,
+        structured_summary,
+        state,
+        session_id,
     )
 
     greeting = f"Dear {recipient}" if recipient else "To whom it may concern"

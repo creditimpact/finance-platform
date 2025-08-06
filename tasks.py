@@ -13,11 +13,20 @@ logger = logging.getLogger(__name__)
 logger.info("Celery worker starting with OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL)
 logger.info("Celery worker OPENAI_API_KEY present=%s", bool(config.OPENAI_API_KEY))
 
+
+def _ensure_file(file_path: str) -> None:
+    if not os.path.exists(file_path):
+        dir_path = os.path.dirname(file_path)
+        listing = os.listdir(dir_path) if os.path.exists(dir_path) else []
+        logger.error("File not found: %s. Dir contents: %s", file_path, listing)
+        raise FileNotFoundError(f"Required file missing: {file_path}")
+
 @app.task(bind=True, name='extract_problematic_accounts')
 def extract_problematic_accounts(self, file_path: str, session_id: str | None = None):
     """Extract problematic accounts from the report."""
     try:
         logger.info("Extracting accounts from %s", file_path)
+        _ensure_file(file_path)
         return extract_problematic_accounts_from_report(file_path, session_id)
     except Exception as exc:
         logger.exception("❌ Error extracting accounts")
@@ -38,6 +47,7 @@ def process_report(self, file_path: str, email: str, goal: str = "Not specified"
         if not session_id:
             session_id = str(uuid.uuid4())
 
+        _ensure_file(file_path)
         logger.info("Starting processing for %s", email)
 
         client_info = {

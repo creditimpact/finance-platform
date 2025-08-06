@@ -49,3 +49,17 @@ npm run dev
 ```
 
 The app runs on http://localhost:5173 and communicates with the Flask backend at http://localhost:5000.
+
+## Celery Workers
+
+Always start Celery from the project root so that Python can locate the
+local modules:
+
+```bash
+cd path/to/finance-platform
+celery -A tasks worker --loglevel=info
+```
+
+The worker bootstrap ensures the repository root is added to
+`sys.path`, allowing modules such as `session_manager` to be imported
+even if the current working directory differs.

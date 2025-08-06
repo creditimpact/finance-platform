@@ -1,10 +1,19 @@
+import os
+import sys
+
+# Ensure the project root is always on sys.path, regardless of the
+# working directory from which this module is executed.
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import logging
 import config
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import os
 import uuid
 from werkzeug.utils import secure_filename
+
 from tasks import process_report, extract_problematic_accounts
 from admin import admin_bp
 from session_manager import set_session, get_session

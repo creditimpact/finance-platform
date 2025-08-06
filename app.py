@@ -16,7 +16,12 @@ from werkzeug.utils import secure_filename
 
 from tasks import process_report, extract_problematic_accounts
 from admin import admin_bp
-from session_manager import set_session, get_session, update_session
+from session_manager import (
+    set_session,
+    get_session,
+    update_session,
+    update_intake,
+)
 from logic.explanations_normalizer import sanitize, extract_structured
 
 logger = logging.getLogger(__name__)
@@ -137,11 +142,8 @@ def explanations_endpoint():
         safe = sanitize(text)
         structured.append(extract_structured(safe, ctx))
 
-    update_session(
-        session_id,
-        structured_summaries=structured,
-        raw_explanations=raw_store,
-    )
+    update_session(session_id, structured_summaries=structured)
+    update_intake(session_id, raw_explanations=raw_store)
     return jsonify({"status": "ok", "structured": structured})
 
 
@@ -179,7 +181,6 @@ def submit_explanations():
     email = data.get("email")
     goal = data.get("goal", "Not specified")
     is_identity_theft = data.get("is_identity_theft", False)
-    explanations = data.get("explanations", {})
 
     if not (session_id and email):
         return jsonify({"status": "error", "message": "Missing data"}), 400
@@ -195,7 +196,10 @@ def submit_explanations():
         logger.error("File for session %s missing at %s. Dir contents: %s", session_id, file_path, dir_listing)
         return jsonify({"status": "error", "message": "Uploaded report is missing. Please restart the process."}), 404
 
-    process_report.delay(file_path, email, goal, is_identity_theft, session_id, explanations)
+    structured = session.get("structured_summaries", {}) if session else {}
+    process_report.delay(
+        file_path, email, goal, is_identity_theft, session_id, structured
+    )
 
     return jsonify({"status": "processing", "message": "Letters generation started."})
 

@@ -16,7 +16,8 @@ from werkzeug.utils import secure_filename
 
 from tasks import process_report, extract_problematic_accounts
 from admin import admin_bp
-from session_manager import set_session, get_session
+from session_manager import set_session, get_session, update_session
+from logic.explanations_normalizer import sanitize, extract_structured
 
 logger = logging.getLogger(__name__)
 logger.info("Flask app starting with OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL)
@@ -113,6 +114,29 @@ def start_process():
     except Exception as e:
         print("❌ Exception occurred:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/explanations", methods=["POST"])
+def explanations_endpoint():
+    data = request.get_json(force=True)
+    session_id = data.get("session_id")
+    explanations = data.get("explanations", [])
+
+    if not session_id or not isinstance(explanations, list):
+        return jsonify({"status": "error", "message": "Invalid input"}), 400
+
+    structured: list[dict] = []
+    for item in explanations:
+        text = item.get("text", "")
+        ctx = {
+            "account_id": item.get("account_id", ""),
+            "dispute_type": item.get("dispute_type", ""),
+        }
+        safe = sanitize(text)
+        structured.append(extract_structured(safe, ctx))
+
+    update_session(session_id, structured_summaries=structured)
+    return jsonify({"status": "ok", "structured": structured})
 
 
 @app.route("/api/submit-explanations", methods=["POST"])

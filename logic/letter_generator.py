@@ -15,7 +15,7 @@ from logic.utils import (
     COLLECTION_RE,
 )
 from .json_utils import parse_json
-from session_manager import get_session
+from .strategy_engine import generate_strategy
 from logic.guardrails import fix_draft_with_guardrails
 
 
@@ -220,6 +220,11 @@ def generate_all_dispute_letters_with_ai(
     if not client_info.get("legal_name"):
         print("[⚠️] Warning: legal_name not found in client_info. Using fallback name.")
 
+    # Build a comprehensive strategy object for this session.
+    session_id = client_info.get("session_id", "")
+    strategy = generate_strategy(session_id, bureau_data)
+    strategy_summaries = strategy.get("dispute_items", {})
+
     for bureau_name, payload in bureau_data.items():
         print(f"[🤖] Generating letter for {bureau_name}...")
 
@@ -334,16 +339,13 @@ def generate_all_dispute_letters_with_ai(
         client_info_for_gpt = dict(client_info)
         client_info_for_gpt["custom_dispute_notes"] = specific_notes
 
-        session = get_session(client_info.get("session_id", "")) or {}
-        structured_summaries = session.get("structured_summaries", {})
-
         gpt_data = call_gpt_dispute_letter(
             client_info_for_gpt,
             bureau_name,
             disputes,
             filtered_inquiries,
             is_identity_theft,
-            structured_summaries,
+            strategy_summaries,
             client_info.get("state", ""),
         )
 

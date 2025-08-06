@@ -7,7 +7,11 @@ CA:
     - "prepaid_fees"
 
 NY:
-  medical_debt_clause: "Pursuant to New York rules limiting medical debt reporting, please confirm whether this qualifies for removal."
+  clauses:
+    medical:
+      reference: "New York rules limiting medical debt reporting"
+      text: "please confirm whether this qualifies for removal."
+      label: "NY Medical Debt Clause"
 
 GA:
   prohibit_service: true

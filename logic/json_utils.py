@@ -8,28 +8,24 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     _jsonrepair = None
 
-try:
-    import dirtyjson as _dirtyjson
-except Exception:  # pragma: no cover - fallback when lib missing
-    _dirtyjson = None
-
-try:
-    import json5 as _json5
-except Exception:  # pragma: no cover - optional dependency
-    _json5 = None
-
 _TRAILING_COMMA_RE = re.compile(r',(?=\s*[}\]])')
+_DOUBLE_COMMA_RE = re.compile(r',\s*,+')
 _SINGLE_QUOTE_KEY_RE = re.compile(r"'([^']*)'(?=\s*:)" )
 _SINGLE_QUOTE_VALUE_RE = re.compile(r":\s*'([^']*)'" )
 _UNQUOTED_KEY_RE = re.compile(r'(?P<prefix>^|[,{])\s*(?P<key>[A-Za-z_][A-Za-z0-9_-]*)\s*(?=:)')
 _LOG_PATH = Path("invalid_ai_json.log")
 
 
-def _log_invalid_json(raw: str) -> None:
-    """Persist the raw AI output for debugging."""
+def _log_invalid_json(raw: str, repaired: str, error: str) -> None:
+    """Persist the raw and repaired AI output for debugging."""
     try:
         with _LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write("Raw:\n")
             f.write(raw)
+            f.write("\nRepaired:\n")
+            f.write(repaired)
+            f.write("\nError:\n")
+            f.write(error)
             f.write("\n---\n")
     except Exception:  # pragma: no cover - best effort only
         logging.debug("Unable to log invalid JSON output.")
@@ -38,6 +34,7 @@ def _log_invalid_json(raw: str) -> None:
 def _basic_clean(content: str) -> str:
     """Apply regex-based fixes for common JSON issues."""
     cleaned = _TRAILING_COMMA_RE.sub("", content)
+    cleaned = _DOUBLE_COMMA_RE.sub(",", cleaned)
     cleaned = _SINGLE_QUOTE_KEY_RE.sub(r'"\1"', cleaned)
     cleaned = _SINGLE_QUOTE_VALUE_RE.sub(r': "\1"', cleaned)
     cleaned = _UNQUOTED_KEY_RE.sub(lambda m: f'{m.group("prefix")}"{m.group("key")}"', cleaned)
@@ -48,7 +45,7 @@ def _repair_json(content: str) -> str:
     """Attempt to repair malformed JSON using json_repair or basic regex fixes."""
     if _jsonrepair is not None:
         try:
-            return _jsonrepair(content)
+            content = _jsonrepair(content)
         except Exception:  # pragma: no cover - if repair fails, fall back
             logging.debug("json_repair failed to process input")
     return _basic_clean(content)
@@ -56,31 +53,16 @@ def _repair_json(content: str) -> str:
 
 def parse_json(text: str):
     """Parse ``text`` as JSON, attempting repairs on failure."""
-    normalized = _repair_json(text)
     try:
-        return json.loads(normalized)
-    except json.JSONDecodeError:
-        _log_invalid_json(text)
-        logging.warning("⚠️ The AI returned invalid JSON. Attempting to repair.")
-        cleaned = _basic_clean(normalized)
-        if cleaned != normalized:
-            logging.debug("Cleaned JSON string: %s", cleaned)
-            try:
-                return json.loads(cleaned)
-            except json.JSONDecodeError:
-                pass
-        if _dirtyjson is not None:
-            try:
-                repaired = _dirtyjson.loads(normalized)
-                logging.debug("Repaired JSON via dirtyjson: %s", repaired)
-                return repaired
-            except Exception:  # pragma: no cover - handle silently
-                logging.debug("dirtyjson failed to parse input")
-        if _json5 is not None:
-            try:
-                repaired = _json5.loads(normalized)
-                logging.debug("Repaired JSON via json5: %s", repaired)
-                return repaired
-            except Exception:  # pragma: no cover - handle silently
-                logging.debug("json5 failed to parse input")
-        raise
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        logging.warning("Initial JSON parse error: %s", e)
+        repaired = _repair_json(text)
+        logging.debug("Raw JSON before repair: %s", text)
+        logging.debug("Repaired JSON string: %s", repaired)
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError as e2:
+            logging.error("Repaired JSON parse error: %s", e2)
+            _log_invalid_json(text, repaired, str(e2))
+            return {}

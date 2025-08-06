@@ -34,6 +34,37 @@ def load_neutral_phrases() -> dict:
     return data
 
 
+_NEUTRAL_CACHE: dict | None = None
+
+
+def get_neutral_phrase(category: str, structured_summary: dict | None = None) -> str | None:
+    """Return a neutral phrase for ``category`` matching the client's summary.
+
+    The phrase list is loaded from ``neutral_phrases.yaml`` only once. A very
+    lightweight heuristic picks the phrase sharing the most word overlap with
+    the client's structured summary. If no summary is provided, the first phrase
+    for the category is returned.
+    """
+
+    global _NEUTRAL_CACHE
+    if _NEUTRAL_CACHE is None:
+        _NEUTRAL_CACHE = load_neutral_phrases()
+
+    phrases = _NEUTRAL_CACHE.get(category, [])
+    if not phrases:
+        return None
+
+    if structured_summary:
+        text = " ".join(
+            str(v).lower() for v in structured_summary.values() if isinstance(v, str)
+        )
+        words = set(text.split())
+        if words:
+            return max(phrases, key=lambda p: len(words & set(p.lower().split())))
+
+    return phrases[0]
+
+
 def load_state_rules() -> dict:
     """Load and return state compliance rules from ``state_rules.yaml``."""
     data = _load_yaml("state_rules.yaml")

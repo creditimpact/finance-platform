@@ -17,7 +17,7 @@ def test_ny_medical_clause_injected_and_logged(tmp_path):
         state="NY",
         context={"debt_type": "medical", "session_id": session_id},
     )
-    assert "pursuant to new york rules limiting medical debt reporting" in cleaned.lower()
+    assert "new york financial services law" in cleaned.lower()
     assert cleaned.index("Additionally") < cleaned.index("Sincerely")
     session = get_session(session_id)
     assert session["state_compliance"]["state"] == "NY"

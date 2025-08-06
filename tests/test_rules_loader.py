@@ -19,6 +19,13 @@ def test_load_neutral_phrases():
     assert phrases["not_mine"][0].startswith("I do not recognize")
 
 
+def test_get_neutral_phrase_matches_category():
+    phrase = rules_loader.get_neutral_phrase(
+        "not_mine", {"facts_summary": "this account is not mine"}
+    )
+    assert phrase in rules_loader.load_neutral_phrases()["not_mine"]
+
+
 def test_load_state_rules():
     state_rules = rules_loader.load_state_rules()
     assert state_rules["CA"]["requires"][0] == "license_number"

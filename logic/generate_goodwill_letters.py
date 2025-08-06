@@ -17,6 +17,7 @@ from .json_utils import parse_json
 from session_manager import get_session
 from logic.guardrails import fix_draft_with_guardrails
 from .summary_classifier import classify_client_summary
+from .rules_loader import get_neutral_phrase
 
 load_dotenv()
 client = OpenAI(
@@ -225,6 +226,9 @@ def call_gpt_for_goodwill_letter(
             )
             if cls.get("state_hook"):
                 summary["state_hook"] = cls["state_hook"]
+            neutral = get_neutral_phrase(cls.get("category"), struct)
+            if neutral:
+                summary["neutral_phrase"] = neutral
         late_summary = summarize_late(acc.get("late_payments"))
         if late_summary:
             summary["late_history"] = late_summary
@@ -249,8 +253,7 @@ def call_gpt_for_goodwill_letter(
 
     prompt = f"""
 Write a goodwill adjustment letter for credit reporting purposes. Write it **in the first person**, in a {tone} tone as if the client wrote it.
-For each account below, craft a short story-style paragraph summarizing the situation and referencing any hardship and recovery details.
-If certain details are missing, create a brief empathetic explanation. Mention supporting documents by name when helpful.
+For each account below, craft a short story-style paragraph that blends the provided neutral_phrase with the client's structured_summary and any hardship and recovery details. Use the neutral_phrase as the legal/tone base while personalizing with the client's explanation. Do not copy the phrase or summary verbatim. Mention supporting documents by name when helpful.
 
 Include these fields in the JSON response:
 - intro_paragraph: opening lines

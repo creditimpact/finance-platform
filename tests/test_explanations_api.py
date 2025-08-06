@@ -5,7 +5,7 @@ import importlib
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from session_manager import get_session
+from session_manager import get_session, get_intake
 
 
 def test_explanations_endpoint_stores_raw_and_structured(monkeypatch):
@@ -52,7 +52,9 @@ def test_explanations_endpoint_stores_raw_and_structured(monkeypatch):
         summary_data = res.get_json()
 
     session = get_session(session_id)
-    assert session["raw_explanations"][0]["text"] == "I was late"
+    intake = get_intake(session_id)
+    assert intake["raw_explanations"][0]["text"] == "I was late"
+    assert "raw_explanations" not in session
     assert session["structured_summaries"][0]["facts_summary"] == "summary"
     text = json.dumps(summary_data)
     assert "I was late" not in text

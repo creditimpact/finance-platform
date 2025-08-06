@@ -52,8 +52,20 @@ def extract_problematic_accounts(self, file_path: str, session_id: str | None = 
 
 
 @app.task(bind=True, name='process_report')
-def process_report(self, file_path: str, email: str, goal: str = "Not specified", is_identity_theft: bool = False, session_id: str | None = None, explanations: dict | None = None):
-    """Process the SmartCredit report and email results."""
+def process_report(
+    self,
+    file_path: str,
+    email: str,
+    goal: str = "Not specified",
+    is_identity_theft: bool = False,
+    session_id: str | None = None,
+    structured_summaries: dict | None = None,
+):
+    """Process the SmartCredit report and email results.
+
+    ``structured_summaries`` should contain only sanitized data extracted from
+    the client's explanations. Raw text must never be passed into this task.
+    """
     try:
         print("🔧 [Celery] process_report called!")
         print(f"📄 file_path: {file_path}")
@@ -74,7 +86,10 @@ def process_report(self, file_path: str, email: str, goal: str = "Not specified"
             "email": email,
             "goal": goal,
             "session_id": session_id,
-            "custom_dispute_notes": explanations or {},
+            # Raw client notes are intentionally excluded from the processing
+            # pipeline to prevent leakage into generated letters.
+            "custom_dispute_notes": {},
+            "structured_summaries": structured_summaries or {},
         }
 
         proofs_files = {"smartcredit_report": file_path}

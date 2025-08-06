@@ -13,6 +13,7 @@ from logic.utils import (
     CHARGEOFF_RE,
     COLLECTION_RE,
 )
+from .json_utils import parse_json
 
 
 def dedupe_disputes(disputes: list[dict], bureau_name: str, log: list[str]) -> list[dict]:
@@ -139,7 +140,7 @@ Return a JSON object with:
 - closing_paragraph
   (should mention the bureau must respond in writing within 30 days under section 611 of the FCRA)
 
-Respond only with JSON.
+Respond only with JSON. The output must be strictly valid JSON: all property names and strings in double quotes, no trailing commas or comments, and no text outside the JSON.
 """
 
     prompt = f'''
@@ -195,7 +196,7 @@ Unauthorized Inquiries:
     print(content)
     print("----- END RESPONSE -----\n")
 
-    result = json.loads(content)
+    result = parse_json(content)
     return result
 
 def generate_all_dispute_letters_with_ai(

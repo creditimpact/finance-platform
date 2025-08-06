@@ -15,6 +15,7 @@ from logic.utils import (
     get_client_address_lines,
     analyze_custom_notes,
 )
+from .json_utils import parse_json
 
 load_dotenv()
 client = OpenAI(
@@ -251,7 +252,7 @@ Supporting doc names: {', '.join(doc_names) if doc_names else 'None'}
 {docs_section}
 {note_text}
 
-Return valid JSON only. No markdown.
+Return strictly valid JSON: all property names and strings in double quotes, no trailing commas or comments, and no text outside the JSON.
 """
 
     response = client.chat.completions.create(
@@ -268,7 +269,7 @@ Return valid JSON only. No markdown.
     print(content)
     print("----- END RESPONSE -----\n")
 
-    return json.loads(content)
+    return parse_json(content)
 
 def load_creditor_address_map():
     try:

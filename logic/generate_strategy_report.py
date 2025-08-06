@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from openai import OpenAI
 from dotenv import load_dotenv
+from .json_utils import parse_json
 
 load_dotenv()
 client = OpenAI(
@@ -54,6 +55,7 @@ Return only a JSON object with this structure:
   }}],
   "global_recommendations": []
 }}
+Ensure the response is strictly valid JSON: all property names and strings in double quotes, no trailing commas or comments, and no text outside the JSON.
 """
         response = client.chat.completions.create(
             model="gpt-4",
@@ -65,7 +67,7 @@ Return only a JSON object with this structure:
             content = (
                 content.replace("```json", "").replace("```", "").strip()
             )
-        return json.loads(content)
+        return parse_json(content)
 
     def save_report(
         self,

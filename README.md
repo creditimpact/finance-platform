@@ -11,6 +11,14 @@ All backend components read configuration from a `.env` file on startup via
 The Flask server, Celery workers and any CLI scripts load this file
 automatically when they start.
 
+## AI JSON Handling
+
+OpenAI responses are parsed using a repair utility backed by the
+[`dirtyjson`](https://pypi.org/project/dirtyjson/) library. When the model
+returns nearly valid JSON (e.g., with trailing commas or single quotes), the
+utility attempts to clean it so processing can continue without manual
+intervention.
+
 ## Action Tags
 
 Accounts may contain an `action_tag` field used to control which letters are generated. The allowed values are:

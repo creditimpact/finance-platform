@@ -13,4 +13,5 @@ fpdf
 PyMuPDF
 celery
 redis
+dirtyjson
 

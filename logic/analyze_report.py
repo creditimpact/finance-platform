@@ -12,6 +12,7 @@ from logic.utils import (
     extract_inquiries,
 )
 from .utils import normalize_bureau_name, has_late_indicator, enforce_collection_status
+from .json_utils import parse_json
 
 load_dotenv()
 client = OpenAI(
@@ -154,8 +155,10 @@ Return this exact JSON structure:
    - advisor_comment: 1–2 sentence explanation of the account’s effect and what the client should do (dispute, pay down, keep healthy, goodwill, etc.)
 
 ⚠️ Rules:
-- Output valid JSON only
-- No markdown, no explanations, no headers — only pure JSON
+- Return strictly valid JSON
+- All property names and strings must use double quotes
+- No trailing commas, comments, or text outside the JSON
+- No markdown or explanations
 - Use proper casing, punctuation, and clean formatting
 - Never guess — only include facts that are visible
 Use the following late payment data to help you accurately tag late accounts, even if the report formatting is inconsistent:
@@ -190,8 +193,8 @@ Report text:
         f.write(inquiry_summary)
 
     try:
-        return json.loads(content)
-    except json.JSONDecodeError:
+        return parse_json(content)
+    except Exception:
         print("\u26a0\ufe0f The AI returned invalid JSON. Here's the raw response:")
         print(content)
         raise

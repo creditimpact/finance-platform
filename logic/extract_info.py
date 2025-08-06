@@ -8,6 +8,7 @@ from .utils import normalize_bureau_name, BUREAUS
 from collections import Counter
 from openai import OpenAI
 from dotenv import load_dotenv
+from .json_utils import parse_json
 
 logging.getLogger("pdfplumber.page").setLevel(logging.ERROR)
 
@@ -163,6 +164,8 @@ Output JSON in this format:
   "current_address": "..."
 }}
 
+Return strictly valid JSON: use double quotes for all property names and strings, avoid trailing commas, and include no text outside the JSON.
+
 Here is the text:
 ===
 {raw_text}
@@ -174,7 +177,7 @@ Here is the text:
                 temperature=0.1
             )
             content = response.choices[0].message.content.strip()
-            ai_data = json.loads(content)
+            ai_data = parse_json(content)
             for b in bureaus:
                 data[b].update(ai_data)
         except Exception as e:

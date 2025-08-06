@@ -5,6 +5,7 @@ from pathlib import Path
 from openai import OpenAI
 from dotenv import load_dotenv
 from .json_utils import parse_json
+from logic.guardrails import fix_draft_with_guardrails
 
 load_dotenv()
 client = OpenAI(
@@ -67,7 +68,15 @@ Ensure the response is strictly valid JSON: all property names and strings in do
             content = (
                 content.replace("```json", "").replace("```", "").strip()
             )
-        return parse_json(content)
+        report = parse_json(content)
+        fix_draft_with_guardrails(
+            json.dumps(report, indent=2),
+            client_info.get("state"),
+            {},
+            client_info.get("session_id", ""),
+            "strategy",
+        )
+        return report
 
     def save_report(
         self,

@@ -16,6 +16,8 @@ from logic.utils import (
     analyze_custom_notes,
 )
 from .json_utils import parse_json
+from session_manager import get_session
+from logic.guardrails import fix_draft_with_guardrails
 
 load_dotenv()
 client = OpenAI(
@@ -128,6 +130,7 @@ def call_gpt_for_goodwill_letter(
     tone="neutral",
     session_id=None,
     custom_note=None,
+    structured_summaries=None,
 ):
     """Compose a goodwill letter prompt and call GPT.
 
@@ -207,8 +210,10 @@ def call_gpt_for_goodwill_letter(
             "hardship_reason": acc.get("hardship_reason"),
             "recovery_summary": acc.get("recovery_summary"),
             "personal_note": acc.get("personal_note"),
-            "repayment_status": acc.get("account_status") or acc.get("payment_status")
+            "repayment_status": acc.get("account_status") or acc.get("payment_status"),
         }
+        if structured_summaries:
+            summary["structured_summary"] = structured_summaries.get(acc.get("account_id"), {})
         late_summary = summarize_late(acc.get("late_payments"))
         if late_summary:
             summary["late_history"] = late_summary
@@ -307,6 +312,8 @@ def generate_goodwill_letter_with_ai(creditor, accounts, client_info, output_pat
         creditor_address = "Address not provided — please enter manually"
 
     session_id = client_info.get("session_id")
+    session = get_session(session_id or "") or {}
+    structured_summaries = session.get("structured_summaries", {})
     raw_notes = client_info.get("custom_dispute_notes", {}) or {}
     acc_names = [a.get("name", "") for a in accounts]
     specific_notes, general_notes = analyze_custom_notes(raw_notes, acc_names)
@@ -325,6 +332,7 @@ def generate_goodwill_letter_with_ai(creditor, accounts, client_info, output_pat
         tone,
         session_id,
         custom_note,
+        structured_summaries,
     )
 
     _, doc_names, _ = gather_supporting_docs(session_id or "")
@@ -344,6 +352,14 @@ def generate_goodwill_letter_with_ai(creditor, accounts, client_info, output_pat
     }
 
     html = template.render(**context)
+    plain_text = re.sub(r"<[^>]+>", " ", html)
+    fix_draft_with_guardrails(
+        plain_text,
+        client_info.get("state"),
+        {},
+        session_id or "",
+        "goodwill",
+    )
     safe_name = safe_filename(creditor)
     filename = f"Goodwill Request - {safe_name}.pdf"
     full_path = output_path / filename

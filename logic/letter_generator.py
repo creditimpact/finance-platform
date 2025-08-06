@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from openai import OpenAI
 from pathlib import Path
 from datetime import datetime
@@ -14,6 +15,8 @@ from logic.utils import (
     COLLECTION_RE,
 )
 from .json_utils import parse_json
+from session_manager import get_session
+from logic.guardrails import fix_draft_with_guardrails
 
 
 def dedupe_disputes(disputes: list[dict], bureau_name: str, log: list[str]) -> list[dict]:
@@ -90,12 +93,11 @@ def render_dispute_letter_html(context: dict) -> str:
     template = env.get_template("dispute_letter_template.html")
     return template.render(**context)
 
-def call_gpt_dispute_letter(client_info, bureau_name, disputes, inquiries, is_identity_theft):
+def call_gpt_dispute_letter(client_info, bureau_name, disputes, inquiries, is_identity_theft, structured_summaries, state):
     """Generate GPT-powered dispute letter content."""
     import json
 
     client_name = client_info.get("legal_name") or client_info.get("name", "Client")
-    custom_notes = client_info.get("custom_dispute_notes", {}) or {}
 
     dispute_blocks = []
     for acc in disputes:
@@ -104,6 +106,7 @@ def call_gpt_dispute_letter(client_info, bureau_name, disputes, inquiries, is_id
             "account_number": acc.get("account_number", "").replace("*", "") or "N/A",
             "status": acc.get("reported_status") or acc.get("status", "N/A"),
             "dispute_type": acc.get("dispute_type", "unspecified"),
+            "structured_summary": structured_summaries.get(acc.get("account_id"), {}),
         }
         if acc.get("advisor_comment"):
             block["advisor_comment"] = acc.get("advisor_comment")
@@ -113,9 +116,6 @@ def call_gpt_dispute_letter(client_info, bureau_name, disputes, inquiries, is_id
             block["recommended_action"] = acc.get("recommended_action")
         if acc.get("flags"):
             block["flags"] = acc.get("flags")
-        note = custom_notes.get(acc.get("name"))
-        if note:
-            block["personal_note"] = note
         dispute_blocks.append(block)
 
     inquiry_blocks = [
@@ -148,6 +148,7 @@ You are a professional legal assistant helping a consumer draft a formal credit 
 
 Client: {client_name}
 Credit Bureau: {bureau_name}
+State: {state}
 Identity Theft (confirmed by client): {"Yes" if is_identity_theft else "No"}
 
 Each disputed account below includes a dispute_type — identity_theft / unauthorized_or_unverified / inaccurate_reporting. Write a short custom paragraph per account referencing the appropriate FCRA section (e.g. 611 or 609(a)(1)) and any personal notes. Include a clear requested action such as deletion or correction.
@@ -333,12 +334,17 @@ def generate_all_dispute_letters_with_ai(
         client_info_for_gpt = dict(client_info)
         client_info_for_gpt["custom_dispute_notes"] = specific_notes
 
+        session = get_session(client_info.get("session_id", "")) or {}
+        structured_summaries = session.get("structured_summaries", {})
+
         gpt_data = call_gpt_dispute_letter(
             client_info_for_gpt,
             bureau_name,
             disputes,
             filtered_inquiries,
             is_identity_theft,
+            structured_summaries,
+            client_info.get("state", ""),
         )
 
         # 🔍 Post-process GPT output to enforce dispute-only language
@@ -425,6 +431,14 @@ def generate_all_dispute_letters_with_ai(
         }
 
         html = render_dispute_letter_html(context)
+        plain_text = re.sub(r"<[^>]+>", " ", html)
+        fix_draft_with_guardrails(
+            plain_text,
+            client_info.get("state"),
+            {},
+            client_info.get("session_id", ""),
+            "dispute",
+        )
         filename = f"Dispute Letter - {bureau_name}.pdf"
         filepath = output_path / filename
         render_html_to_pdf(html, filepath)

@@ -8,12 +8,10 @@ from jinja2 import Environment, FileSystemLoader
 import pdfkit
 import re
 from logic.utils import (
-    gather_supporting_docs_text,
     gather_supporting_docs,
     has_late_indicator,
     safe_filename,
     get_client_address_lines,
-    analyze_custom_notes,
 )
 from .json_utils import parse_json
 from session_manager import get_session
@@ -129,7 +127,6 @@ def call_gpt_for_goodwill_letter(
     personal_story=None,
     tone="neutral",
     session_id=None,
-    custom_note=None,
     structured_summaries=None,
 ):
     """Compose a goodwill letter prompt and call GPT.
@@ -228,7 +225,6 @@ def call_gpt_for_goodwill_letter(
         account_summaries.append(summary)
 
     story_text = f"\nClient's personal story: {personal_story}" if personal_story else ""
-    note_text = f"\nClient note for {creditor}: {custom_note}" if custom_note else ""
 
     docs_text, doc_names, _ = gather_supporting_docs(session_id or "")
     if docs_text:
@@ -255,7 +251,6 @@ Accounts: {json.dumps(account_summaries, indent=2)}
 Supporting doc names: {', '.join(doc_names) if doc_names else 'None'}
 {story_text}
 {docs_section}
-{note_text}
 
 Return strictly valid JSON: all property names and strings in double quotes, no trailing commas or comments, and no text outside the JSON.
 """
@@ -314,15 +309,9 @@ def generate_goodwill_letter_with_ai(creditor, accounts, client_info, output_pat
     session_id = client_info.get("session_id")
     session = get_session(session_id or "") or {}
     structured_summaries = session.get("structured_summaries", {})
-    raw_notes = client_info.get("custom_dispute_notes", {}) or {}
-    acc_names = [a.get("name", "") for a in accounts]
-    specific_notes, general_notes = analyze_custom_notes(raw_notes, acc_names)
-    notes_map = {normalize_creditor_name(k): v for k, v in specific_notes.items()}
-    custom_note = notes_map.get(normalize_creditor_name(creditor))
-    if custom_note:
-        print(f"[📌] Included client note for goodwill letter on: '{creditor}'")
-    if general_notes:
-        personal_story = (personal_story + " " + " ".join(general_notes)).strip()
+    # Ignore any custom client notes; goodwill letters must rely solely on strategy data
+    client_info_no_notes = dict(client_info)
+    client_info_no_notes.pop("custom_dispute_notes", None)
 
     gpt_data = call_gpt_for_goodwill_letter(
         client_name,
@@ -331,7 +320,6 @@ def generate_goodwill_letter_with_ai(creditor, accounts, client_info, output_pat
         personal_story,
         tone,
         session_id,
-        custom_note,
         structured_summaries,
     )
 
@@ -340,7 +328,7 @@ def generate_goodwill_letter_with_ai(creditor, accounts, client_info, output_pat
     context = {
         "date": date_str,
         "client_name": client_name,
-        "client_address_lines": get_client_address_lines(client_info),
+        "client_address_lines": get_client_address_lines(client_info_no_notes),
         "creditor": creditor,
         "creditor_address": creditor_address,
         "accounts": gpt_data.get("accounts", []),

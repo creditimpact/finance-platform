@@ -7,6 +7,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader
 import pdfkit
+import config
 from logic.utils import (
     gather_supporting_docs,
     get_client_address_lines,
@@ -327,6 +328,13 @@ def generate_all_dispute_letters_with_ai(
             else:
                 d["dispute_type"] = "identity_theft"
 
+        fallback_norm_names = {
+            normalize_creditor_name(d.get("name", ""))
+            for d in disputes
+            if d.get("fallback_unrecognized_action")
+        }
+        fallback_used = bool(fallback_norm_names)
+
         # Analyze custom notes to separate account-specific vs general hardship content
         raw_notes = client_info.get("custom_dispute_notes", {}) or {}
         acc_names = [d.get("name", "") for d in disputes]
@@ -335,6 +343,12 @@ def generate_all_dispute_letters_with_ai(
             print(
                 f"[~] {len(general_notes)} general note(s) detected – excluded from dispute letter"
             )
+
+        if config.RULEBOOK_FALLBACK_ENABLED:
+            for fn in fallback_norm_names:
+                specific_notes.pop(fn, None)
+
+        raw_client_text_present = bool(specific_notes)
 
         client_info_for_gpt = dict(client_info)
         client_info_for_gpt["custom_dispute_notes"] = specific_notes
@@ -353,20 +367,31 @@ def generate_all_dispute_letters_with_ai(
         note_map = {normalize_creditor_name(k): v for k, v in specific_notes.items()}
         for acc in gpt_data.get("accounts", []):
             name_key = normalize_creditor_name(acc.get("name", ""))
-            custom_note = note_map.get(name_key)
-            if custom_note:
-                # Combine client's note with the strong default language
-                acc["paragraph"] = (custom_note.strip() + " " + DEFAULT_DISPUTE_REASON)
+            if config.RULEBOOK_FALLBACK_ENABLED and name_key in fallback_norm_names:
+                acc["paragraph"] = DEFAULT_DISPUTE_REASON
                 acc.pop("requested_action", None)
                 acc.pop("personal_note", None)
             else:
-                # Apply the standard dispute language when no custom note exists
-                acc["paragraph"] = DEFAULT_DISPUTE_REASON
-                acc.pop("personal_note", None)
-                # Override any GPT requested action to avoid goodwill wording
-                action = acc.get("requested_action", "")
-                if isinstance(action, str) and ("goodwill" in action.lower() or "hardship" in action.lower()):
-                    acc["requested_action"] = "Please verify this item and correct or remove any inaccuracies."
+                custom_note = note_map.get(name_key)
+                if custom_note:
+                    # Combine client's note with the strong default language
+                    acc["paragraph"] = (
+                        custom_note.strip() + " " + DEFAULT_DISPUTE_REASON
+                    )
+                    acc.pop("requested_action", None)
+                    acc.pop("personal_note", None)
+                else:
+                    # Apply the standard dispute language when no custom note exists
+                    acc["paragraph"] = DEFAULT_DISPUTE_REASON
+                    acc.pop("personal_note", None)
+                    # Override any GPT requested action to avoid goodwill wording
+                    action = acc.get("requested_action", "")
+                    if isinstance(action, str) and (
+                        "goodwill" in action.lower() or "hardship" in action.lower()
+                    ):
+                        acc["requested_action"] = (
+                            "Please verify this item and correct or remove any inaccuracies."
+                        )
 
             lookup_key = (
                 name_key,
@@ -447,5 +472,11 @@ def generate_all_dispute_letters_with_ai(
 
         with open(output_path / f"{bureau_name}_gpt_response.json", 'w') as f:
             json.dump(gpt_data, f, indent=2)
+
+        print(
+            f"[LetterSummary] letter_id={filename}, bureau={bureau_name}, action=dispute, "
+            f"template=dispute_letter_template.html, fallback_used={fallback_used}, "
+            f"raw_client_text_present={raw_client_text_present}"
+        )
 
 generate_dispute_letters_for_all_bureaus = generate_all_dispute_letters_with_ai

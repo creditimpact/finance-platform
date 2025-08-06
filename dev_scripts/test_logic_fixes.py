@@ -6,7 +6,6 @@ from unittest import mock
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-sys.modules.setdefault("openai", types.SimpleNamespace(OpenAI=lambda *_, **__: None))
 sys.modules.setdefault("pdfkit", types.SimpleNamespace(configuration=lambda *_, **__: None, from_string=lambda *_, **__: None))
 sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda *_, **__: None))
 class _DummyEnv:
@@ -18,7 +17,6 @@ class _DummyEnv:
                 return ""
         return _T()
 
-sys.modules.setdefault("jinja2", types.SimpleNamespace(Environment=_DummyEnv, FileSystemLoader=lambda *_, **__: None))
 sys.modules.setdefault("fpdf", types.SimpleNamespace(FPDF=object))
 sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__: None))
 sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None))
@@ -105,7 +103,10 @@ def test_goodwill_generation():
     ):
         out_dir = Path("output/tmp")
         out_dir.mkdir(parents=True, exist_ok=True)
-        def _cb(client_name, creditor, accounts, personal_story=None, tone="neutral", session_id=None, custom_note=None):
+        def _cb(*args, **kwargs):
+            creditor = args[1] if len(args) > 1 else None
+            accounts = args[2] if len(args) > 2 else None
+            custom_note = args[6] if len(args) > 6 else kwargs.get("custom_note")
             sent[creditor] = {
                 "accounts": accounts,
                 "custom_note": custom_note,
@@ -142,7 +143,9 @@ def test_goodwill_on_closed_account():
     ):
         out_dir = Path("output/tmp2")
         out_dir.mkdir(parents=True, exist_ok=True)
-        def _cb(client_name, creditor, accounts, personal_story=None, tone="neutral", session_id=None, custom_note=None):
+        def _cb(*args, **kwargs):
+            creditor = args[1] if len(args) > 1 else None
+            accounts = args[2] if len(args) > 2 else None
             called[creditor] = accounts
             return {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""}
         mock_g.side_effect = _cb
@@ -325,7 +328,9 @@ def test_letter_duplicate_accounts_removed():
         out_dir = Path("output/tmp_dupes")
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        def _cb(ci, b, disputes, inquiries, theft):
+        def _cb(*args, **kwargs):
+            b = args[1] if len(args) > 1 else None
+            disputes = args[2] if len(args) > 2 else None
             sent[b] = disputes
             return {"opening_paragraph": "", "accounts": [], "inquiries": [], "closing_paragraph": ""}
 
@@ -360,7 +365,9 @@ def test_partial_account_number_deduplication():
         out_dir = Path("output/tmp_dupe_nums")
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        def _cb(ci, b, disputes, inquiries, theft):
+        def _cb(*args, **kwargs):
+            b = args[1] if len(args) > 1 else None
+            disputes = args[2] if len(args) > 2 else None
             sent[b] = disputes
             return {"opening_paragraph": "", "accounts": [], "inquiries": [], "closing_paragraph": ""}
 

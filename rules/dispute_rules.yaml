@@ -16,3 +16,11 @@
   block_patterns:
     - "\\b\\d{3}-\\d{2}-\\d{4}\\b"
     - "\\b\\d{9}\\b"
+
+- id: RULE_NEUTRAL_LANGUAGE
+  severity: warning
+  description: Maintain neutral language and avoid insults or charged terms
+  block_patterns:
+    - "\\bcrooks\\b"
+    - "\\bscam\\w*\\b"
+  fix_template: "I believe there may be an error."

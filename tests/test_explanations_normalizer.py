@@ -51,3 +51,23 @@ def test_extract_structured_paraphrased_no_quotes(monkeypatch):
     assert isinstance(result["claimed_errors"], list)
     assert isinstance(result["dates"], dict)
 
+
+def test_extract_structured_pii_flag(monkeypatch):
+    safe_text = sanitize("My SSN is 123-45-6789")
+    account_ctx = {"account_id": "456", "dispute_type": "not_mine"}
+    payload = {
+        "account_id": "456",
+        "dispute_type": "not_mine",
+        "facts_summary": "Account reported in error.",
+        "claimed_errors": [],
+        "dates": {},
+        "evidence": [],
+        "risk_flags": {"contains_pii": True},
+    }
+
+    def fake_create(*args, **kwargs):
+        return DummyResponse(payload)
+
+    monkeypatch.setattr(client.responses, "create", fake_create)
+    result = extract_structured(safe_text, account_ctx)
+    assert result["risk_flags"].get("contains_pii") is True

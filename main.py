@@ -56,6 +56,7 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
         log_messages.append("✅ Process started.")
 
         from logic.upload_validator import is_safe_pdf, move_uploaded_file
+        from session_manager import update_session
 
         if "email" not in client_info or not client_info["email"]:
             raise ValueError("Client email is missing.")
@@ -66,6 +67,7 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             raise FileNotFoundError("SmartCredit report file not found at path: " + str(uploaded_path))
 
         pdf_path = move_uploaded_file(Path(uploaded_path), session_id)
+        update_session(session_id, file_path=str(pdf_path))
         if not is_safe_pdf(pdf_path):
             raise ValueError("Uploaded file failed PDF safety checks.")
 
@@ -330,9 +332,11 @@ def extract_problematic_accounts_from_report(file_path: str, session_id: str | N
     validate_env_variables()
 
     from logic.upload_validator import is_safe_pdf, move_uploaded_file
+    from session_manager import update_session
 
     session_id = session_id or "session"
     pdf_path = move_uploaded_file(Path(file_path), session_id)
+    update_session(session_id, file_path=str(pdf_path))
     if not is_safe_pdf(pdf_path):
         raise ValueError("Uploaded file failed PDF safety checks.")
 

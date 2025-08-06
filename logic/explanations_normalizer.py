@@ -78,7 +78,10 @@ def extract_structured(safe_text: str, account_ctx: Dict[str, Any]) -> Dict[str,
     """
     prompt = (
         "Paraphrase the explanation in a neutral, factual tone. "
-        "Do NOT quote the user's words. Return only JSON matching the provided schema."
+        "Focus solely on objective details such as account names, dates, or verifiable "
+        "hardship reasons. Exclude any admissions of fault, personal details, or "
+        "emotional language. Do NOT quote the user's words. Return only JSON matching "
+        "the provided schema."
         f"\nExplanation: {safe_text}"
         f"\nAccount context: {account_ctx}"
     )

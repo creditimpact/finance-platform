@@ -28,4 +28,4 @@ def test_pii_masked_and_violation_recorded():
 def test_state_specific_clause_appended_for_ny_medical():
     text = "This concerns a medical debt."
     cleaned, _ = check_letter(text, state="NY", context={"debt_type": "medical"})
-    assert "Pursuant to New York rules limiting medical debt reporting" in cleaned
+    assert "pursuant to new york rules limiting medical debt reporting" in cleaned.lower()

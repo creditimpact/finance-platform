@@ -19,7 +19,7 @@ export default function UploadPage() {
     setError('');
     try {
       const data = await startProcess(email, file);
-      navigate('/status', { state: { initialStatus: data } });
+      navigate('/review', { state: { uploadData: { ...data, email } } });
     } catch (err) {
       console.error(err);
       setError('Upload failed. Please try again.');

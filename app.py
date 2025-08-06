@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 import uuid
-from tasks import process_report
+from tasks import process_report, extract_problematic_accounts
 from admin import admin_bp
 
 app = Flask(__name__)
@@ -68,16 +68,37 @@ def start_process():
             "custom_dispute_notes": notes
         })
 
-        process_report.delay(local_filename, data.get("email"), goal, is_identity_theft, session_id)
+        accounts = extract_problematic_accounts.delay(local_filename, session_id).get(timeout=300)
 
         return jsonify({
-            "status": "processing",
-            "message": "Report is being analyzed. You will receive it by email."
+            "status": "ok",
+            "session_id": session_id,
+            "filename": uploaded_file.filename,
+            "accounts": accounts,
         })
 
     except Exception as e:
         print("❌ Exception occurred:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/submit-explanations", methods=["POST"])
+def submit_explanations():
+    data = request.get_json(force=True)
+    session_id = data.get("session_id")
+    filename = data.get("filename")
+    email = data.get("email")
+    goal = data.get("goal", "Not specified")
+    is_identity_theft = data.get("is_identity_theft", False)
+    explanations = data.get("explanations", {})
+
+    if not (session_id and filename and email):
+        return jsonify({"status": "error", "message": "Missing data"}), 400
+
+    file_path = os.path.join("uploads", session_id, filename)
+    process_report.delay(file_path, email, goal, is_identity_theft, session_id, explanations)
+
+    return jsonify({"status": "processing", "message": "Letters generation started."})
 
 if __name__ == "__main__":
     debug_mode = os.environ.get("FLASK_DEBUG", "0") in ("1", "true", "True")

@@ -1,0 +1,13 @@
+CA:
+  requires:
+    - "license_number"
+  disclosures:
+    - "California Credit Services Act disclosure..."
+  prohibit:
+    - "prepaid_fees"
+
+NY:
+  medical_debt_clause: "Pursuant to New York rules limiting medical debt reporting, please confirm whether this qualifies for removal."
+
+GA:
+  prohibit_service: true

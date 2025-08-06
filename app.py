@@ -139,6 +139,33 @@ def explanations_endpoint():
     return jsonify({"status": "ok", "structured": structured})
 
 
+@app.route("/api/summaries/<session_id>", methods=["GET"])
+def get_summaries(session_id: str):
+    session = get_session(session_id)
+    if not session:
+        return jsonify({"status": "error", "message": "Session not found"}), 404
+    raw = session.get("structured_summaries", {}) or {}
+    allowed = {
+        "account_id",
+        "dispute_type",
+        "facts_summary",
+        "claimed_errors",
+        "dates",
+        "evidence",
+        "risk_flags",
+    }
+    cleaned: dict[str, dict] = {}
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                key = item.get("account_id") or str(len(cleaned))
+                cleaned[key] = {k: item.get(k) for k in allowed if k in item}
+    elif isinstance(raw, dict):
+        for key, item in raw.items():
+            cleaned[key] = {k: item.get(k) for k in allowed if k in item}
+    return jsonify({"status": "ok", "summaries": cleaned})
+
+
 @app.route("/api/submit-explanations", methods=["POST"])
 def submit_explanations():
     data = request.get_json(force=True)

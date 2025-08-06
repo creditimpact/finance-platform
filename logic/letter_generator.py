@@ -1,6 +1,8 @@
 import os
 import json
 import re
+import logging
+import warnings
 from openai import OpenAI
 from pathlib import Path
 from datetime import datetime
@@ -17,6 +19,9 @@ from logic.utils import (
 from .json_utils import parse_json
 from .strategy_engine import generate_strategy
 from logic.guardrails import fix_draft_with_guardrails
+
+
+logger = logging.getLogger(__name__)
 
 
 def dedupe_disputes(disputes: list[dict], bureau_name: str, log: list[str]) -> list[dict]:
@@ -225,8 +230,11 @@ def generate_all_dispute_letters_with_ai(
     strategy = generate_strategy(session_id, bureau_data)
     strategy_summaries = strategy.get("dispute_items", {})
 
+    sanitization_issues = False
+
     for bureau_name, payload in bureau_data.items():
         print(f"[🤖] Generating letter for {bureau_name}...")
+        bureau_sanitization = False
 
         disputes = []
         for d in payload.get("disputes", []):
@@ -318,14 +326,39 @@ def generate_all_dispute_letters_with_ai(
 
         bureau_address = CREDIT_BUREAU_ADDRESSES.get(bureau_name, "Unknown")
 
+        allowed_types = {"identity_theft", "unauthorized_or_unverified", "inaccurate_reporting"}
         for d in disputes:
             if not (is_identity_theft and d.get("is_suspected_identity_theft", False)):
                 if d.get("is_suspected_identity_theft"):
                     d["dispute_type"] = "unauthorized_or_unverified"
                 else:
-                    d["dispute_type"] = d.get("dispute_type", "inaccurate_reporting")
+                    dtype = d.get("dispute_type", "inaccurate_reporting")
+                    if dtype not in allowed_types:
+                        warnings.warn(
+                            f"[Fallback] Unrecognized dispute type '{dtype}' for '{d.get('name')}', using generic.",
+                            stacklevel=2,
+                        )
+                        log_messages.append(
+                            f"[{bureau_name}] Fallback dispute_type applied to '{d.get('name')}'"
+                        )
+                        sanitization_issues = True
+                        bureau_sanitization = True
+                        dtype = "inaccurate_reporting"
+                    d["dispute_type"] = dtype
             else:
                 d["dispute_type"] = "identity_theft"
+
+            summary = strategy_summaries.get(d.get("account_id"))
+            if summary is None or not isinstance(summary, dict):
+                warnings.warn(
+                    f"[Sanitization] Missing or malformed summary for '{d.get('name')}'",
+                    stacklevel=2,
+                )
+                log_messages.append(
+                    f"[{bureau_name}] Missing structured summary for '{d.get('name')}'"
+                )
+                sanitization_issues = True
+                bureau_sanitization = True
 
         fallback_norm_names = {
             normalize_creditor_name(d.get("name", ""))
@@ -333,9 +366,25 @@ def generate_all_dispute_letters_with_ai(
             if d.get("fallback_unrecognized_action")
         }
         fallback_used = bool(fallback_norm_names)
+        if fallback_used:
+            warnings.warn(
+                f"[Fallback] Generic content used for accounts: {', '.join(sorted(fallback_norm_names))}",
+                stacklevel=2,
+            )
+            log_messages.append(
+                f"[{bureau_name}] Generic content used for {', '.join(sorted(fallback_norm_names))}"
+            )
 
         # Always ignore any raw client notes; letters must only use strategy data
-        raw_client_text_present = False
+        raw_client_text_present = bool(client_info.get("custom_dispute_notes"))
+        if raw_client_text_present:
+            warnings.warn(
+                f"[PolicyViolation] Raw client notes provided for {bureau_name}; sanitized.",
+                stacklevel=2,
+            )
+            log_messages.append(f"[{bureau_name}] Raw client notes sanitized")
+            sanitization_issues = True
+            bureau_sanitization = True
 
         client_info_for_gpt = dict(client_info)
         # remove any stray custom notes so they cannot leak into prompts
@@ -448,10 +497,16 @@ def generate_all_dispute_letters_with_ai(
         with open(output_path / f"{bureau_name}_gpt_response.json", 'w') as f:
             json.dump(gpt_data, f, indent=2)
 
+        if bureau_sanitization or fallback_used or raw_client_text_present:
+            warnings.warn(
+                f"[Alert] Issues detected generating letter for {bureau_name}",
+                stacklevel=2,
+            )
+
         print(
             f"[LetterSummary] letter_id={filename}, bureau={bureau_name}, action=dispute, "
             f"template=dispute_letter_template.html, fallback_used={fallback_used}, "
-            f"raw_client_text_present={raw_client_text_present}"
+            f"raw_client_text_present={raw_client_text_present}, sanitization_issues={bureau_sanitization}"
         )
 
 generate_dispute_letters_for_all_bureaus = generate_all_dispute_letters_with_ai

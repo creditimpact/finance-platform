@@ -56,4 +56,4 @@ def test_state_clause_added(monkeypatch):
     text, violations, _ = fix_draft_with_guardrails(
         "Please investigate.", "NY", {"debt_type": "medical"}, session_id, "dispute"
     )
-    assert "pursuant to new york rules" in text.lower()
+    assert "new york financial services law" in text.lower()

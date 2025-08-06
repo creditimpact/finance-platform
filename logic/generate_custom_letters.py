@@ -9,6 +9,7 @@ from logic.utils import gather_supporting_docs
 from .summary_classifier import classify_client_summary
 from session_manager import get_session
 from logic.guardrails import generate_letter_with_guardrails
+from .rules_loader import get_neutral_phrase
 
 load_dotenv()
 
@@ -31,8 +32,14 @@ def call_gpt_for_custom_letter(
 ) -> str:
     docs_line = f"Supporting documents summary:\n{docs_text}" if docs_text else ""
     classification = classify_client_summary(structured_summary, state)
+    neutral_phrase = get_neutral_phrase(
+        classification.get("category"), structured_summary
+    )
     prompt = f"""
-Here is the structured summary for the account:
+Neutral legal phrase for this dispute type:
+"{neutral_phrase or ''}"
+
+Here is what the client explained about this account (structured summary):
 {json.dumps(structured_summary, indent=2)}
 Classification: {json.dumps(classification)}
 Client name: {client_name}
@@ -40,7 +47,7 @@ Recipient: {recipient_name}
 State: {state}
 Account: {account_name} {account_number}
 {docs_line}
-Please draft a compliant letter body following the systemic rules.
+Please draft a compliant letter body that blends the neutral legal phrase with the client's explanation. Do not copy either source verbatim.
 """
     body, _, _ = generate_letter_with_guardrails(
         prompt,

@@ -19,6 +19,7 @@ from logic.utils import (
 from .json_utils import parse_json
 from .strategy_engine import generate_strategy
 from .summary_classifier import classify_client_summary
+from .rules_loader import get_neutral_phrase
 from logic.guardrails import fix_draft_with_guardrails
 
 
@@ -109,6 +110,9 @@ def call_gpt_dispute_letter(client_info, bureau_name, disputes, inquiries, is_id
     for acc in disputes:
         struct = structured_summaries.get(acc.get("account_id"), {})
         classification = classify_client_summary(struct, state)
+        neutral_phrase = get_neutral_phrase(
+            classification.get("category"), struct
+        )
         block = {
             "name": acc.get("name", "Unknown"),
             "account_number": acc.get("account_number", "").replace("*", "") or "N/A",
@@ -119,6 +123,8 @@ def call_gpt_dispute_letter(client_info, bureau_name, disputes, inquiries, is_id
             "dispute_approach": classification.get("dispute_approach"),
             "structured_summary": struct,
         }
+        if neutral_phrase:
+            block["neutral_phrase"] = neutral_phrase
         if classification.get("state_hook"):
             block["state_hook"] = classification["state_hook"]
         if acc.get("advisor_comment"):
@@ -164,7 +170,7 @@ Credit Bureau: {bureau_name}
 State: {state}
 Identity Theft (confirmed by client): {"Yes" if is_identity_theft else "No"}
 
-Each disputed account below includes a dispute_type classification along with a suggested legal_hook and tone. Write a short custom paragraph per account referencing the provided legal_hook and any personal notes. Include a clear requested action such as deletion or correction.
+Each disputed account below includes a dispute_type classification, a neutral_phrase template, and the client's structured_summary. For each account, write a short custom paragraph that blends the neutral_phrase with the client's explanation, guided by the legal_hook and tone. Do not copy the phrase or explanation verbatim; instead, craft a professional summary and include a clear requested action such as deletion or correction.
 
 Disputed Accounts:
 {json.dumps(dispute_blocks, indent=2)}

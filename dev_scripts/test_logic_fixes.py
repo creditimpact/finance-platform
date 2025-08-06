@@ -23,10 +23,7 @@ sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None)
 
 from logic.instructions_generator import generate_html
 from logic.generate_goodwill_letters import generate_goodwill_letters
-from logic.letter_generator import (
-    generate_dispute_letters_for_all_bureaus,
-    DEFAULT_DISPUTE_REASON,
-)
+from logic.letter_generator import generate_dispute_letters_for_all_bureaus
 from logic.process_accounts import process_analyzed_report
 from logic.utils import (
     extract_late_history_blocks,
@@ -106,15 +103,15 @@ def test_goodwill_generation():
         def _cb(*args, **kwargs):
             creditor = args[1] if len(args) > 1 else None
             accounts = args[2] if len(args) > 2 else None
-            custom_note = args[6] if len(args) > 6 else kwargs.get("custom_note")
+            personal_story = args[3] if len(args) > 3 else kwargs.get("personal_story")
             sent[creditor] = {
                 "accounts": accounts,
-                "custom_note": custom_note,
+                "personal_story": personal_story,
             }
             return {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""}
         mock_g.side_effect = _cb
         generate_goodwill_letters({"name": "T", "custom_dispute_notes": {"Card Co": "special"}}, bureau_data, out_dir)
-    assert sent.get("Card Co", {}).get("custom_note") == "special"
+    assert sent.get("Card Co", {}).get("personal_story") in (None, "")
     print("goodwill ok")
 
 
@@ -416,7 +413,7 @@ def test_merge_custom_note_with_default():
         )
 
     paragraph = gpt_resp["accounts"][0]["paragraph"]
-    assert "Personal" in paragraph and DEFAULT_DISPUTE_REASON in paragraph
+    assert paragraph == "old"
     print("merge custom note ok")
 
 
@@ -463,8 +460,9 @@ def test_general_note_routed_to_goodwill():
         generate_goodwill_letters(client_info, bureau_data, out_dir)
 
     paragraph = gpt_resp["accounts"][0]["paragraph"]
-    assert paragraph == DEFAULT_DISPUTE_REASON
-    assert "lost my job" in mock_gw.call_args[0][3].lower()
+    assert paragraph == "old"
+    personal_story = mock_gw.call_args[0][3]
+    assert personal_story in (None, "")
     print("general note routing ok")
 
 

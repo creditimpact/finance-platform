@@ -11,7 +11,6 @@ import config
 from logic.utils import (
     gather_supporting_docs,
     get_client_address_lines,
-    analyze_custom_notes,
     CHARGEOFF_RE,
     COLLECTION_RE,
 )
@@ -335,23 +334,12 @@ def generate_all_dispute_letters_with_ai(
         }
         fallback_used = bool(fallback_norm_names)
 
-        # Analyze custom notes to separate account-specific vs general hardship content
-        raw_notes = client_info.get("custom_dispute_notes", {}) or {}
-        acc_names = [d.get("name", "") for d in disputes]
-        specific_notes, general_notes = analyze_custom_notes(raw_notes, acc_names)
-        if general_notes:
-            print(
-                f"[~] {len(general_notes)} general note(s) detected – excluded from dispute letter"
-            )
-
-        if config.RULEBOOK_FALLBACK_ENABLED:
-            for fn in fallback_norm_names:
-                specific_notes.pop(fn, None)
-
-        raw_client_text_present = bool(specific_notes)
+        # Always ignore any raw client notes; letters must only use strategy data
+        raw_client_text_present = False
 
         client_info_for_gpt = dict(client_info)
-        client_info_for_gpt["custom_dispute_notes"] = specific_notes
+        # remove any stray custom notes so they cannot leak into prompts
+        client_info_for_gpt.pop("custom_dispute_notes", None)
 
         gpt_data = call_gpt_dispute_letter(
             client_info_for_gpt,
@@ -364,34 +352,21 @@ def generate_all_dispute_letters_with_ai(
         )
 
         # 🔍 Post-process GPT output to enforce dispute-only language
-        note_map = {normalize_creditor_name(k): v for k, v in specific_notes.items()}
         for acc in gpt_data.get("accounts", []):
             name_key = normalize_creditor_name(acc.get("name", ""))
             if config.RULEBOOK_FALLBACK_ENABLED and name_key in fallback_norm_names:
                 acc["paragraph"] = DEFAULT_DISPUTE_REASON
                 acc.pop("requested_action", None)
-                acc.pop("personal_note", None)
-            else:
-                custom_note = note_map.get(name_key)
-                if custom_note:
-                    # Combine client's note with the strong default language
-                    acc["paragraph"] = (
-                        custom_note.strip() + " " + DEFAULT_DISPUTE_REASON
-                    )
-                    acc.pop("requested_action", None)
-                    acc.pop("personal_note", None)
-                else:
-                    # Apply the standard dispute language when no custom note exists
-                    acc["paragraph"] = DEFAULT_DISPUTE_REASON
-                    acc.pop("personal_note", None)
-                    # Override any GPT requested action to avoid goodwill wording
-                    action = acc.get("requested_action", "")
-                    if isinstance(action, str) and (
-                        "goodwill" in action.lower() or "hardship" in action.lower()
-                    ):
-                        acc["requested_action"] = (
-                            "Please verify this item and correct or remove any inaccuracies."
-                        )
+            # Remove any personal notes to prevent raw text leakage
+            acc.pop("personal_note", None)
+            # Override any GPT requested action to avoid goodwill wording
+            action = acc.get("requested_action", "")
+            if isinstance(action, str) and (
+                "goodwill" in action.lower() or "hardship" in action.lower()
+            ):
+                acc["requested_action"] = (
+                    "Please verify this item and correct or remove any inaccuracies."
+                )
 
             lookup_key = (
                 name_key,

@@ -16,26 +16,28 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def validate_env_variables():
+    defaults = {
+        "OPENAI_API_KEY": "local-api-key",
+        "OPENAI_BASE_URL": "http://localhost:8000/v1",
+        "SMTP_SERVER": "localhost",
+        "SMTP_PORT": "1025",
+        "SMTP_USERNAME": "noreply@example.com",
+        "SMTP_PASSWORD": "",
+    }
+
+    print("🔍 Validating environment configuration...\n")
+    for var, default in defaults.items():
+        if not os.getenv(var):
+            print(f"⚠️ {var} not set, using default '{default}'")
+            os.environ[var] = default
+        else:
+            print(f"✅ {var} is set.")
+    print("✅ Environment variables configured.\n")
+
+
 def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
-    def validate_env_variables():
-        defaults = {
-            "OPENAI_API_KEY": "local-api-key",
-            "OPENAI_BASE_URL": "http://localhost:8000/v1",
-            "SMTP_SERVER": "localhost",
-            "SMTP_PORT": "1025",
-            "SMTP_USERNAME": "noreply@example.com",
-            "SMTP_PASSWORD": "",
-        }
-
-        print("🔍 Validating environment configuration...\n")
-        for var, default in defaults.items():
-            if not os.getenv(var):
-                print(f"⚠️ {var} not set, using default '{default}'")
-                os.environ[var] = default
-            else:
-                print(f"✅ {var} is set.")
-        print("✅ Environment variables configured.\n")
-
     validate_env_variables()
 
     log_messages = []
@@ -314,6 +316,27 @@ Best regards,
                 print(f"[🧹] Deleted uploaded PDF: {pdf_path}")
             except Exception as delete_error:
                 print(f"[⚠️] Failed to delete uploaded PDF: {delete_error}")
+
+
+def extract_problematic_accounts_from_report(file_path: str, session_id: str | None = None) -> dict:
+    """Return problematic accounts extracted from the report for user review."""
+    validate_env_variables()
+
+    from logic.upload_validator import is_safe_pdf, move_uploaded_file
+
+    session_id = session_id or "session"
+    pdf_path = move_uploaded_file(Path(file_path), session_id)
+    if not is_safe_pdf(pdf_path):
+        raise ValueError("Uploaded file failed PDF safety checks.")
+
+    analyzed_json_path = Path("output/analyzed_report.json")
+    sections = analyze_credit_report(pdf_path, analyzed_json_path, {})
+
+    return {
+        "negative_accounts": sections.get("negative_accounts", []),
+        "open_accounts_with_issues": sections.get("open_accounts_with_issues", []),
+        "unauthorized_inquiries": sections.get("unauthorized_inquiries", []),
+    }
 
 def get_current_month():
     return datetime.now().strftime("%Y-%m")

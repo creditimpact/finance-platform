@@ -17,10 +17,14 @@ export async function startProcess(email, file) {
   return response.json();
 }
 
-export async function checkStatus(taskId) {
-  const response = await fetch(`${API_BASE_URL}/api/status/${taskId}`);
+export async function submitExplanations(payload) {
+  const response = await fetch(`${API_BASE_URL}/api/submit-explanations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
   if (!response.ok) {
-    throw new Error('Failed to fetch status');
+    throw new Error('Failed to submit explanations');
   }
   return response.json();
 }

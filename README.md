@@ -63,3 +63,99 @@ celery -A tasks worker --loglevel=info
 The worker bootstrap ensures the repository root is added to
 `sys.path`, allowing modules such as `session_manager` to be imported
 even if the current working directory differs.
+
+## Rulebook Overview
+
+The system enforces guardrails defined in YAML files under the `rules/` directory:
+
+- `rules/dispute_rules.yaml` – core systemic rules such as `RULE_NO_ADMISSION`,
+  `RULE_PII_LIMIT`, and `RULE_NEUTRAL_LANGUAGE`.
+- `rules/neutral_phrases.yaml` – predefined neutral statements referenced in summaries.
+- `rules/state_rules.yaml` – state-specific clauses, disclosures, and prohibitions.
+
+Each rule has a **severity** (`critical` or `warning`). Critical violations are
+automatically fixed when a `fix_template` is provided; otherwise they are surfaced
+to callers for remediation.
+
+To add or modify a rule, edit the appropriate YAML file and include the new
+`id`, `description`, `severity`, `block_patterns`, and optional `fix_template`.
+
+## Letter Generation Flow
+
+1. **Upload** – users upload a credit report PDF.
+2. **Extraction** – accounts and explanations are parsed.
+3. **Explanation Normalization** – user text is sanitized and paraphrased into a
+   structured summary.
+4. **Letter Generation** – templates are filled using the structured summary
+   only; raw user text is never inserted.
+5. **Guardrail Enforcement** – the draft letter passes through the rule checker
+   which masks PII, replaces admissions, enforces neutral tone, and injects
+   applicable state clauses or disclosures.
+6. **Outcome Recording** – when results arrive from bureaus, outcomes are stored
+   and can be exported weekly.
+
+An overview diagram is available in `architecture.svg`.
+
+## State Compliance
+
+State rules are automatically applied based on the provided state code. Clauses
+are appended for certain debt types (e.g., New York medical debt), disclosures
+are added where required, and service is blocked in prohibited states such as
+Georgia. Update `rules/state_rules.yaml` to introduce new clauses or
+disclosures.
+
+## Development Setup
+
+### Backend
+
+```bash
+pip install -r requirements.txt
+python app.py
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### Environment Variables
+
+Create a `.env` file in the project root. The most important variable is
+`OPENAI_API_KEY`. A sample:
+
+```env
+OPENAI_API_KEY=your-key
+OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
+## Testing
+
+Run backend tests with a dummy API key to avoid live requests:
+
+```bash
+OPENAI_API_KEY=dummy pytest --maxfail=1 --disable-warnings -q
+```
+
+Frontend Jest tests:
+
+```bash
+cd frontend
+npm test
+```
+
+## Extending the System
+
+- **New dispute types** – add neutral phrasing in `neutral_phrases.yaml` and
+  handle any bespoke rules in `dispute_rules.yaml`.
+- **New state rules** – extend `state_rules.yaml` with clauses, disclosures, or
+  prohibitions.
+- **Additional compliance checks** – introduce new systemic rules in
+  `dispute_rules.yaml` and corresponding tests.
+
+## Contributing
+
+See `CONTRIBUTING.md` for coding standards, testing requirements, and the pull
+request process.

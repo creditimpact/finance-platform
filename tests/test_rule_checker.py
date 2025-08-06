@@ -29,3 +29,17 @@ def test_state_specific_clause_appended_for_ny_medical():
     text = "This concerns a medical debt."
     cleaned, _ = check_letter(text, state="NY", context={"debt_type": "medical"})
     assert "pursuant to new york rules limiting medical debt reporting" in cleaned.lower()
+
+
+def test_ga_service_prohibited():
+    text = "Irrelevant"
+    _, violations = check_letter(text, state="GA", context={})
+    assert any(v["rule_id"] == "STATE_PROHIBITED" for v in violations)
+
+
+def test_neutral_language_enforced():
+    text = "These crooks are running a scam!"
+    cleaned, violations = check_letter(text, state=None, context={})
+    assert "crooks" not in cleaned.lower()
+    assert "I believe there may be an error." in cleaned
+    assert any(v["rule_id"] == "RULE_NEUTRAL_LANGUAGE" for v in violations)

@@ -2,6 +2,15 @@
 
 This repository contains a simplified demo of a credit repair automation flow used for testing.
 
+## Environment
+
+All backend components read configuration from a `.env` file on startup via
+[python-dotenv](https://pypi.org/project/python-dotenv/). Provide
+`OPENAI_API_KEY` and optionally `OPENAI_BASE_URL` in this file. When
+`OPENAI_BASE_URL` is absent, the default `https://api.openai.com/v1` is used.
+The Flask server, Celery workers and any CLI scripts load this file
+automatically when they start.
+
 ## Action Tags
 
 Accounts may contain an `action_tag` field used to control which letters are generated. The allowed values are:

@@ -27,3 +27,19 @@ nav a:hover {
 .error {
   color: #d93025;
 }
+
+.account-block {
+  margin-bottom: 1.5rem;
+}
+
+.problem-list {
+  margin: 0.5rem 0 0.5rem 1.25rem;
+}
+
+.problem-item.warning {
+  color: #e6a700;
+}
+
+.problem-item.critical {
+  color: #d93025;
+}

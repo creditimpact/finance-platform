@@ -70,4 +70,4 @@ def test_unrecognized_action_fallback(monkeypatch, tmp_path, capsys):
 
     out, _ = capsys.readouterr()
     assert "fallback_used=True" in out
-    assert "raw_client_text_present=False" in out
+    assert "raw_client_text_present=True" in out

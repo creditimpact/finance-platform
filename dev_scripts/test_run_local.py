@@ -127,13 +127,16 @@ def test_skip_goodwill_when_identity_theft():
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         proofs = {"smartcredit_report": tmp.name}
         with (
-            mock.patch.dict(os.environ, {
-                "OPENAI_API_KEY": "x",
-                "SMTP_SERVER": "x",
-                "SMTP_PORT": "587",
-                "SMTP_USERNAME": "x",
-                "SMTP_PASSWORD": "x",
-            }),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", "test"),
+                    "SMTP_SERVER": "x",
+                    "SMTP_PORT": "587",
+                    "SMTP_USERNAME": "x",
+                    "SMTP_PASSWORD": "x",
+                },
+            ),
             mock.patch("main.extract_bureau_info_column_refined", return_value={"data": {}}),
             mock.patch("main.analyze_credit_report", return_value={}),
             mock.patch("main.gather_supporting_docs_text", return_value=""),

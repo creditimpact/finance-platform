@@ -1,9 +1,15 @@
+import logging
+import config
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 import uuid
 from tasks import process_report, extract_problematic_accounts
 from admin import admin_bp
+
+logger = logging.getLogger(__name__)
+logger.info("Flask app starting with OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL)
+logger.info("Flask app OPENAI_API_KEY present=%s", bool(config.OPENAI_API_KEY))
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)

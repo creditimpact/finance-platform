@@ -1,9 +1,12 @@
 import os
 import json
+import logging
+import config
 from pathlib import Path
 from datetime import datetime
 
 def save_analytics_snapshot(client_info: dict, report_summary: dict):
+    logging.getLogger(__name__).info("Analytics tracker using OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL)
     analytics_dir = Path("analytics_data")
     analytics_dir.mkdir(exist_ok=True)
 

@@ -41,7 +41,10 @@ def dedupe_disputes(disputes: list[dict], bureau_name: str, log: list[str]) -> l
     return deduped
 
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+)
 WKHTMLTOPDF_PATH = os.getenv("WKHTMLTOPDF_PATH", "wkhtmltopdf")
 
 CREDIT_BUREAU_ADDRESSES = {
@@ -173,7 +176,10 @@ Unauthorized Inquiries:
     from dotenv import load_dotenv
 
     load_dotenv()
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    client = OpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+    )
 
     response = client.chat.completions.create(
         model="gpt-4",

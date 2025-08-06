@@ -8,7 +8,10 @@ import pdfkit
 from logic.utils import gather_supporting_docs
 
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+)
 
 WKHTMLTOPDF_PATH = os.getenv("WKHTMLTOPDF_PATH", "wkhtmltopdf")
 pdf_config = pdfkit.configuration(wkhtmltopdf=WKHTMLTOPDF_PATH)

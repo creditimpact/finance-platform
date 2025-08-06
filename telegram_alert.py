@@ -1,4 +1,5 @@
 from datetime import datetime
+import config  # Ensures environment variables are loaded when this script runs
 
 
 def send_admin_login_alert(ip: str | None = None) -> None:

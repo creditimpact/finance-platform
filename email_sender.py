@@ -1,5 +1,7 @@
 import smtplib
 import os
+import logging
+import config
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -12,6 +14,7 @@ def send_email_with_attachment(receiver_email, subject, body, files):
     smtp_port = int(os.getenv("SMTP_PORT", "1025"))
     sender_email = os.getenv("SMTP_USERNAME", "noreply@example.com")
     sender_password = os.getenv("SMTP_PASSWORD", "")  # local dev default
+    logging.getLogger(__name__).info("Email sender using OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL)
 
     msg = EmailMessage()
     msg["From"] = sender_email

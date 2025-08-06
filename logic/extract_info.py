@@ -12,7 +12,10 @@ from dotenv import load_dotenv
 logging.getLogger("pdfplumber.page").setLevel(logging.ERROR)
 
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+)
 
 def extract_clean_name(full_name: str) -> str:
     parts = full_name.strip().split()

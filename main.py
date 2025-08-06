@@ -1,4 +1,6 @@
 import os
+import logging
+import config
 from pathlib import Path
 from datetime import datetime
 from shutil import copyfile
@@ -12,15 +14,14 @@ from logic.generate_custom_letters import generate_custom_letters
 from logic.generate_strategy_report import StrategyGenerator
 from email_sender import send_email_with_attachment
 from analytics_tracker import save_analytics_snapshot
-from dotenv import load_dotenv
 
-load_dotenv()
+logger = logging.getLogger(__name__)
+logger.info("Main process starting with OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL)
+logger.info("Main process OPENAI_API_KEY present=%s", bool(config.OPENAI_API_KEY))
 
 
 def validate_env_variables():
     defaults = {
-        "OPENAI_API_KEY": "local-api-key",
-        "OPENAI_BASE_URL": "http://localhost:8000/v1",
         "SMTP_SERVER": "localhost",
         "SMTP_PORT": "1025",
         "SMTP_USERNAME": "noreply@example.com",
@@ -28,6 +29,12 @@ def validate_env_variables():
     }
 
     print("🔍 Validating environment configuration...\n")
+    base_url = os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+    os.environ["OPENAI_BASE_URL"] = base_url
+    if not os.getenv("OPENAI_API_KEY"):
+        raise EnvironmentError("OPENAI_API_KEY is missing")
+    print(f"✅ OPENAI_BASE_URL: {base_url}")
+    print("✅ OPENAI_API_KEY is set.")
     for var, default in defaults.items():
         if not os.getenv(var):
             print(f"⚠️ {var} not set, using default '{default}'")

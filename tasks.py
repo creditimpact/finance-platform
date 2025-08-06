@@ -1,17 +1,17 @@
 import os
 import uuid
 import logging
+import config
 from celery import Celery
-from dotenv import load_dotenv
 from main import run_credit_repair_process, extract_problematic_accounts_from_report
-
-load_dotenv()
 
 BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 app = Celery('tasks', broker=BROKER_URL, backend=BROKER_URL)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.info("Celery worker starting with OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL)
+logger.info("Celery worker OPENAI_API_KEY present=%s", bool(config.OPENAI_API_KEY))
 
 @app.task(bind=True, name='extract_problematic_accounts')
 def extract_problematic_accounts(self, file_path: str, session_id: str | None = None):

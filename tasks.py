@@ -1,6 +1,15 @@
 import os
+import sys
 import uuid
 import logging
+
+# Ensure the project root is always on sys.path so local modules can be
+# imported even when the worker is launched from outside the repository
+# directory.
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import config
 from celery import Celery
 from main import run_credit_repair_process, extract_problematic_accounts_from_report
@@ -12,6 +21,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.info("Celery worker starting with OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL)
 logger.info("Celery worker OPENAI_API_KEY present=%s", bool(config.OPENAI_API_KEY))
+
+# Verify that session_manager is importable at startup. This helps catch
+# cases where the worker is launched from a directory that omits the
+# project root from PYTHONPATH.
+try:
+    import session_manager  # noqa: F401
+    logger.info("session_manager import successful")
+except Exception as exc:  # pragma: no cover - log and continue
+    logger.exception("session_manager import failed: %s", exc)
 
 
 def _ensure_file(file_path: str) -> None:

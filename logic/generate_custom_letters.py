@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader
 import pdfkit
 from logic.utils import gather_supporting_docs
+from .summary_classifier import classify_client_summary
 from session_manager import get_session
 from logic.guardrails import generate_letter_with_guardrails
 
@@ -29,9 +30,11 @@ def call_gpt_for_custom_letter(
     session_id: str,
 ) -> str:
     docs_line = f"Supporting documents summary:\n{docs_text}" if docs_text else ""
+    classification = classify_client_summary(structured_summary, state)
     prompt = f"""
 Here is the structured summary for the account:
 {json.dumps(structured_summary, indent=2)}
+Classification: {json.dumps(classification)}
 Client name: {client_name}
 Recipient: {recipient_name}
 State: {state}
@@ -42,7 +45,10 @@ Please draft a compliant letter body following the systemic rules.
     body, _, _ = generate_letter_with_guardrails(
         prompt,
         state,
-        {"debt_type": structured_summary.get("debt_type")},
+        {
+            "debt_type": structured_summary.get("debt_type"),
+            "dispute_reason": classification.get("category"),
+        },
         session_id,
         "custom",
     )

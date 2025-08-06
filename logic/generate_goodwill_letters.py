@@ -16,6 +16,7 @@ from logic.utils import (
 from .json_utils import parse_json
 from session_manager import get_session
 from logic.guardrails import fix_draft_with_guardrails
+from .summary_classifier import classify_client_summary
 
 load_dotenv()
 client = OpenAI(
@@ -128,6 +129,7 @@ def call_gpt_for_goodwill_letter(
     tone="neutral",
     session_id=None,
     structured_summaries=None,
+    state=None,
 ):
     """Compose a goodwill letter prompt and call GPT.
 
@@ -210,7 +212,19 @@ def call_gpt_for_goodwill_letter(
             "repayment_status": acc.get("account_status") or acc.get("payment_status"),
         }
         if structured_summaries:
-            summary["structured_summary"] = structured_summaries.get(acc.get("account_id"), {})
+            struct = structured_summaries.get(acc.get("account_id"), {})
+            summary["structured_summary"] = struct
+            cls = classify_client_summary(struct, state)
+            summary.update(
+                {
+                    "dispute_reason": cls.get("category"),
+                    "legal_hook": cls.get("legal_tag"),
+                    "tone": cls.get("tone"),
+                    "dispute_approach": cls.get("dispute_approach"),
+                }
+            )
+            if cls.get("state_hook"):
+                summary["state_hook"] = cls["state_hook"]
         late_summary = summarize_late(acc.get("late_payments"))
         if late_summary:
             summary["late_history"] = late_summary
@@ -321,6 +335,7 @@ def generate_goodwill_letter_with_ai(creditor, accounts, client_info, output_pat
         tone,
         session_id,
         structured_summaries,
+        state=client_info.get("state"),
     )
 
     _, doc_names, _ = gather_supporting_docs(session_id or "")

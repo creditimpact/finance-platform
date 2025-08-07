@@ -20,10 +20,11 @@ def test_load_neutral_phrases():
 
 
 def test_get_neutral_phrase_matches_category():
-    phrase = rules_loader.get_neutral_phrase(
+    phrase, reason = rules_loader.get_neutral_phrase(
         "not_mine", {"facts_summary": "this account is not mine"}
     )
     assert phrase in rules_loader.load_neutral_phrases()["not_mine"]
+    assert reason["method"] in {"word_overlap", "default"}
 
 
 def test_load_state_rules():

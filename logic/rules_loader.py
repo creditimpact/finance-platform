@@ -37,13 +37,16 @@ def load_neutral_phrases() -> dict:
 _NEUTRAL_CACHE: dict | None = None
 
 
-def get_neutral_phrase(category: str, structured_summary: dict | None = None) -> str | None:
-    """Return a neutral phrase for ``category`` matching the client's summary.
+def get_neutral_phrase(
+    category: str, structured_summary: dict | None = None
+) -> tuple[str | None, dict]:
+    """Return a neutral phrase and selection metadata for ``category``.
 
     The phrase list is loaded from ``neutral_phrases.yaml`` only once. A very
     lightweight heuristic picks the phrase sharing the most word overlap with
     the client's structured summary. If no summary is provided, the first phrase
-    for the category is returned.
+    for the category is returned. The second element of the tuple describes why
+    the phrase was chosen.
     """
 
     global _NEUTRAL_CACHE
@@ -52,7 +55,7 @@ def get_neutral_phrase(category: str, structured_summary: dict | None = None) ->
 
     phrases = _NEUTRAL_CACHE.get(category, [])
     if not phrases:
-        return None
+        return None, {}
 
     if structured_summary:
         text = " ".join(
@@ -60,9 +63,11 @@ def get_neutral_phrase(category: str, structured_summary: dict | None = None) ->
         )
         words = set(text.split())
         if words:
-            return max(phrases, key=lambda p: len(words & set(p.lower().split())))
+            chosen = max(phrases, key=lambda p: len(words & set(p.lower().split())))
+            matched = sorted(words & set(chosen.lower().split()))
+            return chosen, {"method": "word_overlap", "matched_words": matched}
 
-    return phrases[0]
+    return phrases[0], {"method": "default", "matched_words": []}
 
 
 def load_state_rules() -> dict:

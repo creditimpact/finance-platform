@@ -112,7 +112,7 @@ def call_gpt_dispute_letter(client_info, bureau_name, disputes, inquiries, is_id
     for acc in disputes:
         struct = structured_summaries.get(acc.get("account_id"), {})
         classification = classify_client_summary(struct, state)
-        neutral_phrase = get_neutral_phrase(
+        neutral_phrase, neutral_reason = get_neutral_phrase(
             classification.get("category"), struct
         )
         block = {
@@ -147,6 +147,7 @@ def call_gpt_dispute_letter(client_info, bureau_name, disputes, inquiries, is_id
                     "structured_summary": struct,
                     "classification": classification,
                     "neutral_phrase": neutral_phrase,
+                    "neutral_phrase_reason": neutral_reason,
                     "recommended_action": acc.get("recommended_action"),
                 },
             )

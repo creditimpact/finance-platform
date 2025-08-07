@@ -228,7 +228,7 @@ def call_gpt_for_goodwill_letter(
             )
             if cls.get("state_hook"):
                 summary["state_hook"] = cls["state_hook"]
-            neutral = get_neutral_phrase(cls.get("category"), struct)
+            neutral, neutral_reason = get_neutral_phrase(cls.get("category"), struct)
             if neutral:
                 summary["neutral_phrase"] = neutral
             if audit:
@@ -238,6 +238,7 @@ def call_gpt_for_goodwill_letter(
                         "stage": "goodwill_letter",
                         "classification": cls,
                         "neutral_phrase": neutral,
+                        "neutral_phrase_reason": neutral_reason,
                         "structured_summary": struct,
                     },
                 )

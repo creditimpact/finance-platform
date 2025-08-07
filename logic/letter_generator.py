@@ -241,7 +241,7 @@ Unauthorized Inquiries:
     print(content)
     print("----- END RESPONSE -----\n")
 
-    result = parse_json(content)
+    result, _ = parse_json(content)
     if audit:
         audit.log_step(
             "dispute_response",

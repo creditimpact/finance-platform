@@ -96,7 +96,7 @@ def extract_structured(safe_text: str, account_ctx: Dict[str, Any]) -> Dict[str,
             },
         )
         content = response.output[0].content[0].text
-        data = parse_json(content)
+        data, _ = parse_json(content)
     except Exception:
         # Fallback to empty structure
         data = {}

@@ -304,7 +304,7 @@ Return strictly valid JSON: all property names and strings in double quotes, no 
     print(content)
     print("----- END RESPONSE -----\n")
 
-    result = parse_json(content)
+    result, _ = parse_json(content)
     if audit:
         audit.log_step(
             "goodwill_letter_response",

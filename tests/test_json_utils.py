@@ -5,20 +5,44 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from logic.json_utils import parse_json
 
+
 def test_parse_valid_json():
-    assert parse_json('{"a": 1}') == {"a": 1}
+    data, err = parse_json('{"a": 1}')
+    assert data == {"a": 1}
+    assert err is None
+
 
 def test_parse_trailing_comma():
-    assert parse_json('{"a": 1,}') == {"a": 1}
+    data, err = parse_json('{"a": 1,}')
+    assert data == {"a": 1}
+    assert err is None
+
 
 def test_parse_missing_comma():
-    assert parse_json('{"a": 1 "b": 2}') == {"a": 1, "b": 2}
+    data, err = parse_json('{"a": 1 "b": 2}')
+    assert data == {"a": 1, "b": 2}
+    assert err is None
+
 
 def test_parse_single_quotes():
-    assert parse_json("{'a': 'b'}") == {"a": "b"}
+    data, err = parse_json("{'a': 'b'}")
+    assert data == {"a": "b"}
+    assert err is None
+
 
 def test_parse_unquoted_keys():
-    assert parse_json('{advisor_comment: "text here"}') == {"advisor_comment": "text here"}
+    data, err = parse_json('{advisor_comment: "text here"}')
+    assert data == {"advisor_comment": "text here"}
+    assert err is None
+
 
 def test_parse_mismatched_braces():
-    assert parse_json('{"a": 1, "b": 2') == {"a": 1, "b": 2}
+    data, err = parse_json('{"a": 1, "b": 2')
+    assert data == {"a": 1, "b": 2}
+    assert err is None
+
+
+def test_parse_invalid_json():
+    data, err = parse_json('not json')
+    assert data == {}
+    assert err == "invalid_json"

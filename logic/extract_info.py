@@ -4,7 +4,7 @@ import pdfplumber
 import logging
 import json
 from typing import Dict, List
-from .utils import normalize_bureau_name, BUREAUS
+from logic.utils.names_normalization import normalize_bureau_name, BUREAUS
 from collections import Counter
 from openai import OpenAI
 from dotenv import load_dotenv

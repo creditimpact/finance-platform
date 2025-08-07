@@ -5,12 +5,8 @@ from shutil import copyfile
 
 from audit import AuditLevel
 from logic.extract_info import extract_bureau_info_column_refined
-from logic.utils import (
-    convert_txts_to_pdfs,
-    gather_supporting_docs_text,
-    filter_sections_by_bureau,
-    extract_summary_from_sections,
-)
+from logic.utils.pdf_ops import convert_txts_to_pdfs, gather_supporting_docs_text
+from logic.utils.report_sections import filter_sections_by_bureau, extract_summary_from_sections
 from logic.summary_classifier import classify_client_summary
 from logic.constants import StrategistFailureReason
 from analytics_tracker import save_analytics_snapshot

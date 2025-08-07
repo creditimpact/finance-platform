@@ -7,12 +7,10 @@ from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader
 import pdfkit
 import re
-from logic.utils import (
-    gather_supporting_docs,
-    has_late_indicator,
-    safe_filename,
-    get_client_address_lines,
-)
+from logic.utils.pdf_ops import gather_supporting_docs
+from logic.utils.text_parsing import has_late_indicator
+from logic.utils.file_paths import safe_filename
+from logic.utils.note_handling import get_client_address_lines
 from .json_utils import parse_json
 from session_manager import get_session
 from logic.guardrails import fix_draft_with_guardrails

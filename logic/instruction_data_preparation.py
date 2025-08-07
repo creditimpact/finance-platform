@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from logic.generate_goodwill_letters import normalize_creditor_name
-from logic.utils import analyze_custom_notes
+from logic.utils.note_handling import analyze_custom_notes
 
 load_dotenv()
 client = OpenAI(

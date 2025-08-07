@@ -11,7 +11,7 @@ from logic.constants import (
     normalize_action_tag,
 )
 from logic.fallback_manager import determine_fallback_action
-from logic.utils import normalize_creditor_name
+from logic.utils.names_normalization import normalize_creditor_name
 
 
 def merge_strategy_outputs(strategy_obj: dict, bureau_data_obj: dict) -> None:

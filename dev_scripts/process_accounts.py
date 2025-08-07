@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .generate_goodwill_letters import normalize_creditor_name
-from .utils import normalize_bureau_name, enforce_collection_status
+from logic.utils.names_normalization import normalize_bureau_name
+from logic.utils.text_parsing import enforce_collection_status
 
 BUREAUS = ["Experian", "Equifax", "TransUnion"]
 

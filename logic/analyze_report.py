@@ -6,12 +6,14 @@ from dotenv import load_dotenv
 from pathlib import Path
 import re
 from .generate_goodwill_letters import normalize_creditor_name
-from logic.utils import (
+from logic.utils.text_parsing import (
     extract_late_history_blocks,
-    extract_pdf_text_safe,
-    extract_inquiries,
+    has_late_indicator,
+    enforce_collection_status,
 )
-from .utils import normalize_bureau_name, has_late_indicator, enforce_collection_status
+from logic.utils.pdf_ops import extract_pdf_text_safe
+from logic.utils.inquiries import extract_inquiries
+from logic.utils.names_normalization import normalize_bureau_name
 from .json_utils import parse_json
 
 load_dotenv()

@@ -17,7 +17,7 @@ from typing import List
 import config
 from audit import AuditLevel, get_audit
 from logic.guardrails import fix_draft_with_guardrails
-from logic.utils import get_client_address_lines
+from logic.utils.note_handling import get_client_address_lines
 
 from .generate_goodwill_letters import normalize_creditor_name
 from .strategy_engine import generate_strategy

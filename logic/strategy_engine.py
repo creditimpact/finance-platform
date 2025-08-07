@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Any, Dict, List
 
 from session_manager import get_session, update_session
@@ -83,7 +83,7 @@ def generate_strategy(session_id: str, bureau_data: Dict[str, Any]) -> Dict[str,
     items = _build_dispute_items(structured, bureau_data)
 
     strategy: Dict[str, Any] = {
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "rules": load_rules(),
         "dispute_items": structured,
         "bureau_data": bureau_data,

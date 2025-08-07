@@ -1,7 +1,7 @@
 import json
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Dict, List, Optional
 
 OUTCOMES_FILE = os.path.join("data", "outcomes.json")
@@ -40,7 +40,7 @@ def record_outcome(
 ) -> None:
     """Append an outcome record with timestamp to persistent storage."""
     record = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "session_id": session_id,
         "account_id": account_id,
         "bureau": bureau,

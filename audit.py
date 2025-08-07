@@ -1,6 +1,6 @@
 from __future__ import annotations
 import json
-from datetime import datetime
+from datetime import datetime, UTC
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -29,7 +29,7 @@ class AuditLogger:
     def __init__(self, level: AuditLevel = AuditLevel.ESSENTIAL) -> None:
         self.level = level
         self.data: Dict[str, Any] = {
-            "start_time": datetime.utcnow().isoformat(),
+            "start_time": datetime.now(UTC).isoformat(),
             "steps": [],
             "accounts": {},
             "errors": [],
@@ -41,7 +41,7 @@ class AuditLogger:
         self.data["steps"].append(
             {
                 "stage": stage,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "details": details or {},
             }
         )
@@ -50,13 +50,13 @@ class AuditLogger:
         if self.level == AuditLevel.ESSENTIAL and info.get("stage") not in self.ESSENTIAL_STEPS:
             return
         acc = self.data["accounts"].setdefault(str(account_id), [])
-        entry = {"timestamp": datetime.utcnow().isoformat()}
+        entry = {"timestamp": datetime.now(UTC).isoformat()}
         entry.update(info)
         acc.append(entry)
 
     def log_error(self, message: str) -> None:
         self.data["errors"].append(
-            {"timestamp": datetime.utcnow().isoformat(), "message": message}
+            {"timestamp": datetime.now(UTC).isoformat(), "message": message}
         )
 
     def save(self, folder: Path) -> Path:

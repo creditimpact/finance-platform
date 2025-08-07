@@ -9,17 +9,15 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 from datetime import datetime
 from pathlib import Path
-
-import pdfkit
 
 from logic.instruction_data_preparation import (
     prepare_instruction_data,
     generate_account_action,  # re-exported for backward compatibility
 )
 from logic.instruction_renderer import build_instruction_html
+from logic import pdf_renderer
 
 
 def get_logo_base64() -> str:
@@ -30,19 +28,6 @@ def get_logo_base64() -> str:
             encoded = base64.b64encode(f.read()).decode("ascii")
         return f"data:image/png;base64,{encoded}"
     return ""
-
-
-def render_html_to_pdf(html_string: str, output_path: Path):
-    """Render the provided HTML string to a PDF file."""
-    config = pdfkit.configuration(
-        wkhtmltopdf=os.getenv("WKHTMLTOPDF_PATH", "wkhtmltopdf")
-    )
-    options = {"quiet": ""}
-    try:
-        pdfkit.from_string(html_string, str(output_path), configuration=config, options=options)
-        print(f"[📄] PDF rendered: {output_path}")
-    except Exception as e:
-        print(f"[❌] Failed to render PDF: {e}")
 
 
 def generate_html(
@@ -103,7 +88,7 @@ def render_pdf_from_html(html: str, output_path: Path) -> Path:
     """Persist the rendered PDF to disk."""
     output_path.mkdir(parents=True, exist_ok=True)
     filepath = output_path / "Start_Here - Instructions.pdf"
-    render_html_to_pdf(html, filepath)
+    pdf_renderer.render_html_to_pdf(html, str(filepath))
     return filepath
 
 

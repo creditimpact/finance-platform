@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import html as html_utils
 import random
-from jinja2 import Environment, FileSystemLoader
-
-env = Environment(loader=FileSystemLoader("templates"))
+from logic import pdf_renderer
 
 
 def render_instruction_html(context: dict) -> str:
     """Render the Jinja2 template with the provided context."""
+    env = pdf_renderer.ensure_template_env("templates")
     template = env.get_template("instruction_template.html")
     return template.render(**context)
 

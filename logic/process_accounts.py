@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from .generate_goodwill_letters import normalize_creditor_name
 from .utils import normalize_bureau_name, enforce_collection_status
+from .fallback_manager import determine_fallback_action
 from audit import get_audit
 from .constants import FallbackReason
 
@@ -203,6 +204,7 @@ def process_analyzed_report(
                 f"[{bureau}] Inquiry '{inquiry.get('creditor_name')}' matched known account and was skipped"
             )
 
+    
     def apply_fallback_tags(
         data_dict: Dict[str, Dict[str, List[Any]]], log_list: list[str] | None = None
     ) -> None:
@@ -211,40 +213,27 @@ def process_analyzed_report(
         for bureau, payload in data_dict.items():
             for sec in ["disputes", "goodwill", "high_utilization"]:
                 for acc in payload.get(sec, []):
-                    status = str(
-                        acc.get("status") or acc.get("account_status") or ""
-                    ).lower()
-                    if any(
-                        x in status
-                        for x in (
-                            "collection",
-                            "chargeoff",
-                            "charge-off",
-                            "charge off",
-                            "repossession",
-                            "repos",
-                            "delinquent",
-                            "late payments",
-                        )
-                    ) or acc.get("dispute_type"):
-                        if not acc.get("action_tag"):
-                            original_tag = acc.get("action_tag")
-                            if audit:
-                                audit.log_account(
-                                    acc.get("account_id") or acc.get("name"),
-                                    {
-                                        "stage": "pre_strategy_fallback",
-                                        "fallback_reason": FallbackReason.KEYWORD_MATCH.value,
-                                        "original_tag": original_tag,
-                                    },
-                                )
-                            acc["action_tag"] = "dispute"
-                            if acc.get("recommended_action") is None:
-                                acc["recommended_action"] = "Dispute"
-                            if log_list is not None:
-                                log_list.append(
-                                    f"[{bureau}] Fallback dispute tag applied to '{acc.get('name')}' ({FallbackReason.KEYWORD_MATCH.value})"
-                                )
+                    if acc.get("action_tag"):
+                        continue
+                    action = determine_fallback_action(acc)
+                    if action == "dispute":
+                        original_tag = acc.get("action_tag")
+                        if audit:
+                            audit.log_account(
+                                acc.get("account_id") or acc.get("name"),
+                                {
+                                    "stage": "pre_strategy_fallback",
+                                    "fallback_reason": FallbackReason.KEYWORD_MATCH.value,
+                                    "original_tag": original_tag,
+                                },
+                            )
+                        acc["action_tag"] = "dispute"
+                        if acc.get("recommended_action") is None:
+                            acc["recommended_action"] = "Dispute"
+                        if log_list is not None:
+                            log_list.append(
+                                f"[{bureau}] Fallback dispute tag applied to '{acc.get('name')}' ({FallbackReason.KEYWORD_MATCH.value})",
+                            )
 
     apply_fallback_tags(output, log_list)
     return output

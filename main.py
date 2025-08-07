@@ -51,6 +51,7 @@ def validate_env_variables():
 def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classification_map: dict, audit=None, log_list=None):
     from logic.constants import normalize_action_tag, FallbackReason, StrategistFailureReason
     from logic.utils import normalize_creditor_name
+    from logic.fallback_manager import determine_fallback_action
     import re
 
     def norm_key(name: str, number: str) -> tuple[str, str]:
@@ -129,10 +130,6 @@ def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classificatio
                         acc["flags"] = src["flags"]
 
                 if not acc.get("action_tag"):
-                    status_text = str(
-                        acc.get("status") or acc.get("account_status") or ""
-                    ).strip().lower()
-
                     strategist_action = raw_action if raw_action else None
                     if raw_action is None:
                         fallback_reason = FallbackReason.NO_RECOMMENDATION
@@ -144,19 +141,8 @@ def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classificatio
                             else FallbackReason.UNRECOGNIZED_TAG
                         )
 
-                    keywords_trigger = any(
-                        s in status_text
-                        for s in (
-                            "collection",
-                            "chargeoff",
-                            "charge-off",
-                            "charge off",
-                            "repossession",
-                            "repos",
-                            "delinquent",
-                            "late payments",
-                        )
-                    ) or acc.get("dispute_type")
+                    fallback_action = determine_fallback_action(acc)
+                    keywords_trigger = fallback_action == "dispute"
 
                     if keywords_trigger:
                         acc["action_tag"] = "dispute"

@@ -21,7 +21,7 @@ from .strategy_engine import generate_strategy
 from .summary_classifier import classify_client_summary
 from .rules_loader import get_neutral_phrase
 from logic.guardrails import fix_draft_with_guardrails
-from audit import get_audit
+from audit import get_audit, AuditLevel
 
 
 logger = logging.getLogger(__name__)
@@ -199,14 +199,15 @@ Unauthorized Inquiries:
     session_id = client_info.get("session_id", "")
     docs_text, doc_names, _ = gather_supporting_docs(session_id)
     if docs_text:
-        print(f"[📎] Including supplemental docs for {bureau_name} prompt.")
+        if audit and audit.level is AuditLevel.VERBOSE:
+            print(f"[📎] Including supplemental docs for {bureau_name} prompt.")
         prompt += (
             "\nThe client also provided the following supporting documents:\n"
             f"{docs_text}\n"
             "You may reference them in the overall letter if helpful, but do not "
             "include separate document notes for each account."
         )
-    if audit:
+    if audit and audit.level is AuditLevel.VERBOSE:
         audit.log_step(
             "dispute_prompt",
             {
@@ -237,12 +238,13 @@ Unauthorized Inquiries:
     if content.startswith("```"):
         content = content.replace("```json", "").replace("```", "").strip()
 
-    print("\n----- GPT RAW RESPONSE -----")
-    print(content)
-    print("----- END RESPONSE -----\n")
+    if audit and audit.level is AuditLevel.VERBOSE:
+        print("\n----- GPT RAW RESPONSE -----")
+        print(content)
+        print("----- END RESPONSE -----\n")
 
     result, _ = parse_json(content)
-    if audit:
+    if audit and audit.level is AuditLevel.VERBOSE:
         audit.log_step(
             "dispute_response",
             {"bureau": bureau_name, "response": result},
@@ -543,7 +545,7 @@ def generate_all_dispute_letters_with_ai(
         with open(output_path / f"{bureau_name}_gpt_response.json", 'w') as f:
             json.dump(gpt_data, f, indent=2)
 
-        if audit:
+        if audit and audit.level is AuditLevel.VERBOSE:
             audit.log_step(
                 "dispute_letter_generated",
                 {

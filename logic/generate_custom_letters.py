@@ -10,7 +10,7 @@ from .summary_classifier import classify_client_summary
 from session_manager import get_session
 from logic.guardrails import generate_letter_with_guardrails
 from .rules_loader import get_neutral_phrase
-from audit import get_audit
+from audit import get_audit, AuditLevel
 
 load_dotenv()
 
@@ -72,7 +72,7 @@ Please draft a compliant letter body that blends the neutral legal phrase with t
         session_id,
         "custom",
     )
-    if audit:
+    if audit and audit.level is AuditLevel.VERBOSE:
         audit.log_step(
             "custom_letter_prompt",
             {
@@ -106,7 +106,9 @@ def generate_custom_letter(account: dict, client_info: dict, output_path: Path, 
 
     docs_text, doc_names, _ = gather_supporting_docs(session_id)
     if docs_text:
-        print(f"[📎] Including supplemental docs for custom letter to {recipient}.")
+        audit = get_audit()
+        if audit and audit.level is AuditLevel.VERBOSE:
+            print(f"[📎] Including supplemental docs for custom letter to {recipient}.")
 
     body_paragraph = call_gpt_for_custom_letter(
         client_name,
@@ -147,7 +149,7 @@ def generate_custom_letter(account: dict, client_info: dict, output_path: Path, 
         f.write(body_paragraph)
 
     audit = get_audit()
-    if audit:
+    if audit and audit.level is AuditLevel.VERBOSE:
         audit.log_step(
             "custom_letter_generated",
             {

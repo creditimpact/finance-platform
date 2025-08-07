@@ -189,6 +189,11 @@ def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classificatio
                                 "stage": "strategy_fallback",
                                 "fallback_reason": fallback_reason.value,
                                 "strategist_action": strategist_action,
+                                **(
+                                    {"raw_action": strategist_action}
+                                    if acc.get("fallback_unrecognized_action") and strategist_action
+                                    else {}
+                                ),
                                 "overrode_strategist": overrode_strategist,
                                 **(
                                     {"failure_reason": failure_reason.value}

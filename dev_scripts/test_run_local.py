@@ -137,25 +137,26 @@ def test_skip_goodwill_when_identity_theft():
                     "SMTP_PASSWORD": "x",
                 },
             ),
-            mock.patch("main.extract_bureau_info_column_refined", return_value={"data": {}}),
-            mock.patch("main.analyze_credit_report", return_value={}),
-            mock.patch("main.gather_supporting_docs_text", return_value=""),
-            mock.patch("main.StrategyGenerator") as mock_strat,
-            mock.patch("main.generate_dispute_letters_for_all_bureaus"),
-            mock.patch("main.generate_goodwill_letters") as mock_goodwill,
-            mock.patch("main.generate_custom_letters"),
-            mock.patch("main.generate_instruction_file"),
-            mock.patch("main.convert_txts_to_pdfs"),
-            mock.patch("main.send_email_with_attachment"),
-            mock.patch("main.save_analytics_snapshot"),
+            mock.patch("main.process_client_intake", return_value=("session", {}, {})),
+            mock.patch("main.classify_client_responses", return_value={}),
+            mock.patch(
+                "main.analyze_credit_report",
+                return_value=(Path(tmp.name), {}, {"Experian": {}}, Path(tmp.name).parent),
+            ),
+            mock.patch("main.generate_strategy_plan", return_value={}),
+            mock.patch("logic.letter_generator.generate_dispute_letters_for_all_bureaus"),
+            mock.patch("logic.generate_goodwill_letters.generate_goodwill_letters") as mock_goodwill,
+            mock.patch("logic.generate_custom_letters.generate_custom_letters"),
+            mock.patch("logic.instructions_generator.generate_instruction_file"),
+            mock.patch("logic.utils.convert_txts_to_pdfs"),
+            mock.patch("orchestrators.send_email_with_attachment"),
+            mock.patch("orchestrators.save_analytics_snapshot"),
             mock.patch("main.extract_all_accounts", return_value=[]),
             mock.patch("logic.upload_validator.move_uploaded_file", return_value=Path(tmp.name)),
             mock.patch("logic.upload_validator.is_safe_pdf", return_value=True),
             mock.patch("main.save_log_file"),
-            mock.patch("main.copyfile"),
+            mock.patch("shutil.copyfile"),
         ):
-            mock_strat.return_value.generate.return_value = {}
-            mock_strat.return_value.save_report.return_value = None
             run_credit_repair_process(client_info, proofs, True)
         assert not mock_goodwill.called
     if os.path.exists(tmp.name):

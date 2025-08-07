@@ -7,7 +7,7 @@ from typing import Dict, Iterable, List, Set, Tuple
 
 import config
 from .generate_goodwill_letters import normalize_creditor_name
-from .utils import CHARGEOFF_RE, COLLECTION_RE
+from logic.utils.text_parsing import CHARGEOFF_RE, COLLECTION_RE
 
 
 # Default dispute reason inserted when no custom note is provided.

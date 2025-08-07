@@ -14,7 +14,7 @@ from audit import AuditLevel, get_audit
 from .json_utils import parse_json
 from .rules_loader import get_neutral_phrase
 from .summary_classifier import classify_client_summary
-from .utils import gather_supporting_docs
+from .utils.pdf_ops import gather_supporting_docs
 
 
 def call_gpt_dispute_letter(

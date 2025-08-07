@@ -5,7 +5,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader
 import pdfkit
-from logic.utils import gather_supporting_docs
+from logic.utils.pdf_ops import gather_supporting_docs
 from .summary_classifier import classify_client_summary
 from session_manager import get_session
 from logic.guardrails import generate_letter_with_guardrails

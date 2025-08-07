@@ -148,7 +148,7 @@ def test_skip_goodwill_when_identity_theft():
             mock.patch("logic.generate_goodwill_letters.generate_goodwill_letters") as mock_goodwill,
             mock.patch("logic.generate_custom_letters.generate_custom_letters"),
             mock.patch("logic.instructions_generator.generate_instruction_file"),
-            mock.patch("logic.utils.convert_txts_to_pdfs"),
+            mock.patch("logic.utils.pdf_ops.convert_txts_to_pdfs"),
             mock.patch("orchestrators.send_email_with_attachment"),
             mock.patch("orchestrators.save_analytics_snapshot"),
             mock.patch("main.extract_all_accounts", return_value=[]),

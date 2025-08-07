@@ -26,7 +26,7 @@ from logic.instructions_generator import generate_html
 from logic.generate_goodwill_letters import generate_goodwill_letters
 from logic.letter_generator import generate_dispute_letters_for_all_bureaus
 from logic.process_accounts import process_analyzed_report
-from logic.utils import (
+from logic.utils.text_parsing import (
     extract_late_history_blocks,
     extract_account_blocks,
     parse_late_history_from_block,

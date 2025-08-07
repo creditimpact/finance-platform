@@ -1,6 +1,6 @@
 import csv
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 import sys
 
@@ -14,7 +14,7 @@ EXPORT_DIR = Path("exports")
 
 def export_outcomes() -> None:
     """Export outcomes from the last 7 days to JSON and CSV files."""
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     start = now - timedelta(days=7)
     all_outcomes = get_outcomes()
     recent = []

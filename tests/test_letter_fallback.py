@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import sys
+import pytest
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from logic.letter_generator import (
@@ -17,7 +18,7 @@ def test_unrecognized_action_fallback(monkeypatch, tmp_path, capsys):
     # Patch external dependencies
     monkeypatch.setattr(
         'logic.letter_generator.generate_strategy',
-        lambda session_id, bureau_data: {"dispute_items": {}}
+        lambda session_id, bureau_data: {"dispute_items": {"1": {}}}
     )
 
     def fake_call_gpt(*args, **kwargs):
@@ -54,6 +55,7 @@ def test_unrecognized_action_fallback(monkeypatch, tmp_path, capsys):
                 {
                     "name": "Bank A",
                     "account_number": "1",
+                    "account_id": "1",
                     "action_tag": "dispute",
                     "fallback_unrecognized_action": True,
                 }
@@ -62,9 +64,11 @@ def test_unrecognized_action_fallback(monkeypatch, tmp_path, capsys):
         }
     }
 
-    generate_all_dispute_letters_with_ai(client_info, bureau_data, tmp_path, False)
+    with pytest.warns(UserWarning):
+        generate_all_dispute_letters_with_ai(client_info, bureau_data, tmp_path, False)
 
-    data = json.load(open(tmp_path / "Experian_gpt_response.json"))
+    with open(tmp_path / "Experian_gpt_response.json") as f:
+        data = json.load(f)
     assert data["accounts"][0]["paragraph"] == DEFAULT_DISPUTE_REASON
     assert "ABCXYZ" not in data["accounts"][0]["paragraph"]
 

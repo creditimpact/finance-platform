@@ -56,12 +56,13 @@ def test_letters_do_not_access_raw_intake(monkeypatch, tmp_path):
     bureau_data = {
         "Experian": {
             "disputes": [
-                {"name": "Bank A", "account_number": "1", "action_tag": "dispute"}
+                {"name": "Bank A", "account_number": "1", "account_id": "1", "action_tag": "dispute"}
             ],
             "inquiries": [],
         }
     }
 
     generate_all_dispute_letters_with_ai(client_info, bureau_data, tmp_path, False)
-    data = json.load(open(tmp_path / "Experian_gpt_response.json"))
+    with open(tmp_path / "Experian_gpt_response.json") as f:
+        data = json.load(f)
     assert "SECRET RAW" not in json.dumps(data)

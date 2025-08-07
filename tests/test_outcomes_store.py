@@ -1,6 +1,6 @@
 import csv
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 import sys
 
@@ -34,14 +34,14 @@ def test_export_last_week(tmp_path, monkeypatch):
     outcomes_store.record_outcome("sess2", "acc2", "Experian", 1, "verified")
 
     data = outcomes_store.get_outcomes()
-    data[0]["timestamp"] = (datetime.utcnow() - timedelta(days=8)).isoformat()
+    data[0]["timestamp"] = (datetime.now(UTC) - timedelta(days=8)).isoformat()
     file_path.write_text(json.dumps(data))
 
     export_dir = tmp_path / "exports"
     monkeypatch.setattr(export_outcomes, "EXPORT_DIR", export_dir)
     export_outcomes.export_outcomes()
 
-    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    date_str = datetime.now(UTC).strftime("%Y-%m-%d")
     json_path = export_dir / f"outcomes_{date_str}.json"
     csv_path = export_dir / f"outcomes_{date_str}.csv"
     assert json_path.exists()

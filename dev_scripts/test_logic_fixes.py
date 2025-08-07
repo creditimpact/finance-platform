@@ -3,6 +3,7 @@ import types
 import json
 from pathlib import Path
 from unittest import mock
+import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -305,10 +306,10 @@ def test_letter_duplicate_accounts_removed():
     bureau_data = {
         "Experian": {
             "disputes": [
-                {"name": "Bank A", "account_number": "123", "action_tag": "dispute"},
-                {"name": "BANK A", "account_number": "123", "action_tag": "dispute"},
-                {"name": "Other Bank", "account_number": "", "action_tag": "dispute"},
-                {"name": "Other Bank", "account_number": "N/A", "action_tag": "dispute"},
+                {"name": "Bank A", "account_number": "123", "account_id": "1", "action_tag": "dispute"},
+                {"name": "BANK A", "account_number": "123", "account_id": "2", "action_tag": "dispute"},
+                {"name": "Other Bank", "account_number": "", "account_id": "3", "action_tag": "dispute"},
+                {"name": "Other Bank", "account_number": "N/A", "account_id": "4", "action_tag": "dispute"},
             ],
             "goodwill": [],
             "inquiries": [],
@@ -317,11 +318,13 @@ def test_letter_duplicate_accounts_removed():
         }
     }
 
+    strategy = {"dispute_items": {"1": {}, "2": {}, "3": {}, "4": {}}}
     sent = {}
     with (
         mock.patch("logic.letter_generator.call_gpt_dispute_letter") as mock_d,
         mock.patch("logic.letter_generator.render_html_to_pdf"),
         mock.patch("logic.letter_generator.fix_draft_with_guardrails", lambda *a, **k: ("", [], 0)),
+        mock.patch("logic.letter_generator.generate_strategy", return_value=strategy),
     ):
         out_dir = Path("output/tmp_dupes")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -345,8 +348,18 @@ def test_partial_account_number_deduplication():
     bureau_data = {
         "Experian": {
             "disputes": [
-                {"name": "ACIMA DIGITAL FKA SIMP", "account_number": "XXXX1234", "action_tag": "dispute"},
-                {"name": "ACIMA DIGITAL FKA SIMP", "account_number": "1234", "action_tag": "dispute"},
+                {
+                    "name": "ACIMA DIGITAL FKA SIMP",
+                    "account_number": "XXXX1234",
+                    "account_id": "1",
+                    "action_tag": "dispute",
+                },
+                {
+                    "name": "ACIMA DIGITAL FKA SIMP",
+                    "account_number": "1234",
+                    "account_id": "2",
+                    "action_tag": "dispute",
+                },
             ],
             "goodwill": [],
             "inquiries": [],
@@ -354,12 +367,13 @@ def test_partial_account_number_deduplication():
             "all_accounts": [],
         }
     }
-
+    strategy = {"dispute_items": {"1": {}, "2": {}}}
     sent = {}
     with (
         mock.patch("logic.letter_generator.call_gpt_dispute_letter") as mock_d,
         mock.patch("logic.letter_generator.render_html_to_pdf"),
         mock.patch("logic.letter_generator.fix_draft_with_guardrails", lambda *a, **k: ("", [], 0)),
+        mock.patch("logic.letter_generator.generate_strategy", return_value=strategy),
     ):
         out_dir = Path("output/tmp_dupe_nums")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -381,7 +395,7 @@ def test_merge_custom_note_with_default():
     bureau_data = {
         "Experian": {
             "disputes": [
-                {"name": "Bank A", "account_number": "123", "action_tag": "dispute"}
+                {"name": "Bank A", "account_number": "123", "account_id": "1", "action_tag": "dispute"}
             ],
             "goodwill": [
                 {"name": "Bank B", "account_number": "999", "late_payments": {"Experian": {"30": 1}}, "status": "Closed"}
@@ -401,19 +415,22 @@ def test_merge_custom_note_with_default():
         "closing_paragraph": "",
     }
 
+    strategy = {"dispute_items": {"1": {}}}
     with (
         mock.patch("logic.letter_generator.call_gpt_dispute_letter", return_value=gpt_resp),
         mock.patch("logic.letter_generator.render_html_to_pdf"),
         mock.patch("logic.letter_generator.fix_draft_with_guardrails", lambda *a, **k: ("", [], 0)),
+        mock.patch("logic.letter_generator.generate_strategy", return_value=strategy),
     ):
         out_dir = Path("output/tmp_merge")
         out_dir.mkdir(parents=True, exist_ok=True)
-        generate_dispute_letters_for_all_bureaus(
-            {"name": "T", "custom_dispute_notes": {"Bank A": "Personal"}},
-            bureau_data,
-            out_dir,
-            False,
-        )
+        with pytest.warns(UserWarning):
+            generate_dispute_letters_for_all_bureaus(
+                {"name": "T", "custom_dispute_notes": {"Bank A": "Personal"}},
+                bureau_data,
+                out_dir,
+                False,
+            )
 
     paragraph = gpt_resp["accounts"][0]["paragraph"]
     assert paragraph == "old"
@@ -424,7 +441,7 @@ def test_general_note_routed_to_goodwill():
     bureau_data = {
         "Experian": {
             "disputes": [
-                {"name": "Bank A", "account_number": "123", "action_tag": "dispute"}
+                {"name": "Bank A", "account_number": "123", "account_id": "1", "action_tag": "dispute"}
             ],
             "goodwill": [
                 {
@@ -449,10 +466,12 @@ def test_general_note_routed_to_goodwill():
         "closing_paragraph": "",
     }
 
+    strategy = {"dispute_items": {"1": {}}}
     with (
         mock.patch("logic.letter_generator.call_gpt_dispute_letter", return_value=gpt_resp),
         mock.patch("logic.letter_generator.render_html_to_pdf"),
         mock.patch("logic.letter_generator.fix_draft_with_guardrails", lambda *a, **k: ("", [], 0)),
+        mock.patch("logic.letter_generator.generate_strategy", return_value=strategy),
         mock.patch("logic.generate_goodwill_letters.call_gpt_for_goodwill_letter") as mock_gw,
         mock.patch("logic.generate_goodwill_letters.render_html_to_pdf"),
         mock.patch("logic.generate_goodwill_letters.fix_draft_with_guardrails", lambda *a, **k: ("", [], 0)),
@@ -461,7 +480,8 @@ def test_general_note_routed_to_goodwill():
         out_dir.mkdir(parents=True, exist_ok=True)
         client_info = {"name": "T", "custom_dispute_notes": {"note": "I lost my job and fell behind"}}
         mock_gw.return_value = {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""}
-        generate_dispute_letters_for_all_bureaus(client_info, bureau_data, out_dir, False)
+        with pytest.warns(UserWarning):
+            generate_dispute_letters_for_all_bureaus(client_info, bureau_data, out_dir, False)
         generate_goodwill_letters(client_info, bureau_data, out_dir)
 
     paragraph = gpt_resp["accounts"][0]["paragraph"]

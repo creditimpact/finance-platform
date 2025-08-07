@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import pdfkit
+import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -66,14 +67,16 @@ def test_dispute_letter_ignores_emotional_text(monkeypatch, tmp_path):
     bureau_data = {
         "Experian": {
             "disputes": [
-                {"name": "Bank A", "account_number": "1", "action_tag": "dispute"}
+                {"name": "Bank A", "account_number": "1", "account_id": "1", "action_tag": "dispute"}
             ],
             "inquiries": [],
         }
     }
 
-    generate_all_dispute_letters_with_ai(client_info, bureau_data, tmp_path, False)
-    data = json.load(open(tmp_path / "Experian_gpt_response.json"))
+    with pytest.warns(UserWarning):
+        generate_all_dispute_letters_with_ai(client_info, bureau_data, tmp_path, False)
+    with open(tmp_path / "Experian_gpt_response.json") as f:
+        data = json.load(f)
     dump = json.dumps(data)
     assert "furious" not in dump
     assert "heartbroken" not in dump
@@ -127,7 +130,8 @@ def test_goodwill_letter_ignores_emotional_text(monkeypatch, tmp_path):
     ]
 
     generate_goodwill_letter_with_ai("Creditor", accounts, client_info, tmp_path)
-    data = json.load(open(tmp_path / "Creditor_gpt_response.json"))
+    with open(tmp_path / "Creditor_gpt_response.json") as f:
+        data = json.load(f)
     dump = json.dumps(data)
     assert "devastated" not in dump
     assert "angry" not in dump

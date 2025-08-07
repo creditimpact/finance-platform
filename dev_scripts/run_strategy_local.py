@@ -88,7 +88,7 @@ def test_full_letter_workflow():
         from logic.constants import normalize_action_tag
 
         generator = StrategyGenerator()
-        strategy = generator.generate(client_info, bureau_data)
+        strategy = generator.generate(client_info, bureau_data, audit=None)
         index = {(acc["name"].lower(), acc["account_number"]): acc for acc in strategy["accounts"]}
         for payload in bureau_data.values():
             for section, items in payload.items():

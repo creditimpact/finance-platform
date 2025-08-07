@@ -1,8 +1,6 @@
 import os
 import json
 import fitz  # pymupdf
-from openai import OpenAI
-from dotenv import load_dotenv
 from pathlib import Path
 import re
 from .generate_goodwill_letters import normalize_creditor_name
@@ -15,18 +13,19 @@ from logic.utils.pdf_ops import extract_pdf_text_safe
 from logic.utils.inquiries import extract_inquiries
 from logic.utils.names_normalization import normalize_bureau_name
 from .json_utils import parse_json
-
-load_dotenv()
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-)
+from services.ai_client import AIClient, get_default_ai_client
 
 def extract_text_from_pdf(pdf_path):
     """Extract text using a robust multi-engine approach."""
     return extract_pdf_text_safe(Path(pdf_path), max_chars=150000)
 
-def call_ai_analysis(text, client_goal, is_identity_theft, output_json_path):
+def call_ai_analysis(
+    text,
+    client_goal,
+    is_identity_theft,
+    output_json_path,
+    ai_client: AIClient | None = None,
+):
     late_blocks, late_raw_map = extract_late_history_blocks(text, return_raw_map=True)
     if late_blocks:
         late_summary_text = "Late payment history extracted from report:\n"
@@ -177,10 +176,11 @@ Report text:
 ===
 """
 
-    response = client.chat.completions.create(
+    client = ai_client or get_default_ai_client()
+    response = client.chat_completion(
         model="gpt-4-turbo",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.1
+        temperature=0.1,
     )
 
     content = response.choices[0].message.content.strip()
@@ -350,7 +350,12 @@ def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) ->
         result.setdefault("all_accounts", []).append(entry)
         print(f"[⚠️] Added missing account from parser: {entry['name']}")
 
-def analyze_credit_report(pdf_path, output_json_path, client_info):
+def analyze_credit_report(
+    pdf_path,
+    output_json_path,
+    client_info,
+    ai_client: AIClient | None = None,
+):
     text = extract_text_from_pdf(pdf_path)
     if not text.strip():
         raise ValueError("\u274c No text extracted from PDF")
@@ -369,7 +374,9 @@ def analyze_credit_report(pdf_path, output_json_path, client_info):
         client_goal = client_info.get("goal", "Not specified")
 
     is_identity_theft = client_info.get("is_identity_theft", False)
-    result = call_ai_analysis(text, client_goal, is_identity_theft, output_json_path)
+    result = call_ai_analysis(
+        text, client_goal, is_identity_theft, output_json_path, ai_client=ai_client
+    )
 
     parsed_inquiries = extract_inquiries(text)
     if parsed_inquiries:

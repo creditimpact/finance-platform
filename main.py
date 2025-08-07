@@ -1,6 +1,5 @@
 import os
 import logging
-import config
 from pathlib import Path
 from datetime import datetime
 from shutil import copyfile
@@ -16,11 +15,11 @@ from orchestrators import (
     generate_letters,
     finalize_outputs,
 )
+import config
+from services.ai_client import build_ai_client
 from logic.strategy_merger import merge_strategy_data
 
 logger = logging.getLogger(__name__)
-logger.info("Main process starting with OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL)
-logger.info("Main process OPENAI_API_KEY present=%s", bool(config.OPENAI_API_KEY))
 
 
 def validate_env_variables():
@@ -53,6 +52,7 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
     pdf_path = None
     audit = start_audit()
     session_id = None
+    ai_client = build_ai_client(config.get_ai_config())
 
     try:
         print("\n✅ Starting Credit Repair Process (B2C Mode)...")
@@ -60,12 +60,12 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
         audit.log_step("process_started", {"is_identity_theft": is_identity_theft})
 
         session_id, structured_map, raw_map = process_client_intake(client_info, audit)
-        classification_map = classify_client_responses(structured_map, raw_map, client_info, audit)
+        classification_map = classify_client_responses(structured_map, raw_map, client_info, audit, ai_client)
         pdf_path, sections, bureau_data, today_folder = analyze_credit_report(
-            proofs_files, session_id, client_info, audit, log_messages
+            proofs_files, session_id, client_info, audit, log_messages, ai_client
         )
         strategy = generate_strategy_plan(
-            client_info, bureau_data, classification_map, session_id, audit, log_messages
+            client_info, bureau_data, classification_map, session_id, audit, log_messages, ai_client
         )
         generate_letters(
             client_info,
@@ -76,6 +76,7 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             strategy,
             audit,
             log_messages,
+            ai_client,
         )
         finalize_outputs(client_info, today_folder, sections, audit, log_messages)
 

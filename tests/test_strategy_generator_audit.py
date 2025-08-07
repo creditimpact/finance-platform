@@ -7,6 +7,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from audit import start_audit, clear_audit
 from logic.generate_strategy_report import StrategyGenerator
 from logic.constants import StrategistFailureReason
+from tests.helpers.fake_ai_client import FakeAIClient
 
 
 def test_malformed_json_triggers_audit(monkeypatch, tmp_path):
@@ -16,19 +17,9 @@ def test_malformed_json_triggers_audit(monkeypatch, tmp_path):
         lambda *a, **k: None,
     )
 
-    class DummyResponse:
-        class Choice:
-            class Message:
-                content = "{bad json"
-            message = Message()
-        choices = [Choice()]
-
-    monkeypatch.setattr(
-        "logic.generate_strategy_report.client.chat.completions.create",
-        lambda *a, **k: DummyResponse(),
-    )
-
-    gen = StrategyGenerator()
+    fake = FakeAIClient()
+    fake.add_chat_response("{bad json")
+    gen = StrategyGenerator(ai_client=fake)
     gen.generate({}, {}, audit=audit)
     audit_file = audit.save(tmp_path)
     data = json.loads(audit_file.read_text())

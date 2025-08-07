@@ -19,8 +19,9 @@ app = Celery('tasks', broker=BROKER_URL, backend=BROKER_URL)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.info("Celery worker starting with OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL)
-logger.info("Celery worker OPENAI_API_KEY present=%s", bool(config.OPENAI_API_KEY))
+_conf = config.get_ai_config()
+logger.info("Celery worker starting with OPENAI_BASE_URL=%s", _conf.base_url)
+logger.info("Celery worker OPENAI_API_KEY present=%s", bool(_conf.api_key))
 
 # Verify that session_manager is importable at startup. This helps catch
 # cases where the worker is launched from a directory that omits the

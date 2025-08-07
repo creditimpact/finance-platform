@@ -8,6 +8,7 @@ from logic.letter_generator import (
     generate_all_dispute_letters_with_ai,
     DEFAULT_DISPUTE_REASON,
 )
+from tests.helpers.fake_ai_client import FakeAIClient
 
 class Dummy:
     def __init__(self, data):
@@ -65,7 +66,8 @@ def test_unrecognized_action_fallback(monkeypatch, tmp_path, capsys):
     }
 
     with pytest.warns(UserWarning):
-        generate_all_dispute_letters_with_ai(client_info, bureau_data, tmp_path, False)
+        fake = FakeAIClient()
+        generate_all_dispute_letters_with_ai(client_info, bureau_data, tmp_path, False, ai_client=fake)
 
     with open(tmp_path / "Experian_gpt_response.json") as f:
         data = json.load(f)

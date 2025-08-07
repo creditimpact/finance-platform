@@ -1,8 +1,9 @@
+from __future__ import annotations
+
 import os
 import json
 from pathlib import Path
 from datetime import datetime
-from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader
 import pdfkit
 from logic.utils.pdf_ops import gather_supporting_docs
@@ -11,14 +12,15 @@ from session_manager import get_session
 from logic.guardrails import generate_letter_with_guardrails
 from .rules_loader import get_neutral_phrase
 from audit import get_audit, AuditLevel
-
-load_dotenv()
-
-WKHTMLTOPDF_PATH = os.getenv("WKHTMLTOPDF_PATH", "wkhtmltopdf")
-pdf_config = pdfkit.configuration(wkhtmltopdf=WKHTMLTOPDF_PATH)
+from services.ai_client import AIClient
 
 env = Environment(loader=FileSystemLoader("templates"))
 template = env.get_template("general_letter_template.html")
+
+
+def _pdf_config():
+    path = os.getenv("WKHTMLTOPDF_PATH", "wkhtmltopdf")
+    return pdfkit.configuration(wkhtmltopdf=path)
 
 
 def call_gpt_for_custom_letter(
@@ -30,6 +32,7 @@ def call_gpt_for_custom_letter(
     structured_summary: dict,
     state: str,
     session_id: str,
+    ai_client: AIClient | None = None,
 ) -> str:
     docs_line = f"Supporting documents summary:\n{docs_text}" if docs_text else ""
     classification = classify_client_summary(structured_summary, state)
@@ -71,6 +74,7 @@ Please draft a compliant letter body that blends the neutral legal phrase with t
         },
         session_id,
         "custom",
+        ai_client=ai_client,
     )
     if audit and audit.level is AuditLevel.VERBOSE:
         audit.log_step(
@@ -90,7 +94,13 @@ Please draft a compliant letter body that blends the neutral legal phrase with t
     return body
 
 
-def generate_custom_letter(account: dict, client_info: dict, output_path: Path, run_date: str | None = None) -> None:
+def generate_custom_letter(
+    account: dict,
+    client_info: dict,
+    output_path: Path,
+    run_date: str | None = None,
+    ai_client: AIClient | None = None,
+) -> None:
     client_name = client_info.get("legal_name") or client_info.get("name", "Client")
     date_str = run_date or datetime.now().strftime("%B %d, %Y")
     recipient = account.get("name", "")
@@ -119,6 +129,7 @@ def generate_custom_letter(account: dict, client_info: dict, output_path: Path, 
         structured_summary,
         state,
         session_id,
+        ai_client=ai_client,
     )
 
     greeting = f"Dear {recipient}" if recipient else "To whom it may concern"
@@ -141,7 +152,7 @@ def generate_custom_letter(account: dict, client_info: dict, output_path: Path, 
     filename = f"Custom Letter - {safe_recipient}.pdf"
     full_path = output_path / filename
     options = {"quiet": ""}
-    pdfkit.from_string(html, str(full_path), configuration=pdf_config, options=options)
+    pdfkit.from_string(html, str(full_path), configuration=_pdf_config(), options=options)
     print(f"[📝] Custom letter generated: {full_path}")
 
     response_path = output_path / f"{safe_recipient}_custom_gpt_response.txt"
@@ -166,6 +177,7 @@ def generate_custom_letters(
     output_path: Path,
     run_date: str | None = None,
     log_messages: list[str] | None = None,
+    ai_client: AIClient | None = None,
 ) -> None:
     if log_messages is None:
         log_messages = []
@@ -173,7 +185,9 @@ def generate_custom_letters(
         for acc in content.get("all_accounts", []):
             action = str(acc.get("action_tag") or acc.get("recommended_action") or "").lower()
             if acc.get("letter_type") == "custom" or action == "custom_letter":
-                generate_custom_letter(acc, client_info, output_path, run_date)
+                generate_custom_letter(
+                    acc, client_info, output_path, run_date, ai_client=ai_client
+                )
             else:
                 log_messages.append(
                     f"[{bureau}] No custom letter for '{acc.get('name')}' — not marked for custom correspondence"

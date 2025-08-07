@@ -15,18 +15,10 @@ import os
 import re
 from typing import Dict, List, Tuple
 
-from dotenv import load_dotenv
-from openai import OpenAI
+from services.ai_client import AIClient, get_default_ai_client
 
 from logic.generate_goodwill_letters import normalize_creditor_name
 from logic.utils.note_handling import analyze_custom_notes
-
-load_dotenv()
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-)
-
 
 def extract_clean_name(full_name: str) -> str:
     """Return a deduplicated version of a client's full name."""
@@ -40,7 +32,7 @@ def extract_clean_name(full_name: str) -> str:
     return " ".join(unique_parts)
 
 
-def generate_account_action(account: dict) -> str:
+def generate_account_action(account: dict, ai_client: AIClient | None = None) -> str:
     """Return a human-readable action sentence for an account using GPT."""
     try:
         prompt = (
@@ -51,7 +43,8 @@ def generate_account_action(account: dict) -> str:
             f"Account data:\n{json.dumps(account, indent=2)}\n\n"
             "Respond with only the sentence."
         )
-        response = client.chat.completions.create(
+        client = ai_client or get_default_ai_client()
+        response = client.chat_completion(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
@@ -72,6 +65,7 @@ def prepare_instruction_data(
     run_date: str,
     logo_base64: str,
     strategy: dict | None = None,
+    ai_client: AIClient | None = None,
 ):
     """Prepare structured data used for instruction rendering.
 
@@ -255,7 +249,7 @@ def prepare_instruction_data(
             "recommended_action": recommended_action,
             "advisor_comment": advisor_comment,
         }
-        action_sentence = generate_account_action(action_context)
+        action_sentence = generate_account_action(action_context, ai_client)
 
         entry = {
             "name": name,

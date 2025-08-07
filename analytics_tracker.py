@@ -13,7 +13,7 @@ def save_analytics_snapshot(
     strategist_failures: Optional[Dict[str, int]] = None,
 ) -> None:
     logging.getLogger(__name__).info(
-        "Analytics tracker using OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL
+        "Analytics tracker using OPENAI_BASE_URL=%s", config.get_ai_config().base_url
     )
     analytics_dir = Path("analytics_data")
     analytics_dir.mkdir(exist_ok=True)

@@ -23,6 +23,7 @@ from .generate_goodwill_letters import normalize_creditor_name
 from .strategy_engine import generate_strategy
 from .dispute_preparation import prepare_disputes_and_inquiries
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
+from services.ai_client import AIClient, get_default_ai_client
 from .letter_rendering import render_dispute_letter_html, render_html_to_pdf
 from .compliance_adapter import (
     adapt_gpt_output,
@@ -47,7 +48,9 @@ CREDIT_BUREAU_ADDRESSES = {
 def call_gpt_dispute_letter(*args, **kwargs):
     """Proxy to GPT prompting module for backward compatibility."""
 
-    return _call_gpt_dispute_letter(*args, **kwargs, classifier=classify_client_summary)
+    return _call_gpt_dispute_letter(
+        *args, **kwargs, classifier=classify_client_summary
+    )
 
 
 def generate_all_dispute_letters_with_ai(
@@ -57,9 +60,11 @@ def generate_all_dispute_letters_with_ai(
     is_identity_theft: bool,
     run_date: str | None = None,
     log_messages: List[str] | None = None,
+    ai_client: AIClient | None = None,
 ):
     """Generate dispute letters for all bureaus using GPT-derived content."""
 
+    ai_client = ai_client or get_default_ai_client()
     output_path.mkdir(parents=True, exist_ok=True)
     if log_messages is None:
         log_messages = []
@@ -124,6 +129,7 @@ def generate_all_dispute_letters_with_ai(
             is_identity_theft,
             strategy_summaries,
             client_info.get("state", ""),
+            ai_client=ai_client,
         )
 
         adapt_gpt_output(gpt_data, fallback_norm_names, acc_type_map)
@@ -173,6 +179,7 @@ def generate_all_dispute_letters_with_ai(
             {},
             client_info.get("session_id", ""),
             "dispute",
+            ai_client=ai_client,
         )
         filename = f"Dispute Letter - {bureau_name}.pdf"
         filepath = output_path / filename

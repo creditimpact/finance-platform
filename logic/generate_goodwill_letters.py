@@ -1,9 +1,7 @@
 import os
 import json
-from openai import OpenAI
 from pathlib import Path
 from datetime import datetime
-from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader
 import pdfkit
 import re
@@ -17,18 +15,15 @@ from logic.guardrails import fix_draft_with_guardrails
 from .summary_classifier import classify_client_summary
 from .rules_loader import get_neutral_phrase
 from audit import get_audit, AuditLevel
-
-load_dotenv()
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-)
-
-WKHTMLTOPDF_PATH = os.getenv("WKHTMLTOPDF_PATH", "wkhtmltopdf")
-pdf_config = pdfkit.configuration(wkhtmltopdf=WKHTMLTOPDF_PATH)
+from services.ai_client import AIClient, get_default_ai_client
 
 template_env = Environment(loader=FileSystemLoader("templates"))
 template = template_env.get_template("goodwill_letter_template.html")
+
+
+def _pdf_config():
+    path = os.getenv("WKHTMLTOPDF_PATH", "wkhtmltopdf")
+    return pdfkit.configuration(wkhtmltopdf=path)
 
 COMMON_CREDITOR_ALIASES = {
     "citi": "citibank",
@@ -116,7 +111,9 @@ def normalize_creditor_name(raw_name: str) -> str:
 def render_html_to_pdf(html: str, output_path: Path):
     options = {"quiet": ""}
     try:
-        pdfkit.from_string(html, str(output_path), configuration=pdf_config, options=options)
+        pdfkit.from_string(
+            html, str(output_path), configuration=_pdf_config(), options=options
+        )
         print(f"[📬] PDF rendered: {output_path}")
     except Exception as e:
         print(f"[❌] Failed to render PDF: {e}")
@@ -130,6 +127,7 @@ def call_gpt_for_goodwill_letter(
     session_id=None,
     structured_summaries=None,
     state=None,
+    ai_client: AIClient | None = None,
 ):
     """Compose a goodwill letter prompt and call GPT.
 
@@ -284,10 +282,11 @@ Supporting doc names: {', '.join(doc_names) if doc_names else 'None'}
 Return strictly valid JSON: all property names and strings in double quotes, no trailing commas or comments, and no text outside the JSON.
 """
 
-    response = client.chat.completions.create(
+    ai_client = ai_client or get_default_ai_client()
+    response = ai_client.chat_completion(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.4
+        temperature=0.4,
     )
     if audit and audit.level is AuditLevel.VERBOSE:
         audit.log_step(
@@ -330,7 +329,14 @@ def load_creditor_address_map():
         print(f"[❌] Failed to load creditor addresses: {e}")
         return {}
 
-def generate_goodwill_letter_with_ai(creditor, accounts, client_info, output_path: Path, run_date: str = None):
+def generate_goodwill_letter_with_ai(
+    creditor,
+    accounts,
+    client_info,
+    output_path: Path,
+    run_date: str | None = None,
+    ai_client: AIClient | None = None,
+):
     client_name = client_info.get("legal_name") or client_info.get("name", "Your Name")
     if not client_info.get("legal_name"):
         print("[⚠️] Warning: legal_name not found in client_info. Using fallback name.")
@@ -363,6 +369,7 @@ def generate_goodwill_letter_with_ai(creditor, accounts, client_info, output_pat
         session_id,
         structured_summaries,
         state=client_info.get("state"),
+        ai_client=ai_client,
     )
 
     _, doc_names, _ = gather_supporting_docs(session_id or "")
@@ -389,6 +396,7 @@ def generate_goodwill_letter_with_ai(creditor, accounts, client_info, output_pat
         {},
         session_id or "",
         "goodwill",
+        ai_client=ai_client,
     )
     safe_name = safe_filename(creditor)
     filename = f"Goodwill Request - {safe_name}.pdf"
@@ -405,7 +413,13 @@ def generate_goodwill_letter_with_ai(creditor, accounts, client_info, output_pat
             {"creditor": creditor, "output_pdf": str(full_path), "response": gpt_data},
         )
 
-def generate_goodwill_letters(client_info, bureau_data, output_path: Path, run_date: str = None):
+def generate_goodwill_letters(
+    client_info,
+    bureau_data,
+    output_path: Path,
+    run_date: str | None = None,
+    ai_client: AIClient | None = None,
+):
     seen_creditors = set()
     goodwill_accounts = {}
     detected_late_accounts: dict[str, str] = {}
@@ -512,7 +526,9 @@ def generate_goodwill_letters(client_info, bureau_data, output_path: Path, run_d
             consider_account(account)
 
     for creditor, accounts in goodwill_accounts.items():
-        generate_goodwill_letter_with_ai(creditor, accounts, client_info, output_path, run_date)
+        generate_goodwill_letter_with_ai(
+            creditor, accounts, client_info, output_path, run_date, ai_client=ai_client
+        )
 
     for norm, raw in detected_late_accounts.items():
         if norm not in {normalize_creditor_name(c) for c in goodwill_accounts}:

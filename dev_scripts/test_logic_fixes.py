@@ -25,6 +25,7 @@ sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None)
 from logic.instructions_generator import generate_html
 from logic.generate_goodwill_letters import generate_goodwill_letters
 from logic.letter_generator import generate_dispute_letters_for_all_bureaus
+from tests.helpers.fake_ai_client import FakeAIClient
 from logic.process_accounts import process_analyzed_report
 from logic.utils.text_parsing import (
     extract_late_history_blocks,
@@ -49,7 +50,8 @@ def test_dedup_without_numbers():
     with (
         mock.patch("logic.instructions_generator.generate_account_action", return_value="A"),
     ):
-        html, accounts = generate_html({"name": "Test"}, bureau_data, False, "2024-01-01", "", None)
+        fake = FakeAIClient()
+        html, accounts = generate_html({"name": "Test"}, bureau_data, False, "2024-01-01", "", None, ai_client=fake)
     assert len(accounts) == 1
     print("dedup ok")
 
@@ -111,7 +113,8 @@ def test_goodwill_generation():
             }
             return {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""}
         mock_g.side_effect = _cb
-        generate_goodwill_letters({"name": "T", "custom_dispute_notes": {"Card Co": "special"}}, bureau_data, out_dir)
+        fake = FakeAIClient()
+        generate_goodwill_letters({"name": "T", "custom_dispute_notes": {"Card Co": "special"}}, bureau_data, out_dir, ai_client=fake)
     assert sent.get("Card Co", {}).get("personal_story") in (None, "")
     print("goodwill ok")
 
@@ -147,7 +150,8 @@ def test_goodwill_on_closed_account():
             called[creditor] = accounts
             return {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""}
         mock_g.side_effect = _cb
-        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir)
+        fake = FakeAIClient()
+        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, ai_client=fake)
     assert "Old Card" in called
     print("goodwill closed ok")
 
@@ -336,7 +340,8 @@ def test_letter_duplicate_accounts_removed():
             return {"opening_paragraph": "", "accounts": [], "inquiries": [], "closing_paragraph": ""}
 
         mock_d.side_effect = _cb
-        generate_dispute_letters_for_all_bureaus({"name": "T"}, bureau_data, out_dir, False)
+        fake = FakeAIClient()
+        generate_dispute_letters_for_all_bureaus({"name": "T"}, bureau_data, out_dir, False, ai_client=fake)
 
     assert len(sent.get("Experian", [])) == 2
     names = {d["name"].lower() for d in sent["Experian"]}
@@ -385,7 +390,8 @@ def test_partial_account_number_deduplication():
             return {"opening_paragraph": "", "accounts": [], "inquiries": [], "closing_paragraph": ""}
 
         mock_d.side_effect = _cb
-        generate_dispute_letters_for_all_bureaus({"name": "T"}, bureau_data, out_dir, False)
+        fake = FakeAIClient()
+        generate_dispute_letters_for_all_bureaus({"name": "T"}, bureau_data, out_dir, False, ai_client=fake)
 
     assert len(sent.get("Experian", [])) == 1
     print("partial dedupe ok")
@@ -425,11 +431,13 @@ def test_merge_custom_note_with_default():
         out_dir = Path("output/tmp_merge")
         out_dir.mkdir(parents=True, exist_ok=True)
         with pytest.warns(UserWarning):
+            fake = FakeAIClient()
             generate_dispute_letters_for_all_bureaus(
                 {"name": "T", "custom_dispute_notes": {"Bank A": "Personal"}},
                 bureau_data,
                 out_dir,
                 False,
+                ai_client=fake,
             )
 
     paragraph = gpt_resp["accounts"][0]["paragraph"]
@@ -481,8 +489,10 @@ def test_general_note_routed_to_goodwill():
         client_info = {"name": "T", "custom_dispute_notes": {"note": "I lost my job and fell behind"}}
         mock_gw.return_value = {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""}
         with pytest.warns(UserWarning):
-            generate_dispute_letters_for_all_bureaus(client_info, bureau_data, out_dir, False)
-        generate_goodwill_letters(client_info, bureau_data, out_dir)
+            fake = FakeAIClient()
+            generate_dispute_letters_for_all_bureaus(client_info, bureau_data, out_dir, False, ai_client=fake)
+        fake2 = FakeAIClient()
+        generate_goodwill_letters(client_info, bureau_data, out_dir, ai_client=fake2)
 
     paragraph = gpt_resp["accounts"][0]["paragraph"]
     assert paragraph == "old"

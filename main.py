@@ -252,7 +252,9 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
         client_personal_info = extract_bureau_info_column_refined(pdf_path)
         client_info.update(client_personal_info.get("data", {}))
         log_messages.append("📄 Personal info extracted.")
-        audit.log_step("personal_info_extracted", client_personal_info)
+        # Avoid logging personal details unless verbose auditing is enabled
+        if audit.level == AuditLevel.VERBOSE:
+            audit.log_step("personal_info_extracted", client_personal_info)
 
         print("🔍 Analyzing report with GPT...")
         analyzed_json_path = Path("output/analyzed_report.json")
@@ -276,7 +278,8 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
         today_folder = Path(f"Clients/{get_current_month()}/{safe_name}_{session_id}")
         today_folder.mkdir(parents=True, exist_ok=True)
         log_messages.append(f"📁 Client folder created at: {today_folder}")
-        audit.log_step("client_folder_created", {"path": str(today_folder)})
+        if audit.level == AuditLevel.VERBOSE:
+            audit.log_step("client_folder_created", {"path": str(today_folder)})
 
                 # 🧹 מחיקת PDFים ו־JSON ישנים (רק תגובות GPT)
         for file in today_folder.glob("*.pdf"):
@@ -302,7 +305,8 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             for bureau in ["Experian", "Equifax", "TransUnion"]
         }
         log_messages.extend(detailed_logs)
-        audit.log_step("sections_split_by_bureau", bureau_data)
+        if audit.level == AuditLevel.VERBOSE:
+            audit.log_step("sections_split_by_bureau", bureau_data)
 
         print("🧠 Generating strategy report...")
         docs_text = gather_supporting_docs_text(session_id)

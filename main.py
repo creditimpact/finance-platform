@@ -210,6 +210,8 @@ def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classificatio
                         {
                             "stage": "strategy_decision",
                             "action": acc.get("action_tag") or None,
+                            "recommended_action": acc.get("recommended_action"),
+                            "flags": acc.get("flags"),
                             "reason": acc.get("advisor_comment")
                             or acc.get("analysis")
                             or raw_action,
@@ -224,6 +226,7 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
     today_folder = None
     pdf_path = None
     audit = start_audit()
+    session_id = client_info.get("session_id", "session")
 
     try:
         print("\n✅ Starting Credit Repair Process (B2C Mode)...")
@@ -236,7 +239,6 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
         if "email" not in client_info or not client_info["email"]:
             raise ValueError("Client email is missing.")
 
-        session_id = client_info.get("session_id", "session")
         audit.log_step("session_initialized", {"session_id": session_id})
 
         # Record raw and structured client explanations for traceability
@@ -530,6 +532,9 @@ Best regards,
         save_log_file(client_info, is_identity_theft, today_folder, log_messages)
         if today_folder:
             audit.save(today_folder)
+            if config.EXPORT_TRACE_FILE:
+                from trace_exporter import export_trace_file
+                export_trace_file(audit, session_id)
         clear_audit()
         if pdf_path and os.path.exists(pdf_path):
             try:

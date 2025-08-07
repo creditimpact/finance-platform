@@ -4,9 +4,17 @@ import logging
 import config
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, Optional
 
-def save_analytics_snapshot(client_info: dict, report_summary: dict):
-    logging.getLogger(__name__).info("Analytics tracker using OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL)
+
+def save_analytics_snapshot(
+    client_info: dict,
+    report_summary: dict,
+    strategist_failures: Optional[Dict[str, int]] = None,
+) -> None:
+    logging.getLogger(__name__).info(
+        "Analytics tracker using OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL
+    )
     analytics_dir = Path("analytics_data")
     analytics_dir.mkdir(exist_ok=True)
 
@@ -29,10 +37,15 @@ def save_analytics_snapshot(client_info: dict, report_summary: dict):
             "total_inquiries": report_summary.get("total_inquiries", 0),
             "num_negative_accounts": report_summary.get("num_negative_accounts", 0),
             "num_accounts_over_90_util": report_summary.get("num_accounts_over_90_util", 0),
-            "account_types_in_problem": report_summary.get("account_types_in_problem", [])
+            "account_types_in_problem": report_summary.get("account_types_in_problem", []),
         },
-        "strategic_recommendations": report_summary.get("strategic_recommendations", [])
+        "strategic_recommendations": report_summary.get(
+            "strategic_recommendations", []
+        ),
     }
+
+    if strategist_failures:
+        snapshot["strategist_failures"] = strategist_failures
 
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(snapshot, f, indent=2)

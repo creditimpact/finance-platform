@@ -70,23 +70,27 @@ Ensure the response is strictly valid JSON: all property names and strings in do
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
         )
-        content = response.choices[0].message.content.strip()
+        raw_content = response.choices[0].message.content
         if audit:
-            audit.log_step("strategist_raw_output", {"content": content})
+            audit.log_step("strategist_raw_output", {"content": raw_content})
+        content = (raw_content or "").strip()
         if content.startswith("```"):
             content = content.replace("```json", "").replace("```", "").strip()
         report, error_reason = parse_json(content)
         expected_keys = {"overview", "accounts", "global_recommendations"}
-        if audit:
-            if (
-                error_reason is not None
-                or not isinstance(report, dict)
-                or not expected_keys.issubset(report)
-            ):
-                audit.log_step(
-                    "strategist_failure",
-                    {"failure_reason": StrategistFailureReason.SCHEMA_ERROR},
-                )
+        failure_reason = None
+        if not raw_content:
+            failure_reason = StrategistFailureReason.EMPTY_OUTPUT
+        else:
+            if error_reason is not None or not isinstance(report, dict) or not report:
+                failure_reason = StrategistFailureReason.UNRECOGNIZED_FORMAT
+            elif not expected_keys.issubset(report):
+                failure_reason = StrategistFailureReason.SCHEMA_ERROR
+        if audit and failure_reason:
+            audit.log_step(
+                "strategist_failure",
+                {"failure_reason": failure_reason.value},
+            )
         fix_draft_with_guardrails(
             json.dumps(report, indent=2),
             client_info.get("state"),

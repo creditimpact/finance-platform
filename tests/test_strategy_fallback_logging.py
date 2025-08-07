@@ -39,6 +39,8 @@ def test_strategy_fallback_logs_include_reason_and_override(tmp_path):
 
     assert bad_entry.get("fallback_reason") == FallbackReason.UNRECOGNIZED_TAG.value
     assert bad_entry.get("overrode_strategist") is True
+    assert bad_entry.get("strategist_action") == "foobar"
     assert no_entry.get("fallback_reason") == FallbackReason.NO_RECOMMENDATION.value
     assert no_entry.get("overrode_strategist") is False
+    assert "strategist_action" in no_entry and no_entry.get("strategist_action") is None
     clear_audit()

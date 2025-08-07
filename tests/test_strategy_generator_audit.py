@@ -6,6 +6,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from audit import start_audit, clear_audit
 from logic.generate_strategy_report import StrategyGenerator
+from logic.constants import StrategistFailureReason
 
 
 def test_malformed_json_triggers_audit(monkeypatch, tmp_path):
@@ -33,5 +34,6 @@ def test_malformed_json_triggers_audit(monkeypatch, tmp_path):
     data = json.loads(audit_file.read_text())
     stages = [s["stage"] for s in data["steps"]]
     assert "strategist_raw_output" in stages
-    assert "strategist_failure" in stages
+    fail_entry = next(s for s in data["steps"] if s["stage"] == "strategist_failure")
+    assert fail_entry["details"].get("failure_reason") == StrategistFailureReason.UNRECOGNIZED_FORMAT.value
     clear_audit()

@@ -312,8 +312,8 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             {
                 "client_info": client_info,
                 "bureau_data": bureau_data,
+                "classification_map": classification_map or {},
                 "supporting_docs_text": docs_text,
-                "classification_map": classification_map,
             },
         )
         strategy = strat_gen.generate(

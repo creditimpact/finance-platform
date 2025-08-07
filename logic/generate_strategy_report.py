@@ -40,16 +40,6 @@ class StrategyGenerator:
             else ""
         )
 
-        if audit:
-            audit.log_step(
-                "strategist_input",
-                {
-                    "bureau_data": bureau_data,
-                    "classification_map": classification_map or {},
-                    "supporting_docs_text": supporting_docs_text,
-                },
-            )
-
         prompt = f"""
 You are a credit repair strategist. Analyze the client's credit report data and propose a concise plan of action.
 Client name: {client_name}

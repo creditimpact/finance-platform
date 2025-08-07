@@ -10,6 +10,7 @@ from .summary_classifier import classify_client_summary
 from session_manager import get_session
 from logic.guardrails import generate_letter_with_guardrails
 from .rules_loader import get_neutral_phrase
+from audit import get_audit
 
 load_dotenv()
 
@@ -49,6 +50,17 @@ Account: {account_name} {account_number}
 {docs_line}
 Please draft a compliant letter body that blends the neutral legal phrase with the client's explanation. Do not copy either source verbatim.
 """
+    audit = get_audit()
+    if audit:
+        audit.log_account(
+            structured_summary.get("account_id"),
+            {
+                "stage": "custom_letter",
+                "classification": classification,
+                "neutral_phrase": neutral_phrase,
+                "structured_summary": structured_summary,
+            },
+        )
     body, _, _ = generate_letter_with_guardrails(
         prompt,
         state,
@@ -59,6 +71,14 @@ Please draft a compliant letter body that blends the neutral legal phrase with t
         session_id,
         "custom",
     )
+    if audit:
+        audit.log_step(
+            "custom_letter_prompt",
+            {
+                "account_id": structured_summary.get("account_id"),
+                "prompt": prompt,
+            },
+        )
     return body
 
 

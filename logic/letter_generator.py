@@ -21,6 +21,7 @@ from .strategy_engine import generate_strategy
 from .summary_classifier import classify_client_summary
 from .rules_loader import get_neutral_phrase
 from logic.guardrails import fix_draft_with_guardrails
+from audit import get_audit
 
 
 logger = logging.getLogger(__name__)
@@ -107,6 +108,7 @@ def call_gpt_dispute_letter(client_info, bureau_name, disputes, inquiries, is_id
     client_name = client_info.get("legal_name") or client_info.get("name", "Client")
 
     dispute_blocks = []
+    audit = get_audit()
     for acc in disputes:
         struct = structured_summaries.get(acc.get("account_id"), {})
         classification = classify_client_summary(struct, state)
@@ -136,6 +138,18 @@ def call_gpt_dispute_letter(client_info, bureau_name, disputes, inquiries, is_id
         if acc.get("flags"):
             block["flags"] = acc.get("flags")
         dispute_blocks.append(block)
+        if audit:
+            audit.log_account(
+                acc.get("account_id") or acc.get("name"),
+                {
+                    "stage": "dispute_letter",
+                    "bureau": bureau_name,
+                    "structured_summary": struct,
+                    "classification": classification,
+                    "neutral_phrase": neutral_phrase,
+                    "recommended_action": acc.get("recommended_action"),
+                },
+            )
 
     inquiry_blocks = [
         {
@@ -190,6 +204,16 @@ Unauthorized Inquiries:
             f"{docs_text}\n"
             "You may reference them in the overall letter if helpful, but do not "
             "include separate document notes for each account."
+        )
+    if audit:
+        audit.log_step(
+            "dispute_prompt",
+            {
+                "bureau": bureau_name,
+                "prompt": prompt,
+                "accounts": dispute_blocks,
+                "inquiries": inquiry_blocks,
+            },
         )
 
     from openai import OpenAI

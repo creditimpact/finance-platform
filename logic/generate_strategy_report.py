@@ -68,7 +68,7 @@ Ensure the response is strictly valid JSON: all property names and strings in do
             content = (
                 content.replace("```json", "").replace("```", "").strip()
             )
-        report = parse_json(content)
+        report, _ = parse_json(content)
         fix_draft_with_guardrails(
             json.dumps(report, indent=2),
             client_info.get("state"),

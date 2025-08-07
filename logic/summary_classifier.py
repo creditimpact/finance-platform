@@ -84,7 +84,8 @@ def classify_client_summary(summary: Dict[str, Any], state: str | None = None) -
                 response_format={"type": "json_object"},
             )
             content = resp.output[0].content[0].text
-            data = parse_json(content) or {}
+            data, _ = parse_json(content)
+            data = data or {}
             category = data.get("category")
         except Exception:
             category = None

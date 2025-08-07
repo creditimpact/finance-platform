@@ -195,7 +195,8 @@ Report text:
         f.write(inquiry_summary)
 
     try:
-        return parse_json(content)
+        data, _ = parse_json(content)
+        return data
     except Exception:
         print("\u26a0\ufe0f The AI returned invalid JSON. Here's the raw response:")
         print(content)

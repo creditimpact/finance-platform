@@ -177,7 +177,7 @@ Here is the text:
                 temperature=0.1
             )
             content = response.choices[0].message.content.strip()
-            ai_data = parse_json(content)
+            ai_data, _ = parse_json(content)
             for b in bureaus:
                 data[b].update(ai_data)
         except Exception as e:

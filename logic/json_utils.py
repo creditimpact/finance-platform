@@ -52,17 +52,21 @@ def _repair_json(content: str) -> str:
 
 
 def parse_json(text: str):
-    """Parse ``text`` as JSON, attempting repairs on failure."""
+    """Parse ``text`` as JSON, attempting repairs on failure.
+
+    Returns a tuple of ``(data, error_reason)`` where ``error_reason`` is ``None``
+    on success or ``"invalid_json"`` when parsing fails even after repair.
+    """
     try:
-        return json.loads(text)
+        return json.loads(text), None
     except json.JSONDecodeError as e:
         logging.warning("Initial JSON parse error: %s", e)
         repaired = _repair_json(text)
         logging.debug("Raw JSON before repair: %s", text)
         logging.debug("Repaired JSON string: %s", repaired)
         try:
-            return json.loads(repaired)
+            return json.loads(repaired), None
         except json.JSONDecodeError as e2:
             logging.error("Repaired JSON parse error: %s", e2)
             _log_invalid_json(text, repaired, str(e2))
-            return {}
+            return {}, "invalid_json"

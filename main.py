@@ -132,7 +132,19 @@ def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classificatio
                     status_text = str(
                         acc.get("status") or acc.get("account_status") or ""
                     ).strip().lower()
-                    if any(
+
+                    strategist_action = raw_action if raw_action else None
+                    if raw_action is None:
+                        fallback_reason = FallbackReason.NO_RECOMMENDATION
+                    else:
+                        raw_key = str(raw_action).strip().lower().replace(" ", "_")
+                        fallback_reason = (
+                            FallbackReason.KEYWORD_MATCH
+                            if raw_key == FallbackReason.KEYWORD_MATCH.value
+                            else FallbackReason.UNRECOGNIZED_TAG
+                        )
+
+                    keywords_trigger = any(
                         s in status_text
                         for s in (
                             "collection",
@@ -144,50 +156,47 @@ def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classificatio
                             "delinquent",
                             "late payments",
                         )
-                    ) or acc.get("dispute_type"):
+                    ) or acc.get("dispute_type")
+
+                    if keywords_trigger:
                         acc["action_tag"] = "dispute"
                         if raw_action:
                             acc["recommended_action"] = "Dispute"
                         else:
                             acc.setdefault("recommended_action", "Dispute")
 
-                        strategist_action = raw_action if raw_action else None
-                        overrode_strategist = bool(raw_action)
-                        if raw_action:
-                            raw_key = str(raw_action).strip().lower().replace(" ", "_")
-                            fallback_reason = (
-                                FallbackReason.KEYWORD_MATCH
-                                if raw_key == FallbackReason.KEYWORD_MATCH.value
-                                else FallbackReason.UNRECOGNIZED_TAG
-                            )
-                        else:
-                            fallback_reason = FallbackReason.NO_RECOMMENDATION
-
                         if log_list is not None and (raw_action is None or not tag):
-                            if overrode_strategist:
+                            if raw_action:
                                 log_list.append(
-                                    f"[{bureau}] Fallback dispute overriding '{raw_action}' for '{acc.get('name')}' ({acc.get('account_number')})"
+                                    f"[{bureau}] Fallback dispute overriding '{raw_action}' for '{acc.get('name')}' ({acc.get('account_number')})",
                                 )
                             else:
                                 log_list.append(
-                                    f"[{bureau}] Fallback dispute (no recommendation) for '{acc.get('name')}' ({acc.get('account_number')})"
+                                    f"[{bureau}] Fallback dispute (no recommendation) for '{acc.get('name')}' ({acc.get('account_number')})",
                                 )
-
-                        if audit:
-                            audit.log_account(
-                                acc_id,
-                                {
-                                    "stage": "strategy_fallback",
-                                    "fallback_reason": fallback_reason.value,
-                                    "strategist_action": strategist_action,
-                                    "overrode_strategist": overrode_strategist,
-                                    **(
-                                        {"failure_reason": failure_reason.value}
-                                        if failure_reason
-                                        else {}
-                                    ),
-                                },
+                    else:
+                        if log_list is not None and (raw_action is None or not tag):
+                            log_list.append(
+                                f"[{bureau}] Evaluated fallback for '{acc.get('name')}' ({acc.get('account_number')})",
                             )
+
+                    overrode_strategist = bool(raw_action) and bool(keywords_trigger)
+
+                    if audit:
+                        audit.log_account(
+                            acc_id,
+                            {
+                                "stage": "strategy_fallback",
+                                "fallback_reason": fallback_reason.value,
+                                "strategist_action": strategist_action,
+                                "overrode_strategist": overrode_strategist,
+                                **(
+                                    {"failure_reason": failure_reason.value}
+                                    if failure_reason
+                                    else {}
+                                ),
+                            },
+                        )
 
                 if audit:
                     cls = classification_map.get(str(acc.get("account_id")))

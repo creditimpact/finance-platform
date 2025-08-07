@@ -77,15 +77,16 @@ Ensure the response is strictly valid JSON: all property names and strings in do
             content = content.replace("```json", "").replace("```", "").strip()
         report, error_reason = parse_json(content)
         expected_keys = {"overview", "accounts", "global_recommendations"}
-        if audit and (
-            error_reason is not None
-            or not isinstance(report, dict)
-            or not expected_keys.issubset(report)
-        ):
-            audit.log_step(
-                "strategist_failure",
-                {"failure_reason": StrategistFailureReason.SCHEMA_ERROR},
-            )
+        if audit:
+            if (
+                error_reason is not None
+                or not isinstance(report, dict)
+                or not expected_keys.issubset(report)
+            ):
+                audit.log_step(
+                    "strategist_failure",
+                    {"failure_reason": StrategistFailureReason.SCHEMA_ERROR},
+                )
         fix_draft_with_guardrails(
             json.dumps(report, indent=2),
             client_info.get("state"),

@@ -259,10 +259,42 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
                                 )
                             ) or acc.get("dispute_type"):
                                 acc["action_tag"] = "dispute"
-                                acc.setdefault("recommended_action", "Dispute")
+                                if raw_action:
+                                    acc["recommended_action"] = "Dispute"
+                                else:
+                                    acc.setdefault("recommended_action", "Dispute")
+
+                                strategist_action = raw_action if raw_action else None
+                                overrode_strategist = bool(raw_action)
+                                if raw_action:
+                                    raw_key = str(raw_action).strip().lower().replace(" ", "_")
+                                    fallback_reason = (
+                                        "keyword_keyword"
+                                        if raw_key == "keyword_keyword"
+                                        else "unrecognized_tag"
+                                    )
+                                else:
+                                    fallback_reason = "no_recommendation"
+
                                 if log_list is not None and (raw_action is None or not tag):
-                                    log_list.append(
-                                        f"[{bureau}] Fallback dispute for '{acc.get('name')}' ({acc.get('account_number')})"
+                                    if overrode_strategist:
+                                        log_list.append(
+                                            f"[{bureau}] Fallback dispute overriding '{raw_action}' for '{acc.get('name')}' ({acc.get('account_number')})"
+                                        )
+                                    else:
+                                        log_list.append(
+                                            f"[{bureau}] Fallback dispute (no recommendation) for '{acc.get('name')}' ({acc.get('account_number')})"
+                                        )
+
+                                if audit:
+                                    audit.log_account(
+                                        acc.get("account_id") or acc.get("name"),
+                                        {
+                                            "stage": "strategy_fallback",
+                                            "fallback_reason": fallback_reason,
+                                            "strategist_action": strategist_action,
+                                            "overrode_strategist": overrode_strategist,
+                                        },
                                     )
 
         merge_strategy_data(strategy, bureau_data, log_list=log_messages)

@@ -8,6 +8,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
 RULEBOOK_FALLBACK_ENABLED = os.getenv("RULEBOOK_FALLBACK_ENABLED", "1") != "0"
 EXPORT_TRACE_FILE = os.getenv("EXPORT_TRACE_FILE", "1") != "0"
+WKHTMLTOPDF_PATH = os.getenv("WKHTMLTOPDF_PATH", "wkhtmltopdf")
 
 # Ensure the fallback is visible to later getenv calls
 os.environ.setdefault("OPENAI_BASE_URL", OPENAI_BASE_URL)

@@ -68,6 +68,10 @@ def test_merge_strategy_data_audit_reasons(tmp_path):
         for e in bad_logs
         if e.get("stage") == "strategy_fallback"
     )
+    fail_entry = next(e for e in bad_logs if e.get("stage") == "strategist_failure")
+    fallback_entry = next(e for e in bad_logs if e.get("stage") == "strategy_fallback")
+    assert fail_entry.get("raw_action") == "foobar"
+    assert fallback_entry.get("raw_action") == "foobar"
 
     # No Strat: strategist missing entry
     assert any(e.get("fallback_reason") == FallbackReason.NO_RECOMMENDATION.value for e in no_logs)

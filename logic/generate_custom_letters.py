@@ -79,6 +79,13 @@ Please draft a compliant letter body that blends the neutral legal phrase with t
                 "prompt": prompt,
             },
         )
+        audit.log_step(
+            "custom_letter_response",
+            {
+                "account_id": structured_summary.get("account_id"),
+                "response": body,
+            },
+        )
     return body
 
 
@@ -137,6 +144,17 @@ def generate_custom_letter(account: dict, client_info: dict, output_path: Path, 
     response_path = output_path / f"{safe_recipient}_custom_gpt_response.txt"
     with open(response_path, "w", encoding="utf-8") as f:
         f.write(body_paragraph)
+
+    audit = get_audit()
+    if audit:
+        audit.log_step(
+            "custom_letter_generated",
+            {
+                "account_id": account.get("account_id"),
+                "output_pdf": str(full_path),
+                "response": body_paragraph,
+            },
+        )
 
 
 def generate_custom_letters(

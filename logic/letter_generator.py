@@ -241,6 +241,11 @@ Unauthorized Inquiries:
     print("----- END RESPONSE -----\n")
 
     result = parse_json(content)
+    if audit:
+        audit.log_step(
+            "dispute_response",
+            {"bureau": bureau_name, "response": result},
+        )
     return result
 
 def generate_all_dispute_letters_with_ai(
@@ -255,6 +260,8 @@ def generate_all_dispute_letters_with_ai(
 
     if log_messages is None:
         log_messages = []
+
+    audit = get_audit()
 
     account_inquiry_matches = client_info.get("account_inquiry_matches", [])
     from .generate_goodwill_letters import normalize_creditor_name
@@ -534,6 +541,19 @@ def generate_all_dispute_letters_with_ai(
 
         with open(output_path / f"{bureau_name}_gpt_response.json", 'w') as f:
             json.dump(gpt_data, f, indent=2)
+
+        if audit:
+            audit.log_step(
+                "dispute_letter_generated",
+                {
+                    "bureau": bureau_name,
+                    "output_pdf": str(filepath),
+                    "response": gpt_data,
+                    "fallback_used": fallback_used,
+                    "raw_client_text_present": raw_client_text_present,
+                    "sanitization_issues": bureau_sanitization,
+                },
+            )
 
         if bureau_sanitization or fallback_used or raw_client_text_present:
             warnings.warn(

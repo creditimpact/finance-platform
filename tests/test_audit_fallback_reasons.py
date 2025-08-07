@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from audit import start_audit, clear_audit
-from logic.constants import FallbackReason
+from logic.constants import FallbackReason, StrategistFailureReason
 
 
 def test_apply_fallback_tags_logs_keyword_match(tmp_path, monkeypatch):
@@ -37,7 +37,8 @@ def test_merge_strategy_data_audit_reasons(tmp_path):
     audit = start_audit()
     strategy = {
         "accounts": [
-            {"name": "Bad Corp", "account_number": "1111", "recommended_action": "foobar"}
+            {"name": "Bad Corp", "account_number": "1111", "recommended_action": "foobar"},
+            {"name": "Empty Action", "account_number": "3333"},
         ]
     }
     bureau_data = {
@@ -45,6 +46,7 @@ def test_merge_strategy_data_audit_reasons(tmp_path):
             "disputes": [
                 {"name": "Bad Corp", "account_number": "1111", "status": "collection"},
                 {"name": "No Strat", "account_number": "2222", "status": "chargeoff"},
+                {"name": "Empty Action", "account_number": "3333", "status": "repossession"},
             ],
             "goodwill": [],
             "high_utilization": [],
@@ -57,6 +59,29 @@ def test_merge_strategy_data_audit_reasons(tmp_path):
     data = json.loads(audit_file.read_text())
     bad_logs = data["accounts"]["Bad Corp"]
     no_logs = data["accounts"]["No Strat"]
+    empty_logs = data["accounts"]["Empty Action"]
+
+    # Bad Corp: strategist provided unrecognised action
     assert any(e.get("fallback_reason") == FallbackReason.UNRECOGNIZED_TAG.value for e in bad_logs)
+    assert any(
+        e.get("failure_reason") == StrategistFailureReason.UNRECOGNIZED_FORMAT.value
+        for e in bad_logs
+        if e.get("stage") == "strategy_fallback"
+    )
+
+    # No Strat: strategist missing entry
     assert any(e.get("fallback_reason") == FallbackReason.NO_RECOMMENDATION.value for e in no_logs)
+    assert any(
+        e.get("failure_reason") == StrategistFailureReason.MISSING_INPUT.value
+        for e in no_logs
+        if e.get("stage") == "strategy_fallback"
+    )
+
+    # Empty Action: strategist provided entry with empty recommendation
+    assert any(e.get("fallback_reason") == FallbackReason.NO_RECOMMENDATION.value for e in empty_logs)
+    assert any(
+        e.get("failure_reason") == StrategistFailureReason.EMPTY_OUTPUT.value
+        for e in empty_logs
+        if e.get("stage") == "strategy_fallback"
+    )
     clear_audit()

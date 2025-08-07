@@ -48,7 +48,7 @@ def validate_env_variables():
 
 
 def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classification_map: dict, audit=None, log_list=None):
-    from logic.constants import normalize_action_tag, FallbackReason
+    from logic.constants import normalize_action_tag, FallbackReason, StrategistFailureReason
     from logic.utils import normalize_creditor_name
     import re
 
@@ -72,10 +72,42 @@ def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classificatio
                 src = index.get(key)
                 raw_action = None
                 tag = ""
-                if src is not None:
+                failure_reason = None
+                acc_id = acc.get("account_id") or acc.get("name")
+                if src is None:
+                    failure_reason = StrategistFailureReason.MISSING_INPUT
+                    if audit:
+                        audit.log_account(
+                            acc_id,
+                            {
+                                "stage": "strategist_failure",
+                                "failure_reason": failure_reason.value,
+                            },
+                        )
+                else:
                     raw_action = src.get("recommended_action") or src.get("recommendation")
                     tag, action = normalize_action_tag(raw_action)
-                    if raw_action and not tag:
+                    if raw_action is None:
+                        failure_reason = StrategistFailureReason.EMPTY_OUTPUT
+                        if audit:
+                            audit.log_account(
+                                acc_id,
+                                {
+                                    "stage": "strategist_failure",
+                                    "failure_reason": failure_reason.value,
+                                },
+                            )
+                    elif raw_action and not tag:
+                        failure_reason = StrategistFailureReason.UNRECOGNIZED_FORMAT
+                        if audit:
+                            audit.log_account(
+                                acc_id,
+                                {
+                                    "stage": "strategist_failure",
+                                    "failure_reason": failure_reason.value,
+                                    "raw_action": raw_action,
+                                },
+                            )
                         print(f"[⚠️] Unrecognised strategist action '{raw_action}' for {src.get('name')}")
                         acc["fallback_unrecognized_action"] = True
                     if tag:
@@ -88,13 +120,13 @@ def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classificatio
                         acc["advisor_comment"] = src["advisor_comment"]
                     elif "analysis" in src:
                         acc["advisor_comment"] = src["analysis"]
-                if src and src.get("flags"):
-                    acc["flags"] = src["flags"]
+                    if src.get("flags"):
+                        acc["flags"] = src["flags"]
 
                 if audit and (acc.get("action_tag") or acc.get("recommended_action")):
                     cls = classification_map.get(str(acc.get("account_id")))
                     audit.log_account(
-                        acc.get("account_id") or acc.get("name"),
+                        acc_id,
                         {
                             "stage": "strategy_decision",
                             "action": acc.get("action_tag") or acc.get("recommended_action"),
@@ -103,7 +135,7 @@ def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classificatio
                         },
                     )
                 else:
-                    if log_list is not None:
+                    if log_list is not None and src is None:
                         log_list.append(f"[{bureau}] No strategist entry for '{acc.get('name')}' ({acc.get('account_number')})")
 
                 if not acc.get("action_tag"):
@@ -139,12 +171,17 @@ def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classificatio
 
                         if audit:
                             audit.log_account(
-                                acc.get("account_id") or acc.get("name"),
+                                acc_id,
                                 {
                                     "stage": "strategy_fallback",
                                     "fallback_reason": fallback_reason.value,
                                     "strategist_action": strategist_action,
                                     "overrode_strategist": overrode_strategist,
+                                    **(
+                                        {"failure_reason": failure_reason.value}
+                                        if failure_reason
+                                        else {}
+                                    ),
                                 },
                             )
 

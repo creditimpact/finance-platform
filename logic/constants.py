@@ -51,6 +51,16 @@ class FallbackReason(str, Enum):
     NO_RECOMMENDATION = "no_recommendation"
 
 
+class StrategistFailureReason(str, Enum):
+    """Reasons why a strategist run failed."""
+
+    MISSING_INPUT = "missing_input"
+    SCHEMA_ERROR = "schema_error"
+    EMPTY_OUTPUT = "empty_output"
+    UNRECOGNIZED_FORMAT = "unrecognized_format"
+    PROMPT_MISMATCH = "prompt_mismatch"
+
+
 def normalize_action_tag(raw: str | None) -> tuple[str, str]:
     """Return (action_tag, recommended_action) for a strategist value.
 
@@ -65,3 +75,11 @@ def normalize_action_tag(raw: str | None) -> tuple[str, str]:
     if not tag:
         return "", str(raw).strip()
     return tag, _DISPLAY_NAME.get(tag, tag.title())
+
+
+__all__ = [
+    "VALID_ACTION_TAGS",
+    "FallbackReason",
+    "StrategistFailureReason",
+    "normalize_action_tag",
+]

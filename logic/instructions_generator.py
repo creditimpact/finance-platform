@@ -16,6 +16,7 @@ from logic.instruction_data_preparation import (
     prepare_instruction_data,
     generate_account_action,  # re-exported for backward compatibility
 )
+from services.ai_client import AIClient
 from logic.instruction_renderer import build_instruction_html
 from logic import pdf_renderer
 
@@ -37,6 +38,7 @@ def generate_html(
     run_date: str,
     logo_base64: str,
     strategy: dict | None = None,
+    ai_client: AIClient | None = None,
 ):
     """Return the rendered HTML and merged account list.
 
@@ -50,6 +52,7 @@ def generate_html(
         run_date,
         logo_base64,
         strategy,
+        ai_client=ai_client,
     )
     html = build_instruction_html(context)
     return html, all_accounts
@@ -62,6 +65,7 @@ def generate_instruction_file(
     output_path: Path,
     run_date: str | None = None,
     strategy: dict | None = None,
+    ai_client: AIClient | None = None,
 ):
     """Generate the instruction PDF and JSON context for the client."""
     run_date = run_date or datetime.now().strftime("%B %d, %Y")
@@ -74,6 +78,7 @@ def generate_instruction_file(
         run_date,
         logo_base64,
         strategy,
+        ai_client=ai_client,
     )
 
     html = build_instruction_html(context)

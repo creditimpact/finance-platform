@@ -12,6 +12,7 @@ from logic.constants import StrategistFailureReason
 from analytics_tracker import save_analytics_snapshot
 from analytics.strategist_failures import tally_failure_reasons
 from email_sender import send_email_with_attachment
+from services.ai_client import AIClient
 
 
 def process_client_intake(client_info, audit):
@@ -51,11 +52,11 @@ def process_client_intake(client_info, audit):
     return session_id, structured_map, raw_map
 
 
-def classify_client_responses(structured_map, raw_map, client_info, audit):
+def classify_client_responses(structured_map, raw_map, client_info, audit, ai_client: AIClient | None = None):
     """Classify client summaries for each account."""
     classification_map: dict[str, dict] = {}
     for acc_id, struct in structured_map.items():
-        cls = classify_client_summary(struct, client_info.get("state"))
+        cls = classify_client_summary(struct, client_info.get("state"), ai_client=ai_client)
         classification_map[acc_id] = cls
         audit.log_account(
             acc_id,
@@ -69,7 +70,7 @@ def classify_client_responses(structured_map, raw_map, client_info, audit):
     return classification_map
 
 
-def analyze_credit_report(proofs_files, session_id, client_info, audit, log_messages):
+def analyze_credit_report(proofs_files, session_id, client_info, audit, log_messages, ai_client: AIClient | None = None):
     """Ingest and analyze the client's credit report."""
     from logic.upload_validator import is_safe_pdf, move_uploaded_file
     from session_manager import update_session
@@ -88,7 +89,7 @@ def analyze_credit_report(proofs_files, session_id, client_info, audit, log_mess
         raise ValueError("Uploaded file failed PDF safety checks.")
 
     print("📄 Extracting client info from report...")
-    client_personal_info = extract_bureau_info_column_refined(pdf_path)
+    client_personal_info = extract_bureau_info_column_refined(pdf_path, ai_client=ai_client)
     client_info.update(client_personal_info.get("data", {}))
     log_messages.append("📄 Personal info extracted.")
     if audit.level == AuditLevel.VERBOSE:
@@ -96,7 +97,7 @@ def analyze_credit_report(proofs_files, session_id, client_info, audit, log_mess
 
     print("🔍 Analyzing report with GPT...")
     analyzed_json_path = Path("output/analyzed_report.json")
-    sections = analyze_report_logic(pdf_path, analyzed_json_path, client_info)
+    sections = analyze_report_logic(pdf_path, analyzed_json_path, client_info, ai_client=ai_client)
     client_info.update(sections)
     log_messages.append("🔍 Report analyzed.")
     audit.log_step(
@@ -142,13 +143,13 @@ def analyze_credit_report(proofs_files, session_id, client_info, audit, log_mess
     return pdf_path, sections, bureau_data, today_folder
 
 
-def generate_strategy_plan(client_info, bureau_data, classification_map, session_id, audit, log_messages):
+def generate_strategy_plan(client_info, bureau_data, classification_map, session_id, audit, log_messages, ai_client: AIClient | None = None):
     """Generate and merge the strategy plan."""
     from main import merge_strategy_data
     from logic.generate_strategy_report import StrategyGenerator
 
     docs_text = gather_supporting_docs_text(session_id)
-    strat_gen = StrategyGenerator()
+    strat_gen = StrategyGenerator(ai_client=ai_client)
     audit.log_step(
         "strategist_invocation",
         {
@@ -192,21 +193,32 @@ def generate_strategy_plan(client_info, bureau_data, classification_map, session
     return strategy
 
 
-def generate_letters(client_info, bureau_data, sections, today_folder, is_identity_theft, strategy, audit, log_messages):
+def generate_letters(
+    client_info,
+    bureau_data,
+    sections,
+    today_folder,
+    is_identity_theft,
+    strategy,
+    audit,
+    log_messages,
+    ai_client: AIClient | None = None,
+):
     """Create all client letters and supporting files."""
     from main import extract_all_accounts
-    from logic.letter_generator import generate_dispute_letters_for_all_bureaus
+    from logic.letter_generator import generate_all_dispute_letters_with_ai
     from logic.instructions_generator import generate_instruction_file
     from logic.generate_goodwill_letters import generate_goodwill_letters
     from logic.generate_custom_letters import generate_custom_letters
 
     print("📄 Generating dispute letters...")
-    generate_dispute_letters_for_all_bureaus(
+    generate_all_dispute_letters_with_ai(
         client_info,
         bureau_data,
         today_folder,
         is_identity_theft,
         log_messages=log_messages,
+        ai_client=ai_client,
     )
     log_messages.append("📄 Dispute letters generated.")
     if audit.level is AuditLevel.VERBOSE:
@@ -214,7 +226,9 @@ def generate_letters(client_info, bureau_data, sections, today_folder, is_identi
 
     if not is_identity_theft:
         print("💌 Generating goodwill letters...")
-        generate_goodwill_letters(client_info, bureau_data, today_folder)
+        generate_goodwill_letters(
+            client_info, bureau_data, today_folder, ai_client=ai_client
+        )
         log_messages.append("💌 Goodwill letters generated.")
         if audit.level is AuditLevel.VERBOSE:
             audit.log_step("goodwill_letters_generated")
@@ -234,6 +248,7 @@ def generate_letters(client_info, bureau_data, sections, today_folder, is_identi
         bureau_data,
         today_folder,
         log_messages=log_messages,
+        ai_client=ai_client,
     )
     log_messages.append("📝 Custom letters generated.")
     if audit.level is AuditLevel.VERBOSE:
@@ -246,6 +261,7 @@ def generate_letters(client_info, bureau_data, sections, today_folder, is_identi
         is_identity_theft,
         today_folder,
         strategy=strategy,
+        ai_client=ai_client,
     )
     log_messages.append("📋 Instruction file created.")
     if audit.level is AuditLevel.VERBOSE:

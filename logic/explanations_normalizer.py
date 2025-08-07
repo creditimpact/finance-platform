@@ -2,16 +2,9 @@ import os
 import re
 from typing import Any, Dict, List
 
-from openai import OpenAI
-from dotenv import load_dotenv
+from services.ai_client import AIClient, get_default_ai_client
 
 from .json_utils import parse_json
-
-load_dotenv()
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-)
 
 _PROFANITY = [
     "damn",
@@ -72,7 +65,11 @@ _SCHEMA = {
 }
 
 
-def extract_structured(safe_text: str, account_ctx: Dict[str, Any]) -> Dict[str, Any]:
+def extract_structured(
+    safe_text: str,
+    account_ctx: Dict[str, Any],
+    ai_client: AIClient | None = None,
+) -> Dict[str, Any]:
     """
     Returns structured summary using LLM.
     """
@@ -87,9 +84,9 @@ def extract_structured(safe_text: str, account_ctx: Dict[str, Any]) -> Dict[str,
     )
 
     try:
-        response = client.responses.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
-            input=prompt,
+        client = ai_client or get_default_ai_client()
+        response = client.response_json(
+            prompt=prompt,
             response_format={
                 "type": "json_schema",
                 "json_schema": {"name": "structured_summary", "schema": _SCHEMA},

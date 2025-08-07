@@ -4,13 +4,8 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from logic.explanations_normalizer import sanitize, extract_structured, client
-
-
-class DummyResponse:
-    def __init__(self, payload: dict):
-        text = json.dumps(payload)
-        self.output = [type("o", (), {"content": [type("c", (), {"text": text})]})]
+from logic.explanations_normalizer import sanitize, extract_structured
+from tests.helpers.fake_ai_client import FakeAIClient
 
 
 def test_sanitize_removes_unsafe_content():
@@ -32,11 +27,9 @@ def test_extract_structured_paraphrased_no_quotes(monkeypatch):
         "risk_flags": {"possible_identity_theft": False},
     }
 
-    def fake_create(*args, **kwargs):
-        return DummyResponse(payload)
-
-    monkeypatch.setattr(client.responses, "create", fake_create)
-    result = extract_structured(safe_text, account_ctx)
+    fake = FakeAIClient()
+    fake.add_response(json.dumps(payload))
+    result = extract_structured(safe_text, account_ctx, ai_client=fake)
     assert "Late payment due to bank error" not in result["facts_summary"]
     assert result["facts_summary"] == payload["facts_summary"]
     assert set(result.keys()) == {
@@ -65,11 +58,9 @@ def test_extract_structured_pii_flag(monkeypatch):
         "risk_flags": {"contains_pii": True},
     }
 
-    def fake_create(*args, **kwargs):
-        return DummyResponse(payload)
-
-    monkeypatch.setattr(client.responses, "create", fake_create)
-    result = extract_structured(safe_text, account_ctx)
+    fake = FakeAIClient()
+    fake.add_response(json.dumps(payload))
+    result = extract_structured(safe_text, account_ctx, ai_client=fake)
     assert result["risk_flags"].get("contains_pii") is True
 
 
@@ -90,11 +81,9 @@ def test_extract_structured_filters_personal_emotional(monkeypatch):
         "risk_flags": {},
     }
 
-    def fake_create(*args, **kwargs):
-        return DummyResponse(payload)
-
-    monkeypatch.setattr(client.responses, "create", fake_create)
-    result = extract_structured(safe_text, account_ctx)
+    fake = FakeAIClient()
+    fake.add_response(json.dumps(payload))
+    result = extract_structured(safe_text, account_ctx, ai_client=fake)
     import re
 
     summary = result["facts_summary"].lower()

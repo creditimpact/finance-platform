@@ -7,8 +7,7 @@ import os
 from datetime import datetime
 from typing import Dict, List
 
-import openai
-from dotenv import load_dotenv
+from services.ai_client import AIClient, get_default_ai_client
 
 from audit import AuditLevel, get_audit
 from .json_utils import parse_json
@@ -26,6 +25,7 @@ def call_gpt_dispute_letter(
     structured_summaries: Dict[str, dict],
     state: str,
     classifier=classify_client_summary,
+    ai_client: AIClient | None = None,
 ) -> dict:
     """Generate GPT-powered dispute letter content."""
 
@@ -141,13 +141,8 @@ Unauthorized Inquiries:
                 "inquiries": inquiry_blocks,
             },
         )
-    load_dotenv()
-    client = openai.OpenAI(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-    )
-
-    response = client.chat.completions.create(
+    ai_client = ai_client or get_default_ai_client()
+    response = ai_client.chat_completion(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,

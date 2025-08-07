@@ -4,22 +4,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
-from dotenv import load_dotenv
-from openai import OpenAI
+from services.ai_client import AIClient, get_default_ai_client
 
 from audit import AuditLogger
 from .constants import StrategistFailureReason
 from .json_utils import parse_json
 from logic.guardrails import fix_draft_with_guardrails
 
-load_dotenv()
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-)
-
 class StrategyGenerator:
     """Generate an internal strategic analysis using GPT-4."""
+
+    def __init__(self, ai_client: AIClient | None = None):
+        self.ai_client = ai_client or get_default_ai_client()
 
     def generate(
         self,
@@ -65,7 +61,7 @@ Return only a JSON object with this structure:
 }}
 Ensure the response is strictly valid JSON: all property names and strings in double quotes, no trailing commas or comments, and no text outside the JSON.
 """
-        response = client.chat.completions.create(
+        response = self.ai_client.chat_completion(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,

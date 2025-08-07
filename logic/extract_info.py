@@ -6,17 +6,10 @@ import json
 from typing import Dict, List
 from logic.utils.names_normalization import normalize_bureau_name, BUREAUS
 from collections import Counter
-from openai import OpenAI
-from dotenv import load_dotenv
+from services.ai_client import AIClient, get_default_ai_client
 from .json_utils import parse_json
 
 logging.getLogger("pdfplumber.page").setLevel(logging.ERROR)
-
-load_dotenv()
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-)
 
 def extract_clean_name(full_name: str) -> str:
     parts = full_name.strip().split()
@@ -34,7 +27,12 @@ def normalize_name_order(name: str) -> str:
         return f"{parts[1]} {parts[0]}"
     return name
 
-def extract_bureau_info_column_refined(pdf_path: str, client_info: dict = None, use_ai: bool = False) -> Dict[str, Dict[str, str]]:
+def extract_bureau_info_column_refined(
+    pdf_path: str,
+    client_info: dict | None = None,
+    use_ai: bool = False,
+    ai_client: AIClient | None = None,
+) -> Dict[str, Dict[str, str]]:
     bureaus = BUREAUS
     data = {b: {"name": "", "dob": "", "current_address": ""} for b in bureaus}
     discrepancies = []
@@ -148,6 +146,7 @@ def extract_bureau_info_column_refined(pdf_path: str, client_info: dict = None, 
 
     if use_ai:
         try:
+            client = ai_client or get_default_ai_client()
             print("[🤖] Running GPT validation for personal info...")
             prompt = f"""
 You are a credit repair AI assistant.
@@ -171,10 +170,10 @@ Here is the text:
 {raw_text}
 ===
 """
-            response = client.chat.completions.create(
+            response = client.chat_completion(
                 model="gpt-4",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.1
+                temperature=0.1,
             )
             content = response.choices[0].message.content.strip()
             ai_data, _ = parse_json(content)

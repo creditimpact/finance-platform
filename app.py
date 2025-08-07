@@ -25,8 +25,9 @@ from session_manager import (
 from logic.explanations_normalizer import sanitize, extract_structured
 
 logger = logging.getLogger(__name__)
-logger.info("Flask app starting with OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL)
-logger.info("Flask app OPENAI_API_KEY present=%s", bool(config.OPENAI_API_KEY))
+_ai_conf = config.get_ai_config()
+logger.info("Flask app starting with OPENAI_BASE_URL=%s", _ai_conf.base_url)
+logger.info("Flask app OPENAI_API_KEY present=%s", bool(_ai_conf.api_key))
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)

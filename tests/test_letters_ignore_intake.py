@@ -6,6 +6,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from session_manager import update_session, update_intake
 from logic.letter_generator import generate_all_dispute_letters_with_ai
+from tests.helpers.fake_ai_client import FakeAIClient
 
 
 def test_letters_do_not_access_raw_intake(monkeypatch, tmp_path):
@@ -27,7 +28,7 @@ def test_letters_do_not_access_raw_intake(monkeypatch, tmp_path):
     def fake_generate_strategy(sess_id, bureau_data):
         return {"dispute_items": structured}
 
-    def fake_call_gpt(client_info, bureau_name, disputes, inquiries, is_identity_theft, structured_summaries, state):
+    def fake_call_gpt(client_info, bureau_name, disputes, inquiries, is_identity_theft, structured_summaries, state, ai_client=None):
         text = json.dumps(structured_summaries)
         assert "SECRET RAW" not in text
         return {
@@ -62,7 +63,8 @@ def test_letters_do_not_access_raw_intake(monkeypatch, tmp_path):
         }
     }
 
-    generate_all_dispute_letters_with_ai(client_info, bureau_data, tmp_path, False)
+    fake = FakeAIClient()
+    generate_all_dispute_letters_with_ai(client_info, bureau_data, tmp_path, False, ai_client=fake)
     with open(tmp_path / "Experian_gpt_response.json") as f:
         data = json.load(f)
     assert "SECRET RAW" not in json.dumps(data)

@@ -34,6 +34,7 @@ sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None)
 from logic.letter_generator import generate_dispute_letters_for_all_bureaus
 from logic.generate_goodwill_letters import generate_goodwill_letters
 from logic.instructions_generator import generate_instruction_file, generate_html
+from tests.helpers.fake_ai_client import FakeAIClient
 
 
 def run_checks():
@@ -99,9 +100,10 @@ def run_checks():
         mock_g.side_effect = _g
 
         out_dir = Path("output/test_local")
-        generate_dispute_letters_for_all_bureaus(client_info, bureau_data, out_dir, False)
-        generate_goodwill_letters(client_info, bureau_data, out_dir)
-        generate_instruction_file(client_info, bureau_data, False, out_dir)
+        fake = FakeAIClient()
+        generate_dispute_letters_for_all_bureaus(client_info, bureau_data, out_dir, False, ai_client=fake)
+        generate_goodwill_letters(client_info, bureau_data, out_dir, ai_client=fake)
+        generate_instruction_file(client_info, bureau_data, False, out_dir, ai_client=fake)
         html_content, accounts_list = generate_html(
             client_info,
             bureau_data,
@@ -109,6 +111,7 @@ def run_checks():
             "2024-01-01",
             "",
             None,
+            ai_client=fake,
         )
 
     assert [a["name"] for a in disputes_sent.get("Experian", [])] == ["Bank A"]
@@ -144,6 +147,7 @@ def test_skip_goodwill_when_identity_theft():
                 return_value=(Path(tmp.name), {}, {"Experian": {}}, Path(tmp.name).parent),
             ),
             mock.patch("main.generate_strategy_plan", return_value={}),
+            mock.patch("main.build_ai_client", return_value=FakeAIClient()),
             mock.patch("logic.letter_generator.generate_dispute_letters_for_all_bureaus"),
             mock.patch("logic.generate_goodwill_letters.generate_goodwill_letters") as mock_goodwill,
             mock.patch("logic.generate_custom_letters.generate_custom_letters"),

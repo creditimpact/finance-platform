@@ -13,6 +13,7 @@ from logic.generate_goodwill_letters import generate_goodwill_letters
 from logic.generate_custom_letters import generate_custom_letters
 from logic.generate_strategy_report import StrategyGenerator
 from logic.summary_classifier import classify_client_summary
+from logic.constants import StrategistFailureReason
 from email_sender import send_email_with_attachment
 from analytics_tracker import save_analytics_snapshot
 from audit import start_audit, get_audit, clear_audit
@@ -268,6 +269,15 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
         print("🧠 Generating strategy report...")
         docs_text = gather_supporting_docs_text(session_id)
         strat_gen = StrategyGenerator()
+        audit.log_step(
+            "strategist_invocation",
+            {
+                "client_info": client_info,
+                "bureau_data": bureau_data,
+                "supporting_docs_text": docs_text,
+                "classification_map": classification_map,
+            },
+        )
         strategy = strat_gen.generate(
             client_info,
             bureau_data,
@@ -275,6 +285,11 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             classification_map=classification_map,
             audit=audit,
         )
+        if not strategy or not strategy.get("accounts"):
+            audit.log_step(
+                "strategist_failure",
+                {"failure_reason": StrategistFailureReason.EMPTY_OUTPUT},
+            )
         strat_gen.save_report(strategy, client_info, datetime.now().strftime("%Y-%m-%d"))
         audit.log_step("strategy_generated", strategy)
 

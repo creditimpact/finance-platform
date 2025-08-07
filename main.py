@@ -17,7 +17,7 @@ from logic.constants import StrategistFailureReason
 from email_sender import send_email_with_attachment
 from analytics_tracker import save_analytics_snapshot
 from analytics.strategist_failures import tally_failure_reasons
-from audit import start_audit, get_audit, clear_audit
+from audit import start_audit, get_audit, clear_audit, AuditLevel
 
 logger = logging.getLogger(__name__)
 logger.info("Main process starting with OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL)
@@ -358,17 +358,20 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             log_messages=log_messages,
         )
         log_messages.append("📄 Dispute letters generated.")
-        audit.log_step("dispute_letters_generated")
+        if audit.level is AuditLevel.VERBOSE:
+            audit.log_step("dispute_letters_generated")
 
         if not is_identity_theft:
             print("💌 Generating goodwill letters...")
             generate_goodwill_letters(client_info, bureau_data, today_folder)
             log_messages.append("💌 Goodwill letters generated.")
-            audit.log_step("goodwill_letters_generated")
+            if audit.level is AuditLevel.VERBOSE:
+                audit.log_step("goodwill_letters_generated")
         else:
             print("🔒 Identity theft case - skipping goodwill letters.")
             log_messages.append("🚫 Goodwill letters skipped due to identity theft.")
-            audit.log_step("goodwill_letters_skipped")
+            if audit.level is AuditLevel.VERBOSE:
+                audit.log_step("goodwill_letters_skipped")
 
         # 🧠 הזרקת all_accounts להוראות
         all_accounts = extract_all_accounts(sections)
@@ -383,7 +386,8 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             log_messages=log_messages,
         )
         log_messages.append("📝 Custom letters generated.")
-        audit.log_step("custom_letters_generated")
+        if audit.level is AuditLevel.VERBOSE:
+            audit.log_step("custom_letters_generated")
 
         print("📋 Generating instructions file for client...")
         generate_instruction_file(
@@ -394,13 +398,15 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             strategy=strategy,
         )
         log_messages.append("📋 Instruction file created.")
-        audit.log_step("instructions_generated")
+        if audit.level is AuditLevel.VERBOSE:
+            audit.log_step("instructions_generated")
 
 
         print("🌀 Converting letters to PDF...")
         convert_txts_to_pdfs(today_folder)
         log_messages.append("🌀 All letters converted to PDF.")
-        audit.log_step("letters_converted_to_pdf")
+        if audit.level is AuditLevel.VERBOSE:
+            audit.log_step("letters_converted_to_pdf")
 
         if is_identity_theft:
             print("📎 Adding FCRA rights PDF...")
@@ -413,10 +419,12 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             else:
                 print("⚠️ FCRA rights file not found!")
                 log_messages.append("⚠️ FCRA file missing.")
-                audit.log_step("fcra_file_missing")
+                if audit.level is AuditLevel.VERBOSE:
+                    audit.log_step("fcra_file_missing")
         else:
             log_messages.append("ℹ️ Identity theft not indicated — FCRA PDF skipped.")
-            audit.log_step("fcra_skipped")
+            if audit.level is AuditLevel.VERBOSE:
+                audit.log_step("fcra_skipped")
 
         print("📧 Sending email with all documents to client...")
         output_files = [str(p) for p in today_folder.glob("*.pdf")]
@@ -457,7 +465,8 @@ Best regards,
             files=output_files
         )
         log_messages.append("📧 Email sent to client.")
-        audit.log_step("email_sent", {"files": output_files})
+        if audit.level is AuditLevel.VERBOSE:
+            audit.log_step("email_sent", {"files": output_files})
 
         from logic.utils import extract_summary_from_sections
         failure_counts = tally_failure_reasons(audit)
@@ -467,7 +476,8 @@ Best regards,
             strategist_failures=failure_counts,
         )
         log_messages.append("📊 Analytics snapshot saved.")
-        audit.log_step("analytics_saved", {"strategist_failures": failure_counts})
+        if audit.level is AuditLevel.VERBOSE:
+            audit.log_step("analytics_saved", {"strategist_failures": failure_counts})
 
         print(f"\n🎯 Credit Repair Process completed successfully!")
         print(f"📂 All output saved to: {today_folder}")

@@ -18,7 +18,7 @@ from session_manager import get_session
 from logic.guardrails import fix_draft_with_guardrails
 from .summary_classifier import classify_client_summary
 from .rules_loader import get_neutral_phrase
-from audit import get_audit
+from audit import get_audit, AuditLevel
 
 load_dotenv()
 client = OpenAI(
@@ -259,7 +259,8 @@ def call_gpt_for_goodwill_letter(
 
     docs_text, doc_names, _ = gather_supporting_docs(session_id or "")
     if docs_text:
-        print(f"[📎] Including supplemental docs for goodwill letter to {creditor}.")
+        if audit and audit.level is AuditLevel.VERBOSE:
+            print(f"[📎] Including supplemental docs for goodwill letter to {creditor}.")
         docs_section = f"\nThe following additional documents were provided by the client:\n{docs_text}"
     else:
         docs_section = ""
@@ -290,7 +291,7 @@ Return strictly valid JSON: all property names and strings in double quotes, no 
         messages=[{"role": "user", "content": prompt}],
         temperature=0.4
     )
-    if audit:
+    if audit and audit.level is AuditLevel.VERBOSE:
         audit.log_step(
             "goodwill_letter_prompt",
             {"creditor": creditor, "prompt": prompt, "accounts": account_summaries},
@@ -300,12 +301,13 @@ Return strictly valid JSON: all property names and strings in double quotes, no 
     if content.startswith("```"):
         content = content.replace("```json", "").replace("```", "").strip()
 
-    print("\n----- GPT RAW RESPONSE -----")
-    print(content)
-    print("----- END RESPONSE -----\n")
+    if audit and audit.level is AuditLevel.VERBOSE:
+        print("\n----- GPT RAW RESPONSE -----")
+        print(content)
+        print("----- END RESPONSE -----\n")
 
     result, _ = parse_json(content)
-    if audit:
+    if audit and audit.level is AuditLevel.VERBOSE:
         audit.log_step(
             "goodwill_letter_response",
             {"creditor": creditor, "response": result},
@@ -399,7 +401,7 @@ def generate_goodwill_letter_with_ai(creditor, accounts, client_info, output_pat
         json.dump(gpt_data, f, indent=2)
 
     audit = get_audit()
-    if audit:
+    if audit and audit.level is AuditLevel.VERBOSE:
         audit.log_step(
             "goodwill_letter_generated",
             {"creditor": creditor, "output_pdf": str(full_path), "response": gpt_data},

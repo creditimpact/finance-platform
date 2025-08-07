@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from .generate_goodwill_letters import normalize_creditor_name
 from .utils import normalize_bureau_name, enforce_collection_status
 from audit import get_audit
+from .constants import FallbackReason
 
 BUREAUS = ["Experian", "Equifax", "TransUnion"]
 
@@ -233,7 +234,7 @@ def process_analyzed_report(
                                     acc.get("account_id") or acc.get("name"),
                                     {
                                         "stage": "pre_strategy_fallback",
-                                        "fallback_reason": "keyword_match",
+                                        "fallback_reason": FallbackReason.KEYWORD_MATCH.value,
                                         "original_tag": original_tag,
                                     },
                                 )
@@ -242,7 +243,7 @@ def process_analyzed_report(
                                 acc["recommended_action"] = "Dispute"
                             if log_list is not None:
                                 log_list.append(
-                                    f"[{bureau}] Fallback dispute tag applied to '{acc.get('name')}' (keyword_match)"
+                                    f"[{bureau}] Fallback dispute tag applied to '{acc.get('name')}' ({FallbackReason.KEYWORD_MATCH.value})"
                                 )
 
     apply_fallback_tags(output, log_list)

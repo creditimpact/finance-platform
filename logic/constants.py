@@ -1,4 +1,5 @@
 # Constants and helpers used across the logic package.
+from enum import Enum
 
 # Allowed action tags used for account recommendations.
 VALID_ACTION_TAGS = {
@@ -40,6 +41,14 @@ _DISPLAY_NAME = {
     "custom_letter": "Custom Letter",
     "ignore": "Ignore",
 }
+
+
+class FallbackReason(str, Enum):
+    """Reasons why a fallback dispute tag was applied."""
+
+    KEYWORD_MATCH = "keyword_match"
+    UNRECOGNIZED_TAG = "unrecognized_tag"
+    NO_RECOMMENDATION = "no_recommendation"
 
 
 def normalize_action_tag(raw: str | None) -> tuple[str, str]:

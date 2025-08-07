@@ -46,6 +46,107 @@ def validate_env_variables():
     print("✅ Environment variables configured.\n")
 
 
+def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classification_map: dict, audit=None, log_list=None):
+    from logic.constants import normalize_action_tag, FallbackReason
+    from logic.utils import normalize_creditor_name
+    import re
+
+    def norm_key(name: str, number: str) -> tuple[str, str]:
+        norm_name = normalize_creditor_name(name)
+        digits = re.sub(r"\D", "", number or "")
+        last4 = digits[-4:] if digits else ""
+        return norm_name, last4
+
+    index = {}
+    for item in strategy_obj.get("accounts", []):
+        key = norm_key(item.get("name", ""), item.get("account_number", ""))
+        index[key] = item
+
+    for bureau, payload in bureau_data_obj.items():
+        for section, items in payload.items():
+            if not isinstance(items, list):
+                continue
+            for acc in items:
+                key = norm_key(acc.get("name", ""), acc.get("account_number", ""))
+                src = index.get(key)
+                raw_action = None
+                tag = ""
+                if src is not None:
+                    raw_action = src.get("recommended_action") or src.get("recommendation")
+                    tag, action = normalize_action_tag(raw_action)
+                    if raw_action and not tag:
+                        print(f"[⚠️] Unrecognised strategist action '{raw_action}' for {src.get('name')}")
+                        acc["fallback_unrecognized_action"] = True
+                    if tag:
+                        acc["action_tag"] = tag
+                        acc["recommended_action"] = action
+                    elif raw_action:
+                        acc["recommended_action"] = raw_action
+
+                    if "advisor_comment" in src:
+                        acc["advisor_comment"] = src["advisor_comment"]
+                    elif "analysis" in src:
+                        acc["advisor_comment"] = src["analysis"]
+                if src and src.get("flags"):
+                    acc["flags"] = src["flags"]
+
+                if audit and (acc.get("action_tag") or acc.get("recommended_action")):
+                    cls = classification_map.get(str(acc.get("account_id")))
+                    audit.log_account(
+                        acc.get("account_id") or acc.get("name"),
+                        {
+                            "stage": "strategy_decision",
+                            "action": acc.get("action_tag") or acc.get("recommended_action"),
+                            "reason": acc.get("advisor_comment") or acc.get("analysis") or raw_action,
+                            "classification": cls,
+                        },
+                    )
+                else:
+                    if log_list is not None:
+                        log_list.append(f"[{bureau}] No strategist entry for '{acc.get('name')}' ({acc.get('account_number')})")
+
+                if not acc.get("action_tag"):
+                    status_text = str(acc.get("status") or acc.get("account_status") or "").strip().lower()
+                    if any(s in status_text for s in ("collection", "chargeoff", "charge-off", "charge off", "repossession", "repos", "delinquent", "late payments")) or acc.get("dispute_type"):
+                        acc["action_tag"] = "dispute"
+                        if raw_action:
+                            acc["recommended_action"] = "Dispute"
+                        else:
+                            acc.setdefault("recommended_action", "Dispute")
+
+                        strategist_action = raw_action if raw_action else None
+                        overrode_strategist = bool(raw_action)
+                        if raw_action:
+                            raw_key = str(raw_action).strip().lower().replace(" ", "_")
+                            fallback_reason = (
+                                FallbackReason.KEYWORD_MATCH
+                                if raw_key == FallbackReason.KEYWORD_MATCH.value
+                                else FallbackReason.UNRECOGNIZED_TAG
+                            )
+                        else:
+                            fallback_reason = FallbackReason.NO_RECOMMENDATION
+
+                        if log_list is not None and (raw_action is None or not tag):
+                            if overrode_strategist:
+                                log_list.append(
+                                    f"[{bureau}] Fallback dispute overriding '{raw_action}' for '{acc.get('name')}' ({acc.get('account_number')})"
+                                )
+                            else:
+                                log_list.append(
+                                    f"[{bureau}] Fallback dispute (no recommendation) for '{acc.get('name')}' ({acc.get('account_number')})"
+                                )
+
+                        if audit:
+                            audit.log_account(
+                                acc.get("account_id") or acc.get("name"),
+                                {
+                                    "stage": "strategy_fallback",
+                                    "fallback_reason": fallback_reason.value,
+                                    "strategist_action": strategist_action,
+                                    "overrode_strategist": overrode_strategist,
+                                },
+                            )
+
 def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
     validate_env_variables()
 
@@ -171,133 +272,7 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
         strat_gen.save_report(strategy, client_info, datetime.now().strftime("%Y-%m-%d"))
         audit.log_step("strategy_generated", strategy)
 
-        def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, log_list=None):
-            from logic.constants import normalize_action_tag
-
-            from logic.utils import normalize_creditor_name
-            import re
-
-            def norm_key(name: str, number: str) -> tuple[str, str]:
-                norm_name = normalize_creditor_name(name)
-                digits = re.sub(r"\D", "", number or "")
-                last4 = digits[-4:] if digits else ""
-                return norm_name, last4
-
-            index = {}
-            for item in strategy_obj.get("accounts", []):
-                key = norm_key(item.get("name", ""), item.get("account_number", ""))
-                index[key] = item
-
-            for bureau, payload in bureau_data_obj.items():
-                for section, items in payload.items():
-                    if not isinstance(items, list):
-                        continue
-                    for acc in items:
-                        key = norm_key(
-                            acc.get("name", ""), acc.get("account_number", "")
-                        )
-                        src = index.get(key)
-                        raw_action = None
-                        tag = ""
-                        if src is not None:
-                            raw_action = (
-                                src.get("recommended_action")
-                                or src.get("recommendation")
-                            )
-                            tag, action = normalize_action_tag(raw_action)
-                            if raw_action and not tag:
-                                print(
-                                    f"[⚠️] Unrecognised strategist action '{raw_action}' for {src.get('name')}"
-                                )
-                                acc["fallback_unrecognized_action"] = True
-                            if tag:
-                                acc["action_tag"] = tag
-                                acc["recommended_action"] = action
-                            elif raw_action:
-                                acc["recommended_action"] = raw_action
-
-                            if "advisor_comment" in src:
-                                acc["advisor_comment"] = src["advisor_comment"]
-                            elif "analysis" in src:
-                                acc["advisor_comment"] = src["analysis"]
-                        if src.get("flags"):
-                            acc["flags"] = src["flags"]
-
-                        if audit and (acc.get("action_tag") or acc.get("recommended_action")):
-                            cls = classification_map.get(str(acc.get("account_id")))
-                            audit.log_account(
-                                acc.get("account_id") or acc.get("name"),
-                                {
-                                    "stage": "strategy_decision",
-                                    "action": acc.get("action_tag") or acc.get("recommended_action"),
-                                    "reason": acc.get("advisor_comment") or acc.get("analysis") or raw_action,
-                                    "classification": cls,
-                                },
-                            )
-                        else:
-                            if log_list is not None:
-                                log_list.append(
-                                    f"[{bureau}] No strategist entry for '{acc.get('name')}' ({acc.get('account_number')})"
-                                )
-
-                        # 🚑 Fallback tagging for obvious dispute cases
-                        if not acc.get("action_tag"):
-                            status_text = str(
-                                acc.get("status") or acc.get("account_status") or ""
-                            ).strip().lower()
-                            if any(
-                                s in status_text
-                                for s in (
-                                    "collection",
-                                    "chargeoff",
-                                    "charge-off",
-                                    "charge off",
-                                    "repossession",
-                                    "repos",
-                                    "delinquent",
-                                    "late payments",
-                                )
-                            ) or acc.get("dispute_type"):
-                                acc["action_tag"] = "dispute"
-                                if raw_action:
-                                    acc["recommended_action"] = "Dispute"
-                                else:
-                                    acc.setdefault("recommended_action", "Dispute")
-
-                                strategist_action = raw_action if raw_action else None
-                                overrode_strategist = bool(raw_action)
-                                if raw_action:
-                                    raw_key = str(raw_action).strip().lower().replace(" ", "_")
-                                    fallback_reason = (
-                                        "keyword_keyword"
-                                        if raw_key == "keyword_keyword"
-                                        else "unrecognized_tag"
-                                    )
-                                else:
-                                    fallback_reason = "no_recommendation"
-
-                                if log_list is not None and (raw_action is None or not tag):
-                                    if overrode_strategist:
-                                        log_list.append(
-                                            f"[{bureau}] Fallback dispute overriding '{raw_action}' for '{acc.get('name')}' ({acc.get('account_number')})"
-                                        )
-                                    else:
-                                        log_list.append(
-                                            f"[{bureau}] Fallback dispute (no recommendation) for '{acc.get('name')}' ({acc.get('account_number')})"
-                                        )
-
-                                if audit:
-                                    audit.log_account(
-                                        acc.get("account_id") or acc.get("name"),
-                                        {
-                                            "stage": "strategy_fallback",
-                                            "fallback_reason": fallback_reason,
-                                            "strategist_action": strategist_action,
-                                            "overrode_strategist": overrode_strategist,
-                                        },
-                                    )
-
-        merge_strategy_data(strategy, bureau_data, log_list=log_messages)
+        merge_strategy_data(strategy, bureau_data, classification_map, audit, log_list=log_messages)
         audit.log_step("strategy_merged", bureau_data)
         for bureau, payload in bureau_data.items():
             for section, items in payload.items():

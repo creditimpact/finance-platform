@@ -12,6 +12,7 @@ from logic.instructions_generator import generate_instruction_file
 from logic.generate_goodwill_letters import generate_goodwill_letters
 from logic.generate_custom_letters import generate_custom_letters
 from logic.generate_strategy_report import StrategyGenerator
+from logic.summary_classifier import classify_client_summary
 from email_sender import send_email_with_attachment
 from analytics_tracker import save_analytics_snapshot
 from audit import start_audit, get_audit, clear_audit
@@ -71,6 +72,7 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
         intake = get_intake(session_id) or {}
         structured = client_info.get("structured_summaries") or {}
         structured_map: dict[str, dict] = {}
+        classification_map: dict[str, dict] = {}
         if isinstance(structured, list):
             for idx, item in enumerate(structured):
                 if isinstance(item, dict):
@@ -86,12 +88,15 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             if isinstance(r, dict)
         }
         for acc_id, struct in structured_map.items():
+            cls = classify_client_summary(struct, client_info.get("state"))
+            classification_map[acc_id] = cls
             audit.log_account(
                 acc_id,
                 {
                     "stage": "explanation",
                     "raw_explanation": raw_map.get(acc_id, ""),
                     "structured_summary": struct,
+                    "classification": cls,
                 },
             )
         uploaded_path = proofs_files.get("smartcredit_report")
@@ -219,12 +224,14 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
                             acc["flags"] = src["flags"]
 
                         if audit and (acc.get("action_tag") or acc.get("recommended_action")):
+                            cls = classification_map.get(str(acc.get("account_id")))
                             audit.log_account(
                                 acc.get("account_id") or acc.get("name"),
                                 {
                                     "stage": "strategy_decision",
                                     "action": acc.get("action_tag") or acc.get("recommended_action"),
                                     "reason": acc.get("advisor_comment") or acc.get("analysis") or raw_action,
+                                    "classification": cls,
                                 },
                             )
                         else:

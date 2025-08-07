@@ -33,7 +33,7 @@ def call_gpt_for_custom_letter(
 ) -> str:
     docs_line = f"Supporting documents summary:\n{docs_text}" if docs_text else ""
     classification = classify_client_summary(structured_summary, state)
-    neutral_phrase = get_neutral_phrase(
+    neutral_phrase, neutral_reason = get_neutral_phrase(
         classification.get("category"), structured_summary
     )
     prompt = f"""
@@ -58,6 +58,7 @@ Please draft a compliant letter body that blends the neutral legal phrase with t
                 "stage": "custom_letter",
                 "classification": classification,
                 "neutral_phrase": neutral_phrase,
+                "neutral_phrase_reason": neutral_reason,
                 "structured_summary": structured_summary,
             },
         )

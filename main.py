@@ -16,6 +16,7 @@ from logic.summary_classifier import classify_client_summary
 from logic.constants import StrategistFailureReason
 from email_sender import send_email_with_attachment
 from analytics_tracker import save_analytics_snapshot
+from analytics.strategist_failures import tally_failure_reasons
 from audit import start_audit, get_audit, clear_audit
 
 logger = logging.getLogger(__name__)
@@ -459,9 +460,14 @@ Best regards,
         audit.log_step("email_sent", {"files": output_files})
 
         from logic.utils import extract_summary_from_sections
-        save_analytics_snapshot(client_info, extract_summary_from_sections(sections))
+        failure_counts = tally_failure_reasons(audit)
+        save_analytics_snapshot(
+            client_info,
+            extract_summary_from_sections(sections),
+            strategist_failures=failure_counts,
+        )
         log_messages.append("📊 Analytics snapshot saved.")
-        audit.log_step("analytics_saved")
+        audit.log_step("analytics_saved", {"strategist_failures": failure_counts})
 
         print(f"\n🎯 Credit Repair Process completed successfully!")
         print(f"📂 All output saved to: {today_folder}")

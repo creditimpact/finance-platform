@@ -18,6 +18,7 @@ from session_manager import get_session
 from logic.guardrails import fix_draft_with_guardrails
 from .summary_classifier import classify_client_summary
 from .rules_loader import get_neutral_phrase
+from audit import get_audit
 
 load_dotenv()
 client = OpenAI(
@@ -141,6 +142,7 @@ def call_gpt_for_goodwill_letter(
 
     merged_accounts: list[dict] = []
     seen_numbers: dict[str, dict] = {}
+    audit = get_audit()
 
     for acc in accounts:
         acc_num = str(acc.get("account_number") or "").strip()
@@ -229,6 +231,16 @@ def call_gpt_for_goodwill_letter(
             neutral = get_neutral_phrase(cls.get("category"), struct)
             if neutral:
                 summary["neutral_phrase"] = neutral
+            if audit:
+                audit.log_account(
+                    acc.get("account_id") or acc.get("name"),
+                    {
+                        "stage": "goodwill_letter",
+                        "classification": cls,
+                        "neutral_phrase": neutral,
+                        "structured_summary": struct,
+                    },
+                )
         late_summary = summarize_late(acc.get("late_payments"))
         if late_summary:
             summary["late_history"] = late_summary
@@ -277,6 +289,11 @@ Return strictly valid JSON: all property names and strings in double quotes, no 
         messages=[{"role": "user", "content": prompt}],
         temperature=0.4
     )
+    if audit:
+        audit.log_step(
+            "goodwill_letter_prompt",
+            {"creditor": creditor, "prompt": prompt, "accounts": account_summaries},
+        )
 
     content = response.choices[0].message.content.strip()
     if content.startswith("```"):

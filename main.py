@@ -14,6 +14,7 @@ from logic.generate_custom_letters import generate_custom_letters
 from logic.generate_strategy_report import StrategyGenerator
 from email_sender import send_email_with_attachment
 from analytics_tracker import save_analytics_snapshot
+from audit import start_audit, get_audit, clear_audit
 
 logger = logging.getLogger(__name__)
 logger.info("Main process starting with OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL)
@@ -50,10 +51,12 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
     log_messages = []
     today_folder = None
     pdf_path = None
+    audit = start_audit()
 
     try:
         print("\n✅ Starting Credit Repair Process (B2C Mode)...")
         log_messages.append("✅ Process started.")
+        audit.log_step("process_started", {"is_identity_theft": is_identity_theft})
 
         from logic.upload_validator import is_safe_pdf, move_uploaded_file
         from session_manager import update_session
@@ -62,6 +65,7 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             raise ValueError("Client email is missing.")
 
         session_id = client_info.get("session_id", "session")
+        audit.log_step("session_initialized", {"session_id": session_id})
         uploaded_path = proofs_files.get("smartcredit_report")
         if not uploaded_path or not os.path.exists(uploaded_path):
             raise FileNotFoundError("SmartCredit report file not found at path: " + str(uploaded_path))
@@ -75,17 +79,31 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
         client_personal_info = extract_bureau_info_column_refined(pdf_path)
         client_info.update(client_personal_info.get("data", {}))
         log_messages.append("📄 Personal info extracted.")
+        audit.log_step("personal_info_extracted", client_personal_info)
 
         print("🔍 Analyzing report with GPT...")
         analyzed_json_path = Path("output/analyzed_report.json")
         sections = analyze_credit_report(pdf_path, analyzed_json_path, client_info)
         client_info.update(sections)
         log_messages.append("🔍 Report analyzed.")
+        audit.log_step(
+            "report_analyzed",
+            {
+                "negative_accounts": sections.get("negative_accounts", []),
+                "open_accounts_with_issues": sections.get(
+                    "open_accounts_with_issues", []
+                ),
+                "unauthorized_inquiries": sections.get(
+                    "unauthorized_inquiries", []
+                ),
+            },
+        )
 
         safe_name = (client_info.get("name") or "Client").replace(" ", "_").replace("/", "_")
         today_folder = Path(f"Clients/{get_current_month()}/{safe_name}_{session_id}")
         today_folder.mkdir(parents=True, exist_ok=True)
         log_messages.append(f"📁 Client folder created at: {today_folder}")
+        audit.log_step("client_folder_created", {"path": str(today_folder)})
 
                 # 🧹 מחיקת PDFים ו־JSON ישנים (רק תגובות GPT)
         for file in today_folder.glob("*.pdf"):
@@ -111,12 +129,14 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             for bureau in ["Experian", "Equifax", "TransUnion"]
         }
         log_messages.extend(detailed_logs)
+        audit.log_step("sections_split_by_bureau", bureau_data)
 
         print("🧠 Generating strategy report...")
         docs_text = gather_supporting_docs_text(session_id)
         strat_gen = StrategyGenerator()
         strategy = strat_gen.generate(client_info, bureau_data, docs_text)
         strat_gen.save_report(strategy, client_info, datetime.now().strftime("%Y-%m-%d"))
+        audit.log_step("strategy_generated", strategy)
 
         def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, log_list=None):
             from logic.constants import normalize_action_tag
@@ -201,6 +221,21 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
                                     )
 
         merge_strategy_data(strategy, bureau_data, log_list=log_messages)
+        audit.log_step("strategy_merged", bureau_data)
+        for bureau, payload in bureau_data.items():
+            for section, items in payload.items():
+                if isinstance(items, list):
+                    for acc in items:
+                        acc_id = acc.get("account_id") or acc.get("name")
+                        audit.log_account(
+                            acc_id,
+                            {
+                                "bureau": bureau,
+                                "section": section,
+                                "recommended_action": acc.get("recommended_action"),
+                                "action_tag": acc.get("action_tag"),
+                            },
+                        )
 
 
         print("📄 Generating dispute letters...")
@@ -212,14 +247,17 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             log_messages=log_messages,
         )
         log_messages.append("📄 Dispute letters generated.")
+        audit.log_step("dispute_letters_generated")
 
         if not is_identity_theft:
             print("💌 Generating goodwill letters...")
             generate_goodwill_letters(client_info, bureau_data, today_folder)
             log_messages.append("💌 Goodwill letters generated.")
+            audit.log_step("goodwill_letters_generated")
         else:
             print("🔒 Identity theft case - skipping goodwill letters.")
             log_messages.append("🚫 Goodwill letters skipped due to identity theft.")
+            audit.log_step("goodwill_letters_skipped")
 
         # 🧠 הזרקת all_accounts להוראות
         all_accounts = extract_all_accounts(sections)
@@ -234,6 +272,7 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             log_messages=log_messages,
         )
         log_messages.append("📝 Custom letters generated.")
+        audit.log_step("custom_letters_generated")
 
         print("📋 Generating instructions file for client...")
         generate_instruction_file(
@@ -244,11 +283,13 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             strategy=strategy,
         )
         log_messages.append("📋 Instruction file created.")
+        audit.log_step("instructions_generated")
 
 
         print("🌀 Converting letters to PDF...")
         convert_txts_to_pdfs(today_folder)
         log_messages.append("🌀 All letters converted to PDF.")
+        audit.log_step("letters_converted_to_pdf")
 
         if is_identity_theft:
             print("📎 Adding FCRA rights PDF...")
@@ -261,8 +302,10 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             else:
                 print("⚠️ FCRA rights file not found!")
                 log_messages.append("⚠️ FCRA file missing.")
+                audit.log_step("fcra_file_missing")
         else:
             log_messages.append("ℹ️ Identity theft not indicated — FCRA PDF skipped.")
+            audit.log_step("fcra_skipped")
 
         print("📧 Sending email with all documents to client...")
         output_files = [str(p) for p in today_folder.glob("*.pdf")]
@@ -303,23 +346,30 @@ Best regards,
             files=output_files
         )
         log_messages.append("📧 Email sent to client.")
+        audit.log_step("email_sent", {"files": output_files})
 
         from logic.utils import extract_summary_from_sections
         save_analytics_snapshot(client_info, extract_summary_from_sections(sections))
         log_messages.append("📊 Analytics snapshot saved.")
+        audit.log_step("analytics_saved")
 
         print(f"\n🎯 Credit Repair Process completed successfully!")
         print(f"📂 All output saved to: {today_folder}")
         log_messages.append("🎯 Process completed successfully.")
+        audit.log_step("process_completed")
 
     except Exception as e:
         error_msg = f"❌ Error: {str(e)}"
         print(error_msg)
         log_messages.append(error_msg)
+        audit.log_error(error_msg)
         raise
 
     finally:
         save_log_file(client_info, is_identity_theft, today_folder, log_messages)
+        if today_folder:
+            audit.save(today_folder)
+        clear_audit()
         if pdf_path and os.path.exists(pdf_path):
             try:
                 os.remove(pdf_path)

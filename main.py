@@ -268,7 +268,13 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
         print("🧠 Generating strategy report...")
         docs_text = gather_supporting_docs_text(session_id)
         strat_gen = StrategyGenerator()
-        strategy = strat_gen.generate(client_info, bureau_data, docs_text)
+        strategy = strat_gen.generate(
+            client_info,
+            bureau_data,
+            docs_text,
+            classification_map=classification_map,
+            audit=audit,
+        )
         strat_gen.save_report(strategy, client_info, datetime.now().strftime("%Y-%m-%d"))
         audit.log_step("strategy_generated", strategy)
 

@@ -2,8 +2,13 @@ import os
 import json
 from datetime import datetime
 from pathlib import Path
-from openai import OpenAI
+from typing import Any, Dict
+
 from dotenv import load_dotenv
+from openai import OpenAI
+
+from audit import AuditLogger
+from .constants import StrategistFailureReason
 from .json_utils import parse_json
 from logic.guardrails import fix_draft_with_guardrails
 
@@ -22,6 +27,8 @@ class StrategyGenerator:
         bureau_data: dict,
         supporting_docs_text: str = "",
         run_date: str | None = None,
+        classification_map: Dict[str, Dict[str, Any]] | None = None,
+        audit: AuditLogger | None = None,
     ) -> dict:
         """Return a strategy JSON object for internal analyst review."""
         run_date = run_date or datetime.now().strftime("%B %d, %Y")
@@ -32,6 +39,16 @@ class StrategyGenerator:
             if supporting_docs_text
             else ""
         )
+
+        if audit:
+            audit.log_step(
+                "strategist_input",
+                {
+                    "bureau_data": bureau_data,
+                    "classification_map": classification_map or {},
+                    "supporting_docs_text": supporting_docs_text,
+                },
+            )
 
         prompt = f"""
 You are a credit repair strategist. Analyze the client's credit report data and propose a concise plan of action.
@@ -64,11 +81,21 @@ Ensure the response is strictly valid JSON: all property names and strings in do
             temperature=0.3,
         )
         content = response.choices[0].message.content.strip()
+        if audit:
+            audit.log_step("strategist_raw_output", {"content": content})
         if content.startswith("```"):
-            content = (
-                content.replace("```json", "").replace("```", "").strip()
+            content = content.replace("```json", "").replace("```", "").strip()
+        report, error_reason = parse_json(content)
+        expected_keys = {"overview", "accounts", "global_recommendations"}
+        if audit and (
+            error_reason is not None
+            or not isinstance(report, dict)
+            or not expected_keys.issubset(report)
+        ):
+            audit.log_step(
+                "strategist_failure",
+                {"failure_reason": StrategistFailureReason.SCHEMA_ERROR},
             )
-        report, _ = parse_json(content)
         fix_draft_with_guardrails(
             json.dumps(report, indent=2),
             client_info.get("state"),

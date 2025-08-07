@@ -303,7 +303,13 @@ Return strictly valid JSON: all property names and strings in double quotes, no 
     print(content)
     print("----- END RESPONSE -----\n")
 
-    return parse_json(content)
+    result = parse_json(content)
+    if audit:
+        audit.log_step(
+            "goodwill_letter_response",
+            {"creditor": creditor, "response": result},
+        )
+    return result
 
 def load_creditor_address_map():
     try:
@@ -390,6 +396,13 @@ def generate_goodwill_letter_with_ai(creditor, accounts, client_info, output_pat
 
     with open(output_path / f"{safe_name}_gpt_response.json", 'w') as f:
         json.dump(gpt_data, f, indent=2)
+
+    audit = get_audit()
+    if audit:
+        audit.log_step(
+            "goodwill_letter_generated",
+            {"creditor": creditor, "output_pdf": str(full_path), "response": gpt_data},
+        )
 
 def generate_goodwill_letters(client_info, bureau_data, output_path: Path, run_date: str = None):
     seen_creditors = set()

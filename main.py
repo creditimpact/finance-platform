@@ -59,13 +59,41 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
         audit.log_step("process_started", {"is_identity_theft": is_identity_theft})
 
         from logic.upload_validator import is_safe_pdf, move_uploaded_file
-        from session_manager import update_session
+        from session_manager import update_session, get_intake
 
         if "email" not in client_info or not client_info["email"]:
             raise ValueError("Client email is missing.")
 
         session_id = client_info.get("session_id", "session")
         audit.log_step("session_initialized", {"session_id": session_id})
+
+        # Record raw and structured client explanations for traceability
+        intake = get_intake(session_id) or {}
+        structured = client_info.get("structured_summaries") or {}
+        structured_map: dict[str, dict] = {}
+        if isinstance(structured, list):
+            for idx, item in enumerate(structured):
+                if isinstance(item, dict):
+                    key = str(item.get("account_id") or idx)
+                    structured_map[key] = item
+        elif isinstance(structured, dict):
+            for key, item in structured.items():
+                if isinstance(item, dict):
+                    structured_map[str(key)] = item
+        raw_map = {
+            str(r.get("account_id")): r.get("text")
+            for r in intake.get("raw_explanations", [])
+            if isinstance(r, dict)
+        }
+        for acc_id, struct in structured_map.items():
+            audit.log_account(
+                acc_id,
+                {
+                    "stage": "explanation",
+                    "raw_explanation": raw_map.get(acc_id, ""),
+                    "structured_summary": struct,
+                },
+            )
         uploaded_path = proofs_files.get("smartcredit_report")
         if not uploaded_path or not os.path.exists(uploaded_path):
             raise FileNotFoundError("SmartCredit report file not found at path: " + str(uploaded_path))
@@ -187,8 +215,18 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
                                 acc["advisor_comment"] = src["advisor_comment"]
                             elif "analysis" in src:
                                 acc["advisor_comment"] = src["analysis"]
-                            if src.get("flags"):
-                                acc["flags"] = src["flags"]
+                        if src.get("flags"):
+                            acc["flags"] = src["flags"]
+
+                        if audit and (acc.get("action_tag") or acc.get("recommended_action")):
+                            audit.log_account(
+                                acc.get("account_id") or acc.get("name"),
+                                {
+                                    "stage": "strategy_decision",
+                                    "action": acc.get("action_tag") or acc.get("recommended_action"),
+                                    "reason": acc.get("advisor_comment") or acc.get("analysis") or raw_action,
+                                },
+                            )
                         else:
                             if log_list is not None:
                                 log_list.append(

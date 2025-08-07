@@ -85,6 +85,10 @@ def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classificatio
                                 "failure_reason": failure_reason.value,
                             },
                         )
+                    if log_list is not None:
+                        log_list.append(
+                            f"[{bureau}] No strategist entry for '{acc.get('name')}' ({acc.get('account_number')})"
+                        )
                 else:
                     raw_action = src.get("recommended_action") or src.get("recommendation")
                     tag, action = normalize_action_tag(raw_action)
@@ -124,24 +128,23 @@ def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classificatio
                     if src.get("flags"):
                         acc["flags"] = src["flags"]
 
-                if audit and (acc.get("action_tag") or acc.get("recommended_action")):
-                    cls = classification_map.get(str(acc.get("account_id")))
-                    audit.log_account(
-                        acc_id,
-                        {
-                            "stage": "strategy_decision",
-                            "action": acc.get("action_tag") or acc.get("recommended_action"),
-                            "reason": acc.get("advisor_comment") or acc.get("analysis") or raw_action,
-                            "classification": cls,
-                        },
-                    )
-                else:
-                    if log_list is not None and src is None:
-                        log_list.append(f"[{bureau}] No strategist entry for '{acc.get('name')}' ({acc.get('account_number')})")
-
                 if not acc.get("action_tag"):
-                    status_text = str(acc.get("status") or acc.get("account_status") or "").strip().lower()
-                    if any(s in status_text for s in ("collection", "chargeoff", "charge-off", "charge off", "repossession", "repos", "delinquent", "late payments")) or acc.get("dispute_type"):
+                    status_text = str(
+                        acc.get("status") or acc.get("account_status") or ""
+                    ).strip().lower()
+                    if any(
+                        s in status_text
+                        for s in (
+                            "collection",
+                            "chargeoff",
+                            "charge-off",
+                            "charge off",
+                            "repossession",
+                            "repos",
+                            "delinquent",
+                            "late payments",
+                        )
+                    ) or acc.get("dispute_type"):
                         acc["action_tag"] = "dispute"
                         if raw_action:
                             acc["recommended_action"] = "Dispute"
@@ -185,6 +188,20 @@ def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classificatio
                                     ),
                                 },
                             )
+
+                if audit:
+                    cls = classification_map.get(str(acc.get("account_id")))
+                    audit.log_account(
+                        acc_id,
+                        {
+                            "stage": "strategy_decision",
+                            "action": acc.get("action_tag") or None,
+                            "reason": acc.get("advisor_comment")
+                            or acc.get("analysis")
+                            or raw_action,
+                            "classification": cls,
+                        },
+                    )
 
 def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
     validate_env_variables()

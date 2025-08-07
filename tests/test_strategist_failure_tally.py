@@ -34,6 +34,10 @@ def test_tally_failure_reasons():
 
     counts = tally_failure_reasons(audit)
 
+    accounts = audit.data["accounts"]
+    assert any(e["stage"] == "strategy_decision" for e in accounts["No Strat"])
+    assert any(e["stage"] == "strategy_decision" for e in accounts["Empty Action"])
+
     expected = {
         StrategistFailureReason.UNRECOGNIZED_FORMAT.value: 1,
         StrategistFailureReason.MISSING_INPUT.value: 1,

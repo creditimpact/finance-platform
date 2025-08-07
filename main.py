@@ -4,7 +4,6 @@ import config
 from pathlib import Path
 from datetime import datetime
 from shutil import copyfile
-from logic.constants import StrategistFailureReason
 from email_sender import send_email_with_attachment
 from analytics_tracker import save_analytics_snapshot
 from analytics.strategist_failures import tally_failure_reasons
@@ -17,6 +16,7 @@ from orchestrators import (
     generate_letters,
     finalize_outputs,
 )
+from logic.strategy_merger import merge_strategy_data
 
 logger = logging.getLogger(__name__)
 logger.info("Main process starting with OPENAI_BASE_URL=%s", config.OPENAI_BASE_URL)
@@ -45,164 +45,6 @@ def validate_env_variables():
         else:
             print(f"✅ {var} is set.")
     print("✅ Environment variables configured.\n")
-
-
-def merge_strategy_data(strategy_obj: dict, bureau_data_obj: dict, classification_map: dict, audit=None, log_list=None):
-    from logic.constants import normalize_action_tag, FallbackReason, StrategistFailureReason
-    from logic.utils import normalize_creditor_name
-    from logic.fallback_manager import determine_fallback_action
-    import re
-
-    def norm_key(name: str, number: str) -> tuple[str, str]:
-        norm_name = normalize_creditor_name(name)
-        digits = re.sub(r"\D", "", number or "")
-        last4 = digits[-4:] if digits else ""
-        return norm_name, last4
-
-    index = {}
-    for item in strategy_obj.get("accounts", []):
-        key = norm_key(item.get("name", ""), item.get("account_number", ""))
-        index[key] = item
-
-    for bureau, payload in bureau_data_obj.items():
-        for section, items in payload.items():
-            if not isinstance(items, list):
-                continue
-            for acc in items:
-                key = norm_key(acc.get("name", ""), acc.get("account_number", ""))
-                src = index.get(key)
-                raw_action = None
-                tag = ""
-                failure_reason = None
-                acc_id = acc.get("account_id") or acc.get("name")
-                if src is None:
-                    failure_reason = StrategistFailureReason.MISSING_INPUT
-                    if audit:
-                        audit.log_account(
-                            acc_id,
-                            {
-                                "stage": "strategist_failure",
-                                "failure_reason": failure_reason.value,
-                            },
-                        )
-                    if log_list is not None:
-                        log_list.append(
-                            f"[{bureau}] No strategist entry for '{acc.get('name')}' ({acc.get('account_number')})"
-                        )
-                else:
-                    raw_action = src.get("recommended_action") or src.get("recommendation")
-                    tag, action = normalize_action_tag(raw_action)
-                    if raw_action is None:
-                        failure_reason = StrategistFailureReason.EMPTY_OUTPUT
-                        if audit:
-                            audit.log_account(
-                                acc_id,
-                                {
-                                    "stage": "strategist_failure",
-                                    "failure_reason": failure_reason.value,
-                                },
-                            )
-                    elif raw_action and not tag:
-                        failure_reason = StrategistFailureReason.UNRECOGNIZED_FORMAT
-                        if audit:
-                            audit.log_account(
-                                acc_id,
-                                {
-                                    "stage": "strategist_failure",
-                                    "failure_reason": failure_reason.value,
-                                    "raw_action": raw_action,
-                                },
-                            )
-                        print(f"[⚠️] Unrecognised strategist action '{raw_action}' for {src.get('name')}")
-                        acc["fallback_unrecognized_action"] = True
-                    if tag:
-                        acc["action_tag"] = tag
-                        acc["recommended_action"] = action
-                    elif raw_action:
-                        acc["recommended_action"] = raw_action
-
-                    if "advisor_comment" in src:
-                        acc["advisor_comment"] = src["advisor_comment"]
-                    elif "analysis" in src:
-                        acc["advisor_comment"] = src["analysis"]
-                    if src.get("flags"):
-                        acc["flags"] = src["flags"]
-
-                if not acc.get("action_tag"):
-                    strategist_action = raw_action if raw_action else None
-                    if raw_action is None:
-                        fallback_reason = FallbackReason.NO_RECOMMENDATION
-                    else:
-                        raw_key = str(raw_action).strip().lower().replace(" ", "_")
-                        fallback_reason = (
-                            FallbackReason.KEYWORD_MATCH
-                            if raw_key == FallbackReason.KEYWORD_MATCH.value
-                            else FallbackReason.UNRECOGNIZED_TAG
-                        )
-
-                    fallback_action = determine_fallback_action(acc)
-                    keywords_trigger = fallback_action == "dispute"
-
-                    if keywords_trigger:
-                        acc["action_tag"] = "dispute"
-                        if raw_action:
-                            acc["recommended_action"] = "Dispute"
-                        else:
-                            acc.setdefault("recommended_action", "Dispute")
-
-                        if log_list is not None and (raw_action is None or not tag):
-                            if raw_action:
-                                log_list.append(
-                                    f"[{bureau}] Fallback dispute overriding '{raw_action}' for '{acc.get('name')}' ({acc.get('account_number')})",
-                                )
-                            else:
-                                log_list.append(
-                                    f"[{bureau}] Fallback dispute (no recommendation) for '{acc.get('name')}' ({acc.get('account_number')})",
-                                )
-                    else:
-                        if log_list is not None and (raw_action is None or not tag):
-                            log_list.append(
-                                f"[{bureau}] Evaluated fallback for '{acc.get('name')}' ({acc.get('account_number')})",
-                            )
-
-                    overrode_strategist = bool(raw_action) and bool(keywords_trigger)
-
-                    if audit:
-                        audit.log_account(
-                            acc_id,
-                            {
-                                "stage": "strategy_fallback",
-                                "fallback_reason": fallback_reason.value,
-                                "strategist_action": strategist_action,
-                                **(
-                                    {"raw_action": strategist_action}
-                                    if acc.get("fallback_unrecognized_action") and strategist_action
-                                    else {}
-                                ),
-                                "overrode_strategist": overrode_strategist,
-                                **(
-                                    {"failure_reason": failure_reason.value}
-                                    if failure_reason
-                                    else {}
-                                ),
-                            },
-                        )
-
-                if audit:
-                    cls = classification_map.get(str(acc.get("account_id")))
-                    audit.log_account(
-                        acc_id,
-                        {
-                            "stage": "strategy_decision",
-                            "action": acc.get("action_tag") or None,
-                            "recommended_action": acc.get("recommended_action"),
-                            "flags": acc.get("flags"),
-                            "reason": acc.get("advisor_comment")
-                            or acc.get("analysis")
-                            or raw_action,
-                            "classification": cls,
-                        },
-                    )
 
 def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
     """High-level controller for the credit repair pipeline."""

@@ -16,6 +16,7 @@ from logic.utils import (
     CHARGEOFF_RE,
     COLLECTION_RE,
 )
+from .fallback_manager import determine_fallback_action
 from .json_utils import parse_json
 from .strategy_engine import generate_strategy
 from .summary_classifier import classify_client_summary
@@ -287,6 +288,15 @@ def generate_all_dispute_letters_with_ai(
         disputes = []
         for d in payload.get("disputes", []):
             action = str(d.get("action_tag") or d.get("recommended_action") or "").lower()
+            if action != "dispute":
+                fallback_action = determine_fallback_action(d)
+                if fallback_action == "dispute":
+                    d["action_tag"] = "dispute"
+                    d.setdefault("recommended_action", "Dispute")
+                    log_messages.append(
+                        f"[{bureau_name}] Fallback dispute tag applied to '{d.get('name')}'"
+                    )
+                    action = "dispute"
             if action == "dispute":
                 disputes.append(d)
             else:

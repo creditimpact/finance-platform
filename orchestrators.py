@@ -420,6 +420,7 @@ def run_credit_repair_process(
 
     audit = create_audit_logger(session_id)
     ai_client = build_ai_client(app_config.ai)
+    strategy = None
 
     try:
         print("\n✅ Starting Credit Repair Process (B2C Mode)...")
@@ -464,9 +465,15 @@ def run_credit_repair_process(
         if today_folder:
             audit.save(today_folder)
             if app_config.export_trace_file:
-                from trace_exporter import export_trace_file
+                from trace_exporter import export_trace_file, export_trace_breakdown
 
                 export_trace_file(audit, session_id)
+                export_trace_breakdown(
+                    audit,
+                    strategy,
+                    strategy.get("accounts") if isinstance(strategy, dict) else getattr(strategy, "accounts", None),
+                    Path("client_output"),
+                )
         if pdf_path and os.path.exists(pdf_path):
             try:
                 os.remove(pdf_path)

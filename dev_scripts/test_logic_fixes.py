@@ -333,7 +333,10 @@ def test_letter_duplicate_accounts_removed():
     with (
         mock.patch("logic.letter_generator.call_gpt_dispute_letter") as mock_d,
         mock.patch("logic.letter_generator.render_html_to_pdf"),
-        mock.patch("logic.letter_generator.fix_draft_with_guardrails", lambda *a, **k: ("", [], 0)),
+        mock.patch(
+            "logic.compliance_pipeline.run_compliance_pipeline",
+            lambda html, state, session_id, doc_type, ai_client=None: html,
+        ),
         mock.patch("logic.letter_generator.generate_strategy", return_value=strategy),
     ):
         out_dir = Path("output/tmp_dupes")
@@ -385,7 +388,10 @@ def test_partial_account_number_deduplication():
     with (
         mock.patch("logic.letter_generator.call_gpt_dispute_letter") as mock_d,
         mock.patch("logic.letter_generator.render_html_to_pdf"),
-        mock.patch("logic.letter_generator.fix_draft_with_guardrails", lambda *a, **k: ("", [], 0)),
+        mock.patch(
+            "logic.compliance_pipeline.run_compliance_pipeline",
+            lambda html, state, session_id, doc_type, ai_client=None: html,
+        ),
         mock.patch("logic.letter_generator.generate_strategy", return_value=strategy),
     ):
         out_dir = Path("output/tmp_dupe_nums")
@@ -435,7 +441,10 @@ def test_merge_custom_note_with_default():
     with (
         mock.patch("logic.letter_generator.call_gpt_dispute_letter", return_value=gpt_resp),
         mock.patch("logic.letter_generator.render_html_to_pdf"),
-        mock.patch("logic.letter_generator.fix_draft_with_guardrails", lambda *a, **k: ("", [], 0)),
+        mock.patch(
+            "logic.compliance_pipeline.run_compliance_pipeline",
+            lambda html, state, session_id, doc_type, ai_client=None: html,
+        ),
         mock.patch("logic.letter_generator.generate_strategy", return_value=strategy),
     ):
         out_dir = Path("output/tmp_merge")
@@ -489,11 +498,13 @@ def test_general_note_routed_to_goodwill():
     with (
         mock.patch("logic.letter_generator.call_gpt_dispute_letter", return_value=gpt_resp),
         mock.patch("logic.letter_generator.render_html_to_pdf"),
-        mock.patch("logic.letter_generator.fix_draft_with_guardrails", lambda *a, **k: ("", [], 0)),
+        mock.patch(
+            "logic.compliance_pipeline.run_compliance_pipeline",
+            lambda html, state, session_id, doc_type, ai_client=None: html,
+        ),
         mock.patch("logic.letter_generator.generate_strategy", return_value=strategy),
         mock.patch("logic.generate_goodwill_letters.call_gpt_for_goodwill_letter") as mock_gw,
         mock.patch("logic.generate_goodwill_letters.render_html_to_pdf"),
-        mock.patch("logic.generate_goodwill_letters.fix_draft_with_guardrails", lambda *a, **k: ("", [], 0)),
     ):
         out_dir = Path("output/tmp_general")
         out_dir.mkdir(parents=True, exist_ok=True)

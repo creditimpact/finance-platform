@@ -40,7 +40,10 @@ def test_unrecognized_action_fallback(monkeypatch, tmp_path, capsys):
 
     monkeypatch.setattr('logic.letter_generator.call_gpt_dispute_letter', fake_call_gpt)
     monkeypatch.setattr('logic.letter_generator.render_html_to_pdf', lambda html, path: None)
-    monkeypatch.setattr('logic.letter_generator.fix_draft_with_guardrails', lambda *a, **k: None)
+    monkeypatch.setattr(
+        'logic.compliance_pipeline.run_compliance_pipeline',
+        lambda html, state, session_id, doc_type, ai_client=None: html,
+    )
     import pdfkit
     monkeypatch.setattr(pdfkit, 'configuration', lambda *a, **k: None)
 

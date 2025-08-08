@@ -1,6 +1,6 @@
 from __future__ import annotations
 from datetime import datetime, UTC
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping
 
 from session_manager import get_session, update_session
 from .rules_loader import load_rules
@@ -70,7 +70,7 @@ def _build_dispute_items(
     return items
 
 
-def generate_strategy(session_id: str, bureau_data: Dict[str, Any]) -> Dict[str, Any]:
+def generate_strategy(session_id: str, bureau_data: Mapping[str, Any]) -> Mapping[str, Any]:
     """Build a comprehensive strategy document for a given session.
 
     The strategy combines sanitized client summaries (``structured_summaries``),

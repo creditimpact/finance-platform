@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from datetime import datetime
+from typing import Any, Mapping
 from jinja2 import Environment, FileSystemLoader
 import pdfkit
 from logic.utils.pdf_ops import gather_supporting_docs
@@ -13,6 +14,9 @@ from .rules_loader import get_neutral_phrase
 from audit import AuditLogger, AuditLevel
 from services.ai_client import AIClient
 from config import get_app_config
+from models.account import Account
+from models.client import ClientInfo
+from models.bureau import BureauPayload
 
 env = Environment(loader=FileSystemLoader("templates"))
 template = env.get_template("general_letter_template.html")
@@ -29,7 +33,7 @@ def call_gpt_for_custom_letter(
     account_name: str,
     account_number: str,
     docs_text: str,
-    structured_summary: dict,
+    structured_summary: Mapping[str, Any],
     state: str,
     session_id: str,
     audit: AuditLogger | None,
@@ -95,8 +99,8 @@ Please draft a compliant letter body that blends the neutral legal phrase with t
 
 
 def generate_custom_letter(
-    account: dict,
-    client_info: dict,
+    account: Account | dict[str, Any],
+    client_info: ClientInfo | dict[str, Any],
     output_path: Path,
     audit: AuditLogger | None,
     *,
@@ -178,8 +182,8 @@ def generate_custom_letter(
 
 
 def generate_custom_letters(
-    client_info: dict,
-    bureau_data: dict,
+    client_info: ClientInfo | dict[str, Any],
+    bureau_data: BureauPayload | Mapping[str, Any],
     output_path: Path,
     audit: AuditLogger | None,
     *,

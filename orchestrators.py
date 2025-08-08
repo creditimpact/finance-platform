@@ -11,6 +11,7 @@ import warnings
 from pathlib import Path
 from datetime import datetime
 from shutil import copyfile
+from typing import Any, Mapping
 
 from audit import AuditLevel
 from logic.extract_info import extract_bureau_info_column_refined
@@ -570,7 +571,7 @@ def extract_problematic_accounts_from_report(
 
 def extract_problematic_accounts_from_report_dict(
     file_path: str, session_id: str | None = None
-) -> dict:
+) -> Mapping[str, Any]:
     """Deprecated adapter returning ``dict`` for old clients."""
     warnings.warn(
         "extract_problematic_accounts_from_report_dict is deprecated;"

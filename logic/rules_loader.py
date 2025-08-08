@@ -1,5 +1,6 @@
 from pathlib import Path
 import yaml
+from typing import Any, Mapping
 
 RULES_DIR = Path(__file__).resolve().parents[1] / "rules"
 
@@ -26,7 +27,7 @@ def load_rules() -> list:
     return data
 
 
-def load_neutral_phrases() -> dict:
+def load_neutral_phrases() -> Mapping[str, Any]:
     """Load and return neutral phrases mapping from ``neutral_phrases.yaml``."""
     data = _load_yaml("neutral_phrases.yaml")
     if not isinstance(data, dict):
@@ -70,7 +71,7 @@ def get_neutral_phrase(
     return phrases[0], {"method": "default", "matched_words": []}
 
 
-def load_state_rules() -> dict:
+def load_state_rules() -> Mapping[str, Any]:
     """Load and return state compliance rules from ``state_rules.yaml``."""
     data = _load_yaml("state_rules.yaml")
     if not isinstance(data, dict):

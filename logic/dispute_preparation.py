@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Mapping
 
 from .fallback_manager import determine_fallback_action
 from logic.utils.names_normalization import normalize_creditor_name
+from models.bureau import BureauPayload
+from models.client import ClientInfo
 
 
 def dedupe_disputes(
@@ -37,8 +39,8 @@ def dedupe_disputes(
 
 def prepare_disputes_and_inquiries(
     bureau_name: str,
-    payload: dict,
-    client_info: dict,
+    payload: BureauPayload | Mapping[str, Any],
+    client_info: ClientInfo | Mapping[str, Any],
     account_inquiry_matches: List[dict],
     log_messages: List[str],
 ) -> Tuple[List[dict], List[dict], Dict[Tuple[str, str], dict]]:

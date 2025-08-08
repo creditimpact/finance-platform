@@ -1,6 +1,7 @@
 """Utilities for parsing credit report PDFs into text and sections."""
 
 from pathlib import Path
+from typing import Any, Mapping
 
 
 def extract_text_from_pdf(pdf_path: str | Path) -> str:
@@ -28,7 +29,9 @@ def extract_text_from_pdf(pdf_path: str | Path) -> str:
 from models.bureau import BureauAccount  # noqa: E402
 
 
-def bureau_data_from_dict(data: dict) -> dict[str, list[BureauAccount]]:
+def bureau_data_from_dict(
+    data: Mapping[str, list[dict[str, Any]]]
+) -> Mapping[str, list[BureauAccount]]:
     """Convert raw bureau ``data`` to typed ``BureauAccount`` objects.
 
     Parameters

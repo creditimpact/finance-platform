@@ -1,7 +1,7 @@
 import re
 import pdfplumber
 import logging
-from typing import Dict, List
+from typing import Dict, List, Mapping
 from logic.utils.names_normalization import normalize_bureau_name, BUREAUS
 from collections import Counter
 from services.ai_client import AIClient
@@ -33,7 +33,7 @@ def extract_bureau_info_column_refined(
     ai_client: AIClient,
     client_info: dict | None = None,
     use_ai: bool = False,
-) -> Dict[str, Dict[str, str]]:
+) -> Mapping[str, Dict[str, str]]:
     bureaus = BUREAUS
     data = {b: {"name": "", "dob": "", "current_address": ""} for b in bureaus}
     discrepancies = []

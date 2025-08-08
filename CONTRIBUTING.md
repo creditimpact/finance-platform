@@ -6,6 +6,7 @@ Thank you for your interest in improving this project.
 - Follow PEP8 for Python code.
 - Use 2-space indentation for frontend JavaScript/React files.
 - Include tests for any new feature or bug fix.
+- Public function signatures must use typed models instead of raw ``dict`` values.
 
 ## Development Workflow
 1. Fork the repository and create your changes on a new branch.

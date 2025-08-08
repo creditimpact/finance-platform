@@ -34,9 +34,9 @@ def generate_instruction_file(
     bureau_data,
     is_identity_theft: bool,
     output_path: Path,
+    ai_client: AIClient,
     run_date: str | None = None,
     strategy: dict | None = None,
-    ai_client: AIClient | None = None,
     wkhtmltopdf_path: str | None = None,
 ):
     """Generate the instruction PDF and JSON context for the client."""
@@ -49,8 +49,8 @@ def generate_instruction_file(
         is_identity_theft,
         run_date,
         logo_base64,
-        strategy,
         ai_client=ai_client,
+        strategy=strategy,
     )
     html = build_instruction_html(context)
     run_compliance_pipeline(

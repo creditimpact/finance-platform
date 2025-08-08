@@ -25,7 +25,7 @@ def run_compliance_pipeline(
     session_id: str,
     doc_type: str,
     *,
-    ai_client: AIClient | None = None,
+    ai_client: AIClient,
 ) -> LetterArtifact | str:
     """Apply shared compliance checks to rendered HTML or artifacts."""
 

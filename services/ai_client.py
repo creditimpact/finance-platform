@@ -71,15 +71,15 @@ def build_ai_client(config: AIConfig) -> AIClient:
     return AIClient(config)
 
 
-_default_client: AIClient | None = None
+def get_default_ai_client() -> AIClient:  # pragma: no cover - backwards compat
+    """Deprecated helper that previously returned a global client.
 
+    The application now requires explicit :class:`AIClient` injection at all
+    call sites. This stub remains temporarily to surface a clearer error if
+    legacy code attempts to use the old global accessor.
+    """
 
-def get_default_ai_client() -> AIClient:
-    """Lazily build an :class:`AIClient` using environment configuration."""
-
-    global _default_client
-    if _default_client is None:
-        from config import get_ai_config
-
-        _default_client = build_ai_client(get_ai_config())
-    return _default_client
+    raise RuntimeError(
+        "get_default_ai_client() has been removed. Build an AIClient via"
+        " services.ai_client.build_ai_client and pass it explicitly."
+    )

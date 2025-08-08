@@ -33,10 +33,10 @@ def call_gpt_for_custom_letter(
     state: str,
     session_id: str,
     audit: AuditLogger | None,
-    ai_client: AIClient | None = None,
+    ai_client: AIClient,
 ) -> str:
     docs_line = f"Supporting documents summary:\n{docs_text}" if docs_text else ""
-    classification = classify_client_summary(structured_summary, state)
+    classification = classify_client_summary(structured_summary, ai_client, state)
     neutral_phrase, neutral_reason = get_neutral_phrase(
         classification.get("category"), structured_summary
     )
@@ -99,8 +99,9 @@ def generate_custom_letter(
     client_info: dict,
     output_path: Path,
     audit: AuditLogger | None,
+    *,
+    ai_client: AIClient,
     run_date: str | None = None,
-    ai_client: AIClient | None = None,
     wkhtmltopdf_path: str | None = None,
 ) -> None:
     client_name = client_info.get("legal_name") or client_info.get("name", "Client")
@@ -130,7 +131,7 @@ def generate_custom_letter(
         state,
         session_id,
         audit,
-        ai_client=ai_client,
+        ai_client,
     )
 
     greeting = f"Dear {recipient}" if recipient else "To whom it may concern"
@@ -181,9 +182,10 @@ def generate_custom_letters(
     bureau_data: dict,
     output_path: Path,
     audit: AuditLogger | None,
+    *,
+    ai_client: AIClient,
     run_date: str | None = None,
     log_messages: list[str] | None = None,
-    ai_client: AIClient | None = None,
     wkhtmltopdf_path: str | None = None,
 ) -> None:
     if log_messages is None:
@@ -199,8 +201,8 @@ def generate_custom_letters(
                     client_info,
                     output_path,
                     audit,
-                    run_date,
                     ai_client=ai_client,
+                    run_date=run_date,
                     wkhtmltopdf_path=wkhtmltopdf_path,
                 )
             else:

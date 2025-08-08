@@ -22,7 +22,7 @@ from .dispute_preparation import prepare_disputes_and_inquiries
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
 from models.letter import LetterContext, LetterArtifact, LetterAccount
 from models.account import Account, Inquiry
-from services.ai_client import AIClient, get_default_ai_client
+from services.ai_client import AIClient
 from .letter_rendering import render_dispute_letter_html
 from logic import pdf_renderer
 from .compliance_pipeline import (
@@ -60,15 +60,14 @@ def generate_all_dispute_letters_with_ai(
     output_path: Path,
     is_identity_theft: bool,
     audit: AuditLogger | None,
+    ai_client: AIClient,
     run_date: str | None = None,
     log_messages: List[str] | None = None,
-    ai_client: AIClient | None = None,
     rulebook_fallback_enabled: bool = True,
     wkhtmltopdf_path: str | None = None,
 ):
     """Generate dispute letters for all bureaus using GPT-derived content."""
 
-    ai_client = ai_client or get_default_ai_client()
     output_path.mkdir(parents=True, exist_ok=True)
     if log_messages is None:
         log_messages = []

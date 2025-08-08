@@ -10,4 +10,7 @@ The orchestrators module (`orchestrators.py`) serves as the single entry point f
 4. **Letters** – dedicated generators create dispute or goodwill letters.  Draft HTML passes through the compliance pipeline and the PDF renderer (`logic.compliance_pipeline`, `logic.utils.pdf_ops`) before returning artifacts.
 5. **Finalization** – orchestrators save artifacts, record analytics, and send notifications to finish the workflow.
 
+The orchestrators construct a single `AIClient` at startup and pass it to all
+LLM-powered functions, eliminating hidden global dependencies.
+
 Compliance checks and PDF rendering live inside the `logic` package and are invoked during letter generation to ensure all outbound documents meet guardrails and are rendered to PDF.

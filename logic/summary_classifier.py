@@ -53,36 +53,35 @@ def _heuristic_category(summary: Dict[str, Any]) -> str:
 
 def classify_client_summary(
     summary: Dict[str, Any],
+    ai_client: AIClient,
     state: str | None = None,
-    ai_client: AIClient | None = None,
 ) -> Dict[str, str]:
     """Classify a structured summary into a dispute category and legal strategy.
 
-    Attempts to use the OpenAI API when credentials are available; otherwise falls
-    back to a lightweight keyword heuristic. The return value always contains the
-    keys ``category``, ``legal_tag``, ``dispute_approach`` and ``tone``. A
-    ``state_hook`` is included when a supported state modifier applies.
+    Falls back to a lightweight keyword heuristic when the API call fails. The
+    return value always contains the keys ``category``, ``legal_tag``,
+    ``dispute_approach`` and ``tone``. A ``state_hook`` is included when a
+    supported state modifier applies.
     """
 
     category = None
-    if ai_client:
-        prompt = (
-            "Classify the following structured credit dispute summary into one of "
-            "the categories: not_mine, inaccurate_reporting, identity_theft, goodwill. "
-            "Return only JSON with a 'category' field. Summary: "
-            f"{summary}"
+    prompt = (
+        "Classify the following structured credit dispute summary into one of "
+        "the categories: not_mine, inaccurate_reporting, identity_theft, goodwill. "
+        "Return only JSON with a 'category' field. Summary: "
+        f"{summary}"
+    )
+    try:
+        resp = ai_client.response_json(
+            prompt=prompt,
+            response_format={"type": "json_object"},
         )
-        try:
-            resp = ai_client.response_json(
-                prompt=prompt,
-                response_format={"type": "json_object"},
-            )
-            content = resp.output[0].content[0].text
-            data, _ = parse_json(content)
-            data = data or {}
-            category = data.get("category")
-        except Exception:
-            category = None
+        content = resp.output[0].content[0].text
+        data, _ = parse_json(content)
+        data = data or {}
+        category = data.get("category")
+    except Exception:
+        category = None
     if not category:
         category = _heuristic_category(summary)
 

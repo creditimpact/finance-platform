@@ -14,7 +14,7 @@ import json
 import re
 from typing import Dict, List, Tuple
 
-from services.ai_client import AIClient, get_default_ai_client
+from services.ai_client import AIClient
 
 from logic.utils.names_normalization import normalize_creditor_name
 from logic.utils.note_handling import analyze_custom_notes
@@ -32,7 +32,7 @@ def extract_clean_name(full_name: str) -> str:
     return " ".join(unique_parts)
 
 
-def generate_account_action(account: dict, ai_client: AIClient | None = None) -> str:
+def generate_account_action(account: dict, ai_client: AIClient) -> str:
     """Return a human-readable action sentence for an account using GPT."""
     try:
         prompt = (
@@ -43,8 +43,7 @@ def generate_account_action(account: dict, ai_client: AIClient | None = None) ->
             f"Account data:\n{json.dumps(account, indent=2)}\n\n"
             "Respond with only the sentence."
         )
-        client = ai_client or get_default_ai_client()
-        response = client.chat_completion(
+        response = ai_client.chat_completion(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
@@ -64,8 +63,8 @@ def prepare_instruction_data(
     is_identity_theft: bool,
     run_date: str,
     logo_base64: str,
+    ai_client: AIClient,
     strategy: dict | None = None,
-    ai_client: AIClient | None = None,
 ):
     """Prepare structured data used for instruction rendering.
 

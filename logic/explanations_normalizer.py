@@ -1,7 +1,7 @@
 import re
 from typing import Any, Dict
 
-from services.ai_client import AIClient, get_default_ai_client
+from services.ai_client import AIClient
 
 from .json_utils import parse_json
 
@@ -70,7 +70,7 @@ _SCHEMA = {
 def extract_structured(
     safe_text: str,
     account_ctx: Dict[str, Any],
-    ai_client: AIClient | None = None,
+    ai_client: AIClient,
 ) -> Dict[str, Any]:
     """
     Returns structured summary using LLM.
@@ -86,8 +86,7 @@ def extract_structured(
     )
 
     try:
-        client = ai_client or get_default_ai_client()
-        response = client.response_json(
+        response = ai_client.response_json(
             prompt=prompt,
             response_format={
                 "type": "json_schema",

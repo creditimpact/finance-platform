@@ -61,7 +61,8 @@ def test_dispute_flow_golden(monkeypatch):
         "logic.compliance_pipeline.fix_draft_with_guardrails",
         lambda *a, **k: None,
     )
-    run_compliance_pipeline(artifact, "CA", "sess", "dispute")
+    from tests.helpers.fake_ai_client import FakeAIClient
+    run_compliance_pipeline(artifact, "CA", "sess", "dispute", ai_client=FakeAIClient())
     html = artifact.html
     expected = Path("tests/golden_letter.html").read_text()
     assert html == expected

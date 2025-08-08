@@ -1,7 +1,6 @@
 """Prompt construction and AI calls for credit report analysis."""
 
 from pathlib import Path
-from typing import Optional
 
 from logic.utils.names_normalization import (
     normalize_creditor_name,
@@ -9,7 +8,7 @@ from logic.utils.names_normalization import (
 from logic.utils.text_parsing import extract_late_history_blocks
 from logic.utils.inquiries import extract_inquiries
 from .json_utils import parse_json
-from services.ai_client import AIClient, get_default_ai_client
+from services.ai_client import AIClient
 
 
 def call_ai_analysis(
@@ -17,7 +16,7 @@ def call_ai_analysis(
     client_goal: str,
     is_identity_theft: bool,
     output_json_path: Path,
-    ai_client: Optional[AIClient] = None,
+    ai_client: AIClient,
 ):
     """Analyze raw report text using an AI model and return parsed JSON.
 
@@ -34,7 +33,7 @@ def call_ai_analysis(
         be written.
     ai_client:
         Instance of :class:`services.ai_client.AIClient` used to make the
-        request.  If ``None`` a default client is obtained.
+        request.
 
     Returns
     -------
@@ -191,8 +190,7 @@ Report text:
 ===
 """
 
-    client = ai_client or get_default_ai_client()
-    response = client.chat_completion(
+    response = ai_client.chat_completion(
         model="gpt-4-turbo",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,

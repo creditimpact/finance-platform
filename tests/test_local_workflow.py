@@ -155,14 +155,19 @@ def test_minimal_workflow():
 
         out_dir = Path("output/test_local")
         fake = FakeAIClient()
+        from models import ClientInfo, BureauPayload
+
+        client = ClientInfo.from_dict(client_info)
+        bureau_models = {k: BureauPayload.from_dict(v) for k, v in bureau_data.items()}
+
         generate_dispute_letters_for_all_bureaus(
-            client_info, bureau_data, out_dir, False, None, ai_client=fake
+            client, bureau_models, out_dir, False, None, ai_client=fake
         )
         generate_goodwill_letters(
-            client_info, bureau_data, out_dir, None, ai_client=fake
+            client, bureau_models, out_dir, None, ai_client=fake
         )
         generate_instruction_file(
-            client_info, bureau_data, False, out_dir, ai_client=fake
+            client, bureau_models, False, out_dir, ai_client=fake
         )
         context, accounts_list = instructions_generator.prepare_instruction_data(
             client_info,
@@ -193,13 +198,17 @@ def test_skip_goodwill_when_identity_theft():
     import tempfile
     from orchestrators import run_credit_repair_process
 
-    client_info = {
-        "name": "Jane Test",
-        "email": "jane@example.com",
-        "session_id": "test",
-    }
+    from models import ClientInfo, ProofDocuments
+
+    client_info = ClientInfo.from_dict(
+        {
+            "name": "Jane Test",
+            "email": "jane@example.com",
+            "session_id": "test",
+        }
+    )
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        proofs = {"smartcredit_report": tmp.name}
+        proofs = ProofDocuments.from_dict({"smartcredit_report": tmp.name})
         with (
             mock.patch.dict(
                 os.environ,

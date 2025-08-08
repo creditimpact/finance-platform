@@ -16,6 +16,7 @@ from orchestrators import (
     run_credit_repair_process,
     extract_problematic_accounts_from_report,
 )
+from models import ClientInfo, ProofDocuments
 app = Celery("tasks", loader="default", fixups=[])
 
 logging.basicConfig(level=logging.INFO)
@@ -81,20 +82,22 @@ def process_report(
         _ensure_file(file_path)
         logger.info("Starting processing for %s", email)
 
-        client_info = {
-            "name": "Unknown",
-            "address": "Unknown",
-            "email": email,
-            "goal": goal,
-            "session_id": session_id,
-            # Raw client notes are intentionally excluded from the processing
-            # pipeline to prevent leakage into generated letters.
-            "custom_dispute_notes": {},
-            "structured_summaries": structured_summaries or {},
-        }
+        client = ClientInfo.from_dict(
+            {
+                "name": "Unknown",
+                "address": "Unknown",
+                "email": email,
+                "goal": goal,
+                "session_id": session_id,
+                # Raw client notes are intentionally excluded from the processing
+                # pipeline to prevent leakage into generated letters.
+                "custom_dispute_notes": {},
+                "structured_summaries": structured_summaries or {},
+            }
+        )
 
-        proofs_files = {"smartcredit_report": file_path}
-        run_credit_repair_process(client_info, proofs_files, is_identity_theft)
+        proofs = ProofDocuments.from_dict({"smartcredit_report": file_path})
+        run_credit_repair_process(client, proofs, is_identity_theft)
 
         logger.info("Finished processing for %s", email)
         print("✅ [Celery] Finished processing")

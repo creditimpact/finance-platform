@@ -22,16 +22,19 @@ def main() -> None:
     args = parser.parse_args()
 
     from orchestrators import run_credit_repair_process
+    from models import ClientInfo, ProofDocuments
 
-    client_info = {
-        "name": "Unknown",
-        "address": "Unknown",
-        "email": args.email,
-        "goal": args.goal,
-        "session_id": "cli",
-    }
-    proofs_files = {"smartcredit_report": args.report}
-    run_credit_repair_process(client_info, proofs_files, args.identity_theft)
+    client = ClientInfo.from_dict(
+        {
+            "name": "Unknown",
+            "address": "Unknown",
+            "email": args.email,
+            "goal": args.goal,
+            "session_id": "cli",
+        }
+    )
+    proofs = ProofDocuments.from_dict({"smartcredit_report": args.report})
+    run_credit_repair_process(client, proofs, args.identity_theft)
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI usage only

@@ -22,6 +22,7 @@ from .dispute_preparation import prepare_disputes_and_inquiries
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
 from models.letter import LetterContext, LetterArtifact, LetterAccount
 from models.account import Account, Inquiry
+from models import ClientInfo, BureauPayload
 from services.ai_client import AIClient
 from .letter_rendering import render_dispute_letter_html
 from logic import pdf_renderer
@@ -55,8 +56,8 @@ def call_gpt_dispute_letter(*args, audit: AuditLogger | None = None, **kwargs):
 
 
 def generate_all_dispute_letters_with_ai(
-    client_info: dict,
-    bureau_data: dict,
+    client: ClientInfo,
+    bureau_map: dict[str, BureauPayload],
     output_path: Path,
     is_identity_theft: bool,
     audit: AuditLogger | None,
@@ -67,6 +68,16 @@ def generate_all_dispute_letters_with_ai(
     wkhtmltopdf_path: str | None = None,
 ):
     """Generate dispute letters for all bureaus using GPT-derived content."""
+
+    if isinstance(client, dict):  # pragma: no cover - backward compat
+        client = ClientInfo.from_dict(client)
+    client_info = client.to_dict()
+    bureau_data = {
+        k: (BureauPayload.from_dict(v).to_dict() if isinstance(v, dict) else v.to_dict())
+        if isinstance(v, (BureauPayload, dict))
+        else v
+        for k, v in bureau_map.items()
+    }
 
     output_path.mkdir(parents=True, exist_ok=True)
     if log_messages is None:
@@ -95,6 +106,8 @@ def generate_all_dispute_letters_with_ai(
             account_inquiry_matches,
             log_messages,
         )
+        disputes = disputes or []
+        filtered_inquiries = filtered_inquiries or []
 
         sanitized, bureau_flag, fallback_norm_names, fallback_used = sanitize_disputes(
             disputes,

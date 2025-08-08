@@ -1,9 +1,39 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Dict, Type
 
-from .account import Account
+from .account import Account, Inquiry
+
+
+@dataclass
+class BureauPayload:
+    """Structured data for a single bureau.
+
+    Replaces the previous free-form ``dict`` layout used across the codebase.
+    """
+
+    disputes: List[Account] = field(default_factory=list)
+    goodwill: List[Account] = field(default_factory=list)
+    inquiries: List[Inquiry] = field(default_factory=list)
+    high_utilization: List[Account] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls: Type["BureauPayload"], data: Dict[str, Any]) -> "BureauPayload":
+        return cls(
+            disputes=[Account.from_dict(d) if isinstance(d, dict) else d for d in data.get("disputes", [])],
+            goodwill=[Account.from_dict(d) if isinstance(d, dict) else d for d in data.get("goodwill", [])],
+            inquiries=[Inquiry.from_dict(i) if isinstance(i, dict) else i for i in data.get("inquiries", [])],
+            high_utilization=[Account.from_dict(d) if isinstance(d, dict) else d for d in data.get("high_utilization", [])],
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "disputes": [a.to_dict() for a in self.disputes],
+            "goodwill": [a.to_dict() for a in self.goodwill],
+            "inquiries": [i.to_dict() for i in self.inquiries],
+            "high_utilization": [a.to_dict() for a in self.high_utilization],
+        }
 
 
 @dataclass

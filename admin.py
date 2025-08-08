@@ -17,8 +17,6 @@ from config import get_app_config
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 
-ADMIN_PASSWORD = get_app_config().admin_password
-
 
 def is_authenticated():
     return session.get("admin_authenticated") is True
@@ -36,7 +34,8 @@ def require_login():
 def login():
     if request.method == "POST":
         password = request.form.get("password", "")
-        if ADMIN_PASSWORD and password == ADMIN_PASSWORD:
+        admin_password = get_app_config().admin_password
+        if admin_password and password == admin_password:
             session["admin_authenticated"] = True
             send_admin_login_alert(request.remote_addr)
             return redirect(url_for("admin.index"))

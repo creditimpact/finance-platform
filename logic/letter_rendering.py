@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from config import WKHTMLTOPDF_PATH
 from logic import pdf_renderer
 
 
@@ -16,11 +15,15 @@ def render_dispute_letter_html(context: dict) -> str:
     return template.render(**context)
 
 
-def render_html_to_pdf(html_string: str, output_path: Path) -> None:
+def render_html_to_pdf(
+    html_string: str, output_path: Path, wkhtmltopdf_path: str | None = None
+) -> None:
     """Thin wrapper around :func:`logic.pdf_renderer.render_html_to_pdf`."""
 
-    pdf_renderer.render_html_to_pdf(html_string, str(output_path))
+    pdf_renderer.render_html_to_pdf(
+        html_string, str(output_path), wkhtmltopdf_path=wkhtmltopdf_path
+    )
 
 
-__all__ = ["render_dispute_letter_html", "render_html_to_pdf", "WKHTMLTOPDF_PATH"]
+__all__ = ["render_dispute_letter_html", "render_html_to_pdf"]
 

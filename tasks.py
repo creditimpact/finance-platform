@@ -10,18 +10,28 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-import config
 from celery import Celery
-from orchestrators import run_credit_repair_process, extract_problematic_accounts_from_report
+from orchestrators import (
+    run_credit_repair_process,
+    extract_problematic_accounts_from_report,
+)
+from config import get_app_config
 
-BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-app = Celery('tasks', broker=BROKER_URL, backend=BROKER_URL)
+_app_config = get_app_config()
+app = Celery(
+    'tasks',
+    broker=_app_config.celery_broker_url,
+    backend=_app_config.celery_broker_url,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-_conf = config.get_ai_config()
-logger.info("Celery worker starting with OPENAI_BASE_URL=%s", _conf.base_url)
-logger.info("Celery worker OPENAI_API_KEY present=%s", bool(_conf.api_key))
+logger.info(
+    "Celery worker starting with OPENAI_BASE_URL=%s", _app_config.ai.base_url
+)
+logger.info(
+    "Celery worker OPENAI_API_KEY present=%s", bool(_app_config.ai.api_key)
+)
 
 # Verify that session_manager is importable at startup. This helps catch
 # cases where the worker is launched from a directory that omits the

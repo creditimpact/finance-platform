@@ -5,10 +5,11 @@ import io
 import zipfile
 
 from telegram_alert import send_admin_login_alert
+from config import get_app_config
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 
-ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
+ADMIN_PASSWORD = get_app_config().admin_password
 
 
 def is_authenticated():

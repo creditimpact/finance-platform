@@ -1,4 +1,3 @@
-import os
 import logging
 from datetime import datetime
 
@@ -9,30 +8,6 @@ from orchestrators import (
 from logic.strategy_merger import merge_strategy_data
 
 logger = logging.getLogger(__name__)
-
-
-def validate_env_variables():
-    defaults = {
-        "SMTP_SERVER": "localhost",
-        "SMTP_PORT": "1025",
-        "SMTP_USERNAME": "noreply@example.com",
-        "SMTP_PASSWORD": "",
-    }
-
-    print("🔍 Validating environment configuration...\n")
-    base_url = os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
-    os.environ["OPENAI_BASE_URL"] = base_url
-    if not os.getenv("OPENAI_API_KEY"):
-        raise EnvironmentError("OPENAI_API_KEY is missing")
-    print(f"✅ OPENAI_BASE_URL: {base_url}")
-    print("✅ OPENAI_API_KEY is set.")
-    for var, default in defaults.items():
-        if not os.getenv(var):
-            print(f"⚠️ {var} not set, using default '{default}'")
-            os.environ[var] = default
-        else:
-            print(f"✅ {var} is set.")
-    print("✅ Environment variables configured.\n")
 
 
 def get_current_month():

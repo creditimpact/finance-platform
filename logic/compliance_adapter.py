@@ -5,7 +5,6 @@ from __future__ import annotations
 import warnings
 from typing import Dict, Iterable, List, Set, Tuple
 
-import config
 from logic.utils.names_normalization import normalize_creditor_name
 from logic.utils.text_parsing import CHARGEOFF_RE, COLLECTION_RE
 
@@ -117,12 +116,13 @@ def adapt_gpt_output(
     gpt_data: dict,
     fallback_norm_names: Iterable[str],
     acc_type_map: Dict[Tuple[str, str], dict],
+    rulebook_fallback_enabled: bool,
 ) -> None:
     """Apply compliance rules to the GPT response in-place."""
 
     for acc in gpt_data.get("accounts", []):
         name_key = normalize_creditor_name(acc.get("name", ""))
-        if config.RULEBOOK_FALLBACK_ENABLED and name_key in set(fallback_norm_names):
+        if rulebook_fallback_enabled and name_key in set(fallback_norm_names):
             acc["paragraph"] = DEFAULT_DISPUTE_REASON
             acc.pop("requested_action", None)
         acc.pop("personal_note", None)

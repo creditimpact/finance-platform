@@ -74,6 +74,7 @@ def generate_instruction_file(
     run_date: str | None = None,
     strategy: dict | None = None,
     ai_client: AIClient | None = None,
+    wkhtmltopdf_path: str | None = None,
 ):
     """Generate the instruction PDF and JSON context for the client."""
     run_date = run_date or datetime.now().strftime("%B %d, %Y")
@@ -97,17 +98,27 @@ def generate_instruction_file(
         ai_client=ai_client,
     )
 
-    render_pdf_from_html(html, output_path)
+    if wkhtmltopdf_path:
+        render_pdf_from_html(html, output_path, wkhtmltopdf_path=wkhtmltopdf_path)
+    else:
+        render_pdf_from_html(html, output_path)
     save_json_output(all_accounts, output_path)
 
     print("[✅] Instructions file generated successfully.")
 
 
-def render_pdf_from_html(html: str, output_path: Path) -> Path:
+def render_pdf_from_html(
+    html: str, output_path: Path, wkhtmltopdf_path: str | None = None
+) -> Path:
     """Persist the rendered PDF to disk."""
     output_path.mkdir(parents=True, exist_ok=True)
     filepath = output_path / "Start_Here - Instructions.pdf"
-    pdf_renderer.render_html_to_pdf(html, str(filepath))
+    if wkhtmltopdf_path:
+        pdf_renderer.render_html_to_pdf(
+            html, str(filepath), wkhtmltopdf_path=wkhtmltopdf_path
+        )
+    else:
+        pdf_renderer.render_html_to_pdf(html, str(filepath))
     return filepath
 
 

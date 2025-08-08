@@ -12,10 +12,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from logic.instruction_data_preparation import (
-    prepare_instruction_data,
-    generate_account_action,  # re-exported for backward compatibility
-)
+from logic.instruction_data_preparation import prepare_instruction_data
 from services.ai_client import AIClient
 from logic.instruction_renderer import build_instruction_html
 from logic import pdf_renderer
@@ -30,40 +27,6 @@ def get_logo_base64() -> str:
             encoded = base64.b64encode(f.read()).decode("ascii")
         return f"data:image/png;base64,{encoded}"
     return ""
-
-
-def generate_html(
-    client_info,
-    bureau_data,
-    is_identity_theft: bool,
-    run_date: str,
-    logo_base64: str,
-    strategy: dict | None = None,
-    ai_client: AIClient | None = None,
-):
-    """Return the rendered HTML and merged account list.
-
-    This is kept for backward compatibility with modules that previously
-    imported :func:`generate_html` directly.
-    """
-    context, all_accounts = prepare_instruction_data(
-        client_info,
-        bureau_data,
-        is_identity_theft,
-        run_date,
-        logo_base64,
-        strategy,
-        ai_client=ai_client,
-    )
-    html = build_instruction_html(context)
-    run_compliance_pipeline(
-        html,
-        client_info.get("state"),
-        client_info.get("session_id", ""),
-        "instructions",
-        ai_client=ai_client,
-    )
-    return html, all_accounts
 
 
 def generate_instruction_file(

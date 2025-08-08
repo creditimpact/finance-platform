@@ -43,7 +43,7 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
             },
         )
         monkeypatch.setattr(
-            "logic.letter_generator.render_html_to_pdf", lambda html, path: None
+            "logic.pdf_renderer.render_html_to_pdf", lambda html, path: None
         )
         client_info = {"name": "Client", "session_id": "s1"}
         bureau_data = {
@@ -100,17 +100,20 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
             lambda html, state, session_id, dt, ai_client=None: calls.append(dt) or html,
         )
         monkeypatch.setattr(
-            "logic.generate_goodwill_letters.call_gpt_for_goodwill_letter",
-            lambda *a, **k: {
-                "intro_paragraph": "Intro",
-                "hardship_paragraph": "Hard",
-                "recovery_paragraph": "Rec",
-                "closing_paragraph": "Close",
-                "accounts": [],
-            },
+            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft",
+            lambda *a, **k: (
+                {
+                    "intro_paragraph": "Intro",
+                    "hardship_paragraph": "Hard",
+                    "recovery_paragraph": "Rec",
+                    "closing_paragraph": "Close",
+                    "accounts": [],
+                },
+                [],
+            ),
         )
         monkeypatch.setattr(
-            "logic.generate_goodwill_letters.render_html_to_pdf",
+            "logic.pdf_renderer.render_html_to_pdf",
             lambda html, path: None,
         )
         monkeypatch.setattr(

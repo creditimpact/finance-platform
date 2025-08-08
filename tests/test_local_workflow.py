@@ -33,7 +33,8 @@ sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None)
 
 from logic.letter_generator import generate_dispute_letters_for_all_bureaus
 from logic.generate_goodwill_letters import generate_goodwill_letters
-from logic.instructions_generator import generate_instruction_file, generate_html
+from logic.instructions_generator import generate_instruction_file
+import logic.instructions_generator as instructions_generator
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
@@ -79,12 +80,11 @@ def test_minimal_workflow():
 
     with (
         mock.patch("logic.letter_generator.call_gpt_dispute_letter") as mock_d,
-        mock.patch("logic.letter_generator.render_html_to_pdf"),
         mock.patch("logic.letter_generator.render_dispute_letter_html", return_value="html"),
-        mock.patch("logic.generate_goodwill_letters.call_gpt_for_goodwill_letter") as mock_g,
-        mock.patch("logic.generate_goodwill_letters.render_html_to_pdf"),
+        mock.patch("logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft") as mock_g,
+        mock.patch("logic.pdf_renderer.render_html_to_pdf"),
         mock.patch("logic.instructions_generator.render_pdf_from_html", side_effect=lambda html, p: instructions_capture.setdefault("html", html)),
-        mock.patch("logic.instructions_generator.generate_account_action", return_value="Follow advice"),
+        mock.patch("logic.instruction_data_preparation.generate_account_action", return_value="Follow advice"),
         mock.patch("logic.instructions_generator.run_compliance_pipeline", lambda html, state, session_id, doc_type, ai_client=None: html),
         mock.patch("logic.instructions_generator.build_instruction_html", return_value="html"),
         mock.patch("logic.instructions_generator.save_json_output"),
@@ -101,7 +101,7 @@ def test_minimal_workflow():
             creditor = args[1]
             accounts = args[2]
             goodwill_sent[creditor] = accounts
-            return {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""}
+            return {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""}, []
 
         mock_d.side_effect = _d
         mock_g.side_effect = _g
@@ -111,7 +111,7 @@ def test_minimal_workflow():
         generate_dispute_letters_for_all_bureaus(client_info, bureau_data, out_dir, False, None, ai_client=fake)
         generate_goodwill_letters(client_info, bureau_data, out_dir, None, ai_client=fake)
         generate_instruction_file(client_info, bureau_data, False, out_dir, ai_client=fake)
-        html_content, accounts_list = generate_html(
+        context, accounts_list = instructions_generator.prepare_instruction_data(
             client_info,
             bureau_data,
             False,
@@ -120,8 +120,16 @@ def test_minimal_workflow():
             None,
             ai_client=fake,
         )
+        html_content = instructions_generator.build_instruction_html(context)
+        instructions_generator.run_compliance_pipeline(
+            html_content,
+            client_info.get("state"),
+            client_info.get("session_id", ""),
+            "instructions",
+            ai_client=fake,
+        )
 
-    assert [a["name"] for a in disputes_sent.get("Experian", [])] == ["Bank A"]
+    assert [a.name for a in disputes_sent.get("Experian", [])] == ["Bank A"]
     assert "Card B" in goodwill_sent
 
     assert len(accounts_list) == 2

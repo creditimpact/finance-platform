@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
-from typing import Dict, List, Union
-import warnings
+from typing import Dict, List
 
 from services.ai_client import AIClient, get_default_ai_client
 
@@ -22,8 +21,8 @@ from models.letter import LetterContext
 def call_gpt_dispute_letter(
     client_info: dict,
     bureau_name: str,
-    disputes: List[Union[Account, dict]],
-    inquiries: List[Union[Inquiry, dict]],
+    disputes: List[Account],
+    inquiries: List[Inquiry],
     is_identity_theft: bool,
     structured_summaries: Dict[str, dict],
     state: str,
@@ -35,36 +34,8 @@ def call_gpt_dispute_letter(
 
     client_name = client_info.get("legal_name") or client_info.get("name", "Client")
 
-    norm_disputes: List[Account] = []
-    for acc in disputes:
-        if isinstance(acc, dict):
-            try:
-                warnings.warn(
-                    "dict account is deprecated", DeprecationWarning, stacklevel=2
-                )
-            except DeprecationWarning:
-                pass
-            acc_obj = Account.from_dict(acc)
-        else:
-            acc_obj = acc
-        norm_disputes.append(acc_obj)
-
-    norm_inquiries: List[Inquiry] = []
-    for inq in inquiries:
-        if isinstance(inq, dict):
-            try:
-                warnings.warn(
-                    "dict inquiry is deprecated", DeprecationWarning, stacklevel=2
-                )
-            except DeprecationWarning:
-                pass
-            inq_obj = Inquiry.from_dict(inq)
-        else:
-            inq_obj = inq
-        norm_inquiries.append(inq_obj)
-
     dispute_blocks = []
-    for acc in norm_disputes:
+    for acc in disputes:
         struct = structured_summaries.get(acc.account_id or '', {})
         classification = classifier(struct, state)
         neutral_phrase, neutral_reason = get_neutral_phrase(
@@ -113,7 +84,7 @@ def call_gpt_dispute_letter(
             "date": inq.date or "Unknown",
             "bureau": inq.bureau or bureau_name,
         }
-        for inq in norm_inquiries
+        for inq in inquiries
     ]
 
     instruction_text = """

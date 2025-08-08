@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Type
+from dataclasses import dataclass, field
+from typing import Any, List, Optional
 
 from .account import Account
 
@@ -14,15 +14,15 @@ class BureauAccount(Account):
     section: Optional[str] = None
 
     @classmethod
-    def from_dict(cls, data: Dict) -> 'BureauAccount':
+    def from_dict(cls, data: dict[str, Any]) -> "BureauAccount":
         base = Account.from_dict(data)
         return cls(
             **base.to_dict(),
-            bureau=data.get('bureau'),
-            section=data.get('section'),
+            bureau=data.get("bureau"),
+            section=data.get("section"),
         )
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict[str, Any]:
         d = super().to_dict()
         d.update({"bureau": self.bureau, "section": self.section})
         return d
@@ -36,9 +36,8 @@ class BureauSection:
     accounts: List[BureauAccount] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, name: str, data: List[Dict]) -> 'BureauSection':
+    def from_dict(cls, name: str, data: List[dict[str, Any]]) -> "BureauSection":
         return cls(name=name, accounts=[BureauAccount.from_dict(d) for d in data])
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict[str, Any]:
         return {self.name: [acc.to_dict() for acc in self.accounts]}
-

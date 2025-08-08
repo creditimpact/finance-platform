@@ -13,7 +13,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 
-import config
 from audit import AuditLevel, AuditLogger
 from logic.utils.note_handling import get_client_address_lines
 
@@ -61,6 +60,8 @@ def generate_all_dispute_letters_with_ai(
     run_date: str | None = None,
     log_messages: List[str] | None = None,
     ai_client: AIClient | None = None,
+    rulebook_fallback_enabled: bool = True,
+    wkhtmltopdf_path: str | None = None,
 ):
     """Generate dispute letters for all bureaus using GPT-derived content."""
 
@@ -131,7 +132,9 @@ def generate_all_dispute_letters_with_ai(
             ai_client=ai_client,
         )
 
-        adapt_gpt_output(gpt_data, fallback_norm_names, acc_type_map)
+        adapt_gpt_output(
+            gpt_data, fallback_norm_names, acc_type_map, rulebook_fallback_enabled
+        )
 
         included_set = {
             (
@@ -180,7 +183,10 @@ def generate_all_dispute_letters_with_ai(
         )
         filename = f"Dispute Letter - {bureau_name}.pdf"
         filepath = output_path / filename
-        render_html_to_pdf(html, filepath)
+        if wkhtmltopdf_path:
+            render_html_to_pdf(html, filepath, wkhtmltopdf_path=wkhtmltopdf_path)
+        else:
+            render_html_to_pdf(html, filepath)
 
         with open(output_path / f"{bureau_name}_gpt_response.json", "w") as f:
             json.dump(gpt_data, f, indent=2)

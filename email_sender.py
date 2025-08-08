@@ -1,7 +1,6 @@
 import smtplib
-import os
 import logging
-import config
+import os
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -9,15 +8,17 @@ def collect_all_files(folder: Path):
     """אוסף את כל קבצי ה־PDF מתוך תיקיית הלקוח לשליחה באימייל."""
     return [str(p) for p in folder.glob("*.pdf") if p.is_file()]
 
-def send_email_with_attachment(receiver_email, subject, body, files):
-    smtp_server = os.getenv("SMTP_SERVER", "localhost")
-    smtp_port = int(os.getenv("SMTP_PORT", "1025"))
-    sender_email = os.getenv("SMTP_USERNAME", "noreply@example.com")
-    sender_password = os.getenv("SMTP_PASSWORD", "")  # local dev default
-    logging.getLogger(__name__).info(
-        "Email sender using OPENAI_BASE_URL=%s", config.get_ai_config().base_url
-    )
-
+def send_email_with_attachment(
+    receiver_email,
+    subject,
+    body,
+    files,
+    *,
+    smtp_server: str,
+    smtp_port: int,
+    sender_email: str,
+    sender_password: str,
+):
     msg = EmailMessage()
     msg["From"] = sender_email
     msg["To"] = receiver_email

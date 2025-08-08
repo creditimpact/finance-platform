@@ -59,7 +59,6 @@ def generate_letter_with_guardrails(
         iterations += 1
         client = ai_client or get_default_ai_client()
         response = client.chat_completion(
-            model=os.getenv("OPENAI_MODEL", "gpt-4"),
             messages=messages,
             temperature=0.3,
         )
@@ -109,7 +108,6 @@ def fix_draft_with_guardrails(
         )
         client = ai_client or get_default_ai_client()
         response = client.chat_completion(
-            model=os.getenv("OPENAI_MODEL", "gpt-4"),
             messages=messages,
             temperature=0,
         )

@@ -14,25 +14,26 @@ from shutil import copyfile
 from audit import AuditLevel
 from logic.extract_info import extract_bureau_info_column_refined
 from logic.utils.pdf_ops import convert_txts_to_pdfs, gather_supporting_docs_text
-from logic.utils.report_sections import filter_sections_by_bureau, extract_summary_from_sections
+from logic.utils.report_sections import (
+    filter_sections_by_bureau,
+    extract_summary_from_sections,
+)
 from logic.summary_classifier import classify_client_summary
 from logic.constants import StrategistFailureReason
 from analytics_tracker import save_analytics_snapshot
 from analytics.strategist_failures import tally_failure_reasons
 from email_sender import send_email_with_attachment
 from services.ai_client import AIClient
+from config import AppConfig, get_app_config
 
 
 def process_client_intake(client_info, audit):
-    """Validate environment and prepare client intake information.
+    """Prepare client intake information.
 
     Returns:
         tuple[str, dict, dict]: session id, structured summaries and raw notes.
     """
-    from main import validate_env_variables
     from session_manager import get_intake
-
-    validate_env_variables()
     if "email" not in client_info or not client_info["email"]:
         raise ValueError("Client email is missing.")
 
@@ -211,6 +212,7 @@ def generate_letters(
     audit,
     log_messages,
     ai_client: AIClient | None = None,
+    app_config: AppConfig | None = None,
 ):
     """Create all client letters and supporting files."""
     from main import extract_all_accounts
@@ -228,6 +230,8 @@ def generate_letters(
         audit,
         log_messages=log_messages,
         ai_client=ai_client,
+        rulebook_fallback_enabled=app_config.rulebook_fallback_enabled if app_config else True,
+        wkhtmltopdf_path=app_config.wkhtmltopdf_path if app_config else None,
     )
     log_messages.append("📄 Dispute letters generated.")
     if audit.level is AuditLevel.VERBOSE:
@@ -259,6 +263,7 @@ def generate_letters(
         audit,
         log_messages=log_messages,
         ai_client=ai_client,
+        wkhtmltopdf_path=app_config.wkhtmltopdf_path if app_config else None,
     )
     log_messages.append("📝 Custom letters generated.")
     if audit.level is AuditLevel.VERBOSE:
@@ -272,6 +277,7 @@ def generate_letters(
         today_folder,
         strategy=strategy,
         ai_client=ai_client,
+        wkhtmltopdf_path=app_config.wkhtmltopdf_path if app_config else None,
     )
     log_messages.append("📋 Instruction file created.")
     if audit.level is AuditLevel.VERBOSE:
@@ -302,7 +308,14 @@ def generate_letters(
             audit.log_step("fcra_skipped")
 
 
-def finalize_outputs(client_info, today_folder, sections, audit, log_messages):
+def finalize_outputs(
+    client_info,
+    today_folder,
+    sections,
+    audit,
+    log_messages,
+    app_config: AppConfig,
+):
     """Send final outputs to the client and record analytics."""
     print("📧 Sending email with all documents to client...")
     output_files = [str(p) for p in today_folder.glob("*.pdf")]
@@ -340,6 +353,10 @@ Best regards,
 **CREDIT IMPACT**
 """,
         files=output_files,
+        smtp_server=app_config.smtp_server,
+        smtp_port=app_config.smtp_port,
+        sender_email=app_config.smtp_username,
+        sender_password=app_config.smtp_password,
     )
     log_messages.append("📧 Email sent to client.")
     if audit.level is AuditLevel.VERBOSE:
@@ -385,18 +402,24 @@ def save_log_file(client_info, is_identity_theft, output_folder, log_lines):
     print(f"[📝] Log saved: {log_path}")
 
 
-def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
+def run_credit_repair_process(
+    client_info,
+    proofs_files,
+    is_identity_theft,
+    *,
+    app_config: AppConfig | None = None,
+):
     """Execute the full credit repair pipeline for a single client."""
+    app_config = app_config or get_app_config()
     log_messages: list[str] = []
     today_folder: Path | None = None
     pdf_path: Path | None = None
     session_id = client_info.get("session_id", "session")
     from audit import create_audit_logger
-    import config
     from services.ai_client import build_ai_client
 
     audit = create_audit_logger(session_id)
-    ai_client = build_ai_client(config.get_ai_config())
+    ai_client = build_ai_client(app_config.ai)
 
     try:
         print("\n✅ Starting Credit Repair Process (B2C Mode)...")
@@ -423,8 +446,11 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             audit,
             log_messages,
             ai_client,
+            app_config,
         )
-        finalize_outputs(client_info, today_folder, sections, audit, log_messages)
+        finalize_outputs(
+            client_info, today_folder, sections, audit, log_messages, app_config
+        )
 
     except Exception as e:  # pragma: no cover - surface for higher-level handling
         error_msg = f"❌ Error: {str(e)}"
@@ -437,7 +463,7 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
         save_log_file(client_info, is_identity_theft, today_folder, log_messages)
         if today_folder:
             audit.save(today_folder)
-            if config.EXPORT_TRACE_FILE:
+            if app_config.export_trace_file:
                 from trace_exporter import export_trace_file
 
                 export_trace_file(audit, session_id)
@@ -451,9 +477,6 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
 
 def extract_problematic_accounts_from_report(file_path: str, session_id: str | None = None) -> dict:
     """Return problematic accounts extracted from the report for user review."""
-    from main import validate_env_variables
-    validate_env_variables()
-
     from logic.upload_validator import is_safe_pdf, move_uploaded_file
     from session_manager import update_session
 

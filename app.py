@@ -8,7 +8,6 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 import logging
-import config
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import uuid
@@ -23,16 +22,21 @@ from session_manager import (
     update_intake,
 )
 from logic.explanations_normalizer import sanitize, extract_structured
+from config import get_app_config
 
 logger = logging.getLogger(__name__)
-_ai_conf = config.get_ai_config()
-logger.info("Flask app starting with OPENAI_BASE_URL=%s", _ai_conf.base_url)
-logger.info("Flask app OPENAI_API_KEY present=%s", bool(_ai_conf.api_key))
+_app_config = get_app_config()
+logger.info(
+    "Flask app starting with OPENAI_BASE_URL=%s", _app_config.ai.base_url
+)
+logger.info(
+    "Flask app OPENAI_API_KEY present=%s", bool(_app_config.ai.api_key)
+)
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
 
-app.secret_key = os.environ.get("SECRET_KEY", "change-me")
+app.secret_key = _app_config.secret_key
 app.register_blueprint(admin_bp)
 
 @app.route("/")

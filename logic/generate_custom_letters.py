@@ -13,13 +13,14 @@ from logic.guardrails import generate_letter_with_guardrails
 from .rules_loader import get_neutral_phrase
 from audit import AuditLogger, AuditLevel
 from services.ai_client import AIClient
+from config import get_app_config
 
 env = Environment(loader=FileSystemLoader("templates"))
 template = env.get_template("general_letter_template.html")
 
 
-def _pdf_config():
-    path = os.getenv("WKHTMLTOPDF_PATH", "wkhtmltopdf")
+def _pdf_config(wkhtmltopdf_path: str | None):
+    path = wkhtmltopdf_path or get_app_config().wkhtmltopdf_path
     return pdfkit.configuration(wkhtmltopdf=path)
 
 
@@ -101,6 +102,7 @@ def generate_custom_letter(
     audit: AuditLogger | None,
     run_date: str | None = None,
     ai_client: AIClient | None = None,
+    wkhtmltopdf_path: str | None = None,
 ) -> None:
     client_name = client_info.get("legal_name") or client_info.get("name", "Client")
     date_str = run_date or datetime.now().strftime("%B %d, %Y")
@@ -152,7 +154,9 @@ def generate_custom_letter(
     filename = f"Custom Letter - {safe_recipient}.pdf"
     full_path = output_path / filename
     options = {"quiet": ""}
-    pdfkit.from_string(html, str(full_path), configuration=_pdf_config(), options=options)
+    pdfkit.from_string(
+        html, str(full_path), configuration=_pdf_config(wkhtmltopdf_path), options=options
+    )
     print(f"[📝] Custom letter generated: {full_path}")
 
     response_path = output_path / f"{safe_recipient}_custom_gpt_response.txt"
@@ -178,6 +182,7 @@ def generate_custom_letters(
     run_date: str | None = None,
     log_messages: list[str] | None = None,
     ai_client: AIClient | None = None,
+    wkhtmltopdf_path: str | None = None,
 ) -> None:
     if log_messages is None:
         log_messages = []
@@ -186,7 +191,13 @@ def generate_custom_letters(
             action = str(acc.get("action_tag") or acc.get("recommended_action") or "").lower()
             if acc.get("letter_type") == "custom" or action == "custom_letter":
                 generate_custom_letter(
-                    acc, client_info, output_path, audit, run_date, ai_client=ai_client
+                    acc,
+                    client_info,
+                    output_path,
+                    audit,
+                    run_date,
+                    ai_client=ai_client,
+                    wkhtmltopdf_path=wkhtmltopdf_path,
                 )
             else:
                 log_messages.append(

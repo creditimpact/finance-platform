@@ -6,7 +6,7 @@ from typing import Optional
 import pdfkit
 from jinja2 import Environment, FileSystemLoader
 
-from config import WKHTMLTOPDF_PATH
+from config import get_app_config
 
 _template_env: Environment | None = None
 
@@ -58,7 +58,7 @@ def render_html_to_pdf(
         repository-wide configuration.
     """
     output_path = normalize_output_path(output_path)
-    wkhtmltopdf = wkhtmltopdf_path or WKHTMLTOPDF_PATH
+    wkhtmltopdf = wkhtmltopdf_path or get_app_config().wkhtmltopdf_path
     try:
         config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf)
         options = {"quiet": ""}

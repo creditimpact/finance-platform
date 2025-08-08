@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -16,7 +15,6 @@ from typing import List
 
 import config
 from audit import AuditLevel, AuditLogger
-from logic.guardrails import fix_draft_with_guardrails
 from logic.utils.note_handling import get_client_address_lines
 
 from logic.utils.names_normalization import normalize_creditor_name
@@ -25,7 +23,8 @@ from .dispute_preparation import prepare_disputes_and_inquiries
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
 from services.ai_client import AIClient, get_default_ai_client
 from .letter_rendering import render_dispute_letter_html, render_html_to_pdf
-from .compliance_adapter import (
+from .compliance_pipeline import (
+    run_compliance_pipeline,
     adapt_gpt_output,
     sanitize_client_info,
     sanitize_disputes,
@@ -172,11 +171,9 @@ def generate_all_dispute_letters_with_ai(
         }
 
         html = render_dispute_letter_html(context)
-        plain_text = re.sub(r"<[^>]+>", " ", html)
-        fix_draft_with_guardrails(
-            plain_text,
+        run_compliance_pipeline(
+            html,
             client_info.get("state"),
-            {},
             client_info.get("session_id", ""),
             "dispute",
             ai_client=ai_client,

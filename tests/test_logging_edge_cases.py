@@ -9,7 +9,10 @@ from tests.helpers.fake_ai_client import FakeAIClient
 
 def _setup(monkeypatch):
     monkeypatch.setattr("logic.letter_generator.render_html_to_pdf", lambda html, path: None)
-    monkeypatch.setattr("logic.letter_generator.fix_draft_with_guardrails", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "logic.compliance_pipeline.run_compliance_pipeline",
+        lambda html, state, session_id, doc_type, ai_client=None: html,
+    )
     monkeypatch.setattr(pdfkit, "configuration", lambda *a, **k: None)
 
 

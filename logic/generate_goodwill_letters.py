@@ -11,7 +11,7 @@ from logic.utils.file_paths import safe_filename
 from logic.utils.note_handling import get_client_address_lines
 from .json_utils import parse_json
 from session_manager import get_session
-from logic.guardrails import fix_draft_with_guardrails
+from logic.compliance_pipeline import run_compliance_pipeline
 from .summary_classifier import classify_client_summary
 from .rules_loader import get_neutral_phrase
 from audit import AuditLogger, AuditLevel
@@ -324,11 +324,9 @@ def generate_goodwill_letter_with_ai(
     }
 
     html = template.render(**context)
-    plain_text = re.sub(r"<[^>]+>", " ", html)
-    fix_draft_with_guardrails(
-        plain_text,
+    run_compliance_pipeline(
+        html,
         client_info.get("state"),
-        {},
         session_id or "",
         "goodwill",
         ai_client=ai_client,

@@ -57,7 +57,10 @@ def test_dispute_letter_ignores_emotional_text(monkeypatch, tmp_path):
     monkeypatch.setattr("logic.letter_generator.generate_strategy", fake_generate_strategy)
     monkeypatch.setattr("logic.letter_generator.call_gpt_dispute_letter", fake_call_gpt)
     monkeypatch.setattr("logic.letter_generator.render_html_to_pdf", lambda html, path: None)
-    monkeypatch.setattr("logic.letter_generator.fix_draft_with_guardrails", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "logic.compliance_pipeline.run_compliance_pipeline",
+        lambda html, state, session_id, doc_type, ai_client=None: html,
+    )
     fake = FakeAIClient()
     monkeypatch.setattr(pdfkit, "configuration", lambda *a, **k: None)
 
@@ -122,7 +125,8 @@ def test_goodwill_letter_ignores_emotional_text(monkeypatch, tmp_path):
         "logic.generate_goodwill_letters.render_html_to_pdf", lambda html, path: None
     )
     monkeypatch.setattr(
-        "logic.generate_goodwill_letters.fix_draft_with_guardrails", lambda *a, **k: None
+        "logic.compliance_pipeline.run_compliance_pipeline",
+        lambda html, state, session_id, doc_type, ai_client=None: html,
     )
     fake2 = FakeAIClient()
     monkeypatch.setattr(pdfkit, "configuration", lambda *a, **k: None)

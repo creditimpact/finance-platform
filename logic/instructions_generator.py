@@ -19,6 +19,7 @@ from logic.instruction_data_preparation import (
 from services.ai_client import AIClient
 from logic.instruction_renderer import build_instruction_html
 from logic import pdf_renderer
+from logic.compliance_pipeline import run_compliance_pipeline
 
 
 def get_logo_base64() -> str:
@@ -55,6 +56,13 @@ def generate_html(
         ai_client=ai_client,
     )
     html = build_instruction_html(context)
+    run_compliance_pipeline(
+        html,
+        client_info.get("state"),
+        client_info.get("session_id", ""),
+        "instructions",
+        ai_client=ai_client,
+    )
     return html, all_accounts
 
 
@@ -80,8 +88,14 @@ def generate_instruction_file(
         strategy,
         ai_client=ai_client,
     )
-
     html = build_instruction_html(context)
+    run_compliance_pipeline(
+        html,
+        client_info.get("state"),
+        client_info.get("session_id", ""),
+        "instructions",
+        ai_client=ai_client,
+    )
 
     render_pdf_from_html(html, output_path)
     save_json_output(all_accounts, output_path)

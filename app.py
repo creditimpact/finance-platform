@@ -9,7 +9,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 import logging
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Blueprint
 from flask_cors import CORS
 import uuid
 from werkzeug.utils import secure_filename
@@ -26,23 +26,16 @@ from logic.explanations_normalizer import sanitize, extract_structured
 from config import get_app_config
 
 logger = logging.getLogger(__name__)
-_app_config = get_app_config()
-logger.info("Flask app starting with OPENAI_BASE_URL=%s", _app_config.ai.base_url)
-logger.info("Flask app OPENAI_API_KEY present=%s", bool(_app_config.ai.api_key))
 
-app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
-
-app.secret_key = _app_config.secret_key
-app.register_blueprint(admin_bp)
+api_bp = Blueprint("api", __name__)
 
 
-@app.route("/")
+@api_bp.route("/")
 def index():
     return jsonify({"status": "ok", "message": "API is up"})
 
 
-@app.route("/api/start-process", methods=["POST"])
+@api_bp.route("/api/start-process", methods=["POST"])
 def start_process():
     try:
         print("🔔 Received request to /api/start-process")
@@ -141,7 +134,7 @@ def start_process():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route("/api/explanations", methods=["POST"])
+@api_bp.route("/api/explanations", methods=["POST"])
 def explanations_endpoint():
     data = request.get_json(force=True)
     session_id = data.get("session_id")
@@ -167,7 +160,7 @@ def explanations_endpoint():
     return jsonify({"status": "ok", "structured": structured})
 
 
-@app.route("/api/summaries/<session_id>", methods=["GET"])
+@api_bp.route("/api/summaries/<session_id>", methods=["GET"])
 def get_summaries(session_id: str):
     session = get_session(session_id)
     if not session:
@@ -194,7 +187,7 @@ def get_summaries(session_id: str):
     return jsonify({"status": "ok", "summaries": cleaned})
 
 
-@app.route("/api/submit-explanations", methods=["POST"])
+@api_bp.route("/api/submit-explanations", methods=["POST"])
 def submit_explanations():
     data = request.get_json(force=True)
     session_id = data.get("session_id")
@@ -237,6 +230,25 @@ def submit_explanations():
     return jsonify({"status": "processing", "message": "Letters generation started."})
 
 
-if __name__ == "__main__":
+def create_app() -> Flask:
+    app = Flask(__name__)
+    CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+    app.register_blueprint(admin_bp)
+    app.register_blueprint(api_bp)
+
+    @app.before_request
+    def _load_config() -> None:
+        if getattr(app, "_config_loaded", False):
+            return
+        cfg = get_app_config()
+        app.secret_key = cfg.secret_key
+        logger.info("Flask app starting with OPENAI_BASE_URL=%s", cfg.ai.base_url)
+        logger.info("Flask app OPENAI_API_KEY present=%s", bool(cfg.ai.api_key))
+        app._config_loaded = True
+
+    return app
+
+
+if __name__ == "__main__":  # pragma: no cover - manual execution
     debug_mode = os.environ.get("FLASK_DEBUG", "0") in ("1", "true", "True")
-    app.run(host="0.0.0.0", port=5000, debug=debug_mode)
+    create_app().run(host="0.0.0.0", port=5000, debug=debug_mode)

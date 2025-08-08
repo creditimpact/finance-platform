@@ -15,7 +15,7 @@ def test_summaries_endpoint_returns_clean_data(monkeypatch):
         return Dummy()
 
     monkeypatch.setattr("pdfkit.configuration", fake_config)
-    app = importlib.import_module("app").app
+    app = importlib.import_module("app").create_app()
 
     session_id = "sess-summary"
     raw = {

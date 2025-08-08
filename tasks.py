@@ -16,19 +16,10 @@ from orchestrators import (
     run_credit_repair_process,
     extract_problematic_accounts_from_report,
 )
-from config import get_app_config
-
-_app_config = get_app_config()
-app = Celery(
-    "tasks",
-    broker=_app_config.celery_broker_url,
-    backend=_app_config.celery_broker_url,
-)
+app = Celery("tasks", loader="default", fixups=[])
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.info("Celery worker starting with OPENAI_BASE_URL=%s", _app_config.ai.base_url)
-logger.info("Celery worker OPENAI_API_KEY present=%s", bool(_app_config.ai.api_key))
 
 # Verify that session_manager is importable at startup. This helps catch
 # cases where the worker is launched from a directory that omits the

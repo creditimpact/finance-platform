@@ -19,7 +19,7 @@ def test_explanations_endpoint_stores_raw_and_structured(monkeypatch):
     monkeypatch.setattr("pdfkit.configuration", fake_config)
 
     app_module = importlib.import_module("app")
-    app = app_module.app
+    app = app_module.create_app()
 
     def fake_extract(text, ctx):
         return {

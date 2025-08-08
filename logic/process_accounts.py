@@ -4,8 +4,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .generate_goodwill_letters import normalize_creditor_name
-from logic.utils.names_normalization import normalize_bureau_name
+from logic.utils.names_normalization import (
+    normalize_creditor_name,
+    normalize_bureau_name,
+)
 from logic.utils.text_parsing import enforce_collection_status
 from .fallback_manager import determine_fallback_action
 from audit import AuditLogger

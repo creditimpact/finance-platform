@@ -16,6 +16,11 @@ from .summary_classifier import classify_client_summary
 from .rules_loader import get_neutral_phrase
 from audit import AuditLogger, AuditLevel
 from services.ai_client import AIClient, get_default_ai_client
+import warnings
+from logic.utils.names_normalization import (
+    normalize_creditor_name as _normalize_creditor_name,
+    COMMON_CREDITOR_ALIASES,
+)
 
 template_env = Environment(loader=FileSystemLoader("templates"))
 template = template_env.get_template("goodwill_letter_template.html")
@@ -25,88 +30,16 @@ def _pdf_config():
     path = os.getenv("WKHTMLTOPDF_PATH", "wkhtmltopdf")
     return pdfkit.configuration(wkhtmltopdf=path)
 
-COMMON_CREDITOR_ALIASES = {
-    "citi": "citibank",
-    "citicard": "citibank",
-    "citi bank": "citibank",
-    "bofa": "bank of america",
-    "boa": "bank of america",
-    "bk of amer": "bank of america",
-    "bank of america": "bank of america",
-    "capital one": "capital one",
-    "cap one": "capital one",
-    "cap1": "capital one",
-    "capital 1": "capital one",
-    "cap 1": "capital one",
-    "chase": "chase bank",
-    "jp morgan chase": "chase bank",
-    "jpm chase": "chase bank",
-    "wells": "wells fargo",
-    "wells fargo": "wells fargo",
-    "us bank": "us bank",
-    "usbank": "us bank",
-    "usaa": "usaa",
-    "ally": "ally bank",
-    "ally financial": "ally bank",
-    "synchrony": "synchrony bank",
-    "synchrony financial": "synchrony bank",
-    "paypal credit": "paypal credit (synchrony)",
-    "barclay": "barclays",
-    "barclays": "barclays",
-    "discover": "discover",
-    "comenity": "comenity bank",
-    "comenity bank": "comenity bank",
-    "td": "td bank",
-    "td bank": "td bank",
-    "pnc": "pnc bank",
-    "pnc bank": "pnc bank",
-    "regions": "regions bank",
-    "truist": "truist",
-    "bbt": "bb&t (now truist)",
-    "suntrust": "suntrust (now truist)",
-    "avant": "avant",
-    "upgrade": "upgrade",
-    "sofi": "sofi",
-    "earnest": "earnest",
-    "upstart": "upstart",
-    "marcus": "marcus by goldman sachs",
-    "goldman": "marcus by goldman sachs",
-    "toyota": "toyota financial",
-    "nissan": "nissan motor acceptance corp.",
-    "ford": "ford credit",
-    "honda": "honda financial services",
-    "hyundai": "hyundai motor finance",
-    "kia": "kia motors finance",
-    "tesla": "tesla finance",
-    "navient": "navient",
-    "great lakes": "great lakes (nelnet)",
-    "mohela": "mohela",
-    "aes": "aes (american education services)",
-    "fedloan": "fedloan servicing",
-    "credit one": "credit one bank",
-    "first premier": "first premier bank",
-    "mission lane": "mission lane",
-    "ollo": "ollo card",
-    "reflex": "reflex card",
-    "indigo": "indigo card",
-    "merrick": "merrick bank",
-    "hsbc": "hsbc",
-    "bmw financial": "bmw financial",
-    "bmw fin svc": "bmw financial",
-    "bmw finance": "bmw financial"
-}
 
 def normalize_creditor_name(raw_name: str) -> str:
-    name = raw_name.lower().strip()
-    for alias, canonical in COMMON_CREDITOR_ALIASES.items():
-        if alias in name:
-            if canonical != name:
-                print(f"[~] Alias match: '{raw_name}' -> '{canonical}'")
-            return canonical
-    name = re.sub(r"\b(bank|usa|na|n.a\\.|llc|inc|corp|co|company)\b", "", name)
-    name = re.sub(r"[^a-z0-9 ]", "", name)
-    name = re.sub(r"\s+", " ", name)
-    return name.strip()
+    """Deprecated wrapper for ``utils.names_normalization.normalize_creditor_name``."""
+    warnings.warn(
+        "normalize_creditor_name has moved to logic.utils.names_normalization; "
+        "import from there instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _normalize_creditor_name(raw_name)
 
 def render_html_to_pdf(html: str, output_path: Path):
     options = {"quiet": ""}
@@ -142,7 +75,7 @@ def call_gpt_for_goodwill_letter(
 
     for acc in accounts:
         acc_num = str(acc.get("account_number") or "").strip()
-        name_norm = normalize_creditor_name(acc.get("name", ""))
+        name_norm = _normalize_creditor_name(acc.get("name", ""))
 
         target = None
         if acc_num and acc_num in seen_numbers:
@@ -151,7 +84,7 @@ def call_gpt_for_goodwill_letter(
             # try to locate an existing account with the same creditor name when
             # one of the entries lacks an account number
             for existing in merged_accounts:
-                if normalize_creditor_name(existing.get("name", "")) == name_norm:
+                if _normalize_creditor_name(existing.get("name", "")) == name_norm:
                     if not acc_num or not existing.get("account_number"):
                         target = existing
                         break
@@ -317,11 +250,11 @@ def load_creditor_address_map():
             raw = json.load(f)
             if isinstance(raw, list):
                 return {
-                    normalize_creditor_name(entry["name"]): entry["address"]
+                    _normalize_creditor_name(entry["name"]): entry["address"]
                     for entry in raw if "name" in entry and "address" in entry
                 }
             elif isinstance(raw, dict):
-                return {normalize_creditor_name(k): v for k, v in raw.items()}
+                return {_normalize_creditor_name(k): v for k, v in raw.items()}
             else:
                 print("[⚠️] Unknown address file format.")
                 return {}
@@ -347,7 +280,7 @@ def generate_goodwill_letter_with_ai(
     date_str = run_date or datetime.now().strftime("%B %d, %Y")
 
     address_map = load_creditor_address_map()
-    creditor_key = normalize_creditor_name(creditor)
+    creditor_key = _normalize_creditor_name(creditor)
     creditor_address = address_map.get(creditor_key)
 
     if not creditor_address:
@@ -440,7 +373,7 @@ def generate_goodwill_letters(
             name = acc.get("name") or acc.get("שם החשבון")
             if not name:
                 continue
-            name_norm = normalize_creditor_name(name)
+            name_norm = _normalize_creditor_name(name)
             dispute_map.setdefault(name_norm, set()).add(clean_num(acc.get("account_number")))
 
     def consider_account(account):
@@ -464,7 +397,9 @@ def generate_goodwill_letters(
             )
         ):
             return
-        name_norm = normalize_creditor_name(account.get("name") or account.get("שם החשבון") or "")
+        name_norm = _normalize_creditor_name(
+            account.get("name") or account.get("שם החשבון") or ""
+        )
         acct_num = clean_num(account.get("account_number") or account.get("acct_number"))
         dispute_nums = dispute_map.get(name_norm)
         if dispute_nums is not None:
@@ -533,10 +468,10 @@ def generate_goodwill_letters(
         )
 
     for norm, raw in detected_late_accounts.items():
-        if norm not in {normalize_creditor_name(c) for c in goodwill_accounts}:
+        if norm not in {_normalize_creditor_name(c) for c in goodwill_accounts}:
             print(f"[⚠️] Goodwill skipped for: '{raw}' despite having late payments")
 
-    included_norms = {normalize_creditor_name(c) for c in goodwill_accounts}
+    included_norms = {_normalize_creditor_name(c) for c in goodwill_accounts}
     for norm, raw in flagged_candidates.items():
         if norm not in included_norms:
             print(f"[⚠️] Goodwill candidate '{raw}' skipped – reason: no late payment data")

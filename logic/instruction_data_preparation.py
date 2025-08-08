@@ -17,7 +17,7 @@ from typing import Dict, List, Tuple
 
 from services.ai_client import AIClient, get_default_ai_client
 
-from logic.generate_goodwill_letters import normalize_creditor_name
+from logic.utils.names_normalization import normalize_creditor_name
 from logic.utils.note_handling import analyze_custom_notes
 
 def extract_clean_name(full_name: str) -> str:

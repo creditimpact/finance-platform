@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Dict, List, Tuple
 
 from .fallback_manager import determine_fallback_action
-from .generate_goodwill_letters import normalize_creditor_name
+from logic.utils.names_normalization import normalize_creditor_name
 
 
 def dedupe_disputes(disputes: List[dict], bureau_name: str, log: List[str]) -> List[dict]:

@@ -3,7 +3,10 @@ import json
 import fitz  # pymupdf
 from pathlib import Path
 import re
-from .generate_goodwill_letters import normalize_creditor_name
+from logic.utils.names_normalization import (
+    normalize_creditor_name,
+    normalize_bureau_name,
+)
 from logic.utils.text_parsing import (
     extract_late_history_blocks,
     has_late_indicator,
@@ -11,7 +14,6 @@ from logic.utils.text_parsing import (
 )
 from logic.utils.pdf_ops import extract_pdf_text_safe
 from logic.utils.inquiries import extract_inquiries
-from logic.utils.names_normalization import normalize_bureau_name
 from .json_utils import parse_json
 from services.ai_client import AIClient, get_default_ai_client
 

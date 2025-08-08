@@ -19,7 +19,7 @@ from audit import AuditLevel, AuditLogger
 from logic.guardrails import fix_draft_with_guardrails
 from logic.utils.note_handling import get_client_address_lines
 
-from .generate_goodwill_letters import normalize_creditor_name
+from logic.utils.names_normalization import normalize_creditor_name
 from .strategy_engine import generate_strategy
 from .dispute_preparation import prepare_disputes_and_inquiries
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter

@@ -250,7 +250,7 @@ def extract_late_history_blocks(
     raw_map: dict[str, str] = {}
 
     def norm(name: str) -> str:
-        from ..generate_goodwill_letters import normalize_creditor_name
+        from .names_normalization import normalize_creditor_name
 
         return normalize_creditor_name(name)
 

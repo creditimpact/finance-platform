@@ -10,6 +10,7 @@ import re
 from typing import Dict, List, Any
 
 from audit import AuditLogger
+from services.ai_client import AIClient
 from logic.utils.text_parsing import has_late_indicator
 from logic.utils.names_normalization import normalize_creditor_name
 from .summary_classifier import classify_client_summary
@@ -133,7 +134,7 @@ def prepare_account_summaries(
     state: str | None,
     *,
     audit: AuditLogger | None = None,
-    ai_client=None,
+    ai_client: AIClient,
 ) -> List[Dict[str, Any]]:
     """Merge duplicate account records and enrich with strategy metadata."""
 
@@ -204,7 +205,7 @@ def prepare_account_summaries(
         if structured_summaries:
             struct = structured_summaries.get(acc.get("account_id"), {})
             summary["structured_summary"] = struct
-            cls = classify_client_summary(struct, state, ai_client=ai_client)
+            cls = classify_client_summary(struct, ai_client, state)
             summary.update(
                 {
                     "dispute_reason": cls.get("category"),

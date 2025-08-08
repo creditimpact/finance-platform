@@ -84,8 +84,8 @@ def test_dedup_without_numbers():
             False,
             "2024-01-01",
             "",
-            None,
             ai_client=fake,
+            strategy=None,
         )
         html = instructions_generator.build_instruction_html(context)
         instructions_generator.run_compliance_pipeline(
@@ -238,7 +238,7 @@ def test_skip_goodwill_when_no_late_payments():
     ):
         out_dir = Path("output/tmp3")
         out_dir.mkdir(parents=True, exist_ok=True)
-        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None)
+        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient())
     assert not mock_g.called
     print("goodwill skip ok")
 
@@ -268,7 +268,7 @@ def test_skip_goodwill_on_collections():
     ):
         out_dir = Path("output/tmp4")
         out_dir.mkdir(parents=True, exist_ok=True)
-        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None)
+        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient())
     assert not mock_g.called
     print("goodwill collection skip ok")
 
@@ -298,7 +298,7 @@ def test_skip_goodwill_edge_statuses():
     ):
         out_dir = Path("output/tmp4a")
         out_dir.mkdir(parents=True, exist_ok=True)
-        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None)
+        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient())
     assert not mock_g.called
     print("goodwill edge skip ok")
 
@@ -665,7 +665,7 @@ def test_skip_goodwill_for_disputed_account():
     ):
         out_dir = Path("output/tmp_dupe_skip")
         out_dir.mkdir(parents=True, exist_ok=True)
-        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None)
+        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient())
 
     assert not mock_g.called
     print("goodwill dispute skip ok")

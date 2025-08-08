@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
-from services.ai_client import AIClient, get_default_ai_client
+from services.ai_client import AIClient
 
 from audit import AuditLogger
 from .constants import StrategistFailureReason
@@ -14,8 +14,8 @@ from logic.guardrails import fix_draft_with_guardrails
 class StrategyGenerator:
     """Generate an internal strategic analysis using GPT-4."""
 
-    def __init__(self, ai_client: AIClient | None = None):
-        self.ai_client = ai_client or get_default_ai_client()
+    def __init__(self, ai_client: AIClient):
+        self.ai_client = ai_client
 
     def generate(
         self,

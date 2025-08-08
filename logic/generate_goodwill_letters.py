@@ -29,7 +29,7 @@ def generate_goodwill_letter_with_ai(
     run_date: str | None = None,
     audit: AuditLogger | None = None,
     *,
-    ai_client: AIClient | None = None,
+    ai_client: AIClient,
 ) -> None:
     """Generate a single goodwill letter for ``creditor``."""
 
@@ -79,7 +79,7 @@ def generate_goodwill_letters(
     audit: AuditLogger | None,
     run_date: str | None = None,
     *,
-    ai_client: AIClient | None = None,
+    ai_client: AIClient,
 ) -> None:
     """Generate goodwill letters for all eligible creditors in ``bureau_data``."""
 

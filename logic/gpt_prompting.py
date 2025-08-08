@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Dict, List
 
-from services.ai_client import AIClient, get_default_ai_client
+from services.ai_client import AIClient
 
 from audit import AuditLevel, AuditLogger
 from .json_utils import parse_json
@@ -24,9 +24,9 @@ def call_gpt_dispute_letter(
     is_identity_theft: bool,
     structured_summaries: Dict[str, dict],
     state: str,
+    ai_client: AIClient,
     audit: AuditLogger | None = None,
     classifier=classify_client_summary,
-    ai_client: AIClient | None = None,
 ) -> LetterContext:
     """Generate GPT-powered dispute letter content."""
 
@@ -143,7 +143,6 @@ Unauthorized Inquiries:
                 "inquiries": inquiry_blocks,
             },
         )
-    ai_client = ai_client or get_default_ai_client()
     response = ai_client.chat_completion(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}],

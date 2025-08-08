@@ -4,7 +4,7 @@ import logging
 from typing import Dict, List
 from logic.utils.names_normalization import normalize_bureau_name, BUREAUS
 from collections import Counter
-from services.ai_client import AIClient, get_default_ai_client
+from services.ai_client import AIClient
 from .json_utils import parse_json
 
 logging.getLogger("pdfplumber.page").setLevel(logging.ERROR)
@@ -30,9 +30,9 @@ def normalize_name_order(name: str) -> str:
 
 def extract_bureau_info_column_refined(
     pdf_path: str,
+    ai_client: AIClient,
     client_info: dict | None = None,
     use_ai: bool = False,
-    ai_client: AIClient | None = None,
 ) -> Dict[str, Dict[str, str]]:
     bureaus = BUREAUS
     data = {b: {"name": "", "dob": "", "current_address": ""} for b in bureaus}
@@ -165,7 +165,6 @@ def extract_bureau_info_column_refined(
 
     if use_ai:
         try:
-            client = ai_client or get_default_ai_client()
             print("[🤖] Running GPT validation for personal info...")
             prompt = f"""
 You are a credit repair AI assistant.
@@ -189,7 +188,7 @@ Here is the text:
 {raw_text}
 ===
 """
-            response = client.chat_completion(
+            response = ai_client.chat_completion(
                 model="gpt-4",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,

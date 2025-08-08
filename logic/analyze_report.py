@@ -45,7 +45,7 @@ def analyze_credit_report(
     pdf_path,
     output_json_path,
     client_info,
-    ai_client: AIClient | None = None,
+    ai_client: AIClient,
 ):
     """Analyze ``pdf_path`` and write structured analysis to ``output_json_path``."""
     text = extract_text_from_pdf(pdf_path)

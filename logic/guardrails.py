@@ -1,5 +1,5 @@
 from typing import Tuple, List
-from services.ai_client import AIClient, get_default_ai_client
+from services.ai_client import AIClient
 
 from logic.rule_checker import check_letter, RuleViolation
 from logic.rules_loader import load_rules
@@ -48,7 +48,7 @@ def generate_letter_with_guardrails(
     context: dict,
     session_id: str,
     letter_type: str,
-    ai_client: AIClient | None = None,
+    ai_client: AIClient,
 ) -> Tuple[str, List[RuleViolation], int]:
     """Generate a letter via LLM and ensure compliance with rule checker."""
 
@@ -61,8 +61,7 @@ def generate_letter_with_guardrails(
     violations: List[RuleViolation] = []
     while iterations < 2:
         iterations += 1
-        client = ai_client or get_default_ai_client()
-        response = client.chat_completion(
+        response = ai_client.chat_completion(
             messages=messages,
             temperature=0.3,
         )
@@ -91,7 +90,7 @@ def fix_draft_with_guardrails(
     context: dict,
     session_id: str,
     letter_type: str,
-    ai_client: AIClient | None = None,
+    ai_client: AIClient,
 ) -> Tuple[str, List[RuleViolation], int]:
     """Check and optionally repair an existing draft letter."""
 
@@ -110,8 +109,7 @@ def fix_draft_with_guardrails(
                 "content": f"The draft contains violations of {rule_list}. Please fix them and return a compliant version.",
             }
         )
-        client = ai_client or get_default_ai_client()
-        response = client.chat_completion(
+        response = ai_client.chat_completion(
             messages=messages,
             temperature=0,
         )

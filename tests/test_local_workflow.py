@@ -170,8 +170,8 @@ def test_minimal_workflow():
             False,
             "2024-01-01",
             "",
-            None,
             ai_client=fake,
+            strategy=None,
         )
         html_content = instructions_generator.build_instruction_html(context)
         instructions_generator.run_compliance_pipeline(

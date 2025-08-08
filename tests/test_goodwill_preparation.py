@@ -2,6 +2,7 @@ from logic.goodwill_preparation import (
     select_goodwill_candidates,
     prepare_account_summaries,
 )
+from tests.helpers.fake_ai_client import FakeAIClient
 
 
 def test_select_goodwill_candidates_detects_late_accounts():
@@ -29,7 +30,7 @@ def test_prepare_account_summaries_merges_and_enriches():
         {"name": "Chase", "acct_number": "1234", "status": "Open"},
     ]
     structured = {"a1": {"account_id": "a1", "dispute_type": "goodwill"}}
-    summaries = prepare_account_summaries(accounts, structured, state="CA")
+    summaries = prepare_account_summaries(accounts, structured, state="CA", ai_client=FakeAIClient())
     assert len(summaries) == 1
     summary = summaries[0]
     assert summary["account_number"] == "1234"

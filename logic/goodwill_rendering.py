@@ -51,7 +51,7 @@ def render_goodwill_letter(
     run_date: str | None = None,
     *,
     doc_names: List[str] | None = None,
-    ai_client: AIClient | None = None,
+    ai_client: AIClient,
     audit: AuditLogger | None = None,
     compliance_fn=default_compliance,
     pdf_fn=default_pdf_renderer,

@@ -17,7 +17,7 @@ def test_dispute_prompt_includes_neutral_phrase(monkeypatch):
 
     monkeypatch.setattr(
         "logic.letter_generator.classify_client_summary",
-        lambda struct, state: {"category": "not_mine"},
+        lambda struct, ai_client, state=None: {"category": "not_mine"},
     )
 
     structured = {"explanation": "I never opened this"}

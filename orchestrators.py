@@ -63,13 +63,13 @@ def process_client_intake(client_info, audit):
 
 
 def classify_client_responses(
-    structured_map, raw_map, client_info, audit, ai_client: AIClient | None = None
+    structured_map, raw_map, client_info, audit, ai_client: AIClient
 ):
     """Classify client summaries for each account."""
     classification_map: dict[str, dict] = {}
     for acc_id, struct in structured_map.items():
         cls = classify_client_summary(
-            struct, client_info.get("state"), ai_client=ai_client
+            struct, ai_client, client_info.get("state")
         )
         classification_map[acc_id] = cls
         audit.log_account(
@@ -90,7 +90,7 @@ def analyze_credit_report(
     client_info,
     audit,
     log_messages,
-    ai_client: AIClient | None = None,
+    ai_client: AIClient,
 ):
     """Ingest and analyze the client's credit report."""
     from logic.upload_validator import is_safe_pdf, move_uploaded_file
@@ -175,7 +175,7 @@ def generate_strategy_plan(
     session_id,
     audit,
     log_messages,
-    ai_client: AIClient | None = None,
+    ai_client: AIClient,
 ):
     """Generate and merge the strategy plan."""
     from logic.strategy_merger import merge_strategy_data
@@ -237,7 +237,7 @@ def generate_letters(
     strategy,
     audit,
     log_messages,
-    ai_client: AIClient | None = None,
+    ai_client: AIClient,
     app_config: AppConfig | None = None,
 ):
     """Create all client letters and supporting files."""

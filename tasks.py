@@ -12,7 +12,7 @@ if PROJECT_ROOT not in sys.path:
 
 import config
 from celery import Celery
-from main import run_credit_repair_process, extract_problematic_accounts_from_report
+from orchestrators import run_credit_repair_process, extract_problematic_accounts_from_report
 
 BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 app = Celery('tasks', broker=BROKER_URL, backend=BROKER_URL)

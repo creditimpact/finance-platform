@@ -12,10 +12,10 @@ def test_tasks_can_import_session_manager(tmp_path):
         # Remove project root from sys.path to simulate running from elsewhere
         sys.path = [p for p in sys.path if p != {repr(str(root))}]
         import types
-        main_stub = types.ModuleType('main')
-        main_stub.run_credit_repair_process = lambda *a, **k: None
-        main_stub.extract_problematic_accounts_from_report = lambda *a, **k: None
-        sys.modules['main'] = main_stub
+        orchestrators_stub = types.ModuleType('orchestrators')
+        orchestrators_stub.run_credit_repair_process = lambda *a, **k: None
+        orchestrators_stub.extract_problematic_accounts_from_report = lambda *a, **k: None
+        sys.modules['orchestrators'] = orchestrators_stub
         spec = importlib.util.spec_from_file_location('tasks', {repr(str(root / 'tasks.py'))})
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)

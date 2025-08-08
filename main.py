@@ -1,22 +1,11 @@
 import os
 import logging
-from pathlib import Path
 from datetime import datetime
-from shutil import copyfile
-from email_sender import send_email_with_attachment
-from analytics_tracker import save_analytics_snapshot
-from analytics.strategist_failures import tally_failure_reasons
-from audit import create_audit_logger, AuditLevel
+
 from orchestrators import (
-    process_client_intake,
-    analyze_credit_report,
-    classify_client_responses,
-    generate_strategy_plan,
-    generate_letters,
-    finalize_outputs,
+    run_credit_repair_process,
+    extract_problematic_accounts_from_report,
 )
-import config
-from services.ai_client import build_ai_client
 from logic.strategy_merger import merge_strategy_data
 
 logger = logging.getLogger(__name__)
@@ -45,86 +34,10 @@ def validate_env_variables():
             print(f"✅ {var} is set.")
     print("✅ Environment variables configured.\n")
 
-def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
-    """High-level controller for the credit repair pipeline."""
-    log_messages = []
-    today_folder = None
-    pdf_path = None
-    session_id = client_info.get("session_id", "session")
-    audit = create_audit_logger(session_id)
-    ai_client = build_ai_client(config.get_ai_config())
-
-    try:
-        print("\n✅ Starting Credit Repair Process (B2C Mode)...")
-        log_messages.append("✅ Process started.")
-        audit.log_step("process_started", {"is_identity_theft": is_identity_theft})
-
-        session_id, structured_map, raw_map = process_client_intake(client_info, audit)
-        classification_map = classify_client_responses(structured_map, raw_map, client_info, audit, ai_client)
-        pdf_path, sections, bureau_data, today_folder = analyze_credit_report(
-            proofs_files, session_id, client_info, audit, log_messages, ai_client
-        )
-        strategy = generate_strategy_plan(
-            client_info, bureau_data, classification_map, session_id, audit, log_messages, ai_client
-        )
-        generate_letters(
-            client_info,
-            bureau_data,
-            sections,
-            today_folder,
-            is_identity_theft,
-            strategy,
-            audit,
-            log_messages,
-            ai_client,
-        )
-        finalize_outputs(client_info, today_folder, sections, audit, log_messages)
-
-    except Exception as e:
-        error_msg = f"❌ Error: {str(e)}"
-        print(error_msg)
-        log_messages.append(error_msg)
-        audit.log_error(error_msg)
-        raise
-
-    finally:
-        save_log_file(client_info, is_identity_theft, today_folder, log_messages)
-        if today_folder:
-            audit.save(today_folder)
-            if config.EXPORT_TRACE_FILE:
-                from trace_exporter import export_trace_file
-                export_trace_file(audit, session_id)
-        if pdf_path and os.path.exists(pdf_path):
-            try:
-                os.remove(pdf_path)
-                print(f"[🧹] Deleted uploaded PDF: {pdf_path}")
-            except Exception as delete_error:
-                print(f"[⚠️] Failed to delete uploaded PDF: {delete_error}")
-def extract_problematic_accounts_from_report(file_path: str, session_id: str | None = None) -> dict:
-    """Return problematic accounts extracted from the report for user review."""
-    validate_env_variables()
-
-    from logic.upload_validator import is_safe_pdf, move_uploaded_file
-    from session_manager import update_session
-
-    session_id = session_id or "session"
-    pdf_path = move_uploaded_file(Path(file_path), session_id)
-    update_session(session_id, file_path=str(pdf_path))
-    if not is_safe_pdf(pdf_path):
-        raise ValueError("Uploaded file failed PDF safety checks.")
-
-    analyzed_json_path = Path("output/analyzed_report.json")
-    from logic.analyze_report import analyze_credit_report as analyze_report_logic
-    sections = analyze_report_logic(pdf_path, analyzed_json_path, {})
-
-    return {
-        "negative_accounts": sections.get("negative_accounts", []),
-        "open_accounts_with_issues": sections.get("open_accounts_with_issues", []),
-        "unauthorized_inquiries": sections.get("unauthorized_inquiries", []),
-    }
 
 def get_current_month():
     return datetime.now().strftime("%Y-%m")
+
 
 def extract_all_accounts(sections: dict) -> list:
     """Return a de-duplicated list of all accounts with source categories.
@@ -279,25 +192,3 @@ def extract_all_accounts(sections: dict) -> list:
 
     return accounts
 
-
-def save_log_file(client_info, is_identity_theft, output_folder, log_lines):
-    logs_dir = Path("logs")
-    logs_dir.mkdir(exist_ok=True)
-    client_name = client_info.get("name", "Unknown").replace(" ", "_")
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    log_filename = f"{timestamp}_{client_name}.txt"
-    log_path = logs_dir / log_filename
-
-    header = [
-        f"🕒 Run time: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        f"👤 Client: {client_info.get('name', '')}",
-        f"🏠 Address: {client_info.get('address', '')}",
-        f"🎯 Goal: {client_info.get('goal', '')}",
-        f"🛠️ Treatment Type: {'Identity Theft' if is_identity_theft else 'Standard Dispute'}",
-        f"📁 Output folder: {output_folder}",
-        ""
-    ]
-
-    with open(log_path, mode="w", encoding="utf-8") as f:
-        f.write("\n".join(header + log_lines))
-    print(f"[📝] Log saved: {log_path}")

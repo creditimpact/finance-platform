@@ -7,7 +7,7 @@ import pytest
 # הוספת הנתיב למודולים
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from main import run_credit_repair_process
+from orchestrators import run_credit_repair_process
 
 # 💼 פרטי לקוח - Alirio Exposito Sr
 client_info = {

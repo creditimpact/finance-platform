@@ -124,7 +124,7 @@ def run_checks():
 
 def test_skip_goodwill_when_identity_theft():
     import tempfile
-    from main import run_credit_repair_process
+    from orchestrators import run_credit_repair_process
 
     client_info = {"name": "Jane Test", "email": "jane@example.com", "session_id": "test"}
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
@@ -140,14 +140,14 @@ def test_skip_goodwill_when_identity_theft():
                     "SMTP_PASSWORD": "x",
                 },
             ),
-            mock.patch("main.process_client_intake", return_value=("session", {}, {})),
-            mock.patch("main.classify_client_responses", return_value={}),
+            mock.patch("orchestrators.process_client_intake", return_value=("session", {}, {})),
+            mock.patch("orchestrators.classify_client_responses", return_value={}),
             mock.patch(
-                "main.analyze_credit_report",
+                "orchestrators.analyze_credit_report",
                 return_value=(Path(tmp.name), {}, {"Experian": {}}, Path(tmp.name).parent),
             ),
-            mock.patch("main.generate_strategy_plan", return_value={}),
-            mock.patch("main.build_ai_client", return_value=FakeAIClient()),
+            mock.patch("orchestrators.generate_strategy_plan", return_value={}),
+            mock.patch("services.ai_client.build_ai_client", return_value=FakeAIClient()),
             mock.patch("logic.letter_generator.generate_dispute_letters_for_all_bureaus"),
             mock.patch("logic.generate_goodwill_letters.generate_goodwill_letters") as mock_goodwill,
             mock.patch("logic.generate_custom_letters.generate_custom_letters"),
@@ -158,7 +158,7 @@ def test_skip_goodwill_when_identity_theft():
             mock.patch("main.extract_all_accounts", return_value=[]),
             mock.patch("logic.upload_validator.move_uploaded_file", return_value=Path(tmp.name)),
             mock.patch("logic.upload_validator.is_safe_pdf", return_value=True),
-            mock.patch("main.save_log_file"),
+            mock.patch("orchestrators.save_log_file"),
             mock.patch("shutil.copyfile"),
         ):
             run_credit_repair_process(client_info, proofs, True)

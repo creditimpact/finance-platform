@@ -2,6 +2,13 @@
 
 This repository contains a simplified demo of a credit repair automation flow used for testing.
 
+## Documentation
+
+- [System Overview](docs/SYSTEM_OVERVIEW.md)
+- [Module Guide](docs/MODULE_GUIDE.md)
+- [Data Models](docs/DATA_MODELS.md)
+- [Contributing](docs/CONTRIBUTING.md)
+
 ## Environment
 
 All backend components read configuration from a `.env` file on startup via

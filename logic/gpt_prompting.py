@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Union
+import warnings
 
 from services.ai_client import AIClient, get_default_ai_client
 
@@ -14,36 +15,66 @@ from .json_utils import parse_json
 from .rules_loader import get_neutral_phrase
 from .summary_classifier import classify_client_summary
 from .utils.pdf_ops import gather_supporting_docs
+from models.account import Account, Inquiry
+from models.letter import LetterContext
 
 
 def call_gpt_dispute_letter(
     client_info: dict,
     bureau_name: str,
-    disputes: List[dict],
-    inquiries: List[dict],
+    disputes: List[Union[Account, dict]],
+    inquiries: List[Union[Inquiry, dict]],
     is_identity_theft: bool,
     structured_summaries: Dict[str, dict],
     state: str,
     audit: AuditLogger | None = None,
     classifier=classify_client_summary,
     ai_client: AIClient | None = None,
-) -> dict:
+) -> LetterContext:
     """Generate GPT-powered dispute letter content."""
 
     client_name = client_info.get("legal_name") or client_info.get("name", "Client")
 
-    dispute_blocks = []
+    norm_disputes: List[Account] = []
     for acc in disputes:
-        struct = structured_summaries.get(acc.get("account_id"), {})
+        if isinstance(acc, dict):
+            try:
+                warnings.warn(
+                    "dict account is deprecated", DeprecationWarning, stacklevel=2
+                )
+            except DeprecationWarning:
+                pass
+            acc_obj = Account.from_dict(acc)
+        else:
+            acc_obj = acc
+        norm_disputes.append(acc_obj)
+
+    norm_inquiries: List[Inquiry] = []
+    for inq in inquiries:
+        if isinstance(inq, dict):
+            try:
+                warnings.warn(
+                    "dict inquiry is deprecated", DeprecationWarning, stacklevel=2
+                )
+            except DeprecationWarning:
+                pass
+            inq_obj = Inquiry.from_dict(inq)
+        else:
+            inq_obj = inq
+        norm_inquiries.append(inq_obj)
+
+    dispute_blocks = []
+    for acc in norm_disputes:
+        struct = structured_summaries.get(acc.account_id or '', {})
         classification = classifier(struct, state)
         neutral_phrase, neutral_reason = get_neutral_phrase(
             classification.get("category"), struct
         )
         block = {
-            "name": acc.get("name", "Unknown"),
-            "account_number": acc.get("account_number", "").replace("*", "") or "N/A",
-            "status": acc.get("reported_status") or acc.get("status", "N/A"),
-            "dispute_type": classification.get("category", acc.get("dispute_type", "unspecified")),
+            "name": acc.name or "Unknown",
+            "account_number": (acc.account_number or "").replace("*", "") or "N/A",
+            "status": acc.reported_status or acc.status or "N/A",
+            "dispute_type": classification.get("category", acc.dispute_type or "unspecified"),
             "legal_hook": classification.get("legal_tag"),
             "tone": classification.get("tone"),
             "dispute_approach": classification.get("dispute_approach"),
@@ -53,18 +84,18 @@ def call_gpt_dispute_letter(
             block["neutral_phrase"] = neutral_phrase
         if classification.get("state_hook"):
             block["state_hook"] = classification["state_hook"]
-        if acc.get("advisor_comment"):
-            block["advisor_comment"] = acc.get("advisor_comment")
-        if acc.get("action_tag"):
-            block["action_tag"] = acc.get("action_tag")
-        if acc.get("recommended_action"):
-            block["recommended_action"] = acc.get("recommended_action")
-        if acc.get("flags"):
-            block["flags"] = acc.get("flags")
+        if acc.advisor_comment:
+            block["advisor_comment"] = acc.advisor_comment
+        if acc.action_tag:
+            block["action_tag"] = acc.action_tag
+        if acc.recommended_action:
+            block["recommended_action"] = acc.recommended_action
+        if acc.flags:
+            block["flags"] = acc.flags
         dispute_blocks.append(block)
         if audit:
             audit.log_account(
-                acc.get("account_id") or acc.get("name"),
+                acc.account_id or acc.name,
                 {
                     "stage": "dispute_letter",
                     "bureau": bureau_name,
@@ -72,17 +103,17 @@ def call_gpt_dispute_letter(
                     "classification": classification,
                     "neutral_phrase": neutral_phrase,
                     "neutral_phrase_reason": neutral_reason,
-                    "recommended_action": acc.get("recommended_action"),
+                    "recommended_action": acc.recommended_action,
                 },
             )
 
     inquiry_blocks = [
         {
-            "creditor_name": inq.get("creditor_name", "Unknown"),
-            "date": inq.get("date", "Unknown"),
-            "bureau": inq.get("bureau", bureau_name),
+            "creditor_name": inq.creditor_name or "Unknown",
+            "date": inq.date or "Unknown",
+            "bureau": inq.bureau or bureau_name,
         }
-        for inq in inquiries
+        for inq in norm_inquiries
     ]
 
     instruction_text = """
@@ -158,12 +189,13 @@ Unauthorized Inquiries:
         print("----- END RESPONSE -----\n")
 
     result, _ = parse_json(content)
+    context = LetterContext.from_dict(result)
     if audit and audit.level is AuditLevel.VERBOSE:
         audit.log_step(
             "dispute_response",
             {"bureau": bureau_name, "response": result},
         )
-    return result
+    return context
 
 
 __all__ = ["call_gpt_dispute_letter"]

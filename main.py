@@ -6,7 +6,7 @@ from shutil import copyfile
 from email_sender import send_email_with_attachment
 from analytics_tracker import save_analytics_snapshot
 from analytics.strategist_failures import tally_failure_reasons
-from audit import start_audit, clear_audit, AuditLevel
+from audit import create_audit_logger, AuditLevel
 from orchestrators import (
     process_client_intake,
     analyze_credit_report,
@@ -50,8 +50,8 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
     log_messages = []
     today_folder = None
     pdf_path = None
-    audit = start_audit()
-    session_id = None
+    session_id = client_info.get("session_id", "session")
+    audit = create_audit_logger(session_id)
     ai_client = build_ai_client(config.get_ai_config())
 
     try:
@@ -94,7 +94,6 @@ def run_credit_repair_process(client_info, proofs_files, is_identity_theft):
             if config.EXPORT_TRACE_FILE:
                 from trace_exporter import export_trace_file
                 export_trace_file(audit, session_id)
-        clear_audit()
         if pdf_path and os.path.exists(pdf_path):
             try:
                 os.remove(pdf_path)

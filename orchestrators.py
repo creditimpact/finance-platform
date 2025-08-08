@@ -217,6 +217,7 @@ def generate_letters(
         bureau_data,
         today_folder,
         is_identity_theft,
+        audit,
         log_messages=log_messages,
         ai_client=ai_client,
     )
@@ -227,7 +228,7 @@ def generate_letters(
     if not is_identity_theft:
         print("💌 Generating goodwill letters...")
         generate_goodwill_letters(
-            client_info, bureau_data, today_folder, ai_client=ai_client
+            client_info, bureau_data, today_folder, audit, ai_client=ai_client
         )
         log_messages.append("💌 Goodwill letters generated.")
         if audit.level is AuditLevel.VERBOSE:
@@ -247,6 +248,7 @@ def generate_letters(
         client_info,
         bureau_data,
         today_folder,
+        audit,
         log_messages=log_messages,
         ai_client=ai_client,
     )

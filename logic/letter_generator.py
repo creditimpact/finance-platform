@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import List
 
 import config
-from audit import AuditLevel, get_audit
+from audit import AuditLevel, AuditLogger
 from logic.guardrails import fix_draft_with_guardrails
 from logic.utils.note_handling import get_client_address_lines
 
@@ -45,11 +45,11 @@ CREDIT_BUREAU_ADDRESSES = {
 }
 
 
-def call_gpt_dispute_letter(*args, **kwargs):
+def call_gpt_dispute_letter(*args, audit: AuditLogger | None = None, **kwargs):
     """Proxy to GPT prompting module for backward compatibility."""
 
     return _call_gpt_dispute_letter(
-        *args, **kwargs, classifier=classify_client_summary
+        *args, audit=audit, **kwargs, classifier=classify_client_summary
     )
 
 
@@ -58,6 +58,7 @@ def generate_all_dispute_letters_with_ai(
     bureau_data: dict,
     output_path: Path,
     is_identity_theft: bool,
+    audit: AuditLogger | None,
     run_date: str | None = None,
     log_messages: List[str] | None = None,
     ai_client: AIClient | None = None,
@@ -68,8 +69,6 @@ def generate_all_dispute_letters_with_ai(
     output_path.mkdir(parents=True, exist_ok=True)
     if log_messages is None:
         log_messages = []
-
-    audit = get_audit()
 
     account_inquiry_matches = client_info.get("account_inquiry_matches", [])
     client_name = client_info.get("legal_name") or client_info.get("name", "Client")
@@ -129,6 +128,7 @@ def generate_all_dispute_letters_with_ai(
             is_identity_theft,
             strategy_summaries,
             client_info.get("state", ""),
+            audit=audit,
             ai_client=ai_client,
         )
 

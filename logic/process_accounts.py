@@ -8,7 +8,7 @@ from .generate_goodwill_letters import normalize_creditor_name
 from logic.utils.names_normalization import normalize_bureau_name
 from logic.utils.text_parsing import enforce_collection_status
 from .fallback_manager import determine_fallback_action
-from audit import get_audit
+from audit import AuditLogger
 from .constants import FallbackReason
 
 BUREAUS = ["Experian", "Equifax", "TransUnion"]
@@ -95,7 +95,9 @@ def load_analyzed_report(json_path: Path) -> Dict[str, Any]:
 # 🎯 Process and categorize by bureau
 
 def process_analyzed_report(
-    json_path: str | Path, log_list: list[str] | None = None
+    json_path: str | Path,
+    audit: AuditLogger | None = None,
+    log_list: list[str] | None = None,
 ) -> Dict[str, Dict[str, List[Any]]]:
     """Process a SmartCredit analysis report and categorize accounts by bureau.
 
@@ -207,10 +209,11 @@ def process_analyzed_report(
 
     
     def apply_fallback_tags(
-        data_dict: Dict[str, Dict[str, List[Any]]], log_list: list[str] | None = None
+        data_dict: Dict[str, Dict[str, List[Any]]],
+        audit: AuditLogger | None,
+        log_list: list[str] | None = None,
     ) -> None:
         """Tag obvious dispute items when the strategist left them blank."""
-        audit = get_audit()
         for bureau, payload in data_dict.items():
             for sec in ["disputes", "goodwill", "high_utilization"]:
                 for acc in payload.get(sec, []):
@@ -236,7 +239,7 @@ def process_analyzed_report(
                                 f"[{bureau}] Fallback dispute tag applied to '{acc.get('name')}' ({FallbackReason.KEYWORD_MATCH.value})",
                             )
 
-    apply_fallback_tags(output, log_list)
+    apply_fallback_tags(output, audit, log_list)
     return output
 
 # 💾 Save separate JSON files per bureau

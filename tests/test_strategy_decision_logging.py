@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from audit import start_audit, clear_audit
+from audit import create_audit_logger
 
 
 def test_strategy_decision_logged_for_all_accounts(tmp_path):
@@ -12,7 +12,7 @@ def test_strategy_decision_logged_for_all_accounts(tmp_path):
     sys.modules['pdfkit'] = types.SimpleNamespace(configuration=lambda **kwargs: None)
     import main
 
-    audit = start_audit()
+    audit = create_audit_logger("test")
     strategy = {
         "accounts": [
             {"name": "Bad Corp", "account_number": "1111", "recommended_action": "foobar"},
@@ -51,4 +51,3 @@ def test_strategy_decision_logged_for_all_accounts(tmp_path):
     no_action_fallback = find_stage("No Action", "strategy_fallback")
     assert no_action_fallback.get("strategist_action") is None
     assert no_action_fallback.get("overrode_strategist") is False
-    clear_audit()

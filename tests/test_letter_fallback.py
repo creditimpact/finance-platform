@@ -67,7 +67,9 @@ def test_unrecognized_action_fallback(monkeypatch, tmp_path, capsys):
 
     with pytest.warns(UserWarning):
         fake = FakeAIClient()
-        generate_all_dispute_letters_with_ai(client_info, bureau_data, tmp_path, False, ai_client=fake)
+        generate_all_dispute_letters_with_ai(
+            client_info, bureau_data, tmp_path, False, None, ai_client=fake
+        )
 
     with open(tmp_path / "Experian_gpt_response.json") as f:
         data = json.load(f)

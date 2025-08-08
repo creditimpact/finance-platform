@@ -27,7 +27,11 @@ def test_orchestrator_invokes_compliance(monkeypatch, tmp_path):
             'accounts': [{'name': 'Bank', 'account_number': '1', 'status': 'Open', 'paragraph': 'p'}]
         }, [])
 
-    monkeypatch.setattr(generate_goodwill_letters, 'call_gpt_for_goodwill_letter', lambda *a, **k: fake_prompt()[0])
+    monkeypatch.setattr(
+        generate_goodwill_letters.goodwill_prompting,
+        'generate_goodwill_letter_draft',
+        lambda *a, **k: fake_prompt(),
+    )
 
     calls = []
     def fake_compliance(html, state, session_id, doc_type, ai_client=None):
@@ -35,7 +39,7 @@ def test_orchestrator_invokes_compliance(monkeypatch, tmp_path):
         return html
 
     monkeypatch.setattr(generate_goodwill_letters, 'run_compliance_pipeline', fake_compliance)
-    monkeypatch.setattr(generate_goodwill_letters, 'render_html_to_pdf', lambda html, path: None)
+    monkeypatch.setattr('logic.pdf_renderer.render_html_to_pdf', lambda html, path: None)
     monkeypatch.setattr(generate_goodwill_letters.goodwill_rendering, 'load_creditor_address_map', lambda: {'bank': 'addr'})
     monkeypatch.setattr(generate_goodwill_letters, 'gather_supporting_docs', lambda session_id: ("", [], {}))
     monkeypatch.setattr(generate_goodwill_letters, 'get_session', lambda sid: {})

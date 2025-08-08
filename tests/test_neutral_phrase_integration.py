@@ -7,6 +7,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from logic.letter_generator import call_gpt_dispute_letter
 from logic import rules_loader
 from tests.helpers.fake_ai_client import FakeAIClient
+from models.account import Account
 
 
 def test_dispute_prompt_includes_neutral_phrase(monkeypatch):
@@ -24,7 +25,7 @@ def test_dispute_prompt_includes_neutral_phrase(monkeypatch):
     call_gpt_dispute_letter(
         {"legal_name": "Test", "session_id": ""},
         "Equifax",
-        [{"account_id": "1", "name": "Acc", "account_number": "123", "reported_status": "open"}],
+        [Account(account_id="1", name="Acc", account_number="123", reported_status="open")],
         [],
         False,
         {"1": structured},

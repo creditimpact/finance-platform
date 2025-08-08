@@ -4,7 +4,6 @@ from datetime import datetime, UTC
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional
-import warnings
 
 
 class AuditLevel(Enum):
@@ -72,12 +71,3 @@ def create_audit_logger(
     audit = AuditLogger(level=level)
     audit.data["session_id"] = session_id
     return audit
-
-
-def get_audit() -> None:
-    warnings.warn(
-        "get_audit() is deprecated; pass AuditLogger explicitly.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return None

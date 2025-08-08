@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import warnings
 from typing import Any, List, Dict
 
 from openai import OpenAI
@@ -81,12 +80,5 @@ def get_default_ai_client() -> AIClient:
     global _default_client
     if _default_client is None:
         from config import get_ai_config
-
-        warnings.warn(
-            "Using default AI client built from environment variables; "
-            "please pass an explicit AIClient (deprecated).",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         _default_client = build_ai_client(get_ai_config())
     return _default_client

@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
-
-import warnings
-from typing import Iterable
+from typing import Iterable, Optional
 
 from logic.constants import (
     FallbackReason,
@@ -20,28 +17,13 @@ from models.strategy import StrategyPlan
 
 
 def merge_strategy_outputs(
-    strategy_obj: StrategyPlan | dict, bureau_data_obj: dict[str, dict[str, list[Account | dict]]]
+    strategy_obj: StrategyPlan, bureau_data_obj: dict[str, dict[str, list[Account]]]
 ) -> None:
-    """Align strategist ``strategy_obj`` with ``bureau_data_obj``.
+    """Align strategist ``strategy_obj`` with ``bureau_data_obj``."""
 
-    Parameters
-    ----------
-    strategy_obj:
-        Strategy plan or equivalent dictionary.
-    bureau_data_obj:
-        Mapping of bureau -> section -> list of accounts.
-    """
-
-    if isinstance(strategy_obj, dict):
-        try:
-            warnings.warn(
-                "dict strategy_obj is deprecated", DeprecationWarning, stacklevel=2
-            )
-        except DeprecationWarning:
-            pass
-        plan = StrategyPlan.from_dict(strategy_obj)
-    else:
-        plan = strategy_obj
+    if not isinstance(strategy_obj, StrategyPlan):
+        raise TypeError("strategy_obj must be a StrategyPlan instance")
+    plan = strategy_obj
 
     def norm_key(name: str, number: str) -> tuple[str, str]:
         norm_name = normalize_creditor_name(name)
@@ -58,57 +40,43 @@ def merge_strategy_outputs(
         for items in payload.values():
             if not isinstance(items, list):
                 continue
-            for i, acc in enumerate(items):
-                if isinstance(acc, dict):
-                    try:
-                        warnings.warn(
-                            "dict account is deprecated", DeprecationWarning, stacklevel=2
-                        )
-                    except DeprecationWarning:
-                        pass
-                    acc_obj = Account.from_dict(acc)
-                else:
-                    acc_obj = acc
+            for acc in items:
+                if not isinstance(acc, Account):
+                    raise TypeError("bureau_data_obj must contain Account instances")
 
-                key = norm_key(acc_obj.name, acc_obj.account_number or "")
+                key = norm_key(acc.name, acc.account_number or "")
                 src = index.get(key)
                 raw_action: Optional[str] = None
                 if src is None:
-                    acc_obj.extras["strategist_failure_reason"] = (
+                    acc.extras["strategist_failure_reason"] = (
                         StrategistFailureReason.MISSING_INPUT
                     )
-                    if isinstance(acc, dict):
-                        items[i] = acc_obj.to_dict()
                     continue
-
                 rec = src.recommendation
                 raw_action = (
                     rec.recommended_action if rec else None
-                ) or acc_obj.extras.get("recommendation")
+                ) or acc.extras.get("recommendation")
                 tag, action = normalize_action_tag(raw_action)
                 if raw_action is None:
-                    acc_obj.extras["strategist_failure_reason"] = (
+                    acc.extras["strategist_failure_reason"] = (
                         StrategistFailureReason.EMPTY_OUTPUT
                     )
                 elif raw_action and not tag:
-                    acc_obj.extras["strategist_failure_reason"] = (
+                    acc.extras["strategist_failure_reason"] = (
                         StrategistFailureReason.UNRECOGNIZED_FORMAT
                     )
-                    acc_obj.extras["fallback_unrecognized_action"] = True
+                    acc.extras["fallback_unrecognized_action"] = True
                 if tag:
-                    acc_obj.action_tag = tag
-                    acc_obj.recommended_action = action
+                    acc.action_tag = tag
+                    acc.recommended_action = action
                 elif raw_action:
-                    acc_obj.recommended_action = raw_action
+                    acc.recommended_action = raw_action
 
-                acc_obj.extras["strategist_raw_action"] = raw_action
+                acc.extras["strategist_raw_action"] = raw_action
                 if rec and rec.advisor_comment:
-                    acc_obj.advisor_comment = rec.advisor_comment
+                    acc.advisor_comment = rec.advisor_comment
                 if rec and rec.flags:
-                    acc_obj.flags = rec.flags
-
-                if isinstance(acc, dict):
-                    items[i] = acc_obj.to_dict()
+                    acc.flags = rec.flags
 
 
 def handle_strategy_fallbacks(
@@ -236,7 +204,7 @@ def handle_strategy_fallbacks(
 
 
 def merge_strategy_data(
-    strategy_obj: dict,
+    strategy_obj: StrategyPlan | dict,
     bureau_data_obj: dict,
     classification_map: dict,
     audit=None,
@@ -244,7 +212,28 @@ def merge_strategy_data(
 ) -> None:
     """Wrapper combining merge and fallback handling."""
 
-    merge_strategy_outputs(strategy_obj, bureau_data_obj)
+    plan = (
+        strategy_obj
+        if isinstance(strategy_obj, StrategyPlan)
+        else StrategyPlan.from_dict(strategy_obj)
+    )
+
+    for payload in bureau_data_obj.values():
+        for section, items in payload.items():
+            if isinstance(items, list):
+                payload[section] = [
+                    Account.from_dict(a) if isinstance(a, dict) else a for a in items
+                ]
+
+    merge_strategy_outputs(plan, bureau_data_obj)
+
+    for payload in bureau_data_obj.values():
+        for section, items in payload.items():
+            if isinstance(items, list):
+                payload[section] = [
+                    a.to_dict() if isinstance(a, Account) else a for a in items
+                ]
+
     handle_strategy_fallbacks(bureau_data_obj, classification_map, audit, log_list)
 
 

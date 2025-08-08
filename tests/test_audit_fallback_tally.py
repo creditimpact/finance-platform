@@ -6,6 +6,8 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from audit import create_audit_logger
 from analytics.strategist_failures import tally_fallback_vs_decision
+from models.account import Account
+from models.strategy import StrategyPlan
 
 
 def test_tally_fallback_vs_decision(tmp_path):
@@ -14,18 +16,20 @@ def test_tally_fallback_vs_decision(tmp_path):
     import main
 
     audit = create_audit_logger("test")
-    strategy = {
-        "accounts": [
-            {"name": "Bad Corp", "account_number": "1111", "recommended_action": "foobar"},
-            {"name": "Good Tag", "account_number": "3333", "recommended_action": "dispute"},
-        ]
-    }
+    strategy = StrategyPlan.from_dict(
+        {
+            "accounts": [
+                {"name": "Bad Corp", "account_number": "1111", "recommended_action": "foobar"},
+                {"name": "Good Tag", "account_number": "3333", "recommended_action": "dispute"},
+            ]
+        }
+    )
     bureau_data = {
         "Experian": {
             "disputes": [
-                {"name": "Bad Corp", "account_number": "1111", "status": "collection"},
-                {"name": "No Strat", "account_number": "2222", "status": "chargeoff"},
-                {"name": "Good Tag", "account_number": "3333", "status": "open"},
+                Account.from_dict({"name": "Bad Corp", "account_number": "1111", "status": "collection"}),
+                Account.from_dict({"name": "No Strat", "account_number": "2222", "status": "chargeoff"}),
+                Account.from_dict({"name": "Good Tag", "account_number": "3333", "status": "open"}),
             ],
             "goodwill": [],
             "high_utilization": [],

@@ -6,6 +6,8 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from audit import create_audit_logger
 from logic.constants import FallbackReason, StrategistFailureReason
+from models.account import Account
+from models.strategy import StrategyPlan
 
 
 def test_apply_fallback_tags_logs_keyword_match(tmp_path, monkeypatch):
@@ -34,18 +36,20 @@ def test_merge_strategy_data_audit_reasons(tmp_path):
     import main
 
     audit = create_audit_logger("test")
-    strategy = {
-        "accounts": [
-            {"name": "Bad Corp", "account_number": "1111", "recommended_action": "foobar"},
-            {"name": "Empty Action", "account_number": "3333"},
-        ]
-    }
+    strategy = StrategyPlan.from_dict(
+        {
+            "accounts": [
+                {"name": "Bad Corp", "account_number": "1111", "recommended_action": "foobar"},
+                {"name": "Empty Action", "account_number": "3333"},
+            ]
+        }
+    )
     bureau_data = {
         "Experian": {
             "disputes": [
-                {"name": "Bad Corp", "account_number": "1111", "status": "collection"},
-                {"name": "No Strat", "account_number": "2222", "status": "chargeoff"},
-                {"name": "Empty Action", "account_number": "3333", "status": "repossession"},
+                Account.from_dict({"name": "Bad Corp", "account_number": "1111", "status": "collection"}),
+                Account.from_dict({"name": "No Strat", "account_number": "2222", "status": "chargeoff"}),
+                Account.from_dict({"name": "Empty Action", "account_number": "3333", "status": "repossession"}),
             ],
             "goodwill": [],
             "high_utilization": [],

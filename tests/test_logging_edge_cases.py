@@ -8,7 +8,7 @@ from tests.helpers.fake_ai_client import FakeAIClient
 
 
 def _setup(monkeypatch):
-    monkeypatch.setattr("logic.letter_generator.render_html_to_pdf", lambda html, path: None)
+    monkeypatch.setattr("logic.pdf_renderer.render_html_to_pdf", lambda html, path: None)
     monkeypatch.setattr(
         "logic.compliance_pipeline.run_compliance_pipeline",
         lambda html, state, session_id, doc_type, ai_client=None: html,
@@ -118,6 +118,6 @@ def test_unrecognized_dispute_type_fallback(monkeypatch, tmp_path, recwarn):
     generate_all_dispute_letters_with_ai(
         client_info, bureau_data, tmp_path, False, None, ai_client=fake
     )
-    assert captured['disputes'][0]['dispute_type'] == 'inaccurate_reporting'
+    assert captured['disputes'][0].dispute_type == 'inaccurate_reporting'
     assert any("Unrecognized dispute type" in str(w.message) for w in recwarn)
 

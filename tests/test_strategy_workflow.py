@@ -73,10 +73,10 @@ def test_full_letter_workflow():
         mock.patch.object(StrategyGenerator, "generate", return_value=strategy_result),
         mock.patch("logic.letter_generator.render_dispute_letter_html", return_value="html"),
         mock.patch("logic.letter_generator.call_gpt_dispute_letter") as mock_gpt_call,
-        mock.patch("logic.letter_generator.render_html_to_pdf"),
+        mock.patch("logic.pdf_renderer.render_html_to_pdf"),
         mock.patch("logic.instructions_generator.render_pdf_from_html",
                    side_effect=lambda html, p: instructions_capture.setdefault("html", html)),
-        mock.patch("logic.instructions_generator.generate_account_action", return_value="Action"),
+        mock.patch("logic.instruction_data_preparation.generate_account_action", return_value="Action"),
         mock.patch("logic.instructions_generator.run_compliance_pipeline", lambda html, state, session_id, doc_type, ai_client=None: html),
         mock.patch("logic.instructions_generator.build_instruction_html", return_value="html"),
         mock.patch("logic.instructions_generator.save_json_output"),
@@ -114,6 +114,6 @@ def test_full_letter_workflow():
         generate_instruction_file(client_info, bureau_data, False, out_dir, strategy=strategy, ai_client=fake)
 
     # --- Assertions ---
-    assert [d["name"] for d in letters_created.get("Experian", [])] == ["Bank A"]
+    assert [d.name for d in letters_created.get("Experian", [])] == ["Bank A"]
     assert "html" in instructions_capture
 

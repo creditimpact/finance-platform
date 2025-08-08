@@ -21,9 +21,10 @@ from .strategy_engine import generate_strategy
 from .dispute_preparation import prepare_disputes_and_inquiries
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
 from models.letter import LetterContext, LetterArtifact, LetterAccount
-from models.account import Inquiry
+from models.account import Account, Inquiry
 from services.ai_client import AIClient, get_default_ai_client
-from .letter_rendering import render_dispute_letter_html, render_html_to_pdf
+from .letter_rendering import render_dispute_letter_html
+from logic import pdf_renderer
 from .compliance_pipeline import (
     run_compliance_pipeline,
     adapt_gpt_output,
@@ -122,11 +123,19 @@ def generate_all_dispute_letters_with_ai(
 
         bureau_address = CREDIT_BUREAU_ADDRESSES.get(bureau_name, "Unknown")
 
+        dispute_objs = [
+            Account.from_dict(d) if isinstance(d, dict) else d for d in disputes
+        ]
+        inquiry_objs = [
+            Inquiry.from_dict(i) if isinstance(i, dict) else i
+            for i in filtered_inquiries
+        ]
+
         gpt_data = call_gpt_dispute_letter(
             client_info_for_gpt,
             bureau_name,
-            disputes,
-            filtered_inquiries,
+            dispute_objs,
+            inquiry_objs,
             is_identity_theft,
             strategy_summaries,
             client_info.get("state", ""),
@@ -189,9 +198,11 @@ def generate_all_dispute_letters_with_ai(
         filename = f"Dispute Letter - {bureau_name}.pdf"
         filepath = output_path / filename
         if wkhtmltopdf_path:
-            render_html_to_pdf(html, filepath, wkhtmltopdf_path=wkhtmltopdf_path)
+            pdf_renderer.render_html_to_pdf(
+                html, str(filepath), wkhtmltopdf_path=wkhtmltopdf_path
+            )
         else:
-            render_html_to_pdf(html, filepath)
+            pdf_renderer.render_html_to_pdf(html, str(filepath))
 
         with open(output_path / f"{bureau_name}_gpt_response.json", "w") as f:
             json.dump(gpt_data, f, indent=2)

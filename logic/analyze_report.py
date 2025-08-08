@@ -3,14 +3,11 @@
 This module wires together parsing utilities, prompt generation/AI calls,
 and a suite of post-processing helpers. Historically all of this logic lived
 in a single file which made the responsibilities difficult to test and
-reason about. The functions have now been split into dedicated modules:
+reason about. The functionality has been split into dedicated modules:
 
 - :mod:`logic.report_parsing`
 - :mod:`logic.report_prompting`
 - :mod:`logic.report_postprocessing`
-
-For backwards compatibility, selected functions are re-exported here with
-``DeprecationWarning`` so downstream code can migrate gradually.
 """
 
 from __future__ import annotations
@@ -18,54 +15,22 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
-import warnings
 
 from logic.utils.names_normalization import normalize_creditor_name
 from logic.utils.text_parsing import extract_late_history_blocks, enforce_collection_status
 from logic.utils.inquiries import extract_inquiries
 
-from .report_parsing import extract_text_from_pdf as _extract_text_from_pdf
-from .report_prompting import call_ai_analysis as _call_ai_analysis
+from .report_parsing import extract_text_from_pdf
+from .report_prompting import call_ai_analysis
 from .report_postprocessing import (
     _sanitize_late_counts,
     _cleanup_unverified_late_text,
     _inject_missing_late_accounts,
     _merge_parser_inquiries,
-    validate_analysis_sanity as _validate_analysis_sanity,
+    validate_analysis_sanity,
 )
 
 from services.ai_client import AIClient
-
-
-# ---------------------------------------------------------------------------
-# Backwards compatible re-exports
-# ---------------------------------------------------------------------------
-
-def extract_text_from_pdf(pdf_path):
-    warnings.warn(
-        "extract_text_from_pdf has moved to logic.report_parsing; import from there instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _extract_text_from_pdf(pdf_path)
-
-
-def call_ai_analysis(text, client_goal, is_identity_theft, output_json_path, ai_client: AIClient | None = None):
-    warnings.warn(
-        "call_ai_analysis has moved to logic.report_prompting; import from there instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _call_ai_analysis(text, client_goal, is_identity_theft, Path(output_json_path), ai_client=ai_client)
-
-
-def validate_analysis_sanity(analysis: dict):
-    warnings.warn(
-        "validate_analysis_sanity has moved to logic.report_postprocessing; import from there instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _validate_analysis_sanity(analysis)
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +44,7 @@ def analyze_credit_report(
     ai_client: AIClient | None = None,
 ):
     """Analyze ``pdf_path`` and write structured analysis to ``output_json_path``."""
-    text = _extract_text_from_pdf(pdf_path)
+    text = extract_text_from_pdf(pdf_path)
     if not text.strip():
         raise ValueError("❌ No text extracted from PDF")
 
@@ -96,7 +61,7 @@ def analyze_credit_report(
         client_goal = client_info.get("goal", "Not specified")
 
     is_identity_theft = client_info.get("is_identity_theft", False)
-    result = _call_ai_analysis(
+    result = call_ai_analysis(
         text, client_goal, is_identity_theft, Path(output_json_path), ai_client=ai_client
     )
 
@@ -229,10 +194,10 @@ def analyze_credit_report(
     except Exception as e:
         print(f"[⚠️] Late history parsing failed: {e}")
 
-    warnings = _validate_analysis_sanity(result)
+    issues = validate_analysis_sanity(result)
     if not result.get("open_accounts_with_issues") and detected_late_phrases(text):
         msg = "⚠️ Late payment terms found in text but no accounts marked with issues."
-        warnings.append(msg)
+        issues.append(msg)
         print(msg)
 
     Path(output_json_path).parent.mkdir(parents=True, exist_ok=True)

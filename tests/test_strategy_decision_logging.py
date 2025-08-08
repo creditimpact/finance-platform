@@ -12,7 +12,7 @@ from models.strategy import StrategyPlan
 def test_strategy_decision_logged_for_all_accounts(tmp_path):
     import types
     sys.modules['pdfkit'] = types.SimpleNamespace(configuration=lambda **kwargs: None)
-    import main
+    from logic.strategy_merger import merge_strategy_data
 
     audit = create_audit_logger("test")
     strategy = StrategyPlan.from_dict(
@@ -36,7 +36,7 @@ def test_strategy_decision_logged_for_all_accounts(tmp_path):
         }
     }
     classification_map = {}
-    main.merge_strategy_data(strategy, bureau_data, classification_map, audit, [])
+    merge_strategy_data(strategy, bureau_data, classification_map, audit, [])
     audit_file = audit.save(tmp_path)
     data = json.loads(audit_file.read_text())
 

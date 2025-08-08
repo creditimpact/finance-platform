@@ -3,12 +3,12 @@ import types
 
 sys.modules['pdfkit'] = types.SimpleNamespace(configuration=lambda **kwargs: None)
 
-import main
-from audit import create_audit_logger
-from analytics.strategist_failures import tally_failure_reasons
-from logic.constants import StrategistFailureReason
-from models.account import Account
-from models.strategy import StrategyPlan
+from audit import create_audit_logger  # noqa: E402
+from analytics.strategist_failures import tally_failure_reasons  # noqa: E402
+from logic.constants import StrategistFailureReason  # noqa: E402
+from logic.strategy_merger import merge_strategy_data  # noqa: E402
+from models.account import Account  # noqa: E402
+from models.strategy import StrategyPlan  # noqa: E402
 
 
 def test_tally_failure_reasons():
@@ -34,7 +34,7 @@ def test_tally_failure_reasons():
         }
     }
 
-    main.merge_strategy_data(strategy, bureau_data, {}, audit, [])
+    merge_strategy_data(strategy, bureau_data, {}, audit, [])
 
     counts = tally_failure_reasons(audit)
 

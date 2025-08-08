@@ -1,4 +1,3 @@
-import json
 import sys
 from pathlib import Path
 
@@ -13,7 +12,7 @@ from models.strategy import StrategyPlan
 def test_tally_fallback_vs_decision(tmp_path):
     import types
     sys.modules['pdfkit'] = types.SimpleNamespace(configuration=lambda **kwargs: None)
-    import main
+    from logic.strategy_merger import merge_strategy_data
 
     audit = create_audit_logger("test")
     strategy = StrategyPlan.from_dict(
@@ -36,7 +35,7 @@ def test_tally_fallback_vs_decision(tmp_path):
         }
     }
     classification_map = {}
-    main.merge_strategy_data(strategy, bureau_data, classification_map, audit, [])
+    merge_strategy_data(strategy, bureau_data, classification_map, audit, [])
 
     counts = tally_fallback_vs_decision(audit)
     assert counts["strategy_fallback"] == 2

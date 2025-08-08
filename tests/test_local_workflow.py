@@ -31,11 +31,11 @@ sys.modules.setdefault("fpdf", types.SimpleNamespace(FPDF=object))
 sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__: None))
 sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None))
 
-from logic.letter_generator import generate_dispute_letters_for_all_bureaus
-from logic.generate_goodwill_letters import generate_goodwill_letters
-from logic.instructions_generator import generate_instruction_file
-import logic.instructions_generator as instructions_generator
-from tests.helpers.fake_ai_client import FakeAIClient
+from logic.letter_generator import generate_dispute_letters_for_all_bureaus  # noqa: E402
+from logic.generate_goodwill_letters import generate_goodwill_letters  # noqa: E402
+from logic.instructions_generator import generate_instruction_file  # noqa: E402
+import logic.instructions_generator as instructions_generator  # noqa: E402
+from tests.helpers.fake_ai_client import FakeAIClient  # noqa: E402
 
 
 def test_minimal_workflow():
@@ -169,7 +169,7 @@ def test_skip_goodwill_when_identity_theft():
             mock.patch("logic.utils.pdf_ops.convert_txts_to_pdfs"),
             mock.patch("orchestrators.send_email_with_attachment"),
             mock.patch("orchestrators.save_analytics_snapshot"),
-            mock.patch("main.extract_all_accounts", return_value=[]),
+            mock.patch("logic.bootstrap.extract_all_accounts", return_value=[]),
             mock.patch("logic.upload_validator.move_uploaded_file", return_value=Path(tmp.name)),
             mock.patch("logic.upload_validator.is_safe_pdf", return_value=True),
             mock.patch("orchestrators.save_log_file"),

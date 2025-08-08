@@ -11,7 +11,7 @@ from .summary_classifier import classify_client_summary
 from session_manager import get_session
 from logic.guardrails import generate_letter_with_guardrails
 from .rules_loader import get_neutral_phrase
-from audit import get_audit, AuditLevel
+from audit import AuditLogger, AuditLevel
 from services.ai_client import AIClient
 
 env = Environment(loader=FileSystemLoader("templates"))
@@ -32,6 +32,7 @@ def call_gpt_for_custom_letter(
     structured_summary: dict,
     state: str,
     session_id: str,
+    audit: AuditLogger | None,
     ai_client: AIClient | None = None,
 ) -> str:
     docs_line = f"Supporting documents summary:\n{docs_text}" if docs_text else ""
@@ -53,7 +54,6 @@ Account: {account_name} {account_number}
 {docs_line}
 Please draft a compliant letter body that blends the neutral legal phrase with the client's explanation. Do not copy either source verbatim.
 """
-    audit = get_audit()
     if audit:
         audit.log_account(
             structured_summary.get("account_id"),
@@ -98,6 +98,7 @@ def generate_custom_letter(
     account: dict,
     client_info: dict,
     output_path: Path,
+    audit: AuditLogger | None,
     run_date: str | None = None,
     ai_client: AIClient | None = None,
 ) -> None:
@@ -115,10 +116,8 @@ def generate_custom_letter(
     )
 
     docs_text, doc_names, _ = gather_supporting_docs(session_id)
-    if docs_text:
-        audit = get_audit()
-        if audit and audit.level is AuditLevel.VERBOSE:
-            print(f"[📎] Including supplemental docs for custom letter to {recipient}.")
+    if docs_text and audit and audit.level is AuditLevel.VERBOSE:
+        print(f"[📎] Including supplemental docs for custom letter to {recipient}.")
 
     body_paragraph = call_gpt_for_custom_letter(
         client_name,
@@ -129,6 +128,7 @@ def generate_custom_letter(
         structured_summary,
         state,
         session_id,
+        audit,
         ai_client=ai_client,
     )
 
@@ -159,7 +159,6 @@ def generate_custom_letter(
     with open(response_path, "w", encoding="utf-8") as f:
         f.write(body_paragraph)
 
-    audit = get_audit()
     if audit and audit.level is AuditLevel.VERBOSE:
         audit.log_step(
             "custom_letter_generated",
@@ -175,6 +174,7 @@ def generate_custom_letters(
     client_info: dict,
     bureau_data: dict,
     output_path: Path,
+    audit: AuditLogger | None,
     run_date: str | None = None,
     log_messages: list[str] | None = None,
     ai_client: AIClient | None = None,
@@ -186,7 +186,7 @@ def generate_custom_letters(
             action = str(acc.get("action_tag") or acc.get("recommended_action") or "").lower()
             if acc.get("letter_type") == "custom" or action == "custom_letter":
                 generate_custom_letter(
-                    acc, client_info, output_path, run_date, ai_client=ai_client
+                    acc, client_info, output_path, audit, run_date, ai_client=ai_client
                 )
             else:
                 log_messages.append(

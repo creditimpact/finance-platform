@@ -35,7 +35,7 @@ def test_dispute_letter_ignores_emotional_text(monkeypatch, tmp_path):
     def fake_generate_strategy(sess_id, bureau_data):
         return {"dispute_items": structured}
 
-    def fake_call_gpt(client_info, bureau_name, disputes, inquiries, is_identity_theft, structured_summaries, state, ai_client=None):
+    def fake_call_gpt(client_info, bureau_name, disputes, inquiries, is_identity_theft, structured_summaries, state, audit=None, ai_client=None):
         text = json.dumps(client_info)
         assert "furious" not in text
         assert "heartbroken" not in text
@@ -76,7 +76,9 @@ def test_dispute_letter_ignores_emotional_text(monkeypatch, tmp_path):
     }
 
     with pytest.warns(UserWarning):
-        generate_all_dispute_letters_with_ai(client_info, bureau_data, tmp_path, False, ai_client=fake)
+        generate_all_dispute_letters_with_ai(
+            client_info, bureau_data, tmp_path, False, None, ai_client=fake
+        )
     with open(tmp_path / "Experian_gpt_response.json") as f:
         data = json.load(f)
     dump = json.dumps(data)
@@ -101,6 +103,7 @@ def test_goodwill_letter_ignores_emotional_text(monkeypatch, tmp_path):
         session_id=None,
         structured_summaries=None,
         state=None,
+        audit=None,
         ai_client=None,
     ):
         assert "devastated" not in (personal_story or "")
@@ -133,7 +136,7 @@ def test_goodwill_letter_ignores_emotional_text(monkeypatch, tmp_path):
         {"name": "Creditor", "account_number": "1", "action_tag": "goodwill"}
     ]
 
-    generate_goodwill_letter_with_ai("Creditor", accounts, client_info, tmp_path, ai_client=fake2)
+    generate_goodwill_letter_with_ai("Creditor", accounts, client_info, tmp_path, None, ai_client=fake2)
     with open(tmp_path / "Creditor_gpt_response.json") as f:
         data = json.load(f)
     dump = json.dumps(data)

@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from audit import start_audit, clear_audit
+from audit import create_audit_logger
 from logic.constants import FallbackReason, StrategistFailureReason
 
 
@@ -13,7 +13,7 @@ def test_apply_fallback_tags_logs_keyword_match(tmp_path, monkeypatch):
     sys.modules['pdfkit'] = types.SimpleNamespace(configuration=lambda **kwargs: None)
     from logic.process_accounts import process_analyzed_report
 
-    audit = start_audit()
+    audit = create_audit_logger("test")
     report = {
         "negative_accounts": [
             {"name": "Bad Corp", "bureaus": ["Experian"], "status": "collection"}
@@ -21,12 +21,11 @@ def test_apply_fallback_tags_logs_keyword_match(tmp_path, monkeypatch):
     }
     path = tmp_path / "report.json"
     path.write_text(json.dumps(report))
-    process_analyzed_report(path)
+    process_analyzed_report(path, audit)
     audit_file = audit.save(tmp_path)
     data = json.loads(audit_file.read_text())
     entries = data["accounts"]["Bad Corp"]
     assert any(e.get("fallback_reason") == FallbackReason.KEYWORD_MATCH.value for e in entries)
-    clear_audit()
 
 
 def test_merge_strategy_data_audit_reasons(tmp_path):
@@ -34,7 +33,7 @@ def test_merge_strategy_data_audit_reasons(tmp_path):
     sys.modules['pdfkit'] = types.SimpleNamespace(configuration=lambda **kwargs: None)
     import main
 
-    audit = start_audit()
+    audit = create_audit_logger("test")
     strategy = {
         "accounts": [
             {"name": "Bad Corp", "account_number": "1111", "recommended_action": "foobar"},
@@ -88,4 +87,3 @@ def test_merge_strategy_data_audit_reasons(tmp_path):
         for e in empty_logs
         if e.get("stage") == "strategy_fallback"
     )
-    clear_audit()

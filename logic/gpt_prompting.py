@@ -9,7 +9,7 @@ from typing import Dict, List
 
 from services.ai_client import AIClient, get_default_ai_client
 
-from audit import AuditLevel, get_audit
+from audit import AuditLevel, AuditLogger
 from .json_utils import parse_json
 from .rules_loader import get_neutral_phrase
 from .summary_classifier import classify_client_summary
@@ -24,6 +24,7 @@ def call_gpt_dispute_letter(
     is_identity_theft: bool,
     structured_summaries: Dict[str, dict],
     state: str,
+    audit: AuditLogger | None = None,
     classifier=classify_client_summary,
     ai_client: AIClient | None = None,
 ) -> dict:
@@ -32,7 +33,6 @@ def call_gpt_dispute_letter(
     client_name = client_info.get("legal_name") or client_info.get("name", "Client")
 
     dispute_blocks = []
-    audit = get_audit()
     for acc in disputes:
         struct = structured_summaries.get(acc.get("account_id"), {})
         classification = classifier(struct, state)

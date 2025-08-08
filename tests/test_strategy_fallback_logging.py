@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from audit import start_audit, clear_audit
+from audit import create_audit_logger
 from logic.constants import FallbackReason
 
 
@@ -13,7 +13,7 @@ def test_strategy_fallback_logs_include_reason_and_override(tmp_path):
     sys.modules['pdfkit'] = types.SimpleNamespace(configuration=lambda **kwargs: None)
     import main
 
-    audit = start_audit()
+    audit = create_audit_logger("test")
     strategy = {
         "accounts": [
             {"name": "Bad Corp", "account_number": "1111", "recommended_action": "foobar"}
@@ -43,4 +43,3 @@ def test_strategy_fallback_logs_include_reason_and_override(tmp_path):
     assert no_entry.get("fallback_reason") == FallbackReason.NO_RECOMMENDATION.value
     assert no_entry.get("overrode_strategist") is False
     assert "strategist_action" in no_entry and no_entry.get("strategist_action") is None
-    clear_audit()

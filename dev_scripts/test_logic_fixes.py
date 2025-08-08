@@ -114,7 +114,13 @@ def test_goodwill_generation():
             return {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""}
         mock_g.side_effect = _cb
         fake = FakeAIClient()
-        generate_goodwill_letters({"name": "T", "custom_dispute_notes": {"Card Co": "special"}}, bureau_data, out_dir, ai_client=fake)
+        generate_goodwill_letters(
+            {"name": "T", "custom_dispute_notes": {"Card Co": "special"}},
+            bureau_data,
+            out_dir,
+            None,
+            ai_client=fake,
+        )
     assert sent.get("Card Co", {}).get("personal_story") in (None, "")
     print("goodwill ok")
 
@@ -151,7 +157,7 @@ def test_goodwill_on_closed_account():
             return {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""}
         mock_g.side_effect = _cb
         fake = FakeAIClient()
-        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, ai_client=fake)
+        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None, ai_client=fake)
     assert "Old Card" in called
     print("goodwill closed ok")
 
@@ -179,7 +185,7 @@ def test_skip_goodwill_when_no_late_payments():
     ):
         out_dir = Path("output/tmp3")
         out_dir.mkdir(parents=True, exist_ok=True)
-        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir)
+        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None)
     assert not mock_g.called
     print("goodwill skip ok")
 
@@ -207,7 +213,7 @@ def test_skip_goodwill_on_collections():
     ):
         out_dir = Path("output/tmp4")
         out_dir.mkdir(parents=True, exist_ok=True)
-        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir)
+        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None)
     assert not mock_g.called
     print("goodwill collection skip ok")
 
@@ -235,7 +241,7 @@ def test_skip_goodwill_edge_statuses():
     ):
         out_dir = Path("output/tmp4a")
         out_dir.mkdir(parents=True, exist_ok=True)
-        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir)
+        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None)
     assert not mock_g.called
     print("goodwill edge skip ok")
 
@@ -341,7 +347,9 @@ def test_letter_duplicate_accounts_removed():
 
         mock_d.side_effect = _cb
         fake = FakeAIClient()
-        generate_dispute_letters_for_all_bureaus({"name": "T"}, bureau_data, out_dir, False, ai_client=fake)
+        generate_dispute_letters_for_all_bureaus(
+            {"name": "T"}, bureau_data, out_dir, False, None, ai_client=fake
+        )
 
     assert len(sent.get("Experian", [])) == 2
     names = {d["name"].lower() for d in sent["Experian"]}
@@ -391,7 +399,9 @@ def test_partial_account_number_deduplication():
 
         mock_d.side_effect = _cb
         fake = FakeAIClient()
-        generate_dispute_letters_for_all_bureaus({"name": "T"}, bureau_data, out_dir, False, ai_client=fake)
+        generate_dispute_letters_for_all_bureaus(
+            {"name": "T"}, bureau_data, out_dir, False, None, ai_client=fake
+        )
 
     assert len(sent.get("Experian", [])) == 1
     print("partial dedupe ok")
@@ -437,6 +447,7 @@ def test_merge_custom_note_with_default():
                 bureau_data,
                 out_dir,
                 False,
+                None,
                 ai_client=fake,
             )
 
@@ -490,9 +501,11 @@ def test_general_note_routed_to_goodwill():
         mock_gw.return_value = {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""}
         with pytest.warns(UserWarning):
             fake = FakeAIClient()
-            generate_dispute_letters_for_all_bureaus(client_info, bureau_data, out_dir, False, ai_client=fake)
+            generate_dispute_letters_for_all_bureaus(
+                client_info, bureau_data, out_dir, False, None, ai_client=fake
+            )
         fake2 = FakeAIClient()
-        generate_goodwill_letters(client_info, bureau_data, out_dir, ai_client=fake2)
+        generate_goodwill_letters(client_info, bureau_data, out_dir, None, ai_client=fake2)
 
     paragraph = gpt_resp["accounts"][0]["paragraph"]
     assert paragraph == "old"
@@ -527,7 +540,7 @@ def test_skip_goodwill_for_disputed_account():
     ):
         out_dir = Path("output/tmp_dupe_skip")
         out_dir.mkdir(parents=True, exist_ok=True)
-        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir)
+        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None)
 
     assert not mock_g.called
     print("goodwill dispute skip ok")

@@ -22,7 +22,7 @@ def test_warning_on_raw_client_text(monkeypatch, tmp_path, recwarn):
     def fake_strategy(sess_id, bureau_data):
         return {"dispute_items": structured}
 
-    def fake_call_gpt(client_info, bureau_name, disputes, inquiries, is_identity_theft, structured_summaries, state, ai_client=None):
+    def fake_call_gpt(client_info, bureau_name, disputes, inquiries, is_identity_theft, structured_summaries, state, audit=None, ai_client=None):
         return {
             "opening_paragraph": "open",
             "accounts": [{
@@ -53,7 +53,9 @@ def test_warning_on_raw_client_text(monkeypatch, tmp_path, recwarn):
     }
 
     fake = FakeAIClient()
-    generate_all_dispute_letters_with_ai(client_info, bureau_data, tmp_path, False, ai_client=fake)
+    generate_all_dispute_letters_with_ai(
+        client_info, bureau_data, tmp_path, False, None, ai_client=fake
+    )
     assert any("[PolicyViolation]" in str(w.message) for w in recwarn)
 
 
@@ -66,7 +68,7 @@ def test_warning_on_missing_summary(monkeypatch, tmp_path, recwarn):
         return {"dispute_items": structured}
 
     captured = {}
-    def fake_call_gpt(client_info, bureau_name, disputes, inquiries, is_identity_theft, structured_summaries, state, ai_client=None):
+    def fake_call_gpt(client_info, bureau_name, disputes, inquiries, is_identity_theft, structured_summaries, state, audit=None, ai_client=None):
         captured['disputes'] = disputes
         return {"opening_paragraph": "o", "accounts": [], "inquiries": [], "closing_paragraph": "c"}
 
@@ -78,7 +80,9 @@ def test_warning_on_missing_summary(monkeypatch, tmp_path, recwarn):
     bureau_data = {"Experian": {"disputes": [{"name": "Bank A", "account_number": "1", "action_tag": "dispute"}], "inquiries": []}}
 
     fake = FakeAIClient()
-    generate_all_dispute_letters_with_ai(client_info, bureau_data, tmp_path, False, ai_client=fake)
+    generate_all_dispute_letters_with_ai(
+        client_info, bureau_data, tmp_path, False, None, ai_client=fake
+    )
     assert any("[Sanitization]" in str(w.message) for w in recwarn)
 
 
@@ -91,7 +95,7 @@ def test_unrecognized_dispute_type_fallback(monkeypatch, tmp_path, recwarn):
         return {"dispute_items": structured}
 
     captured = {}
-    def fake_call_gpt(client_info, bureau_name, disputes, inquiries, is_identity_theft, structured_summaries, state, ai_client=None):
+    def fake_call_gpt(client_info, bureau_name, disputes, inquiries, is_identity_theft, structured_summaries, state, audit=None, ai_client=None):
         captured['disputes'] = disputes
         return {"opening_paragraph": "o", "accounts": [], "inquiries": [], "closing_paragraph": "c"}
 
@@ -108,7 +112,9 @@ def test_unrecognized_dispute_type_fallback(monkeypatch, tmp_path, recwarn):
     }
 
     fake = FakeAIClient()
-    generate_all_dispute_letters_with_ai(client_info, bureau_data, tmp_path, False, ai_client=fake)
+    generate_all_dispute_letters_with_ai(
+        client_info, bureau_data, tmp_path, False, None, ai_client=fake
+    )
     assert captured['disputes'][0]['dispute_type'] == 'inaccurate_reporting'
     assert any("Unrecognized dispute type" in str(w.message) for w in recwarn)
 

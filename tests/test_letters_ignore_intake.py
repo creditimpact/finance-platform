@@ -28,7 +28,7 @@ def test_letters_do_not_access_raw_intake(monkeypatch, tmp_path):
     def fake_generate_strategy(sess_id, bureau_data):
         return {"dispute_items": structured}
 
-    def fake_call_gpt(client_info, bureau_name, disputes, inquiries, is_identity_theft, structured_summaries, state, ai_client=None):
+    def fake_call_gpt(client_info, bureau_name, disputes, inquiries, is_identity_theft, structured_summaries, state, audit=None, ai_client=None):
         text = json.dumps(structured_summaries)
         assert "SECRET RAW" not in text
         return {
@@ -64,7 +64,9 @@ def test_letters_do_not_access_raw_intake(monkeypatch, tmp_path):
     }
 
     fake = FakeAIClient()
-    generate_all_dispute_letters_with_ai(client_info, bureau_data, tmp_path, False, ai_client=fake)
+    generate_all_dispute_letters_with_ai(
+        client_info, bureau_data, tmp_path, False, None, ai_client=fake
+    )
     with open(tmp_path / "Experian_gpt_response.json") as f:
         data = json.load(f)
     assert "SECRET RAW" not in json.dumps(data)

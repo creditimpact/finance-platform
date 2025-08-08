@@ -4,13 +4,13 @@ import types
 sys.modules['pdfkit'] = types.SimpleNamespace(configuration=lambda **kwargs: None)
 
 import main
-from audit import start_audit, clear_audit
+from audit import create_audit_logger
 from analytics.strategist_failures import tally_failure_reasons
 from logic.constants import StrategistFailureReason
 
 
 def test_tally_failure_reasons():
-    audit = start_audit()
+    audit = create_audit_logger("test")
 
     strategy = {
         "accounts": [
@@ -45,4 +45,3 @@ def test_tally_failure_reasons():
     }
 
     assert counts == expected
-    clear_audit()

@@ -14,7 +14,7 @@ from session_manager import get_session
 from logic.guardrails import fix_draft_with_guardrails
 from .summary_classifier import classify_client_summary
 from .rules_loader import get_neutral_phrase
-from audit import get_audit, AuditLevel
+from audit import AuditLogger, AuditLevel
 from services.ai_client import AIClient, get_default_ai_client
 
 template_env = Environment(loader=FileSystemLoader("templates"))
@@ -127,6 +127,7 @@ def call_gpt_for_goodwill_letter(
     session_id=None,
     structured_summaries=None,
     state=None,
+    audit: AuditLogger | None = None,
     ai_client: AIClient | None = None,
 ):
     """Compose a goodwill letter prompt and call GPT.
@@ -138,7 +139,6 @@ def call_gpt_for_goodwill_letter(
 
     merged_accounts: list[dict] = []
     seen_numbers: dict[str, dict] = {}
-    audit = get_audit()
 
     for acc in accounts:
         acc_num = str(acc.get("account_number") or "").strip()
@@ -335,6 +335,7 @@ def generate_goodwill_letter_with_ai(
     client_info,
     output_path: Path,
     run_date: str | None = None,
+    audit: AuditLogger | None = None,
     ai_client: AIClient | None = None,
 ):
     client_name = client_info.get("legal_name") or client_info.get("name", "Your Name")
@@ -369,6 +370,7 @@ def generate_goodwill_letter_with_ai(
         session_id,
         structured_summaries,
         state=client_info.get("state"),
+        audit=audit,
         ai_client=ai_client,
     )
 
@@ -406,7 +408,6 @@ def generate_goodwill_letter_with_ai(
     with open(output_path / f"{safe_name}_gpt_response.json", 'w') as f:
         json.dump(gpt_data, f, indent=2)
 
-    audit = get_audit()
     if audit and audit.level is AuditLevel.VERBOSE:
         audit.log_step(
             "goodwill_letter_generated",
@@ -417,6 +418,7 @@ def generate_goodwill_letters(
     client_info,
     bureau_data,
     output_path: Path,
+    audit: AuditLogger | None,
     run_date: str | None = None,
     ai_client: AIClient | None = None,
 ):
@@ -527,7 +529,7 @@ def generate_goodwill_letters(
 
     for creditor, accounts in goodwill_accounts.items():
         generate_goodwill_letter_with_ai(
-            creditor, accounts, client_info, output_path, run_date, ai_client=ai_client
+            creditor, accounts, client_info, output_path, run_date, audit, ai_client=ai_client
         )
 
     for norm, raw in detected_late_accounts.items():

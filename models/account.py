@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, TypeVar, Type
+from dataclasses import asdict, dataclass, field
+from typing import Any, List, Optional, Type
 
 
 AccountId = str
-AccountMap = Dict[AccountId, 'Account']
+AccountMap = dict[AccountId, "Account"]
 
 
 @dataclass
@@ -24,10 +24,10 @@ class LateHistory:
     status: str
 
     @classmethod
-    def from_dict(cls: Type['LateHistory'], data: Dict) -> 'LateHistory':
-        return cls(date=data.get('date', ''), status=data.get('status', ''))
+    def from_dict(cls: Type["LateHistory"], data: dict[str, Any]) -> "LateHistory":
+        return cls(date=data.get("date", ""), status=data.get("status", ""))
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -50,14 +50,14 @@ class Inquiry:
     bureau: Optional[str] = None
 
     @classmethod
-    def from_dict(cls: Type['Inquiry'], data: Dict) -> 'Inquiry':
+    def from_dict(cls: Type["Inquiry"], data: dict[str, Any]) -> "Inquiry":
         return cls(
-            creditor_name=data.get('creditor_name', ''),
-            date=data.get('date', ''),
-            bureau=data.get('bureau'),
+            creditor_name=data.get("creditor_name", ""),
+            date=data.get("date", ""),
+            bureau=data.get("bureau"),
         )
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -99,30 +99,41 @@ class Account:
     action_tag: Optional[str] = None
     recommended_action: Optional[str] = None
     flags: Optional[List[str]] = field(default_factory=list)
-    extras: Dict[str, object] = field(default_factory=dict)
+    extras: dict[str, object] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls: Type['Account'], data: Dict) -> 'Account':
+    def from_dict(cls: Type["Account"], data: dict[str, Any]) -> "Account":
         return cls(
-            account_id=data.get('account_id'),
-            name=data.get('name', ''),
-            account_number=data.get('account_number'),
-            reported_status=data.get('reported_status') or data.get('status'),
-            status=data.get('status'),
-            dispute_type=data.get('dispute_type'),
-            advisor_comment=data.get('advisor_comment'),
-            action_tag=data.get('action_tag'),
-            recommended_action=data.get('recommended_action'),
-            flags=list(data.get('flags', []) or []),
-            extras={k: v for k, v in data.items() if k not in {
-                'account_id', 'name', 'account_number', 'reported_status',
-                'status', 'dispute_type', 'advisor_comment', 'action_tag',
-                'recommended_action', 'flags'
-            }},
+            account_id=data.get("account_id"),
+            name=data.get("name", ""),
+            account_number=data.get("account_number"),
+            reported_status=data.get("reported_status") or data.get("status"),
+            status=data.get("status"),
+            dispute_type=data.get("dispute_type"),
+            advisor_comment=data.get("advisor_comment"),
+            action_tag=data.get("action_tag"),
+            recommended_action=data.get("recommended_action"),
+            flags=list(data.get("flags", []) or []),
+            extras={
+                k: v
+                for k, v in data.items()
+                if k
+                not in {
+                    "account_id",
+                    "name",
+                    "account_number",
+                    "reported_status",
+                    "status",
+                    "dispute_type",
+                    "advisor_comment",
+                    "action_tag",
+                    "recommended_action",
+                    "flags",
+                }
+            },
         )
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data.update(self.extras)
         return data
-

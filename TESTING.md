@@ -26,3 +26,11 @@ Example warning output:
 ```
 
 These logs provide an audit trail for compliance reviews.
+
+To run code-quality and type checks along with the tests, execute:
+
+```
+scripts/run_checks.sh
+```
+
+This helper script runs Ruff, Black (in check mode), MyPy, and pytest.

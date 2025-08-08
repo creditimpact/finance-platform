@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional
+from dataclasses import asdict, dataclass, field
+from typing import Any, List, Optional
 
 
 @dataclass
@@ -14,15 +14,15 @@ class Recommendation:
     flags: List[str] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, data: Dict) -> 'Recommendation':
+    def from_dict(cls, data: dict[str, Any]) -> "Recommendation":
         return cls(
-            action_tag=data.get('action_tag'),
-            recommended_action=data.get('recommended_action'),
-            advisor_comment=data.get('advisor_comment'),
-            flags=list(data.get('flags', []) or []),
+            action_tag=data.get("action_tag"),
+            recommended_action=data.get("recommended_action"),
+            advisor_comment=data.get("advisor_comment"),
+            flags=list(data.get("flags", []) or []),
         )
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -36,18 +36,18 @@ class StrategyItem:
     recommendation: Recommendation | None = None
 
     @classmethod
-    def from_dict(cls, data: Dict) -> 'StrategyItem':
+    def from_dict(cls, data: dict[str, Any]) -> "StrategyItem":
         return cls(
-            account_id=str(data.get('account_id') or ''),
-            name=data.get('name', ''),
-            account_number=data.get('account_number'),
+            account_id=str(data.get("account_id") or ""),
+            name=data.get("name", ""),
+            account_number=data.get("account_number"),
             recommendation=Recommendation.from_dict(data) if data else None,
         )
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict[str, Any]:
         base = asdict(self)
         if self.recommendation is not None:
-            base['recommendation'] = self.recommendation.to_dict()
+            base["recommendation"] = self.recommendation.to_dict()
         return base
 
 
@@ -58,10 +58,9 @@ class StrategyPlan:
     accounts: List[StrategyItem] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, data: Dict) -> 'StrategyPlan':
-        accounts = [StrategyItem.from_dict(d) for d in data.get('accounts', [])]
+    def from_dict(cls, data: dict[str, Any]) -> "StrategyPlan":
+        accounts = [StrategyItem.from_dict(d) for d in data.get("accounts", [])]
         return cls(accounts=accounts)
 
-    def to_dict(self) -> Dict:
-        return {'accounts': [item.to_dict() for item in self.accounts]}
-
+    def to_dict(self) -> dict[str, Any]:
+        return {"accounts": [item.to_dict() for item in self.accounts]}

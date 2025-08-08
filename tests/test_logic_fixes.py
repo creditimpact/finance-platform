@@ -432,9 +432,10 @@ def test_letter_duplicate_accounts_removed():
 
         mock_d.side_effect = _cb
         fake = FakeAIClient()
-        generate_dispute_letters_for_all_bureaus(
-            {"name": "T"}, bureau_data, out_dir, False, None, ai_client=fake
-        )
+        with pytest.warns(UserWarning):
+            generate_dispute_letters_for_all_bureaus(
+                {"name": "T"}, bureau_data, out_dir, False, None, ai_client=fake
+            )
 
     assert len(sent.get("Experian", [])) == 2
     names = {d.name.lower() for d in sent["Experian"]}
@@ -492,9 +493,10 @@ def test_partial_account_number_deduplication():
 
         mock_d.side_effect = _cb
         fake = FakeAIClient()
-        generate_dispute_letters_for_all_bureaus(
-            {"name": "T"}, bureau_data, out_dir, False, None, ai_client=fake
-        )
+        with pytest.warns(UserWarning):
+            generate_dispute_letters_for_all_bureaus(
+                {"name": "T"}, bureau_data, out_dir, False, None, ai_client=fake
+            )
 
     assert len(sent.get("Experian", [])) == 1
     print("partial dedupe ok")

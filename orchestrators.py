@@ -25,6 +25,7 @@ from analytics.strategist_failures import tally_failure_reasons
 from email_sender import send_email_with_attachment
 from services.ai_client import AIClient
 from config import AppConfig, get_app_config
+from models import ClientInfo, ProofDocuments
 
 
 def process_client_intake(client_info, audit):
@@ -431,14 +432,25 @@ def save_log_file(client_info, is_identity_theft, output_folder, log_lines):
 
 
 def run_credit_repair_process(
-    client_info,
-    proofs_files,
-    is_identity_theft,
+    client: ClientInfo,
+    proofs: ProofDocuments,
+    is_identity_theft: bool,
     *,
     app_config: AppConfig | None = None,
 ):
-    """Execute the full credit repair pipeline for a single client."""
+    """Execute the full credit repair pipeline for a single client.
+
+    ``client`` and ``proofs`` should be instances of :class:`ClientInfo` and
+    :class:`ProofDocuments` respectively. Passing plain dictionaries is
+    deprecated and will be removed in a future release.
+    """
     app_config = app_config or get_app_config()
+    if isinstance(client, dict):  # pragma: no cover - backward compat
+        client = ClientInfo.from_dict(client)
+    if isinstance(proofs, dict):  # pragma: no cover - backward compat
+        proofs = ProofDocuments.from_dict(proofs)
+    client_info = client.to_dict()
+    proofs_files = proofs.to_dict()
     log_messages: list[str] = []
     today_folder: Path | None = None
     pdf_path: Path | None = None

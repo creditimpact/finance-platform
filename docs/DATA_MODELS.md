@@ -37,6 +37,31 @@ This document summarizes dataclasses under `models/` and their relationships.
 - `name: str`
 - `accounts: List[BureauAccount]`
 
+### `BureauPayload`
+- `disputes: List[Account]`
+- `goodwill: List[Account]`
+- `inquiries: List[Inquiry]`
+- `high_utilization: List[Account]`
+
+## client.py
+
+### `ClientInfo`
+- `name: Optional[str]`
+- `legal_name: Optional[str]`
+- `address: Optional[str]`
+- `email: Optional[str]`
+- `state: Optional[str]`
+- `goal: Optional[str]`
+- `session_id: str`
+- `custom_dispute_notes: Optional[Dict[str, Any]]`
+- `structured_summaries: Any`
+- `account_inquiry_matches: Optional[List[Dict[str, Any]]]`
+- `extras: Dict[str, Any]`
+
+### `ProofDocuments`
+- `smartcredit_report: str`
+- `extras: Dict[str, Any]`
+
 ## letter.py
 
 ### `LetterAccount`

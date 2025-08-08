@@ -15,6 +15,8 @@ import logic.goodwill_rendering as goodwill_rendering
 from logic import pdf_renderer
 from logic.utils.pdf_ops import gather_supporting_docs
 from logic.compliance_pipeline import run_compliance_pipeline
+from models import ClientInfo, BureauPayload
+from models.account import Account
 
 # ---------------------------------------------------------------------------
 # Orchestrator functions
@@ -23,8 +25,8 @@ from logic.compliance_pipeline import run_compliance_pipeline
 
 def generate_goodwill_letter_with_ai(
     creditor: str,
-    accounts: list[dict],
-    client_info: Dict[str, Any],
+    accounts: list[Account],
+    client: ClientInfo,
     output_path: Path,
     run_date: str | None = None,
     audit: AuditLogger | None = None,
@@ -33,12 +35,17 @@ def generate_goodwill_letter_with_ai(
 ) -> None:
     """Generate a single goodwill letter for ``creditor``."""
 
+    if isinstance(client, dict):  # pragma: no cover - backward compat
+        client = ClientInfo.from_dict(client)
+    account_objs = [Account.from_dict(a) if isinstance(a, dict) else a for a in accounts]
+    client_info = client.to_dict()
+    account_dicts = [a.to_dict() for a in account_objs]
     session_id = client_info.get("session_id")
     session = get_session(session_id or "") or {}
     structured_summaries = session.get("structured_summaries", {})
 
     account_summaries = goodwill_preparation.prepare_account_summaries(
-        accounts,
+        account_dicts,
         structured_summaries,
         client_info.get("state"),
         audit=audit,
@@ -73,8 +80,8 @@ def generate_goodwill_letter_with_ai(
 
 
 def generate_goodwill_letters(
-    client_info: Dict[str, Any],
-    bureau_data: Dict[str, Any],
+    client: ClientInfo,
+    bureau_map: Dict[str, BureauPayload],
     output_path: Path,
     audit: AuditLogger | None,
     run_date: str | None = None,
@@ -83,14 +90,25 @@ def generate_goodwill_letters(
 ) -> None:
     """Generate goodwill letters for all eligible creditors in ``bureau_data``."""
 
+    if isinstance(client, dict):  # pragma: no cover - backward compat
+        client = ClientInfo.from_dict(client)
+    client_info = client.to_dict()
+    bureau_data = {
+        k: (BureauPayload.from_dict(v).to_dict() if isinstance(v, dict) else v.to_dict())
+        if isinstance(v, (BureauPayload, dict))
+        else v
+        for k, v in bureau_map.items()
+    }
+
     goodwill_accounts = goodwill_preparation.select_goodwill_candidates(
         client_info, bureau_data
     )
     for creditor, accounts in goodwill_accounts.items():
+        account_objs = [Account.from_dict(a) if isinstance(a, dict) else a for a in accounts]
         generate_goodwill_letter_with_ai(
             creditor,
-            accounts,
-            client_info,
+            account_objs,
+            client,
             output_path,
             run_date,
             audit,

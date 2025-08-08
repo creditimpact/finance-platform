@@ -46,23 +46,28 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
         monkeypatch.setattr(
             "logic.pdf_renderer.render_html_to_pdf", lambda html, path: None
         )
-        client_info = {"name": "Client", "session_id": "s1"}
+        from models import ClientInfo, BureauPayload
+
+        client = ClientInfo.from_dict({"name": "Client", "session_id": "s1"})
         bureau_data = {
-            "Experian": {
-                "disputes": [
-                    {
-                        "name": "Bank A",
-                        "account_number": "1",
-                        "account_id": "1",
-                        "action_tag": "dispute",
-                    }
-                ],
-                "inquiries": [],
-            }
+            "Experian": BureauPayload.from_dict(
+                {
+                    "disputes": [
+                        {
+                            "name": "Bank A",
+                            "account_number": "1",
+                            "account_id": "1",
+                            "action_tag": "dispute",
+                        }
+                    ],
+                    "inquiries": [],
+                }
+            )
         }
-        generate_all_dispute_letters_with_ai(
-            client_info, bureau_data, tmp_path, False, None, ai_client=FakeAIClient()
-        )
+        with pytest.warns(UserWarning):
+            generate_all_dispute_letters_with_ai(
+                client, bureau_data, tmp_path, False, None, ai_client=FakeAIClient()
+            )
     elif doc_type == "instructions":
         from logic.instructions_generator import generate_instruction_file
 
@@ -78,22 +83,26 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
         monkeypatch.setattr(
             "logic.pdf_renderer.render_html_to_pdf", lambda html, path: None
         )
-        client_info = {"name": "Client", "session_id": "s2"}
+        from models import ClientInfo, BureauPayload
+
+        client = ClientInfo.from_dict({"name": "Client", "session_id": "s2"})
         bureau_data = {
-            "Experian": {
-                "all_accounts": [
-                    {
-                        "name": "Bank B",
-                        "status": "good",
-                        "action_tag": "positive",
-                    }
-                ],
-                "disputes": [],
-                "inquiries": [],
-            }
+            "Experian": BureauPayload.from_dict(
+                {
+                    "all_accounts": [
+                        {
+                            "name": "Bank B",
+                            "status": "good",
+                            "action_tag": "positive",
+                        }
+                    ],
+                    "disputes": [],
+                    "inquiries": [],
+                }
+            )
         }
         generate_instruction_file(
-            client_info, bureau_data, False, tmp_path / "inst", ai_client=FakeAIClient()
+            client, bureau_data, False, tmp_path / "inst", ai_client=FakeAIClient()
         )
     else:  # goodwill
         from logic.generate_goodwill_letters import generate_goodwill_letter_with_ai

@@ -1,6 +1,7 @@
 import json
 import sys
 from pathlib import Path
+import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -89,9 +90,10 @@ def test_letters_do_not_access_raw_intake(monkeypatch, tmp_path):
     }
 
     fake = FakeAIClient()
-    generate_all_dispute_letters_with_ai(
-        client_info, bureau_data, tmp_path, False, None, ai_client=fake
-    )
+    with pytest.warns(UserWarning):
+        generate_all_dispute_letters_with_ai(
+            client_info, bureau_data, tmp_path, False, None, ai_client=fake
+        )
     with open(tmp_path / "Experian_gpt_response.json") as f:
         data = json.load(f)
     assert "SECRET RAW" not in json.dumps(data)

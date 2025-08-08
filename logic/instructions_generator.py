@@ -17,6 +17,7 @@ from services.ai_client import AIClient
 from logic.instruction_renderer import build_instruction_html
 from logic import pdf_renderer
 from logic.compliance_pipeline import run_compliance_pipeline
+from models import ClientInfo, BureauPayload
 
 
 def get_logo_base64() -> str:
@@ -30,8 +31,8 @@ def get_logo_base64() -> str:
 
 
 def generate_instruction_file(
-    client_info,
-    bureau_data,
+    client: ClientInfo,
+    bureau_map: dict[str, BureauPayload],
     is_identity_theft: bool,
     output_path: Path,
     ai_client: AIClient,
@@ -42,6 +43,16 @@ def generate_instruction_file(
     """Generate the instruction PDF and JSON context for the client."""
     run_date = run_date or datetime.now().strftime("%B %d, %Y")
     logo_base64 = get_logo_base64()
+
+    if isinstance(client, dict):  # pragma: no cover - backward compat
+        client = ClientInfo.from_dict(client)
+    client_info = client.to_dict()
+    bureau_data = {
+        k: (BureauPayload.from_dict(v).to_dict() if isinstance(v, dict) else v.to_dict())
+        if isinstance(v, (BureauPayload, dict))
+        else v
+        for k, v in bureau_map.items()
+    }
 
     context, all_accounts = prepare_instruction_data(
         client_info,

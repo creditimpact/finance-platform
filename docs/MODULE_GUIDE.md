@@ -2,7 +2,7 @@
 
 | Module | Role | Public API | Key Dependencies |
 | ------ | ---- | ---------- | ---------------- |
-| `orchestrators.py` | Coordinates the end-to-end credit repair pipeline. | `run_credit_repair_process` (uses `ClientInfo` and `ProofDocuments` models) | `logic.*`, `session_manager`, `analytics_tracker` |
+| `orchestrators.py` | Coordinates the end-to-end credit repair pipeline. | `run_credit_repair_process`, `extract_problematic_accounts_from_report` → `BureauPayload` | `logic.*`, `session_manager`, `analytics_tracker` |
 | `models/` | Dataclasses representing accounts, bureaus, letters, client metadata and strategy plans. | `Account`, `BureauAccount`, `BureauSection`, `BureauPayload`, `ClientInfo`, `ProofDocuments`, `LetterAccount`, `LetterContext`, `LetterArtifact`, `Recommendation`, `StrategyItem`, `StrategyPlan` | `dataclasses`, `typing` |
 | `logic/` | Business logic: report parsing, strategy generation, compliance checks and PDF rendering. | `analyze_credit_report`, `StrategyGenerator`, `run_compliance_pipeline`, `pdf_ops.convert_txts_to_pdfs` | OpenAI API, PDF utilities |
 | `services/` | Lightweight wrappers for external integrations. | `AIClient`, email utilities | `requests`, `smtplib` |

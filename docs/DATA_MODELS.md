@@ -42,6 +42,7 @@ This document summarizes dataclasses under `models/` and their relationships.
 - `goodwill: List[Account]`
 - `inquiries: List[Inquiry]`
 - `high_utilization: List[Account]`
+- Returned by `extract_problematic_accounts_from_report` instead of a raw `dict`.
 
 ## client.py
 

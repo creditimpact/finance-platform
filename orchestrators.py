@@ -7,6 +7,7 @@ steps of the credit repair workflow.  All core orchestration lives here;
 """
 
 import os
+import warnings
 from pathlib import Path
 from datetime import datetime
 from shutil import copyfile
@@ -534,10 +535,12 @@ def run_credit_repair_process(
 
 def extract_problematic_accounts_from_report(
     file_path: str, session_id: str | None = None
-) -> dict:
+) -> "BureauPayload":
     """Return problematic accounts extracted from the report for user review."""
     from logic.upload_validator import is_safe_pdf, move_uploaded_file
     from session_manager import update_session
+    from logic.analyze_report import analyze_credit_report as analyze_report_logic
+    from models import BureauPayload, BureauAccount, Inquiry
 
     session_id = session_id or "session"
     pdf_path = move_uploaded_file(Path(file_path), session_id)
@@ -546,12 +549,38 @@ def extract_problematic_accounts_from_report(
         raise ValueError("Uploaded file failed PDF safety checks.")
 
     analyzed_json_path = Path("output/analyzed_report.json")
-    from logic.analyze_report import analyze_credit_report as analyze_report_logic
 
     sections = analyze_report_logic(pdf_path, analyzed_json_path, {})
 
+    return BureauPayload(
+        disputes=[
+            BureauAccount.from_dict(d)
+            for d in sections.get("negative_accounts", [])
+        ],
+        goodwill=[
+            BureauAccount.from_dict(d)
+            for d in sections.get("open_accounts_with_issues", [])
+        ],
+        inquiries=[
+            Inquiry.from_dict(d)
+            for d in sections.get("unauthorized_inquiries", [])
+        ],
+    )
+
+
+def extract_problematic_accounts_from_report_dict(
+    file_path: str, session_id: str | None = None
+) -> dict:
+    """Deprecated adapter returning ``dict`` for old clients."""
+    warnings.warn(
+        "extract_problematic_accounts_from_report_dict is deprecated;"
+        " use extract_problematic_accounts_from_report instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    payload = extract_problematic_accounts_from_report(file_path, session_id)
     return {
-        "negative_accounts": sections.get("negative_accounts", []),
-        "open_accounts_with_issues": sections.get("open_accounts_with_issues", []),
-        "unauthorized_inquiries": sections.get("unauthorized_inquiries", []),
+        "negative_accounts": [a.to_dict() for a in payload.disputes],
+        "open_accounts_with_issues": [a.to_dict() for a in payload.goodwill],
+        "unauthorized_inquiries": [i.to_dict() for i in payload.inquiries],
     }

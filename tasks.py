@@ -3,6 +3,7 @@ import os
 import sys
 import uuid
 import logging
+import warnings
 
 # Ensure the project root is always on sys.path so local modules can be
 # imported even when the worker is launched from outside the repository
@@ -43,11 +44,22 @@ def _ensure_file(file_path: str) -> None:
 
 @app.task(bind=True, name="extract_problematic_accounts")
 def extract_problematic_accounts(self, file_path: str, session_id: str | None = None):
-    """Extract problematic accounts from the report."""
+    """Extract problematic accounts from the report.
+
+    Deprecated: this task returns a plain ``dict`` for backward compatibility.
+    Prefer calling :func:`orchestrators.extract_problematic_accounts_from_report`
+    directly for a typed ``BureauPayload``.
+    """
     try:
         logger.info("Extracting accounts from %s", file_path)
         _ensure_file(file_path)
-        return extract_problematic_accounts_from_report(file_path, session_id)
+        payload = extract_problematic_accounts_from_report(file_path, session_id)
+        warnings.warn(
+            "extract_problematic_accounts task will return BureauPayload in the future; current dict output is deprecated",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return payload.to_dict()
     except Exception as exc:
         logger.exception("❌ Error extracting accounts")
         raise exc

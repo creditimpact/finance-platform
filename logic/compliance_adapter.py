@@ -6,7 +6,7 @@ import warnings
 from typing import Dict, Iterable, List, Set, Tuple
 
 import config
-from .generate_goodwill_letters import normalize_creditor_name
+from logic.utils.names_normalization import normalize_creditor_name
 from logic.utils.text_parsing import CHARGEOFF_RE, COLLECTION_RE
 
 

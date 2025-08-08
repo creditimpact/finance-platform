@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Mapping
 
 from audit import AuditLogger
 from services.ai_client import AIClient
@@ -81,7 +81,7 @@ def generate_goodwill_letter_with_ai(
 
 def generate_goodwill_letters(
     client: ClientInfo,
-    bureau_map: Dict[str, BureauPayload],
+    bureau_map: Mapping[str, BureauPayload | dict[str, Any]],
     output_path: Path,
     audit: AuditLogger | None,
     run_date: str | None = None,

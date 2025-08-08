@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any
+from typing import Any, Mapping
 
 from services.ai_client import AIClient
 
@@ -36,7 +36,7 @@ _STATE_HOOKS = {
 }
 
 
-def _heuristic_category(summary: Dict[str, Any]) -> str:
+def _heuristic_category(summary: Mapping[str, Any]) -> str:
     text_bits = [
         summary.get("dispute_type", ""),
         summary.get("facts_summary", ""),
@@ -52,10 +52,10 @@ def _heuristic_category(summary: Dict[str, Any]) -> str:
 
 
 def classify_client_summary(
-    summary: Dict[str, Any],
+    summary: Mapping[str, Any],
     ai_client: AIClient,
     state: str | None = None,
-) -> Dict[str, str]:
+) -> Mapping[str, str]:
     """Classify a structured summary into a dispute category and legal strategy.
 
     Falls back to a lightweight keyword heuristic when the API call fails. The

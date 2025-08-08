@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, List
+from typing import Any, Dict, List, Mapping
 
 from services.ai_client import AIClient
 
@@ -14,15 +14,16 @@ from .summary_classifier import classify_client_summary
 from .utils.pdf_ops import gather_supporting_docs
 from models.account import Account, Inquiry
 from models.letter import LetterContext
+from models.client import ClientInfo
 
 
 def call_gpt_dispute_letter(
-    client_info: dict,
+    client_info: ClientInfo | Mapping[str, Any],
     bureau_name: str,
     disputes: List[Account],
     inquiries: List[Inquiry],
     is_identity_theft: bool,
-    structured_summaries: Dict[str, dict],
+    structured_summaries: Mapping[str, Mapping[str, Any]],
     state: str,
     ai_client: AIClient,
     audit: AuditLogger | None = None,
@@ -30,7 +31,10 @@ def call_gpt_dispute_letter(
 ) -> LetterContext:
     """Generate GPT-powered dispute letter content."""
 
-    client_name = client_info.get("legal_name") or client_info.get("name", "Client")
+    client_dict = (
+        client_info.to_dict() if isinstance(client_info, ClientInfo) else dict(client_info)
+    )
+    client_name = client_dict.get("legal_name") or client_dict.get("name", "Client")
 
     dispute_blocks = []
     for acc in disputes:
@@ -122,7 +126,7 @@ Unauthorized Inquiries:
 {instruction_text}
 """
 
-    session_id = client_info.get("session_id", "")
+    session_id = client_dict.get("session_id", "")
     docs_text, doc_names, _ = gather_supporting_docs(session_id)
     if docs_text:
         if audit and audit.level is AuditLevel.VERBOSE:

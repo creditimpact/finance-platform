@@ -8,7 +8,7 @@ imported safely by both the CLI in ``main.py`` and the orchestration logic in
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List
+from typing import Any, List, Mapping
 
 
 def get_current_month() -> str:
@@ -16,7 +16,7 @@ def get_current_month() -> str:
     return datetime.now().strftime("%Y-%m")
 
 
-def extract_all_accounts(sections: dict) -> List[dict]:
+def extract_all_accounts(sections: Mapping[str, Any]) -> List[dict]:
     """Return a de-duplicated list of all accounts with source categories.
 
     Accounts are considered the same only when key fields match. This prevents

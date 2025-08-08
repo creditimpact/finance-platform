@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from services.ai_client import AIClient
+from models.account import Account
 
 from logic.utils.names_normalization import normalize_creditor_name
 from logic.utils.note_handling import analyze_custom_notes
@@ -32,15 +33,18 @@ def extract_clean_name(full_name: str) -> str:
     return " ".join(unique_parts)
 
 
-def generate_account_action(account: dict, ai_client: AIClient) -> str:
+def generate_account_action(
+    account: Account | dict[str, Any], ai_client: AIClient
+) -> str:
     """Return a human-readable action sentence for an account using GPT."""
     try:
+        acc_dict = account.to_dict() if isinstance(account, Account) else account
         prompt = (
             "You are a friendly credit repair coach speaking in plain English. "
             "Write one short sentence explaining what the client should do next "
             "for the account below. Keep it simple and avoid jargon like 'utilization' or 'negatively impacts.' "
             "If no action is needed, give a quick reassuring note.\n\n"
-            f"Account data:\n{json.dumps(account, indent=2)}\n\n"
+            f"Account data:\n{json.dumps(acc_dict, indent=2)}\n\n"
             "Respond with only the sentence."
         )
         response = ai_client.chat_completion(

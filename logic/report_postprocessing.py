@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Set
+from typing import Any, Dict, List, Mapping, Set
 import re
 
 from logic.utils.names_normalization import (
@@ -144,7 +144,7 @@ def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) ->
 # ---------------------------------------------------------------------------
 
 
-def validate_analysis_sanity(analysis: dict) -> List[str]:
+def validate_analysis_sanity(analysis: Mapping[str, Any]) -> List[str]:
     """Run lightweight sanity checks on the final analysis structure.
 
     Returns a list of warning messages.  The function prints them as a side

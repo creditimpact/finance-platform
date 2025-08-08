@@ -1,5 +1,5 @@
 import re
-from typing import Any, Dict
+from typing import Any, Mapping
 
 from services.ai_client import AIClient
 
@@ -69,9 +69,9 @@ _SCHEMA = {
 
 def extract_structured(
     safe_text: str,
-    account_ctx: Dict[str, Any],
+    account_ctx: Mapping[str, Any],
     ai_client: AIClient,
-) -> Dict[str, Any]:
+) -> Mapping[str, Any]:
     """
     Returns structured summary using LLM.
     """

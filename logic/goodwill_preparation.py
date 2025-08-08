@@ -7,7 +7,8 @@ goodwill adjustment letters and shape account data for AI prompting.
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Any
+from typing import Any, Dict, List, Mapping
+from models.client import ClientInfo
 
 from audit import AuditLogger
 from services.ai_client import AIClient
@@ -18,8 +19,9 @@ from .rules_loader import get_neutral_phrase
 
 
 def select_goodwill_candidates(
-    client_info: Dict[str, Any], bureau_data: Dict[str, Any]
-) -> Dict[str, List[Dict[str, Any]]]:
+    client_info: ClientInfo | Mapping[str, Any],
+    bureau_data: Mapping[str, Any],
+) -> Mapping[str, List[Dict[str, Any]]]:
     """Return a mapping of creditor name to accounts needing goodwill letters.
 
     The selection logic mirrors the historical behaviour from the monolithic

@@ -1,5 +1,6 @@
-from typing import Tuple, List
+from typing import Tuple, List, Any
 from services.ai_client import AIClient
+from models.letter import LetterContext
 
 from logic.rule_checker import check_letter, RuleViolation
 from logic.rules_loader import load_rules
@@ -45,7 +46,7 @@ def _record_letter(
 def generate_letter_with_guardrails(
     user_prompt: str,
     state: str | None,
-    context: dict,
+    context: LetterContext | dict[str, Any],
     session_id: str,
     letter_type: str,
     ai_client: AIClient,
@@ -87,7 +88,7 @@ def generate_letter_with_guardrails(
 def fix_draft_with_guardrails(
     draft_text: str,
     state: str | None,
-    context: dict,
+    context: LetterContext | dict[str, Any],
     session_id: str,
     letter_type: str,
     ai_client: AIClient,

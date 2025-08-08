@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import Any, MutableMapping, Mapping, Optional
 
 from logic.constants import (
     FallbackReason,
@@ -17,7 +17,8 @@ from models.strategy import StrategyPlan
 
 
 def merge_strategy_outputs(
-    strategy_obj: StrategyPlan, bureau_data_obj: dict[str, dict[str, list[Account]]]
+    strategy_obj: StrategyPlan,
+    bureau_data_obj: MutableMapping[str, MutableMapping[str, list[Account]]],
 ) -> None:
     """Align strategist ``strategy_obj`` with ``bureau_data_obj``."""
 
@@ -80,8 +81,8 @@ def merge_strategy_outputs(
 
 
 def handle_strategy_fallbacks(
-    bureau_data_obj: dict,
-    classification_map: dict,
+    bureau_data_obj: MutableMapping[str, Any],
+    classification_map: Mapping[str, Any],
     audit=None,
     log_list: list | None = None,
 ) -> None:
@@ -208,8 +209,8 @@ def handle_strategy_fallbacks(
 
 def merge_strategy_data(
     strategy_obj: StrategyPlan | dict,
-    bureau_data_obj: dict,
-    classification_map: dict,
+    bureau_data_obj: MutableMapping[str, Any],
+    classification_map: Mapping[str, Any],
     audit=None,
     log_list: list | None = None,
 ) -> None:

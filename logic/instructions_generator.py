@@ -11,6 +11,7 @@ import base64
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Mapping
 
 from logic.instruction_data_preparation import prepare_instruction_data
 from services.ai_client import AIClient
@@ -32,7 +33,7 @@ def get_logo_base64() -> str:
 
 def generate_instruction_file(
     client: ClientInfo,
-    bureau_map: dict[str, BureauPayload],
+    bureau_map: Mapping[str, BureauPayload | dict[str, Any]],
     is_identity_theft: bool,
     output_path: Path,
     ai_client: AIClient,

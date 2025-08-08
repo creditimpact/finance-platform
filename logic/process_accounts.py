@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Mapping
 
 from logic.utils.names_normalization import (
     normalize_creditor_name,
@@ -103,7 +103,7 @@ def infer_recovery_summary(account: Account) -> str:
 # 📥 Load analyzed SmartCredit report
 
 
-def load_analyzed_report(json_path: Path) -> Dict[str, Any]:
+def load_analyzed_report(json_path: Path) -> Mapping[str, Any]:
     with open(json_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -115,7 +115,7 @@ def process_analyzed_report(
     json_path: str | Path,
     audit: AuditLogger | None = None,
     log_list: list[str] | None = None,
-) -> Dict[str, Dict[str, List[Any]]]:
+) -> Mapping[str, Dict[str, List[Any]]]:
     """Process a SmartCredit analysis report and categorize accounts by bureau.
 
     ``log_list`` if provided will be appended with messages describing
@@ -278,7 +278,7 @@ def process_analyzed_report(
 
 
 def save_bureau_outputs(
-    output_data: Dict[str, Dict[str, List[Any]]], output_folder: Path
+    output_data: Mapping[str, Dict[str, List[Any]]], output_folder: Path
 ) -> None:
     """Write bureau data to JSON files."""
     output_folder.mkdir(parents=True, exist_ok=True)

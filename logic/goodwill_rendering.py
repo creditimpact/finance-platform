@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Any, List, Mapping
 from datetime import datetime
 
 from audit import AuditLogger, AuditLevel
@@ -18,12 +18,13 @@ from logic.utils.file_paths import safe_filename
 from logic.utils.note_handling import get_client_address_lines
 from logic.utils.names_normalization import normalize_creditor_name
 from logic.compliance_pipeline import run_compliance_pipeline as default_compliance
+from models.client import ClientInfo
 
 
 _template = ensure_template_env().get_template("goodwill_letter_template.html")
 
 
-def load_creditor_address_map() -> Dict[str, str]:
+def load_creditor_address_map() -> Mapping[str, str]:
     """Load a mapping of normalized creditor names to addresses."""
     try:
         with open("data/creditor_addresses.json", encoding="utf-8") as f:
@@ -45,8 +46,8 @@ def load_creditor_address_map() -> Dict[str, str]:
 
 def render_goodwill_letter(
     creditor: str,
-    gpt_data: Dict[str, Any],
-    client_info: Dict[str, Any],
+    gpt_data: Mapping[str, Any],
+    client_info: ClientInfo | Mapping[str, Any],
     output_path: Path,
     run_date: str | None = None,
     *,

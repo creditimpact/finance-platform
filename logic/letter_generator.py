@@ -11,7 +11,7 @@ import logging
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import Any, List, Mapping
 
 from audit import AuditLevel, AuditLogger
 from logic.utils.note_handling import get_client_address_lines
@@ -57,7 +57,7 @@ def call_gpt_dispute_letter(*args, audit: AuditLogger | None = None, **kwargs):
 
 def generate_all_dispute_letters_with_ai(
     client: ClientInfo,
-    bureau_map: dict[str, BureauPayload],
+    bureau_map: Mapping[str, BureauPayload | dict[str, Any]],
     output_path: Path,
     is_identity_theft: bool,
     audit: AuditLogger | None,

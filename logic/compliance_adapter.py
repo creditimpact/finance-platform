@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import warnings
-from typing import Dict, Iterable, List, Set, Tuple
+from typing import Any, Dict, Iterable, List, Set, Tuple, Mapping, MutableMapping
 
 from logic.utils.names_normalization import normalize_creditor_name
 from logic.utils.text_parsing import CHARGEOFF_RE
+from models.client import ClientInfo
 
 
 # Default dispute reason inserted when no custom note is provided.
@@ -32,7 +33,7 @@ ESCALATION_NOTE = (
 def sanitize_disputes(
     disputes: List[dict],
     bureau_name: str,
-    strategy_summaries: Dict[str, dict],
+    strategy_summaries: Mapping[str, Mapping[str, Any]],
     log_messages: List[str],
     is_identity_theft: bool,
 ) -> Tuple[bool, bool, Set[str], bool]:
@@ -102,7 +103,9 @@ def sanitize_disputes(
 
 
 def sanitize_client_info(
-    client_info: dict, bureau_name: str, log_messages: List[str]
+    client_info: ClientInfo | Mapping[str, Any],
+    bureau_name: str,
+    log_messages: List[str],
 ) -> Tuple[dict, bool]:
     """Remove raw client notes to maintain compliance."""
 
@@ -113,15 +116,17 @@ def sanitize_client_info(
             stacklevel=2,
         )
         log_messages.append(f"[{bureau_name}] Raw client notes sanitized")
-    client_info_for_gpt = dict(client_info)
+    client_info_for_gpt = (
+        client_info.to_dict() if isinstance(client_info, ClientInfo) else dict(client_info)
+    )
     client_info_for_gpt.pop("custom_dispute_notes", None)
     return client_info_for_gpt, raw_client_text_present
 
 
 def adapt_gpt_output(
-    gpt_data: dict,
+    gpt_data: MutableMapping[str, Any],
     fallback_norm_names: Iterable[str],
-    acc_type_map: Dict[Tuple[str, str], dict],
+    acc_type_map: Mapping[Tuple[str, str], Mapping[str, Any]],
     rulebook_fallback_enabled: bool,
 ) -> None:
     """Apply compliance rules to the GPT response in-place."""

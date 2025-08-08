@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import re
-from typing import TypedDict, Literal
+from typing import TypedDict, Literal, Any
 
 from logic.rules_loader import load_rules, load_state_rules
+from models.letter import LetterContext
 
 
 class RuleViolation(TypedDict):
@@ -14,7 +15,7 @@ class RuleViolation(TypedDict):
 
 
 def check_letter(
-    text: str, state: str | None, context: dict
+    text: str, state: str | None, context: LetterContext | dict[str, Any]
 ) -> tuple[str, list[RuleViolation]]:
     """
     Returns (possibly_fixed_text, violations)

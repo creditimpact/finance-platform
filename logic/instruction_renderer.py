@@ -9,17 +9,19 @@ from __future__ import annotations
 
 import html as html_utils
 import random
+from typing import Any
 from logic import pdf_renderer
+from models.letter import LetterContext
 
 
-def render_instruction_html(context: dict) -> str:
+def render_instruction_html(context: LetterContext | dict[str, Any]) -> str:
     """Render the Jinja2 template with the provided context."""
     env = pdf_renderer.ensure_template_env("templates")
     template = env.get_template("instruction_template.html")
     return template.render(**context)
 
 
-def build_instruction_html(context: dict) -> str:
+def build_instruction_html(context: LetterContext | dict[str, Any]) -> str:
     """Build the full instruction HTML string from prepared data."""
     sections = context.get("sections", {})
 

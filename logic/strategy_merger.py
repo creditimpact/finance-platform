@@ -5,6 +5,9 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+import warnings
+from typing import Iterable
+
 from logic.constants import (
     FallbackReason,
     StrategistFailureReason,
@@ -12,15 +15,33 @@ from logic.constants import (
 )
 from logic.fallback_manager import determine_fallback_action
 from logic.utils.names_normalization import normalize_creditor_name
+from models.account import Account
+from models.strategy import StrategyPlan
 
 
-def merge_strategy_outputs(strategy_obj: dict, bureau_data_obj: dict) -> None:
+def merge_strategy_outputs(
+    strategy_obj: StrategyPlan | dict, bureau_data_obj: dict[str, dict[str, list[Account | dict]]]
+) -> None:
     """Align strategist ``strategy_obj`` with ``bureau_data_obj``.
 
-    Adds strategist recommendations and related metadata onto matching
-    accounts in ``bureau_data_obj``. No logging or fallback handling is
-    performed here.
+    Parameters
+    ----------
+    strategy_obj:
+        Strategy plan or equivalent dictionary.
+    bureau_data_obj:
+        Mapping of bureau -> section -> list of accounts.
     """
+
+    if isinstance(strategy_obj, dict):
+        try:
+            warnings.warn(
+                "dict strategy_obj is deprecated", DeprecationWarning, stacklevel=2
+            )
+        except DeprecationWarning:
+            pass
+        plan = StrategyPlan.from_dict(strategy_obj)
+    else:
+        plan = strategy_obj
 
     def norm_key(name: str, number: str) -> tuple[str, str]:
         norm_name = normalize_creditor_name(name)
@@ -29,44 +50,65 @@ def merge_strategy_outputs(strategy_obj: dict, bureau_data_obj: dict) -> None:
         return norm_name, last4
 
     index = {}
-    for item in strategy_obj.get("accounts", []):
-        key = norm_key(item.get("name", ""), item.get("account_number", ""))
+    for item in plan.accounts:
+        key = norm_key(item.name, item.account_number or "")
         index[key] = item
 
     for payload in bureau_data_obj.values():
         for items in payload.values():
             if not isinstance(items, list):
                 continue
-            for acc in items:
-                key = norm_key(acc.get("name", ""), acc.get("account_number", ""))
+            for i, acc in enumerate(items):
+                if isinstance(acc, dict):
+                    try:
+                        warnings.warn(
+                            "dict account is deprecated", DeprecationWarning, stacklevel=2
+                        )
+                    except DeprecationWarning:
+                        pass
+                    acc_obj = Account.from_dict(acc)
+                else:
+                    acc_obj = acc
+
+                key = norm_key(acc_obj.name, acc_obj.account_number or "")
                 src = index.get(key)
                 raw_action: Optional[str] = None
                 if src is None:
-                    acc["strategist_failure_reason"] = StrategistFailureReason.MISSING_INPUT
+                    acc_obj.extras["strategist_failure_reason"] = (
+                        StrategistFailureReason.MISSING_INPUT
+                    )
+                    if isinstance(acc, dict):
+                        items[i] = acc_obj.to_dict()
                     continue
 
-                raw_action = src.get("recommended_action") or src.get("recommendation")
+                rec = src.recommendation
+                raw_action = (
+                    rec.recommended_action if rec else None
+                ) or acc_obj.extras.get("recommendation")
                 tag, action = normalize_action_tag(raw_action)
                 if raw_action is None:
-                    acc["strategist_failure_reason"] = StrategistFailureReason.EMPTY_OUTPUT
+                    acc_obj.extras["strategist_failure_reason"] = (
+                        StrategistFailureReason.EMPTY_OUTPUT
+                    )
                 elif raw_action and not tag:
-                    acc["strategist_failure_reason"] = (
+                    acc_obj.extras["strategist_failure_reason"] = (
                         StrategistFailureReason.UNRECOGNIZED_FORMAT
                     )
-                    acc["fallback_unrecognized_action"] = True
+                    acc_obj.extras["fallback_unrecognized_action"] = True
                 if tag:
-                    acc["action_tag"] = tag
-                    acc["recommended_action"] = action
+                    acc_obj.action_tag = tag
+                    acc_obj.recommended_action = action
                 elif raw_action:
-                    acc["recommended_action"] = raw_action
+                    acc_obj.recommended_action = raw_action
 
-                acc["strategist_raw_action"] = raw_action
-                if "advisor_comment" in src:
-                    acc["advisor_comment"] = src["advisor_comment"]
-                elif "analysis" in src:
-                    acc["advisor_comment"] = src["analysis"]
-                if src.get("flags"):
-                    acc["flags"] = src["flags"]
+                acc_obj.extras["strategist_raw_action"] = raw_action
+                if rec and rec.advisor_comment:
+                    acc_obj.advisor_comment = rec.advisor_comment
+                if rec and rec.flags:
+                    acc_obj.flags = rec.flags
+
+                if isinstance(acc, dict):
+                    items[i] = acc_obj.to_dict()
 
 
 def handle_strategy_fallbacks(

@@ -7,6 +7,7 @@ from typing import Optional
 
 from logic.guardrails import fix_draft_with_guardrails
 from services.ai_client import AIClient
+from models.letter import LetterArtifact
 
 # Re-export existing compliance helpers for compatibility
 from .compliance_adapter import (
@@ -19,18 +20,19 @@ from .compliance_adapter import (
 
 
 def run_compliance_pipeline(
-    html: str,
+    letter: LetterArtifact | str,
     state: Optional[str],
     session_id: str,
     doc_type: str,
     *,
     ai_client: AIClient | None = None,
-) -> str:
-    """Apply shared compliance checks to text destined for rendering.
+) -> LetterArtifact | str:
+    """Apply shared compliance checks to rendered HTML or artifacts."""
 
-    The pipeline strips HTML tags and routes the plain text through the
-    guardrails checker. The original HTML is returned unchanged.
-    """
+    if isinstance(letter, LetterArtifact):
+        html = letter.html
+    else:
+        html = letter
 
     plain_text = re.sub(r"<[^>]+>", " ", html)
     fix_draft_with_guardrails(
@@ -41,7 +43,7 @@ def run_compliance_pipeline(
         doc_type,
         ai_client=ai_client,
     )
-    return html
+    return letter
 
 
 # Backwards compatible alias

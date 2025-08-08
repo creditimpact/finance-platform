@@ -23,3 +23,25 @@ def extract_text_from_pdf(pdf_path: str | Path) -> str:
     from .utils.pdf_ops import extract_pdf_text_safe
 
     return extract_pdf_text_safe(Path(pdf_path), max_chars=150000)
+
+from models.bureau import BureauAccount
+
+
+def bureau_data_from_dict(data: dict) -> dict[str, list[BureauAccount]]:
+    """Convert raw bureau ``data`` to typed ``BureauAccount`` objects.
+
+    Parameters
+    ----------
+    data:
+        Mapping of section name to list of account dictionaries.
+
+    Returns
+    -------
+    dict[str, list[BureauAccount]]
+        Mapping with the same keys but ``BureauAccount`` instances as values.
+    """
+    result: dict[str, list[BureauAccount]] = {}
+    for section, items in data.items():
+        if isinstance(items, list):
+            result[section] = [BureauAccount.from_dict(it) for it in items]
+    return result

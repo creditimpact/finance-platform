@@ -20,6 +20,8 @@ from logic.utils.names_normalization import normalize_creditor_name
 from .strategy_engine import generate_strategy
 from .dispute_preparation import prepare_disputes_and_inquiries
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
+from models.letter import LetterContext, LetterArtifact, LetterAccount
+from models.account import Inquiry
 from services.ai_client import AIClient, get_default_ai_client
 from .letter_rendering import render_dispute_letter_html, render_html_to_pdf
 from .compliance_pipeline import (
@@ -45,10 +47,10 @@ CREDIT_BUREAU_ADDRESSES = {
 
 def call_gpt_dispute_letter(*args, audit: AuditLogger | None = None, **kwargs):
     """Proxy to GPT prompting module for backward compatibility."""
-
-    return _call_gpt_dispute_letter(
+    ctx = _call_gpt_dispute_letter(
         *args, audit=audit, **kwargs, classifier=classify_client_summary
     )
+    return ctx.to_dict()
 
 
 def generate_all_dispute_letters_with_ai(
@@ -156,26 +158,29 @@ def generate_all_dispute_letters_with_ai(
         if run_date is None:
             run_date = datetime.now().strftime("%B %d, %Y")
 
-        context = {
-            "client_name": client_name,
-            "client_street": client_info.get("street", ""),
-            "client_city": client_info.get("city", ""),
-            "client_state": client_info.get("state", ""),
-            "client_zip": client_info.get("zip", ""),
-            "client_address_lines": get_client_address_lines(client_info),
-            "bureau_name": bureau_name,
-            "bureau_address": bureau_address,
-            "date": run_date,
-            "opening_paragraph": gpt_data.get("opening_paragraph", ""),
-            "accounts": gpt_data.get("accounts", []),
-            "inquiries": gpt_data.get("inquiries", []),
-            "closing_paragraph": gpt_data.get("closing_paragraph", ""),
-            "is_identity_theft": is_identity_theft,
-        }
+        context = LetterContext(
+            client_name=client_name,
+            client_address_lines=get_client_address_lines(client_info),
+            bureau_name=bureau_name,
+            bureau_address=bureau_address,
+            date=run_date,
+            opening_paragraph=gpt_data.get("opening_paragraph", ""),
+            accounts=[
+                LetterAccount.from_dict(a) if isinstance(a, dict) else a
+                for a in gpt_data.get("accounts", [])
+            ],
+            inquiries=[
+                Inquiry.from_dict(i) if isinstance(i, dict) else i
+                for i in gpt_data.get("inquiries", [])
+            ],
+            closing_paragraph=gpt_data.get("closing_paragraph", ""),
+            is_identity_theft=is_identity_theft,
+        )
 
-        html = render_dispute_letter_html(context)
+        artifact = render_dispute_letter_html(context)
+        html = artifact.html if isinstance(artifact, LetterArtifact) else artifact
         run_compliance_pipeline(
-            html,
+            artifact,
             client_info.get("state"),
             client_info.get("session_id", ""),
             "dispute",

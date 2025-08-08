@@ -29,6 +29,7 @@ sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None)
 # -------------------------------------------------------------------
 
 from logic.generate_strategy_report import StrategyGenerator
+from tests.helpers.fake_ai_client import FakeAIClient
 from logic.letter_generator import generate_dispute_letters_for_all_bureaus
 from logic.instructions_generator import generate_instruction_file
 
@@ -76,10 +77,16 @@ def test_full_letter_workflow():
         mock.patch("logic.instructions_generator.render_pdf_from_html",
                    side_effect=lambda html, p: instructions_capture.setdefault("html", html)),
         mock.patch("logic.instructions_generator.generate_account_action", return_value="Action"),
+        mock.patch("logic.instructions_generator.run_compliance_pipeline", lambda html, state, session_id, doc_type, ai_client=None: html),
+        mock.patch("logic.instructions_generator.build_instruction_html", return_value="html"),
         mock.patch("logic.instructions_generator.save_json_output"),
+        mock.patch("logic.letter_generator.generate_strategy", return_value={"dispute_items": {"a": {}}}),
+        mock.patch("logic.letter_generator.sanitize_disputes", return_value=(False, False, set(), False)),
     ):
         # Capture which disputes were sent to GPT
-        def fake_gpt(ci, bureau, disputes, inquiries, theft):
+        def fake_gpt(*args, **kwargs):
+            bureau = args[1]
+            disputes = args[2]
             letters_created[bureau] = disputes
             return {"opening_paragraph": "", "accounts": [], "inquiries": [], "closing_paragraph": ""}
         mock_gpt_call.side_effect = fake_gpt
@@ -87,7 +94,7 @@ def test_full_letter_workflow():
         # Generate strategy and merge into bureau data
         from logic.constants import normalize_action_tag
 
-        generator = StrategyGenerator()
+        generator = StrategyGenerator(ai_client=FakeAIClient())
         strategy = generator.generate(client_info, bureau_data, audit=None)
         index = {(acc["name"].lower(), acc["account_number"]): acc for acc in strategy["accounts"]}
         for payload in bureau_data.values():
@@ -102,13 +109,11 @@ def test_full_letter_workflow():
                             acc["recommended_action"] = action
 
         out_dir = Path("output/test_flow")
-        generate_dispute_letters_for_all_bureaus(client_info, bureau_data, out_dir, False)
-        generate_instruction_file(client_info, bureau_data, False, out_dir, strategy=strategy)
+        fake = FakeAIClient()
+        generate_dispute_letters_for_all_bureaus(client_info, bureau_data, out_dir, False, None, ai_client=fake)
+        generate_instruction_file(client_info, bureau_data, False, out_dir, strategy=strategy, ai_client=fake)
 
     # --- Assertions ---
     assert [d["name"] for d in letters_created.get("Experian", [])] == ["Bank A"]
     assert "html" in instructions_capture
 
-
-if __name__ == "__main__":
-    test_full_letter_workflow()

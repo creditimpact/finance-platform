@@ -602,23 +602,3 @@ def test_account_block_extraction_and_parsing():
 
 
 
-
-if __name__ == "__main__":
-    import json
-    test_dedup_without_numbers()
-    test_inquiry_matching()
-    test_goodwill_generation()
-    test_skip_goodwill_on_collections()
-    test_skip_goodwill_edge_statuses()
-    test_fallback_tagging_collections()
-    test_fallback_tagging_extra_keywords()
-    test_normalize_action_tag_aliases()
-    test_letter_duplicate_accounts_removed()
-    test_partial_account_number_deduplication()
-    test_merge_custom_note_with_default()
-    test_general_note_routed_to_goodwill()
-    test_skip_goodwill_for_disputed_account()
-    test_extract_late_history_blocks()
-    test_extract_late_history_no_header()
-    test_account_block_extraction_and_parsing()
-    print("✅ logic fix tests passed")

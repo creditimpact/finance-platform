@@ -8,11 +8,13 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     _jsonrepair = None
 
-_TRAILING_COMMA_RE = re.compile(r',(?=\s*[}\]])')
-_DOUBLE_COMMA_RE = re.compile(r',\s*,+')
-_SINGLE_QUOTE_KEY_RE = re.compile(r"'([^']*)'(?=\s*:)" )
-_SINGLE_QUOTE_VALUE_RE = re.compile(r":\s*'([^']*)'" )
-_UNQUOTED_KEY_RE = re.compile(r'(?P<prefix>^|[,{])\s*(?P<key>[A-Za-z_][A-Za-z0-9_-]*)\s*(?=:)')
+_TRAILING_COMMA_RE = re.compile(r",(?=\s*[}\]])")
+_DOUBLE_COMMA_RE = re.compile(r",\s*,+")
+_SINGLE_QUOTE_KEY_RE = re.compile(r"'([^']*)'(?=\s*:)")
+_SINGLE_QUOTE_VALUE_RE = re.compile(r":\s*'([^']*)'")
+_UNQUOTED_KEY_RE = re.compile(
+    r"(?P<prefix>^|[,{])\s*(?P<key>[A-Za-z_][A-Za-z0-9_-]*)\s*(?=:)"
+)
 _LOG_PATH = Path("invalid_ai_json.log")
 
 
@@ -37,7 +39,9 @@ def _basic_clean(content: str) -> str:
     cleaned = _DOUBLE_COMMA_RE.sub(",", cleaned)
     cleaned = _SINGLE_QUOTE_KEY_RE.sub(r'"\1"', cleaned)
     cleaned = _SINGLE_QUOTE_VALUE_RE.sub(r': "\1"', cleaned)
-    cleaned = _UNQUOTED_KEY_RE.sub(lambda m: f'{m.group("prefix")}"{m.group("key")}"', cleaned)
+    cleaned = _UNQUOTED_KEY_RE.sub(
+        lambda m: f'{m.group("prefix")}"{m.group("key")}"', cleaned
+    )
     return cleaned
 
 

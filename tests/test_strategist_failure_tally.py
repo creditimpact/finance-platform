@@ -1,7 +1,7 @@
 import sys
 import types
 
-sys.modules['pdfkit'] = types.SimpleNamespace(configuration=lambda **kwargs: None)
+sys.modules["pdfkit"] = types.SimpleNamespace(configuration=lambda **kwargs: None)
 
 from audit import create_audit_logger  # noqa: E402
 from analytics.strategist_failures import tally_failure_reasons  # noqa: E402
@@ -17,7 +17,11 @@ def test_tally_failure_reasons():
     strategy = StrategyPlan.from_dict(
         {
             "accounts": [
-                {"name": "Bad Corp", "account_number": "1111", "recommended_action": "foobar"},
+                {
+                    "name": "Bad Corp",
+                    "account_number": "1111",
+                    "recommended_action": "foobar",
+                },
                 {"name": "Empty Action", "account_number": "3333"},
             ]
         }
@@ -25,9 +29,27 @@ def test_tally_failure_reasons():
     bureau_data = {
         "Experian": {
             "disputes": [
-                Account.from_dict({"name": "Bad Corp", "account_number": "1111", "status": "collection"}),
-                Account.from_dict({"name": "No Strat", "account_number": "2222", "status": "chargeoff"}),
-                Account.from_dict({"name": "Empty Action", "account_number": "3333", "status": "repossession"}),
+                Account.from_dict(
+                    {
+                        "name": "Bad Corp",
+                        "account_number": "1111",
+                        "status": "collection",
+                    }
+                ),
+                Account.from_dict(
+                    {
+                        "name": "No Strat",
+                        "account_number": "2222",
+                        "status": "chargeoff",
+                    }
+                ),
+                Account.from_dict(
+                    {
+                        "name": "Empty Action",
+                        "account_number": "3333",
+                        "status": "repossession",
+                    }
+                ),
             ],
             "goodwill": [],
             "high_utilization": [],

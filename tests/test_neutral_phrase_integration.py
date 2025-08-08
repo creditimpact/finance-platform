@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 import sys
 
@@ -25,7 +24,11 @@ def test_dispute_prompt_includes_neutral_phrase(monkeypatch):
     call_gpt_dispute_letter(
         {"legal_name": "Test", "session_id": ""},
         "Equifax",
-        [Account(account_id="1", name="Acc", account_number="123", reported_status="open")],
+        [
+            Account(
+                account_id="1", name="Acc", account_number="123", reported_status="open"
+            )
+        ],
         [],
         False,
         {"1": structured},

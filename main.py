@@ -1,4 +1,5 @@
 """Command line entry point for the credit repair workflow."""
+
 from __future__ import annotations
 
 import argparse

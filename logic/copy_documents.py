@@ -1,8 +1,10 @@
-import os
 import shutil
 from pathlib import Path
 
-def copy_required_documents(client_info, client_folder: Path, proofs_files: dict, is_identity_theft: bool):
+
+def copy_required_documents(
+    client_info, client_folder: Path, proofs_files: dict, is_identity_theft: bool
+):
     bureaus = ["Experian", "Equifax", "TransUnion"]
 
     for bureau in bureaus:
@@ -30,6 +32,8 @@ def copy_required_documents(client_info, client_folder: Path, proofs_files: dict
 
     # Copy user-uploaded SmartCredit report
     if "smartcredit_report" in proofs_files:
-        shutil.copy(proofs_files["smartcredit_report"], client_folder / "SmartCredit_Report.pdf")
+        shutil.copy(
+            proofs_files["smartcredit_report"], client_folder / "SmartCredit_Report.pdf"
+        )
 
     print(f"[📂] Documents organized in: {client_folder}")

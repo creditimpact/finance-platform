@@ -9,14 +9,16 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Any
 
-from audit import AuditLogger, AuditLevel
+from audit import AuditLogger
 from logic.utils.text_parsing import has_late_indicator
 from logic.utils.names_normalization import normalize_creditor_name
 from .summary_classifier import classify_client_summary
 from .rules_loader import get_neutral_phrase
 
 
-def select_goodwill_candidates(client_info: Dict[str, Any], bureau_data: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+def select_goodwill_candidates(
+    client_info: Dict[str, Any], bureau_data: Dict[str, Any]
+) -> Dict[str, List[Dict[str, Any]]]:
     """Return a mapping of creditor name to accounts needing goodwill letters.
 
     The selection logic mirrors the historical behaviour from the monolithic
@@ -41,7 +43,9 @@ def select_goodwill_candidates(client_info: Dict[str, Any], bureau_data: Dict[st
             if not name:
                 continue
             name_norm = normalize_creditor_name(name)
-            dispute_map.setdefault(name_norm, set()).add(clean_num(acc.get("account_number")))
+            dispute_map.setdefault(name_norm, set()).add(
+                clean_num(acc.get("account_number"))
+            )
 
     def consider_account(account: Dict[str, Any]) -> None:
         status_text = str(
@@ -70,7 +74,9 @@ def select_goodwill_candidates(client_info: Dict[str, Any], bureau_data: Dict[st
             return
         name_norm = normalize_creditor_name(name)
 
-        acct_num = clean_num(account.get("account_number") or account.get("acct_number"))
+        acct_num = clean_num(
+            account.get("account_number") or account.get("acct_number")
+        )
         dispute_nums = dispute_map.get(name_norm)
         if dispute_nums is not None:
             for dn in dispute_nums:

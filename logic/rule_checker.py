@@ -13,7 +13,9 @@ class RuleViolation(TypedDict):
     message: str
 
 
-def check_letter(text: str, state: str | None, context: dict) -> tuple[str, list[RuleViolation]]:
+def check_letter(
+    text: str, state: str | None, context: dict
+) -> tuple[str, list[RuleViolation]]:
     """
     Returns (possibly_fixed_text, violations)
     - Load systemic rules
@@ -92,7 +94,9 @@ def check_letter(text: str, state: str | None, context: dict) -> tuple[str, list
             if clause_info:
                 reference = clause_info.get("reference", "")
                 text_clause = clause_info.get("text", "")
-                sentence = f"Additionally, pursuant to {reference}, {text_clause}".rstrip()
+                sentence = (
+                    f"Additionally, pursuant to {reference}, {text_clause}".rstrip()
+                )
                 if not sentence.endswith("."):
                     sentence += "."
                 clause_texts.append(sentence)

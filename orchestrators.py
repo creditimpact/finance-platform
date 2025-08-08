@@ -34,6 +34,7 @@ def process_client_intake(client_info, audit):
         tuple[str, dict, dict]: session id, structured summaries and raw notes.
     """
     from session_manager import get_intake
+
     if "email" not in client_info or not client_info["email"]:
         raise ValueError("Client email is missing.")
 
@@ -61,11 +62,15 @@ def process_client_intake(client_info, audit):
     return session_id, structured_map, raw_map
 
 
-def classify_client_responses(structured_map, raw_map, client_info, audit, ai_client: AIClient | None = None):
+def classify_client_responses(
+    structured_map, raw_map, client_info, audit, ai_client: AIClient | None = None
+):
     """Classify client summaries for each account."""
     classification_map: dict[str, dict] = {}
     for acc_id, struct in structured_map.items():
-        cls = classify_client_summary(struct, client_info.get("state"), ai_client=ai_client)
+        cls = classify_client_summary(
+            struct, client_info.get("state"), ai_client=ai_client
+        )
         classification_map[acc_id] = cls
         audit.log_account(
             acc_id,
@@ -79,7 +84,14 @@ def classify_client_responses(structured_map, raw_map, client_info, audit, ai_cl
     return classification_map
 
 
-def analyze_credit_report(proofs_files, session_id, client_info, audit, log_messages, ai_client: AIClient | None = None):
+def analyze_credit_report(
+    proofs_files,
+    session_id,
+    client_info,
+    audit,
+    log_messages,
+    ai_client: AIClient | None = None,
+):
     """Ingest and analyze the client's credit report."""
     from logic.upload_validator import is_safe_pdf, move_uploaded_file
     from session_manager import update_session
@@ -98,7 +110,9 @@ def analyze_credit_report(proofs_files, session_id, client_info, audit, log_mess
         raise ValueError("Uploaded file failed PDF safety checks.")
 
     print("📄 Extracting client info from report...")
-    client_personal_info = extract_bureau_info_column_refined(pdf_path, ai_client=ai_client)
+    client_personal_info = extract_bureau_info_column_refined(
+        pdf_path, ai_client=ai_client
+    )
     client_info.update(client_personal_info.get("data", {}))
     log_messages.append("📄 Personal info extracted.")
     if audit.level == AuditLevel.VERBOSE:
@@ -106,7 +120,9 @@ def analyze_credit_report(proofs_files, session_id, client_info, audit, log_mess
 
     print("🔍 Analyzing report with GPT...")
     analyzed_json_path = Path("output/analyzed_report.json")
-    sections = analyze_report_logic(pdf_path, analyzed_json_path, client_info, ai_client=ai_client)
+    sections = analyze_report_logic(
+        pdf_path, analyzed_json_path, client_info, ai_client=ai_client
+    )
     client_info.update(sections)
     log_messages.append("🔍 Report analyzed.")
     audit.log_step(
@@ -118,10 +134,10 @@ def analyze_credit_report(proofs_files, session_id, client_info, audit, log_mess
         },
     )
 
-    safe_name = (client_info.get("name") or "Client").replace(" ", "_").replace("/", "_")
-    today_folder = Path(
-        f"Clients/{get_current_month()}/{safe_name}_{session_id}"
+    safe_name = (
+        (client_info.get("name") or "Client").replace(" ", "_").replace("/", "_")
     )
+    today_folder = Path(f"Clients/{get_current_month()}/{safe_name}_{session_id}")
     today_folder.mkdir(parents=True, exist_ok=True)
     log_messages.append(f"📁 Client folder created at: {today_folder}")
     if audit.level == AuditLevel.VERBOSE:
@@ -152,7 +168,15 @@ def analyze_credit_report(proofs_files, session_id, client_info, audit, log_mess
     return pdf_path, sections, bureau_data, today_folder
 
 
-def generate_strategy_plan(client_info, bureau_data, classification_map, session_id, audit, log_messages, ai_client: AIClient | None = None):
+def generate_strategy_plan(
+    client_info,
+    bureau_data,
+    classification_map,
+    session_id,
+    audit,
+    log_messages,
+    ai_client: AIClient | None = None,
+):
     """Generate and merge the strategy plan."""
     from logic.strategy_merger import merge_strategy_data
     from logic.generate_strategy_report import StrategyGenerator
@@ -183,7 +207,9 @@ def generate_strategy_plan(client_info, bureau_data, classification_map, session
     strat_gen.save_report(strategy, client_info, datetime.now().strftime("%Y-%m-%d"))
     audit.log_step("strategy_generated", strategy)
 
-    merge_strategy_data(strategy, bureau_data, classification_map, audit, log_list=log_messages)
+    merge_strategy_data(
+        strategy, bureau_data, classification_map, audit, log_list=log_messages
+    )
     audit.log_step("strategy_merged", bureau_data)
     for bureau, payload in bureau_data.items():
         for section, items in payload.items():
@@ -230,7 +256,9 @@ def generate_letters(
         audit,
         log_messages=log_messages,
         ai_client=ai_client,
-        rulebook_fallback_enabled=app_config.rulebook_fallback_enabled if app_config else True,
+        rulebook_fallback_enabled=(
+            app_config.rulebook_fallback_enabled if app_config else True
+        ),
         wkhtmltopdf_path=app_config.wkhtmltopdf_path if app_config else None,
     )
     log_messages.append("📄 Dispute letters generated.")
@@ -376,7 +404,7 @@ Best regards,
     print(f"📂 All output saved to: {today_folder}")
     log_messages.append("🎯 Process completed successfully.")
     audit.log_step("process_completed")
-    
+
 
 def save_log_file(client_info, is_identity_theft, output_folder, log_lines):
     """Persist a human-readable log of pipeline activity."""
@@ -435,7 +463,13 @@ def run_credit_repair_process(
             proofs_files, session_id, client_info, audit, log_messages, ai_client
         )
         strategy = generate_strategy_plan(
-            client_info, bureau_data, classification_map, session_id, audit, log_messages, ai_client
+            client_info,
+            bureau_data,
+            classification_map,
+            session_id,
+            audit,
+            log_messages,
+            ai_client,
         )
         generate_letters(
             client_info,
@@ -471,7 +505,11 @@ def run_credit_repair_process(
                 export_trace_breakdown(
                     audit,
                     strategy,
-                    strategy.get("accounts") if isinstance(strategy, dict) else getattr(strategy, "accounts", None),
+                    (
+                        strategy.get("accounts")
+                        if isinstance(strategy, dict)
+                        else getattr(strategy, "accounts", None)
+                    ),
                     Path("client_output"),
                 )
         if pdf_path and os.path.exists(pdf_path):
@@ -482,7 +520,9 @@ def run_credit_repair_process(
                 print(f"[⚠️] Failed to delete uploaded PDF: {delete_error}")
 
 
-def extract_problematic_accounts_from_report(file_path: str, session_id: str | None = None) -> dict:
+def extract_problematic_accounts_from_report(
+    file_path: str, session_id: str | None = None
+) -> dict:
     """Return problematic accounts extracted from the report for user review."""
     from logic.upload_validator import is_safe_pdf, move_uploaded_file
     from session_manager import update_session
@@ -495,6 +535,7 @@ def extract_problematic_accounts_from_report(file_path: str, session_id: str | N
 
     analyzed_json_path = Path("output/analyzed_report.json")
     from logic.analyze_report import analyze_credit_report as analyze_report_logic
+
     sections = analyze_report_logic(pdf_path, analyzed_json_path, {})
 
     return {

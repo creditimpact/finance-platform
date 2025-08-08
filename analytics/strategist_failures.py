@@ -62,4 +62,3 @@ def tally_fallback_vs_decision(audit: Any) -> Dict[str, int]:
 
 
 __all__ = ["tally_failure_reasons", "tally_fallback_vs_decision"]
-

@@ -1,5 +1,7 @@
-import json
-from logic.goodwill_preparation import select_goodwill_candidates, prepare_account_summaries
+from logic.goodwill_preparation import (
+    select_goodwill_candidates,
+    prepare_account_summaries,
+)
 
 
 def test_select_goodwill_candidates_detects_late_accounts():

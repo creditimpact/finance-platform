@@ -3,6 +3,7 @@ import subprocess
 import sys
 import textwrap
 
+
 def test_tasks_can_import_session_manager(tmp_path):
     root = pathlib.Path(__file__).resolve().parents[1]
     script = textwrap.dedent(
@@ -23,6 +24,8 @@ def test_tasks_can_import_session_manager(tmp_path):
         print(session_manager.__file__)
         """
     )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert "session_manager.py" in result.stdout

@@ -1,12 +1,13 @@
 import smtplib
-import logging
 import os
 from email.message import EmailMessage
 from pathlib import Path
 
+
 def collect_all_files(folder: Path):
     """אוסף את כל קבצי ה־PDF מתוך תיקיית הלקוח לשליחה באימייל."""
     return [str(p) for p in folder.glob("*.pdf") if p.is_file()]
+
 
 def send_email_with_attachment(
     receiver_email,
@@ -33,7 +34,12 @@ def send_email_with_attachment(
         with open(file_path, "rb") as f:
             file_data = f.read()
             file_name = os.path.basename(file_path)
-            msg.add_attachment(file_data, maintype="application", subtype="octet-stream", filename=file_name)
+            msg.add_attachment(
+                file_data,
+                maintype="application",
+                subtype="octet-stream",
+                filename=file_name,
+            )
 
     with smtplib.SMTP(smtp_server, smtp_port) as smtp:
         try:

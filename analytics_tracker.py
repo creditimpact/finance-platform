@@ -1,4 +1,3 @@
-import os
 import json
 import logging
 import config
@@ -26,7 +25,9 @@ def save_analytics_snapshot(
     snapshot = {
         "date": now.strftime("%Y-%m-%d"),
         "goal": client_info.get("goal", "N/A"),
-        "dispute_type": "identity_theft" if client_info.get("is_identity_theft") else "standard",
+        "dispute_type": (
+            "identity_theft" if client_info.get("is_identity_theft") else "standard"
+        ),
         "client_name": client_info.get("name", "Unknown"),
         "client_state": client_info.get("state", "unknown"),
         "summary": {
@@ -36,8 +37,12 @@ def save_analytics_snapshot(
             "recent_inquiries": report_summary.get("recent_inquiries", 0),
             "total_inquiries": report_summary.get("total_inquiries", 0),
             "num_negative_accounts": report_summary.get("num_negative_accounts", 0),
-            "num_accounts_over_90_util": report_summary.get("num_accounts_over_90_util", 0),
-            "account_types_in_problem": report_summary.get("account_types_in_problem", []),
+            "num_accounts_over_90_util": report_summary.get(
+                "num_accounts_over_90_util", 0
+            ),
+            "account_types_in_problem": report_summary.get(
+                "account_types_in_problem", []
+            ),
         },
         "strategic_recommendations": report_summary.get(
             "strategic_recommendations", []

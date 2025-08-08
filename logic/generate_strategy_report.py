@@ -1,4 +1,3 @@
-import os
 import json
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +9,7 @@ from audit import AuditLogger
 from .constants import StrategistFailureReason
 from .json_utils import parse_json
 from logic.guardrails import fix_draft_with_guardrails
+
 
 class StrategyGenerator:
     """Generate an internal strategic analysis using GPT-4."""
@@ -104,9 +104,15 @@ Ensure the response is strictly valid JSON: all property names and strings in do
         base_dir: str = "Clients",
     ) -> Path:
         """Save the strategy JSON under the client's folder and return the path."""
-        safe_name = (client_info.get("name") or "Client").replace(" ", "_").replace("/", "_")
+        safe_name = (
+            (client_info.get("name") or "Client").replace(" ", "_").replace("/", "_")
+        )
         session_id = client_info.get("session_id", "session")
-        folder = Path(base_dir) / datetime.now().strftime("%Y-%m") / f"{safe_name}_{session_id}"
+        folder = (
+            Path(base_dir)
+            / datetime.now().strftime("%Y-%m")
+            / f"{safe_name}_{session_id}"
+        )
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / "strategy.json"
         with open(path, "w", encoding="utf-8") as f:

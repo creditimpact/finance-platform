@@ -23,12 +23,24 @@ def test_letters_do_not_access_raw_intake(monkeypatch, tmp_path):
     }
     session_id = "sess-intake-guard"
     update_session(session_id, structured_summaries=structured)
-    update_intake(session_id, raw_explanations=[{"account_id": "1", "text": "SECRET RAW"}])
+    update_intake(
+        session_id, raw_explanations=[{"account_id": "1", "text": "SECRET RAW"}]
+    )
 
     def fake_generate_strategy(sess_id, bureau_data):
         return {"dispute_items": structured}
 
-    def fake_call_gpt(client_info, bureau_name, disputes, inquiries, is_identity_theft, structured_summaries, state, audit=None, ai_client=None):
+    def fake_call_gpt(
+        client_info,
+        bureau_name,
+        disputes,
+        inquiries,
+        is_identity_theft,
+        structured_summaries,
+        state,
+        audit=None,
+        ai_client=None,
+    ):
         text = json.dumps(structured_summaries)
         assert "SECRET RAW" not in text
         return {
@@ -46,21 +58,31 @@ def test_letters_do_not_access_raw_intake(monkeypatch, tmp_path):
             "closing_paragraph": "Closing",
         }
 
-    monkeypatch.setattr("logic.letter_generator.generate_strategy", fake_generate_strategy)
+    monkeypatch.setattr(
+        "logic.letter_generator.generate_strategy", fake_generate_strategy
+    )
     monkeypatch.setattr("logic.letter_generator.call_gpt_dispute_letter", fake_call_gpt)
-    monkeypatch.setattr("logic.pdf_renderer.render_html_to_pdf", lambda html, path: None)
+    monkeypatch.setattr(
+        "logic.pdf_renderer.render_html_to_pdf", lambda html, path: None
+    )
     monkeypatch.setattr(
         "logic.compliance_pipeline.run_compliance_pipeline",
         lambda html, state, session_id, doc_type, ai_client=None: html,
     )
     import pdfkit
+
     monkeypatch.setattr(pdfkit, "configuration", lambda *a, **k: None)
 
     client_info = {"name": "Test Client", "session_id": session_id}
     bureau_data = {
         "Experian": {
             "disputes": [
-                {"name": "Bank A", "account_number": "1", "account_id": "1", "action_tag": "dispute"}
+                {
+                    "name": "Bank A",
+                    "account_number": "1",
+                    "account_id": "1",
+                    "action_tag": "dispute",
+                }
             ],
             "inquiries": [],
         }

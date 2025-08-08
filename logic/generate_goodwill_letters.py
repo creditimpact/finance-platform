@@ -9,7 +9,9 @@ from audit import AuditLogger
 from services.ai_client import AIClient
 from session_manager import get_session
 
-from . import goodwill_preparation, goodwill_prompting, goodwill_rendering
+import logic.goodwill_preparation as goodwill_preparation
+import logic.goodwill_prompting as goodwill_prompting
+import logic.goodwill_rendering as goodwill_rendering
 from logic import pdf_renderer
 from logic.utils.pdf_ops import gather_supporting_docs
 from logic.compliance_pipeline import run_compliance_pipeline
@@ -17,6 +19,7 @@ from logic.compliance_pipeline import run_compliance_pipeline
 # ---------------------------------------------------------------------------
 # Orchestrator functions
 # ---------------------------------------------------------------------------
+
 
 def generate_goodwill_letter_with_ai(
     creditor: str,
@@ -49,10 +52,8 @@ def generate_goodwill_letter_with_ai(
         client_info.get("story"),
         client_info.get("tone", "neutral"),
         session_id,
-        structured_summaries,
-        client_info.get("state"),
-        audit,
-        ai_client,
+        ai_client=ai_client,
+        audit=audit,
     )
 
     _, doc_names, _ = gather_supporting_docs(session_id or "")
@@ -95,6 +96,7 @@ def generate_goodwill_letters(
             audit,
             ai_client=ai_client,
         )
+
 
 __all__ = [
     "generate_goodwill_letter_with_ai",

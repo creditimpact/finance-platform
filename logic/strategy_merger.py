@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable, Optional
+from typing import Optional
 
 from logic.constants import (
     FallbackReason,
@@ -114,7 +114,10 @@ def handle_strategy_fallbacks(
                             ),
                         },
                     )
-                if failure_reason == StrategistFailureReason.MISSING_INPUT and log_list is not None:
+                if (
+                    failure_reason == StrategistFailureReason.MISSING_INPUT
+                    and log_list is not None
+                ):
                     log_list.append(
                         f"[{bureau}] No strategist entry for '{acc.get('name')}' ({acc.get('account_number')})"
                     )

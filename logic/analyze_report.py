@@ -17,7 +17,10 @@ from pathlib import Path
 import re
 
 from logic.utils.names_normalization import normalize_creditor_name
-from logic.utils.text_parsing import extract_late_history_blocks, enforce_collection_status
+from logic.utils.text_parsing import (
+    extract_late_history_blocks,
+    enforce_collection_status,
+)
 from logic.utils.inquiries import extract_inquiries
 
 from .report_parsing import extract_text_from_pdf
@@ -36,6 +39,7 @@ from services.ai_client import AIClient
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
+
 
 def analyze_credit_report(
     pdf_path,
@@ -62,7 +66,11 @@ def analyze_credit_report(
 
     is_identity_theft = client_info.get("is_identity_theft", False)
     result = call_ai_analysis(
-        text, client_goal, is_identity_theft, Path(output_json_path), ai_client=ai_client
+        text,
+        client_goal,
+        is_identity_theft,
+        Path(output_json_path),
+        ai_client=ai_client,
     )
 
     parsed_inquiries = extract_inquiries(text)
@@ -103,13 +111,24 @@ def analyze_credit_report(
             existing_norms.add(norm)
             if norm in history:
                 acc["late_payments"] = history[norm]
-                if any(v >= 1 for vals in history[norm].values() for v in vals.values()):
+                if any(
+                    v >= 1 for vals in history[norm].values() for v in vals.values()
+                ):
                     acc.setdefault("flags", []).append("Late Payments")
-                    status_text = str(acc.get("status") or acc.get("account_status") or "").strip().lower()
+                    status_text = (
+                        str(acc.get("status") or acc.get("account_status") or "")
+                        .strip()
+                        .lower()
+                    )
                     if status_text == "closed":
                         acc["goodwill_on_closed"] = True
 
-        for section in ["negative_accounts", "open_accounts_with_issues", "positive_accounts", "high_utilization_accounts"]:
+        for section in [
+            "negative_accounts",
+            "open_accounts_with_issues",
+            "positive_accounts",
+            "high_utilization_accounts",
+        ]:
             for acc in result.get(section, []):
                 raw_name = acc.get("name", "")
                 norm = normalize_creditor_name(raw_name)
@@ -117,11 +136,20 @@ def analyze_credit_report(
                     print(f"[~] Normalized account heading '{raw_name}' -> '{norm}'")
                 if norm in history:
                     acc["late_payments"] = history[norm]
-                    if any(v >= 1 for vals in history[norm].values() for v in vals.values()):
+                    if any(
+                        v >= 1 for vals in history[norm].values() for v in vals.values()
+                    ):
                         acc.setdefault("flags", []).append("Late Payments")
-                        if section not in ["negative_accounts", "open_accounts_with_issues"]:
+                        if section not in [
+                            "negative_accounts",
+                            "open_accounts_with_issues",
+                        ]:
                             acc["goodwill_candidate"] = True
-                        status_text = str(acc.get("status") or acc.get("account_status") or "").strip().lower()
+                        status_text = (
+                            str(acc.get("status") or acc.get("account_status") or "")
+                            .strip()
+                            .lower()
+                        )
                         if status_text == "closed":
                             acc["goodwill_on_closed"] = True
 

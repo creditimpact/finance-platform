@@ -87,6 +87,7 @@ def render_pdf_from_html(
 
 def save_json_output(all_accounts: list[dict], output_path: Path):
     """Write the sanitized account context to a JSON file."""
+
     def sanitize_for_json(data):
         if isinstance(data, dict):
             return {k: sanitize_for_json(v) for k, v in data.items()}

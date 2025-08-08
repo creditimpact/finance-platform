@@ -1,4 +1,3 @@
-import os
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,7 +37,13 @@ class Account:
             for k, v in data.items()
             if k not in {"name", "bureaus", "account_number", "status"}
         }
-        return cls(name=name, bureaus=bureaus, account_number=account_number, status=status, extra=extra)
+        return cls(
+            name=name,
+            bureaus=bureaus,
+            account_number=account_number,
+            status=status,
+            extra=extra,
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert back to a serializable dictionary."""
@@ -69,7 +74,9 @@ class Account:
         else:
             self.extra[key] = value
 
+
 # 💡 Functions to enrich goodwill accounts with hardship context
+
 
 def infer_hardship_reason(account: Account) -> str:
     """Infer a short hardship reason based on account notes."""
@@ -78,23 +85,31 @@ def infer_hardship_reason(account: Account) -> str:
         return "I was dealing with a medical emergency that affected my finances"
     elif "job" in notes or "unemploy" in notes:
         return "I experienced an unexpected job loss which disrupted my ability to make payments"
-    return "I went through a temporary hardship that affected my ability to stay current"
+    return (
+        "I went through a temporary hardship that affected my ability to stay current"
+    )
+
 
 def infer_personal_impact(account: Account) -> str:
     """Describe how the hardship affected the client."""
     return "difficulty qualifying for a loan and increased financial stress"
 
+
 def infer_recovery_summary(account: Account) -> str:
     """Summarize how the client has recovered from the hardship."""
     return "Since then, I have taken full responsibility and made all payments on time"
 
+
 # 📥 Load analyzed SmartCredit report
 
+
 def load_analyzed_report(json_path: Path) -> Dict[str, Any]:
-    with open(json_path, 'r', encoding='utf-8') as f:
+    with open(json_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
+
 # 🎯 Process and categorize by bureau
+
 
 def process_analyzed_report(
     json_path: str | Path,
@@ -113,12 +128,14 @@ def process_analyzed_report(
             "disputes": [],
             "goodwill": [],
             "inquiries": [],
-            "high_utilization": []
-        } for bureau in BUREAUS
+            "high_utilization": [],
+        }
+        for bureau in BUREAUS
     }
 
     def clean_num(n: str | None) -> str:
         import re
+
         return re.sub(r"\D", "", n or "")
 
     seen_entries = set()
@@ -137,19 +154,25 @@ def process_analyzed_report(
                     enriched_account = Account.from_dict(account.to_dict())
                     enriched_account["hardship_reason"] = infer_hardship_reason(account)
                     enriched_account["impact"] = infer_personal_impact(account)
-                    enriched_account["recovery_summary"] = infer_recovery_summary(account)
+                    enriched_account["recovery_summary"] = infer_recovery_summary(
+                        account
+                    )
                     output[bureau_norm]["goodwill"].append(enriched_account)
                 else:
                     output[bureau_norm]["disputes"].append(account)
                 seen_entries.add(key)
             elif bureau_norm in output and log_list is not None:
-                log_list.append(f"[{bureau_norm}] Duplicate entry skipped for '{account.name}'")
+                log_list.append(
+                    f"[{bureau_norm}] Duplicate entry skipped for '{account.name}'"
+                )
 
     # 2. Open Accounts with Issues
     for account_data in data.get("open_accounts_with_issues", []):
         enforce_collection_status(account_data)
         account = Account.from_dict(account_data)
-        is_goodwill = account.get("goodwill_candidate", False) or account.get("goodwill_on_closed", False)
+        is_goodwill = account.get("goodwill_candidate", False) or account.get(
+            "goodwill_on_closed", False
+        )
         name_key = normalize_creditor_name(account.name)
         for bureau in account.bureaus:
             bureau_norm = normalize_bureau_name(bureau)
@@ -159,13 +182,17 @@ def process_analyzed_report(
                     enriched_account = Account.from_dict(account.to_dict())
                     enriched_account["hardship_reason"] = infer_hardship_reason(account)
                     enriched_account["impact"] = infer_personal_impact(account)
-                    enriched_account["recovery_summary"] = infer_recovery_summary(account)
+                    enriched_account["recovery_summary"] = infer_recovery_summary(
+                        account
+                    )
                     output[bureau_norm]["goodwill"].append(enriched_account)
                 else:
                     output[bureau_norm]["disputes"].append(account)
                 seen_entries.add(key)
             elif bureau_norm in output and log_list is not None:
-                log_list.append(f"[{bureau_norm}] Duplicate entry skipped for '{account.name}'")
+                log_list.append(
+                    f"[{bureau_norm}] Duplicate entry skipped for '{account.name}'"
+                )
 
     # 3. High Utilization Accounts — NOT sent to disputes
     for account_data in data.get("high_utilization_accounts", []):
@@ -179,7 +206,9 @@ def process_analyzed_report(
                 output[bureau_norm]["high_utilization"].append(account)
                 seen_entries.add(key)
             elif bureau_norm in output and log_list is not None:
-                log_list.append(f"[{bureau_norm}] Duplicate entry skipped for '{account.name}'")
+                log_list.append(
+                    f"[{bureau_norm}] Duplicate entry skipped for '{account.name}'"
+                )
 
     # 4. Inquiries (exclude matched)
     def norm(name: str) -> str:
@@ -193,7 +222,8 @@ def process_analyzed_report(
     all_account_names = {
         norm(acc.get("name"))
         for acc in data.get("all_accounts", [])
-        if "closed" not in str(acc.get("status") or acc.get("account_status") or "").lower()
+        if "closed"
+        not in str(acc.get("status") or acc.get("account_status") or "").lower()
     }
 
     for inquiry in data.get("inquiries", []):
@@ -209,7 +239,6 @@ def process_analyzed_report(
                 f"[{bureau}] Inquiry '{inquiry.get('creditor_name')}' matched known account and was skipped"
             )
 
-    
     def apply_fallback_tags(
         data_dict: Dict[str, Dict[str, List[Any]]],
         audit: AuditLogger | None,
@@ -244,20 +273,27 @@ def process_analyzed_report(
     apply_fallback_tags(output, audit, log_list)
     return output
 
+
 # 💾 Save separate JSON files per bureau
 
-def save_bureau_outputs(output_data: Dict[str, Dict[str, List[Any]]], output_folder: Path) -> None:
+
+def save_bureau_outputs(
+    output_data: Dict[str, Dict[str, List[Any]]], output_folder: Path
+) -> None:
     """Write bureau data to JSON files."""
     output_folder.mkdir(parents=True, exist_ok=True)
     for bureau, content in output_data.items():
         serializable = {
-            section: [item.to_dict() if isinstance(item, Account) else item for item in items]
+            section: [
+                item.to_dict() if isinstance(item, Account) else item for item in items
+            ]
             for section, items in content.items()
         }
         out_path = output_folder / f"{bureau}_payload.json"
-        with open(out_path, 'w', encoding='utf-8') as f:
+        with open(out_path, "w", encoding="utf-8") as f:
             json.dump(serializable, f, indent=4, ensure_ascii=False)
         print(f"[💾] Saved: {out_path}")
+
 
 # ✅ CLI Run
 

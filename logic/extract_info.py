@@ -1,8 +1,6 @@
-import os
 import re
 import pdfplumber
 import logging
-import json
 from typing import Dict, List
 from logic.utils.names_normalization import normalize_bureau_name, BUREAUS
 from collections import Counter
@@ -10,6 +8,7 @@ from services.ai_client import AIClient, get_default_ai_client
 from .json_utils import parse_json
 
 logging.getLogger("pdfplumber.page").setLevel(logging.ERROR)
+
 
 def extract_clean_name(full_name: str) -> str:
     parts = full_name.strip().split()
@@ -21,11 +20,13 @@ def extract_clean_name(full_name: str) -> str:
             seen.add(part.lower())
     return " ".join(unique_parts)
 
+
 def normalize_name_order(name: str) -> str:
     parts = name.strip().split()
     if len(parts) == 2:
         return f"{parts[1]} {parts[0]}"
     return name
+
 
 def extract_bureau_info_column_refined(
     pdf_path: str,
@@ -53,9 +54,23 @@ def extract_bureau_info_column_refined(
             columns[normalize_bureau_name("Equifax")].append(w)
 
     noise_words = {
-        "account", "progress", "plan", "reactivate", "score", "alert", "change",
-        "your", "personal", "information", "identity", "elements", "name",
-        "employer", "lowes", "consumer", "statement"
+        "account",
+        "progress",
+        "plan",
+        "reactivate",
+        "score",
+        "alert",
+        "change",
+        "your",
+        "personal",
+        "information",
+        "identity",
+        "elements",
+        "name",
+        "employer",
+        "lowes",
+        "consumer",
+        "statement",
     }
 
     def group_words_by_line(words: List[Dict]) -> List[str]:
@@ -79,9 +94,9 @@ def extract_bureau_info_column_refined(
             line_upper = line.upper()
             words = line.strip().split()
             if (
-                2 <= len(words) <= 5 and
-                all(len(w) > 1 for w in words) and
-                not any(noise in line_upper.lower() for noise in noise_words)
+                2 <= len(words) <= 5
+                and all(len(w) > 1 for w in words)
+                and not any(noise in line_upper.lower() for noise in noise_words)
             ):
                 if re.fullmatch(r"[A-Z\s\.']{6,}", line_upper):
                     return extract_clean_name(line.title())
@@ -113,8 +128,8 @@ def extract_bureau_info_column_refined(
             most_common = Counter(field_values).most_common(1)[0][0]
             for b in bureaus:
                 if not data[b][field] or (
-                    len(data[b][field].split()) < 2 and
-                    data[b][field].lower() not in most_common.lower()
+                    len(data[b][field].split()) < 2
+                    and data[b][field].lower() not in most_common.lower()
                 ):
                     data[b][field] = most_common
 
@@ -126,8 +141,8 @@ def extract_bureau_info_column_refined(
         values = {b: data[b][field].strip().lower() for b in bureaus if data[b][field]}
         if len(set(values.values())) > 1:
             discrepancies.append(
-                f"⚠️ Mismatch in {field} across bureaus:\n" +
-                "\n".join([f"  - {b}: {data[b][field]}" for b in bureaus])
+                f"⚠️ Mismatch in {field} across bureaus:\n"
+                + "\n".join([f"  - {b}: {data[b][field]}" for b in bureaus])
             )
 
     # Compare to client-provided info
@@ -136,13 +151,17 @@ def extract_bureau_info_column_refined(
             extracted = data["Experian"]["name"].lower().strip()
             legal = client_info["legal_name"].lower().strip()
             if set(extracted.split()) != set(legal.split()):
-                discrepancies.append(f"⚠️ Name mismatch with ID: extracted '{extracted}' vs client '{legal}'")
+                discrepancies.append(
+                    f"⚠️ Name mismatch with ID: extracted '{extracted}' vs client '{legal}'"
+                )
 
         if "legal_address" in client_info:
             extracted = data["Experian"]["current_address"].lower().strip()
             legal = client_info["legal_address"].lower().strip()
             if extracted != legal:
-                discrepancies.append(f"⚠️ Address mismatch with ID: extracted '{extracted}' vs client '{legal}'")
+                discrepancies.append(
+                    f"⚠️ Address mismatch with ID: extracted '{extracted}' vs client '{legal}'"
+                )
 
     if use_ai:
         try:
@@ -185,5 +204,5 @@ Here is the text:
     return {
         "data": data["Experian"],
         "discrepancies": discrepancies,
-        "raw_all_bureaus": data
+        "raw_all_bureaus": data,
     }

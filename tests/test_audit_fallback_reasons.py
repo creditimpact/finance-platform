@@ -12,7 +12,8 @@ from models.strategy import StrategyPlan
 
 def test_apply_fallback_tags_logs_keyword_match(tmp_path, monkeypatch):
     import types
-    sys.modules['pdfkit'] = types.SimpleNamespace(configuration=lambda **kwargs: None)
+
+    sys.modules["pdfkit"] = types.SimpleNamespace(configuration=lambda **kwargs: None)
     from logic.process_accounts import process_analyzed_report
 
     audit = create_audit_logger("test")
@@ -27,19 +28,26 @@ def test_apply_fallback_tags_logs_keyword_match(tmp_path, monkeypatch):
     audit_file = audit.save(tmp_path)
     data = json.loads(audit_file.read_text())
     entries = data["accounts"]["Bad Corp"]
-    assert any(e.get("fallback_reason") == FallbackReason.KEYWORD_MATCH.value for e in entries)
+    assert any(
+        e.get("fallback_reason") == FallbackReason.KEYWORD_MATCH.value for e in entries
+    )
 
 
 def test_merge_strategy_data_audit_reasons(tmp_path):
     import types
-    sys.modules['pdfkit'] = types.SimpleNamespace(configuration=lambda **kwargs: None)
+
+    sys.modules["pdfkit"] = types.SimpleNamespace(configuration=lambda **kwargs: None)
     from logic.strategy_merger import merge_strategy_data
 
     audit = create_audit_logger("test")
     strategy = StrategyPlan.from_dict(
         {
             "accounts": [
-                {"name": "Bad Corp", "account_number": "1111", "recommended_action": "foobar"},
+                {
+                    "name": "Bad Corp",
+                    "account_number": "1111",
+                    "recommended_action": "foobar",
+                },
                 {"name": "Empty Action", "account_number": "3333"},
             ]
         }
@@ -47,9 +55,27 @@ def test_merge_strategy_data_audit_reasons(tmp_path):
     bureau_data = {
         "Experian": {
             "disputes": [
-                Account.from_dict({"name": "Bad Corp", "account_number": "1111", "status": "collection"}),
-                Account.from_dict({"name": "No Strat", "account_number": "2222", "status": "chargeoff"}),
-                Account.from_dict({"name": "Empty Action", "account_number": "3333", "status": "repossession"}),
+                Account.from_dict(
+                    {
+                        "name": "Bad Corp",
+                        "account_number": "1111",
+                        "status": "collection",
+                    }
+                ),
+                Account.from_dict(
+                    {
+                        "name": "No Strat",
+                        "account_number": "2222",
+                        "status": "chargeoff",
+                    }
+                ),
+                Account.from_dict(
+                    {
+                        "name": "Empty Action",
+                        "account_number": "3333",
+                        "status": "repossession",
+                    }
+                ),
             ],
             "goodwill": [],
             "high_utilization": [],
@@ -65,7 +91,10 @@ def test_merge_strategy_data_audit_reasons(tmp_path):
     empty_logs = data["accounts"]["Empty Action"]
 
     # Bad Corp: strategist provided unrecognised action
-    assert any(e.get("fallback_reason") == FallbackReason.UNRECOGNIZED_TAG.value for e in bad_logs)
+    assert any(
+        e.get("fallback_reason") == FallbackReason.UNRECOGNIZED_TAG.value
+        for e in bad_logs
+    )
     assert any(
         e.get("failure_reason") == StrategistFailureReason.UNRECOGNIZED_FORMAT.value
         for e in bad_logs
@@ -77,7 +106,10 @@ def test_merge_strategy_data_audit_reasons(tmp_path):
     assert fallback_entry.get("raw_action") == "foobar"
 
     # No Strat: strategist missing entry
-    assert any(e.get("fallback_reason") == FallbackReason.NO_RECOMMENDATION.value for e in no_logs)
+    assert any(
+        e.get("fallback_reason") == FallbackReason.NO_RECOMMENDATION.value
+        for e in no_logs
+    )
     assert any(
         e.get("failure_reason") == StrategistFailureReason.MISSING_INPUT.value
         for e in no_logs
@@ -85,7 +117,10 @@ def test_merge_strategy_data_audit_reasons(tmp_path):
     )
 
     # Empty Action: strategist provided entry with empty recommendation
-    assert any(e.get("fallback_reason") == FallbackReason.NO_RECOMMENDATION.value for e in empty_logs)
+    assert any(
+        e.get("fallback_reason") == FallbackReason.NO_RECOMMENDATION.value
+        for e in empty_logs
+    )
     assert any(
         e.get("failure_reason") == StrategistFailureReason.EMPTY_OUTPUT.value
         for e in empty_logs

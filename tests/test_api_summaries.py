@@ -11,6 +11,7 @@ def test_summaries_endpoint_returns_clean_data(monkeypatch):
     def fake_config(*args, **kwargs):
         class Dummy:
             pass
+
         return Dummy()
 
     monkeypatch.setattr("pdfkit.configuration", fake_config)

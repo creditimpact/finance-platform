@@ -12,22 +12,39 @@ from models.strategy import StrategyPlan
 
 def test_strategy_fallback_logs_include_reason_and_override(tmp_path):
     import types
-    sys.modules['pdfkit'] = types.SimpleNamespace(configuration=lambda **kwargs: None)
+
+    sys.modules["pdfkit"] = types.SimpleNamespace(configuration=lambda **kwargs: None)
     from logic.strategy_merger import merge_strategy_data
 
     audit = create_audit_logger("test")
     strategy = StrategyPlan.from_dict(
         {
             "accounts": [
-                {"name": "Bad Corp", "account_number": "1111", "recommended_action": "foobar"}
+                {
+                    "name": "Bad Corp",
+                    "account_number": "1111",
+                    "recommended_action": "foobar",
+                }
             ]
         }
     )
     bureau_data = {
         "Experian": {
             "disputes": [
-                Account.from_dict({"name": "Bad Corp", "account_number": "1111", "status": "collection"}),
-                Account.from_dict({"name": "No Strat", "account_number": "2222", "status": "chargeoff"}),
+                Account.from_dict(
+                    {
+                        "name": "Bad Corp",
+                        "account_number": "1111",
+                        "status": "collection",
+                    }
+                ),
+                Account.from_dict(
+                    {
+                        "name": "No Strat",
+                        "account_number": "2222",
+                        "status": "chargeoff",
+                    }
+                ),
             ],
             "goodwill": [],
             "high_utilization": [],
@@ -38,8 +55,12 @@ def test_strategy_fallback_logs_include_reason_and_override(tmp_path):
     audit_file = audit.save(tmp_path)
     data = json.loads(audit_file.read_text())
 
-    bad_entry = next(e for e in data["accounts"]["Bad Corp"] if e.get("stage") == "strategy_fallback")
-    no_entry = next(e for e in data["accounts"]["No Strat"] if e.get("stage") == "strategy_fallback")
+    bad_entry = next(
+        e for e in data["accounts"]["Bad Corp"] if e.get("stage") == "strategy_fallback"
+    )
+    no_entry = next(
+        e for e in data["accounts"]["No Strat"] if e.get("stage") == "strategy_fallback"
+    )
 
     assert bad_entry.get("fallback_reason") == FallbackReason.UNRECOGNIZED_TAG.value
     assert bad_entry.get("overrode_strategist") is True

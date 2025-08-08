@@ -10,6 +10,7 @@ class AuditLevel(Enum):
     ESSENTIAL = 1
     VERBOSE = 2
 
+
 class AuditLogger:
     """Collects structured audit information for a credit repair run."""
 
@@ -45,7 +46,10 @@ class AuditLogger:
         )
 
     def log_account(self, account_id: Any, info: Dict[str, Any]) -> None:
-        if self.level == AuditLevel.ESSENTIAL and info.get("stage") not in self.ESSENTIAL_STEPS:
+        if (
+            self.level == AuditLevel.ESSENTIAL
+            and info.get("stage") not in self.ESSENTIAL_STEPS
+        ):
             return
         acc = self.data["accounts"].setdefault(str(account_id), [])
         entry = {"timestamp": datetime.now(UTC).isoformat()}

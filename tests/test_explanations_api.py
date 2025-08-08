@@ -9,11 +9,11 @@ from session_manager import get_session, get_intake
 
 
 def test_explanations_endpoint_stores_raw_and_structured(monkeypatch):
-    import pdfkit
 
     def fake_config(*args, **kwargs):
         class Dummy:
             pass
+
         return Dummy()
 
     monkeypatch.setattr("pdfkit.configuration", fake_config)

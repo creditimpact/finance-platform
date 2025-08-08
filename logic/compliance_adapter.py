@@ -6,7 +6,7 @@ import warnings
 from typing import Dict, Iterable, List, Set, Tuple
 
 from logic.utils.names_normalization import normalize_creditor_name
-from logic.utils.text_parsing import CHARGEOFF_RE, COLLECTION_RE
+from logic.utils.text_parsing import CHARGEOFF_RE
 
 
 # Default dispute reason inserted when no custom note is provided.
@@ -44,7 +44,11 @@ def sanitize_disputes(
 
     sanitization_issues = False
     bureau_sanitization = False
-    allowed_types = {"identity_theft", "unauthorized_or_unverified", "inaccurate_reporting"}
+    allowed_types = {
+        "identity_theft",
+        "unauthorized_or_unverified",
+        "inaccurate_reporting",
+    }
 
     for d in disputes:
         if not (is_identity_theft and d.get("is_suspected_identity_theft", False)):
@@ -97,7 +101,9 @@ def sanitize_disputes(
     return sanitization_issues, bureau_sanitization, fallback_norm_names, fallback_used
 
 
-def sanitize_client_info(client_info: dict, bureau_name: str, log_messages: List[str]) -> Tuple[dict, bool]:
+def sanitize_client_info(
+    client_info: dict, bureau_name: str, log_messages: List[str]
+) -> Tuple[dict, bool]:
     """Remove raw client notes to maintain compliance."""
 
     raw_client_text_present = bool(client_info.get("custom_dispute_notes"))
@@ -141,8 +147,8 @@ def adapt_gpt_output(
         acc_info = acc_type_map.get(lookup_key) or acc_type_map.get((name_key, ""))
         if acc_info:
             status_text = (
-                (acc_info.get("account_type", "") + " " + acc_info.get("status", "")).lower()
-            )
+                acc_info.get("account_type", "") + " " + acc_info.get("status", "")
+            ).lower()
             if "collection" in status_text:
                 acc["paragraph"] = acc["paragraph"].rstrip() + (
                     " Please also provide evidence of assignment or purchase agreements from the "
@@ -164,8 +170,8 @@ def adapt_gpt_output(
 
     closing = gpt_data.get("closing_paragraph", "").strip()
     gpt_data["closing_paragraph"] = (
-        (closing + (" " if closing else "") + ESCALATION_NOTE).strip()
-    )
+        closing + (" " if closing else "") + ESCALATION_NOTE
+    ).strip()
 
 
 __all__ = [
@@ -175,4 +181,3 @@ __all__ = [
     "DEFAULT_DISPUTE_REASON",
     "ESCALATION_NOTE",
 ]
-

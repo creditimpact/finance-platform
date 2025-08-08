@@ -1,12 +1,11 @@
 import sys
 from pathlib import Path
 
-import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from logic.rule_checker import check_letter
-from session_manager import get_session, update_session
+from session_manager import get_session
 
 
 def test_ny_medical_clause_injected_and_logged(tmp_path):
@@ -26,7 +25,10 @@ def test_ny_medical_clause_injected_and_logged(tmp_path):
 
 def test_ga_prohibit_service_flags_violation():
     _, violations = check_letter("Body\nSincerely,\nName", state="GA", context={})
-    assert any(v["rule_id"] == "STATE_PROHIBITED" and v["severity"] == "critical" for v in violations)
+    assert any(
+        v["rule_id"] == "STATE_PROHIBITED" and v["severity"] == "critical"
+        for v in violations
+    )
 
 
 def test_unrelated_state_no_extra_text():

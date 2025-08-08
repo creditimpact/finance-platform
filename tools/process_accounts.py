@@ -12,7 +12,9 @@ def main() -> None:
         description="Process a SmartCredit analysis report into bureau payloads"
     )
     parser.add_argument("input", type=Path, help="Path to analyzed report JSON")
-    parser.add_argument("output", type=Path, help="Directory where payloads will be written")
+    parser.add_argument(
+        "output", type=Path, help="Directory where payloads will be written"
+    )
     args = parser.parse_args()
 
     result = process_analyzed_report(args.input)

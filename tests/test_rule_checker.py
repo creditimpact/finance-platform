@@ -1,7 +1,6 @@
 from pathlib import Path
 import sys
 
-import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -13,10 +12,12 @@ def test_admissions_replaced_and_ca_disclosure():
     cleaned, violations = check_letter(text, state="CA", context={})
     assert "I admit" not in cleaned
     assert (
-        "I dispute the accuracy of this information and request validation under applicable law." in cleaned
+        "I dispute the accuracy of this information and request validation under applicable law."
+        in cleaned
     )
     assert (
-        "Under the California Credit Services Act, we are required to provide this disclosure." in cleaned
+        "Under the California Credit Services Act, we are required to provide this disclosure."
+        in cleaned
     )
     assert any(v["rule_id"] == "RULE_NO_ADMISSION" for v in violations)
 
@@ -26,7 +27,10 @@ def test_pii_masked_and_violation_recorded():
     cleaned, violations = check_letter(text, state=None, context={})
     assert "123-45-6789" not in cleaned
     assert "[REDACTED]" in cleaned
-    assert any(v["rule_id"] == "RULE_PII_LIMIT" and v["severity"] == "critical" for v in violations)
+    assert any(
+        v["rule_id"] == "RULE_PII_LIMIT" and v["severity"] == "critical"
+        for v in violations
+    )
 
 
 def test_state_specific_clause_appended_for_ny_medical():

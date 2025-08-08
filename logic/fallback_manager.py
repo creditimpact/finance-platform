@@ -1,4 +1,5 @@
 """Centralized fallback logic for account action tagging."""
+
 from typing import Any, Mapping
 
 # Keywords that imply an account should be disputed when no explicit action is provided.

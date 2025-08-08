@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 import sys
 import types
@@ -48,7 +47,9 @@ def test_call_ai_analysis_parses_json(tmp_path):
     client = FakeAIClient()
     client.add_chat_response('{"inquiries": [], "all_accounts": []}')
     out = tmp_path / "result.json"
-    data = report_prompting.call_ai_analysis("text", "goal", False, out, ai_client=client)
+    data = report_prompting.call_ai_analysis(
+        "text", "goal", False, out, ai_client=client
+    )
     assert data["inquiries"] == []
     assert out.with_name(out.stem + "_raw.txt").exists()
 
@@ -84,7 +85,11 @@ def test_merge_parser_inquiries():
     ]
     report_postprocessing._merge_parser_inquiries(result, parsed)
     assert len(result["inquiries"]) == 2
-    assert any(i.get("advisor_comment") for i in result["inquiries"] if i["creditor_name"] == "Chase")
+    assert any(
+        i.get("advisor_comment")
+        for i in result["inquiries"]
+        if i["creditor_name"] == "Chase"
+    )
 
 
 @pytest.mark.parametrize("identity_theft", [True, False])
@@ -110,15 +115,31 @@ def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
     # Parsing stage
     monkeypatch.setattr(report_parsing, "extract_text_from_pdf", lambda p: "text")
     monkeypatch.setattr(analyze_report, "extract_inquiries", lambda text: [])
-    monkeypatch.setattr(report_prompting, "extract_late_history_blocks", lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {})
+    monkeypatch.setattr(
+        report_prompting,
+        "extract_late_history_blocks",
+        lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
+    )
     monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
 
     # Post-processing no-ops
-    monkeypatch.setattr(report_postprocessing, "_sanitize_late_counts", lambda hist: None)
-    monkeypatch.setattr(report_postprocessing, "_cleanup_unverified_late_text", lambda res, ver: None)
-    monkeypatch.setattr(report_postprocessing, "_inject_missing_late_accounts", lambda res, hist, raw: None)
-    monkeypatch.setattr(report_postprocessing, "_merge_parser_inquiries", lambda res, parsed: None)
-    monkeypatch.setattr(report_postprocessing, "validate_analysis_sanity", lambda res: [])
+    monkeypatch.setattr(
+        report_postprocessing, "_sanitize_late_counts", lambda hist: None
+    )
+    monkeypatch.setattr(
+        report_postprocessing, "_cleanup_unverified_late_text", lambda res, ver: None
+    )
+    monkeypatch.setattr(
+        report_postprocessing,
+        "_inject_missing_late_accounts",
+        lambda res, hist, raw: None,
+    )
+    monkeypatch.setattr(
+        report_postprocessing, "_merge_parser_inquiries", lambda res, parsed: None
+    )
+    monkeypatch.setattr(
+        report_postprocessing, "validate_analysis_sanity", lambda res: []
+    )
 
     default_goal = (
         "Improve credit score significantly within the next 3–6 months using strategies such as authorized users, "
@@ -126,7 +147,11 @@ def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
     )
 
     baseline = report_prompting.call_ai_analysis(
-        "text", default_goal, identity_theft, tmp_path / "baseline.json", ai_client=client
+        "text",
+        default_goal,
+        identity_theft,
+        tmp_path / "baseline.json",
+        ai_client=client,
     )
 
     result = analyze_report.analyze_credit_report(

@@ -1,6 +1,5 @@
-import os
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from services.ai_client import AIClient, get_default_ai_client
 
@@ -12,6 +11,7 @@ _PROFANITY = [
     "fuck",
     "bitch",
 ]
+
 
 def _redact(pattern: str, text: str) -> str:
     return re.sub(pattern, "[REDACTED]", text, flags=re.IGNORECASE)
@@ -33,7 +33,9 @@ def sanitize(text: str) -> str:
     cleaned = _redact(r"\b\d{3}-\d{2}-\d{4}\b", cleaned)
     # Profanity
     for word in _PROFANITY:
-        cleaned = re.sub(rf"\b{re.escape(word)}\b", "[REDACTED]", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(
+            rf"\b{re.escape(word)}\b", "[REDACTED]", cleaned, flags=re.IGNORECASE
+        )
     # Emojis and other symbols beyond BMP
     cleaned = re.sub(r"[\U00010000-\U0010FFFF]", "", cleaned)
     # Normalize whitespace

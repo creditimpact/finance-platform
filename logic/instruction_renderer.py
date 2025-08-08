@@ -49,7 +49,9 @@ def build_instruction_html(context: dict) -> str:
         if clean_status:
             status_line = f"<strong>Status:</strong> {html_utils.escape(clean_status)}"
         else:
-            status_line = "<strong>Status:</strong> No status available from the bureaus"
+            status_line = (
+                "<strong>Status:</strong> No status available from the bureaus"
+            )
         action_lines.append(status_line)
 
         late = acc.get("late_payments")
@@ -77,7 +79,9 @@ def build_instruction_html(context: dict) -> str:
         if dispute_type == "identity_theft":
             action_lines.append("⚠️ This account is reported as identity theft.")
         elif dispute_type == "unauthorized_or_unverified":
-            action_lines.append("⚠️ This account doesn't look familiar and is being disputed.")
+            action_lines.append(
+                "⚠️ This account doesn't look familiar and is being disputed."
+            )
         elif dispute_type == "inaccurate_reporting":
             action_lines.append("⚠️ The information on this account appears incorrect.")
 
@@ -92,7 +96,9 @@ def build_instruction_html(context: dict) -> str:
             except Exception:
                 pass
 
-        if not any(x.startswith(("📄", "⚠️", "💳")) for x in action_lines) and not acc.get("advisor_comment"):
+        if not any(
+            x.startswith(("📄", "⚠️", "💳")) for x in action_lines
+        ) and not acc.get("advisor_comment"):
             acc["advisor_comment"] = random.choice(
                 [
                     "This account is in good standing and supports your credit profile.",
@@ -103,10 +109,14 @@ def build_instruction_html(context: dict) -> str:
             )
 
         if acc.get("advisor_comment"):
-            action_lines.append(f"💬 <em>{html_utils.escape(acc['advisor_comment'])}</em>")
+            action_lines.append(
+                f"💬 <em>{html_utils.escape(acc['advisor_comment'])}</em>"
+            )
 
         if acc.get("personal_note"):
-            action_lines.append(f"📝 <em>{html_utils.escape(acc['personal_note'])}</em>")
+            action_lines.append(
+                f"📝 <em>{html_utils.escape(acc['personal_note'])}</em>"
+            )
 
         action_lines.append(
             f"<strong>Your Action:</strong> {html_utils.escape(acc.get('action_sentence', ''))}"

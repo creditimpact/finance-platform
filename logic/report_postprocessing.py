@@ -15,6 +15,7 @@ from logic.utils.names_normalization import (
 # Inquiry merging
 # ---------------------------------------------------------------------------
 
+
 def _merge_parser_inquiries(result: dict, parsed: List[dict]):
     """Merge parser-detected inquiries, preferring them over GPT output.
 
@@ -73,6 +74,7 @@ def _merge_parser_inquiries(result: dict, parsed: List[dict]):
 # Late payment utilities
 # ---------------------------------------------------------------------------
 
+
 def _sanitize_late_counts(history: Dict[str, Dict[str, Dict[str, int]]]) -> None:
     """Remove unrealistic late payment numbers from parsed history."""
     for acc, bureaus in list(history.items()):
@@ -118,7 +120,8 @@ def _cleanup_unverified_late_text(result: dict, verified: Set[str]):
 def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) -> None:
     """Add accounts detected by the parser but missing from the AI output."""
     existing = {
-        normalize_creditor_name(acc.get("name", "")) for acc in result.get("all_accounts", [])
+        normalize_creditor_name(acc.get("name", ""))
+        for acc in result.get("all_accounts", [])
     }
 
     for norm_name, bureaus in history.items():
@@ -140,6 +143,7 @@ def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) ->
 # Analysis sanity checks
 # ---------------------------------------------------------------------------
 
+
 def validate_analysis_sanity(analysis: dict) -> List[str]:
     """Run lightweight sanity checks on the final analysis structure.
 
@@ -148,16 +152,22 @@ def validate_analysis_sanity(analysis: dict) -> List[str]:
     """
     warnings: List[str] = []
 
-    if not analysis.get("negative_accounts") and not analysis.get("open_accounts_with_issues"):
+    if not analysis.get("negative_accounts") and not analysis.get(
+        "open_accounts_with_issues"
+    ):
         warnings.append("⚠️ No dispute/goodwill accounts found.")
 
     total_inquiries = analysis.get("summary_metrics", {}).get("total_inquiries")
     if isinstance(total_inquiries, list):
         if len(total_inquiries) > 50:
-            warnings.append("⚠️ Too many inquiries detected — may indicate parsing issue.")
+            warnings.append(
+                "⚠️ Too many inquiries detected — may indicate parsing issue."
+            )
     elif isinstance(total_inquiries, int):
         if total_inquiries > 50:
-            warnings.append("⚠️ Too many inquiries detected — may indicate parsing issue.")
+            warnings.append(
+                "⚠️ Too many inquiries detected — may indicate parsing issue."
+            )
 
     if not analysis.get("strategic_recommendations"):
         warnings.append("⚠️ No strategic recommendations provided.")
@@ -166,7 +176,9 @@ def validate_analysis_sanity(analysis: dict) -> List[str]:
         for account in analysis.get(section, []):
             comment = account.get("advisor_comment", "")
             if len(comment.split()) < 4:
-                warnings.append(f"⚠️ Advisor comment too short for account: {account.get('name')}")
+                warnings.append(
+                    f"⚠️ Advisor comment too short for account: {account.get('name')}"
+                )
 
     if warnings:
         print("\n[!] ANALYSIS QA WARNINGS:")

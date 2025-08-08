@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 import pdfplumber
 
@@ -7,16 +6,24 @@ MIN_TEXT_CHARS = 300
 MAX_UPLOAD_SIZE_MB = 10
 ALLOWED_EXTENSIONS = {".pdf"}
 
+
 def is_valid_filename(file_path: Path) -> bool:
     """בודק אם שם הקובץ לא מכיל תווים חשודים"""
     return file_path.name.replace(" ", "").isalnum() or file_path.name.endswith(".pdf")
+
 
 def contains_suspicious_pdf_elements(file_path: Path) -> bool:
     """בודק אם יש קוד זדוני ב־PDF (JS, Launch וכו׳)"""
     try:
         with open(file_path, "rb") as f:
             content = f.read().lower()
-            suspicious_keywords = [b"/js", b"/javascript", b"/launch", b"/aa", b"/openaction"]
+            suspicious_keywords = [
+                b"/js",
+                b"/javascript",
+                b"/launch",
+                b"/aa",
+                b"/openaction",
+            ]
             return any(keyword in content for keyword in suspicious_keywords)
     except Exception as e:
         print(f"[⚠️] Failed to scan for PDF threats: {e}")
@@ -33,7 +40,9 @@ def is_safe_pdf(file_path: Path) -> bool:
 
     size_mb = file_path.stat().st_size / (1024 * 1024)
     if size_mb > MAX_UPLOAD_SIZE_MB:
-        print(f"[❌] Blocked: File size {size_mb:.2f} MB exceeds {MAX_UPLOAD_SIZE_MB} MB")
+        print(
+            f"[❌] Blocked: File size {size_mb:.2f} MB exceeds {MAX_UPLOAD_SIZE_MB} MB"
+        )
         return False
 
     suspicious = contains_suspicious_pdf_elements(file_path)
@@ -69,6 +78,7 @@ def is_safe_pdf(file_path: Path) -> bool:
 
     print("[✅] PDF passed all checks.")
     return True
+
 
 def move_uploaded_file(uploaded_path: Path, session_id: str) -> Path:
     """מעביר את הקובץ לתיקייה ייחודית לפי session ID + שומר גם בשם המקורי"""

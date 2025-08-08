@@ -19,7 +19,7 @@ def _load_sessions() -> Dict[str, Dict[str, Any]]:
     if not os.path.exists(SESSION_FILE):
         return {}
     try:
-        with open(SESSION_FILE, 'r', encoding='utf-8') as f:
+        with open(SESSION_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
@@ -27,7 +27,7 @@ def _load_sessions() -> Dict[str, Dict[str, Any]]:
 
 def _save_sessions(sessions: Dict[str, Dict[str, Any]]) -> None:
     os.makedirs(os.path.dirname(SESSION_FILE), exist_ok=True)
-    with open(SESSION_FILE, 'w', encoding='utf-8') as f:
+    with open(SESSION_FILE, "w", encoding="utf-8") as f:
         json.dump(sessions, f)
 
 
@@ -57,6 +57,7 @@ def update_session(session_id: str, **kwargs: Any) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Intake-only storage helpers
 # ---------------------------------------------------------------------------
+
 
 def _load_intake() -> Dict[str, Dict[str, Any]]:
     if not os.path.exists(INTAKE_FILE):

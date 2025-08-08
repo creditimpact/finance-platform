@@ -19,7 +19,8 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
 
         monkeypatch.setattr(
             "logic.letter_generator.run_compliance_pipeline",
-            lambda html, state, session_id, dt, ai_client=None: calls.append(dt) or html,
+            lambda html, state, session_id, dt, ai_client=None: calls.append(dt)
+            or html,
         )
         monkeypatch.setattr(
             "logic.letter_generator.generate_strategy",
@@ -64,9 +65,11 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
         )
     elif doc_type == "instructions":
         from logic.instructions_generator import generate_instruction_file
+
         monkeypatch.setattr(
             "logic.instructions_generator.run_compliance_pipeline",
-            lambda html, state, session_id, dt, ai_client=None: calls.append(dt) or html,
+            lambda html, state, session_id, dt, ai_client=None: calls.append(dt)
+            or html,
         )
         monkeypatch.setattr(
             "logic.instruction_data_preparation.generate_account_action",
@@ -97,7 +100,8 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
 
         monkeypatch.setattr(
             "logic.generate_goodwill_letters.run_compliance_pipeline",
-            lambda html, state, session_id, dt, ai_client=None: calls.append(dt) or html,
+            lambda html, state, session_id, dt, ai_client=None: calls.append(dt)
+            or html,
         )
         monkeypatch.setattr(
             "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft",

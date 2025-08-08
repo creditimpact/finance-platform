@@ -10,7 +10,10 @@ from datetime import datetime
 from audit import AuditLogger, AuditLevel
 from services.ai_client import AIClient
 
-from logic.pdf_renderer import ensure_template_env, render_html_to_pdf as default_pdf_renderer
+from logic.pdf_renderer import (
+    ensure_template_env,
+    render_html_to_pdf as default_pdf_renderer,
+)
 from logic.utils.file_paths import safe_filename
 from logic.utils.note_handling import get_client_address_lines
 from logic.utils.names_normalization import normalize_creditor_name

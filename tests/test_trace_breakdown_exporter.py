@@ -66,7 +66,9 @@ def test_export_trace_breakdown_files_exist(tmp_path: Path) -> None:
         assert "1" in data.get("accounts", {})
 
 
-def test_export_trace_breakdown_strategy_vs_fallback_consistency(tmp_path: Path) -> None:
+def test_export_trace_breakdown_strategy_vs_fallback_consistency(
+    tmp_path: Path,
+) -> None:
     audit = _build_sample_audit()
     strategy = _build_strategy()
     export_trace_breakdown(audit, strategy, strategy["accounts"], tmp_path)

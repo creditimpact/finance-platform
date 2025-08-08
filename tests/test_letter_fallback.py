@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import sys
 import pytest
+
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from logic.letter_generator import (
@@ -9,6 +10,7 @@ from logic.letter_generator import (
     DEFAULT_DISPUTE_REASON,
 )
 from tests.helpers.fake_ai_client import FakeAIClient
+
 
 class Dummy:
     def __init__(self, data):
@@ -18,8 +20,8 @@ class Dummy:
 def test_unrecognized_action_fallback(monkeypatch, tmp_path, capsys):
     # Patch external dependencies
     monkeypatch.setattr(
-        'logic.letter_generator.generate_strategy',
-        lambda session_id, bureau_data: {"dispute_items": {"1": {}}}
+        "logic.letter_generator.generate_strategy",
+        lambda session_id, bureau_data: {"dispute_items": {"1": {}}},
     )
 
     def fake_call_gpt(*args, **kwargs):
@@ -38,14 +40,17 @@ def test_unrecognized_action_fallback(monkeypatch, tmp_path, capsys):
             "closing_paragraph": "Closing",
         }
 
-    monkeypatch.setattr('logic.letter_generator.call_gpt_dispute_letter', fake_call_gpt)
-    monkeypatch.setattr('logic.pdf_renderer.render_html_to_pdf', lambda html, path: None)
+    monkeypatch.setattr("logic.letter_generator.call_gpt_dispute_letter", fake_call_gpt)
     monkeypatch.setattr(
-        'logic.compliance_pipeline.run_compliance_pipeline',
+        "logic.pdf_renderer.render_html_to_pdf", lambda html, path: None
+    )
+    monkeypatch.setattr(
+        "logic.compliance_pipeline.run_compliance_pipeline",
         lambda html, state, session_id, doc_type, ai_client=None: html,
     )
     import pdfkit
-    monkeypatch.setattr(pdfkit, 'configuration', lambda *a, **k: None)
+
+    monkeypatch.setattr(pdfkit, "configuration", lambda *a, **k: None)
 
     client_info = {
         "name": "Test Client",

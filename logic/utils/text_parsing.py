@@ -1,4 +1,5 @@
 """Text parsing helpers for account histories and flags."""
+
 from __future__ import annotations
 
 import re
@@ -17,6 +18,7 @@ GENERIC_NAME_RE = re.compile(r"days?\s+late|payment\s+history|year\s+history", r
 
 
 # Internal helpers ---------------------------------------------------------
+
 
 def _has_late_flag(text: str) -> bool:
     """Return True when the text indicates late payments."""
@@ -144,7 +146,9 @@ def extract_account_blocks(text: str, debug: bool = False) -> list[list[str]]:
                 if _has_account_fields(current_block):
                     blocks.append(current_block)
                 elif debug:
-                    print(f"[~] Discarded block '{current_block[0]}' (no account fields)")
+                    print(
+                        f"[~] Discarded block '{current_block[0]}' (no account fields)"
+                    )
             current_block = [line]
             capturing = True
             await_equifax_counts = False
@@ -163,7 +167,9 @@ def extract_account_blocks(text: str, debug: bool = False) -> list[list[str]]:
                 if _has_account_fields(current_block):
                     blocks.append(current_block)
                 elif debug:
-                    print(f"[~] Discarded block '{current_block[0]}' (no account fields)")
+                    print(
+                        f"[~] Discarded block '{current_block[0]}' (no account fields)"
+                    )
                 if debug:
                     print(
                         f"[🏁] End block '{current_block[0]}' after Equifax counts line"
@@ -366,7 +372,10 @@ def enforce_collection_status(acc: dict) -> None:
         if acc.get("status") and "reported_status" not in acc:
             acc["reported_status"] = acc["status"]
         # Preserve the status field so the full text can be shown in letters.
-        if acc.get("account_type") and "collection" not in str(acc["account_type"]).lower():
+        if (
+            acc.get("account_type")
+            and "collection" not in str(acc["account_type"]).lower()
+        ):
             acc["account_type"] = "Collection"
         else:
             acc.setdefault("account_type", "Collection")

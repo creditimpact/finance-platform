@@ -1,4 +1,5 @@
 """Utilities for filtering and summarizing report sections by bureau."""
+
 from __future__ import annotations
 
 from .names_normalization import (
@@ -71,7 +72,9 @@ def filter_sections_by_bureau(sections, bureau_name, log_list=None):
         if isinstance(acc, dict)
     }
 
-    extra_sources = sections.get("positive_accounts", []) + sections.get("all_accounts", [])
+    extra_sources = sections.get("positive_accounts", []) + sections.get(
+        "all_accounts", []
+    )
     for acc in extra_sources:
         reported = [normalize_bureau_name(b) for b in acc.get("bureaus", [])]
         if bureau_name not in reported:

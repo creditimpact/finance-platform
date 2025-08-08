@@ -8,7 +8,9 @@ from .fallback_manager import determine_fallback_action
 from logic.utils.names_normalization import normalize_creditor_name
 
 
-def dedupe_disputes(disputes: List[dict], bureau_name: str, log: List[str]) -> List[dict]:
+def dedupe_disputes(
+    disputes: List[dict], bureau_name: str, log: List[str]
+) -> List[dict]:
     """Remove duplicate dispute entries based on creditor name and account number."""
 
     def _sanitize(num: str | None) -> str | None:
@@ -146,4 +148,3 @@ def prepare_disputes_and_inquiries(
 
 
 __all__ = ["dedupe_disputes", "prepare_disputes_and_inquiries"]
-

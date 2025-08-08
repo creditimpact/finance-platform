@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 import os
 import sys
 
@@ -26,12 +27,8 @@ from config import get_app_config
 
 logger = logging.getLogger(__name__)
 _app_config = get_app_config()
-logger.info(
-    "Flask app starting with OPENAI_BASE_URL=%s", _app_config.ai.base_url
-)
-logger.info(
-    "Flask app OPENAI_API_KEY present=%s", bool(_app_config.ai.api_key)
-)
+logger.info("Flask app starting with OPENAI_BASE_URL=%s", _app_config.ai.base_url)
+logger.info("Flask app OPENAI_API_KEY present=%s", bool(_app_config.ai.api_key))
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
@@ -39,9 +36,11 @@ CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
 app.secret_key = _app_config.secret_key
 app.register_blueprint(admin_bp)
 
+
 @app.route("/")
 def index():
     return jsonify({"status": "ok", "message": "API is up"})
+
 
 @app.route("/api/start-process", methods=["POST"])
 def start_process():
@@ -59,7 +58,9 @@ def start_process():
 
         uploaded_file = request.files.get("file")
         print(f"📧 Email: {data.get('email')}")
-        print(f"📎 Uploaded file: {uploaded_file.filename if uploaded_file else '❌ None'}")
+        print(
+            f"📎 Uploaded file: {uploaded_file.filename if uploaded_file else '❌ None'}"
+        )
 
         if not data.get("email") or not uploaded_file:
             return jsonify({"status": "error", "message": "Missing email or file"}), 400
@@ -89,37 +90,51 @@ def start_process():
                 print("❌ File is not a valid PDF")
                 return jsonify({"status": "error", "message": "Invalid PDF file"}), 400
 
-        set_session(session_id, {
-            "file_path": local_filename,
-            "original_filename": original_name,
-            "email": data.get("email")
-        })
+        set_session(
+            session_id,
+            {
+                "file_path": local_filename,
+                "original_filename": original_name,
+                "email": data.get("email"),
+            },
+        )
 
         goal = data.get("goal")
-        is_identity_theft = str(data.get("is_identity_theft", "")).lower() in ("1", "true", "yes")
+        is_identity_theft = str(data.get("is_identity_theft", "")).lower() in (
+            "1",
+            "true",
+            "yes",
+        )
         legal_name = data.get("legal_name")
         address = data.get("address")
         story = data.get("story")
         notes = data.get("custom_dispute_notes")
 
-        print("📋 Collected fields:", {
-            "goal": goal,
-            "legal_name": legal_name,
-            "address": address,
-            "story": story,
-            "is_identity_theft": is_identity_theft,
-            "custom_dispute_notes": notes
-        })
+        print(
+            "📋 Collected fields:",
+            {
+                "goal": goal,
+                "legal_name": legal_name,
+                "address": address,
+                "story": story,
+                "is_identity_theft": is_identity_theft,
+                "custom_dispute_notes": notes,
+            },
+        )
 
-        accounts = extract_problematic_accounts.delay(local_filename, session_id).get(timeout=300)
+        accounts = extract_problematic_accounts.delay(local_filename, session_id).get(
+            timeout=300
+        )
 
-        return jsonify({
-            "status": "ok",
-            "session_id": session_id,
-            "filename": unique_name,
-            "original_filename": original_name,
-            "accounts": accounts,
-        })
+        return jsonify(
+            {
+                "status": "ok",
+                "session_id": session_id,
+                "filename": unique_name,
+                "original_filename": original_name,
+                "accounts": accounts,
+            }
+        )
 
     except Exception as e:
         print("❌ Exception occurred:", str(e))
@@ -198,8 +213,21 @@ def submit_explanations():
             dir_path = os.path.dirname(file_path)
             if os.path.exists(dir_path):
                 dir_listing = os.listdir(dir_path)
-        logger.error("File for session %s missing at %s. Dir contents: %s", session_id, file_path, dir_listing)
-        return jsonify({"status": "error", "message": "Uploaded report is missing. Please restart the process."}), 404
+        logger.error(
+            "File for session %s missing at %s. Dir contents: %s",
+            session_id,
+            file_path,
+            dir_listing,
+        )
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Uploaded report is missing. Please restart the process.",
+                }
+            ),
+            404,
+        )
 
     structured = session.get("structured_summaries", {}) if session else {}
     process_report.delay(
@@ -208,6 +236,7 @@ def submit_explanations():
 
     return jsonify({"status": "processing", "message": "Letters generation started."})
 
+
 if __name__ == "__main__":
     debug_mode = os.environ.get("FLASK_DEBUG", "0") in ("1", "true", "True")
-    app.run(host='0.0.0.0', port=5000, debug=debug_mode)
+    app.run(host="0.0.0.0", port=5000, debug=debug_mode)

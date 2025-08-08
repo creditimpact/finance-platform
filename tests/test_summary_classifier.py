@@ -1,4 +1,3 @@
-import os
 from logic.summary_classifier import classify_client_summary
 
 

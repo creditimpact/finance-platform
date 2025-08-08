@@ -11,7 +11,6 @@ the final HTML and PDF output.
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Dict, List, Tuple
 
@@ -19,6 +18,7 @@ from services.ai_client import AIClient, get_default_ai_client
 
 from logic.utils.names_normalization import normalize_creditor_name
 from logic.utils.note_handling import analyze_custom_notes
+
 
 def extract_clean_name(full_name: str) -> str:
     """Return a deduplicated version of a client's full name."""

@@ -1,4 +1,5 @@
 """PDF text extraction and conversion helpers."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -98,7 +99,7 @@ def gather_supporting_docs(
             continue
         for pdf_path in sorted(folder.glob("*.pdf")):
             if total_len >= max_chars:
-                print(f"[⚠️] Reached max characters, truncating remaining docs.")
+                print("[⚠️] Reached max characters, truncating remaining docs.")
                 break
             try:
                 raw_text = extract_pdf_text_safe(pdf_path, 1500)

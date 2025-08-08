@@ -40,7 +40,9 @@ def _lookup_account(account_id: str, bureau_data: Dict[str, Any]) -> Dict[str, A
     return {"bureau": None}
 
 
-def _build_dispute_items(structured: Dict[str, Any], bureau_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _build_dispute_items(
+    structured: Dict[str, Any], bureau_data: Dict[str, Any]
+) -> List[Dict[str, Any]]:
     """Construct per-account dispute strategies."""
 
     items: List[Dict[str, Any]] = []

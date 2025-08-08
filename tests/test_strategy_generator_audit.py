@@ -26,4 +26,7 @@ def test_malformed_json_triggers_audit(monkeypatch, tmp_path):
     stages = [s["stage"] for s in data["steps"]]
     assert "strategist_raw_output" in stages
     fail_entry = next(s for s in data["steps"] if s["stage"] == "strategist_failure")
-    assert fail_entry["details"].get("failure_reason") == StrategistFailureReason.UNRECOGNIZED_FORMAT.value
+    assert (
+        fail_entry["details"].get("failure_reason")
+        == StrategistFailureReason.UNRECOGNIZED_FORMAT.value
+    )

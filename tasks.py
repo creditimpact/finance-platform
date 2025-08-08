@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 import os
 import sys
 import uuid
@@ -19,25 +20,22 @@ from config import get_app_config
 
 _app_config = get_app_config()
 app = Celery(
-    'tasks',
+    "tasks",
     broker=_app_config.celery_broker_url,
     backend=_app_config.celery_broker_url,
 )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.info(
-    "Celery worker starting with OPENAI_BASE_URL=%s", _app_config.ai.base_url
-)
-logger.info(
-    "Celery worker OPENAI_API_KEY present=%s", bool(_app_config.ai.api_key)
-)
+logger.info("Celery worker starting with OPENAI_BASE_URL=%s", _app_config.ai.base_url)
+logger.info("Celery worker OPENAI_API_KEY present=%s", bool(_app_config.ai.api_key))
 
 # Verify that session_manager is importable at startup. This helps catch
 # cases where the worker is launched from a directory that omits the
 # project root from PYTHONPATH.
 try:
     import session_manager  # noqa: F401
+
     logger.info("session_manager import successful")
 except Exception as exc:  # pragma: no cover - log and continue
     logger.exception("session_manager import failed: %s", exc)
@@ -50,7 +48,8 @@ def _ensure_file(file_path: str) -> None:
         logger.error("File not found: %s. Dir contents: %s", file_path, listing)
         raise FileNotFoundError(f"Required file missing: {file_path}")
 
-@app.task(bind=True, name='extract_problematic_accounts')
+
+@app.task(bind=True, name="extract_problematic_accounts")
 def extract_problematic_accounts(self, file_path: str, session_id: str | None = None):
     """Extract problematic accounts from the report."""
     try:
@@ -62,7 +61,7 @@ def extract_problematic_accounts(self, file_path: str, session_id: str | None = 
         raise exc
 
 
-@app.task(bind=True, name='process_report')
+@app.task(bind=True, name="process_report")
 def process_report(
     self,
     file_path: str,

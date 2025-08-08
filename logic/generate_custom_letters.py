@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import json
 from pathlib import Path
 from datetime import datetime
@@ -113,8 +112,8 @@ def generate_custom_letter(
     state = client_info.get("state", "")
 
     session = get_session(session_id) or {}
-    structured_summary = (
-        session.get("structured_summaries", {}).get(account.get("account_id"), {})
+    structured_summary = session.get("structured_summaries", {}).get(
+        account.get("account_id"), {}
     )
 
     docs_text, doc_names, _ = gather_supporting_docs(session_id)
@@ -155,7 +154,10 @@ def generate_custom_letter(
     full_path = output_path / filename
     options = {"quiet": ""}
     pdfkit.from_string(
-        html, str(full_path), configuration=_pdf_config(wkhtmltopdf_path), options=options
+        html,
+        str(full_path),
+        configuration=_pdf_config(wkhtmltopdf_path),
+        options=options,
     )
     print(f"[📝] Custom letter generated: {full_path}")
 
@@ -188,7 +190,9 @@ def generate_custom_letters(
         log_messages = []
     for bureau, content in bureau_data.items():
         for acc in content.get("all_accounts", []):
-            action = str(acc.get("action_tag") or acc.get("recommended_action") or "").lower()
+            action = str(
+                acc.get("action_tag") or acc.get("recommended_action") or ""
+            ).lower()
             if acc.get("letter_type") == "custom" or action == "custom_letter":
                 generate_custom_letter(
                     acc,

@@ -1,11 +1,9 @@
-import os
 from typing import Tuple, List
 from services.ai_client import AIClient, get_default_ai_client
 
 from logic.rule_checker import check_letter, RuleViolation
 from logic.rules_loader import load_rules
 from session_manager import get_session, update_session
-
 
 
 def _build_system_prompt() -> str:
@@ -24,7 +22,13 @@ def _build_system_prompt() -> str:
 SYSTEM_PROMPT = _build_system_prompt()
 
 
-def _record_letter(session_id: str, letter_type: str, text: str, violations: List[RuleViolation], iterations: int) -> None:
+def _record_letter(
+    session_id: str,
+    letter_type: str,
+    text: str,
+    violations: List[RuleViolation],
+    iterations: int,
+) -> None:
     session = get_session(session_id) or {}
     letters = session.get("letters_generated", [])
     letters.append(

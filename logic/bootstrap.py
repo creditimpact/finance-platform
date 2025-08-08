@@ -4,6 +4,7 @@ These helpers are intentionally free of side effects so that they can be
 imported safely by both the CLI in ``main.py`` and the orchestration logic in
 ``orchestrators.py``.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -65,7 +66,8 @@ def extract_all_accounts(sections: dict) -> List[dict]:
             found = None
             for existing in accounts:
                 if (
-                    normalize_creditor_name(existing.get("name", "")).lower() == norm_name
+                    normalize_creditor_name(existing.get("name", "")).lower()
+                    == norm_name
                     and sanitize_number(existing.get("account_number")) == last4
                     and tuple(sorted(existing.get("bureaus", []))) == bureaus
                     and (existing.get("status") or "").strip().lower() == status

@@ -18,7 +18,10 @@ def ensure_template_env(base_template_dir: Optional[str] = None) -> Environment:
     """
     global _template_env
     base_dir = base_template_dir or "templates"
-    if _template_env is None or getattr(_template_env.loader, "searchpath", [None])[0] != base_dir:
+    if (
+        _template_env is None
+        or getattr(_template_env.loader, "searchpath", [None])[0] != base_dir
+    ):
         _template_env = Environment(loader=FileSystemLoader(base_dir))
     return _template_env
 

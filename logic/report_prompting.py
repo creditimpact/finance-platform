@@ -5,7 +5,6 @@ from typing import Optional
 
 from logic.utils.names_normalization import (
     normalize_creditor_name,
-    normalize_bureau_name,
 )
 from logic.utils.text_parsing import extract_late_history_blocks
 from logic.utils.inquiries import extract_inquiries

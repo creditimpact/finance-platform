@@ -1,5 +1,13 @@
-from flask import Blueprint, render_template, request, redirect, url_for, session, send_file, abort
-import os
+from flask import (
+    Blueprint,
+    render_template,
+    request,
+    redirect,
+    url_for,
+    session,
+    send_file,
+    abort,
+)
 from pathlib import Path
 import io
 import zipfile
@@ -7,72 +15,76 @@ import zipfile
 from telegram_alert import send_admin_login_alert
 from config import get_app_config
 
-admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
+admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 
 ADMIN_PASSWORD = get_app_config().admin_password
 
 
 def is_authenticated():
-    return session.get('admin_authenticated') is True
+    return session.get("admin_authenticated") is True
 
 
 @admin_bp.before_request
 def require_login():
-    if request.endpoint == 'admin.login':
+    if request.endpoint == "admin.login":
         return
     if not is_authenticated():
-        return redirect(url_for('admin.login'))
+        return redirect(url_for("admin.login"))
 
 
-@admin_bp.route('/login', methods=['GET', 'POST'])
+@admin_bp.route("/login", methods=["GET", "POST"])
 def login():
-    if request.method == 'POST':
-        password = request.form.get('password', '')
+    if request.method == "POST":
+        password = request.form.get("password", "")
         if ADMIN_PASSWORD and password == ADMIN_PASSWORD:
-            session['admin_authenticated'] = True
+            session["admin_authenticated"] = True
             send_admin_login_alert(request.remote_addr)
-            return redirect(url_for('admin.index'))
-        return render_template('admin_login.html', error='Invalid password')
-    return render_template('admin_login.html')
+            return redirect(url_for("admin.index"))
+        return render_template("admin_login.html", error="Invalid password")
+    return render_template("admin_login.html")
 
 
-@admin_bp.route('/logout')
+@admin_bp.route("/logout")
 def logout():
-    session.pop('admin_authenticated', None)
-    return redirect(url_for('admin.login'))
+    session.pop("admin_authenticated", None)
+    return redirect(url_for("admin.login"))
 
 
-@admin_bp.route('/')
+@admin_bp.route("/")
 def index():
     clients = []
-    clients_base = Path('Clients').resolve()
+    clients_base = Path("Clients").resolve()
     if clients_base.exists():
-        for path in clients_base.rglob('*'):
+        for path in clients_base.rglob("*"):
             if path.is_dir() and path != clients_base:
                 clients.append(str(path.relative_to(clients_base)))
-    analytics_dir = Path('analytics_data')
-    analytics = [f.name for f in analytics_dir.glob('*.json')] if analytics_dir.exists() else []
-    return render_template('admin_index.html', clients=sorted(clients), analytics=sorted(analytics))
+    analytics_dir = Path("analytics_data")
+    analytics = (
+        [f.name for f in analytics_dir.glob("*.json")] if analytics_dir.exists() else []
+    )
+    return render_template(
+        "admin_index.html", clients=sorted(clients), analytics=sorted(analytics)
+    )
 
 
-@admin_bp.route('/download/client/<path:folder>')
+@admin_bp.route("/download/client/<path:folder>")
 def download_client(folder):
-    base_dir = Path('Clients').resolve()
+    base_dir = Path("Clients").resolve()
     target = (base_dir / folder).resolve()
     if not target.is_dir() or base_dir not in target.parents and target != base_dir:
         abort(404)
     memory = io.BytesIO()
-    with zipfile.ZipFile(memory, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for file_path in target.rglob('*'):
+    with zipfile.ZipFile(memory, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file_path in target.rglob("*"):
             if file_path.is_file():
                 zf.write(file_path, arcname=str(file_path.relative_to(target)))
     memory.seek(0)
     return send_file(memory, as_attachment=True, download_name=f"{target.name}.zip")
 
 
-@admin_bp.route('/download/analytics/<path:filename>')
+@admin_bp.route("/download/analytics/<path:filename>")
 def download_analytics(filename):
-    analytics_dir = Path('analytics_data').resolve()
+    analytics_dir = Path("analytics_data").resolve()
     target = (analytics_dir / filename).resolve()
     if not target.is_file() or target.parent != analytics_dir:
         abort(404)

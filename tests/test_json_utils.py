@@ -43,6 +43,6 @@ def test_parse_mismatched_braces():
 
 
 def test_parse_invalid_json():
-    data, err = parse_json('not json')
+    data, err = parse_json("not json")
     assert data == {}
     assert err == "invalid_json"

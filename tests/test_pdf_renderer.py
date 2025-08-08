@@ -1,7 +1,6 @@
 from pathlib import Path
 import types
 
-import pytest
 
 from logic import pdf_renderer
 
@@ -31,4 +30,4 @@ def test_render_html_to_pdf_writes_file(tmp_path, monkeypatch):
     output = tmp_path / "out"
     pdf_renderer.render_html_to_pdf("<p>hi</p>", str(output))
     assert written["path"].endswith(".pdf")
-    assert (Path(written["path"]).exists())
+    assert Path(written["path"]).exists()

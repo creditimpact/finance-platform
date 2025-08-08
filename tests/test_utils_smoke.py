@@ -26,9 +26,7 @@ def test_utils_smoke(tmp_path: Path):
 
     assert has_late_indicator({"status": "30 days late"})
 
-    text = (
-        "Inquiries\nCreditor Name Date of Inquiry Credit Bureau\nCap One 01/01/23 Experian"
-    )
+    text = "Inquiries\nCreditor Name Date of Inquiry Credit Bureau\nCap One 01/01/23 Experian"
     assert extract_inquiries(text)
 
     # PDF helpers should handle missing files gracefully

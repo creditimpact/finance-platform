@@ -96,6 +96,7 @@ def export_trace_file(audit: Any, session_id: str) -> Path:
         json.dump(trace, f, indent=2)
     return trace_path
 
+
 def export_trace_breakdown(
     audit: Any, strategy: Any, accounts: Any, output_dir: Path | str
 ) -> None:
@@ -155,7 +156,13 @@ def export_trace_breakdown(
     acc_ids: list[str] = []
     try:
         for acc in accounts or []:
-            acc_id = str(getattr(acc, "account_id", None) or getattr(acc, "id", None) or acc.get("account_id") if isinstance(acc, dict) else "")
+            acc_id = str(
+                getattr(acc, "account_id", None)
+                or getattr(acc, "id", None)
+                or acc.get("account_id")
+                if isinstance(acc, dict)
+                else ""
+            )
             if acc_id:
                 acc_ids.append(acc_id)
     except Exception:
@@ -165,8 +172,12 @@ def export_trace_breakdown(
 
     for acc_id in acc_ids:
         entries = data.get("accounts", {}).get(str(acc_id), [])
-        decision_entry = next((e for e in entries if e.get("stage") == "strategy_decision"), None)
-        fallback_entry = next((e for e in entries if e.get("stage") == "strategy_fallback"), None)
+        decision_entry = next(
+            (e for e in entries if e.get("stage") == "strategy_decision"), None
+        )
+        fallback_entry = next(
+            (e for e in entries if e.get("stage") == "strategy_fallback"), None
+        )
         if decision_entry:
             decision_map[str(acc_id)] = {
                 "action_tag": decision_entry.get("action"),

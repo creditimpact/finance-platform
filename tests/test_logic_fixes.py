@@ -1,3 +1,6 @@
+"""Regression tests for logic modules."""
+
+# ruff: noqa: E402
 import sys
 import types
 import json
@@ -7,16 +10,28 @@ import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-sys.modules.setdefault("pdfkit", types.SimpleNamespace(configuration=lambda *_, **__: None, from_string=lambda *_, **__: None))
-sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda *_, **__: None))
+sys.modules.setdefault(
+    "pdfkit",
+    types.SimpleNamespace(
+        configuration=lambda *_, **__: None, from_string=lambda *_, **__: None
+    ),
+)
+sys.modules.setdefault(
+    "dotenv", types.SimpleNamespace(load_dotenv=lambda *_, **__: None)
+)
+
+
 class _DummyEnv:
     def __init__(self, *_, **__):
         pass
+
     def get_template(self, *_, **__):
         class _T:
             def render(self, **_):
                 return ""
+
         return _T()
+
 
 sys.modules.setdefault("fpdf", types.SimpleNamespace(FPDF=object))
 sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__: None))
@@ -30,7 +45,6 @@ from logic.process_accounts import process_analyzed_report
 from logic.utils.text_parsing import (
     extract_late_history_blocks,
     extract_account_blocks,
-    parse_late_history_from_block,
 )
 
 
@@ -42,13 +56,26 @@ def test_dedup_without_numbers():
             "inquiries": [],
             "high_utilization": [],
             "all_accounts": [
-                {"name": "Capital One", "account_number": "", "status": "Open", "bureaus": ["Experian"]},
-                {"name": "CAP ONE", "account_number": None, "status": "Open", "bureaus": ["Experian"]},
+                {
+                    "name": "Capital One",
+                    "account_number": "",
+                    "status": "Open",
+                    "bureaus": ["Experian"],
+                },
+                {
+                    "name": "CAP ONE",
+                    "account_number": None,
+                    "status": "Open",
+                    "bureaus": ["Experian"],
+                },
             ],
         }
     }
     with (
-        mock.patch("logic.instruction_data_preparation.generate_account_action", return_value="A"),
+        mock.patch(
+            "logic.instruction_data_preparation.generate_account_action",
+            return_value="A",
+        ),
     ):
         fake = FakeAIClient()
         context, accounts = instructions_generator.prepare_instruction_data(
@@ -78,9 +105,7 @@ def test_inquiry_matching():
         "open_accounts_with_issues": [],
         "high_utilization_accounts": [],
         "account_inquiry_matches": [],
-        "all_accounts": [
-            {"name": "Bank of America", "bureaus": ["Experian"]}
-        ],
+        "all_accounts": [{"name": "Bank of America", "bureaus": ["Experian"]}],
         "inquiries": [
             {"creditor_name": "BK OF AMER", "bureau": "Experian"},
             {"creditor_name": "Some Store", "bureau": "Experian"},
@@ -114,11 +139,14 @@ def test_goodwill_generation():
     }
     sent = {}
     with (
-        mock.patch("logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft") as mock_g,
+        mock.patch(
+            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
+        ) as mock_g,
         mock.patch("logic.pdf_renderer.render_html_to_pdf"),
     ):
         out_dir = Path("output/tmp")
         out_dir.mkdir(parents=True, exist_ok=True)
+
         def _cb(*args, **kwargs):
             creditor = args[1] if len(args) > 1 else None
             accounts = args[2] if len(args) > 2 else None
@@ -128,6 +156,7 @@ def test_goodwill_generation():
                 "personal_story": personal_story,
             }
             return {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""}, []
+
         mock_g.side_effect = _cb
         fake = FakeAIClient()
         generate_goodwill_letters(
@@ -161,19 +190,25 @@ def test_goodwill_on_closed_account():
     }
     called = {}
     with (
-        mock.patch("logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft") as mock_g,
+        mock.patch(
+            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
+        ) as mock_g,
         mock.patch("logic.pdf_renderer.render_html_to_pdf"),
     ):
         out_dir = Path("output/tmp2")
         out_dir.mkdir(parents=True, exist_ok=True)
+
         def _cb(*args, **kwargs):
             creditor = args[1] if len(args) > 1 else None
             accounts = args[2] if len(args) > 2 else None
             called[creditor] = accounts
             return {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""}, []
+
         mock_g.side_effect = _cb
         fake = FakeAIClient()
-        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None, ai_client=fake)
+        generate_goodwill_letters(
+            {"name": "T"}, bureau_data, out_dir, None, ai_client=fake
+        )
     assert "Old Card" in called
     print("goodwill closed ok")
 
@@ -196,7 +231,9 @@ def test_skip_goodwill_when_no_late_payments():
         }
     }
     with (
-        mock.patch("logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft") as mock_g,
+        mock.patch(
+            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
+        ) as mock_g,
         mock.patch("logic.pdf_renderer.render_html_to_pdf"),
     ):
         out_dir = Path("output/tmp3")
@@ -224,7 +261,9 @@ def test_skip_goodwill_on_collections():
         }
     }
     with (
-        mock.patch("logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft") as mock_g,
+        mock.patch(
+            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
+        ) as mock_g,
         mock.patch("logic.pdf_renderer.render_html_to_pdf"),
     ):
         out_dir = Path("output/tmp4")
@@ -252,7 +291,9 @@ def test_skip_goodwill_edge_statuses():
         }
     }
     with (
-        mock.patch("logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft") as mock_g,
+        mock.patch(
+            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
+        ) as mock_g,
         mock.patch("logic.pdf_renderer.render_html_to_pdf"),
     ):
         out_dir = Path("output/tmp4a")
@@ -332,10 +373,30 @@ def test_letter_duplicate_accounts_removed():
     bureau_data = {
         "Experian": {
             "disputes": [
-                {"name": "Bank A", "account_number": "123", "account_id": "1", "action_tag": "dispute"},
-                {"name": "BANK A", "account_number": "123", "account_id": "2", "action_tag": "dispute"},
-                {"name": "Other Bank", "account_number": "", "account_id": "3", "action_tag": "dispute"},
-                {"name": "Other Bank", "account_number": "N/A", "account_id": "4", "action_tag": "dispute"},
+                {
+                    "name": "Bank A",
+                    "account_number": "123",
+                    "account_id": "1",
+                    "action_tag": "dispute",
+                },
+                {
+                    "name": "BANK A",
+                    "account_number": "123",
+                    "account_id": "2",
+                    "action_tag": "dispute",
+                },
+                {
+                    "name": "Other Bank",
+                    "account_number": "",
+                    "account_id": "3",
+                    "action_tag": "dispute",
+                },
+                {
+                    "name": "Other Bank",
+                    "account_number": "N/A",
+                    "account_id": "4",
+                    "action_tag": "dispute",
+                },
             ],
             "goodwill": [],
             "inquiries": [],
@@ -362,7 +423,12 @@ def test_letter_duplicate_accounts_removed():
             b = args[1] if len(args) > 1 else None
             disputes = args[2] if len(args) > 2 else None
             sent[b] = disputes
-            return {"opening_paragraph": "", "accounts": [], "inquiries": [], "closing_paragraph": ""}
+            return {
+                "opening_paragraph": "",
+                "accounts": [],
+                "inquiries": [],
+                "closing_paragraph": "",
+            }
 
         mock_d.side_effect = _cb
         fake = FakeAIClient()
@@ -417,7 +483,12 @@ def test_partial_account_number_deduplication():
             b = args[1] if len(args) > 1 else None
             disputes = args[2] if len(args) > 2 else None
             sent[b] = disputes
-            return {"opening_paragraph": "", "accounts": [], "inquiries": [], "closing_paragraph": ""}
+            return {
+                "opening_paragraph": "",
+                "accounts": [],
+                "inquiries": [],
+                "closing_paragraph": "",
+            }
 
         mock_d.side_effect = _cb
         fake = FakeAIClient()
@@ -433,10 +504,20 @@ def test_merge_custom_note_with_default():
     bureau_data = {
         "Experian": {
             "disputes": [
-                {"name": "Bank A", "account_number": "123", "account_id": "1", "action_tag": "dispute"}
+                {
+                    "name": "Bank A",
+                    "account_number": "123",
+                    "account_id": "1",
+                    "action_tag": "dispute",
+                }
             ],
             "goodwill": [
-                {"name": "Bank B", "account_number": "999", "late_payments": {"Experian": {"30": 1}}, "status": "Closed"}
+                {
+                    "name": "Bank B",
+                    "account_number": "999",
+                    "late_payments": {"Experian": {"30": 1}},
+                    "status": "Closed",
+                }
             ],
             "inquiries": [],
             "high_utilization": [],
@@ -446,16 +527,16 @@ def test_merge_custom_note_with_default():
 
     gpt_resp = {
         "opening_paragraph": "",
-        "accounts": [
-            {"name": "Bank A", "account_number": "123", "paragraph": "old"}
-        ],
+        "accounts": [{"name": "Bank A", "account_number": "123", "paragraph": "old"}],
         "inquiries": [],
         "closing_paragraph": "",
     }
 
     strategy = {"dispute_items": {"1": {}}}
     with (
-        mock.patch("logic.letter_generator.call_gpt_dispute_letter", return_value=gpt_resp),
+        mock.patch(
+            "logic.letter_generator.call_gpt_dispute_letter", return_value=gpt_resp
+        ),
         mock.patch("logic.pdf_renderer.render_html_to_pdf"),
         mock.patch(
             "logic.compliance_pipeline.run_compliance_pipeline",
@@ -485,7 +566,12 @@ def test_general_note_routed_to_goodwill():
     bureau_data = {
         "Experian": {
             "disputes": [
-                {"name": "Bank A", "account_number": "123", "account_id": "1", "action_tag": "dispute"}
+                {
+                    "name": "Bank A",
+                    "account_number": "123",
+                    "account_id": "1",
+                    "action_tag": "dispute",
+                }
             ],
             "goodwill": [
                 {
@@ -503,36 +589,46 @@ def test_general_note_routed_to_goodwill():
 
     gpt_resp = {
         "opening_paragraph": "",
-        "accounts": [
-            {"name": "Bank A", "account_number": "123", "paragraph": "old"}
-        ],
+        "accounts": [{"name": "Bank A", "account_number": "123", "paragraph": "old"}],
         "inquiries": [],
         "closing_paragraph": "",
     }
 
     strategy = {"dispute_items": {"1": {}}}
     with (
-        mock.patch("logic.letter_generator.call_gpt_dispute_letter", return_value=gpt_resp),
+        mock.patch(
+            "logic.letter_generator.call_gpt_dispute_letter", return_value=gpt_resp
+        ),
         mock.patch("logic.pdf_renderer.render_html_to_pdf"),
         mock.patch(
             "logic.compliance_pipeline.run_compliance_pipeline",
             lambda html, state, session_id, doc_type, ai_client=None: html,
         ),
         mock.patch("logic.letter_generator.generate_strategy", return_value=strategy),
-        mock.patch("logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft") as mock_gw,
+        mock.patch(
+            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
+        ) as mock_gw,
         mock.patch("logic.pdf_renderer.render_html_to_pdf"),
     ):
         out_dir = Path("output/tmp_general")
         out_dir.mkdir(parents=True, exist_ok=True)
-        client_info = {"name": "T", "custom_dispute_notes": {"note": "I lost my job and fell behind"}}
-        mock_gw.return_value = ({"intro_paragraph": "", "accounts": [], "closing_paragraph": ""}, [])
+        client_info = {
+            "name": "T",
+            "custom_dispute_notes": {"note": "I lost my job and fell behind"},
+        }
+        mock_gw.return_value = (
+            {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""},
+            [],
+        )
         with pytest.warns(UserWarning):
             fake = FakeAIClient()
             generate_dispute_letters_for_all_bureaus(
                 client_info, bureau_data, out_dir, False, None, ai_client=fake
             )
         fake2 = FakeAIClient()
-        generate_goodwill_letters(client_info, bureau_data, out_dir, None, ai_client=fake2)
+        generate_goodwill_letters(
+            client_info, bureau_data, out_dir, None, ai_client=fake2
+        )
 
     paragraph = gpt_resp["accounts"][0]["paragraph"]
     assert paragraph == "old"
@@ -562,7 +658,9 @@ def test_skip_goodwill_for_disputed_account():
     }
 
     with (
-        mock.patch("logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft") as mock_g,
+        mock.patch(
+            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
+        ) as mock_g,
         mock.patch("logic.pdf_renderer.render_html_to_pdf"),
     ):
         out_dir = Path("output/tmp_dupe_skip")
@@ -615,6 +713,3 @@ def test_account_block_extraction_and_parsing():
     blocks = extract_account_blocks(text)
     assert blocks == []
     print("account blocks ok")
-
-
-

@@ -1,4 +1,5 @@
 """Utilities for analyzing custom client notes and related text."""
+
 from __future__ import annotations
 
 import re
@@ -52,7 +53,9 @@ def get_client_address_lines(client_info: dict) -> list[str]:
     an empty list is returned so the caller can render a placeholder line.
     """
 
-    raw = (client_info.get("address") or client_info.get("current_address") or "").strip()
+    raw = (
+        client_info.get("address") or client_info.get("current_address") or ""
+    ).strip()
     if not raw:
         return []
 

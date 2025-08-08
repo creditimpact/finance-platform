@@ -30,13 +30,18 @@ def generate_goodwill_letter_draft(
     included in the prompt.
     """
 
-    story_text = f"\nClient's personal story: {personal_story}" if personal_story else ""
+    story_text = (
+        f"\nClient's personal story: {personal_story}" if personal_story else ""
+    )
     docs_text, doc_names, _ = gather_supporting_docs(session_id or "")
     if docs_text:
         if audit and audit.level is AuditLevel.VERBOSE:
-            print(f"[📎] Including supplemental docs for goodwill letter to {creditor}.")
+            print(
+                f"[📎] Including supplemental docs for goodwill letter to {creditor}."
+            )
         docs_section = (
-            "\nThe following additional documents were provided by the client:\n" + docs_text
+            "\nThe following additional documents were provided by the client:\n"
+            + docs_text
         )
     else:
         docs_section = ""

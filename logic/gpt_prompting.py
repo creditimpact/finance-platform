@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-from datetime import datetime
 from typing import Dict, List
 
 from services.ai_client import AIClient, get_default_ai_client
@@ -36,7 +34,7 @@ def call_gpt_dispute_letter(
 
     dispute_blocks = []
     for acc in disputes:
-        struct = structured_summaries.get(acc.account_id or '', {})
+        struct = structured_summaries.get(acc.account_id or "", {})
         classification = classifier(struct, state)
         neutral_phrase, neutral_reason = get_neutral_phrase(
             classification.get("category"), struct
@@ -45,7 +43,9 @@ def call_gpt_dispute_letter(
             "name": acc.name or "Unknown",
             "account_number": (acc.account_number or "").replace("*", "") or "N/A",
             "status": acc.reported_status or acc.status or "N/A",
-            "dispute_type": classification.get("category", acc.dispute_type or "unspecified"),
+            "dispute_type": classification.get(
+                "category", acc.dispute_type or "unspecified"
+            ),
             "legal_hook": classification.get("legal_tag"),
             "tone": classification.get("tone"),
             "dispute_approach": classification.get("dispute_approach"),
@@ -170,4 +170,3 @@ Unauthorized Inquiries:
 
 
 __all__ = ["call_gpt_dispute_letter"]
-

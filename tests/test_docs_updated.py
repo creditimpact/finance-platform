@@ -17,11 +17,13 @@ def _changed_files() -> set[Path]:
 
 def test_model_docs_updated():
     changed = _changed_files()
-    model_changed = any(p.parts and p.parts[0] == "models" and p.suffix == ".py" for p in changed)
+    model_changed = any(
+        p.parts and p.parts[0] == "models" and p.suffix == ".py" for p in changed
+    )
     if model_changed:
-        assert Path("docs/DATA_MODELS.md") in changed, (
-            "models/ changed without updating docs/DATA_MODELS.md"
-        )
+        assert (
+            Path("docs/DATA_MODELS.md") in changed
+        ), "models/ changed without updating docs/DATA_MODELS.md"
 
 
 def test_system_overview_updated():
@@ -34,9 +36,10 @@ def test_system_overview_updated():
             text=True,
         ).stdout
         api_changed = any(
-            line.startswith("+def ") or line.startswith("-def ") for line in diff.splitlines()
+            line.startswith("+def ") or line.startswith("-def ")
+            for line in diff.splitlines()
         )
         if api_changed:
-            assert Path("docs/SYSTEM_OVERVIEW.md") in changed, (
-                "orchestrators.py public API changed without updating docs/SYSTEM_OVERVIEW.md"
-            )
+            assert (
+                Path("docs/SYSTEM_OVERVIEW.md") in changed
+            ), "orchestrators.py public API changed without updating docs/SYSTEM_OVERVIEW.md"

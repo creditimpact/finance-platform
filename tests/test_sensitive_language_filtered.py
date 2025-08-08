@@ -35,7 +35,17 @@ def test_dispute_letter_ignores_emotional_text(monkeypatch, tmp_path):
     def fake_generate_strategy(sess_id, bureau_data):
         return {"dispute_items": structured}
 
-    def fake_call_gpt(client_info, bureau_name, disputes, inquiries, is_identity_theft, structured_summaries, state, audit=None, ai_client=None):
+    def fake_call_gpt(
+        client_info,
+        bureau_name,
+        disputes,
+        inquiries,
+        is_identity_theft,
+        structured_summaries,
+        state,
+        audit=None,
+        ai_client=None,
+    ):
         text = json.dumps(client_info)
         assert "furious" not in text
         assert "heartbroken" not in text
@@ -54,9 +64,13 @@ def test_dispute_letter_ignores_emotional_text(monkeypatch, tmp_path):
             "closing_paragraph": "Closing",
         }
 
-    monkeypatch.setattr("logic.letter_generator.generate_strategy", fake_generate_strategy)
+    monkeypatch.setattr(
+        "logic.letter_generator.generate_strategy", fake_generate_strategy
+    )
     monkeypatch.setattr("logic.letter_generator.call_gpt_dispute_letter", fake_call_gpt)
-    monkeypatch.setattr("logic.pdf_renderer.render_html_to_pdf", lambda html, path: None)
+    monkeypatch.setattr(
+        "logic.pdf_renderer.render_html_to_pdf", lambda html, path: None
+    )
     monkeypatch.setattr(
         "logic.compliance_pipeline.run_compliance_pipeline",
         lambda html, state, session_id, doc_type, ai_client=None: html,
@@ -72,7 +86,12 @@ def test_dispute_letter_ignores_emotional_text(monkeypatch, tmp_path):
     bureau_data = {
         "Experian": {
             "disputes": [
-                {"name": "Bank A", "account_number": "1", "account_id": "1", "action_tag": "dispute"}
+                {
+                    "name": "Bank A",
+                    "account_number": "1",
+                    "account_id": "1",
+                    "action_tag": "dispute",
+                }
             ],
             "inquiries": [],
         }
@@ -94,7 +113,9 @@ def test_goodwill_letter_ignores_emotional_text(monkeypatch, tmp_path):
     update_session(session_id, structured_summaries={"1": {"account_id": "1"}})
     update_intake(
         session_id,
-        raw_explanations=[{"account_id": "1", "text": "They ruined my life and I'm devastated"}],
+        raw_explanations=[
+            {"account_id": "1", "text": "They ruined my life and I'm devastated"}
+        ],
     )
 
     def fake_call_gpt(
@@ -137,14 +158,13 @@ def test_goodwill_letter_ignores_emotional_text(monkeypatch, tmp_path):
         "session_id": session_id,
         "custom_dispute_notes": {"Creditor": "I am devastated and angry"},
     }
-    accounts = [
-        {"name": "Creditor", "account_number": "1", "action_tag": "goodwill"}
-    ]
+    accounts = [{"name": "Creditor", "account_number": "1", "action_tag": "goodwill"}]
 
-    generate_goodwill_letter_with_ai("Creditor", accounts, client_info, tmp_path, None, ai_client=fake2)
+    generate_goodwill_letter_with_ai(
+        "Creditor", accounts, client_info, tmp_path, None, ai_client=fake2
+    )
     with open(tmp_path / "Creditor_gpt_response.json") as f:
         data = json.load(f)
     dump = json.dumps(data)
     assert "devastated" not in dump
     assert "angry" not in dump
-

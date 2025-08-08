@@ -37,7 +37,7 @@ from logic.instructions_generator import generate_instruction_file, generate_htm
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
-def run_checks():
+def test_minimal_workflow():
     client_info = {"name": "Jane Test", "email": "jane@example.com", "session_id": "test"}
 
     account_dispute = {
@@ -47,7 +47,7 @@ def run_checks():
         "bureaus": ["Experian"],
         "action_tag": "dispute",
         "recommended_action": "Dispute",
-        "opened_date": "01/01/2020",
+        "opened_date": "01/01/2020", "account_id": "1",
     }
     account_goodwill = {
         "name": "Card B",
@@ -80,13 +80,20 @@ def run_checks():
     with (
         mock.patch("logic.letter_generator.call_gpt_dispute_letter") as mock_d,
         mock.patch("logic.letter_generator.render_html_to_pdf"),
+        mock.patch("logic.letter_generator.render_dispute_letter_html", return_value="html"),
         mock.patch("logic.generate_goodwill_letters.call_gpt_for_goodwill_letter") as mock_g,
         mock.patch("logic.generate_goodwill_letters.render_html_to_pdf"),
         mock.patch("logic.instructions_generator.render_pdf_from_html", side_effect=lambda html, p: instructions_capture.setdefault("html", html)),
         mock.patch("logic.instructions_generator.generate_account_action", return_value="Follow advice"),
+        mock.patch("logic.instructions_generator.run_compliance_pipeline", lambda html, state, session_id, doc_type, ai_client=None: html),
+        mock.patch("logic.instructions_generator.build_instruction_html", return_value="html"),
         mock.patch("logic.instructions_generator.save_json_output"),
+        mock.patch("logic.letter_generator.generate_strategy", return_value={"dispute_items": {"1": {}}}),
+        mock.patch("logic.letter_generator.sanitize_disputes", return_value=(False, False, set(), False)),
     ):
-        def _d(ci, b, d, i, t):
+        def _d(*args, **kwargs):
+            b = args[1]
+            d = args[2]
             disputes_sent[b] = d
             return {"opening_paragraph": "", "accounts": [], "inquiries": [], "closing_paragraph": ""}
 
@@ -101,8 +108,8 @@ def run_checks():
 
         out_dir = Path("output/test_local")
         fake = FakeAIClient()
-        generate_dispute_letters_for_all_bureaus(client_info, bureau_data, out_dir, False, ai_client=fake)
-        generate_goodwill_letters(client_info, bureau_data, out_dir, ai_client=fake)
+        generate_dispute_letters_for_all_bureaus(client_info, bureau_data, out_dir, False, None, ai_client=fake)
+        generate_goodwill_letters(client_info, bureau_data, out_dir, None, ai_client=fake)
         generate_instruction_file(client_info, bureau_data, False, out_dir, ai_client=fake)
         html_content, accounts_list = generate_html(
             client_info,
@@ -119,7 +126,6 @@ def run_checks():
 
     assert len(accounts_list) == 2
     assert "Unknown" not in html_content
-    print("✅ All checks passed")
 
 
 def test_skip_goodwill_when_identity_theft():
@@ -166,7 +172,3 @@ def test_skip_goodwill_when_identity_theft():
     if os.path.exists(tmp.name):
         os.remove(tmp.name)
 
-
-if __name__ == "__main__":
-    run_checks()
-    test_skip_goodwill_when_identity_theft()

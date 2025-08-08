@@ -84,7 +84,7 @@ def analyze_credit_report(proofs_files, session_id, client_info, audit, log_mess
     from logic.upload_validator import is_safe_pdf, move_uploaded_file
     from session_manager import update_session
     from logic.analyze_report import analyze_credit_report as analyze_report_logic
-    from main import get_current_month
+    from logic.bootstrap import get_current_month
 
     uploaded_path = proofs_files.get("smartcredit_report")
     if not uploaded_path or not os.path.exists(uploaded_path):
@@ -154,7 +154,7 @@ def analyze_credit_report(proofs_files, session_id, client_info, audit, log_mess
 
 def generate_strategy_plan(client_info, bureau_data, classification_map, session_id, audit, log_messages, ai_client: AIClient | None = None):
     """Generate and merge the strategy plan."""
-    from main import merge_strategy_data
+    from logic.strategy_merger import merge_strategy_data
     from logic.generate_strategy_report import StrategyGenerator
 
     docs_text = gather_supporting_docs_text(session_id)
@@ -215,7 +215,7 @@ def generate_letters(
     app_config: AppConfig | None = None,
 ):
     """Create all client letters and supporting files."""
-    from main import extract_all_accounts
+    from logic.bootstrap import extract_all_accounts
     from logic.letter_generator import generate_all_dispute_letters_with_ai
     from logic.instructions_generator import generate_instruction_file
     from logic.generate_goodwill_letters import generate_goodwill_letters

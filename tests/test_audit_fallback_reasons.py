@@ -33,7 +33,7 @@ def test_apply_fallback_tags_logs_keyword_match(tmp_path, monkeypatch):
 def test_merge_strategy_data_audit_reasons(tmp_path):
     import types
     sys.modules['pdfkit'] = types.SimpleNamespace(configuration=lambda **kwargs: None)
-    import main
+    from logic.strategy_merger import merge_strategy_data
 
     audit = create_audit_logger("test")
     strategy = StrategyPlan.from_dict(
@@ -57,7 +57,7 @@ def test_merge_strategy_data_audit_reasons(tmp_path):
     }
     classification_map = {}
     log_list = []
-    main.merge_strategy_data(strategy, bureau_data, classification_map, audit, log_list)
+    merge_strategy_data(strategy, bureau_data, classification_map, audit, log_list)
     audit_file = audit.save(tmp_path)
     data = json.loads(audit_file.read_text())
     bad_logs = data["accounts"]["Bad Corp"]

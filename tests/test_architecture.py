@@ -39,3 +39,14 @@ def test_features_do_not_import_app() -> None:
     for file_path in features_dir.rglob("*.py"):
         imports = _imports(file_path)
         assert "app" not in imports, f"{file_path} imports app.py"
+
+
+def test_no_module_imports_main() -> None:
+    """Ensure core modules do not depend on the CLI layer."""
+    for file_path in PROJECT_ROOT.rglob("*.py"):
+        if file_path.name == "main.py" or "tests" in file_path.parts:
+            continue
+        imports = _imports(file_path)
+        assert "main" not in imports and not any(
+            name.startswith("main.") for name in imports
+        ), f"{file_path} imports main"

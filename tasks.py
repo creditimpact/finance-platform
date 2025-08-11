@@ -61,7 +61,7 @@ def extract_problematic_accounts(self, file_path: str, session_id: str | None = 
         )
         return payload.to_dict()
     except Exception as exc:
-        logger.exception("❌ Error extracting accounts")
+        logger.exception("âŒ Error extracting accounts")
         raise exc
 
 
@@ -81,12 +81,12 @@ def process_report(
     the client's explanations. Raw text must never be passed into this task.
     """
     try:
-        print("🔧 [Celery] process_report called!")
-        print(f"📄 file_path: {file_path}")
-        print(f"📧 email: {email}")
-        print(f"🎯 goal: {goal}")
-        print(f"🕵️ is_identity_theft: {is_identity_theft}")
-        print(f"🆔 session_id: {session_id or '[none]'}")
+        print("ðŸ"§ [Celery] process_report called!")
+        print(f"ðŸ"„ file_path: {file_path}")
+        print(f"ðŸ"§ email: {email}")
+        print(f"ðŸŽ¯ goal: {goal}")
+        print(f"ðŸ•µï¸ is_identity_theft: {is_identity_theft}")
+        print(f"ðŸ†" session_id: {session_id or '[none]'}")
 
         if not session_id:
             session_id = str(uuid.uuid4())
@@ -112,9 +112,9 @@ def process_report(
         run_credit_repair_process(client, proofs, is_identity_theft)
 
         logger.info("Finished processing for %s", email)
-        print("✅ [Celery] Finished processing")
+        print("âœ... [Celery] Finished processing")
 
     except Exception as exc:
-        logger.exception("❌ Error processing report for %s", email)
-        print(f"❌ [Celery] Exception: {exc}")
+        logger.exception("âŒ Error processing report for %s", email)
+        print(f"âŒ [Celery] Exception: {exc}")
         raise exc

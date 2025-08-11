@@ -142,7 +142,7 @@ def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
     )
 
     default_goal = (
-        "Improve credit score significantly within the next 3–6 months using strategies such as authorized users, "
+        "Improve credit score significantly within the next 3-6 months using strategies such as authorized users, "
         "credit building tools, and removal of negative items."
     )
 

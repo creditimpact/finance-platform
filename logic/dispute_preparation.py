@@ -66,7 +66,7 @@ def prepare_disputes_and_inquiries(
             disputes.append(d)
         else:
             log_messages.append(
-                f"[{bureau_name}] Skipping account '{d.get('name')}' – recommended_action='{action}'"
+                f"[{bureau_name}] Skipping account '{d.get('name')}' â€" recommended_action='{action}'"
             )
 
     disputes = dedupe_disputes(disputes, bureau_name, log_messages)
@@ -83,10 +83,10 @@ def prepare_disputes_and_inquiries(
         }
 
     inquiries = payload.get("inquiries", [])
-    print(f"[🔍] {len(inquiries)} inquiries for {bureau_name} to evaluate:")
+    print(f"[ðŸ"] {len(inquiries)} inquiries for {bureau_name} to evaluate:")
     for raw_inq in inquiries:
         print(
-            f"    ➡️ {raw_inq.get('creditor_name')} — {raw_inq.get('date')} ({raw_inq.get('bureau', bureau_name)})"
+            f"    âž¡ï¸ {raw_inq.get('creditor_name')} â€" {raw_inq.get('date')} ({raw_inq.get('bureau', bureau_name)})"
         )
 
     matched_set = {
@@ -123,7 +123,7 @@ def prepare_disputes_and_inquiries(
         if name_norm in matched_set and not matched_label:
             matched_label = "matched list"
         print(
-            "📄 Inquiry being evaluated: {name} on {bureau} {date} - {status}".format(
+            "ðŸ"„ Inquiry being evaluated: {name} on {bureau} {date} - {status}".format(
                 name=inq.get("creditor_name"),
                 bureau=inq.get("bureau", bureau_name),
                 date=inq.get("date"),
@@ -136,11 +136,11 @@ def prepare_disputes_and_inquiries(
                 f"[Will be disputed] Inquiry detected: {inq.get('creditor_name')}, {inq.get('date')}, {bureau_name}"
             )
             print(
-                f"✅ Inquiry added to dispute letter: {inq.get('creditor_name')} — {inq.get('date')} ({bureau_name})"
+                f"âœ... Inquiry added to dispute letter: {inq.get('creditor_name')} â€" {inq.get('date')} ({bureau_name})"
             )
         else:
             print(
-                f"🚫 Inquiry skipped due to open account match: {matched_label or inq.get('creditor_name')}"
+                f"ðŸš« Inquiry skipped due to open account match: {matched_label or inq.get('creditor_name')}"
             )
             log_messages.append(
                 f"[{bureau_name}] Skipping inquiry '{inq.get('creditor_name')}' matched to existing account"

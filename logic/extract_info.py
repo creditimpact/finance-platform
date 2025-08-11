@@ -141,7 +141,7 @@ def extract_bureau_info_column_refined(
         values = {b: data[b][field].strip().lower() for b in bureaus if data[b][field]}
         if len(set(values.values())) > 1:
             discrepancies.append(
-                f"⚠️ Mismatch in {field} across bureaus:\n"
+                f"âš ï¸ Mismatch in {field} across bureaus:\n"
                 + "\n".join([f"  - {b}: {data[b][field]}" for b in bureaus])
             )
 
@@ -152,7 +152,7 @@ def extract_bureau_info_column_refined(
             legal = client_info["legal_name"].lower().strip()
             if set(extracted.split()) != set(legal.split()):
                 discrepancies.append(
-                    f"⚠️ Name mismatch with ID: extracted '{extracted}' vs client '{legal}'"
+                    f"âš ï¸ Name mismatch with ID: extracted '{extracted}' vs client '{legal}'"
                 )
 
         if "legal_address" in client_info:
@@ -160,12 +160,12 @@ def extract_bureau_info_column_refined(
             legal = client_info["legal_address"].lower().strip()
             if extracted != legal:
                 discrepancies.append(
-                    f"⚠️ Address mismatch with ID: extracted '{extracted}' vs client '{legal}'"
+                    f"âš ï¸ Address mismatch with ID: extracted '{extracted}' vs client '{legal}'"
                 )
 
     if use_ai:
         try:
-            print("[🤖] Running GPT validation for personal info...")
+            print("[ðŸ¤-] Running GPT validation for personal info...")
             prompt = f"""
 You are a credit repair AI assistant.
 You received the first page of a SmartCredit report. Extract the following:
@@ -198,7 +198,7 @@ Here is the text:
             for b in bureaus:
                 data[b].update(ai_data)
         except Exception as e:
-            print(f"[⚠️] AI info extraction failed: {str(e)}")
+            print(f"[âš ï¸] AI info extraction failed: {str(e)}")
 
     return {
         "data": data["Experian"],

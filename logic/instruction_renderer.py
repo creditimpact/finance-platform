@@ -35,7 +35,7 @@ def build_instruction_html(context: LetterContext | dict[str, Any]) -> str:
     if context.get("has_duplicates"):
         duplicates_block = """
 <div class='advisory'>
-<h2>⚠️ Potential Duplicate Negative Reporting Detected</h2>
+<h2>âš ï¸ Potential Duplicate Negative Reporting Detected</h2>
 <p>We noticed that your report might contain duplicate negative entries for the same debt (e.g., reported both as Charge-Off and Collection). This situation is more complex and may require manual review and a personalized dispute strategy. We recommend that you contact us directly so we can assist you with a tailored approach to address this properly.</p>
 </div>
 """
@@ -79,13 +79,13 @@ def build_instruction_html(context: LetterContext | dict[str, Any]) -> str:
 
         dispute_type = acc.get("dispute_type")
         if dispute_type == "identity_theft":
-            action_lines.append("⚠️ This account is reported as identity theft.")
+            action_lines.append("âš ï¸ This account is reported as identity theft.")
         elif dispute_type == "unauthorized_or_unverified":
             action_lines.append(
-                "⚠️ This account doesn't look familiar and is being disputed."
+                "âš ï¸ This account doesn't look familiar and is being disputed."
             )
         elif dispute_type == "inaccurate_reporting":
-            action_lines.append("⚠️ The information on this account appears incorrect.")
+            action_lines.append("âš ï¸ The information on this account appears incorrect.")
 
         utilization = acc.get("utilization")
         if utilization:
@@ -93,31 +93,31 @@ def build_instruction_html(context: LetterContext | dict[str, Any]) -> str:
                 percent = int(utilization.replace("%", ""))
                 if percent > 30:
                     action_lines.append(
-                        f"💳 You're using about {percent}% of your limit. Paying this down will help your score."
+                        f"ðŸ'³ You're using about {percent}% of your limit. Paying this down will help your score."
                     )
             except Exception:
                 pass
 
         if not any(
-            x.startswith(("📄", "⚠️", "💳")) for x in action_lines
+            x.startswith(("ðŸ"„", "âš ï¸", "ðŸ'³")) for x in action_lines
         ) and not acc.get("advisor_comment"):
             acc["advisor_comment"] = random.choice(
                 [
                     "This account is in good standing and supports your credit profile.",
                     "Keep this account open and continue making on-time payments to strengthen your credit.",
-                    "Avoid closing this account — older positive accounts help your score.",
+                    "Avoid closing this account â€" older positive accounts help your score.",
                     "This account reflects positively on your report. Maintain low usage and regular activity.",
                 ]
             )
 
         if acc.get("advisor_comment"):
             action_lines.append(
-                f"💬 <em>{html_utils.escape(acc['advisor_comment'])}</em>"
+                f"ðŸ'¬ <em>{html_utils.escape(acc['advisor_comment'])}</em>"
             )
 
         if acc.get("personal_note"):
             action_lines.append(
-                f"📝 <em>{html_utils.escape(acc['personal_note'])}</em>"
+                f"ðŸ" <em>{html_utils.escape(acc['personal_note'])}</em>"
             )
 
         action_lines.append(
@@ -155,15 +155,15 @@ def build_instruction_html(context: LetterContext | dict[str, Any]) -> str:
 
     html_block = f"""
     <div class='category problematic'>
-      <h2 class='category-title problematic-title'>🟥 Problematic Accounts to Remove</h2>
+      <h2 class='category-title problematic-title'>ðŸŸ¥ Problematic Accounts to Remove</h2>
       {build_table(sections.get('problematic', []))}
     </div>
     <div class='category improve'>
-      <h2 class='category-title improve-title'>🟡 Accounts to Improve</h2>
+      <h2 class='category-title improve-title'>ðŸŸ¡ Accounts to Improve</h2>
       {build_table(sections.get('improve', []))}
     </div>
     <div class='category positive'>
-      <h2 class='category-title positive-title'>🟢 Positive Accounts to Maintain</h2>
+      <h2 class='category-title positive-title'>ðŸŸ¢ Positive Accounts to Maintain</h2>
       {build_table(sections.get('positive', []))}
     </div>
     """
@@ -171,9 +171,9 @@ def build_instruction_html(context: LetterContext | dict[str, Any]) -> str:
     tips_block = """
     <h2>General Credit Tips</h2>
     <ul>
-        <li>📆 Pay all bills on time — payment history is the most important factor in your credit score.</li>
-        <li>📉 Keep your credit usage below 30%, ideally under 10%.</li>
-        <li>🧾 Do not close old positive accounts — they help your average credit age.</li>
+        <li>ðŸ"† Pay all bills on time â€" payment history is the most important factor in your credit score.</li>
+        <li>ðŸ"‰ Keep your credit usage below 30%, ideally under 10%.</li>
+        <li>ðŸ§¾ Do not close old positive accounts â€" they help your average credit age.</li>
     </ul>
     """
 
@@ -199,12 +199,12 @@ def build_instruction_html(context: LetterContext | dict[str, Any]) -> str:
             )
 
     closing_block = (
-        "<p><strong>You’re in control of your credit journey — "
+        "<p><strong>Youâ€™re in control of your credit journey â€" "
         "every step brings you closer to financial freedom!</strong></p>"
         "<div class='support'>"
-        "💬 Feeling overwhelmed? If any of this feels confusing or too much "
-        "— you're not alone. We're here to help. Our team can take care of "
-        "the whole process for you, including mailing the letters — just "
+        "ðŸ'¬ Feeling overwhelmed? If any of this feels confusing or too much "
+        "â€" you're not alone. We're here to help. Our team can take care of "
+        "the whole process for you, including mailing the letters â€" just "
         "reach out and ask about our <strong>Done-For-You</strong> service."
         "</div>"
     )

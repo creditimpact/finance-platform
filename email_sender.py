@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def collect_all_files(folder: Path):
-    """אוסף את כל קבצי ה־PDF מתוך תיקיית הלקוח לשליחה באימייל."""
+    """××•×¡×£ ××ª ×›×œ ×§×'×¦×™ ×"Ö¾PDF ×ž×ª×•×š ×ª×™×§×™×™×ª ×"×œ×§×•×- ×œ×©×œ×™×-×" ×'××™×ž×™×™×œ."""
     return [str(p) for p in folder.glob("*.pdf") if p.is_file()]
 
 
@@ -28,7 +28,7 @@ def send_email_with_attachment(
 
     for file_path in files:
         if not os.path.exists(file_path):
-            print(f"[⚠️] File not found, skipping: {file_path}")
+            print(f"[âš ï¸] File not found, skipping: {file_path}")
             continue
 
         with open(file_path, "rb") as f:
@@ -49,4 +49,4 @@ def send_email_with_attachment(
         except Exception:
             pass
         smtp.send_message(msg)
-        print(f"📧 Email sent to {receiver_email}")
+        print(f"ðŸ"§ Email sent to {receiver_email}")

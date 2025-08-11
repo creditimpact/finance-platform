@@ -38,21 +38,21 @@ def index():
 @api_bp.route("/api/start-process", methods=["POST"])
 def start_process():
     try:
-        print("🔔 Received request to /api/start-process")
+        print("ðŸ"" Received request to /api/start-process")
 
         data = request.get_json(silent=True)
-        print("📦 Raw body:", request.data[:200])
-        print("📑 Headers:", dict(request.headers))
-        print("🧾 Parsed JSON:", data)
+        print("ðŸ"¦ Raw body:", request.data[:200])
+        print("ðŸ"' Headers:", dict(request.headers))
+        print("ðŸ§¾ Parsed JSON:", data)
 
         if not data:
             data = request.form
-            print("📤 Using form-data:", data)
+            print("ðŸ"¤ Using form-data:", data)
 
         uploaded_file = request.files.get("file")
-        print(f"📧 Email: {data.get('email')}")
+        print(f"ðŸ"§ Email: {data.get('email')}")
         print(
-            f"📎 Uploaded file: {uploaded_file.filename if uploaded_file else '❌ None'}"
+            f"ðŸ"Ž Uploaded file: {uploaded_file.filename if uploaded_file else 'âŒ None'}"
         )
 
         if not data.get("email") or not uploaded_file:
@@ -74,13 +74,13 @@ def start_process():
             return jsonify({"status": "error", "message": "File upload failed"}), 500
 
         size = os.path.getsize(local_filename)
-        print(f"💾 File saved to {local_filename} ({size} bytes)")
+        print(f"ðŸ'¾ File saved to {local_filename} ({size} bytes)")
 
         with open(local_filename, "rb") as f:
             first_bytes = f.read(4)
-            print("🧪 First bytes of file:", first_bytes)
+            print("ðŸ§ª First bytes of file:", first_bytes)
             if first_bytes != b"%PDF":
-                print("❌ File is not a valid PDF")
+                print("âŒ File is not a valid PDF")
                 return jsonify({"status": "error", "message": "Invalid PDF file"}), 400
 
         set_session(
@@ -104,7 +104,7 @@ def start_process():
         notes = data.get("custom_dispute_notes")
 
         print(
-            "📋 Collected fields:",
+            "ðŸ"‹ Collected fields:",
             {
                 "goal": goal,
                 "legal_name": legal_name,
@@ -130,7 +130,7 @@ def start_process():
         )
 
     except Exception as e:
-        print("❌ Exception occurred:", str(e))
+        print("âŒ Exception occurred:", str(e))
         return jsonify({"status": "error", "message": str(e)}), 500
 
 

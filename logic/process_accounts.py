@@ -194,7 +194,7 @@ def process_analyzed_report(
                     f"[{bureau_norm}] Duplicate entry skipped for '{account.name}'"
                 )
 
-    # 3. High Utilization Accounts — NOT sent to disputes
+    # 3. High Utilization Accounts - NOT sent to disputes
     for account_data in data.get("high_utilization_accounts", []):
         enforce_collection_status(account_data)
         account = Account.from_dict(account_data)

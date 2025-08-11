@@ -57,7 +57,7 @@ def generate_account_action(
             content = content.replace("```", "").strip()
         return content
     except Exception as e:
-        print(f"[⚠️] GPT action generation failed: {e}")
+        print(f"[âš ï¸] GPT action generation failed: {e}")
         return "Review the attached letter and follow the standard mailing steps."
 
 

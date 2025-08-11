@@ -127,7 +127,7 @@ def handle_strategy_fallbacks(
                     and raw_action
                 ):
                     print(
-                        f"[⚠️] Unrecognised strategist action '{raw_action}' for {acc.get('name')}"
+                        f"[âš ï¸] Unrecognised strategist action '{raw_action}' for {acc.get('name')}"
                     )
 
                 if not tag:

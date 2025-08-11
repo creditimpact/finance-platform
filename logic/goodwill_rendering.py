@@ -37,10 +37,10 @@ def load_creditor_address_map() -> Mapping[str, str]:
                 }
             if isinstance(raw, dict):
                 return {normalize_creditor_name(k): v for k, v in raw.items()}
-            print("[⚠️] Unknown address file format.")
+            print("[âš ï¸] Unknown address file format.")
             return {}
     except Exception as e:  # pragma: no cover - file IO issues
-        print(f"[❌] Failed to load creditor addresses: {e}")
+        print(f"[âŒ] Failed to load creditor addresses: {e}")
         return {}
 
 
@@ -61,15 +61,15 @@ def render_goodwill_letter(
 
     client_name = client_info.get("legal_name") or client_info.get("name", "Your Name")
     if not client_info.get("legal_name"):
-        print("[⚠️] Warning: legal_name not found in client_info. Using fallback name.")
+        print("[âš ï¸] Warning: legal_name not found in client_info. Using fallback name.")
 
     date_str = run_date or datetime.now().strftime("%B %d, %Y")
     address_map = load_creditor_address_map()
     creditor_key = normalize_creditor_name(creditor)
     creditor_address = address_map.get(creditor_key)
     if not creditor_address:
-        print(f"[⚠️] No address found for: {creditor}")
-        creditor_address = "Address not provided — please enter manually"
+        print(f"[âš ï¸] No address found for: {creditor}")
+        creditor_address = "Address not provided â€" please enter manually"
 
     session_id = client_info.get("session_id") or ""
 

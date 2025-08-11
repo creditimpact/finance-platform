@@ -87,7 +87,7 @@ def generate_all_dispute_letters_with_ai(
     client_name = client_info.get("legal_name") or client_info.get("name", "Client")
 
     if not client_info.get("legal_name"):
-        print("[⚠️] Warning: legal_name not found in client_info. Using fallback name.")
+        print("[âš ï¸] Warning: legal_name not found in client_info. Using fallback name.")
 
     session_id = client_info.get("session_id", "")
     strategy = generate_strategy(session_id, bureau_data)
@@ -96,7 +96,7 @@ def generate_all_dispute_letters_with_ai(
     sanitization_issues = False
 
     for bureau_name, payload in bureau_data.items():
-        print(f"[🤖] Generating letter for {bureau_name}...")
+        print(f"[ðŸ¤-] Generating letter for {bureau_name}...")
         bureau_sanitization = False
 
         disputes, filtered_inquiries, acc_type_map = prepare_disputes_and_inquiries(
@@ -129,7 +129,7 @@ def generate_all_dispute_letters_with_ai(
 
         if not disputes and not filtered_inquiries:
             msg = f"[{bureau_name}] No disputes or inquiries after filtering - letter skipped"
-            print(f"[⚠️] No data to dispute for {bureau_name}, skipping.")
+            print(f"[âš ï¸] No data to dispute for {bureau_name}, skipping.")
             log_messages.append(msg)
             continue
 
@@ -173,7 +173,7 @@ def generate_all_dispute_letters_with_ai(
             )
             if key not in included_set:
                 print(
-                    f"[⚠️] Inquiry '{inq.get('creditor_name')}' expected in dispute letter but was not included."
+                    f"[âš ï¸] Inquiry '{inq.get('creditor_name')}' expected in dispute letter but was not included."
                 )
 
         if run_date is None:

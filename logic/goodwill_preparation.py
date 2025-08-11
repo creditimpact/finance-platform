@@ -42,7 +42,7 @@ def select_goodwill_candidates(
             ).lower()
             if action != "dispute":
                 continue
-            name = acc.get("name") or acc.get("שם החשבון")
+            name = acc.get("name") or acc.get("×©× ×"×-×©×'×•×Ÿ")
             if not name:
                 continue
             name_norm = normalize_creditor_name(name)
@@ -72,7 +72,7 @@ def select_goodwill_candidates(
         ):
             return
 
-        name = account.get("name") or account.get("שם החשבון")
+        name = account.get("name") or account.get("×©× ×"×-×©×'×•×Ÿ")
         if not name:
             return
         name_norm = normalize_creditor_name(name)
@@ -104,7 +104,7 @@ def select_goodwill_candidates(
         if _total_lates(late_info) == 0 and not has_late_indicator(account):
             return
 
-        creditor = account.get("name") or account.get("שם החשבון")
+        creditor = account.get("name") or account.get("×©× ×"×-×©×'×•×Ÿ")
         goodwill_accounts.setdefault(creditor, []).append(account)
 
     for content in bureau_data.values():

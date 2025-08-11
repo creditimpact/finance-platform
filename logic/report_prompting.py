@@ -99,7 +99,7 @@ Return this exact JSON structure:
    - is_suspected_identity_theft: true/false
    - dispute_type: "identity_theft" / "unauthorized_or_unverified" / "inaccurate_reporting"
    - impact: short sentence describing how this negatively affects the client
-   - advisor_comment: 1–2 sentences explaining what we’re doing about this account and why.
+   - advisor_comment: 1â€"2 sentences explaining what weâ€™re doing about this account and why.
 
 3. open_accounts_with_issues: Non-collection accounts with any late payment history or remarks like "past due", "derogatory", etc. Look carefully for text such as "30 days late", "60 days late", or "past due" even if formatting is odd. If an account is otherwise in good standing with only one or two late payments, mark ``goodwill_candidate`` true.
    Include:
@@ -164,20 +164,20 @@ Return this exact JSON structure:
    - "Lower utilization on Capital One"
    - "Dispute Midland account with Experian"
 
-10. all_accounts: ✅ For every account (positive or negative), return:
+10. all_accounts: âœ... For every account (positive or negative), return:
    - name
    - bureaus
    - status
    - utilization (if available)
-   - advisor_comment: 1–2 sentence explanation of the account’s effect and what the client should do (dispute, pay down, keep healthy, goodwill, etc.)
+   - advisor_comment: 1â€"2 sentence explanation of the accountâ€™s effect and what the client should do (dispute, pay down, keep healthy, goodwill, etc.)
 
-⚠️ Rules:
+âš ï¸ Rules:
 - Return strictly valid JSON
 - All property names and strings must use double quotes
 - No trailing commas, comments, or text outside the JSON
 - No markdown or explanations
 - Use proper casing, punctuation, and clean formatting
-- Never guess — only include facts that are visible
+- Never guess â€" only include facts that are visible
 Use the following late payment data to help you accurately tag late accounts, even if the report formatting is inconsistent:
 
 {late_summary_text}

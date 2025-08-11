@@ -34,9 +34,9 @@ def tally_fallback_vs_decision(audit: Any) -> Dict[str, int]:
 
     Returns a dictionary with two keys:
 
-    - ``strategy_fallback`` – number of accounts that include a
+    - ``strategy_fallback`` - number of accounts that include a
       ``strategy_fallback`` entry.
-    - ``strategy_decision_only`` – number of accounts that have a
+    - ``strategy_decision_only`` - number of accounts that have a
       ``strategy_decision`` entry but no ``strategy_fallback`` entry.
 
     The ``audit`` argument may be an :class:`AuditLogger` instance or a raw

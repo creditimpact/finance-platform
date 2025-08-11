@@ -60,7 +60,7 @@ def filter_sections_by_bureau(sections, bureau_name, log_list=None):
                     f"[{bureau_name}] Skipped inquiry '{inquiry.get('creditor_name')}' - belongs to {inquiry.get('bureau')}"
                 )
 
-    # 🔍 Detect late payment indicators in positive or uncategorized accounts
+    # ðŸ" Detect late payment indicators in positive or uncategorized accounts
     seen = {
         (
             normalize_creditor_name(acc.get("name", "")),

@@ -172,7 +172,7 @@ def extract_account_blocks(text: str, debug: bool = False) -> list[list[str]]:
                     )
                 if debug:
                     print(
-                        f"[🏁] End block '{current_block[0]}' after Equifax counts line"
+                        f"[ðŸ] End block '{current_block[0]}' after Equifax counts line"
                     )
                 current_block = []
                 capturing = False
@@ -185,7 +185,7 @@ def extract_account_blocks(text: str, debug: bool = False) -> list[list[str]]:
             elif debug:
                 print(f"[~] Discarded block '{current_block[0]}' (no account fields)")
             if debug:
-                print(f"[🏁] End block '{current_block[0]}' after Equifax counts line")
+                print(f"[ðŸ] End block '{current_block[0]}' after Equifax counts line")
             current_block = []
             capturing = False
             await_equifax_counts = False
@@ -197,7 +197,7 @@ def extract_account_blocks(text: str, debug: bool = False) -> list[list[str]]:
         elif debug:
             print(f"[~] Discarded block '{current_block[0]}' (no account fields)")
         if debug:
-            print(f"[🏁] End block '{current_block[0]}' (EOF)")
+            print(f"[ðŸ] End block '{current_block[0]}' (EOF)")
 
     return blocks
 
@@ -279,7 +279,7 @@ def extract_late_history_blocks(
                     print(f"[~] Skipping unrecognized account '{heading_raw}'")
                 continue
             if debug:
-                print(f"[~] Fuzzy matched '{acc_norm}' → '{match[0]}'")
+                print(f"[~] Fuzzy matched '{acc_norm}' â†' '{match[0]}'")
             acc_norm = match[0]
 
         details = parse_late_history_from_block(block, debug=debug)
@@ -297,13 +297,13 @@ def extract_late_history_blocks(
                     b for b in {"Transunion", "Experian", "Equifax"} if b not in details
                 ]
                 print(
-                    f"[🏁] End block '{heading_raw}' found={found or []} missing={missing or []}"
+                    f"[ðŸ] End block '{heading_raw}' found={found or []} missing={missing or []}"
                 )
-                print(f"[📋] Parsed block '{heading_raw}' → {details}")
+                print(f"[ðŸ"‹] Parsed block '{heading_raw}' â†' {details}")
 
     for norm_name, bureaus in account_map.items():
         raw_name = raw_map.get(norm_name, norm_name)
-        print(f"[📋] Parsed block '{raw_name}' → {bureaus}")
+        print(f"[ðŸ"‹] Parsed block '{raw_name}' â†' {bureaus}")
 
     if return_raw_map:
         return account_map, raw_map

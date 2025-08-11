@@ -136,7 +136,7 @@ def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) ->
             "flags": ["Late Payments"],
         }
         result.setdefault("all_accounts", []).append(entry)
-        print(f"[⚠️] Added missing account from parser: {entry['name']}")
+        print(f"[âš ï¸] Added missing account from parser: {entry['name']}")
 
 
 # ---------------------------------------------------------------------------
@@ -155,29 +155,29 @@ def validate_analysis_sanity(analysis: Mapping[str, Any]) -> List[str]:
     if not analysis.get("negative_accounts") and not analysis.get(
         "open_accounts_with_issues"
     ):
-        warnings.append("⚠️ No dispute/goodwill accounts found.")
+        warnings.append("âš ï¸ No dispute/goodwill accounts found.")
 
     total_inquiries = analysis.get("summary_metrics", {}).get("total_inquiries")
     if isinstance(total_inquiries, list):
         if len(total_inquiries) > 50:
             warnings.append(
-                "⚠️ Too many inquiries detected — may indicate parsing issue."
+                "âš ï¸ Too many inquiries detected â€" may indicate parsing issue."
             )
     elif isinstance(total_inquiries, int):
         if total_inquiries > 50:
             warnings.append(
-                "⚠️ Too many inquiries detected — may indicate parsing issue."
+                "âš ï¸ Too many inquiries detected â€" may indicate parsing issue."
             )
 
     if not analysis.get("strategic_recommendations"):
-        warnings.append("⚠️ No strategic recommendations provided.")
+        warnings.append("âš ï¸ No strategic recommendations provided.")
 
     for section in ["negative_accounts", "open_accounts_with_issues", "all_accounts"]:
         for account in analysis.get(section, []):
             comment = account.get("advisor_comment", "")
             if len(comment.split()) < 4:
                 warnings.append(
-                    f"⚠️ Advisor comment too short for account: {account.get('name')}"
+                    f"âš ï¸ Advisor comment too short for account: {account.get('name')}"
                 )
 
     if warnings:

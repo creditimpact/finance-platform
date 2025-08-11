@@ -50,7 +50,7 @@ def analyze_credit_report(
     """Analyze ``pdf_path`` and write structured analysis to ``output_json_path``."""
     text = extract_text_from_pdf(pdf_path)
     if not text.strip():
-        raise ValueError("âŒ No text extracted from PDF")
+        raise ValueError("[ERROR] No text extracted from PDF")
 
     def detected_late_phrases(txt: str) -> bool:
         return bool(re.search(r"late|past due", txt, re.I))
@@ -58,7 +58,7 @@ def analyze_credit_report(
     raw_goal = client_info.get("goal", "").strip().lower()
     if raw_goal in ["", "not specified", "improve credit", "repair credit"]:
         client_goal = (
-            "Improve credit score significantly within the next 3â€"6 months using strategies such as authorized users, "
+            "Improve credit score significantly within the next 3-6 months using strategies such as authorized users, "
             "credit building tools, and removal of negative items."
         )
     else:
@@ -75,16 +75,16 @@ def analyze_credit_report(
 
     parsed_inquiries = extract_inquiries(text)
     if parsed_inquiries:
-        print(f"[ðŸ"Ž] Parser found {len(parsed_inquiries)} inquiries in text.")
+        print(f"[INFO] Parser found {len(parsed_inquiries)} inquiries in text.")
     else:
-        print("[âš ï¸] Parser did not find any inquiries in the report text.")
+        print("[WARN] Parser did not find any inquiries in the report text.")
 
     if result.get("inquiries"):
-        print(f"[ðŸ"] GPT found {len(result['inquiries'])} inquiries:")
+        print(f"[INFO] GPT found {len(result['inquiries'])} inquiries:")
         for inq in result["inquiries"]:
-            print(f"  â€¢ {inq['creditor_name']} - {inq['date']} ({inq['bureau']})")
+            print(f"  * {inq['creditor_name']} - {inq['date']} ({inq['bureau']})")
     else:
-        print("[âš ï¸] No inquiries found in GPT result.")
+        print("[WARN] No inquiries found in GPT result.")
 
     try:
         account_names = {acc.get("name", "") for acc in result.get("all_accounts", [])}
@@ -94,13 +94,13 @@ def analyze_credit_report(
         _sanitize_late_counts(history)
 
         if history:
-            print(f"[âœ...] Found {len(history)} late payment block(s):")
+            print(f"[INFO] Found {len(history)} late payment block(s):")
             for creditor, bureaus in history.items():
                 print(
-                    f"[ðŸ"] Detected late payments for: '{creditor.title()}' â†' {bureaus}"
+                    f"[INFO] Detected late payments for: '{creditor.title()}' -> {bureaus}"
                 )
         else:
-            print("[âŒ] No late payment history blocks detected.")
+            print("[ERROR] No late payment history blocks detected.")
 
         existing_norms = set()
         for acc in result.get("all_accounts", []):
@@ -157,11 +157,11 @@ def analyze_credit_report(
             linked = raw_norm in history
             if linked:
                 print(
-                    f"[ðŸ"] Linked late payment block '{raw_map.get(raw_norm, raw_norm)}' to account '{raw_norm.title()}'"
+                    f"[INFO] Linked late payment block '{raw_map.get(raw_norm, raw_norm)}' to account '{raw_norm.title()}'"
                 )
             else:
                 snippet = raw_map.get(raw_norm, raw_norm)
-                print(f"[âš ï¸] Unlinked late-payment block detected near: '{snippet}'")
+                print(f"[WARN] Unlinked late-payment block detected near: '{snippet}'")
 
         # Remove any late_payment fields that were not verified by parser
         verified_names = set(history.keys())
@@ -216,15 +216,15 @@ def analyze_credit_report(
             )
             if key not in found_pairs:
                 print(
-                    f"[âš ï¸] Inquiry missing from GPT output: {parsed['creditor_name']} {parsed['date']} ({parsed['bureau']})"
+                    f"[WARN] Inquiry missing from GPT output: {parsed['creditor_name']} {parsed['date']} ({parsed['bureau']})"
                 )
 
     except Exception as e:
-        print(f"[âš ï¸] Late history parsing failed: {e}")
+        print(f"[WARN] Late history parsing failed: {e}")
 
     issues = validate_analysis_sanity(result)
     if not result.get("open_accounts_with_issues") and detected_late_phrases(text):
-        msg = "âš ï¸ Late payment terms found in text but no accounts marked with issues."
+        msg = "WARN Late payment terms found in text but no accounts marked with issues."
         issues.append(msg)
         print(msg)
 

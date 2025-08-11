@@ -112,22 +112,22 @@ def analyze_credit_report(
     if not is_safe_pdf(pdf_path):
         raise ValueError("Uploaded file failed PDF safety checks.")
 
-    print("Ã°ÂŸÂ"Â„ Extracting client info from report...")
+    print("[INFO] Extracting client info from report...")
     client_personal_info = extract_bureau_info_column_refined(
         pdf_path, ai_client=ai_client
     )
     client_info.update(client_personal_info.get("data", {}))
-    log_messages.append("Ã°ÂŸÂ"Â„ Personal info extracted.")
+    log_messages.append("[INFO] Personal info extracted.")
     if audit.level == AuditLevel.VERBOSE:
         audit.log_step("personal_info_extracted", client_personal_info)
 
-    print("Ã°ÂŸÂ" Analyzing report with GPT...")
+    print("[INFO] Analyzing report with GPT...")
     analyzed_json_path = Path("output/analyzed_report.json")
     sections = analyze_report_logic(
         pdf_path, analyzed_json_path, client_info, ai_client=ai_client
     )
     client_info.update(sections)
-    log_messages.append("Ã°ÂŸÂ" Report analyzed.")
+    log_messages.append("[INFO] Report analyzed.")
     audit.log_step(
         "report_analyzed",
         {
@@ -142,7 +142,7 @@ def analyze_credit_report(
     )
     today_folder = Path(f"Clients/{get_current_month()}/{safe_name}_{session_id}")
     today_folder.mkdir(parents=True, exist_ok=True)
-    log_messages.append(f"Ã°ÂŸÂ"Â Client folder created at: {today_folder}")
+    log_messages.append(f"[INFO] Client folder created at: {today_folder}")
     if audit.level == AuditLevel.VERBOSE:
         audit.log_step("client_folder_created", {"path": str(today_folder)})
 
@@ -153,11 +153,11 @@ def analyze_credit_report(
 
     original_pdf_copy = today_folder / "Original SmartCredit Report.pdf"
     copyfile(pdf_path, original_pdf_copy)
-    log_messages.append("Ã°ÂŸÂ"Â Original report saved to client folder.")
+    log_messages.append("[INFO] Original report saved to client folder.")
 
     if analyzed_json_path.exists():
         copyfile(analyzed_json_path, today_folder / "analyzed_report.json")
-        log_messages.append("Ã°ÂŸÂ"Â Analyzed report JSON saved.")
+        log_messages.append("[INFO] Analyzed report JSON saved.")
 
     detailed_logs = []
     bureau_data = {
@@ -250,7 +250,7 @@ def generate_letters(
     from logic.generate_goodwill_letters import generate_goodwill_letters
     from logic.generate_custom_letters import generate_custom_letters
 
-    print("Ã°ÂŸÂ"Â„ Generating dispute letters...")
+    print("[INFO] Generating dispute letters...")
     generate_all_dispute_letters_with_ai(
         client_info,
         bureau_data,
@@ -264,21 +264,21 @@ def generate_letters(
         ),
         wkhtmltopdf_path=app_config.wkhtmltopdf_path if app_config else None,
     )
-    log_messages.append("Ã°ÂŸÂ"Â„ Dispute letters generated.")
+    log_messages.append("[INFO] Dispute letters generated.")
     if audit.level is AuditLevel.VERBOSE:
         audit.log_step("dispute_letters_generated")
 
     if not is_identity_theft:
-        print("Ã°ÂŸÂ'ÂŒ Generating goodwill letters...")
+        print("[INFO] Generating goodwill letters...")
         generate_goodwill_letters(
             client_info, bureau_data, today_folder, audit, ai_client=ai_client
         )
-        log_messages.append("Ã°ÂŸÂ'ÂŒ Goodwill letters generated.")
+        log_messages.append("[INFO] Goodwill letters generated.")
         if audit.level is AuditLevel.VERBOSE:
             audit.log_step("goodwill_letters_generated")
     else:
-        print("Ã°ÂŸÂ"Â' Identity theft case - skipping goodwill letters.")
-        log_messages.append("Ã°ÂŸÂšÂ« Goodwill letters skipped due to identity theft.")
+        print("[INFO] Identity theft case - skipping goodwill letters.")
+        log_messages.append("[INFO] Goodwill letters skipped due to identity theft.")
         if audit.level is AuditLevel.VERBOSE:
             audit.log_step("goodwill_letters_skipped")
 
@@ -286,7 +286,7 @@ def generate_letters(
     for bureau in bureau_data:
         bureau_data[bureau]["all_accounts"] = all_accounts
 
-    print("Ã°ÂŸÂ" Generating custom letters...")
+    print("[INFO] Generating custom letters...")
     generate_custom_letters(
         client_info,
         bureau_data,
@@ -296,11 +296,11 @@ def generate_letters(
         ai_client=ai_client,
         wkhtmltopdf_path=app_config.wkhtmltopdf_path if app_config else None,
     )
-    log_messages.append("Ã°ÂŸÂ" Custom letters generated.")
+    log_messages.append("[INFO] Custom letters generated.")
     if audit.level is AuditLevel.VERBOSE:
         audit.log_step("custom_letters_generated")
 
-    print("Ã°ÂŸÂ"Â‹ Generating instructions file for client...")
+    print("[INFO] Generating instructions file for client...")
     generate_instruction_file(
         client_info,
         bureau_data,
@@ -310,31 +310,31 @@ def generate_letters(
         ai_client=ai_client,
         wkhtmltopdf_path=app_config.wkhtmltopdf_path if app_config else None,
     )
-    log_messages.append("Ã°ÂŸÂ"Â‹ Instruction file created.")
+    log_messages.append("[INFO] Instruction file created.")
     if audit.level is AuditLevel.VERBOSE:
         audit.log_step("instructions_generated")
 
-    print("Ã°ÂŸÂŒÂ€ Converting letters to PDF...")
+    print("[INFO] Converting letters to PDF...")
     convert_txts_to_pdfs(today_folder)
-    log_messages.append("Ã°ÂŸÂŒÂ€ All letters converted to PDF.")
+    log_messages.append("[INFO] All letters converted to PDF.")
     if audit.level is AuditLevel.VERBOSE:
         audit.log_step("letters_converted_to_pdf")
 
     if is_identity_theft:
-        print("Ã°ÂŸÂ"ÂŽ Adding FCRA rights PDF...")
+        print("[INFO] Adding FCRA rights PDF...")
         frca_source_path = "templates/FTC_FCRA_605b.pdf"
         frca_target_path = today_folder / "Your Rights - FCRA.pdf"
         if os.path.exists(frca_source_path):
             copyfile(frca_source_path, frca_target_path)
-            print(f"Ã°ÂŸÂ"ÂŽ FCRA rights PDF copied to: {frca_target_path}")
-            log_messages.append("Ã°ÂŸÂ"ÂŽ FCRA document added.")
+            print(f"[INFO] FCRA rights PDF copied to: {frca_target_path}")
+            log_messages.append("[INFO] FCRA document added.")
         else:
-            print("Ã¢Âš Ã¯Â¸ FCRA rights file not found!")
-            log_messages.append("Ã¢Âš Ã¯Â¸ FCRA file missing.")
+            print("[WARN] FCRA rights file not found!")
+            log_messages.append("[WARN] FCRA file missing.")
             if audit.level is AuditLevel.VERBOSE:
                 audit.log_step("fcra_file_missing")
     else:
-        log_messages.append("Ã¢Â„Â¹Ã¯Â¸ Identity theft not indicated Ã¢Â€Â" FCRA PDF skipped.")
+        log_messages.append("[INFO] Identity theft not indicated - FCRA PDF skipped.")
         if audit.level is AuditLevel.VERBOSE:
             audit.log_step("fcra_skipped")
 
@@ -348,7 +348,7 @@ def finalize_outputs(
     app_config: AppConfig,
 ):
     """Send final outputs to the client and record analytics."""
-    print("Ã°ÂŸÂ"Â§ Sending email with all documents to client...")
+    print("[INFO] Sending email with all documents to client...")
     output_files = [str(p) for p in today_folder.glob("*.pdf")]
     raw_name = (client_info.get("name") or "").strip()
     first_name = raw_name.split()[0] if raw_name else "Client"
@@ -389,7 +389,7 @@ Best regards,
         sender_email=app_config.smtp_username,
         sender_password=app_config.smtp_password,
     )
-    log_messages.append("Ã°ÂŸÂ"Â§ Email sent to client.")
+    log_messages.append("[INFO] Email sent to client.")
     if audit.level is AuditLevel.VERBOSE:
         audit.log_step("email_sent", {"files": output_files})
 
@@ -399,13 +399,13 @@ Best regards,
         extract_summary_from_sections(sections),
         strategist_failures=failure_counts,
     )
-    log_messages.append("Ã°ÂŸÂ"ÂŠ Analytics snapshot saved.")
+    log_messages.append("[INFO] Analytics snapshot saved.")
     if audit.level is AuditLevel.VERBOSE:
         audit.log_step("analytics_saved", {"strategist_failures": failure_counts})
 
-    print("\nÃ°ÂŸÂŽÂ¯ Credit Repair Process completed successfully!")
-    print(f"Ã°ÂŸÂ"Â‚ All output saved to: {today_folder}")
-    log_messages.append("Ã°ÂŸÂŽÂ¯ Process completed successfully.")
+    print("\n[INFO] Credit Repair Process completed successfully!")
+    print(f"[INFO] All output saved to: {today_folder}")
+    log_messages.append("[INFO] Process completed successfully.")
     audit.log_step("process_completed")
 
 
@@ -419,18 +419,18 @@ def save_log_file(client_info, is_identity_theft, output_folder, log_lines):
     log_path = logs_dir / log_filename
 
     header = [
-        f"Ã°ÂŸÂ•Â' Run time: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        f"Ã°ÂŸÂ'Â¤ Client: {client_info.get('name', '')}",
-        f"Ã°ÂŸ  Address: {client_info.get('address', '')}",
-        f"Ã°ÂŸÂŽÂ¯ Goal: {client_info.get('goal', '')}",
-        f"Ã°ÂŸÂ› Ã¯Â¸ Treatment Type: {'Identity Theft' if is_identity_theft else 'Standard Dispute'}",
-        f"Ã°ÂŸÂ"Â Output folder: {output_folder}",
+        f"Run time: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"Client: {client_info.get('name', '')}",
+        f"Address: {client_info.get('address', '')}",
+        f"Goal: {client_info.get('goal', '')}",
+        f"Treatment Type: {'Identity Theft' if is_identity_theft else 'Standard Dispute'}",
+        f"Output folder: {output_folder}",
         "",
     ]
 
     with open(log_path, mode="w", encoding="utf-8") as f:
         f.write("\n".join(header + log_lines))
-    print(f"[Ã°ÂŸÂ"] Log saved: {log_path}")
+    print(f"[INFO] Log saved: {log_path}")
 
 
 def run_credit_repair_process(
@@ -465,8 +465,8 @@ def run_credit_repair_process(
     strategy = None
 
     try:
-        print("\nÃ¢ÂœÂ... Starting Credit Repair Process (B2C Mode)...")
-        log_messages.append("Ã¢ÂœÂ... Process started.")
+        print("\n[INFO] Starting Credit Repair Process (B2C Mode)...")
+        log_messages.append("[INFO] Process started.")
         audit.log_step("process_started", {"is_identity_theft": is_identity_theft})
 
         session_id, structured_map, raw_map = process_client_intake(client_info, audit)
@@ -502,7 +502,7 @@ def run_credit_repair_process(
         )
 
     except Exception as e:  # pragma: no cover - surface for higher-level handling
-        error_msg = f"Ã¢ÂŒ Error: {str(e)}"
+        error_msg = f"[ERROR] Error: {str(e)}"
         print(error_msg)
         log_messages.append(error_msg)
         audit.log_error(error_msg)
@@ -526,12 +526,12 @@ def run_credit_repair_process(
                     ),
                     Path("client_output"),
                 )
-        if pdf_path and os.path.exists(pdf_path):
-            try:
-                os.remove(pdf_path)
-                print(f"[Ã°ÂŸÂ§Â¹] Deleted uploaded PDF: {pdf_path}")
-            except Exception as delete_error:  # pragma: no cover - best effort
-                print(f"[Ã¢Âš Ã¯Â¸] Failed to delete uploaded PDF: {delete_error}")
+    if pdf_path and os.path.exists(pdf_path):
+        try:
+            os.remove(pdf_path)
+            print(f"[INFO] Deleted uploaded PDF: {pdf_path}")
+        except Exception as delete_error:  # pragma: no cover - best effort
+            print(f"[WARN] Failed to delete uploaded PDF: {delete_error}")
 
 
 def extract_problematic_accounts_from_report(

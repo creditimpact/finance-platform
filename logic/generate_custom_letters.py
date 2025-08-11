@@ -123,7 +123,7 @@ def generate_custom_letter(
 
     docs_text, doc_names, _ = gather_supporting_docs(session_id)
     if docs_text and audit and audit.level is AuditLevel.VERBOSE:
-        print(f"[ðŸ"Ž] Including supplemental docs for custom letter to {recipient}.")
+        print(f"[INFO] Including supplemental docs for custom letter to {recipient}.")
 
     body_paragraph = call_gpt_for_custom_letter(
         client_name,
@@ -164,7 +164,7 @@ def generate_custom_letter(
         configuration=_pdf_config(wkhtmltopdf_path),
         options=options,
     )
-    print(f"[ðŸ"] Custom letter generated: {full_path}")
+    print(f"[INFO] Custom letter generated: {full_path}")
 
     response_path = output_path / f"{safe_recipient}_custom_gpt_response.txt"
     with open(response_path, "w", encoding="utf-8") as f:
@@ -211,5 +211,5 @@ def generate_custom_letters(
                 )
             else:
                 log_messages.append(
-                    f"[{bureau}] No custom letter for '{acc.get('name')}' â€" not marked for custom correspondence"
+                    f"[{bureau}] No custom letter for '{acc.get('name')}' - not marked for custom correspondence"
                 )

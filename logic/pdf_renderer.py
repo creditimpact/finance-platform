@@ -68,6 +68,8 @@ def render_html_to_pdf(
         config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf)
         options = {"quiet": ""}
         pdfkit.from_string(html, output_path, configuration=config, options=options)
-        print(f"[ðŸ"„] PDF rendered: {output_path}")
+        # Emit a simple ASCII message so the source file remains UTF-8 clean
+        # and portable across operating systems.
+        print(f"[INFO] PDF rendered: {output_path}")
     except Exception as e:  # pragma: no cover - rendering failures are logged
-        print(f"[âŒ] Failed to render PDF: {e}")
+        print(f"[ERROR] Failed to render PDF: {e}")

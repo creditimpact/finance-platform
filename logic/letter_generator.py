@@ -18,6 +18,7 @@ from logic.utils.note_handling import get_client_address_lines
 
 from logic.utils.names_normalization import normalize_creditor_name
 from .strategy_engine import generate_strategy
+from logic.guardrails.summary_validator import validate_structured_summaries
 from .dispute_preparation import prepare_disputes_and_inquiries
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
 from models.letter import LetterContext, LetterArtifact, LetterAccount
@@ -91,7 +92,9 @@ def generate_all_dispute_letters_with_ai(
 
     session_id = client_info.get("session_id", "")
     strategy = generate_strategy(session_id, bureau_data)
-    strategy_summaries = strategy.get("dispute_items", {})
+    strategy_summaries = validate_structured_summaries(
+        strategy.get("dispute_items", {})
+    )
 
     sanitization_issues = False
 

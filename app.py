@@ -9,12 +9,12 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 import logging
-from flask import Flask, request, jsonify, Blueprint
+from flask import Flask, request, jsonify, Blueprint, redirect, url_for
 from flask_cors import CORS
 import uuid
 from werkzeug.utils import secure_filename
 
-from tasks import process_report, extract_problematic_accounts
+from tasks import extract_problematic_accounts
 from admin import admin_bp
 from session_manager import (
     set_session,
@@ -189,45 +189,7 @@ def get_summaries(session_id: str):
 
 @api_bp.route("/api/submit-explanations", methods=["POST"])
 def submit_explanations():
-    data = request.get_json(force=True)
-    session_id = data.get("session_id")
-    email = data.get("email")
-    goal = data.get("goal", "Not specified")
-    is_identity_theft = data.get("is_identity_theft", False)
-
-    if not (session_id and email):
-        return jsonify({"status": "error", "message": "Missing data"}), 400
-
-    session = get_session(session_id)
-    file_path = session.get("file_path") if session else None
-    if not file_path or not os.path.exists(file_path):
-        dir_listing = []
-        if session:
-            dir_path = os.path.dirname(file_path)
-            if os.path.exists(dir_path):
-                dir_listing = os.listdir(dir_path)
-        logger.error(
-            "File for session %s missing at %s. Dir contents: %s",
-            session_id,
-            file_path,
-            dir_listing,
-        )
-        return (
-            jsonify(
-                {
-                    "status": "error",
-                    "message": "Uploaded report is missing. Please restart the process.",
-                }
-            ),
-            404,
-        )
-
-    structured = session.get("structured_summaries", {}) if session else {}
-    process_report.delay(
-        file_path, email, goal, is_identity_theft, session_id, structured
-    )
-
-    return jsonify({"status": "processing", "message": "Letters generation started."})
+    return redirect(url_for("api.explanations_endpoint"), code=307)
 
 
 def create_app() -> Flask:

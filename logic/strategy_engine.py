@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Mapping
 from session_manager import get_session, update_session
 from .rules_loader import load_rules
 from .outcomes_store import get_outcomes
+from logic.guardrails.summary_validator import validate_structured_summaries
 
 
 # Simple mapping of dispute types to relevant statutes and tone guidance.
@@ -80,7 +81,9 @@ def generate_strategy(session_id: str, bureau_data: Mapping[str, Any]) -> Mappin
     """
 
     session = get_session(session_id) or {}
-    structured = session.get("structured_summaries", {})
+    structured = validate_structured_summaries(
+        session.get("structured_summaries", {})
+    )
 
     items = _build_dispute_items(structured, bureau_data)
 

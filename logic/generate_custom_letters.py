@@ -10,6 +10,7 @@ from logic.utils.pdf_ops import gather_supporting_docs
 from .summary_classifier import classify_client_summary
 from session_manager import get_session
 from logic.guardrails import generate_letter_with_guardrails
+from logic.guardrails.summary_validator import validate_structured_summaries
 from .rules_loader import get_neutral_phrase
 from audit import AuditLogger, AuditLevel
 from services.ai_client import AIClient
@@ -117,7 +118,9 @@ def generate_custom_letter(
     state = client_info.get("state", "")
 
     session = get_session(session_id) or {}
-    structured_summary = session.get("structured_summaries", {}).get(
+    structured_summaries = session.get("structured_summaries", {})
+    structured_summaries = validate_structured_summaries(structured_summaries)
+    structured_summary = structured_summaries.get(
         account.get("account_id"), {}
     )
 

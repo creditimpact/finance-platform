@@ -15,6 +15,9 @@ _SINGLE_QUOTE_VALUE_RE = re.compile(r":\s*'([^']*)'")
 _UNQUOTED_KEY_RE = re.compile(
     r"(?P<prefix>^|[,{])\s*(?P<key>[A-Za-z_][A-Za-z0-9_-]*)\s*(?=:)"
 )
+_MISSING_COMMA_VALUE_RE = re.compile(
+    r"(:\s*)(true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(\s+)(?=\")"
+)
 _LOG_PATH = Path("invalid_ai_json.log")
 
 
@@ -42,6 +45,7 @@ def _basic_clean(content: str) -> str:
     cleaned = _UNQUOTED_KEY_RE.sub(
         lambda m: f'{m.group("prefix")}"{m.group("key")}"', cleaned
     )
+    cleaned = _MISSING_COMMA_VALUE_RE.sub(r'\1\2,\3', cleaned)
     return cleaned
 
 

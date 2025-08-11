@@ -87,8 +87,20 @@ def generate_goodwill_letters(
     run_date: str | None = None,
     *,
     ai_client: AIClient,
+    identity_theft: bool = False,
 ) -> None:
-    """Generate goodwill letters for all eligible creditors in ``bureau_data``."""
+    """Generate goodwill letters for all eligible creditors in ``bureau_data``.
+
+    Parameters
+    ----------
+    identity_theft:
+        When ``True`` the function returns immediately without generating any
+        letters.  This mirrors the higher level orchestration logic and acts as
+        a defensive guard should callers invoke this helper directly.
+    """
+
+    if identity_theft:
+        return
 
     if isinstance(client, dict):  # pragma: no cover - backward compat
         client = ClientInfo.from_dict(client)

@@ -167,6 +167,15 @@ def prepare_instruction_data(
 
     all_accounts = list({id(v): v for v in deduped.values()}.values())
 
+    # Remove goodwill-only items entirely if this is an identity theft case.
+    if is_identity_theft:
+        all_accounts = [
+            acc
+            for acc in all_accounts
+            if str(acc.get("action_tag", "")).lower() != "goodwill"
+            and str(acc.get("recommended_action", "")).lower() != "goodwill"
+        ]
+
     has_dupes = any(acc.get("duplicate_suspect") for acc in all_accounts)
 
     sections: Dict[str, List[dict]] = {
@@ -235,7 +244,7 @@ def prepare_instruction_data(
         letters = []
         if action_tag.lower() == "dispute":
             letters.append("Dispute")
-        if action_tag.lower() == "goodwill":
+        if action_tag.lower() == "goodwill" and not is_identity_theft:
             letters.append("Goodwill")
         if acc.get("letter_type") == "custom" or action_tag.lower() == "custom_letter":
             letters.append("Custom")

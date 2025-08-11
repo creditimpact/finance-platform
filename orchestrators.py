@@ -27,7 +27,7 @@ from analytics.strategist_failures import tally_failure_reasons
 from email_sender import send_email_with_attachment
 from services.ai_client import AIClient
 from config import AppConfig, get_app_config
-from models import ClientInfo, ProofDocuments
+from models import ClientInfo, ProofDocuments, BureauPayload, BureauAccount, Inquiry
 
 
 def process_client_intake(client_info, audit):
@@ -71,9 +71,7 @@ def classify_client_responses(
     """Classify client summaries for each account."""
     classification_map: dict[str, dict] = {}
     for acc_id, struct in structured_map.items():
-        cls = classify_client_summary(
-            struct, ai_client, client_info.get("state")
-        )
+        cls = classify_client_summary(struct, ai_client, client_info.get("state"))
         classification_map[acc_id] = cls
         audit.log_account(
             acc_id,
@@ -315,10 +313,15 @@ def generate_letters(
         audit.log_step("instructions_generated")
 
     print("[INFO] Converting letters to PDF...")
-    convert_txts_to_pdfs(today_folder)
-    log_messages.append("[INFO] All letters converted to PDF.")
-    if audit.level is AuditLevel.VERBOSE:
-        audit.log_step("letters_converted_to_pdf")
+    if os.getenv("DISABLE_PDF_RENDER", "").lower() not in ("1", "true", "yes"):
+        convert_txts_to_pdfs(today_folder)
+        log_messages.append("[INFO] All letters converted to PDF.")
+        if audit.level is AuditLevel.VERBOSE:
+            audit.log_step("letters_converted_to_pdf")
+    else:
+        print(
+            "[INFO] PDF rendering disabled via DISABLE_PDF_RENDER – skipping conversion."
+        )
 
     if is_identity_theft:
         print("[INFO] Adding FCRA rights PDF...")
@@ -541,7 +544,6 @@ def extract_problematic_accounts_from_report(
     from logic.upload_validator import is_safe_pdf, move_uploaded_file
     from session_manager import update_session
     from logic.analyze_report import analyze_credit_report as analyze_report_logic
-    from models import BureauPayload, BureauAccount, Inquiry
 
     session_id = session_id or "session"
     pdf_path = move_uploaded_file(Path(file_path), session_id)
@@ -555,16 +557,14 @@ def extract_problematic_accounts_from_report(
 
     return BureauPayload(
         disputes=[
-            BureauAccount.from_dict(d)
-            for d in sections.get("negative_accounts", [])
+            BureauAccount.from_dict(d) for d in sections.get("negative_accounts", [])
         ],
         goodwill=[
             BureauAccount.from_dict(d)
             for d in sections.get("open_accounts_with_issues", [])
         ],
         inquiries=[
-            Inquiry.from_dict(d)
-            for d in sections.get("unauthorized_inquiries", [])
+            Inquiry.from_dict(d) for d in sections.get("unauthorized_inquiries", [])
         ],
     )
 

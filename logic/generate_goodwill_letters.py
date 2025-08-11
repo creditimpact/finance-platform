@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Any, Mapping
+from typing import Any, Mapping
 
 from audit import AuditLogger
 from services.ai_client import AIClient
 from session_manager import get_session
+from logic.guardrails.summary_validator import validate_structured_summaries
 
 import logic.goodwill_preparation as goodwill_preparation
 import logic.goodwill_prompting as goodwill_prompting
@@ -43,6 +44,7 @@ def generate_goodwill_letter_with_ai(
     session_id = client_info.get("session_id")
     session = get_session(session_id or "") or {}
     structured_summaries = session.get("structured_summaries", {})
+    structured_summaries = validate_structured_summaries(structured_summaries)
 
     account_summaries = goodwill_preparation.prepare_account_summaries(
         account_dicts,

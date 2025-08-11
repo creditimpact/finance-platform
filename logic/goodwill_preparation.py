@@ -42,7 +42,10 @@ def select_goodwill_candidates(
             ).lower()
             if action != "dispute":
                 continue
-            name = acc.get("name") or acc.get("×©× ×"×-×©×'×•×Ÿ")
+            # Earlier versions attempted to read a mis-encoded "name" key from
+            # imported data. Those stray byte sequences caused parsing issues on
+            # some platforms. We only rely on the standard ASCII key now.
+            name = acc.get("name")
             if not name:
                 continue
             name_norm = normalize_creditor_name(name)
@@ -72,7 +75,9 @@ def select_goodwill_candidates(
         ):
             return
 
-        name = account.get("name") or account.get("×©× ×"×-×©×'×•×Ÿ")
+        # Avoid non-ASCII fallbacks that previously appeared in some exports.
+        # The canonical "name" key is sufficient for our tests.
+        name = account.get("name")
         if not name:
             return
         name_norm = normalize_creditor_name(name)
@@ -104,7 +109,7 @@ def select_goodwill_candidates(
         if _total_lates(late_info) == 0 and not has_late_indicator(account):
             return
 
-        creditor = account.get("name") or account.get("×©× ×"×-×©×'×•×Ÿ")
+        creditor = account.get("name")
         goodwill_accounts.setdefault(creditor, []).append(account)
 
     for content in bureau_data.values():

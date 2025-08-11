@@ -40,12 +40,12 @@ def convert_txts_to_pdfs(folder: Path):
                 try:
                     pdf.multi_cell(0, 10, line)
                 except Exception as e:
-                    print(f"[âš ï¸] Failed to render line: {line[:50]} â€" {e}")
+                    print(f"[WARN] Failed to render line: {line[:50]} - {e}")
                     continue
 
         new_path = output_folder / (txt_path.stem + ".pdf")
         pdf.output(str(new_path))
-        print(f"[ðŸ"„] Converted to PDF: {new_path}")
+        print(f"[INFO] Converted to PDF: {new_path}")
 
 
 def extract_pdf_text_safe(pdf_path: Path, max_chars: int = 4000) -> str:
@@ -63,7 +63,7 @@ def extract_pdf_text_safe(pdf_path: Path, max_chars: int = 4000) -> str:
             if joined:
                 return joined[:max_chars]
     except Exception as e:
-        print(f"[âš ï¸] pdfplumber failed for {pdf_path}: {e}")
+        print(f"[WARN] pdfplumber failed for {pdf_path}: {e}")
 
     try:
         doc = fitz.open(pdf_path)
@@ -75,7 +75,7 @@ def extract_pdf_text_safe(pdf_path: Path, max_chars: int = 4000) -> str:
         doc.close()
         return text[:max_chars]
     except Exception as e:
-        print(f"[âŒ] Fallback extraction failed for {pdf_path}: {e}")
+        print(f"[ERROR] Fallback extraction failed for {pdf_path}: {e}")
         return ""
 
 
@@ -99,7 +99,7 @@ def gather_supporting_docs(
             continue
         for pdf_path in sorted(folder.glob("*.pdf")):
             if total_len >= max_chars:
-                print("[âš ï¸] Reached max characters, truncating remaining docs.")
+                print("[WARN] Reached max characters, truncating remaining docs.")
                 break
             try:
                 raw_text = extract_pdf_text_safe(pdf_path, 1500)
@@ -107,15 +107,15 @@ def gather_supporting_docs(
                 if snippet:
                     summary = (
                         f"The following document was provided: '{pdf_path.name}'\n"
-                        f"â†' Summary: {snippet}"
+                        f"-> Summary: {snippet}"
                     )
                     summaries.append(summary)
                     doc_snippets[pdf_path.name] = snippet
                     total_len += len(summary) + 1
                 filenames.append(pdf_path.name)
-                print(f"[ðŸ"Ž] Parsed supporting doc: {pdf_path.name}")
+                print(f"[INFO] Parsed supporting doc: {pdf_path.name}")
             except Exception as e:
-                print(f"[âš ï¸] Failed to parse {pdf_path.name}: {e}")
+                print(f"[WARN] Failed to parse {pdf_path.name}: {e}")
                 continue
         if total_len >= max_chars:
             break
@@ -123,7 +123,7 @@ def gather_supporting_docs(
     combined = "\n".join(summaries)
     if len(combined) > max_chars:
         combined = combined[:max_chars]
-        print("[âš ï¸] Combined supporting docs summary truncated due to length.")
+        print("[WARN] Combined supporting docs summary truncated due to length.")
 
     return combined.strip(), filenames, doc_snippets
 

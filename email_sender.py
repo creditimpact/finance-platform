@@ -28,7 +28,7 @@ def send_email_with_attachment(
 
     for file_path in files:
         if not os.path.exists(file_path):
-            print(f"[âš ï¸] File not found, skipping: {file_path}")
+            print(f"[WARN] File not found, skipping: {file_path}")
             continue
 
         with open(file_path, "rb") as f:
@@ -49,4 +49,4 @@ def send_email_with_attachment(
         except Exception:
             pass
         smtp.send_message(msg)
-        print(f"ðŸ"§ Email sent to {receiver_email}")
+        print(f"[INFO] Email sent to {receiver_email}")

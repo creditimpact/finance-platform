@@ -66,3 +66,13 @@ analytics_data/
 # קבצי גיבוי
 *.bak
 *~
+
+# Pytest & Testing Artifacts
+.pytest_cache/
+.artifacts/
+.coverage
+coverage.xml
+
+# Type Checking / Linting Cache
+.mypy_cache/
+.ruff_cache/

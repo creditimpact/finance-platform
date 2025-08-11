@@ -30,15 +30,17 @@ def normalize_output_path(path: str) -> str:
     """Normalize an output path for PDF generation.
 
     Ensures the path is absolute, ends with ``.pdf`` and that the parent
-    directory exists.
+    directory exists.  The returned path is formatted using POSIX-style
+    forward slashes so tests do not depend on the host platform.
     """
     p = Path(path).expanduser()
     if not p.is_absolute():
         p = Path.cwd() / p
     if p.suffix.lower() != ".pdf":
         p = p.with_suffix(".pdf")
+    p = p.resolve()
     p.parent.mkdir(parents=True, exist_ok=True)
-    return str(p.resolve())
+    return p.as_posix()
 
 
 def render_html_to_pdf(

@@ -5,8 +5,11 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from logic.guardrails import generate_letter_with_guardrails, fix_draft_with_guardrails
-from session_manager import update_session, get_session
+from backend.core.logic.guardrails import (
+    generate_letter_with_guardrails,
+    fix_draft_with_guardrails,
+)
+from backend.api.session_manager import update_session, get_session
 from tests.helpers.fake_ai_client import FakeAIClient
 
 

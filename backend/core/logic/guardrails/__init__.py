@@ -1,10 +1,10 @@
 from typing import Tuple, List, Any
-from services.ai_client import AIClient
-from models.letter import LetterContext
+from backend.core.services.ai_client import AIClient
+from backend.core.models.letter import LetterContext
 
-from logic.rule_checker import check_letter, RuleViolation
-from logic.rules_loader import load_rules
-from session_manager import get_session, update_session
+from backend.core.logic.rule_checker import check_letter, RuleViolation
+from backend.core.logic.rules_loader import load_rules
+from backend.api.session_manager import get_session, update_session
 
 
 def _build_system_prompt() -> str:

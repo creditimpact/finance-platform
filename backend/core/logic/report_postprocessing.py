@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Mapping, Set
 import re
 
-from logic.utils.names_normalization import (
+from backend.core.logic.utils.names_normalization import (
     normalize_creditor_name,
     normalize_bureau_name,
 )

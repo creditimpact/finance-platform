@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 from typing import TypedDict, Literal, Any
 
-from logic.rules_loader import load_rules, load_state_rules
-from models.letter import LetterContext
+from backend.core.logic.rules_loader import load_rules, load_state_rules
+from backend.core.models.letter import LetterContext
 
 
 class RuleViolation(TypedDict):
@@ -130,7 +130,7 @@ def check_letter(
         session_id = context.get("session_id")
         if session_id and clauses_added:
             try:
-                from session_manager import update_session
+                from backend.api.session_manager import update_session
 
                 update_session(
                     session_id,

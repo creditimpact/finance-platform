@@ -56,7 +56,7 @@ def test_imports_do_not_load_app_config(monkeypatch):
             AssertionError("environment variable accessed")
         ),
     )
-    import config
+    from backend.api import config
 
     monkeypatch.setattr(
         config,

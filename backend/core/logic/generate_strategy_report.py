@@ -3,12 +3,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
-from services.ai_client import AIClient
+from backend.core.services.ai_client import AIClient
 
-from audit import AuditLogger
+from backend.audit.audit import AuditLogger
 from .constants import StrategistFailureReason
 from .json_utils import parse_json
-from logic.guardrails import fix_draft_with_guardrails
+from backend.core.logic.guardrails import fix_draft_with_guardrails
 
 
 class StrategyGenerator:

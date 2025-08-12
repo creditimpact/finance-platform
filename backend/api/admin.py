@@ -13,7 +13,7 @@ import io
 import zipfile
 
 from telegram_alert import send_admin_login_alert
-from config import get_app_config
+from backend.api.config import get_app_config
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 

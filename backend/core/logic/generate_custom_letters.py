@@ -6,18 +6,20 @@ from datetime import datetime
 from typing import Any, Mapping
 from jinja2 import Environment, FileSystemLoader
 import pdfkit
-from logic.utils.pdf_ops import gather_supporting_docs
+from backend.core.logic.utils.pdf_ops import gather_supporting_docs
 from .summary_classifier import classify_client_summary
-from session_manager import get_session
-from logic.guardrails import generate_letter_with_guardrails
-from logic.guardrails.summary_validator import validate_structured_summaries
+from backend.api.session_manager import get_session
+from backend.core.logic.guardrails import generate_letter_with_guardrails
+from backend.core.logic.guardrails.summary_validator import (
+    validate_structured_summaries,
+)
 from .rules_loader import get_neutral_phrase
-from audit import AuditLogger, AuditLevel
-from services.ai_client import AIClient
-from config import get_app_config
-from models.account import Account
-from models.client import ClientInfo
-from models.bureau import BureauPayload
+from backend.audit.audit import AuditLogger, AuditLevel
+from backend.core.services.ai_client import AIClient
+from backend.api.config import get_app_config
+from backend.core.models.account import Account
+from backend.core.models.client import ClientInfo
+from backend.core.models.bureau import BureauPayload
 
 env = Environment(loader=FileSystemLoader("templates"))
 template = env.get_template("general_letter_template.html")
@@ -120,9 +122,7 @@ def generate_custom_letter(
     session = get_session(session_id) or {}
     structured_summaries = session.get("structured_summaries", {})
     structured_summaries = validate_structured_summaries(structured_summaries)
-    structured_summary = structured_summaries.get(
-        account.get("account_id"), {}
-    )
+    structured_summary = structured_summaries.get(account.get("account_id"), {})
 
     docs_text, doc_names, _ = gather_supporting_docs(session_id)
     if docs_text and audit and audit.level is AuditLevel.VERBOSE:

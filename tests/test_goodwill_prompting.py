@@ -1,5 +1,5 @@
 import json
-from logic.goodwill_prompting import generate_goodwill_letter_draft
+from backend.core.logic.goodwill_prompting import generate_goodwill_letter_draft
 from tests.helpers.fake_ai_client import FakeAIClient
 
 

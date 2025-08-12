@@ -26,7 +26,7 @@ def extract_text_from_pdf(pdf_path: str | Path) -> str:
     return extract_pdf_text_safe(Path(pdf_path), max_chars=150000)
 
 
-from models.bureau import BureauAccount  # noqa: E402
+from backend.core.models.bureau import BureauAccount  # noqa: E402
 
 
 def bureau_data_from_dict(

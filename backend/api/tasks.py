@@ -13,11 +13,12 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from celery import Celery
-from orchestrators import (
+from backend.core.orchestrators import (
     run_credit_repair_process,
     extract_problematic_accounts_from_report,
 )
-from models import ClientInfo, ProofDocuments
+from backend.core.models import ClientInfo, ProofDocuments
+
 app = Celery("tasks", loader="default", fixups=[])
 
 logging.basicConfig(level=logging.INFO)
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 # cases where the worker is launched from a directory that omits the
 # project root from PYTHONPATH.
 try:
-    import session_manager  # noqa: F401
+    from backend.api import session_manager  # noqa: F401
 
     logger.info("session_manager import successful")
 except Exception as exc:  # pragma: no cover - log and continue

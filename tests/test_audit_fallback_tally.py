@@ -3,17 +3,17 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from audit import create_audit_logger
-from analytics.strategist_failures import tally_fallback_vs_decision
-from models.account import Account
-from models.strategy import StrategyPlan
+from backend.audit.audit import create_audit_logger
+from backend.analytics.analytics.strategist_failures import tally_fallback_vs_decision
+from backend.core.models.account import Account
+from backend.core.models.strategy import StrategyPlan
 
 
 def test_tally_fallback_vs_decision(tmp_path):
     import types
 
     sys.modules["pdfkit"] = types.SimpleNamespace(configuration=lambda **kwargs: None)
-    from logic.strategy_merger import merge_strategy_data
+    from backend.core.logic.strategy_merger import merge_strategy_data
 
     audit = create_audit_logger("test")
     strategy = StrategyPlan.from_dict(

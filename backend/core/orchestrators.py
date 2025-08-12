@@ -13,21 +13,30 @@ from datetime import datetime
 from shutil import copyfile
 from typing import Any, Mapping
 
-from audit import AuditLevel
-from logic.extract_info import extract_bureau_info_column_refined
-from logic.utils.pdf_ops import convert_txts_to_pdfs, gather_supporting_docs_text
-from logic.utils.report_sections import (
+from backend.audit.audit import AuditLevel
+from backend.core.logic.extract_info import extract_bureau_info_column_refined
+from backend.core.logic.utils.pdf_ops import (
+    convert_txts_to_pdfs,
+    gather_supporting_docs_text,
+)
+from backend.core.logic.utils.report_sections import (
     filter_sections_by_bureau,
     extract_summary_from_sections,
 )
-from logic.summary_classifier import classify_client_summary
-from logic.constants import StrategistFailureReason
-from analytics_tracker import save_analytics_snapshot
-from analytics.strategist_failures import tally_failure_reasons
-from email_sender import send_email_with_attachment
-from services.ai_client import AIClient
-from config import AppConfig, get_app_config
-from models import ClientInfo, ProofDocuments, BureauPayload, BureauAccount, Inquiry
+from backend.core.logic.summary_classifier import classify_client_summary
+from backend.core.logic.constants import StrategistFailureReason
+from backend.analytics.analytics_tracker import save_analytics_snapshot
+from backend.analytics.analytics.strategist_failures import tally_failure_reasons
+from backend.core.email_sender import send_email_with_attachment
+from backend.core.services.ai_client import AIClient
+from backend.api.config import AppConfig, get_app_config
+from backend.core.models import (
+    ClientInfo,
+    ProofDocuments,
+    BureauPayload,
+    BureauAccount,
+    Inquiry,
+)
 
 
 def process_client_intake(client_info, audit):
@@ -36,7 +45,7 @@ def process_client_intake(client_info, audit):
     Returns:
         tuple[str, dict, dict]: session id, structured summaries and raw notes.
     """
-    from session_manager import get_intake
+    from backend.api.session_manager import get_intake
 
     if "email" not in client_info or not client_info["email"]:
         raise ValueError("Client email is missing.")
@@ -94,10 +103,12 @@ def analyze_credit_report(
     ai_client: AIClient,
 ):
     """Ingest and analyze the client's credit report."""
-    from logic.upload_validator import is_safe_pdf, move_uploaded_file
-    from session_manager import update_session
-    from logic.analyze_report import analyze_credit_report as analyze_report_logic
-    from logic.bootstrap import get_current_month
+    from backend.core.logic.upload_validator import is_safe_pdf, move_uploaded_file
+    from backend.api.session_manager import update_session
+    from backend.core.logic.analyze_report import (
+        analyze_credit_report as analyze_report_logic,
+    )
+    from backend.core.logic.bootstrap import get_current_month
 
     uploaded_path = proofs_files.get("smartcredit_report")
     if not uploaded_path or not os.path.exists(uploaded_path):
@@ -179,8 +190,8 @@ def generate_strategy_plan(
     ai_client: AIClient,
 ):
     """Generate and merge the strategy plan."""
-    from logic.strategy_merger import merge_strategy_data
-    from logic.generate_strategy_report import StrategyGenerator
+    from backend.core.logic.strategy_merger import merge_strategy_data
+    from backend.core.logic.generate_strategy_report import StrategyGenerator
 
     docs_text = gather_supporting_docs_text(session_id)
     strat_gen = StrategyGenerator(ai_client=ai_client)
@@ -242,11 +253,11 @@ def generate_letters(
     app_config: AppConfig | None = None,
 ):
     """Create all client letters and supporting files."""
-    from logic.bootstrap import extract_all_accounts
-    from logic.letter_generator import generate_all_dispute_letters_with_ai
-    from logic.instructions_generator import generate_instruction_file
-    from logic.generate_goodwill_letters import generate_goodwill_letters
-    from logic.generate_custom_letters import generate_custom_letters
+    from backend.core.logic.bootstrap import extract_all_accounts
+    from backend.core.logic.letter_generator import generate_all_dispute_letters_with_ai
+    from backend.core.logic.instructions_generator import generate_instruction_file
+    from backend.core.logic.generate_goodwill_letters import generate_goodwill_letters
+    from backend.core.logic.generate_custom_letters import generate_custom_letters
 
     print("[INFO] Generating dispute letters...")
     generate_all_dispute_letters_with_ai(
@@ -460,8 +471,8 @@ def run_credit_repair_process(
     today_folder: Path | None = None
     pdf_path: Path | None = None
     session_id = client_info.get("session_id", "session")
-    from audit import create_audit_logger
-    from services.ai_client import build_ai_client
+    from backend.audit.audit import create_audit_logger
+    from backend.core.services.ai_client import build_ai_client
 
     audit = create_audit_logger(session_id)
     ai_client = build_ai_client(app_config.ai)
@@ -516,7 +527,10 @@ def run_credit_repair_process(
         if today_folder:
             audit.save(today_folder)
             if app_config.export_trace_file:
-                from trace_exporter import export_trace_file, export_trace_breakdown
+                from backend.audit.trace_exporter import (
+                    export_trace_file,
+                    export_trace_breakdown,
+                )
 
                 export_trace_file(audit, session_id)
                 export_trace_breakdown(
@@ -541,9 +555,11 @@ def extract_problematic_accounts_from_report(
     file_path: str, session_id: str | None = None
 ) -> "BureauPayload":
     """Return problematic accounts extracted from the report for user review."""
-    from logic.upload_validator import is_safe_pdf, move_uploaded_file
-    from session_manager import update_session
-    from logic.analyze_report import analyze_credit_report as analyze_report_logic
+    from backend.core.logic.upload_validator import is_safe_pdf, move_uploaded_file
+    from backend.api.session_manager import update_session
+    from backend.core.logic.analyze_report import (
+        analyze_credit_report as analyze_report_logic,
+    )
 
     session_id = session_id or "session"
     pdf_path = move_uploaded_file(Path(file_path), session_id)

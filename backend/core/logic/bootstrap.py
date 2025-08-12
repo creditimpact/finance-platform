@@ -24,7 +24,7 @@ def extract_all_accounts(sections: Mapping[str, Any]) -> List[dict]:
     """
     from datetime import datetime
     import re
-    from logic.utils.names_normalization import normalize_creditor_name
+    from backend.core.logic.utils.names_normalization import normalize_creditor_name
 
     def sanitize_number(num: str | None) -> str:
         if not num:

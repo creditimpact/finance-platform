@@ -1,4 +1,4 @@
-from logic.goodwill_preparation import (
+from backend.core.logic.goodwill_preparation import (
     select_goodwill_candidates,
     prepare_account_summaries,
 )
@@ -30,7 +30,9 @@ def test_prepare_account_summaries_merges_and_enriches():
         {"name": "Chase", "acct_number": "1234", "status": "Open"},
     ]
     structured = {"a1": {"account_id": "a1", "dispute_type": "goodwill"}}
-    summaries = prepare_account_summaries(accounts, structured, state="CA", ai_client=FakeAIClient())
+    summaries = prepare_account_summaries(
+        accounts, structured, state="CA", ai_client=FakeAIClient()
+    )
     assert len(summaries) == 1
     summary = summaries[0]
     assert summary["account_number"] == "1234"

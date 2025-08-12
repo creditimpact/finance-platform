@@ -2,13 +2,13 @@
 
 from pathlib import Path
 
-from logic.utils.names_normalization import (
+from backend.core.logic.utils.names_normalization import (
     normalize_creditor_name,
 )
-from logic.utils.text_parsing import extract_late_history_blocks
-from logic.utils.inquiries import extract_inquiries
+from backend.core.logic.utils.text_parsing import extract_late_history_blocks
+from backend.core.logic.utils.inquiries import extract_inquiries
 from .json_utils import parse_json
-from services.ai_client import AIClient
+from backend.core.services.ai_client import AIClient
 
 
 def call_ai_analysis(

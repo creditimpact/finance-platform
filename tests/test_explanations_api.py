@@ -5,7 +5,7 @@ import importlib
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from session_manager import get_session, get_intake
+from backend.api.session_manager import get_session, get_intake
 
 
 def test_explanations_endpoint_stores_raw_and_structured(monkeypatch):
@@ -95,7 +95,9 @@ def test_submit_explanations_redirects_to_sanitizer(monkeypatch):
     }
 
     with app.test_client() as client:
-        res = client.post("/api/submit-explanations", json=payload, follow_redirects=True)
+        res = client.post(
+            "/api/submit-explanations", json=payload, follow_redirects=True
+        )
         assert res.status_code == 200
 
     session = get_session(session_id)

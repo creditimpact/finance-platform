@@ -3,8 +3,8 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from models.account import Account, Inquiry
-from models.letter import LetterContext, LetterAccount
+from backend.core.models.account import Account, Inquiry
+from backend.core.models.letter import LetterContext, LetterAccount
 
 
 def test_account_roundtrip():

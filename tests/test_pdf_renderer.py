@@ -2,7 +2,7 @@ from pathlib import Path
 import types
 
 
-from logic import pdf_renderer
+from backend.core.logic import pdf_renderer
 
 
 def test_normalize_output_path_creates_dir_and_pdf(tmp_path):

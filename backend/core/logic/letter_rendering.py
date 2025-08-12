@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from logic import pdf_renderer
-from models.letter import LetterContext, LetterArtifact
+from backend.core.logic import pdf_renderer
+from backend.core.models.letter import LetterContext, LetterArtifact
 
 
 def render_dispute_letter_html(context: LetterContext) -> LetterArtifact:

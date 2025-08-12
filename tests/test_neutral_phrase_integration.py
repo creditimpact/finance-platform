@@ -3,10 +3,10 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from logic.letter_generator import call_gpt_dispute_letter
-from logic import rules_loader
+from backend.core.logic.letter_generator import call_gpt_dispute_letter
+from backend.core.logic import rules_loader
 from tests.helpers.fake_ai_client import FakeAIClient
-from models.account import Account
+from backend.core.models.account import Account
 
 
 def test_dispute_prompt_includes_neutral_phrase(monkeypatch):

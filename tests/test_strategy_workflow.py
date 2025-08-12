@@ -44,10 +44,10 @@ sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__:
 sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None))
 # -------------------------------------------------------------------
 
-from logic.generate_strategy_report import StrategyGenerator
+from backend.core.logic.generate_strategy_report import StrategyGenerator
 from tests.helpers.fake_ai_client import FakeAIClient
-from logic.letter_generator import generate_dispute_letters_for_all_bureaus
-from logic.instructions_generator import generate_instruction_file
+from backend.core.logic.letter_generator import generate_dispute_letters_for_all_bureaus
+from backend.core.logic.instructions_generator import generate_instruction_file
 
 
 def test_full_letter_workflow():
@@ -145,7 +145,7 @@ def test_full_letter_workflow():
         mock_gpt_call.side_effect = fake_gpt
 
         # Generate strategy and merge into bureau data
-        from logic.constants import normalize_action_tag
+        from backend.core.logic.constants import normalize_action_tag
 
         generator = StrategyGenerator(ai_client=FakeAIClient())
         strategy = generator.generate(client_info, bureau_data, audit=None)

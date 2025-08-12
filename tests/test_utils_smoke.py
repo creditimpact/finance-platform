@@ -1,15 +1,14 @@
 from pathlib import Path
 
-from logic.utils.names_normalization import (
+from backend.core.logic.utils.names_normalization import (
     normalize_bureau_name,
-    normalize_creditor_name,
 )
-from logic.utils.note_handling import get_client_address_lines
-from logic.utils.file_paths import safe_filename
-from logic.utils.text_parsing import has_late_indicator
-from logic.utils.inquiries import extract_inquiries
-from logic.utils.pdf_ops import gather_supporting_docs_text
-from logic.utils.report_sections import filter_sections_by_bureau
+from backend.core.logic.utils.note_handling import get_client_address_lines
+from backend.core.logic.utils.file_paths import safe_filename
+from backend.core.logic.utils.text_parsing import has_late_indicator
+from backend.core.logic.utils.inquiries import extract_inquiries
+from backend.core.logic.utils.pdf_ops import gather_supporting_docs_text
+from backend.core.logic.utils.report_sections import filter_sections_by_bureau
 
 
 def test_utils_smoke(tmp_path: Path):

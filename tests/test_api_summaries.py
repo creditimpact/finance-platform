@@ -4,7 +4,7 @@ import importlib
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from session_manager import update_session
+from backend.api.session_manager import update_session
 
 
 def test_summaries_endpoint_returns_clean_data(monkeypatch):

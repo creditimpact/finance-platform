@@ -1,4 +1,4 @@
-from logic import generate_goodwill_letters
+from backend.core.logic import generate_goodwill_letters
 from tests.helpers.fake_ai_client import FakeAIClient
 
 

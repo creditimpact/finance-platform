@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from logic.explanations_normalizer import sanitize, extract_structured
+from backend.core.logic.explanations_normalizer import sanitize, extract_structured
 from tests.helpers.fake_ai_client import FakeAIClient
 
 

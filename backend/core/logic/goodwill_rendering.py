@@ -7,18 +7,20 @@ from pathlib import Path
 from typing import Any, List, Mapping
 from datetime import datetime
 
-from audit import AuditLogger, AuditLevel
-from services.ai_client import AIClient
+from backend.audit.audit import AuditLogger, AuditLevel
+from backend.core.services.ai_client import AIClient
 
-from logic.pdf_renderer import (
+from backend.core.logic.pdf_renderer import (
     ensure_template_env,
     render_html_to_pdf as default_pdf_renderer,
 )
-from logic.utils.file_paths import safe_filename
-from logic.utils.note_handling import get_client_address_lines
-from logic.utils.names_normalization import normalize_creditor_name
-from logic.compliance_pipeline import run_compliance_pipeline as default_compliance
-from models.client import ClientInfo
+from backend.core.logic.utils.file_paths import safe_filename
+from backend.core.logic.utils.note_handling import get_client_address_lines
+from backend.core.logic.utils.names_normalization import normalize_creditor_name
+from backend.core.logic.compliance_pipeline import (
+    run_compliance_pipeline as default_compliance,
+)
+from backend.core.models.client import ClientInfo
 
 
 _template = ensure_template_env().get_template("goodwill_letter_template.html")
@@ -61,7 +63,9 @@ def render_goodwill_letter(
 
     client_name = client_info.get("legal_name") or client_info.get("name", "Your Name")
     if not client_info.get("legal_name"):
-        print("[WARN] Warning: legal_name not found in client_info. Using fallback name.")
+        print(
+            "[WARN] Warning: legal_name not found in client_info. Using fallback name."
+        )
 
     date_str = run_date or datetime.now().strftime("%B %d, %Y")
     address_map = load_creditor_address_map()

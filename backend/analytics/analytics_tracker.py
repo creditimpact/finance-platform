@@ -1,6 +1,6 @@
 import json
 import logging
-import config
+from backend.api import config
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional

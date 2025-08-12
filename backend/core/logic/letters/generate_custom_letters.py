@@ -8,13 +8,13 @@ from jinja2 import Environment, FileSystemLoader
 from backend.assets.paths import templates_path
 import pdfkit
 from backend.core.logic.utils.pdf_ops import gather_supporting_docs
-from .summary_classifier import classify_client_summary
+from backend.core.logic.strategy.summary_classifier import classify_client_summary
 from backend.api.session_manager import get_session
 from backend.core.logic.guardrails import generate_letter_with_guardrails
 from backend.core.logic.guardrails.summary_validator import (
     validate_structured_summaries,
 )
-from .rules_loader import get_neutral_phrase
+from backend.core.logic.compliance.rules_loader import get_neutral_phrase
 from backend.audit.audit import AuditLogger, AuditLevel
 from backend.core.services.ai_client import AIClient
 from backend.api.config import get_app_config

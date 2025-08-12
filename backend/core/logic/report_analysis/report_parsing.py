@@ -21,7 +21,7 @@ def extract_text_from_pdf(pdf_path: str | Path) -> str:
         The extracted text limited to a sensible character count to avoid
         excessive memory consumption.
     """
-    from .utils.pdf_ops import extract_pdf_text_safe
+    from backend.core.logic.utils.pdf_ops import extract_pdf_text_safe
 
     return extract_pdf_text_safe(Path(pdf_path), max_chars=150000)
 

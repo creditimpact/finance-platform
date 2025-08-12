@@ -34,8 +34,8 @@ def test_start_process_success(monkeypatch, tmp_path):
     )
     assert resp.status_code == 200
     payload = json.loads(resp.data)
-    assert payload["status"] == "ok"
-    assert called.get("called")
+    assert payload["status"] == "awaiting_user_explanations"
+    assert not called.get("called")
 
 
 def test_start_process_missing_file():

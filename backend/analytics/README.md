@@ -1,17 +1,20 @@
 # Analytics
+
 ## Purpose
-Utilities for tracking analytics snapshots and internal metrics.
-## Subfolders / Key Files
-- analytics/ — helper functions and counters
-- analytics_tracker.py — writes analytics snapshots to disk
-## Entry Points
-- TODO
-## Internal Dependencies
-- config (environment settings)
-## External Dependencies
-- json
-- logging
-- pathlib
-- datetime
-## Notes / Guardrails
-- Intended for internal diagnostics; avoid leaking user data.
+Capture lightweight metrics and snapshots about each credit repair run for internal diagnostics.
+
+## Pipeline position
+Invoked after report analysis and strategy generation to persist summary statistics and failure reasons.
+
+## Files
+- `__init__.py`: package marker.
+- `analytics_tracker.py`: write JSON analytics snapshots to disk.
+  - Key function: `save_analytics_snapshot()`.
+  - Internal deps: `backend.api.config`.
+- `analytics/` – helper subpackage (e.g., `strategist_failures.py`) providing counters; no separate README.
+
+## Entry points
+- `analytics_tracker.save_analytics_snapshot`
+
+## Guardrails / constraints
+- Intended for internal use only; avoid storing sensitive client data in snapshots.

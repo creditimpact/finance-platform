@@ -32,6 +32,49 @@ archive/
 examples/
 ```
 
+## System Map (Directory Guide)
+
+### Table of Contents
+- [archive](#archive)
+- [backend](#backend)
+- [docs](#docs)
+- [frontend](#frontend)
+- [scripts](#scripts)
+- [services](#services)
+- [tests](#tests)
+- [tools](#tools)
+
+### How pieces connect
+- Intake/API: [`backend/api`](backend/api/README.md) accepts the PDF report and optional email, storing session data.
+- Core processing: [`backend/core`](backend/core/README.md) orchestrates analysis via `logic/report_analysis`, builds strategies in `logic/strategy`, generates letters through `logic/letters`, and enforces rules from `logic/compliance` and `logic/guardrails`.
+- Rendering & assets: [`backend/core/logic/rendering`](backend/core/logic/rendering/README.md) converts text to HTML/PDF using templates and fonts from [`backend/assets`](backend/assets/README.md).
+- Audit & analytics: [`backend/audit`](backend/audit/README.md) captures structured logs while [`backend/analytics`](backend/analytics/README.md) records run metrics.
+- Frontend & tooling: [`frontend`](frontend/README.md) provides the React UI; [`scripts`](scripts) and [`tools`](tools/README.md) host developer utilities; reference docs live in [`docs`](docs) and legacy materials in [`archive`](archive/README.md); service stubs sit under [`services`](services); tests reside in [`tests`](tests).
+
+### archive
+Legacy documentation and sample artifacts retained for historical reference. See [archive/README.md](archive/README.md) for file-level details.
+
+### backend
+Python backend powering ingestion, analysis, strategy generation, letter creation, analytics, and auditing. Key subpackages include [api](backend/api/README.md), [core](backend/core/README.md), [analytics](backend/analytics/README.md), [audit](backend/audit/README.md), and [assets](backend/assets/README.md).
+
+### docs
+Reference materials such as data models and contributing guides. No dedicated README; browse files within [`docs`](docs) for deeper documentation.
+
+### frontend
+React client that interacts with the API to upload reports and display results. See [frontend/README.md](frontend/README.md) for build and run instructions.
+
+### scripts
+Standalone Python utilities for maintenance tasks (encoding fixes, data exports). No README; inspect individual scripts in [`scripts`](scripts).
+
+### services
+Lightweight connectors to external services (e.g., OpenAI client). This folder currently lacks a README; see [`services`](services) for modules.
+
+### tests
+Automated tests exercising API endpoints and core logic. The [`tests`](tests) folder has no README; individual test files provide context.
+
+### tools
+Developer-facing command-line helpers and checks. See [tools/README.md](tools/README.md) for usage examples.
+
 ## Getting Started (Local)
 
 ### Backend (PowerShell)
@@ -94,4 +137,3 @@ python tools/import_sanity_check.py
 - Install hooks: `pip install pre-commit && pre-commit install`
 - Run import smoke: `python tools/import_sanity_check.py`
 - Run tests: `DISABLE_PDF_RENDER=true python -m pytest -q`
-

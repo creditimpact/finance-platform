@@ -1,20 +1,19 @@
 # Guardrails
 
 ## Purpose
-Enforce content guardrails such as validation of summaries and generated text.
+Validate structured summaries and generated content to enforce neutral tone and prevent unsafe output.
+
+## Pipeline position
+Runs after client explanations are structured and before strategy or letters are finalized, ensuring only sanitized summaries flow downstream.
 
 ## Files
-File | Role in this capability | Key imports / called by
---- | --- | ---
-summary_validator.py | validate generated summaries for safety & tone | used by strategy and letters (TODO)
+- `__init__.py`: package marker.
+- `summary_validator.py`: validate structured summaries for required fields and safe tone.
+  - Key function: `validate_structured_summaries()`.
+  - Internal deps: `typing` and standard library.
 
 ## Entry points
-- `summary_validator.validate_summary` (TODO)
+- `summary_validator.validate_structured_summaries`
 
-## Dependencies
-- **Internal**: `backend.core.logic.utils`
-- **External**: `pydantic` (TODO)
-
-## Notes / Guardrails
-- Guardrail checks must not leak sensitive data.
-- Maintain neutral, non-adversarial messaging.
+## Guardrails / constraints
+- Designed to prevent PII leakage and disallowed phrasing before interacting with models or rendering letters.

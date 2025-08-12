@@ -28,7 +28,7 @@ from backend.core.logic.compliance.constants import StrategistFailureReason
 from backend.analytics.analytics_tracker import save_analytics_snapshot
 from backend.analytics.analytics.strategist_failures import tally_failure_reasons
 from backend.core.email_sender import send_email_with_attachment
-from backend.core.services.ai_client import AIClient
+from backend.core.services.ai_client import AIClient, get_ai_client
 from backend.api.config import AppConfig, get_app_config
 from backend.assets.paths import templates_path
 from backend.core.models import (
@@ -101,7 +101,7 @@ def analyze_credit_report(
     client_info,
     audit,
     log_messages,
-    ai_client: AIClient,
+    ai_client: AIClient | None = None,
 ):
     """Ingest and analyze the client's credit report."""
     from backend.core.logic.compliance.upload_validator import is_safe_pdf, move_uploaded_file
@@ -117,6 +117,7 @@ def analyze_credit_report(
             "SmartCredit report file not found at path: " + str(uploaded_path)
         )
 
+    ai_client = ai_client or get_ai_client()
     pdf_path = move_uploaded_file(Path(uploaded_path), session_id)
     update_session(session_id, file_path=str(pdf_path))
     if not is_safe_pdf(pdf_path):
@@ -570,7 +571,8 @@ def extract_problematic_accounts_from_report(
 
     analyzed_json_path = Path("output/analyzed_report.json")
 
-    sections = analyze_report_logic(pdf_path, analyzed_json_path, {})
+    ai_client = get_ai_client()
+    sections = analyze_report_logic(pdf_path, analyzed_json_path, {}, ai_client=ai_client)
 
     return BureauPayload(
         disputes=[

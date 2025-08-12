@@ -23,6 +23,8 @@ app = Celery("tasks", loader="default", fixups=[])
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", message=".*FontBBox.*")
 
 # Verify that session_manager is importable at startup. This helps catch
 # cases where the worker is launched from a directory that omits the
@@ -64,6 +66,12 @@ def extract_problematic_accounts(self, file_path: str, session_id: str | None = 
     except Exception as exc:
         logger.exception("[ERROR] Error extracting accounts")
         raise exc
+
+
+@app.task(bind=True, name="smoke_task")
+def smoke_task(self):
+    """Minimal task used for health checks."""
+    return {"status": "ok"}
 
 
 @app.task(bind=True, name="process_report")

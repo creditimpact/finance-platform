@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, List, Dict
+import logging
 
 from openai import OpenAI
 
@@ -83,3 +84,33 @@ def get_default_ai_client() -> AIClient:  # pragma: no cover - backwards compat
         "get_default_ai_client() has been removed. Build an AIClient via"
         " services.ai_client.build_ai_client and pass it explicitly."
     )
+
+class _StubAIClient:
+    """Fallback AI client used when configuration is missing."""
+
+    def chat_completion(self, *a: Any, **kw: Any):  # pragma: no cover - minimal stub
+        raise RuntimeError("AI client is not configured")
+
+    def response_json(self, *a: Any, **kw: Any):  # pragma: no cover - minimal stub
+        raise RuntimeError("AI client is not configured")
+
+
+def get_ai_client() -> AIClient | _StubAIClient:
+    """Return a configured :class:`AIClient` or a safe stub.
+
+    If environment configuration is missing or invalid, a no-op client is
+    returned which raises ``RuntimeError`` on use. This keeps the application
+    dependency-injection friendly while providing a clear failure mode during
+    development.
+    """
+
+    from backend.api.config import get_ai_config
+
+    try:
+        cfg = get_ai_config()
+        return build_ai_client(cfg)
+    except Exception as exc:  # pragma: no cover - best effort fallback
+        logging.getLogger(__name__).warning(
+            "Using stub AI client due to configuration error: %s", exc
+        )
+        return _StubAIClient()

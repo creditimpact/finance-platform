@@ -33,7 +33,7 @@ from .report_postprocessing import (
     validate_analysis_sanity,
 )
 
-from backend.core.services.ai_client import AIClient
+from backend.core.services.ai_client import AIClient, get_ai_client
 
 
 # ---------------------------------------------------------------------------
@@ -45,9 +45,10 @@ def analyze_credit_report(
     pdf_path,
     output_json_path,
     client_info,
-    ai_client: AIClient,
+    ai_client: AIClient | None = None,
 ):
     """Analyze ``pdf_path`` and write structured analysis to ``output_json_path``."""
+    ai_client = ai_client or get_ai_client()
     text = extract_text_from_pdf(pdf_path)
     if not text.strip():
         raise ValueError("[ERROR] No text extracted from PDF")

@@ -46,6 +46,7 @@ def analyze_credit_report(
     output_json_path,
     client_info,
     ai_client: AIClient | None = None,
+    run_ai: bool = True,
 ):
     """Analyze ``pdf_path`` and write structured analysis to ``output_json_path``."""
     ai_client = ai_client or get_ai_client()
@@ -66,13 +67,23 @@ def analyze_credit_report(
         client_goal = client_info.get("goal", "Not specified")
 
     is_identity_theft = client_info.get("is_identity_theft", False)
-    result = call_ai_analysis(
-        text,
-        client_goal,
-        is_identity_theft,
-        Path(output_json_path),
-        ai_client=ai_client,
-    )
+    if run_ai:
+        result = call_ai_analysis(
+            text,
+            client_goal,
+            is_identity_theft,
+            Path(output_json_path),
+            ai_client=ai_client,
+        )
+    else:
+        result = {
+            "negative_accounts": [],
+            "open_accounts_with_issues": [],
+            "positive_accounts": [],
+            "high_utilization_accounts": [],
+            "all_accounts": [],
+            "inquiries": [],
+        }
 
     parsed_inquiries = extract_inquiries(text)
     if parsed_inquiries:
@@ -80,12 +91,14 @@ def analyze_credit_report(
     else:
         print("[WARN] Parser did not find any inquiries in the report text.")
 
-    if result.get("inquiries"):
+    if run_ai and result.get("inquiries"):
         print(f"[INFO] GPT found {len(result['inquiries'])} inquiries:")
         for inq in result["inquiries"]:
             print(f"  * {inq['creditor_name']} - {inq['date']} ({inq['bureau']})")
-    else:
+    elif run_ai:
         print("[WARN] No inquiries found in GPT result.")
+    else:
+        result["inquiries"] = parsed_inquiries
 
     try:
         account_names = {acc.get("name", "") for acc in result.get("all_accounts", [])}

@@ -93,13 +93,9 @@ def start_process():
             timeout=300
         )
 
-        client = ClientInfo(name=email or "Client", email=email, session_id=session_id)
-        proofs = ProofDocuments(smartcredit_report=local_filename)
-        run_credit_repair_process(client, proofs, True)
-
         return jsonify(
             {
-                "status": "ok",
+                "status": "awaiting_user_explanations",
                 "session_id": session_id,
                 "filename": unique_name,
                 "original_filename": original_name,

@@ -187,3 +187,28 @@ def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
         ai_client=client,
     )
     assert result == baseline
+
+
+def test_analyze_credit_report_skips_ai(monkeypatch, tmp_path):
+    from backend.core.logic.report_analysis import (
+        analyze_report,
+        report_parsing,
+        report_prompting,
+    )
+
+    def boom(*a, **k):  # pragma: no cover - fail if called
+        raise AssertionError("AI should not be called")
+
+    monkeypatch.setattr(report_prompting, "call_ai_analysis", boom)
+    monkeypatch.setattr(
+        report_parsing, "extract_text_from_pdf", lambda p: "dummy text"
+    )
+
+    result = analyze_report.analyze_credit_report(
+        tmp_path / "dummy.pdf",
+        tmp_path / "out.json",
+        {},
+        ai_client=None,
+        run_ai=False,
+    )
+    assert result["negative_accounts"] == []

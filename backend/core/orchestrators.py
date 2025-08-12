@@ -572,7 +572,14 @@ def extract_problematic_accounts_from_report(
     analyzed_json_path = Path("output/analyzed_report.json")
 
     ai_client = get_ai_client()
-    sections = analyze_report_logic(pdf_path, analyzed_json_path, {}, ai_client=ai_client)
+    sections = analyze_report_logic(
+        pdf_path,
+        analyzed_json_path,
+        {},
+        ai_client=ai_client,
+        run_ai=False,
+    )
+    update_session(session_id, status="awaiting_user_explanations")
 
     return BureauPayload(
         disputes=[
@@ -583,7 +590,8 @@ def extract_problematic_accounts_from_report(
             for d in sections.get("open_accounts_with_issues", [])
         ],
         inquiries=[
-            Inquiry.from_dict(d) for d in sections.get("unauthorized_inquiries", [])
+            Inquiry.from_dict(d)
+            for d in sections.get("unauthorized_inquiries", sections.get("inquiries", []))
         ],
     )
 

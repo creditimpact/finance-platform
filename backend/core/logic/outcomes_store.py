@@ -4,7 +4,9 @@ import threading
 from datetime import datetime, UTC
 from typing import Dict, List, Optional
 
-OUTCOMES_FILE = os.path.join("data", "outcomes.json")
+from backend.assets.paths import data_path
+
+OUTCOMES_FILE = data_path("outcomes.json")
 _lock = threading.Lock()
 
 

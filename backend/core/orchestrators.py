@@ -30,6 +30,7 @@ from backend.analytics.analytics.strategist_failures import tally_failure_reason
 from backend.core.email_sender import send_email_with_attachment
 from backend.core.services.ai_client import AIClient
 from backend.api.config import AppConfig, get_app_config
+from backend.assets.paths import templates_path
 from backend.core.models import (
     ClientInfo,
     ProofDocuments,
@@ -336,7 +337,7 @@ def generate_letters(
 
     if is_identity_theft:
         print("[INFO] Adding FCRA rights PDF...")
-        frca_source_path = "templates/FTC_FCRA_605b.pdf"
+        frca_source_path = templates_path("FTC_FCRA_605b.pdf")
         frca_target_path = today_folder / "Your Rights - FCRA.pdf"
         if os.path.exists(frca_source_path):
             copyfile(frca_source_path, frca_target_path)

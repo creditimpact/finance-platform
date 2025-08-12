@@ -7,6 +7,7 @@ import pdfkit
 from jinja2 import Environment, FileSystemLoader
 
 from backend.api.config import get_app_config
+from backend.assets.paths import templates_path
 
 _template_env: Environment | None = None
 
@@ -17,7 +18,7 @@ def ensure_template_env(base_template_dir: Optional[str] = None) -> Environment:
     The environment is cached so multiple calls reuse the same loader.
     """
     global _template_env
-    base_dir = base_template_dir or "templates"
+    base_dir = base_template_dir or templates_path("")
     if (
         _template_env is None
         or getattr(_template_env.loader, "searchpath", [None])[0] != base_dir

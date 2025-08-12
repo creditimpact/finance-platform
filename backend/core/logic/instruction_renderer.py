@@ -12,11 +12,12 @@ import random
 from typing import Any
 from backend.core.logic import pdf_renderer
 from backend.core.models.letter import LetterContext
+from backend.assets.paths import templates_path
 
 
 def render_instruction_html(context: LetterContext | dict[str, Any]) -> str:
     """Render the Jinja2 template with the provided context."""
-    env = pdf_renderer.ensure_template_env("templates")
+    env = pdf_renderer.ensure_template_env(templates_path(""))
     template = env.get_template("instruction_template.html")
     return template.render(**context)
 

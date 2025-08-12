@@ -19,11 +19,12 @@ from backend.core.logic.instruction_renderer import build_instruction_html
 from backend.core.logic import pdf_renderer
 from backend.core.logic.compliance_pipeline import run_compliance_pipeline
 from backend.core.models import ClientInfo, BureauPayload
+from backend.assets.paths import templates_path
 
 
 def get_logo_base64() -> str:
     """Return the Credit Impact logo encoded as a base64 data URI."""
-    logo_path = Path("templates/Logo_CreditImpact.png")
+    logo_path = Path(templates_path("Logo_CreditImpact.png"))
     if logo_path.exists():
         with open(logo_path, "rb") as f:
             encoded = base64.b64encode(f.read()).decode("ascii")

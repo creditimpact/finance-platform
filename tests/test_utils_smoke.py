@@ -4,10 +4,7 @@ from logic.utils.names_normalization import (
     normalize_bureau_name,
     normalize_creditor_name,
 )
-from logic.utils.note_handling import (
-    analyze_custom_notes,
-    get_client_address_lines,
-)
+from logic.utils.note_handling import get_client_address_lines
 from logic.utils.file_paths import safe_filename
 from logic.utils.text_parsing import has_late_indicator
 from logic.utils.inquiries import extract_inquiries
@@ -19,9 +16,6 @@ def test_utils_smoke(tmp_path: Path):
     assert normalize_bureau_name("tu") == "TransUnion"
     assert safe_filename("a:b") == "a_b"
 
-    notes, _ = analyze_custom_notes({"Cap One": "note"}, ["Cap One"])
-    norm_name = normalize_creditor_name("Cap One")
-    assert notes[norm_name] == "note"
     assert get_client_address_lines({"address": "123 A St, Town"})
 
     assert has_late_indicator({"status": "30 days late"})

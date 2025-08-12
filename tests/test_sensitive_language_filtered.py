@@ -81,7 +81,6 @@ def test_dispute_letter_ignores_emotional_text(monkeypatch, tmp_path):
     client_info = {
         "name": "Test Client",
         "session_id": session_id,
-        "custom_dispute_notes": {"Bank A": "I am furious and heartbroken"},
     }
     bureau_data = {
         "Experian": {
@@ -122,7 +121,6 @@ def test_goodwill_letter_ignores_emotional_text(monkeypatch, tmp_path):
         client_name,
         creditor,
         accounts,
-        personal_story=None,
         tone="neutral",
         session_id=None,
         structured_summaries=None,
@@ -130,7 +128,6 @@ def test_goodwill_letter_ignores_emotional_text(monkeypatch, tmp_path):
         audit=None,
         ai_client=None,
     ):
-        assert "devastated" not in (personal_story or "")
         return {
             "intro_paragraph": "Intro",
             "hardship_paragraph": "Hardship",
@@ -156,7 +153,6 @@ def test_goodwill_letter_ignores_emotional_text(monkeypatch, tmp_path):
     client_info = {
         "name": "Test Client",
         "session_id": session_id,
-        "custom_dispute_notes": {"Creditor": "I am devastated and angry"},
     }
     accounts = [{"name": "Creditor", "account_number": "1", "action_tag": "goodwill"}]
 

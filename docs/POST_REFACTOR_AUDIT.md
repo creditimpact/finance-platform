@@ -112,7 +112,6 @@ graph TD
     logic_instruction_data_preparation_prepare_instruction_data --> logic_extract_info_extract_clean_name
     logic_instruction_data_preparation_prepare_instruction_data --> logic_process_accounts_get
     logic_instruction_data_preparation_prepare_instruction_data --> logic_utils_names_normalization_normalize_creditor_name
-    logic_instruction_data_preparation_prepare_instruction_data --> logic_utils_note_handling_analyze_custom_notes
     logic_instruction_renderer_build_account_lines --> logic_process_accounts_get
     logic_instruction_renderer_build_instruction_html --> logic_process_accounts_get
     logic_instruction_renderer_build_table --> logic_process_accounts_get

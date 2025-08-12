@@ -101,9 +101,6 @@ def process_report(
                 "email": email,
                 "goal": goal,
                 "session_id": session_id,
-                # Raw client notes are intentionally excluded from the processing
-                # pipeline to prevent leakage into generated letters.
-                "custom_dispute_notes": {},
                 "structured_summaries": structured_summaries or {},
             }
         )

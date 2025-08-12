@@ -47,6 +47,13 @@ Goodwill letters are only generated for late-payment accounts that are not in co
 
 A React-based client is available in the `frontend/` directory for uploading PDF credit reports and tracking processing status.
 
+### Upload step inputs
+
+Only two fields are accepted when starting the process:
+
+- **email** (optional)
+- **file** – the credit report PDF
+
 ### Running the frontend
 
 ```bash

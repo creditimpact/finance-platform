@@ -24,6 +24,8 @@ from session_manager import (
 )
 from logic.explanations_normalizer import sanitize, extract_structured
 from config import get_app_config
+from models import ClientInfo, ProofDocuments
+from orchestrators import run_credit_repair_process
 
 logger = logging.getLogger(__name__)
 
@@ -40,23 +42,11 @@ def start_process():
     try:
         print("Received request to /api/start-process")
 
-        data = request.get_json(silent=True)
-        print("Raw body:", request.data[:200])
-        print("Headers:", dict(request.headers))
-        print("Parsed JSON:", data)
-
-        if not data:
-            data = request.form
-            print("Using form-data:", data)
-
+        form = request.form or {}
         uploaded_file = request.files.get("file")
-        print(f"Email: {data.get('email')}")
-        print(
-            f"Uploaded file: {uploaded_file.filename if uploaded_file else 'None'}"
-        )
-
-        if not data.get("email") or not uploaded_file:
-            return jsonify({"status": "error", "message": "Missing email or file"}), 400
+        email = form.get("email")
+        if not uploaded_file:
+            return jsonify({"status": "error", "message": "Missing file"}), 400
 
         session_id = str(uuid.uuid4())
         upload_folder = os.path.join("uploads", session_id)
@@ -88,36 +78,17 @@ def start_process():
             {
                 "file_path": local_filename,
                 "original_filename": original_name,
-                "email": data.get("email"),
-            },
-        )
-
-        goal = data.get("goal")
-        is_identity_theft = str(data.get("is_identity_theft", "")).lower() in (
-            "1",
-            "true",
-            "yes",
-        )
-        legal_name = data.get("legal_name")
-        address = data.get("address")
-        story = data.get("story")
-        notes = data.get("custom_dispute_notes")
-
-        print(
-            "Collected fields:",
-            {
-                "goal": goal,
-                "legal_name": legal_name,
-                "address": address,
-                "story": story,
-                "is_identity_theft": is_identity_theft,
-                "custom_dispute_notes": notes,
+                "email": email,
             },
         )
 
         accounts = extract_problematic_accounts.delay(local_filename, session_id).get(
             timeout=300
         )
+
+        client = ClientInfo(name=email or "Client", email=email, session_id=session_id)
+        proofs = ProofDocuments(smartcredit_report=local_filename)
+        run_credit_repair_process(client, proofs, True)
 
         return jsonify(
             {

@@ -55,7 +55,6 @@ def test_unrecognized_action_fallback(monkeypatch, tmp_path, capsys):
     client_info = {
         "name": "Test Client",
         "session_id": "sess1",
-        "custom_dispute_notes": {"Bank A": "raw note ABCXYZ"},
     }
 
     bureau_data = {
@@ -82,8 +81,6 @@ def test_unrecognized_action_fallback(monkeypatch, tmp_path, capsys):
     with open(tmp_path / "Experian_gpt_response.json") as f:
         data = json.load(f)
     assert data["accounts"][0]["paragraph"] == DEFAULT_DISPUTE_REASON
-    assert "ABCXYZ" not in data["accounts"][0]["paragraph"]
 
     out, _ = capsys.readouterr()
     assert "fallback_used=True" in out
-    assert "raw_client_text_present=True" in out

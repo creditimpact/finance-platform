@@ -1,25 +1,35 @@
 # Strategy
 
 ## Purpose
-Compute credit repair strategies from analyzed report data and other signals.
+Derive action plans and recommendations from analyzed report data and client summaries.
+
+## Pipeline position
+Consumes structured report sections and sanitized summaries to classify accounts, generate strategic plans, and merge strategist output before letter generation.
 
 ## Files
-File | Role in this capability | Key imports / called by
---- | --- | ---
-fallback_manager.py | selects fallback actions when strategy generation fails | compliance.constants
-generate_strategy_report.py | high-level entry to assemble strategy report | strategy_engine, strategy_merger
-strategy_engine.py | core engine deriving actions from analysis | rule_checker, utils
-strategy_merger.py | combines outputs from multiple strategy components | strategy_engine
-summary_classifier.py | classifies summaries to direct strategy paths | services.ai_client
+- `__init__.py`: package marker.
+- `fallback_manager.py`: choose fallback actions when strategist recommendations are missing or unrecognized.
+  - Key functions: `_get()`, `determine_fallback_action()`.
+  - Internal deps: `backend.core.logic.compliance.constants`.
+- `generate_strategy_report.py`: wrapper around the AI strategist.
+  - Key class: `StrategyGenerator` with methods `generate()` and `save_report()`.
+  - Internal deps: `backend.core.services.ai_client`, `backend.core.logic.guardrails`, `backend.core.logic.utils.json_utils`.
+- `strategy_engine.py`: build dispute items and assemble strategy documents.
+  - Key functions: `_lookup_account()`, `_build_dispute_items()`, `generate_strategy()`.
+  - Internal deps: `backend.api.session_manager`, `backend.core.logic.compliance.rules_loader`, `backend.core.logic.letters.outcomes_store`, `backend.core.logic.guardrails.summary_validator`.
+- `strategy_merger.py`: align strategist output with parsed bureau data and handle fallbacks.
+  - Key functions: `merge_strategy_outputs()`, `handle_strategy_fallbacks()`, `merge_strategy_data()`.
+  - Internal deps: `backend.core.logic.compliance.constants`, `backend.core.logic.strategy.fallback_manager`, `backend.core.logic.utils.names_normalization`, `backend.core.models`.
+- `summary_classifier.py`: categorize summaries to drive strategy decisions.
+  - Key functions: `_heuristic_category()`, `classify_client_summary()`.
+  - Internal deps: `backend.core.services.ai_client`, `backend.core.logic.utils.json_utils`.
 
 ## Entry points
-- `generate_strategy_report.generate_strategy_report`
-- TODO: expose `strategy_engine.run` or similar
+- `generate_strategy_report.StrategyGenerator.generate`
+- `strategy_engine.generate_strategy`
+- `strategy_merger.merge_strategy_data`
+- `summary_classifier.classify_client_summary`
+- `fallback_manager.determine_fallback_action`
 
-## Dependencies
-- **Internal**: `backend.core.logic.report_analysis`, `backend.core.logic.utils`, `backend.core.logic.compliance`
-- **External**: standard library `typing`, `dataclasses`
-
-## Notes / Guardrails
-- Strategies must comply with regulatory requirements.
-- Recommendations should remain factual and actionable.
+## Guardrails / constraints
+- Recommendations must comply with `compliance.constants.VALID_ACTION_TAGS` and neutral phrasing rules.

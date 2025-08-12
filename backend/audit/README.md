@@ -1,18 +1,16 @@
 # Audit
-
 ## Purpose
-Provides auditing and trace export utilities for strategy runs.
-
-## Files
-- `audit.py` – structured audit logger and helpers
-- `trace_exporter.py` – exports trace diagnostics and per-account breakdowns
-
+Audit logging and trace export utilities for strategy runs.
+## Subfolders / Key Files
+- audit.py — structured audit logger
+- trace_exporter.py — exports diagnostics per account
 ## Entry Points
-No standalone entry point; used by backend services.
-
-## Dependencies
-- Standard library: `json`, `datetime`, `pathlib`
-- Internal: `models.strategy`
-
-## Notes
-Moved from project root during backend reorganization.
+- TODO
+## Internal Dependencies
+- TODO
+## External Dependencies
+- json
+- datetime
+- pathlib
+## Notes / Guardrails
+- Logs may include sensitive account details; handle outputs securely.

@@ -1,24 +1,21 @@
 # Core
-
 ## Purpose
-The core layer contains the domain logic and orchestration for credit repair processes. It houses business rules, services, and data models that drive automated workflows.
-
-## Subfolders
-- `logic/` – analysis algorithms and workflow steps for credit reports and strategy generation.
-- `models/` – data models representing clients, accounts, bureaus, and related entities.
-- `services/` – interfaces to external systems and supporting service clients.
-- `rules/` – YAML rule definitions for disputes, compliance, and neutral phrasing.
-
-## Root files
-- `orchestrators.py` – coordinates the end-to-end credit repair process.
-- `email_sender.py` – utilities for sending process and notification emails.
-
-## Entry points
-- `run_credit_repair_process` – drives the full credit repair workflow.
-
-## Key dependencies
-- Internal: `analytics_tracker`, `audit`, `config`, API task layer.
-- External: networking, OpenAI, and other third‑party libraries.
-
-## Notes / guardrails
-Handles sensitive credit data; ensure PII is managed securely and follow compliance requirements when extending or using these modules.
+Domain logic, models, rules, and services coordinating the credit repair workflow.
+## Subfolders / Key Files
+- logic/ — analysis algorithms and workflow steps
+- models/ — data representations for clients and accounts
+- services/ — connectors to external systems
+- rules/ — YAML rule definitions
+- orchestrators.py — coordinates end-to-end processing
+- email_sender.py — notification helpers
+## Entry Points
+- run_credit_repair_process
+## Internal Dependencies
+- backend.analytics.analytics_tracker
+- backend.audit.audit
+- backend.api.tasks
+## External Dependencies
+- OpenAI APIs (TODO)
+- email libraries (TODO)
+## Notes / Guardrails
+- Handles PII; ensure data is stored and transmitted securely.

@@ -1,10 +1,30 @@
 import sys
 from pathlib import Path
+import types
 
 import pdfkit
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+sys.modules.setdefault(
+    "backend.core.logic.letters.fallback_manager",
+    types.SimpleNamespace(determine_fallback_action=lambda *a, **k: "dispute"),
+)
+sys.modules.setdefault(
+    "backend.core.logic.letters.summary_classifier",
+    types.SimpleNamespace(classify_client_summary=lambda struct, state=None: {"category": "not_mine"}),
+)
+
+utils_pkg = types.ModuleType("backend.core.logic.letters.utils")
+pdf_ops_mod = types.SimpleNamespace(gather_supporting_docs=lambda *a, **k: ("", [], None))
+utils_pkg.pdf_ops = pdf_ops_mod
+sys.modules.setdefault("backend.core.logic.letters.utils", utils_pkg)
+sys.modules.setdefault("backend.core.logic.letters.utils.pdf_ops", pdf_ops_mod)
+sys.modules.setdefault(
+    "backend.core.logic.letters.letter_rendering",
+    types.SimpleNamespace(render_dispute_letter_html=lambda *a, **k: ""),
+)
 
 from tests.helpers.fake_ai_client import FakeAIClient
 

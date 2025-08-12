@@ -1,19 +1,23 @@
-from pathlib import Path
+from importlib.resources import files
 import yaml
 from typing import Any, Mapping
 
-RULES_DIR = Path(__file__).resolve().parents[1] / "rules"
+RULES_PKG = "backend.core.rules"
 
 
 def _load_yaml(filename: str):
-    path = RULES_DIR / filename
-    if not path.exists():
-        raise FileNotFoundError(f"Missing required rules file: {path}")
     try:
+        path = files(RULES_PKG) / filename
         with path.open("r", encoding="utf-8") as f:
             return yaml.safe_load(f)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Missing required rules file: {RULES_PKG}/{filename}"
+        ) from exc
+    except ModuleNotFoundError as exc:
+        raise FileNotFoundError(f"Missing rules package: {RULES_PKG}") from exc
     except yaml.YAMLError as exc:
-        raise RuntimeError(f"Invalid YAML in {path}: {exc}") from exc
+        raise RuntimeError(f"Invalid YAML in {filename}: {exc}") from exc
 
 
 def load_rules() -> list:

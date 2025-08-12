@@ -4,17 +4,17 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from audit import create_audit_logger
-from logic.constants import FallbackReason, StrategistFailureReason
-from models.account import Account
-from models.strategy import StrategyPlan
+from backend.audit.audit import create_audit_logger
+from backend.core.logic.constants import FallbackReason, StrategistFailureReason
+from backend.core.models.account import Account
+from backend.core.models.strategy import StrategyPlan
 
 
 def test_apply_fallback_tags_logs_keyword_match(tmp_path, monkeypatch):
     import types
 
     sys.modules["pdfkit"] = types.SimpleNamespace(configuration=lambda **kwargs: None)
-    from logic.process_accounts import process_analyzed_report
+    from backend.core.logic.process_accounts import process_analyzed_report
 
     audit = create_audit_logger("test")
     report = {
@@ -37,7 +37,7 @@ def test_merge_strategy_data_audit_reasons(tmp_path):
     import types
 
     sys.modules["pdfkit"] = types.SimpleNamespace(configuration=lambda **kwargs: None)
-    from logic.strategy_merger import merge_strategy_data
+    from backend.core.logic.strategy_merger import merge_strategy_data
 
     audit = create_audit_logger("test")
     strategy = StrategyPlan.from_dict(

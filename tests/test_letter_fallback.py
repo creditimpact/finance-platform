@@ -5,7 +5,7 @@ import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from logic.letter_generator import (
+from backend.core.logic.letter_generator import (
     generate_all_dispute_letters_with_ai,
     DEFAULT_DISPUTE_REASON,
 )

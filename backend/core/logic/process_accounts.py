@@ -3,13 +3,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Mapping
 
-from logic.utils.names_normalization import (
+from backend.core.logic.utils.names_normalization import (
     normalize_creditor_name,
     normalize_bureau_name,
 )
-from logic.utils.text_parsing import enforce_collection_status
+from backend.core.logic.utils.text_parsing import enforce_collection_status
 from .fallback_manager import determine_fallback_action
-from audit import AuditLogger
+from backend.audit.audit import AuditLogger
 from .constants import FallbackReason
 
 BUREAUS = ["Experian", "Equifax", "TransUnion"]

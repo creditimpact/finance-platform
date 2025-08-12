@@ -4,7 +4,10 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from logic.process_accounts import process_analyzed_report, save_bureau_outputs
+from backend.core.logic.process_accounts import (
+    process_analyzed_report,
+    save_bureau_outputs,
+)
 
 
 def main() -> None:

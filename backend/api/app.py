@@ -14,18 +14,18 @@ from flask_cors import CORS
 import uuid
 from werkzeug.utils import secure_filename
 
-from tasks import extract_problematic_accounts
-from admin import admin_bp
-from session_manager import (
+from backend.api.tasks import extract_problematic_accounts
+from backend.api.admin import admin_bp
+from backend.api.session_manager import (
     set_session,
     get_session,
     update_session,
     update_intake,
 )
-from logic.explanations_normalizer import sanitize, extract_structured
-from config import get_app_config
-from models import ClientInfo, ProofDocuments
-from orchestrators import run_credit_repair_process
+from backend.core.logic.explanations_normalizer import sanitize, extract_structured
+from backend.api.config import get_app_config
+from backend.core.models import ClientInfo, ProofDocuments
+from backend.core.orchestrators import run_credit_repair_process
 
 logger = logging.getLogger(__name__)
 

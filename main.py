@@ -21,8 +21,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    from orchestrators import run_credit_repair_process
-    from models import ClientInfo, ProofDocuments
+    from backend.core.orchestrators import run_credit_repair_process
+    from backend.core.models import ClientInfo, ProofDocuments
 
     client = ClientInfo.from_dict(
         {

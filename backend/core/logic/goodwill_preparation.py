@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import re
 from typing import Any, Dict, List, Mapping
-from models.client import ClientInfo
+from backend.core.models.client import ClientInfo
 
-from audit import AuditLogger
-from services.ai_client import AIClient
-from logic.utils.text_parsing import has_late_indicator
-from logic.utils.names_normalization import normalize_creditor_name
+from backend.audit.audit import AuditLogger
+from backend.core.services.ai_client import AIClient
+from backend.core.logic.utils.text_parsing import has_late_indicator
+from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from .summary_classifier import classify_client_summary
 from .rules_loader import get_neutral_phrase
 

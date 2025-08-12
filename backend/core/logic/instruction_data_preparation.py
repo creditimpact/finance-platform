@@ -14,10 +14,10 @@ import json
 import re
 from typing import Any, Dict, List, Tuple
 
-from services.ai_client import AIClient
-from models.account import Account
+from backend.core.services.ai_client import AIClient
+from backend.core.models.account import Account
 
-from logic.utils.names_normalization import normalize_creditor_name
+from backend.core.logic.utils.names_normalization import normalize_creditor_name
 
 
 def extract_clean_name(full_name: str) -> str:

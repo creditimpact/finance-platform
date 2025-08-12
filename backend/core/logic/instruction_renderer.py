@@ -10,8 +10,8 @@ from __future__ import annotations
 import html as html_utils
 import random
 from typing import Any
-from logic import pdf_renderer
-from models.letter import LetterContext
+from backend.core.logic import pdf_renderer
+from backend.core.models.letter import LetterContext
 
 
 def render_instruction_html(context: LetterContext | dict[str, Any]) -> str:
@@ -85,7 +85,9 @@ def build_instruction_html(context: LetterContext | dict[str, Any]) -> str:
                 "[WARN] This account doesn't look familiar and is being disputed."
             )
         elif dispute_type == "inaccurate_reporting":
-            action_lines.append("[WARN] The information on this account appears incorrect.")
+            action_lines.append(
+                "[WARN] The information on this account appears incorrect."
+            )
 
         utilization = acc.get("utilization")
         if utilization:
@@ -103,7 +105,7 @@ def build_instruction_html(context: LetterContext | dict[str, Any]) -> str:
                 [
                     "This account is in good standing and supports your credit profile.",
                     "Keep this account open and continue making on-time payments to strengthen your credit.",
-                      "Avoid closing this account - older positive accounts help your score.",
+                    "Avoid closing this account - older positive accounts help your score.",
                     "This account reflects positively on your report. Maintain low usage and regular activity.",
                 ]
             )

@@ -5,19 +5,21 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-from audit import AuditLogger
-from services.ai_client import AIClient
-from session_manager import get_session
-from logic.guardrails.summary_validator import validate_structured_summaries
+from backend.audit.audit import AuditLogger
+from backend.core.services.ai_client import AIClient
+from backend.api.session_manager import get_session
+from backend.core.logic.guardrails.summary_validator import (
+    validate_structured_summaries,
+)
 
-import logic.goodwill_preparation as goodwill_preparation
-import logic.goodwill_prompting as goodwill_prompting
-import logic.goodwill_rendering as goodwill_rendering
-from logic import pdf_renderer
-from logic.utils.pdf_ops import gather_supporting_docs
-from logic.compliance_pipeline import run_compliance_pipeline
-from models import ClientInfo, BureauPayload
-from models.account import Account
+import backend.core.logic.goodwill_preparation as goodwill_preparation
+import backend.core.logic.goodwill_prompting as goodwill_prompting
+import backend.core.logic.goodwill_rendering as goodwill_rendering
+from backend.core.logic import pdf_renderer
+from backend.core.logic.utils.pdf_ops import gather_supporting_docs
+from backend.core.logic.compliance_pipeline import run_compliance_pipeline
+from backend.core.models import ClientInfo, BureauPayload
+from backend.core.models.account import Account
 
 # ---------------------------------------------------------------------------
 # Orchestrator functions
@@ -38,7 +40,9 @@ def generate_goodwill_letter_with_ai(
 
     if isinstance(client, dict):  # pragma: no cover - backward compat
         client = ClientInfo.from_dict(client)
-    account_objs = [Account.from_dict(a) if isinstance(a, dict) else a for a in accounts]
+    account_objs = [
+        Account.from_dict(a) if isinstance(a, dict) else a for a in accounts
+    ]
     client_info = client.to_dict()
     account_dicts = [a.to_dict() for a in account_objs]
     session_id = client_info.get("session_id")
@@ -107,9 +111,15 @@ def generate_goodwill_letters(
         client = ClientInfo.from_dict(client)
     client_info = client.to_dict()
     bureau_data = {
-        k: (BureauPayload.from_dict(v).to_dict() if isinstance(v, dict) else v.to_dict())
-        if isinstance(v, (BureauPayload, dict))
-        else v
+        k: (
+            (
+                BureauPayload.from_dict(v).to_dict()
+                if isinstance(v, dict)
+                else v.to_dict()
+            )
+            if isinstance(v, (BureauPayload, dict))
+            else v
+        )
         for k, v in bureau_map.items()
     }
 
@@ -117,7 +127,9 @@ def generate_goodwill_letters(
         client_info, bureau_data
     )
     for creditor, accounts in goodwill_accounts.items():
-        account_objs = [Account.from_dict(a) if isinstance(a, dict) else a for a in accounts]
+        account_objs = [
+            Account.from_dict(a) if isinstance(a, dict) else a for a in accounts
+        ]
         generate_goodwill_letter_with_ai(
             creditor,
             account_objs,

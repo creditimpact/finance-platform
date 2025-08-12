@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any, Dict, List, Tuple, Mapping
 
 from .fallback_manager import determine_fallback_action
-from logic.utils.names_normalization import normalize_creditor_name
-from models.bureau import BureauPayload
-from models.client import ClientInfo
+from backend.core.logic.utils.names_normalization import normalize_creditor_name
+from backend.core.models.bureau import BureauPayload
+from backend.core.models.client import ClientInfo
 
 
 def dedupe_disputes(

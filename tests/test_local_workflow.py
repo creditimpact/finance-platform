@@ -44,12 +44,16 @@ sys.modules.setdefault("fpdf", types.SimpleNamespace(FPDF=object))
 sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__: None))
 sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None))
 
-from logic.letter_generator import (
+from backend.core.logic.letter_generator import (
     generate_dispute_letters_for_all_bureaus,
 )  # noqa: E402
-from logic.generate_goodwill_letters import generate_goodwill_letters  # noqa: E402
-from logic.instructions_generator import generate_instruction_file  # noqa: E402
-import logic.instructions_generator as instructions_generator  # noqa: E402
+from backend.core.logic.generate_goodwill_letters import (
+    generate_goodwill_letters,
+)  # noqa: E402
+from backend.core.logic.instructions_generator import (
+    generate_instruction_file,
+)  # noqa: E402
+import backend.core.logic.instructions_generator as instructions_generator  # noqa: E402
 from tests.helpers.fake_ai_client import FakeAIClient  # noqa: E402
 
 
@@ -155,7 +159,7 @@ def test_minimal_workflow():
 
         out_dir = Path("output/test_local")
         fake = FakeAIClient()
-        from models import ClientInfo, BureauPayload
+        from backend.core.models import ClientInfo, BureauPayload
 
         client = ClientInfo.from_dict(client_info)
         bureau_models = {k: BureauPayload.from_dict(v) for k, v in bureau_data.items()}
@@ -163,12 +167,8 @@ def test_minimal_workflow():
         generate_dispute_letters_for_all_bureaus(
             client, bureau_models, out_dir, False, None, ai_client=fake
         )
-        generate_goodwill_letters(
-            client, bureau_models, out_dir, None, ai_client=fake
-        )
-        generate_instruction_file(
-            client, bureau_models, False, out_dir, ai_client=fake
-        )
+        generate_goodwill_letters(client, bureau_models, out_dir, None, ai_client=fake)
+        generate_instruction_file(client, bureau_models, False, out_dir, ai_client=fake)
         context, accounts_list = instructions_generator.prepare_instruction_data(
             client_info,
             bureau_data,
@@ -196,9 +196,9 @@ def test_minimal_workflow():
 
 def test_skip_goodwill_when_identity_theft():
     import tempfile
-    from orchestrators import run_credit_repair_process
+    from backend.core.orchestrators import run_credit_repair_process
 
-    from models import ClientInfo, ProofDocuments
+    from backend.core.models import ClientInfo, ProofDocuments
 
     client_info = ClientInfo.from_dict(
         {

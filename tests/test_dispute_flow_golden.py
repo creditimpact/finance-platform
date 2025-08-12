@@ -3,8 +3,8 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from models.account import Account, Inquiry
-from logic.letter_rendering import render_dispute_letter_html
+from backend.core.models.account import Account, Inquiry
+from backend.core.logic.letter_rendering import render_dispute_letter_html
 
 
 class FakeAI:
@@ -29,8 +29,8 @@ def test_dispute_flow_golden(monkeypatch):
 
     sys.modules["fitz"] = types.ModuleType("fitz")
     sys.modules["pymupdf"] = types.ModuleType("pymupdf")
-    from logic.gpt_prompting import call_gpt_dispute_letter
-    from logic.compliance_pipeline import run_compliance_pipeline
+    from backend.core.logic.gpt_prompting import call_gpt_dispute_letter
+    from backend.core.logic.compliance_pipeline import run_compliance_pipeline
 
     payload = """{\n  \"opening_paragraph\": \"I dispute the following accounts\",\n  \"accounts\": [{\n    \"name\": \"ABC Bank\",\n    \"account_number\": \"1234\",\n    \"status\": \"Late\",\n    \"paragraph\": \"Please delete\",\n    \"requested_action\": \"Delete\"\n  }],\n  \"inquiries\": [{\n    \"creditor_name\": \"XYZ Bank\",\n    \"date\": \"2020-01-01\"\n  }],\n  \"closing_paragraph\": \"Thank you\"\n}"""
     fake_ai = FakeAI(payload)
@@ -62,6 +62,7 @@ def test_dispute_flow_golden(monkeypatch):
         lambda *a, **k: None,
     )
     from tests.helpers.fake_ai_client import FakeAIClient
+
     run_compliance_pipeline(artifact, "CA", "sess", "dispute", ai_client=FakeAIClient())
     html = artifact.html
     expected = Path("tests/golden_letter.html").read_text()

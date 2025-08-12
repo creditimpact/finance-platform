@@ -1,7 +1,7 @@
 import re
 from typing import Any, Mapping
 
-from services.ai_client import AIClient
+from backend.core.services.ai_client import AIClient
 
 from .json_utils import parse_json
 

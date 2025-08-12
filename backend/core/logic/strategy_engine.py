@@ -2,10 +2,12 @@ from __future__ import annotations
 from datetime import datetime, UTC
 from typing import Any, Dict, List, Mapping
 
-from session_manager import get_session, update_session
+from backend.api.session_manager import get_session, update_session
 from .rules_loader import load_rules
 from .outcomes_store import get_outcomes
-from logic.guardrails.summary_validator import validate_structured_summaries
+from backend.core.logic.guardrails.summary_validator import (
+    validate_structured_summaries,
+)
 
 
 # Simple mapping of dispute types to relevant statutes and tone guidance.
@@ -71,7 +73,9 @@ def _build_dispute_items(
     return items
 
 
-def generate_strategy(session_id: str, bureau_data: Mapping[str, Any]) -> Mapping[str, Any]:
+def generate_strategy(
+    session_id: str, bureau_data: Mapping[str, Any]
+) -> Mapping[str, Any]:
     """Build a comprehensive strategy document for a given session.
 
     The strategy combines sanitized client summaries (``structured_summaries``),
@@ -81,9 +85,7 @@ def generate_strategy(session_id: str, bureau_data: Mapping[str, Any]) -> Mappin
     """
 
     session = get_session(session_id) or {}
-    structured = validate_structured_summaries(
-        session.get("structured_summaries", {})
-    )
+    structured = validate_structured_summaries(session.get("structured_summaries", {}))
 
     items = _build_dispute_items(structured, bureau_data)
 

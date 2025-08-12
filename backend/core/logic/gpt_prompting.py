@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Mapping
+from typing import Any, List, Mapping
 
-from services.ai_client import AIClient
+from backend.core.services.ai_client import AIClient
 
-from audit import AuditLevel, AuditLogger
+from backend.audit.audit import AuditLevel, AuditLogger
 from .json_utils import parse_json
 from .rules_loader import get_neutral_phrase
 from .summary_classifier import classify_client_summary
 from .utils.pdf_ops import gather_supporting_docs
-from models.account import Account, Inquiry
-from models.letter import LetterContext
-from models.client import ClientInfo
+from backend.core.models.account import Account, Inquiry
+from backend.core.models.letter import LetterContext
+from backend.core.models.client import ClientInfo
 
 
 def call_gpt_dispute_letter(
@@ -32,7 +32,9 @@ def call_gpt_dispute_letter(
     """Generate GPT-powered dispute letter content."""
 
     client_dict = (
-        client_info.to_dict() if isinstance(client_info, ClientInfo) else dict(client_info)
+        client_info.to_dict()
+        if isinstance(client_info, ClientInfo)
+        else dict(client_info)
     )
     client_name = client_dict.get("legal_name") or client_dict.get("name", "Client")
 

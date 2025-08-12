@@ -20,7 +20,7 @@ def test_tasks_can_import_session_manager(tmp_path):
         spec = importlib.util.spec_from_file_location('tasks', {repr(str(root / 'tasks.py'))})
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        import session_manager
+        from backend.api import session_manager
         print(session_manager.__file__)
         """
     )

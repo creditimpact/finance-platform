@@ -16,12 +16,12 @@ import json
 from pathlib import Path
 import re
 
-from logic.utils.names_normalization import normalize_creditor_name
-from logic.utils.text_parsing import (
+from backend.core.logic.utils.names_normalization import normalize_creditor_name
+from backend.core.logic.utils.text_parsing import (
     extract_late_history_blocks,
     enforce_collection_status,
 )
-from logic.utils.inquiries import extract_inquiries
+from backend.core.logic.utils.inquiries import extract_inquiries
 
 from .report_parsing import extract_text_from_pdf
 from .report_prompting import call_ai_analysis
@@ -33,7 +33,7 @@ from .report_postprocessing import (
     validate_analysis_sanity,
 )
 
-from services.ai_client import AIClient
+from backend.core.services.ai_client import AIClient
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ def analyze_credit_report(
                 enforce_collection_status(acc)
 
         # Check that GPT returned all parser-detected inquiries
-        from logic.utils.names_normalization import normalize_bureau_name
+        from backend.core.logic.utils.names_normalization import normalize_bureau_name
 
         found_pairs = {
             (
@@ -224,7 +224,9 @@ def analyze_credit_report(
 
     issues = validate_analysis_sanity(result)
     if not result.get("open_accounts_with_issues") and detected_late_phrases(text):
-        msg = "WARN Late payment terms found in text but no accounts marked with issues."
+        msg = (
+            "WARN Late payment terms found in text but no accounts marked with issues."
+        )
         issues.append(msg)
         print(msg)
 

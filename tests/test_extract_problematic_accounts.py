@@ -1,9 +1,9 @@
 import pytest
-from orchestrators import (
+from backend.core.orchestrators import (
     extract_problematic_accounts_from_report,
     extract_problematic_accounts_from_report_dict,
 )
-from models import BureauPayload
+from backend.core.models import BureauPayload
 
 
 def _mock_dependencies(monkeypatch, sections):
@@ -21,9 +21,7 @@ def test_extract_problematic_accounts_returns_models(monkeypatch):
     sections = {
         "negative_accounts": [{"name": "Acc1"}],
         "open_accounts_with_issues": [{"name": "Acc2"}],
-        "unauthorized_inquiries": [
-            {"creditor_name": "Bank", "date": "2024-01-01"}
-        ],
+        "unauthorized_inquiries": [{"creditor_name": "Bank", "date": "2024-01-01"}],
     }
     _mock_dependencies(monkeypatch, sections)
     payload = extract_problematic_accounts_from_report("dummy.pdf")
@@ -37,9 +35,7 @@ def test_extract_problematic_accounts_dict_adapter(monkeypatch):
     sections = {
         "negative_accounts": [{"name": "Acc1"}],
         "open_accounts_with_issues": [{"name": "Acc2"}],
-        "unauthorized_inquiries": [
-            {"creditor_name": "Bank", "date": "2024-01-01"}
-        ],
+        "unauthorized_inquiries": [{"creditor_name": "Bank", "date": "2024-01-01"}],
     }
     _mock_dependencies(monkeypatch, sections)
     with pytest.deprecated_call():

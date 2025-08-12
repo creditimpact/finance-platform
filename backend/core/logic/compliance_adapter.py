@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any, Dict, Iterable, List, Set, Tuple, Mapping, MutableMapping
+from typing import Any, Iterable, List, Set, Tuple, Mapping, MutableMapping
 
-from logic.utils.names_normalization import normalize_creditor_name
-from logic.utils.text_parsing import CHARGEOFF_RE
-from models.client import ClientInfo
+from backend.core.logic.utils.names_normalization import normalize_creditor_name
+from backend.core.logic.utils.text_parsing import CHARGEOFF_RE
+from backend.core.models.client import ClientInfo
 
 
 # Default dispute reason inserted when no custom note is provided.
@@ -110,7 +110,9 @@ def sanitize_client_info(
     """Remove raw client notes to maintain compliance."""
 
     client_info_for_gpt = (
-        client_info.to_dict() if isinstance(client_info, ClientInfo) else dict(client_info)
+        client_info.to_dict()
+        if isinstance(client_info, ClientInfo)
+        else dict(client_info)
     )
     return client_info_for_gpt, False
 

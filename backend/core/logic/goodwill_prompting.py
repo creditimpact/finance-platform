@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 from typing import Dict, List, Tuple, Any
 
-from audit import AuditLogger, AuditLevel
-from services.ai_client import AIClient
+from backend.audit.audit import AuditLogger, AuditLevel
+from backend.core.services.ai_client import AIClient
 
-from logic.utils.pdf_ops import gather_supporting_docs
+from backend.core.logic.utils.pdf_ops import gather_supporting_docs
 from .json_utils import parse_json
 
 

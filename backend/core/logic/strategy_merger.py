@@ -5,15 +5,15 @@ from __future__ import annotations
 import re
 from typing import Any, MutableMapping, Mapping, Optional
 
-from logic.constants import (
+from backend.core.logic.constants import (
     FallbackReason,
     StrategistFailureReason,
     normalize_action_tag,
 )
-from logic.fallback_manager import determine_fallback_action
-from logic.utils.names_normalization import normalize_creditor_name
-from models.account import Account
-from models.strategy import StrategyPlan
+from backend.core.logic.fallback_manager import determine_fallback_action
+from backend.core.logic.utils.names_normalization import normalize_creditor_name
+from backend.core.models.account import Account
+from backend.core.models.strategy import StrategyPlan
 
 
 def merge_strategy_outputs(

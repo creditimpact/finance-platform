@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 
-from audit import AuditLogger
-from logic.constants import FallbackReason
-from trace_exporter import export_trace_breakdown
+from backend.audit.audit import AuditLogger
+from backend.core.logic.constants import FallbackReason
+from backend.audit.trace_exporter import export_trace_breakdown
 
 
 def _build_sample_audit() -> AuditLogger:

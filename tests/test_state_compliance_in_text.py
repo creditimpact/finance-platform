@@ -4,8 +4,8 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from logic.rule_checker import check_letter
-from session_manager import get_session
+from backend.core.logic.rule_checker import check_letter
+from backend.api.session_manager import get_session
 
 
 def test_ny_medical_clause_injected_and_logged(tmp_path):

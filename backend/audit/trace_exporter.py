@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
-from models.strategy import StrategyPlan
+from backend.core.models.strategy import StrategyPlan
 
 
 def export_trace_file(audit: Any, session_id: str) -> Path:

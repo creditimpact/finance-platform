@@ -4,7 +4,7 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from logic.rule_checker import check_letter
+from backend.core.logic.rule_checker import check_letter
 
 
 def test_admissions_replaced_and_ca_disclosure():

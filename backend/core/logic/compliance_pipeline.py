@@ -5,9 +5,9 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from logic.guardrails import fix_draft_with_guardrails
-from services.ai_client import AIClient
-from models.letter import LetterArtifact
+from backend.core.logic.guardrails import fix_draft_with_guardrails
+from backend.core.services.ai_client import AIClient
+from backend.core.models.letter import LetterArtifact
 
 # Re-export existing compliance helpers for compatibility
 from .compliance_adapter import (

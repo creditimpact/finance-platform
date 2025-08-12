@@ -6,7 +6,7 @@ from typing import Optional
 import pdfkit
 from jinja2 import Environment, FileSystemLoader
 
-from config import get_app_config
+from backend.api.config import get_app_config
 
 _template_env: Environment | None = None
 

@@ -1,7 +1,7 @@
 import pdfkit
 
-from session_manager import update_session, update_intake
-from logic.letter_generator import generate_all_dispute_letters_with_ai
+from backend.api.session_manager import update_session, update_intake
+from backend.core.logic.letter_generator import generate_all_dispute_letters_with_ai
 from tests.helpers.fake_ai_client import FakeAIClient
 
 

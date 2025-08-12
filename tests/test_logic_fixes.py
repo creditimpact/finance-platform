@@ -37,12 +37,12 @@ sys.modules.setdefault("fpdf", types.SimpleNamespace(FPDF=object))
 sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__: None))
 sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None))
 
-import logic.instructions_generator as instructions_generator
-from logic.generate_goodwill_letters import generate_goodwill_letters
-from logic.letter_generator import generate_dispute_letters_for_all_bureaus
+import backend.core.logic.instructions_generator as instructions_generator
+from backend.core.logic.generate_goodwill_letters import generate_goodwill_letters
+from backend.core.logic.letter_generator import generate_dispute_letters_for_all_bureaus
 from tests.helpers.fake_ai_client import FakeAIClient
-from logic.process_accounts import process_analyzed_report
-from logic.utils.text_parsing import (
+from backend.core.logic.process_accounts import process_analyzed_report
+from backend.core.logic.utils.text_parsing import (
     extract_late_history_blocks,
     extract_account_blocks,
 )
@@ -236,7 +236,9 @@ def test_skip_goodwill_when_no_late_payments():
     ):
         out_dir = Path("output/tmp3")
         out_dir.mkdir(parents=True, exist_ok=True)
-        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient())
+        generate_goodwill_letters(
+            {"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient()
+        )
     assert not mock_g.called
     print("goodwill skip ok")
 
@@ -266,7 +268,9 @@ def test_skip_goodwill_on_collections():
     ):
         out_dir = Path("output/tmp4")
         out_dir.mkdir(parents=True, exist_ok=True)
-        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient())
+        generate_goodwill_letters(
+            {"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient()
+        )
     assert not mock_g.called
     print("goodwill collection skip ok")
 
@@ -296,7 +300,9 @@ def test_skip_goodwill_edge_statuses():
     ):
         out_dir = Path("output/tmp4a")
         out_dir.mkdir(parents=True, exist_ok=True)
-        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient())
+        generate_goodwill_letters(
+            {"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient()
+        )
     assert not mock_g.called
     print("goodwill edge skip ok")
 
@@ -352,7 +358,7 @@ def test_fallback_tagging_extra_keywords():
 
 
 def test_normalize_action_tag_aliases():
-    from logic.constants import normalize_action_tag
+    from backend.core.logic.constants import normalize_action_tag
 
     phrases = [
         "dispute for verification",
@@ -528,7 +534,9 @@ def test_skip_goodwill_for_disputed_account():
     ):
         out_dir = Path("output/tmp_dupe_skip")
         out_dir.mkdir(parents=True, exist_ok=True)
-        generate_goodwill_letters({"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient())
+        generate_goodwill_letters(
+            {"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient()
+        )
 
     assert not mock_g.called
     print("goodwill dispute skip ok")

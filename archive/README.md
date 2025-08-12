@@ -1,11 +1,16 @@
-# Archived Items
-
-| Item | Why archived | Notes / restore path |
-| --- | --- | --- |
-| CONTRIBUTING.md | duplicate of docs/CONTRIBUTING.md | README.md links to this file; update if restoring |
-| dev_notes.md | developer notes no longer maintained | restore to project root if needed |
-| architecture.svg | outdated architecture diagram | README.md references this diagram; update link if restoring |
-| examples/ | sample artifacts no longer in active use | restore to project root for examples |
-
-## Likely to update later
-- README.md references `CONTRIBUTING.md` and `architecture.svg`.
+# Archive
+## Purpose
+Holds legacy documentation and examples kept for reference.
+## Subfolders / Key Files
+- CONTRIBUTING.md — deprecated contributing guide
+- dev_notes.md — unmaintained developer notes
+- architecture.svg — outdated architecture diagram
+- examples/ — old sample artifacts
+## Entry Points
+- None
+## Internal Dependencies
+- None
+## External Dependencies
+- None
+## Notes / Guardrails
+- Update root links if restoring files from this folder.

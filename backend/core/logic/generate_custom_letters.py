@@ -5,6 +5,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Any, Mapping
 from jinja2 import Environment, FileSystemLoader
+from backend.assets.paths import templates_path
 import pdfkit
 from backend.core.logic.utils.pdf_ops import gather_supporting_docs
 from .summary_classifier import classify_client_summary
@@ -21,7 +22,7 @@ from backend.core.models.account import Account
 from backend.core.models.client import ClientInfo
 from backend.core.models.bureau import BureauPayload
 
-env = Environment(loader=FileSystemLoader("templates"))
+env = Environment(loader=FileSystemLoader(templates_path("")))
 template = env.get_template("general_letter_template.html")
 
 

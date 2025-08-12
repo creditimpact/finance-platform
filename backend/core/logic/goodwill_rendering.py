@@ -9,6 +9,7 @@ from datetime import datetime
 
 from backend.audit.audit import AuditLogger, AuditLevel
 from backend.core.services.ai_client import AIClient
+from backend.assets.paths import data_path
 
 from backend.core.logic.pdf_renderer import (
     ensure_template_env,
@@ -29,7 +30,7 @@ _template = ensure_template_env().get_template("goodwill_letter_template.html")
 def load_creditor_address_map() -> Mapping[str, str]:
     """Load a mapping of normalized creditor names to addresses."""
     try:
-        with open("data/creditor_addresses.json", encoding="utf-8") as f:
+        with open(data_path("creditor_addresses.json"), encoding="utf-8") as f:
             raw = json.load(f)
             if isinstance(raw, list):
                 return {

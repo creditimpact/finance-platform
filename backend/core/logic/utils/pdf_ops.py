@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from typing import Any, Iterable, List, Tuple
 
+from backend.assets.paths import fonts_path
+
 
 def convert_txts_to_pdfs(folder: Path):
     """
@@ -28,7 +30,7 @@ def convert_txts_to_pdfs(folder: Path):
         pdf = FPDF()
         pdf.add_page()
         # If you have a Unicode TTF, you can register it here. For now, use core font.
-        # pdf.add_font("DejaVu", "", "assets/fonts/DejaVuSans.ttf", uni=True)
+        # pdf.add_font("DejaVu", "", fonts_path("DejaVuSans.ttf"), uni=True)
         # pdf.set_font("DejaVu", size=12)
         pdf.set_font("Helvetica", size=12)
 

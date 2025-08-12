@@ -3,15 +3,17 @@ import os
 import threading
 from typing import Any, Dict
 
+from backend.assets.paths import data_path
+
 
 # Standard session data that can be safely accessed by most modules.
-SESSION_FILE = os.path.join("data", "sessions.json")
+SESSION_FILE = data_path("sessions.json")
 _lock = threading.Lock()
 
 # Dedicated storage for intake-only information such as the raw client
 # explanations. These values should never be exposed to downstream
 # components like the letter generator.
-INTAKE_FILE = os.path.join("data", "intake_only.json")
+INTAKE_FILE = data_path("intake_only.json")
 _intake_lock = threading.Lock()
 
 

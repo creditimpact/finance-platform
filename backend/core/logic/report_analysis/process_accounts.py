@@ -8,9 +8,9 @@ from backend.core.logic.utils.names_normalization import (
     normalize_bureau_name,
 )
 from backend.core.logic.utils.text_parsing import enforce_collection_status
-from .fallback_manager import determine_fallback_action
+from backend.core.logic.strategy.fallback_manager import determine_fallback_action
 from backend.audit.audit import AuditLogger
-from .constants import FallbackReason
+from backend.core.logic.compliance.constants import FallbackReason
 
 BUREAUS = ["Experian", "Equifax", "TransUnion"]
 

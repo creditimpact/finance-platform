@@ -426,7 +426,7 @@ def test_letter_duplicate_accounts_removed():
         ),
         mock.patch(
             "backend.core.logic.letters.letter_generator.sanitize_disputes",
-            return_value=(False, False, set(), False),
+            return_value=(False, True, set(), False),
         ),
     ):
         out_dir = Path("output/tmp_dupes")
@@ -496,7 +496,7 @@ def test_partial_account_number_deduplication():
         ),
         mock.patch(
             "backend.core.logic.letters.letter_generator.sanitize_disputes",
-            return_value=(False, False, set(), False),
+            return_value=(False, True, set(), False),
         ),
     ):
         out_dir = Path("output/tmp_dupe_nums")

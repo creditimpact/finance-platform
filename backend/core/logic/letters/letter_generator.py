@@ -27,7 +27,7 @@ from backend.core.models.letter import LetterContext, LetterArtifact, LetterAcco
 from backend.core.models.account import Account, Inquiry
 from backend.core.models import ClientInfo, BureauPayload
 from backend.core.services.ai_client import AIClient
-from .letter_rendering import render_dispute_letter_html
+from backend.core.logic.rendering.letter_rendering import render_dispute_letter_html
 from backend.core.logic.rendering import pdf_renderer
 from backend.core.logic.compliance.compliance_pipeline import (
     run_compliance_pipeline,
@@ -37,7 +37,7 @@ from backend.core.logic.compliance.compliance_pipeline import (
     DEFAULT_DISPUTE_REASON,
     ESCALATION_NOTE,
 )
-from .summary_classifier import classify_client_summary  # backward compatibility
+from backend.core.logic.strategy.summary_classifier import classify_client_summary
 
 
 logger = logging.getLogger(__name__)

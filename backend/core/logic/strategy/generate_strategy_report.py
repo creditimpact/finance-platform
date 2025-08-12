@@ -6,7 +6,7 @@ from typing import Any, Dict
 from backend.core.services.ai_client import AIClient
 
 from backend.audit.audit import AuditLogger
-from .constants import StrategistFailureReason
+from backend.core.logic.compliance.constants import StrategistFailureReason
 from backend.core.logic.utils.json_utils import parse_json
 from backend.core.logic.guardrails import fix_draft_with_guardrails
 

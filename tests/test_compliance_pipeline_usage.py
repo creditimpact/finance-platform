@@ -7,25 +7,6 @@ import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-sys.modules.setdefault(
-    "backend.core.logic.letters.fallback_manager",
-    types.SimpleNamespace(determine_fallback_action=lambda *a, **k: "dispute"),
-)
-sys.modules.setdefault(
-    "backend.core.logic.letters.summary_classifier",
-    types.SimpleNamespace(classify_client_summary=lambda struct, state=None: {"category": "not_mine"}),
-)
-
-utils_pkg = types.ModuleType("backend.core.logic.letters.utils")
-pdf_ops_mod = types.SimpleNamespace(gather_supporting_docs=lambda *a, **k: ("", [], None))
-utils_pkg.pdf_ops = pdf_ops_mod
-sys.modules.setdefault("backend.core.logic.letters.utils", utils_pkg)
-sys.modules.setdefault("backend.core.logic.letters.utils.pdf_ops", pdf_ops_mod)
-sys.modules.setdefault(
-    "backend.core.logic.letters.letter_rendering",
-    types.SimpleNamespace(render_dispute_letter_html=lambda *a, **k: ""),
-)
-
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
@@ -33,6 +14,27 @@ from tests.helpers.fake_ai_client import FakeAIClient
 def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
     calls = []
     monkeypatch.setattr(pdfkit, "configuration", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "backend.core.logic.strategy.fallback_manager.determine_fallback_action",
+        lambda *a, **k: "dispute",
+    )
+    monkeypatch.setattr(
+        "backend.core.logic.strategy.summary_classifier.classify_client_summary",
+        lambda struct, ai_client=None, state=None: {"category": "not_mine"},
+    )
+    utils_pkg = types.ModuleType("backend.core.logic.letters.utils")
+    pdf_ops_mod = types.SimpleNamespace(
+        gather_supporting_docs=lambda *a, **k: ("", [], None)
+    )
+    utils_pkg.pdf_ops = pdf_ops_mod
+    monkeypatch.setitem(sys.modules, "backend.core.logic.letters.utils", utils_pkg)
+    monkeypatch.setitem(
+        sys.modules, "backend.core.logic.letters.utils.pdf_ops", pdf_ops_mod
+    )
+    monkeypatch.setattr(
+        "backend.core.logic.rendering.letter_rendering.render_dispute_letter_html",
+        lambda *a, **k: "",
+    )
 
     if doc_type == "dispute":
         from backend.core.logic.letters.letter_generator import (

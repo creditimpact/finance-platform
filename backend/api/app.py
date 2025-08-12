@@ -14,7 +14,7 @@ from flask_cors import CORS
 import uuid
 from werkzeug.utils import secure_filename
 
-from backend.api.tasks import extract_problematic_accounts
+from backend.api.tasks import extract_problematic_accounts, smoke_task
 from backend.api.admin import admin_bp
 from backend.api.session_manager import (
     set_session,
@@ -35,6 +35,13 @@ api_bp = Blueprint("api", __name__)
 @api_bp.route("/")
 def index():
     return jsonify({"status": "ok", "message": "API is up"})
+
+
+@api_bp.route("/api/smoke", methods=["GET"])
+def smoke():
+    """Lightweight health check verifying Celery round-trip."""
+    result = smoke_task.delay().get(timeout=10)
+    return jsonify({"ok": True, "celery": result})
 
 
 @api_bp.route("/api/start-process", methods=["POST"])

@@ -88,3 +88,10 @@ python tools/import_sanity_check.py
 
 - [Contributing Guide](docs/CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
+
+## Pre-commit & Tests
+
+- Install hooks: `pip install pre-commit && pre-commit install`
+- Run import smoke: `python tools/import_sanity_check.py`
+- Run tests: `DISABLE_PDF_RENDER=true python -m pytest -q`
+

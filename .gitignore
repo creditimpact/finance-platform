@@ -76,3 +76,14 @@ coverage.xml
 # Type Checking / Linting Cache
 .mypy_cache/
 .ruff_cache/
+
+# Additional ignores
+client_output/
+**/__pycache__/
+.venv/
+*.pyc
+*.pyo
+**/*.pdf
+data/sessions.json
+data/intake_only.json
+archive/examples/**

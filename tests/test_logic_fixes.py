@@ -150,23 +150,21 @@ def test_goodwill_generation():
         def _cb(*args, **kwargs):
             creditor = args[1] if len(args) > 1 else None
             accounts = args[2] if len(args) > 2 else None
-            personal_story = args[3] if len(args) > 3 else kwargs.get("personal_story")
             sent[creditor] = {
                 "accounts": accounts,
-                "personal_story": personal_story,
             }
             return {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""}, []
 
         mock_g.side_effect = _cb
         fake = FakeAIClient()
         generate_goodwill_letters(
-            {"name": "T", "custom_dispute_notes": {"Card Co": "special"}},
+            {"name": "T"},
             bureau_data,
             out_dir,
             None,
             ai_client=fake,
         )
-    assert sent.get("Card Co", {}).get("personal_story") in (None, "")
+    assert "Card Co" in sent
     print("goodwill ok")
 
 
@@ -500,143 +498,6 @@ def test_partial_account_number_deduplication():
 
     assert len(sent.get("Experian", [])) == 1
     print("partial dedupe ok")
-
-
-def test_merge_custom_note_with_default():
-    bureau_data = {
-        "Experian": {
-            "disputes": [
-                {
-                    "name": "Bank A",
-                    "account_number": "123",
-                    "account_id": "1",
-                    "action_tag": "dispute",
-                }
-            ],
-            "goodwill": [
-                {
-                    "name": "Bank B",
-                    "account_number": "999",
-                    "late_payments": {"Experian": {"30": 1}},
-                    "status": "Closed",
-                }
-            ],
-            "inquiries": [],
-            "high_utilization": [],
-            "all_accounts": [],
-        }
-    }
-
-    gpt_resp = {
-        "opening_paragraph": "",
-        "accounts": [{"name": "Bank A", "account_number": "123", "paragraph": "old"}],
-        "inquiries": [],
-        "closing_paragraph": "",
-    }
-
-    strategy = {"dispute_items": {"1": {}}}
-    with (
-        mock.patch(
-            "logic.letter_generator.call_gpt_dispute_letter", return_value=gpt_resp
-        ),
-        mock.patch("logic.pdf_renderer.render_html_to_pdf"),
-        mock.patch(
-            "logic.compliance_pipeline.run_compliance_pipeline",
-            lambda html, state, session_id, doc_type, ai_client=None: html,
-        ),
-        mock.patch("logic.letter_generator.generate_strategy", return_value=strategy),
-    ):
-        out_dir = Path("output/tmp_merge")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        with pytest.warns(UserWarning):
-            fake = FakeAIClient()
-            generate_dispute_letters_for_all_bureaus(
-                {"name": "T", "custom_dispute_notes": {"Bank A": "Personal"}},
-                bureau_data,
-                out_dir,
-                False,
-                None,
-                ai_client=fake,
-            )
-
-    paragraph = gpt_resp["accounts"][0]["paragraph"]
-    assert paragraph == "old"
-    print("merge custom note ok")
-
-
-def test_general_note_routed_to_goodwill():
-    bureau_data = {
-        "Experian": {
-            "disputes": [
-                {
-                    "name": "Bank A",
-                    "account_number": "123",
-                    "account_id": "1",
-                    "action_tag": "dispute",
-                }
-            ],
-            "goodwill": [
-                {
-                    "name": "Bank B",
-                    "account_number": "999",
-                    "late_payments": {"Experian": {"30": 1}},
-                    "status": "Closed",
-                }
-            ],
-            "inquiries": [],
-            "high_utilization": [],
-            "all_accounts": [],
-        }
-    }
-
-    gpt_resp = {
-        "opening_paragraph": "",
-        "accounts": [{"name": "Bank A", "account_number": "123", "paragraph": "old"}],
-        "inquiries": [],
-        "closing_paragraph": "",
-    }
-
-    strategy = {"dispute_items": {"1": {}}}
-    with (
-        mock.patch(
-            "logic.letter_generator.call_gpt_dispute_letter", return_value=gpt_resp
-        ),
-        mock.patch("logic.pdf_renderer.render_html_to_pdf"),
-        mock.patch(
-            "logic.compliance_pipeline.run_compliance_pipeline",
-            lambda html, state, session_id, doc_type, ai_client=None: html,
-        ),
-        mock.patch("logic.letter_generator.generate_strategy", return_value=strategy),
-        mock.patch(
-            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
-        ) as mock_gw,
-        mock.patch("logic.pdf_renderer.render_html_to_pdf"),
-    ):
-        out_dir = Path("output/tmp_general")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        client_info = {
-            "name": "T",
-            "custom_dispute_notes": {"note": "I lost my job and fell behind"},
-        }
-        mock_gw.return_value = (
-            {"intro_paragraph": "", "accounts": [], "closing_paragraph": ""},
-            [],
-        )
-        with pytest.warns(UserWarning):
-            fake = FakeAIClient()
-            generate_dispute_letters_for_all_bureaus(
-                client_info, bureau_data, out_dir, False, None, ai_client=fake
-            )
-        fake2 = FakeAIClient()
-        generate_goodwill_letters(
-            client_info, bureau_data, out_dir, None, ai_client=fake2
-        )
-
-    paragraph = gpt_resp["accounts"][0]["paragraph"]
-    assert paragraph == "old"
-    personal_story = mock_gw.call_args[0][3]
-    assert personal_story in (None, "")
-    print("general note routing ok")
 
 
 def test_skip_goodwill_for_disputed_account():

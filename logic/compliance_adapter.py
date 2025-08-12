@@ -109,18 +109,10 @@ def sanitize_client_info(
 ) -> Tuple[dict, bool]:
     """Remove raw client notes to maintain compliance."""
 
-    raw_client_text_present = bool(client_info.get("custom_dispute_notes"))
-    if raw_client_text_present:
-        warnings.warn(
-            f"[PolicyViolation] Raw client notes provided for {bureau_name}; sanitized.",
-            stacklevel=2,
-        )
-        log_messages.append(f"[{bureau_name}] Raw client notes sanitized")
     client_info_for_gpt = (
         client_info.to_dict() if isinstance(client_info, ClientInfo) else dict(client_info)
     )
-    client_info_for_gpt.pop("custom_dispute_notes", None)
-    return client_info_for_gpt, raw_client_text_present
+    return client_info_for_gpt, False
 
 
 def adapt_gpt_output(

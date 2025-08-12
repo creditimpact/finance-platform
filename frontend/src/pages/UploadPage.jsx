@@ -11,8 +11,8 @@ export default function UploadPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!email || !file) {
-      setError('Please provide an email and PDF file.');
+    if (!file) {
+      setError('Please provide a PDF file.');
       return;
     }
     setUploading(true);
@@ -33,17 +33,18 @@ export default function UploadPage() {
       <h2>Upload Credit Report</h2>
       <form onSubmit={handleSubmit}>
         <div>
-          <label>Email:</label>
+          <label htmlFor="email">Email:</label>
           <input
+            id="email"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            required
           />
         </div>
         <div>
-          <label>PDF File:</label>
+          <label htmlFor="file">PDF File:</label>
           <input
+            id="file"
             type="file"
             accept="application/pdf"
             onChange={(e) => setFile(e.target.files[0])}

@@ -58,9 +58,8 @@ def generate_goodwill_letter_with_ai(
         client_info.get("legal_name") or client_info.get("name", "Your Name"),
         creditor,
         account_summaries,
-        client_info.get("story"),
-        client_info.get("tone", "neutral"),
-        session_id,
+        tone=client_info.get("tone", "neutral"),
+        session_id=session_id,
         ai_client=ai_client,
         audit=audit,
     )

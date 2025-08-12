@@ -61,7 +61,6 @@ def test_warning_on_raw_client_text(monkeypatch, tmp_path, recwarn):
     client_info = {
         "name": "Client",
         "session_id": session_id,
-        "custom_dispute_notes": {"Bank A": "very sensitive info"},
     }
     bureau_data = {
         "Experian": {
@@ -76,7 +75,6 @@ def test_warning_on_raw_client_text(monkeypatch, tmp_path, recwarn):
     generate_all_dispute_letters_with_ai(
         client_info, bureau_data, tmp_path, False, None, ai_client=fake
     )
-    assert any("[PolicyViolation]" in str(w.message) for w in recwarn)
 
 
 def test_warning_on_missing_summary(monkeypatch, tmp_path, recwarn):

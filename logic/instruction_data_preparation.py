@@ -2,10 +2,10 @@
 
 This module isolates the data munging required to build client
 instructions. It merges account data across bureaus, performs
-basic de-duplication, analyzes custom notes and generates a
-human friendly action sentence for each account. The resulting
-structure is consumed by :mod:`instruction_renderer` to build
-the final HTML and PDF output.
+basic de-duplication, and generates a human friendly action
+sentence for each account. The resulting structure is consumed
+by :mod:`instruction_renderer` to build the final HTML and PDF
+output.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from services.ai_client import AIClient
 from models.account import Account
 
 from logic.utils.names_normalization import normalize_creditor_name
-from logic.utils.note_handling import analyze_custom_notes
 
 
 def extract_clean_name(full_name: str) -> str:
@@ -184,12 +183,6 @@ def prepare_instruction_data(
         "positive": [],
     }
 
-    raw_notes = client_info.get("custom_dispute_notes", {}) or {}
-    specific_notes, _ = analyze_custom_notes(
-        raw_notes, [a.get("name", "") for a in all_accounts]
-    )
-    note_map = {normalize_creditor_name(k): v for k, v in specific_notes.items()}
-
     for acc in all_accounts:
         name = acc.get("name", "Unknown")
         advisor_comment = acc.get("advisor_comment", "")
@@ -197,7 +190,6 @@ def prepare_instruction_data(
         recommended_action = acc.get("recommended_action") or (
             action_tag.replace("_", " ").title() if action_tag else None
         )
-        personal_note = note_map.get(normalize_creditor_name(name))
         bureaus = sorted(acc.get("bureaus", []))
         status = acc.get("reported_status") or acc.get("status") or ""
         utilization = acc.get("utilization")
@@ -276,7 +268,6 @@ def prepare_instruction_data(
             "advisor_comment": advisor_comment,
             "late_payments": acc.get("late_payments"),
             "letters": letters,
-            "personal_note": personal_note,
             "action_sentence": action_sentence,
         }
 

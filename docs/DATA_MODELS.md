@@ -54,7 +54,6 @@ This document summarizes dataclasses under `models/` and their relationships.
 - `state: Optional[str]`
 - `goal: Optional[str]`
 - `session_id: str`
-- `custom_dispute_notes: Optional[Dict[str, Any]]`
 - `structured_summaries: Any`
 - `account_inquiry_matches: Optional[List[Dict[str, Any]]]`
 - `extras: Dict[str, Any]`

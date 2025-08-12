@@ -16,7 +16,6 @@ def generate_goodwill_letter_draft(
     client_name: str,
     creditor: str,
     account_summaries: List[Dict[str, Any]],
-    personal_story: str | None = None,
     tone: str = "neutral",
     session_id: str | None = None,
     *,
@@ -30,9 +29,6 @@ def generate_goodwill_letter_draft(
     included in the prompt.
     """
 
-    story_text = (
-        f"\nClient's personal story: {personal_story}" if personal_story else ""
-    )
     docs_text, doc_names, _ = gather_supporting_docs(session_id or "")
     if docs_text:
         if audit and audit.level is AuditLevel.VERBOSE:
@@ -61,7 +57,6 @@ Creditor: {creditor}
 Client name: {client_name}
 Accounts: {json.dumps(account_summaries, indent=2)}
 Supporting doc names: {', '.join(doc_names) if doc_names else 'None'}
-{story_text}
 {docs_section}
 
 Return strictly valid JSON: all property names and strings in double quotes, no trailing commas or comments, and no text outside the JSON.

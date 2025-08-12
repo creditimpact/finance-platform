@@ -19,7 +19,6 @@ class ClientInfo:
     state: str | None = None
     goal: str | None = None
     session_id: str = "session"
-    custom_dispute_notes: Dict[str, Any] | None = None
     structured_summaries: Any = None
     account_inquiry_matches: List[Dict[str, Any]] | None = None
     extras: Dict[str, Any] = field(default_factory=dict)
@@ -34,7 +33,6 @@ class ClientInfo:
             "state",
             "goal",
             "session_id",
-            "custom_dispute_notes",
             "structured_summaries",
             "account_inquiry_matches",
         }
@@ -47,7 +45,6 @@ class ClientInfo:
             state=data.get("state"),
             goal=data.get("goal"),
             session_id=data.get("session_id", "session"),
-            custom_dispute_notes=data.get("custom_dispute_notes"),
             structured_summaries=data.get("structured_summaries"),
             account_inquiry_matches=data.get("account_inquiry_matches"),
             extras=extras,

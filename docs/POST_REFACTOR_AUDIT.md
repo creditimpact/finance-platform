@@ -7,19 +7,19 @@ _Date: 2025-08-08_
 ### Package-Level Module Graph
 ```mermaid
 graph TD
-    app.py --> logic
-    config.py --> services
-    logic --> models
-    logic --> services
-    main.py --> models
-    orchestrators.py --> analytics
-    orchestrators.py --> logic
-    orchestrators.py --> models
-    orchestrators.py --> services
-    scripts --> logic
-    tasks.py --> models
-    tools --> logic
-    trace_exporter.py --> models
+    backend/api/app.py --> backend/core/logic
+    backend/api/config.py --> backend/core/services
+    backend/core/logic --> backend/core/models
+    backend/core/logic --> backend/core/services
+    main.py --> backend/core/models
+    backend/core/orchestrators.py --> backend/analytics
+    backend/core/orchestrators.py --> backend/core/logic
+    backend/core/orchestrators.py --> backend/core/models
+    backend/core/orchestrators.py --> backend/core/services
+    scripts --> backend/core/logic
+    backend/api/tasks.py --> backend/core/models
+    tools --> backend/core/logic
+    backend/audit/trace_exporter.py --> backend/core/models
 ```
 
 ### Cross-Module Function Graph (logic package)
@@ -131,16 +131,16 @@ No import-time calls to `get_app_config()` were detected.
 
 ## 3. Public API Signatures
 - 55 functions still expose `dict` in public signatures (see console output).
-- Example: `extract_problematic_accounts_from_report` returns a `dict`【F:orchestrators.py†L535-L556】
+- Example: `extract_problematic_accounts_from_report` returns a `dict`【F:backend/core/orchestrators.py†L535-L556】
 - **Status:** **HIGH**
 
 ## 4. Fallback and Compliance
-- Fallback logic centralized in `determine_fallback_action`【F:logic/fallback_manager.py†L1-L41】
-- Compliance pipeline invoked once per letter generation【F:logic/letter_generator.py†L201-L209】
+- Fallback logic centralized in `determine_fallback_action`【F:backend/core/logic/strategy/fallback_manager.py†L1-L41】
+- Compliance pipeline invoked once per letter generation【F:backend/core/logic/letters/letter_generator.py†L201-L209】
 - **Status:** OK
 
 ## 5. Trace Exporter
-`export_trace_breakdown` writes four files (`strategist_raw_output.json`, `strategy_decision.json`, `fallback_reason.json`, `recommendation_summary.json`) each containing `run_date`, `session_id`, and per-account data【F:trace_exporter.py†L134-L235】
+`export_trace_breakdown` writes four files (`strategist_raw_output.json`, `strategy_decision.json`, `fallback_reason.json`, `recommendation_summary.json`) each containing `run_date`, `session_id`, and per-account data【F:backend/audit/trace_exporter.py†L134-L235】
 
 ## Summary
 - **HIGH:** Dict-based public APIs remain (55 functions).

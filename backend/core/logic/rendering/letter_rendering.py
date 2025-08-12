@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from backend.core.logic import pdf_renderer
+from backend.core.logic.rendering import pdf_renderer
 from backend.core.models.letter import LetterContext, LetterArtifact
 from backend.assets.paths import templates_path
 

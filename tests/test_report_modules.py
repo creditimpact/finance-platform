@@ -12,11 +12,13 @@ from tests.helpers.fake_ai_client import FakeAIClient
 
 def test_extract_text_from_pdf_calls_pdf_ops(monkeypatch):
     called = {}
-    utils_pkg = types.ModuleType("logic.utils")
-    utils_pkg.__path__ = [str(Path(__file__).resolve().parents[1] / "logic" / "utils")]
-    sys.modules["logic.utils"] = utils_pkg
+    utils_pkg = types.ModuleType("backend.core.logic.utils")
+    utils_pkg.__path__ = [
+        str(Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils")
+    ]
+    sys.modules["backend.core.logic.utils"] = utils_pkg
 
-    fake_pdf_ops = types.ModuleType("logic.utils.pdf_ops")
+    fake_pdf_ops = types.ModuleType("backend.core.logic.utils.pdf_ops")
 
     def fake_extract(path, max_chars):
         called["path"] = path
@@ -24,8 +26,10 @@ def test_extract_text_from_pdf_calls_pdf_ops(monkeypatch):
         return "dummy text"
 
     fake_pdf_ops.extract_pdf_text_safe = fake_extract
-    sys.modules["logic.utils.pdf_ops"] = fake_pdf_ops
-    report_parsing = importlib.import_module("logic.report_parsing")
+    sys.modules["backend.core.logic.utils.pdf_ops"] = fake_pdf_ops
+    report_parsing = importlib.import_module(
+        "backend.core.logic.report_analysis.report_parsing"
+    )
 
     text = report_parsing.extract_text_from_pdf("report.pdf")
     assert text == "dummy text"
@@ -35,14 +39,18 @@ def test_extract_text_from_pdf_calls_pdf_ops(monkeypatch):
 
 
 def test_call_ai_analysis_parses_json(tmp_path):
-    utils_pkg = types.ModuleType("logic.utils")
-    utils_pkg.__path__ = [str(Path(__file__).resolve().parents[1] / "logic" / "utils")]
-    sys.modules["logic.utils"] = utils_pkg
+    utils_pkg = types.ModuleType("backend.core.logic.utils")
+    utils_pkg.__path__ = [
+        str(Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils")
+    ]
+    sys.modules["backend.core.logic.utils"] = utils_pkg
 
-    fake_pdf_ops = types.ModuleType("logic.utils.pdf_ops")
+    fake_pdf_ops = types.ModuleType("backend.core.logic.utils.pdf_ops")
     fake_pdf_ops.extract_pdf_text_safe = lambda *a, **k: ""  # avoid fitz import
-    sys.modules.setdefault("logic.utils.pdf_ops", fake_pdf_ops)
-    report_prompting = importlib.import_module("logic.report_prompting")
+    sys.modules.setdefault("backend.core.logic.utils.pdf_ops", fake_pdf_ops)
+    report_prompting = importlib.import_module(
+        "backend.core.logic.report_analysis.report_prompting"
+    )
 
     client = FakeAIClient()
     client.add_chat_response('{"inquiries": [], "all_accounts": []}')
@@ -55,11 +63,15 @@ def test_call_ai_analysis_parses_json(tmp_path):
 
 
 def test_sanitize_late_counts_removes_unrealistic():
-    utils_pkg = types.ModuleType("logic.utils")
-    utils_pkg.__path__ = [str(Path(__file__).resolve().parents[1] / "logic" / "utils")]
-    sys.modules["logic.utils"] = utils_pkg
+    utils_pkg = types.ModuleType("backend.core.logic.utils")
+    utils_pkg.__path__ = [
+        str(Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils")
+    ]
+    sys.modules["backend.core.logic.utils"] = utils_pkg
 
-    report_postprocessing = importlib.import_module("logic.report_postprocessing")
+    report_postprocessing = importlib.import_module(
+        "backend.core.logic.report_analysis.report_postprocessing"
+    )
     history = {
         "acc": {"Experian": {"30": 2, "60": 13}, "Equifax": {"90": 1}},
         "acc2": {"TU": {"60": 14}},
@@ -69,11 +81,15 @@ def test_sanitize_late_counts_removes_unrealistic():
 
 
 def test_merge_parser_inquiries():
-    utils_pkg = types.ModuleType("logic.utils")
-    utils_pkg.__path__ = [str(Path(__file__).resolve().parents[1] / "logic" / "utils")]
-    sys.modules["logic.utils"] = utils_pkg
+    utils_pkg = types.ModuleType("backend.core.logic.utils")
+    utils_pkg.__path__ = [
+        str(Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils")
+    ]
+    sys.modules["backend.core.logic.utils"] = utils_pkg
 
-    report_postprocessing = importlib.import_module("logic.report_postprocessing")
+    report_postprocessing = importlib.import_module(
+        "backend.core.logic.report_analysis.report_postprocessing"
+    )
     result = {
         "inquiries": [
             {"creditor_name": "Cap One", "date": "01/2024", "bureau": "Experian"}
@@ -94,18 +110,28 @@ def test_merge_parser_inquiries():
 
 @pytest.mark.parametrize("identity_theft", [True, False])
 def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
-    utils_pkg = types.ModuleType("logic.utils")
-    utils_pkg.__path__ = [str(Path(__file__).resolve().parents[1] / "logic" / "utils")]
-    sys.modules["logic.utils"] = utils_pkg
+    utils_pkg = types.ModuleType("backend.core.logic.utils")
+    utils_pkg.__path__ = [
+        str(Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils")
+    ]
+    sys.modules["backend.core.logic.utils"] = utils_pkg
 
-    fake_pdf_ops = types.ModuleType("logic.utils.pdf_ops")
+    fake_pdf_ops = types.ModuleType("backend.core.logic.utils.pdf_ops")
     fake_pdf_ops.extract_pdf_text_safe = lambda *a, **k: "text"
-    sys.modules["logic.utils.pdf_ops"] = fake_pdf_ops
+    sys.modules["backend.core.logic.utils.pdf_ops"] = fake_pdf_ops
 
-    report_parsing = importlib.import_module("logic.report_parsing")
-    report_prompting = importlib.import_module("logic.report_prompting")
-    report_postprocessing = importlib.import_module("logic.report_postprocessing")
-    analyze_report = importlib.import_module("logic.analyze_report")
+    report_parsing = importlib.import_module(
+        "backend.core.logic.report_analysis.report_parsing"
+    )
+    report_prompting = importlib.import_module(
+        "backend.core.logic.report_analysis.report_prompting"
+    )
+    report_postprocessing = importlib.import_module(
+        "backend.core.logic.report_analysis.report_postprocessing"
+    )
+    analyze_report = importlib.import_module(
+        "backend.core.logic.report_analysis.analyze_report"
+    )
 
     client = FakeAIClient()
     response = '{"summary_metrics": {"total_inquiries": 0}, "all_accounts": []}'

@@ -1,4 +1,4 @@
-from backend.core.logic import generate_goodwill_letters
+from backend.core.logic.letters import generate_goodwill_letters
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
@@ -53,7 +53,8 @@ def test_orchestrator_invokes_compliance(monkeypatch, tmp_path):
         generate_goodwill_letters, "run_compliance_pipeline", fake_compliance
     )
     monkeypatch.setattr(
-        "logic.pdf_renderer.render_html_to_pdf", lambda html, path: None
+        "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
+        lambda html, path: None,
     )
     monkeypatch.setattr(
         generate_goodwill_letters.goodwill_rendering,

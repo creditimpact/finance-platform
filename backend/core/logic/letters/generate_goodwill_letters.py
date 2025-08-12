@@ -12,12 +12,12 @@ from backend.core.logic.guardrails.summary_validator import (
     validate_structured_summaries,
 )
 
-import backend.core.logic.goodwill_preparation as goodwill_preparation
-import backend.core.logic.goodwill_prompting as goodwill_prompting
-import backend.core.logic.goodwill_rendering as goodwill_rendering
-from backend.core.logic import pdf_renderer
+import backend.core.logic.letters.goodwill_preparation as goodwill_preparation
+import backend.core.logic.letters.goodwill_prompting as goodwill_prompting
+import backend.core.logic.letters.goodwill_rendering as goodwill_rendering
+from backend.core.logic.rendering import pdf_renderer
 from backend.core.logic.utils.pdf_ops import gather_supporting_docs
-from backend.core.logic.compliance_pipeline import run_compliance_pipeline
+from backend.core.logic.compliance.compliance_pipeline import run_compliance_pipeline
 from backend.core.models import ClientInfo, BureauPayload
 from backend.core.models.account import Account
 

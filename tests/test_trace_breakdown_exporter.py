@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from backend.audit.audit import AuditLogger
-from backend.core.logic.constants import FallbackReason
+from backend.core.logic.compliance.constants import FallbackReason
 from backend.audit.trace_exporter import export_trace_breakdown
 
 

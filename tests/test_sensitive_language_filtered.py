@@ -8,8 +8,10 @@ import pytest
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from backend.api.session_manager import update_session, update_intake
-from backend.core.logic.letter_generator import generate_all_dispute_letters_with_ai
-from backend.core.logic.generate_goodwill_letters import (
+from backend.core.logic.letters.letter_generator import (
+    generate_all_dispute_letters_with_ai,
+)
+from backend.core.logic.letters.generate_goodwill_letters import (
     generate_goodwill_letter_with_ai,
 )
 from tests.helpers.fake_ai_client import FakeAIClient
@@ -67,14 +69,19 @@ def test_dispute_letter_ignores_emotional_text(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(
-        "logic.letter_generator.generate_strategy", fake_generate_strategy
-    )
-    monkeypatch.setattr("logic.letter_generator.call_gpt_dispute_letter", fake_call_gpt)
-    monkeypatch.setattr(
-        "logic.pdf_renderer.render_html_to_pdf", lambda html, path: None
+        "backend.core.logic.letters.letter_generator.generate_strategy",
+        fake_generate_strategy,
     )
     monkeypatch.setattr(
-        "logic.compliance_pipeline.run_compliance_pipeline",
+        "backend.core.logic.letters.letter_generator.call_gpt_dispute_letter",
+        fake_call_gpt,
+    )
+    monkeypatch.setattr(
+        "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
+        lambda html, path: None,
+    )
+    monkeypatch.setattr(
+        "backend.core.logic.compliance.compliance_pipeline.run_compliance_pipeline",
         lambda html, state, session_id, doc_type, ai_client=None: html,
     )
     fake = FakeAIClient()
@@ -139,14 +146,15 @@ def test_goodwill_letter_ignores_emotional_text(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(
-        "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft",
+        "backend.core.logic.letters.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft",
         lambda *a, **k: (fake_call_gpt(*a, **k), []),
     )
     monkeypatch.setattr(
-        "logic.pdf_renderer.render_html_to_pdf", lambda html, path: None
+        "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
+        lambda html, path: None,
     )
     monkeypatch.setattr(
-        "logic.compliance_pipeline.run_compliance_pipeline",
+        "backend.core.logic.compliance.compliance_pipeline.run_compliance_pipeline",
         lambda html, state, session_id, doc_type, ai_client=None: html,
     )
     fake2 = FakeAIClient()

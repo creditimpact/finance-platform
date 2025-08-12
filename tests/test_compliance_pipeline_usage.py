@@ -15,21 +15,21 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
     monkeypatch.setattr(pdfkit, "configuration", lambda *a, **k: None)
 
     if doc_type == "dispute":
-        from backend.core.logic.letter_generator import (
+        from backend.core.logic.letters.letter_generator import (
             generate_all_dispute_letters_with_ai,
         )
 
         monkeypatch.setattr(
-            "logic.letter_generator.run_compliance_pipeline",
+            "backend.core.logic.letters.letter_generator.run_compliance_pipeline",
             lambda html, state, session_id, dt, ai_client=None: calls.append(dt)
             or html,
         )
         monkeypatch.setattr(
-            "logic.letter_generator.generate_strategy",
+            "backend.core.logic.letters.letter_generator.generate_strategy",
             lambda session_id, bureau_data: {"dispute_items": {"1": {}}},
         )
         monkeypatch.setattr(
-            "logic.letter_generator.call_gpt_dispute_letter",
+            "backend.core.logic.letters.letter_generator.call_gpt_dispute_letter",
             lambda *a, **k: {
                 "opening_paragraph": "Opening",
                 "accounts": [
@@ -46,7 +46,8 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
             },
         )
         monkeypatch.setattr(
-            "logic.pdf_renderer.render_html_to_pdf", lambda html, path: None
+            "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
+            lambda html, path: None,
         )
         from backend.core.models import ClientInfo, BureauPayload
 
@@ -71,19 +72,20 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
                 client, bureau_data, tmp_path, False, None, ai_client=FakeAIClient()
             )
     elif doc_type == "instructions":
-        from backend.core.logic.instructions_generator import generate_instruction_file
+        from backend.core.logic.rendering.instructions_generator import generate_instruction_file
 
         monkeypatch.setattr(
-            "logic.instructions_generator.run_compliance_pipeline",
+            "backend.core.logic.rendering.instructions_generator.run_compliance_pipeline",
             lambda html, state, session_id, dt, ai_client=None: calls.append(dt)
             or html,
         )
         monkeypatch.setattr(
-            "logic.instruction_data_preparation.generate_account_action",
+            "backend.core.logic.rendering.instruction_data_preparation.generate_account_action",
             lambda acc, ai_client=None: "Do something",
         )
         monkeypatch.setattr(
-            "logic.pdf_renderer.render_html_to_pdf", lambda html, path: None
+            "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
+            lambda html, path: None,
         )
         from backend.core.models import ClientInfo, BureauPayload
 
@@ -107,17 +109,17 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
             client, bureau_data, False, tmp_path / "inst", ai_client=FakeAIClient()
         )
     else:  # goodwill
-        from backend.core.logic.generate_goodwill_letters import (
+        from backend.core.logic.letters.generate_goodwill_letters import (
             generate_goodwill_letter_with_ai,
         )
 
         monkeypatch.setattr(
-            "logic.generate_goodwill_letters.run_compliance_pipeline",
+            "backend.core.logic.letters.generate_goodwill_letters.run_compliance_pipeline",
             lambda html, state, session_id, dt, ai_client=None: calls.append(dt)
             or html,
         )
         monkeypatch.setattr(
-            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft",
+            "backend.core.logic.letters.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft",
             lambda *a, **k: (
                 {
                     "intro_paragraph": "Intro",
@@ -130,11 +132,11 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
             ),
         )
         monkeypatch.setattr(
-            "logic.pdf_renderer.render_html_to_pdf",
+            "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
             lambda html, path: None,
         )
         monkeypatch.setattr(
-            "logic.generate_goodwill_letters.gather_supporting_docs",
+            "backend.core.logic.letters.generate_goodwill_letters.gather_supporting_docs",
             lambda session_id: ("", [], None),
         )
         output = tmp_path / "gw"

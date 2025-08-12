@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from backend.core.logic.process_accounts import (
+from backend.core.logic.report_analysis.process_accounts import (
     process_analyzed_report,
     save_bureau_outputs,
 )

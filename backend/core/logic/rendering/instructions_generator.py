@@ -13,11 +13,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
-from backend.core.logic.instruction_data_preparation import prepare_instruction_data
+from backend.core.logic.rendering.instruction_data_preparation import prepare_instruction_data
 from backend.core.services.ai_client import AIClient
-from backend.core.logic.instruction_renderer import build_instruction_html
-from backend.core.logic import pdf_renderer
-from backend.core.logic.compliance_pipeline import run_compliance_pipeline
+from backend.core.logic.rendering.instruction_renderer import build_instruction_html
+from backend.core.logic.rendering import pdf_renderer
+from backend.core.logic.compliance.compliance_pipeline import run_compliance_pipeline
 from backend.core.models import ClientInfo, BureauPayload
 from backend.assets.paths import templates_path
 

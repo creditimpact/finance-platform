@@ -2,8 +2,8 @@ from typing import Tuple, List, Any
 from backend.core.services.ai_client import AIClient
 from backend.core.models.letter import LetterContext
 
-from backend.core.logic.rule_checker import check_letter, RuleViolation
-from backend.core.logic.rules_loader import load_rules
+from backend.core.logic.compliance.rule_checker import check_letter, RuleViolation
+from backend.core.logic.compliance.rules_loader import load_rules
 from backend.api.session_manager import get_session, update_session
 
 

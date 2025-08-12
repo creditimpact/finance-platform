@@ -44,10 +44,10 @@ sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__:
 sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None))
 # -------------------------------------------------------------------
 
-from backend.core.logic.generate_strategy_report import StrategyGenerator
+from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
 from tests.helpers.fake_ai_client import FakeAIClient
-from backend.core.logic.letter_generator import generate_dispute_letters_for_all_bureaus
-from backend.core.logic.instructions_generator import generate_instruction_file
+from backend.core.logic.letters.letter_generator import generate_dispute_letters_for_all_bureaus
+from backend.core.logic.rendering.instructions_generator import generate_instruction_file
 
 
 def test_full_letter_workflow():
@@ -101,32 +101,38 @@ def test_full_letter_workflow():
     with (
         mock.patch.object(StrategyGenerator, "generate", return_value=strategy_result),
         mock.patch(
-            "logic.letter_generator.render_dispute_letter_html", return_value="html"
+            "backend.core.logic.letters.letter_generator.render_dispute_letter_html",
+            return_value="html",
         ),
-        mock.patch("logic.letter_generator.call_gpt_dispute_letter") as mock_gpt_call,
-        mock.patch("logic.pdf_renderer.render_html_to_pdf"),
         mock.patch(
-            "logic.instructions_generator.render_pdf_from_html",
+            "backend.core.logic.letters.letter_generator.call_gpt_dispute_letter"
+        ) as mock_gpt_call,
+        mock.patch("backend.core.logic.rendering.pdf_renderer.render_html_to_pdf"),
+        mock.patch(
+            "backend.core.logic.rendering.instructions_generator.render_pdf_from_html",
             side_effect=lambda html, p: instructions_capture.setdefault("html", html),
         ),
         mock.patch(
-            "logic.instruction_data_preparation.generate_account_action",
+            "backend.core.logic.rendering.instruction_data_preparation.generate_account_action",
             return_value="Action",
         ),
         mock.patch(
-            "logic.instructions_generator.run_compliance_pipeline",
+            "backend.core.logic.rendering.instructions_generator.run_compliance_pipeline",
             lambda html, state, session_id, doc_type, ai_client=None: html,
         ),
         mock.patch(
-            "logic.instructions_generator.build_instruction_html", return_value="html"
+            "backend.core.logic.rendering.instructions_generator.build_instruction_html",
+            return_value="html",
         ),
-        mock.patch("logic.instructions_generator.save_json_output"),
         mock.patch(
-            "logic.letter_generator.generate_strategy",
+            "backend.core.logic.rendering.instructions_generator.save_json_output"
+        ),
+        mock.patch(
+            "backend.core.logic.letters.letter_generator.generate_strategy",
             return_value={"dispute_items": {"a": {}}},
         ),
         mock.patch(
-            "logic.letter_generator.sanitize_disputes",
+            "backend.core.logic.letters.letter_generator.sanitize_disputes",
             return_value=(False, False, set(), False),
         ),
     ):
@@ -145,7 +151,7 @@ def test_full_letter_workflow():
         mock_gpt_call.side_effect = fake_gpt
 
         # Generate strategy and merge into bureau data
-        from backend.core.logic.constants import normalize_action_tag
+        from backend.core.logic.compliance.constants import normalize_action_tag
 
         generator = StrategyGenerator(ai_client=FakeAIClient())
         strategy = generator.generate(client_info, bureau_data, audit=None)

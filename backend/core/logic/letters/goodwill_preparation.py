@@ -14,8 +14,8 @@ from backend.audit.audit import AuditLogger
 from backend.core.services.ai_client import AIClient
 from backend.core.logic.utils.text_parsing import has_late_indicator
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
-from .summary_classifier import classify_client_summary
-from .rules_loader import get_neutral_phrase
+from backend.core.logic.strategy.summary_classifier import classify_client_summary
+from backend.core.logic.compliance.rules_loader import get_neutral_phrase
 
 
 def select_goodwill_candidates(

@@ -5,9 +5,9 @@ and a suite of post-processing helpers. Historically all of this logic lived
 in a single file which made the responsibilities difficult to test and
 reason about. The functionality has been split into dedicated modules:
 
-- :mod:`logic.report_parsing`
-- :mod:`logic.report_prompting`
-- :mod:`logic.report_postprocessing`
+- :mod:`backend.core.logic.report_analysis.report_parsing`
+- :mod:`backend.core.logic.report_analysis.report_prompting`
+- :mod:`backend.core.logic.report_analysis.report_postprocessing`
 """
 
 from __future__ import annotations

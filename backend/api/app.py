@@ -22,7 +22,7 @@ from backend.api.session_manager import (
     update_session,
     update_intake,
 )
-from backend.core.logic.explanations_normalizer import sanitize, extract_structured
+from backend.core.logic.letters.explanations_normalizer import sanitize, extract_structured
 from backend.api.config import get_app_config
 from backend.core.models import ClientInfo, ProofDocuments
 from backend.core.orchestrators import run_credit_repair_process

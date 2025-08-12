@@ -4,7 +4,7 @@ import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from backend.core.logic import rules_loader
+from backend.core.logic.compliance import rules_loader
 
 
 def test_load_rules():

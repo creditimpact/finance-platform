@@ -14,7 +14,7 @@ from shutil import copyfile
 from typing import Any, Mapping
 
 from backend.audit.audit import AuditLevel
-from backend.core.logic.extract_info import extract_bureau_info_column_refined
+from backend.core.logic.report_analysis.extract_info import extract_bureau_info_column_refined
 from backend.core.logic.utils.pdf_ops import (
     convert_txts_to_pdfs,
     gather_supporting_docs_text,
@@ -23,8 +23,8 @@ from backend.core.logic.utils.report_sections import (
     filter_sections_by_bureau,
     extract_summary_from_sections,
 )
-from backend.core.logic.summary_classifier import classify_client_summary
-from backend.core.logic.constants import StrategistFailureReason
+from backend.core.logic.strategy.summary_classifier import classify_client_summary
+from backend.core.logic.compliance.constants import StrategistFailureReason
 from backend.analytics.analytics_tracker import save_analytics_snapshot
 from backend.analytics.analytics.strategist_failures import tally_failure_reasons
 from backend.core.email_sender import send_email_with_attachment
@@ -104,12 +104,12 @@ def analyze_credit_report(
     ai_client: AIClient,
 ):
     """Ingest and analyze the client's credit report."""
-    from backend.core.logic.upload_validator import is_safe_pdf, move_uploaded_file
+    from backend.core.logic.compliance.upload_validator import is_safe_pdf, move_uploaded_file
     from backend.api.session_manager import update_session
-    from backend.core.logic.analyze_report import (
+    from backend.core.logic.report_analysis.analyze_report import (
         analyze_credit_report as analyze_report_logic,
     )
-    from backend.core.logic.bootstrap import get_current_month
+    from backend.core.logic.utils.bootstrap import get_current_month
 
     uploaded_path = proofs_files.get("smartcredit_report")
     if not uploaded_path or not os.path.exists(uploaded_path):
@@ -191,8 +191,8 @@ def generate_strategy_plan(
     ai_client: AIClient,
 ):
     """Generate and merge the strategy plan."""
-    from backend.core.logic.strategy_merger import merge_strategy_data
-    from backend.core.logic.generate_strategy_report import StrategyGenerator
+    from backend.core.logic.strategy.strategy_merger import merge_strategy_data
+    from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
 
     docs_text = gather_supporting_docs_text(session_id)
     strat_gen = StrategyGenerator(ai_client=ai_client)
@@ -254,11 +254,11 @@ def generate_letters(
     app_config: AppConfig | None = None,
 ):
     """Create all client letters and supporting files."""
-    from backend.core.logic.bootstrap import extract_all_accounts
-    from backend.core.logic.letter_generator import generate_all_dispute_letters_with_ai
-    from backend.core.logic.instructions_generator import generate_instruction_file
-    from backend.core.logic.generate_goodwill_letters import generate_goodwill_letters
-    from backend.core.logic.generate_custom_letters import generate_custom_letters
+    from backend.core.logic.utils.bootstrap import extract_all_accounts
+    from backend.core.logic.letters.letter_generator import generate_all_dispute_letters_with_ai
+    from backend.core.logic.rendering.instructions_generator import generate_instruction_file
+    from backend.core.logic.letters.generate_goodwill_letters import generate_goodwill_letters
+    from backend.core.logic.letters.generate_custom_letters import generate_custom_letters
 
     print("[INFO] Generating dispute letters...")
     generate_all_dispute_letters_with_ai(
@@ -556,9 +556,9 @@ def extract_problematic_accounts_from_report(
     file_path: str, session_id: str | None = None
 ) -> "BureauPayload":
     """Return problematic accounts extracted from the report for user review."""
-    from backend.core.logic.upload_validator import is_safe_pdf, move_uploaded_file
+    from backend.core.logic.compliance.upload_validator import is_safe_pdf, move_uploaded_file
     from backend.api.session_manager import update_session
-    from backend.core.logic.analyze_report import (
+    from backend.core.logic.report_analysis.analyze_report import (
         analyze_credit_report as analyze_report_logic,
     )
 

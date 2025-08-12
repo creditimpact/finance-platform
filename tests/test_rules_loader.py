@@ -34,13 +34,13 @@ def test_load_state_rules():
 
 
 def test_missing_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(rules_loader, "RULES_DIR", tmp_path)
+    monkeypatch.setattr(rules_loader, "files", lambda pkg: tmp_path)
     with pytest.raises(FileNotFoundError):
         rules_loader.load_rules()
 
 
 def test_invalid_yaml(tmp_path, monkeypatch):
     (tmp_path / "dispute_rules.yaml").write_text(": bad\n", encoding="utf-8")
-    monkeypatch.setattr(rules_loader, "RULES_DIR", tmp_path)
+    monkeypatch.setattr(rules_loader, "files", lambda pkg: tmp_path)
     with pytest.raises(RuntimeError):
         rules_loader.load_rules()

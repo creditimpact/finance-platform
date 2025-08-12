@@ -8,12 +8,16 @@ from backend.core.models import BureauPayload
 
 def _mock_dependencies(monkeypatch, sections):
     monkeypatch.setattr(
-        "logic.upload_validator.move_uploaded_file", lambda path, session_id: path
+        "backend.core.logic.compliance.upload_validator.move_uploaded_file",
+        lambda path, session_id: path,
     )
-    monkeypatch.setattr("logic.upload_validator.is_safe_pdf", lambda path: True)
+    monkeypatch.setattr(
+        "backend.core.logic.compliance.upload_validator.is_safe_pdf", lambda path: True
+    )
     monkeypatch.setattr("session_manager.update_session", lambda *a, **k: None)
     monkeypatch.setattr(
-        "logic.analyze_report.analyze_credit_report", lambda *a, **k: sections
+        "backend.core.logic.report_analysis.analyze_report.analyze_credit_report",
+        lambda *a, **k: sections,
     )
 
 

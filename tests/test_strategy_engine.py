@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from backend.api.session_manager import update_session, get_session, update_intake
-from backend.core.logic.strategy_engine import generate_strategy
+from backend.core.logic.strategy.strategy_engine import generate_strategy
 
 
 def test_strategy_engine_uses_structured_summaries():

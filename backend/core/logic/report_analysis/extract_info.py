@@ -5,7 +5,7 @@ from typing import Dict, List, Mapping
 from backend.core.logic.utils.names_normalization import normalize_bureau_name, BUREAUS
 from collections import Counter
 from backend.core.services.ai_client import AIClient
-from .json_utils import parse_json
+from backend.core.logic.utils.json_utils import parse_json
 
 logging.getLogger("pdfplumber.page").setLevel(logging.ERROR)
 

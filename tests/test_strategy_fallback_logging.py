@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from backend.audit.audit import create_audit_logger
-from backend.core.logic.constants import FallbackReason
+from backend.core.logic.compliance.constants import FallbackReason
 from backend.core.models.account import Account
 from backend.core.models.strategy import StrategyPlan
 
@@ -14,7 +14,7 @@ def test_strategy_fallback_logs_include_reason_and_override(tmp_path):
     import types
 
     sys.modules["pdfkit"] = types.SimpleNamespace(configuration=lambda **kwargs: None)
-    from backend.core.logic.strategy_merger import merge_strategy_data
+    from backend.core.logic.strategy.strategy_merger import merge_strategy_data
 
     audit = create_audit_logger("test")
     strategy = StrategyPlan.from_dict(

@@ -3,8 +3,8 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from backend.core.logic.letter_generator import call_gpt_dispute_letter
-from backend.core.logic import rules_loader
+from backend.core.logic.letters.letter_generator import call_gpt_dispute_letter
+from backend.core.logic.compliance import rules_loader
 from tests.helpers.fake_ai_client import FakeAIClient
 from backend.core.models.account import Account
 
@@ -16,7 +16,7 @@ def test_dispute_prompt_includes_neutral_phrase(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "logic.letter_generator.classify_client_summary",
+        "backend.core.logic.letters.letter_generator.classify_client_summary",
         lambda struct, ai_client, state=None: {"category": "not_mine"},
     )
 

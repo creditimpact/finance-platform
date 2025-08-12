@@ -37,11 +37,11 @@ sys.modules.setdefault("fpdf", types.SimpleNamespace(FPDF=object))
 sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__: None))
 sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None))
 
-import backend.core.logic.instructions_generator as instructions_generator
-from backend.core.logic.generate_goodwill_letters import generate_goodwill_letters
-from backend.core.logic.letter_generator import generate_dispute_letters_for_all_bureaus
+import backend.core.logic.rendering.instructions_generator as instructions_generator
+from backend.core.logic.letters.generate_goodwill_letters import generate_goodwill_letters
+from backend.core.logic.letters.letter_generator import generate_dispute_letters_for_all_bureaus
 from tests.helpers.fake_ai_client import FakeAIClient
-from backend.core.logic.process_accounts import process_analyzed_report
+from backend.core.logic.report_analysis.process_accounts import process_analyzed_report
 from backend.core.logic.utils.text_parsing import (
     extract_late_history_blocks,
     extract_account_blocks,
@@ -73,7 +73,7 @@ def test_dedup_without_numbers():
     }
     with (
         mock.patch(
-            "logic.instruction_data_preparation.generate_account_action",
+            "backend.core.logic.rendering.instruction_data_preparation.generate_account_action",
             return_value="A",
         ),
     ):
@@ -140,9 +140,9 @@ def test_goodwill_generation():
     sent = {}
     with (
         mock.patch(
-            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
+            "backend.core.logic.letters.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
         ) as mock_g,
-        mock.patch("logic.pdf_renderer.render_html_to_pdf"),
+        mock.patch("backend.core.logic.rendering.pdf_renderer.render_html_to_pdf"),
     ):
         out_dir = Path("output/tmp")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -189,9 +189,9 @@ def test_goodwill_on_closed_account():
     called = {}
     with (
         mock.patch(
-            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
+            "backend.core.logic.letters.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
         ) as mock_g,
-        mock.patch("logic.pdf_renderer.render_html_to_pdf"),
+        mock.patch("backend.core.logic.rendering.pdf_renderer.render_html_to_pdf"),
     ):
         out_dir = Path("output/tmp2")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -230,9 +230,9 @@ def test_skip_goodwill_when_no_late_payments():
     }
     with (
         mock.patch(
-            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
+            "backend.core.logic.letters.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
         ) as mock_g,
-        mock.patch("logic.pdf_renderer.render_html_to_pdf"),
+        mock.patch("backend.core.logic.rendering.pdf_renderer.render_html_to_pdf"),
     ):
         out_dir = Path("output/tmp3")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -262,9 +262,9 @@ def test_skip_goodwill_on_collections():
     }
     with (
         mock.patch(
-            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
+            "backend.core.logic.letters.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
         ) as mock_g,
-        mock.patch("logic.pdf_renderer.render_html_to_pdf"),
+        mock.patch("backend.core.logic.rendering.pdf_renderer.render_html_to_pdf"),
     ):
         out_dir = Path("output/tmp4")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -294,9 +294,9 @@ def test_skip_goodwill_edge_statuses():
     }
     with (
         mock.patch(
-            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
+            "backend.core.logic.letters.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
         ) as mock_g,
-        mock.patch("logic.pdf_renderer.render_html_to_pdf"),
+        mock.patch("backend.core.logic.rendering.pdf_renderer.render_html_to_pdf"),
     ):
         out_dir = Path("output/tmp4a")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -358,7 +358,7 @@ def test_fallback_tagging_extra_keywords():
 
 
 def test_normalize_action_tag_aliases():
-    from backend.core.logic.constants import normalize_action_tag
+    from backend.core.logic.compliance.constants import normalize_action_tag
 
     phrases = [
         "dispute for verification",
@@ -412,13 +412,22 @@ def test_letter_duplicate_accounts_removed():
     strategy = {"dispute_items": {"1": {}, "2": {}, "3": {}, "4": {}}}
     sent = {}
     with (
-        mock.patch("logic.letter_generator.call_gpt_dispute_letter") as mock_d,
-        mock.patch("logic.pdf_renderer.render_html_to_pdf"),
         mock.patch(
-            "logic.compliance_pipeline.run_compliance_pipeline",
+            "backend.core.logic.letters.letter_generator.call_gpt_dispute_letter"
+        ) as mock_d,
+        mock.patch("backend.core.logic.rendering.pdf_renderer.render_html_to_pdf"),
+        mock.patch(
+            "backend.core.logic.compliance.compliance_pipeline.run_compliance_pipeline",
             lambda html, state, session_id, doc_type, ai_client=None: html,
         ),
-        mock.patch("logic.letter_generator.generate_strategy", return_value=strategy),
+        mock.patch(
+            "backend.core.logic.letters.letter_generator.generate_strategy",
+            return_value=strategy,
+        ),
+        mock.patch(
+            "backend.core.logic.letters.letter_generator.sanitize_disputes",
+            return_value=(False, False, set(), False),
+        ),
     ):
         out_dir = Path("output/tmp_dupes")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -473,13 +482,22 @@ def test_partial_account_number_deduplication():
     strategy = {"dispute_items": {"1": {}, "2": {}}}
     sent = {}
     with (
-        mock.patch("logic.letter_generator.call_gpt_dispute_letter") as mock_d,
-        mock.patch("logic.pdf_renderer.render_html_to_pdf"),
         mock.patch(
-            "logic.compliance_pipeline.run_compliance_pipeline",
+            "backend.core.logic.letters.letter_generator.call_gpt_dispute_letter"
+        ) as mock_d,
+        mock.patch("backend.core.logic.rendering.pdf_renderer.render_html_to_pdf"),
+        mock.patch(
+            "backend.core.logic.compliance.compliance_pipeline.run_compliance_pipeline",
             lambda html, state, session_id, doc_type, ai_client=None: html,
         ),
-        mock.patch("logic.letter_generator.generate_strategy", return_value=strategy),
+        mock.patch(
+            "backend.core.logic.letters.letter_generator.generate_strategy",
+            return_value=strategy,
+        ),
+        mock.patch(
+            "backend.core.logic.letters.letter_generator.sanitize_disputes",
+            return_value=(False, False, set(), False),
+        ),
     ):
         out_dir = Path("output/tmp_dupe_nums")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -528,9 +546,9 @@ def test_skip_goodwill_for_disputed_account():
 
     with (
         mock.patch(
-            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
+            "backend.core.logic.letters.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
         ) as mock_g,
-        mock.patch("logic.pdf_renderer.render_html_to_pdf"),
+        mock.patch("backend.core.logic.rendering.pdf_renderer.render_html_to_pdf"),
     ):
         out_dir = Path("output/tmp_dupe_skip")
         out_dir.mkdir(parents=True, exist_ok=True)

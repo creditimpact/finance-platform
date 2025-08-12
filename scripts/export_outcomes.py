@@ -7,7 +7,7 @@ import sys
 # Allow importing the project modules when this script is run directly
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from backend.core.logic.outcomes_store import get_outcomes
+from backend.core.logic.letters.outcomes_store import get_outcomes
 
 EXPORT_DIR = Path("exports")
 

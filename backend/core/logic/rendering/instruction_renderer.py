@@ -10,7 +10,7 @@ from __future__ import annotations
 import html as html_utils
 import random
 from typing import Any
-from backend.core.logic import pdf_renderer
+from backend.core.logic.rendering import pdf_renderer
 from backend.core.models.letter import LetterContext
 from backend.assets.paths import templates_path
 

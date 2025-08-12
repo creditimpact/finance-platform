@@ -1,4 +1,4 @@
-from backend.core.logic.goodwill_preparation import (
+from backend.core.logic.letters.goodwill_preparation import (
     select_goodwill_candidates,
     prepare_account_summaries,
 )

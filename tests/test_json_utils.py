@@ -1,9 +1,10 @@
 from pathlib import Path
+from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from backend.core.logic.json_utils import parse_json
+from backend.core.logic.utils.json_utils import parse_json
 
 
 def test_parse_valid_json():

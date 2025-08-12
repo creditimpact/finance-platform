@@ -11,14 +11,14 @@ from backend.audit.audit import AuditLogger, AuditLevel
 from backend.core.services.ai_client import AIClient
 from backend.assets.paths import data_path
 
-from backend.core.logic.pdf_renderer import (
+from backend.core.logic.rendering.pdf_renderer import (
     ensure_template_env,
     render_html_to_pdf as default_pdf_renderer,
 )
 from backend.core.logic.utils.file_paths import safe_filename
 from backend.core.logic.utils.note_handling import get_client_address_lines
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
-from backend.core.logic.compliance_pipeline import (
+from backend.core.logic.compliance.compliance_pipeline import (
     run_compliance_pipeline as default_compliance,
 )
 from backend.core.models.client import ClientInfo

@@ -1,16 +1,17 @@
 import pdfkit
 
 from backend.api.session_manager import update_session, update_intake
-from backend.core.logic.letter_generator import generate_all_dispute_letters_with_ai
+from backend.core.logic.letters.letter_generator import generate_all_dispute_letters_with_ai
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
 def _setup(monkeypatch):
     monkeypatch.setattr(
-        "logic.pdf_renderer.render_html_to_pdf", lambda html, path: None
+        "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
+        lambda html, path: None,
     )
     monkeypatch.setattr(
-        "logic.compliance_pipeline.run_compliance_pipeline",
+        "backend.core.logic.compliance.compliance_pipeline.run_compliance_pipeline",
         lambda html, state, session_id, doc_type, ai_client=None: html,
     )
     monkeypatch.setattr(pdfkit, "configuration", lambda *a, **k: None)
@@ -55,8 +56,14 @@ def test_warning_on_raw_client_text(monkeypatch, tmp_path, recwarn):
         }
 
     _setup(monkeypatch)
-    monkeypatch.setattr("logic.letter_generator.generate_strategy", fake_strategy)
-    monkeypatch.setattr("logic.letter_generator.call_gpt_dispute_letter", fake_call_gpt)
+    monkeypatch.setattr(
+        "backend.core.logic.letters.letter_generator.generate_strategy",
+        fake_strategy,
+    )
+    monkeypatch.setattr(
+        "backend.core.logic.letters.letter_generator.call_gpt_dispute_letter",
+        fake_call_gpt,
+    )
 
     client_info = {
         "name": "Client",
@@ -107,8 +114,14 @@ def test_warning_on_missing_summary(monkeypatch, tmp_path, recwarn):
         }
 
     _setup(monkeypatch)
-    monkeypatch.setattr("logic.letter_generator.generate_strategy", fake_strategy)
-    monkeypatch.setattr("logic.letter_generator.call_gpt_dispute_letter", fake_call_gpt)
+    monkeypatch.setattr(
+        "backend.core.logic.letters.letter_generator.generate_strategy",
+        fake_strategy,
+    )
+    monkeypatch.setattr(
+        "backend.core.logic.letters.letter_generator.call_gpt_dispute_letter",
+        fake_call_gpt,
+    )
 
     client_info = {"name": "Client", "session_id": session_id}
     bureau_data = {
@@ -157,8 +170,14 @@ def test_unrecognized_dispute_type_fallback(monkeypatch, tmp_path, recwarn):
         }
 
     _setup(monkeypatch)
-    monkeypatch.setattr("logic.letter_generator.generate_strategy", fake_strategy)
-    monkeypatch.setattr("logic.letter_generator.call_gpt_dispute_letter", fake_call_gpt)
+    monkeypatch.setattr(
+        "backend.core.logic.letters.letter_generator.generate_strategy",
+        fake_strategy,
+    )
+    monkeypatch.setattr(
+        "backend.core.logic.letters.letter_generator.call_gpt_dispute_letter",
+        fake_call_gpt,
+    )
 
     client_info = {"name": "Client", "session_id": session_id}
     bureau_data = {

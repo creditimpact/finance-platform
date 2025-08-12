@@ -7,7 +7,7 @@ from backend.core.logic.utils.names_normalization import (
 )
 from backend.core.logic.utils.text_parsing import extract_late_history_blocks
 from backend.core.logic.utils.inquiries import extract_inquiries
-from .json_utils import parse_json
+from backend.core.logic.utils.json_utils import parse_json
 from backend.core.services.ai_client import AIClient
 
 

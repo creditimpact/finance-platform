@@ -9,7 +9,7 @@ from backend.audit.audit import AuditLogger, AuditLevel
 from backend.core.services.ai_client import AIClient
 
 from backend.core.logic.utils.pdf_ops import gather_supporting_docs
-from .json_utils import parse_json
+from backend.core.logic.utils.json_utils import parse_json
 
 
 def generate_goodwill_letter_draft(

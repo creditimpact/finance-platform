@@ -17,7 +17,7 @@ from backend.audit.audit import AuditLevel, AuditLogger
 from backend.core.logic.utils.note_handling import get_client_address_lines
 
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
-from .strategy_engine import generate_strategy
+from backend.core.logic.strategy.strategy_engine import generate_strategy
 from backend.core.logic.guardrails.summary_validator import (
     validate_structured_summaries,
 )
@@ -28,8 +28,8 @@ from backend.core.models.account import Account, Inquiry
 from backend.core.models import ClientInfo, BureauPayload
 from backend.core.services.ai_client import AIClient
 from .letter_rendering import render_dispute_letter_html
-from backend.core.logic import pdf_renderer
-from .compliance_pipeline import (
+from backend.core.logic.rendering import pdf_renderer
+from backend.core.logic.compliance.compliance_pipeline import (
     run_compliance_pipeline,
     adapt_gpt_output,
     sanitize_client_info,

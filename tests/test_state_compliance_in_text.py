@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from backend.core.logic.rule_checker import check_letter
+from backend.core.logic.compliance.rule_checker import check_letter
 from backend.api.session_manager import get_session
 
 

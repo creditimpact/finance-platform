@@ -44,16 +44,16 @@ sys.modules.setdefault("fpdf", types.SimpleNamespace(FPDF=object))
 sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__: None))
 sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None))
 
-from backend.core.logic.letter_generator import (
+from backend.core.logic.letters.letter_generator import (
     generate_dispute_letters_for_all_bureaus,
 )  # noqa: E402
-from backend.core.logic.generate_goodwill_letters import (
+from backend.core.logic.letters.generate_goodwill_letters import (
     generate_goodwill_letters,
 )  # noqa: E402
-from backend.core.logic.instructions_generator import (
+from backend.core.logic.rendering.instructions_generator import (
     generate_instruction_file,
 )  # noqa: E402
-import backend.core.logic.instructions_generator as instructions_generator  # noqa: E402
+import backend.core.logic.rendering.instructions_generator as instructions_generator  # noqa: E402
 from tests.helpers.fake_ai_client import FakeAIClient  # noqa: E402
 
 
@@ -103,36 +103,42 @@ def test_minimal_workflow():
     instructions_capture = {}
 
     with (
-        mock.patch("logic.letter_generator.call_gpt_dispute_letter") as mock_d,
         mock.patch(
-            "logic.letter_generator.render_dispute_letter_html", return_value="html"
+            "backend.core.logic.letters.letter_generator.call_gpt_dispute_letter"
+        ) as mock_d,
+        mock.patch(
+            "backend.core.logic.letters.letter_generator.render_dispute_letter_html",
+            return_value="html",
         ),
         mock.patch(
-            "logic.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
+            "backend.core.logic.letters.generate_goodwill_letters.goodwill_prompting.generate_goodwill_letter_draft"
         ) as mock_g,
-        mock.patch("logic.pdf_renderer.render_html_to_pdf"),
+        mock.patch("backend.core.logic.rendering.pdf_renderer.render_html_to_pdf"),
         mock.patch(
-            "logic.instructions_generator.render_pdf_from_html",
+            "backend.core.logic.rendering.instructions_generator.render_pdf_from_html",
             side_effect=lambda html, p: instructions_capture.setdefault("html", html),
         ),
         mock.patch(
-            "logic.instruction_data_preparation.generate_account_action",
+            "backend.core.logic.rendering.instruction_data_preparation.generate_account_action",
             return_value="Follow advice",
         ),
         mock.patch(
-            "logic.instructions_generator.run_compliance_pipeline",
+            "backend.core.logic.rendering.instructions_generator.run_compliance_pipeline",
             lambda html, state, session_id, doc_type, ai_client=None: html,
         ),
         mock.patch(
-            "logic.instructions_generator.build_instruction_html", return_value="html"
+            "backend.core.logic.rendering.instructions_generator.build_instruction_html",
+            return_value="html",
         ),
-        mock.patch("logic.instructions_generator.save_json_output"),
         mock.patch(
-            "logic.letter_generator.generate_strategy",
+            "backend.core.logic.rendering.instructions_generator.save_json_output"
+        ),
+        mock.patch(
+            "backend.core.logic.letters.letter_generator.generate_strategy",
             return_value={"dispute_items": {"1": {}}},
         ),
         mock.patch(
-            "logic.letter_generator.sanitize_disputes",
+            "backend.core.logic.letters.letter_generator.sanitize_disputes",
             return_value=(False, False, set(), False),
         ),
     ):
@@ -238,21 +244,31 @@ def test_skip_goodwill_when_identity_theft():
                 "services.ai_client.build_ai_client", return_value=FakeAIClient()
             ),
             mock.patch(
-                "logic.letter_generator.generate_dispute_letters_for_all_bureaus"
+                "backend.core.logic.letters.letter_generator.generate_dispute_letters_for_all_bureaus"
             ),
             mock.patch(
-                "logic.generate_goodwill_letters.generate_goodwill_letters"
+                "backend.core.logic.letters.generate_goodwill_letters.generate_goodwill_letters"
             ) as mock_goodwill,
-            mock.patch("logic.generate_custom_letters.generate_custom_letters"),
-            mock.patch("logic.instructions_generator.generate_instruction_file"),
-            mock.patch("logic.utils.pdf_ops.convert_txts_to_pdfs"),
+            mock.patch(
+                "backend.core.logic.letters.generate_custom_letters.generate_custom_letters"
+            ),
+            mock.patch(
+                "backend.core.logic.rendering.instructions_generator.generate_instruction_file"
+            ),
+            mock.patch("backend.core.logic.utils.pdf_ops.convert_txts_to_pdfs"),
             mock.patch("orchestrators.send_email_with_attachment"),
             mock.patch("orchestrators.save_analytics_snapshot"),
-            mock.patch("logic.bootstrap.extract_all_accounts", return_value=[]),
             mock.patch(
-                "logic.upload_validator.move_uploaded_file", return_value=Path(tmp.name)
+                "backend.core.logic.utils.bootstrap.extract_all_accounts", return_value=[]
             ),
-            mock.patch("logic.upload_validator.is_safe_pdf", return_value=True),
+            mock.patch(
+                "backend.core.logic.compliance.upload_validator.move_uploaded_file",
+                return_value=Path(tmp.name),
+            ),
+            mock.patch(
+                "backend.core.logic.compliance.upload_validator.is_safe_pdf",
+                return_value=True,
+            ),
             mock.patch("orchestrators.save_log_file"),
             mock.patch("shutil.copyfile"),
         ):

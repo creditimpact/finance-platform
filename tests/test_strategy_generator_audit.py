@@ -5,15 +5,15 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from backend.audit.audit import create_audit_logger
-from backend.core.logic.generate_strategy_report import StrategyGenerator
-from backend.core.logic.constants import StrategistFailureReason
+from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
+from backend.core.logic.compliance.constants import StrategistFailureReason
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
 def test_malformed_json_triggers_audit(monkeypatch, tmp_path):
     audit = create_audit_logger("test")
     monkeypatch.setattr(
-        "logic.generate_strategy_report.fix_draft_with_guardrails",
+        "backend.core.logic.strategy.generate_strategy_report.fix_draft_with_guardrails",
         lambda *a, **k: None,
     )
 

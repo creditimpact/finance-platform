@@ -1,4 +1,4 @@
-from backend.core.logic.summary_classifier import classify_client_summary
+from backend.core.logic.strategy.summary_classifier import classify_client_summary
 from tests.helpers.fake_ai_client import FakeAIClient
 
 

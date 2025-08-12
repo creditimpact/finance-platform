@@ -6,7 +6,7 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from backend.core.logic import outcomes_store
+from backend.core.logic.letters import outcomes_store
 from scripts import export_outcomes
 
 

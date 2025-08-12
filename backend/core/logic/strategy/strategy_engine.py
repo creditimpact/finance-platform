@@ -3,8 +3,8 @@ from datetime import datetime, UTC
 from typing import Any, Dict, List, Mapping
 
 from backend.api.session_manager import get_session, update_session
-from .rules_loader import load_rules
-from .outcomes_store import get_outcomes
+from backend.core.logic.compliance.rules_loader import load_rules
+from backend.core.logic.letters.outcomes_store import get_outcomes
 from backend.core.logic.guardrails.summary_validator import (
     validate_structured_summaries,
 )

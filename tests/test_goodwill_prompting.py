@@ -1,5 +1,5 @@
 import json
-from backend.core.logic.goodwill_prompting import generate_goodwill_letter_draft
+from backend.core.logic.letters.goodwill_prompting import generate_goodwill_letter_draft
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
@@ -14,7 +14,10 @@ def test_prompting_parses_ai_response(monkeypatch):
     def fake_docs(session_id):
         return "", [], {}
 
-    monkeypatch.setattr("logic.goodwill_prompting.gather_supporting_docs", fake_docs)
+    monkeypatch.setattr(
+        "backend.core.logic.letters.goodwill_prompting.gather_supporting_docs",
+        fake_docs,
+    )
 
     summaries = [{"name": "Bank", "account_number": "1", "status": "Open"}]
     result, doc_names = generate_goodwill_letter_draft(

@@ -18,13 +18,17 @@ def _imports(path: Path) -> set[str]:
 
 
 def test_letter_rendering_does_not_import_gpt_prompting() -> None:
-    path = PROJECT_ROOT / "logic" / "letter_rendering.py"
+    path = PROJECT_ROOT / "backend" / "core" / "logic" / "rendering" / "letter_rendering.py"
     imports = _imports(path)
-    assert "logic.gpt_prompting" not in imports and "gpt_prompting" not in imports
+    assert (
+        "backend.core.logic.letters.gpt_prompting" not in imports
+        and "gpt_prompting" not in imports
+    )
 
 
 def test_compliance_modules_are_pure() -> None:
-    for module_path in (PROJECT_ROOT / "logic").glob("compliance_*.py"):
+    compliance_dir = PROJECT_ROOT / "backend" / "core" / "logic" / "compliance"
+    for module_path in compliance_dir.glob("*.py"):
         imports = _imports(module_path)
         for name in imports:
             assert (

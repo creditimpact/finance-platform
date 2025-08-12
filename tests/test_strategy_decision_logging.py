@@ -13,7 +13,7 @@ def test_strategy_decision_logged_for_all_accounts(tmp_path):
     import types
 
     sys.modules["pdfkit"] = types.SimpleNamespace(configuration=lambda **kwargs: None)
-    from backend.core.logic.strategy_merger import merge_strategy_data
+    from backend.core.logic.strategy.strategy_merger import merge_strategy_data
 
     audit = create_audit_logger("test")
     strategy = StrategyPlan.from_dict(

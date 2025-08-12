@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import TypedDict, Literal, Any
 
-from backend.core.logic.rules_loader import load_rules, load_state_rules
+from backend.core.logic.compliance.rules_loader import load_rules, load_state_rules
 from backend.core.models.letter import LetterContext
 
 

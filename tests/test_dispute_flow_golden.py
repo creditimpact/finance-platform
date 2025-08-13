@@ -49,6 +49,7 @@ def test_dispute_flow_golden(monkeypatch):
         False,
         {},
         "CA",
+        {},
         ai_client=fake_ai,
     )
     ctx.client_name = "John Doe"

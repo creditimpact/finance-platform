@@ -21,6 +21,15 @@ class _CacheEntry:
 _CACHE: Dict[Tuple[str, str, str], _CacheEntry] = {}
 
 
+@dataclass
+class ClassificationRecord:
+    """Cached classification details for a structured summary."""
+
+    summary: Mapping[str, Any]
+    classification: Mapping[str, str]
+    summary_hash: str
+
+
 def summary_hash(summary: Mapping[str, Any]) -> str:
     """Return a stable hash for ``summary``.
 
@@ -249,4 +258,5 @@ __all__ = [
     "classify_client_summaries",
     "invalidate_summary_cache",
     "summary_hash",
+    "ClassificationRecord",
 ]

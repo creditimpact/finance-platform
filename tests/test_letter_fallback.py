@@ -78,8 +78,19 @@ def test_unrecognized_action_fallback(monkeypatch, tmp_path, capsys):
 
     with pytest.warns(UserWarning):
         fake = FakeAIClient()
+        from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+
+        classification_map = {
+            "1": ClassificationRecord({}, {"category": "inaccurate_reporting"}, "")
+        }
         generate_all_dispute_letters_with_ai(
-            client_info, bureau_data, tmp_path, False, None, ai_client=fake
+            client_info,
+            bureau_data,
+            tmp_path,
+            False,
+            None,
+            ai_client=fake,
+            classification_map=classification_map,
         )
 
     with open(tmp_path / "Experian_gpt_response.json") as f:

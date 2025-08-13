@@ -14,10 +14,10 @@ from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLevel, AuditLogger
 from backend.core.logic.compliance.rules_loader import get_neutral_phrase
 from backend.core.logic.guardrails import generate_letter_with_guardrails
-from backend.core.logic.guardrails.summary_validator import \
-    validate_structured_summaries
-from backend.core.logic.strategy.summary_classifier import \
-    classify_client_summary
+from backend.core.logic.guardrails.summary_validator import (
+    validate_structured_summaries,
+)
+from backend.core.logic.strategy.summary_classifier import ClassificationRecord
 from backend.core.logic.utils.pdf_ops import gather_supporting_docs
 from backend.core.models.account import Account
 from backend.core.models.bureau import BureauPayload
@@ -40,39 +40,17 @@ def call_gpt_for_custom_letter(
     account_number: str,
     docs_text: str,
     structured_summary: Mapping[str, Any],
+    classification_record: ClassificationRecord | None,
     state: str,
     session_id: str,
     audit: AuditLogger | None,
     ai_client: AIClient,
 ) -> str:
-    from backend.api.session_manager import get_session, update_session
-    from backend.core.logic.strategy.summary_classifier import summary_hash
-    import time
-
     docs_line = f"Supporting documents summary:\n{docs_text}" if docs_text else ""
 
-    acc_id = structured_summary.get("account_id")
-    session = get_session(session_id or "") or {}
-    cache = session.get("summary_classifications", {})
-    struct_hash = summary_hash(structured_summary)
-    cached = cache.get(acc_id) if acc_id and isinstance(cache, dict) else None
-    if cached and cached.get("summary_hash") == struct_hash:
-        classification = cached.get("classification", {})
-    else:
-        classification = classify_client_summary(
-            structured_summary,
-            ai_client,
-            state,
-            session_id=session_id,
-            account_id=acc_id,
-        )
-        if acc_id:
-            cache[acc_id] = {
-                "summary_hash": struct_hash,
-                "classified_at": time.time(),
-                "classification": classification,
-            }
-            update_session(session_id, summary_classifications=cache)
+    classification = (
+        classification_record.classification if classification_record else {}
+    )
     neutral_phrase, neutral_reason = get_neutral_phrase(
         classification.get("category"), structured_summary
     )
@@ -137,6 +115,7 @@ def generate_custom_letter(
     audit: AuditLogger | None,
     *,
     ai_client: AIClient,
+    classification_map: Mapping[str, ClassificationRecord] | None = None,
     run_date: str | None = None,
     wkhtmltopdf_path: str | None = None,
 ) -> None:
@@ -157,6 +136,11 @@ def generate_custom_letter(
     if docs_text and audit and audit.level is AuditLevel.VERBOSE:
         print(f"[INFO] Including supplemental docs for custom letter to {recipient}.")
 
+    classification_record = (
+        classification_map.get(account.get("account_id"))
+        if classification_map
+        else None
+    )
     body_paragraph = call_gpt_for_custom_letter(
         client_name,
         recipient,
@@ -164,6 +148,7 @@ def generate_custom_letter(
         acc_number,
         docs_text,
         structured_summary,
+        classification_record,
         state,
         session_id,
         audit,
@@ -220,6 +205,7 @@ def generate_custom_letters(
     audit: AuditLogger | None,
     *,
     ai_client: AIClient,
+    classification_map: Mapping[str, ClassificationRecord] | None = None,
     run_date: str | None = None,
     log_messages: list[str] | None = None,
     wkhtmltopdf_path: str | None = None,
@@ -238,6 +224,7 @@ def generate_custom_letters(
                     output_path,
                     audit,
                     ai_client=ai_client,
+                    classification_map=classification_map,
                     run_date=run_date,
                     wkhtmltopdf_path=wkhtmltopdf_path,
                 )

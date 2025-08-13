@@ -79,9 +79,12 @@ def classify_client_responses(
     expensive classification step and reuse the stored data.
     """
     from backend.api.session_manager import get_session, update_session
-    from backend.core.logic.strategy.summary_classifier import summary_hash
+    from backend.core.logic.strategy.summary_classifier import (
+        summary_hash,
+        ClassificationRecord,
+    )
 
-    classification_map: dict[str, dict] = {}
+    classification_map: dict[str, ClassificationRecord] = {}
     session_id = client_info.get("session_id")
     session = get_session(session_id or "") or {}
     cache = session.get("summary_classifications", {}) if session_id else {}
@@ -92,7 +95,10 @@ def classify_client_responses(
         struct_hash = summary_hash(struct)
         cached = cache.get(acc_id) if isinstance(cache, dict) else None
         if cached and cached.get("summary_hash") == struct_hash:
-            classification_map[acc_id] = cached.get("classification", {})
+            cls = cached.get("classification", {})
+            classification_map[acc_id] = ClassificationRecord(
+                summary=struct, classification=cls, summary_hash=struct_hash
+            )
         else:
             enriched = dict(struct)
             enriched.setdefault("account_id", acc_id)
@@ -109,7 +115,9 @@ def classify_client_responses(
         )
         for acc_id, _summary, struct_hash in batch:
             cls = batch_results.get(acc_id, {})
-            classification_map[acc_id] = cls
+            classification_map[acc_id] = ClassificationRecord(
+                summary=_summary, classification=cls, summary_hash=struct_hash
+            )
             if session_id:
                 cache[acc_id] = {
                     "summary_hash": struct_hash,
@@ -119,13 +127,14 @@ def classify_client_responses(
                 updated = True
 
     for acc_id, struct in structured_map.items():
+        record = classification_map.get(acc_id)
         audit.log_account(
             acc_id,
             {
                 "stage": "explanation",
                 "raw_explanation": raw_map.get(acc_id, ""),
                 "structured_summary": struct,
-                "classification": classification_map.get(acc_id, {}),
+                "classification": record.classification if record else {},
             },
         )
 
@@ -242,7 +251,9 @@ def generate_strategy_plan(
         {
             "client_info": client_info,
             "bureau_data": bureau_data,
-            "classification_map": classification_map or {},
+            "classification_map": {
+                k: v.classification for k, v in (classification_map or {}).items()
+            },
             "supporting_docs_text": docs_text,
         },
     )
@@ -250,7 +261,9 @@ def generate_strategy_plan(
         client_info,
         bureau_data,
         docs_text,
-        classification_map=classification_map,
+        classification_map={
+            k: v.classification for k, v in (classification_map or {}).items()
+        },
         audit=audit,
     )
     if not strategy or not strategy.get("accounts"):
@@ -291,6 +304,7 @@ def generate_letters(
     strategy,
     audit,
     log_messages,
+    classification_map,
     ai_client: AIClient,
     app_config: AppConfig | None = None,
 ):
@@ -312,6 +326,7 @@ def generate_letters(
         today_folder,
         is_identity_theft,
         audit,
+        classification_map=classification_map,
         log_messages=log_messages,
         ai_client=ai_client,
         rulebook_fallback_enabled=(
@@ -326,7 +341,12 @@ def generate_letters(
     if not is_identity_theft:
         print("[INFO] Generating goodwill letters...")
         generate_goodwill_letters(
-            client_info, bureau_data, today_folder, audit, ai_client=ai_client
+            client_info,
+            bureau_data,
+            today_folder,
+            audit,
+            ai_client=ai_client,
+            classification_map=classification_map,
         )
         log_messages.append("[INFO] Goodwill letters generated.")
         if audit.level is AuditLevel.VERBOSE:
@@ -347,6 +367,7 @@ def generate_letters(
         bureau_data,
         today_folder,
         audit,
+        classification_map=classification_map,
         log_messages=log_messages,
         ai_client=ai_client,
         wkhtmltopdf_path=app_config.wkhtmltopdf_path if app_config else None,
@@ -554,6 +575,7 @@ def run_credit_repair_process(
             strategy,
             audit,
             log_messages,
+            classification_map,
             ai_client,
             app_config,
         )

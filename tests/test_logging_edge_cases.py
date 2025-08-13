@@ -37,6 +37,7 @@ def test_warning_on_raw_client_text(monkeypatch, tmp_path, recwarn):
         is_identity_theft,
         structured_summaries,
         state,
+        classification_map=None,
         audit=None,
         ai_client=None,
     ):
@@ -79,8 +80,19 @@ def test_warning_on_raw_client_text(monkeypatch, tmp_path, recwarn):
     }
 
     fake = FakeAIClient()
+    from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+
+    classification_map = {
+        "1": ClassificationRecord({}, {"category": "inaccurate_reporting"}, "")
+    }
     generate_all_dispute_letters_with_ai(
-        client_info, bureau_data, tmp_path, False, None, ai_client=fake
+        client_info,
+        bureau_data,
+        tmp_path,
+        False,
+        None,
+        ai_client=fake,
+        classification_map=classification_map,
     )
 
 
@@ -102,6 +114,7 @@ def test_warning_on_missing_summary(monkeypatch, tmp_path, recwarn):
         is_identity_theft,
         structured_summaries,
         state,
+        classification_map=None,
         audit=None,
         ai_client=None,
     ):
@@ -134,8 +147,19 @@ def test_warning_on_missing_summary(monkeypatch, tmp_path, recwarn):
     }
 
     fake = FakeAIClient()
+    from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+
+    classification_map = {
+        "1": ClassificationRecord({}, {"category": "inaccurate_reporting"}, "")
+    }
     generate_all_dispute_letters_with_ai(
-        client_info, bureau_data, tmp_path, False, None, ai_client=fake
+        client_info,
+        bureau_data,
+        tmp_path,
+        False,
+        None,
+        ai_client=fake,
+        classification_map=classification_map,
     )
     assert any("[Sanitization]" in str(w.message) for w in recwarn)
 
@@ -158,6 +182,7 @@ def test_unrecognized_dispute_type_fallback(monkeypatch, tmp_path, recwarn):
         is_identity_theft,
         structured_summaries,
         state,
+        classification_map=None,
         audit=None,
         ai_client=None,
     ):
@@ -195,8 +220,19 @@ def test_unrecognized_dispute_type_fallback(monkeypatch, tmp_path, recwarn):
     }
 
     fake = FakeAIClient()
+    from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+
+    classification_map = {
+        "1": ClassificationRecord({}, {"category": "inaccurate_reporting"}, "")
+    }
     generate_all_dispute_letters_with_ai(
-        client_info, bureau_data, tmp_path, False, None, ai_client=fake
+        client_info,
+        bureau_data,
+        tmp_path,
+        False,
+        None,
+        ai_client=fake,
+        classification_map=classification_map,
     )
     assert captured["disputes"][0].dispute_type == "inaccurate_reporting"
     assert any("Unrecognized dispute type" in str(w.message) for w in recwarn)

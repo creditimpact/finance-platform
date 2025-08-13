@@ -23,6 +23,7 @@ from backend.core.logic.guardrails.summary_validator import (
 )
 from .dispute_preparation import prepare_disputes_and_inquiries
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
+from backend.core.logic.strategy.summary_classifier import ClassificationRecord
 from backend.core.models.letter import LetterContext, LetterArtifact, LetterAccount
 from backend.core.models.account import Account, Inquiry
 from backend.core.models import ClientInfo, BureauPayload
@@ -37,7 +38,6 @@ from backend.core.logic.compliance.compliance_pipeline import (
     DEFAULT_DISPUTE_REASON,
     ESCALATION_NOTE,
 )
-from backend.core.logic.strategy.summary_classifier import classify_client_summary
 
 
 logger = logging.getLogger(__name__)
@@ -50,10 +50,15 @@ CREDIT_BUREAU_ADDRESSES = {
 }
 
 
-def call_gpt_dispute_letter(*args, audit: AuditLogger | None = None, **kwargs):
+def call_gpt_dispute_letter(
+    *args,
+    audit: AuditLogger | None = None,
+    classification_map=None,
+    **kwargs,
+):
     """Proxy to GPT prompting module for backward compatibility."""
     ctx = _call_gpt_dispute_letter(
-        *args, audit=audit, **kwargs, classifier=classify_client_summary
+        *args, audit=audit, classification_map=classification_map, **kwargs
     )
     return ctx.to_dict()
 
@@ -65,6 +70,8 @@ def generate_all_dispute_letters_with_ai(
     is_identity_theft: bool,
     audit: AuditLogger | None,
     ai_client: AIClient,
+    *,
+    classification_map: Mapping[str, ClassificationRecord] | None = None,
     run_date: str | None = None,
     log_messages: List[str] | None = None,
     rulebook_fallback_enabled: bool = True,
@@ -164,6 +171,7 @@ def generate_all_dispute_letters_with_ai(
             is_identity_theft,
             strategy_summaries,
             client_info.get("state", ""),
+            classification_map=classification_map,
             audit=audit,
             ai_client=ai_client,
         )
@@ -266,6 +274,5 @@ __all__ = [
     "generate_dispute_letters_for_all_bureaus",
     "DEFAULT_DISPUTE_REASON",
     "ESCALATION_NOTE",
-    "classify_client_summary",
     "call_gpt_dispute_letter",
 ]

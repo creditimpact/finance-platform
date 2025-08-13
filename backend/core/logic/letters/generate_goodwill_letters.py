@@ -19,6 +19,7 @@ from backend.core.logic.utils.pdf_ops import gather_supporting_docs
 from backend.core.models import BureauPayload, ClientInfo
 from backend.core.models.account import Account
 from backend.core.services.ai_client import AIClient
+from backend.core.logic.strategy.summary_classifier import ClassificationRecord
 
 # ---------------------------------------------------------------------------
 # Orchestrator functions
@@ -34,6 +35,7 @@ def generate_goodwill_letter_with_ai(
     audit: AuditLogger | None = None,
     *,
     ai_client: AIClient,
+    classification_map: Mapping[str, ClassificationRecord] | None = None,
 ) -> None:
     """Generate a single goodwill letter for ``creditor``."""
 
@@ -52,10 +54,10 @@ def generate_goodwill_letter_with_ai(
     account_summaries = goodwill_preparation.prepare_account_summaries(
         account_dicts,
         structured_summaries,
+        classification_map,
         client_info.get("state"),
         session_id,
         audit=audit,
-        ai_client=ai_client,
     )
 
     gpt_data, _ = goodwill_prompting.generate_goodwill_letter_draft(
@@ -93,6 +95,7 @@ def generate_goodwill_letters(
     *,
     ai_client: AIClient,
     identity_theft: bool = False,
+    classification_map: Mapping[str, ClassificationRecord] | None = None,
 ) -> None:
     """Generate goodwill letters for all eligible creditors in ``bureau_data``.
 
@@ -138,6 +141,7 @@ def generate_goodwill_letters(
             run_date,
             audit,
             ai_client=ai_client,
+            classification_map=classification_map,
         )
 
 

@@ -3,11 +3,12 @@ import time
 import time
 
 from backend.core.orchestrators import classify_client_responses
-from backend.core.logic.letters.generate_custom_letters import (
-    call_gpt_for_custom_letter,
-)
+from backend.core.logic.letters.generate_custom_letters import call_gpt_for_custom_letter
 from backend.core.logic.letters.goodwill_preparation import prepare_account_summaries
-from backend.core.logic.strategy.summary_classifier import summary_hash
+from backend.core.logic.strategy.summary_classifier import (
+    summary_hash,
+    ClassificationRecord,
+)
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
@@ -57,30 +58,11 @@ class FakeAudit:
 
 
 def test_custom_letter_uses_cached_classification(monkeypatch):
-    session_id = "sess2"
     summary = {"account_id": "1", "facts_summary": "hi", "claimed_errors": []}
-    h = summary_hash(summary)
-    store = {
-        session_id: {
-            "summary_classifications": {
-                "1": {
-                    "summary_hash": h,
-                    "classified_at": time.time(),
-                    "classification": {"category": "goodwill", "legal_tag": "TAG", "dispute_approach": "A", "tone": "T"},
-                }
-            }
-        }
-    }
-
-    monkeypatch.setattr(
-        "backend.api.session_manager.get_session", lambda sid: store.get(sid)
-    )
-    monkeypatch.setattr(
-        "backend.api.session_manager.update_session", lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        "backend.core.logic.letters.generate_custom_letters.classify_client_summary",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not call")),
+    record = ClassificationRecord(
+        summary,
+        {"category": "goodwill", "legal_tag": "TAG", "dispute_approach": "A", "tone": "T"},
+        summary_hash(summary),
     )
     monkeypatch.setattr(
         "backend.core.logic.letters.generate_custom_letters.get_neutral_phrase",
@@ -90,46 +72,34 @@ def test_custom_letter_uses_cached_classification(monkeypatch):
         "backend.core.logic.letters.generate_custom_letters.generate_letter_with_guardrails",
         lambda *a, **k: ("body", None, None),
     )
-
     ai = FakeAIClient()
     body = call_gpt_for_custom_letter(
-        "C", "R", "A", "1", "", summary, "CA", session_id, None, ai
+        "C",
+        "R",
+        "A",
+        "1",
+        "",
+        summary,
+        record,
+        "CA",
+        "sess2",
+        None,
+        ai,
     )
     assert body == "body"
 
 
 def test_goodwill_preparation_uses_cached_classification(monkeypatch):
-    session_id = "sess3"
     summary = {"account_id": "1", "facts_summary": "hi", "claimed_errors": []}
-    h = summary_hash(summary)
-    store = {
-        session_id: {
-            "summary_classifications": {
-                "1": {
-                    "summary_hash": h,
-                    "classified_at": time.time(),
-                    "classification": {
-                        "category": "goodwill",
-                        "legal_tag": "L",
-                        "dispute_approach": "D",
-                        "tone": "T",
-                    },
-                }
-            }
-        }
-    }
-
-    monkeypatch.setattr(
-        "backend.core.logic.letters.goodwill_preparation.get_session",
-        lambda sid: store.get(sid),
-    )
-    monkeypatch.setattr(
-        "backend.core.logic.letters.goodwill_preparation.update_session",
-        lambda *a, **k: None,
-    )
-    monkeypatch.setattr(
-        "backend.core.logic.letters.goodwill_preparation.classify_client_summary",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not call")),
+    record = ClassificationRecord(
+        summary,
+        {
+            "category": "goodwill",
+            "legal_tag": "L",
+            "dispute_approach": "D",
+            "tone": "T",
+        },
+        summary_hash(summary),
     )
     monkeypatch.setattr(
         "backend.core.logic.letters.goodwill_preparation.get_neutral_phrase",
@@ -138,7 +108,12 @@ def test_goodwill_preparation_uses_cached_classification(monkeypatch):
 
     accounts = [{"account_id": "1", "name": "Bank", "account_number": "123"}]
     res = prepare_account_summaries(
-        accounts, {"1": summary}, "CA", session_id, audit=None, ai_client=FakeAIClient()
+        accounts,
+        {"1": summary},
+        {"1": record},
+        "CA",
+        "sess3",
+        audit=None,
     )
     assert res[0]["dispute_reason"] == "goodwill"
     assert res[0]["neutral_phrase"] == "NP"

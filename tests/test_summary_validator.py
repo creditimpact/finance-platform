@@ -30,6 +30,7 @@ def test_validator_replaces_flagged_paragraph(monkeypatch, tmp_path):
         is_identity_theft,
         structured_summaries,
         state,
+        classification_map=None,
         audit=None,
         ai_client=None,
     ):
@@ -80,6 +81,17 @@ def test_validator_replaces_flagged_paragraph(monkeypatch, tmp_path):
         }
     }
 
+    from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+
+    classification_map = {
+        "1": ClassificationRecord(tampered["1"], {"category": "inaccurate_reporting"}, "")
+    }
     generate_all_dispute_letters_with_ai(
-        client_info, bureau_data, tmp_path, False, None, ai_client=FakeAIClient()
+        client_info,
+        bureau_data,
+        tmp_path,
+        False,
+        None,
+        ai_client=FakeAIClient(),
+        classification_map=classification_map,
     )

@@ -5,6 +5,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from backend.core.logic.compliance import rules_loader
 from backend.core.logic.letters.letter_generator import call_gpt_dispute_letter
+from backend.core.logic.strategy.summary_classifier import ClassificationRecord
 from backend.core.models.account import Account
 from tests.helpers.fake_ai_client import FakeAIClient
 
@@ -15,12 +16,10 @@ def test_dispute_prompt_includes_neutral_phrase(monkeypatch):
         '{"opening_paragraph": "", "accounts": [], "inquiries": [], "closing_paragraph": ""}'
     )
 
-    monkeypatch.setattr(
-        "backend.core.logic.letters.letter_generator.classify_client_summary",
-        lambda struct, ai_client, state=None, **kw: {"category": "not_mine"},
-    )
-
     structured = {"explanation": "I never opened this"}
+    classification_map = {
+        "1": ClassificationRecord(structured, {"category": "not_mine"}, "")
+    }
     call_gpt_dispute_letter(
         {"legal_name": "Test", "session_id": ""},
         "Equifax",
@@ -33,6 +32,7 @@ def test_dispute_prompt_includes_neutral_phrase(monkeypatch):
         False,
         {"1": structured},
         "",
+        classification_map=classification_map,
         ai_client=fake_client,
     )
 

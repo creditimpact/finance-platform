@@ -28,8 +28,27 @@ def test_prepare_account_summaries_merges_and_enriches():
         {"name": "Chase", "acct_number": "1234", "status": "Open"},
     ]
     structured = {"a1": {"account_id": "a1", "dispute_type": "goodwill"}}
+    from backend.core.logic.strategy.summary_classifier import (
+        ClassificationRecord,
+        summary_hash,
+    )
+    record = ClassificationRecord(
+        structured["a1"],
+        {
+            "category": "goodwill",
+            "legal_tag": "FCRA §623(a)(1)",
+            "dispute_approach": "goodwill_adjustment",
+            "tone": "conciliatory",
+            "state_hook": "California Consumer Credit Reporting Agencies Act",
+        },
+        summary_hash(structured["a1"]),
+    )
     summaries = prepare_account_summaries(
-        accounts, structured, state="CA", session_id="sess", ai_client=FakeAIClient()
+        accounts,
+        structured,
+        {"a1": record},
+        state="CA",
+        session_id="sess",
     )
     assert len(summaries) == 1
     summary = summaries[0]

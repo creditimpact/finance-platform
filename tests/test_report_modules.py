@@ -66,6 +66,43 @@ def test_call_ai_analysis_parses_json(tmp_path):
     assert out.with_name(out.stem + "_raw.txt").exists()
 
 
+def test_call_ai_analysis_merges_segments(tmp_path):
+    utils_pkg = types.ModuleType("backend.core.logic.utils")
+    utils_pkg.__path__ = [
+        str(
+            Path(__file__).resolve().parents[1]
+            / "backend"
+            / "core"
+            / "logic"
+            / "utils"
+        )
+    ]
+    sys.modules["backend.core.logic.utils"] = utils_pkg
+
+    fake_pdf_ops = types.ModuleType("backend.core.logic.utils.pdf_ops")
+    fake_pdf_ops.extract_pdf_text_safe = lambda *a, **k: ""
+    sys.modules.setdefault("backend.core.logic.utils.pdf_ops", fake_pdf_ops)
+    report_prompting = importlib.import_module(
+        "backend.core.logic.report_analysis.report_prompting"
+    )
+
+    client = FakeAIClient()
+    client.add_chat_response(
+        '{"inquiries":[{"creditor_name":"A","date":"01/2024","bureau":"Experian"}],"all_accounts":[{"name":"Cap One","bureaus":["Experian"]}]}'
+    )
+    client.add_chat_response(
+        '{"inquiries":[{"creditor_name":"A","date":"01/2024","bureau":"Equifax"}],"all_accounts":[{"name":"Cap One","bureaus":["Equifax"]}]}'
+    )
+    out = tmp_path / "result.json"
+    text = "Experian section Equifax section"
+    data = report_prompting.call_ai_analysis(text, False, out, ai_client=client)
+    assert len(data["inquiries"]) == 2
+    assert sorted(data["all_accounts"][0]["bureaus"]) == [
+        "Equifax",
+        "Experian",
+    ]
+
+
 def test_sanitize_late_counts_removes_unrealistic():
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [

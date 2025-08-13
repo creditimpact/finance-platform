@@ -5,7 +5,10 @@ from pathlib import Path
 from backend.core.logic.utils.inquiries import extract_inquiries
 from backend.core.logic.utils.json_utils import parse_json
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
-from backend.core.logic.utils.text_parsing import extract_late_history_blocks
+from backend.core.logic.utils.text_parsing import (
+    extract_account_headings,
+    extract_late_history_blocks,
+)
 from backend.core.services.ai_client import AIClient
 
 
@@ -39,6 +42,15 @@ def call_ai_analysis(
     dict
         Parsed JSON result from the AI model.
     """
+    headings = extract_account_headings(text)
+
+    if headings:
+        heading_summary = "Account Headings:\n" + "\n".join(
+            f"- {norm.title()} (raw: {raw})" for norm, raw in headings
+        )
+    else:
+        heading_summary = "Account Headings:\n- None detected"
+
     late_blocks, late_raw_map = extract_late_history_blocks(text, return_raw_map=True)
     if late_blocks:
         late_summary_text = "Late payment history extracted from report:\n"
@@ -78,6 +90,8 @@ def call_ai_analysis(
     )
 
     prompt = f"""
+{heading_summary}
+
 You are a senior credit repair expert with deep knowledge of credit reports, FCRA regulations, dispute strategies, and client psychology.
 
 Your task: deeply analyze the following SmartCredit report text and extract a structured JSON summary for use in automated dispute and goodwill letters, and personalized client instructions.

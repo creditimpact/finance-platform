@@ -35,7 +35,11 @@ from .report_postprocessing import (
     _reconcile_account_headings,
     validate_analysis_sanity,
 )
-from .report_prompting import call_ai_analysis
+from .report_prompting import (
+    ANALYSIS_PROMPT_VERSION,
+    ANALYSIS_SCHEMA_VERSION,
+    call_ai_analysis,
+)
 
 # ---------------------------------------------------------------------------
 # Orchestrator
@@ -73,7 +77,11 @@ def analyze_credit_report(
         strategic_context = client_info.get("goal", "Not specified")
 
     is_identity_theft = client_info.get("is_identity_theft", False)
-    doc_fingerprint = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    doc_fingerprint = hashlib.sha256(
+        f"{text}|{ANALYSIS_PROMPT_VERSION}|{ANALYSIS_SCHEMA_VERSION}".encode(
+            "utf-8"
+        )
+    ).hexdigest()
     if run_ai:
         result = call_ai_analysis(
             text,
@@ -93,6 +101,9 @@ def analyze_credit_report(
             "all_accounts": [],
             "inquiries": [],
         }
+
+    result["prompt_version"] = ANALYSIS_PROMPT_VERSION
+    result["schema_version"] = ANALYSIS_SCHEMA_VERSION
 
     _reconcile_account_headings(result, heading_map)
 

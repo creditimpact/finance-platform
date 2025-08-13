@@ -36,6 +36,9 @@ _SCHEMA_PATH = Path(__file__).with_name("analysis_schema.json")
 _ANALYSIS_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
 _ANALYSIS_VALIDATOR = Draft7Validator(_ANALYSIS_SCHEMA)
 
+ANALYSIS_PROMPT_VERSION = 1
+ANALYSIS_SCHEMA_VERSION = 1
+
 try:  # pragma: no cover - fallback when app config is unavailable
     from backend.api.config import ANALYSIS_DEBUG_STORE_RAW
 except Exception:  # pragma: no cover
@@ -412,6 +415,8 @@ def call_ai_analysis(
                     "request_id": request_id,
                     "doc_fingerprint": doc_fingerprint,
                     "bureau": bureau,
+                    "prompt_version": ANALYSIS_PROMPT_VERSION,
+                    "schema_version": ANALYSIS_SCHEMA_VERSION,
                     "tokens_in": tokens_in,
                     "tokens_out": tokens_out,
                     "latency_ms": latency_ms,
@@ -455,5 +460,7 @@ def call_ai_analysis(
 
     if summary_metrics:
         aggregate["summary_metrics"] = summary_metrics
+    aggregate["prompt_version"] = ANALYSIS_PROMPT_VERSION
+    aggregate["schema_version"] = ANALYSIS_SCHEMA_VERSION
 
     return aggregate

@@ -61,6 +61,7 @@ def test_call_ai_analysis_parses_json(tmp_path, monkeypatch):
     report_prompting = importlib.import_module(
         "backend.core.logic.report_analysis.report_prompting"
     )
+    report_prompting.ANALYSIS_DEBUG_STORE_RAW = True
 
     client = FakeAIClient()
     client.add_chat_response('{"inquiries": [], "all_accounts": []}')
@@ -75,6 +76,8 @@ def test_call_ai_analysis_parses_json(tmp_path, monkeypatch):
         doc_fingerprint="fp",
     )
     assert data["inquiries"] == []
+    assert data["prompt_version"] == report_prompting.ANALYSIS_PROMPT_VERSION
+    assert data["schema_version"] == report_prompting.ANALYSIS_SCHEMA_VERSION
     assert out.with_name(out.stem + "_raw.txt").exists()
     report_prompting.ANALYSIS_DEBUG_STORE_RAW = False
 
@@ -110,6 +113,8 @@ def test_call_ai_analysis_populates_defaults_and_logs(tmp_path, caplog):
         )
     assert data["negative_accounts"] == []
     assert data["summary_metrics"]["total_inquiries"] == 0
+    assert data["prompt_version"] == report_prompting.ANALYSIS_PROMPT_VERSION
+    assert data["schema_version"] == report_prompting.ANALYSIS_SCHEMA_VERSION
     assert any(r.__dict__.get("validation_errors") for r in caplog.records)
 
 
@@ -285,7 +290,7 @@ def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
     result = analyze_report.analyze_credit_report(
         tmp_path / "dummy.pdf",
         tmp_path / "out.json",
-        {"goal": "improve credit", "is_identity_theft": identity_theft},
+       {"goal": "improve credit", "is_identity_theft": identity_theft},
         ai_client=client,
         request_id="req",
     )
@@ -314,3 +319,5 @@ def test_analyze_credit_report_skips_ai(monkeypatch, tmp_path):
         request_id="req",
     )
     assert result["negative_accounts"] == []
+    assert result["prompt_version"] == report_prompting.ANALYSIS_PROMPT_VERSION
+    assert result["schema_version"] == report_prompting.ANALYSIS_SCHEMA_VERSION

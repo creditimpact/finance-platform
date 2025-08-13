@@ -1,12 +1,15 @@
 import json
 import sys
 from pathlib import Path
+
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from backend.api.session_manager import update_session, update_intake
-from backend.core.logic.letters.letter_generator import generate_all_dispute_letters_with_ai
+from backend.api.session_manager import update_intake, update_session
+from backend.core.logic.letters.letter_generator import (
+    generate_all_dispute_letters_with_ai,
+)
 from tests.helpers.fake_ai_client import FakeAIClient
 
 

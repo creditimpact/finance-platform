@@ -14,16 +14,22 @@ REPL = {
     "\u2026": "...",
     # ×¨×•×•×-×™×/×'×§×¨×•×ª × ×"×™×¨×•×ª â€" ×ž×¡×™×¨×™×/×ž×ž×™×¨×
     "\u00A0": " ",  # nbsp
-    "\u200B": "",   # zero-width space
-    "\u0081": "", "\u008D": "", "\u008F": "", "\u0090": "", "\u009D": "",
+    "\u200B": "",  # zero-width space
+    "\u0081": "",
+    "\u008D": "",
+    "\u008F": "",
+    "\u0090": "",
+    "\u009D": "",
 }
 
 BAD_BYTES = (0x81, 0x8D, 0x8F, 0x90, 0x9D)
+
 
 def cleanse_text(s: str) -> str:
     for k, v in REPL.items():
         s = s.replace(k, v)
     return s
+
 
 def decode_best_effort(b: bytes) -> str:
     # × ×¤×˜×¨×™× ×ž×'×™×™×˜×™× ×'×¢×™×™×ª×™×™× ×ž×¨××©
@@ -36,6 +42,7 @@ def decode_best_effort(b: bytes) -> str:
             continue
     return b.decode("latin-1", errors="ignore")
 
+
 def process_file(p: Path) -> bool:
     raw = p.read_bytes()
     text = decode_best_effort(raw)
@@ -43,6 +50,7 @@ def process_file(p: Path) -> bool:
     # ×ª×ž×™×" ×›×•×ª×'×™× ×-×-×¨×" ×'-UTF-8 ×¢× ×©×•×¨×•×ª \n ×›×"×™ ×œ×™×™×©×¨ ××ª ×"×§×™×"×•×" ×¡×•×¤×™×ª
     p.write_text(cleaned, encoding="utf-8", newline="\n")
     return True
+
 
 def main():
     changed = 0
@@ -59,6 +67,7 @@ def main():
         except Exception as e:
             print(f"ERROR {p}: {e}")
     print(f"\nDone. Scanned {scanned} files, fixed {changed} (re-encoded UTF-8).")
+
 
 if __name__ == "__main__":
     main()

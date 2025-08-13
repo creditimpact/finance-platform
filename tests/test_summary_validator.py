@@ -1,11 +1,14 @@
 import sys
 from pathlib import Path
+
 import pdfkit
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from backend.api.session_manager import update_session
-from backend.core.logic.letters.letter_generator import generate_all_dispute_letters_with_ai
+from backend.core.logic.letters.letter_generator import (
+    generate_all_dispute_letters_with_ai,
+)
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
@@ -84,7 +87,9 @@ def test_validator_replaces_flagged_paragraph(monkeypatch, tmp_path):
     from backend.core.logic.strategy.summary_classifier import ClassificationRecord
 
     classification_map = {
-        "1": ClassificationRecord(tampered["1"], {"category": "inaccurate_reporting"}, "")
+        "1": ClassificationRecord(
+            tampered["1"], {"category": "inaccurate_reporting"}, ""
+        )
     }
     generate_all_dispute_letters_with_ai(
         client_info,

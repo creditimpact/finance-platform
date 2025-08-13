@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from .names_normalization import (
-    normalize_bureau_name,
-    normalize_creditor_name,
-    BUREAUS,
-)
+from .names_normalization import BUREAUS, normalize_bureau_name, normalize_creditor_name
 from .text_parsing import has_late_indicator
 
 

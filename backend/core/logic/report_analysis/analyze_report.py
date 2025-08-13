@@ -13,28 +13,26 @@ reason about. The functionality has been split into dedicated modules:
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import re
+from pathlib import Path
 
+from backend.core.logic.utils.inquiries import extract_inquiries
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.logic.utils.text_parsing import (
-    extract_late_history_blocks,
     enforce_collection_status,
+    extract_late_history_blocks,
 )
-from backend.core.logic.utils.inquiries import extract_inquiries
+from backend.core.services.ai_client import AIClient, get_ai_client
 
 from .report_parsing import extract_text_from_pdf
-from .report_prompting import call_ai_analysis
 from .report_postprocessing import (
-    _sanitize_late_counts,
     _cleanup_unverified_late_text,
     _inject_missing_late_accounts,
     _merge_parser_inquiries,
+    _sanitize_late_counts,
     validate_analysis_sanity,
 )
-
-from backend.core.services.ai_client import AIClient, get_ai_client
-
+from .report_prompting import call_ai_analysis
 
 # ---------------------------------------------------------------------------
 # Orchestrator

@@ -9,23 +9,26 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 import logging
-from flask import Flask, request, jsonify, Blueprint, redirect, url_for
-from flask_cors import CORS
 import uuid
+
+from flask import Blueprint, Flask, jsonify, redirect, request, url_for
+from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
-from backend.api.tasks import extract_problematic_accounts, smoke_task
 from backend.api.admin import admin_bp
-from backend.api.session_manager import (
-    set_session,
-    get_session,
-    update_session,
-    update_intake,
-)
-from backend.core.logic.letters.explanations_normalizer import sanitize, extract_structured
 from backend.api.config import get_app_config
-from backend.core.models import ClientInfo, ProofDocuments
-from backend.core.orchestrators import run_credit_repair_process
+from backend.api.session_manager import (
+    get_session,
+    set_session,
+    update_intake,
+    update_session,
+)
+from backend.api.tasks import run_credit_repair_process  # noqa: F401
+from backend.api.tasks import extract_problematic_accounts, smoke_task
+from backend.core.logic.letters.explanations_normalizer import (
+    extract_structured,
+    sanitize,
+)
 
 logger = logging.getLogger(__name__)
 

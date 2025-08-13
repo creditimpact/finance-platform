@@ -5,6 +5,6 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from backend.core import orchestrators as _real
+from backend.core import orchestrators as _real  # noqa: E402
 
 sys.modules[__name__] = _real

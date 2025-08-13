@@ -1,8 +1,8 @@
 import csv
 import json
-from datetime import datetime, timedelta, UTC
-from pathlib import Path
 import sys
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 # Allow importing the project modules when this script is run directly
 sys.path.append(str(Path(__file__).resolve().parents[1]))

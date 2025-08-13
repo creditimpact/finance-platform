@@ -125,8 +125,7 @@ record exceeds `CLASSIFY_CACHE_MAXSIZE`.
 **Environment flags**
 - `CLASSIFY_CACHE_ENABLED` – disable caching when set to `0` (default `1`).
 - `CLASSIFY_CACHE_MAXSIZE` – maximum number of cached classifications.
-- `CLASSIFY_CACHE_TTL_SEC` – seconds before a cache entry expires; `0` keeps
-  entries indefinitely.
+- `CLASSIFY_CACHE_TTL_SEC` – seconds before a cache entry expires; `0` keeps entries indefinitely.
 
 **Production note:** This is an in-memory, per-process cache. Deployments with
 multiple worker processes keep separate caches, so hit rates decrease as worker

@@ -25,7 +25,7 @@ const uploadData = {
 describe('ReviewPage', () => {
   test('renders helper text', async () => {
     render(
-      <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+      <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
         <ReviewPage />
       </MemoryRouter>
     );
@@ -36,7 +36,7 @@ describe('ReviewPage', () => {
 
   test('shows summary box when toggle active', async () => {
     render(
-      <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+      <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
         <ReviewPage />
       </MemoryRouter>
     );

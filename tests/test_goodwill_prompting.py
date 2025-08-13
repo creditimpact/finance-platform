@@ -1,4 +1,5 @@
 import json
+
 from backend.core.logic.letters.goodwill_prompting import generate_goodwill_letter_draft
 from tests.helpers.fake_ai_client import FakeAIClient
 

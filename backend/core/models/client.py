@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Type
 
 
@@ -65,7 +65,9 @@ class ProofDocuments:
     extras: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls: Type["ProofDocuments"], data: Dict[str, Any]) -> "ProofDocuments":
+    def from_dict(
+        cls: Type["ProofDocuments"], data: Dict[str, Any]
+    ) -> "ProofDocuments":
         known = {"smartcredit_report"}
         extras = {k: v for k, v in data.items() if k not in known}
         return cls(smartcredit_report=data.get("smartcredit_report", ""), extras=extras)

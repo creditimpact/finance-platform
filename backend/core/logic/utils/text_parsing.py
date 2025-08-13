@@ -185,7 +185,9 @@ def extract_account_blocks(text: str, debug: bool = False) -> list[list[str]]:
             elif debug:
                 print(f"[~] Discarded block '{current_block[0]}' (no account fields)")
             if debug:
-                print(f"[INFO] End block '{current_block[0]}' after Equifax counts line")
+                print(
+                    f"[INFO] End block '{current_block[0]}' after Equifax counts line"
+                )
             current_block = []
             capturing = False
             await_equifax_counts = False

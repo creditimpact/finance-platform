@@ -2,12 +2,10 @@
 
 from pathlib import Path
 
-from backend.core.logic.utils.names_normalization import (
-    normalize_creditor_name,
-)
-from backend.core.logic.utils.text_parsing import extract_late_history_blocks
 from backend.core.logic.utils.inquiries import extract_inquiries
 from backend.core.logic.utils.json_utils import parse_json
+from backend.core.logic.utils.names_normalization import normalize_creditor_name
+from backend.core.logic.utils.text_parsing import extract_late_history_blocks
 from backend.core.services.ai_client import AIClient
 
 

@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Tuple, Any
+from typing import Any, Dict, List, Tuple
 
-from backend.audit.audit import AuditLogger, AuditLevel
-from backend.core.services.ai_client import AIClient
-
-from backend.core.logic.utils.pdf_ops import gather_supporting_docs
+from backend.audit.audit import AuditLevel, AuditLogger
 from backend.core.logic.utils.json_utils import parse_json
+from backend.core.logic.utils.pdf_ops import gather_supporting_docs
+from backend.core.services.ai_client import AIClient
 
 
 def generate_goodwill_letter_draft(

@@ -71,8 +71,8 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
             "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
             lambda html, path: None,
         )
-        from backend.core.models import BureauPayload, ClientInfo
         from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+        from backend.core.models import BureauPayload, ClientInfo
 
         client = ClientInfo.from_dict({"name": "Client", "session_id": "s1"})
         bureau_data = {
@@ -104,8 +104,9 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
                 classification_map=classification_map,
             )
     elif doc_type == "instructions":
-        from backend.core.logic.rendering.instructions_generator import \
-            generate_instruction_file
+        from backend.core.logic.rendering.instructions_generator import (
+            generate_instruction_file,
+        )
 
         monkeypatch.setattr(
             "backend.core.logic.rendering.instructions_generator.run_compliance_pipeline",
@@ -142,8 +143,9 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
             client, bureau_data, False, tmp_path / "inst", ai_client=FakeAIClient()
         )
     else:  # goodwill
-        from backend.core.logic.letters.generate_goodwill_letters import \
-            generate_goodwill_letter_with_ai
+        from backend.core.logic.letters.generate_goodwill_letters import (
+            generate_goodwill_letter_with_ai,
+        )
 
         monkeypatch.setattr(
             "backend.core.logic.letters.generate_goodwill_letters.run_compliance_pipeline",

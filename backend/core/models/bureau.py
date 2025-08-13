@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, Dict, Type
+from typing import Any, Dict, List, Optional, Type
 
 from .account import Account, Inquiry
 
@@ -21,10 +21,22 @@ class BureauPayload:
     @classmethod
     def from_dict(cls: Type["BureauPayload"], data: Dict[str, Any]) -> "BureauPayload":
         return cls(
-            disputes=[Account.from_dict(d) if isinstance(d, dict) else d for d in data.get("disputes", [])],
-            goodwill=[Account.from_dict(d) if isinstance(d, dict) else d for d in data.get("goodwill", [])],
-            inquiries=[Inquiry.from_dict(i) if isinstance(i, dict) else i for i in data.get("inquiries", [])],
-            high_utilization=[Account.from_dict(d) if isinstance(d, dict) else d for d in data.get("high_utilization", [])],
+            disputes=[
+                Account.from_dict(d) if isinstance(d, dict) else d
+                for d in data.get("disputes", [])
+            ],
+            goodwill=[
+                Account.from_dict(d) if isinstance(d, dict) else d
+                for d in data.get("goodwill", [])
+            ],
+            inquiries=[
+                Inquiry.from_dict(i) if isinstance(i, dict) else i
+                for i in data.get("inquiries", [])
+            ],
+            high_utilization=[
+                Account.from_dict(d) if isinstance(d, dict) else d
+                for d in data.get("high_utilization", [])
+            ],
         )
 
     def to_dict(self) -> Dict[str, Any]:

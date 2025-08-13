@@ -18,7 +18,14 @@ def _imports(path: Path) -> set[str]:
 
 
 def test_letter_rendering_does_not_import_gpt_prompting() -> None:
-    path = PROJECT_ROOT / "backend" / "core" / "logic" / "rendering" / "letter_rendering.py"
+    path = (
+        PROJECT_ROOT
+        / "backend"
+        / "core"
+        / "logic"
+        / "rendering"
+        / "letter_rendering.py"
+    )
     imports = _imports(path)
     assert (
         "backend.core.logic.letters.gpt_prompting" not in imports

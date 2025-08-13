@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, MutableMapping, Mapping, Optional
+from typing import Any, Mapping, MutableMapping, Optional
 
 from backend.core.logic.compliance.constants import (
     FallbackReason,
@@ -202,8 +202,7 @@ def handle_strategy_fallbacks(
                             "reason": acc.get("advisor_comment")
                             or acc.get("analysis")
                             or raw_action,
-                            "classification": getattr(cls, "classification", cls)
-                            or {},
+                            "classification": getattr(cls, "classification", cls) or {},
                         },
                     )
 

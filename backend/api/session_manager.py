@@ -4,8 +4,7 @@ import threading
 from typing import Any, Dict
 
 from backend.assets.paths import data_path
-from backend.core.logic.strategy.summary_classifier import \
-    invalidate_summary_cache
+from backend.core.logic.strategy.summary_classifier import invalidate_summary_cache
 
 # Standard session data that can be safely accessed by most modules.
 SESSION_FILE = data_path("sessions.json")

@@ -3,8 +3,8 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from backend.audit.audit import create_audit_logger
 from backend.analytics.analytics.strategist_failures import tally_fallback_vs_decision
+from backend.audit.audit import create_audit_logger
 from backend.core.models.account import Account
 from backend.core.models.strategy import StrategyPlan
 

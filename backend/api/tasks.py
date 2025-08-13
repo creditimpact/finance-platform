@@ -1,8 +1,8 @@
 # ruff: noqa: E402
+import logging
 import os
 import sys
 import uuid
-import logging
 import warnings
 
 # Ensure the project root is always on sys.path so local modules can be
@@ -13,11 +13,12 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from celery import Celery
-from backend.core.orchestrators import (
-    run_credit_repair_process,
-    extract_problematic_accounts_from_report,
-)
+
 from backend.core.models import ClientInfo, ProofDocuments
+from backend.core.orchestrators import (
+    extract_problematic_accounts_from_report,
+    run_credit_repair_process,
+)
 
 app = Celery("tasks", loader="default", fixups=[])
 

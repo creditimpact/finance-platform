@@ -1,7 +1,8 @@
 """Quick import sanity checks for core logic packages."""
+
 import sys
-from pathlib import Path
 from importlib.machinery import SourceFileLoader
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -21,8 +22,13 @@ def main() -> int:
     try:
         for name in MODULES:
             if name.startswith("backend.core.logic.guardrails."):
-                file = ROOT / "backend" / "core" / "logic" / "guardrails" / (
-                    name.rsplit(".", 1)[-1] + ".py"
+                file = (
+                    ROOT
+                    / "backend"
+                    / "core"
+                    / "logic"
+                    / "guardrails"
+                    / (name.rsplit(".", 1)[-1] + ".py")
                 )
                 SourceFileLoader(name, str(file)).load_module()
             else:

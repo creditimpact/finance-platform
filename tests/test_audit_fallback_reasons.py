@@ -17,7 +17,9 @@ def test_apply_fallback_tags_logs_keyword_match(tmp_path, monkeypatch):
     import types
 
     sys.modules["pdfkit"] = types.SimpleNamespace(configuration=lambda **kwargs: None)
-    from backend.core.logic.report_analysis.process_accounts import process_analyzed_report
+    from backend.core.logic.report_analysis.process_accounts import (
+        process_analyzed_report,
+    )
 
     audit = create_audit_logger("test")
     report = {

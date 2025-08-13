@@ -31,5 +31,12 @@ Consumes structured report sections and sanitized summaries to classify accounts
 - `summary_classifier.classify_client_summary`
 - `fallback_manager.determine_fallback_action`
 
+## Classification cache
+`summary_classifier` caches classification results using a key of session id,
+account id, summary hash, client state, and rules version. Entries expire when
+evicted by TTL or size limits. See
+[`tests/test_classification_cache.py`](../../../../tests/test_classification_cache.py)
+for coverage of the cache behavior.
+
 ## Guardrails / constraints
 - Recommendations must comply with `compliance.constants.VALID_ACTION_TAGS` and neutral phrasing rules.

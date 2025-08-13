@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import Dict, List
 
+from backend.analytics.analytics_tracker import log_ai_request
+from backend.audit.audit import emit_event
 from backend.core.logic.utils.inquiries import extract_inquiries
 from backend.core.logic.utils.json_utils import parse_json
 from backend.core.logic.utils.names_normalization import (
@@ -18,6 +21,9 @@ from backend.core.logic.utils.text_parsing import (
     extract_late_history_blocks,
 )
 from backend.core.services.ai_client import AIClient
+
+_INPUT_COST_PER_TOKEN = 0.01 / 1000
+_OUTPUT_COST_PER_TOKEN = 0.03 / 1000
 
 
 def _split_text_by_bureau(text: str) -> Dict[str, str]:
@@ -44,7 +50,7 @@ def _run_segment(
     output_json_path: Path,
     ai_client: AIClient,
     strategic_context: str | None,
-) -> dict:
+) -> tuple[dict, dict]:
     """Run the existing prompt/analysis flow for a single bureau segment."""
     headings = extract_account_headings(segment_text)
     if headings:
@@ -217,6 +223,9 @@ Report text:
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
     )
+    usage = getattr(response, "usage", None)
+    tokens_in = getattr(usage, "prompt_tokens", 0)
+    tokens_out = getattr(usage, "completion_tokens", 0)
 
     content = response.choices[0].message.content.strip()
 
@@ -232,7 +241,7 @@ Report text:
         f.write(inquiry_summary)
 
     data, _ = parse_json(content)
-    return data
+    return data, {"prompt_tokens": tokens_in, "completion_tokens": tokens_out}
 
 
 def _merge_accounts(dest: List[dict], new: List[dict]) -> None:
@@ -294,6 +303,9 @@ def call_ai_analysis(
     output_json_path: Path,
     ai_client: AIClient,
     strategic_context: str | None = None,
+    *,
+    request_id: str,
+    doc_fingerprint: str,
 ):
     """Analyze raw report text using an AI model and return parsed JSON."""
     segments = _split_text_by_bureau(text)
@@ -314,13 +326,42 @@ def call_ai_analysis(
             if idx == 0
             else output_json_path.with_name(f"{output_json_path.stem}_{bureau}.json")
         )
-        data = _run_segment(
-            seg_text,
-            is_identity_theft=is_identity_theft,
-            output_json_path=seg_path,
-            ai_client=ai_client,
-            strategic_context=strategic_context,
-        )
+        start = time.time()
+        tokens_in = tokens_out = 0
+        error_code: str | int = 0
+        data: dict = {}
+        try:
+            data, usage = _run_segment(
+                seg_text,
+                is_identity_theft=is_identity_theft,
+                output_json_path=seg_path,
+                ai_client=ai_client,
+                strategic_context=strategic_context,
+            )
+            tokens_in = usage.get("prompt_tokens", 0)
+            tokens_out = usage.get("completion_tokens", 0)
+        except Exception as exc:
+            error_code = getattr(exc, "code", type(exc).__name__)
+            raise
+        finally:
+            latency_ms = (time.time() - start) * 1000
+            emit_event(
+                "report_segment",
+                {
+                    "request_id": request_id,
+                    "doc_fingerprint": doc_fingerprint,
+                    "bureau": bureau,
+                    "tokens_in": tokens_in,
+                    "tokens_out": tokens_out,
+                    "latency_ms": latency_ms,
+                    "error_code": error_code,
+                },
+            )
+            cost = (
+                tokens_in * _INPUT_COST_PER_TOKEN
+                + tokens_out * _OUTPUT_COST_PER_TOKEN
+            )
+            log_ai_request(tokens_in, tokens_out, cost, latency_ms)
 
         for key in [
             "negative_accounts",

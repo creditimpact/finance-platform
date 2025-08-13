@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
@@ -76,3 +77,12 @@ def create_audit_logger(
     audit = AuditLogger(level=level)
     audit.data["session_id"] = session_id
     return audit
+
+
+_logger = logging.getLogger(__name__)
+
+
+def emit_event(event: str, payload: Dict[str, Any]) -> None:
+    """Emit a structured audit log entry for external monitoring."""
+
+    _logger.info("%s %s", event, json.dumps(payload))

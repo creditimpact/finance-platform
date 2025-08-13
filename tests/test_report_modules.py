@@ -60,7 +60,13 @@ def test_call_ai_analysis_parses_json(tmp_path):
     client.add_chat_response('{"inquiries": [], "all_accounts": []}')
     out = tmp_path / "result.json"
     data = report_prompting.call_ai_analysis(
-        "text", False, out, ai_client=client, strategic_context="goal"
+        "text",
+        False,
+        out,
+        ai_client=client,
+        strategic_context="goal",
+        request_id="req",
+        doc_fingerprint="fp",
     )
     assert data["inquiries"] == []
     assert out.with_name(out.stem + "_raw.txt").exists()
@@ -95,7 +101,14 @@ def test_call_ai_analysis_merges_segments(tmp_path):
     )
     out = tmp_path / "result.json"
     text = "Experian section Equifax section"
-    data = report_prompting.call_ai_analysis(text, False, out, ai_client=client)
+    data = report_prompting.call_ai_analysis(
+        text,
+        False,
+        out,
+        ai_client=client,
+        request_id="req",
+        doc_fingerprint="fp",
+    )
     assert len(data["inquiries"]) == 2
     assert sorted(data["all_accounts"][0]["bureaus"]) == [
         "Equifax",
@@ -228,6 +241,8 @@ def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
         tmp_path / "baseline.json",
         ai_client=client,
         strategic_context=default_goal,
+        request_id="req",
+        doc_fingerprint="fp",
     )
 
     result = analyze_report.analyze_credit_report(
@@ -235,6 +250,7 @@ def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
         tmp_path / "out.json",
         {"goal": "improve credit", "is_identity_theft": identity_theft},
         ai_client=client,
+        request_id="req",
     )
     assert result == baseline
 
@@ -258,5 +274,6 @@ def test_analyze_credit_report_skips_ai(monkeypatch, tmp_path):
         {},
         ai_client=None,
         run_ai=False,
+        request_id="req",
     )
     assert result["negative_accounts"] == []

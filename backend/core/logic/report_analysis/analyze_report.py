@@ -12,6 +12,7 @@ reason about. The functionality has been split into dedicated modules:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -47,6 +48,8 @@ def analyze_credit_report(
     client_info,
     ai_client: AIClient | None = None,
     run_ai: bool = True,
+    *,
+    request_id: str,
 ):
     """Analyze ``pdf_path`` and write structured analysis to ``output_json_path``."""
     ai_client = ai_client or get_ai_client()
@@ -70,6 +73,7 @@ def analyze_credit_report(
         strategic_context = client_info.get("goal", "Not specified")
 
     is_identity_theft = client_info.get("is_identity_theft", False)
+    doc_fingerprint = hashlib.sha256(text.encode("utf-8")).hexdigest()
     if run_ai:
         result = call_ai_analysis(
             text,
@@ -77,6 +81,8 @@ def analyze_credit_report(
             Path(output_json_path),
             ai_client=ai_client,
             strategic_context=strategic_context,
+            request_id=request_id,
+            doc_fingerprint=doc_fingerprint,
         )
     else:
         result = {

@@ -212,7 +212,7 @@ def analyze_credit_report(
     print("[INFO] Analyzing report with GPT...")
     analyzed_json_path = Path("output/analyzed_report.json")
     sections = analyze_report_logic(
-        pdf_path, analyzed_json_path, client_info, ai_client=ai_client
+        pdf_path, analyzed_json_path, client_info, ai_client=ai_client, request_id=session_id
     )
     client_info.update(sections)
     log_messages.append("[INFO] Report analyzed.")
@@ -679,6 +679,7 @@ def extract_problematic_accounts_from_report(
         {},
         ai_client=ai_client,
         run_ai=False,
+        request_id=session_id,
     )
     update_session(session_id, status="awaiting_user_explanations")
 

@@ -1,0 +1,29 @@
+type: object
+required:
+  - version
+  - rules
+properties:
+  version:
+    type: string
+  limits:
+    type: object
+    additionalProperties: true
+  flags:
+    type: object
+    additionalProperties: true
+  rules:
+    type: array
+    items:
+      type: object
+      required: [id, description, conditions, effects]
+      properties:
+        id:
+          type: string
+        description:
+          type: string
+        conditions:
+          type: array
+          items: {}
+        effects:
+          type: array
+          items: {}

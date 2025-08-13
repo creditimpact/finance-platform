@@ -9,6 +9,7 @@ import time
 from copy import deepcopy
 from pathlib import Path
 from typing import Dict, List
+import hashlib
 
 from jsonschema import Draft7Validator
 
@@ -28,9 +29,11 @@ from backend.core.logic.utils.text_parsing import (
     extract_late_history_blocks,
 )
 from backend.core.services.ai_client import AIClient
+from .analysis_cache import get_cached_analysis, store_cached_analysis
 
 _INPUT_COST_PER_TOKEN = 0.01 / 1000
 _OUTPUT_COST_PER_TOKEN = 0.03 / 1000
+ANALYSIS_MODEL_VERSION = "gpt-4-turbo"
 
 _SCHEMA_PATH = Path(__file__).with_name("analysis_schema.json")
 _ANALYSIS_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -93,15 +96,13 @@ def _split_text_by_bureau(text: str) -> Dict[str, str]:
     return segments
 
 
-def _run_segment(
+def _generate_prompt(
     segment_text: str,
     *,
     is_identity_theft: bool,
-    output_json_path: Path,
-    ai_client: AIClient,
     strategic_context: str | None,
-) -> tuple[dict, dict]:
-    """Run the existing prompt/analysis flow for a single bureau segment."""
+) -> tuple[str, str, str]:
+    """Return prompt text and summaries used for a segment."""
     if FLAGS.inject_headings:
         headings = extract_account_headings(segment_text)
         if headings:
@@ -198,68 +199,6 @@ Return this exact JSON structure:
 
 4. high_utilization_accounts: Revolving accounts with balance over 30% of limit.
    Include:
-   - name
-   - balance
-   - limit
-   - utilization (e.g., "76%")
-   - bureaus
-   - is_suspected_identity_theft: true/false
-   - advisor_comment
-   - recommended_payment_amount
-
-5. positive_accounts: Accounts in good standing that support the credit profile.
-   Include:
-   - name
-   - account_number (if available)
-   - opened_date (if available)
-   - balance
-   - status
-   - utilization (if revolving)
-   - bureaus
-   - advisor_comment
-
-6. inquiries: Hard inquiries from the last 2 years that are NOT tied to any existing account.
-   Exclude inquiries that clearly relate to open or closed accounts listed. Treat names with minor spelling differences as the same creditor when deciding to exclude.
-   Include:
-   - creditor_name
-   - date (MM/YYYY)
-   - bureau
-
-7. account_inquiry_matches: Inquiries clearly matching existing accounts (to be excluded from disputes).
-   Include:
-   - creditor_name
-   - matched_account_name
-
-8. summary_metrics:
-   - num_collections
-   - num_late_payments
-   - high_utilization (true/false)
-   - recent_inquiries
-   - total_inquiries
-   - num_negative_accounts
-   - num_accounts_over_90_util
-   - account_types_in_problem
-
-9. strategic_recommendations: Clear action items based on the client goal, such as:
-   - "Open secured card"
-   - "Lower utilization on Capital One"
-   - "Dispute Midland account with Experian"
-
-10. all_accounts: ✓ For every account (positive or negative), return:
-   - name
-   - bureaus
-   - status
-   - utilization (if available)
-   - advisor_comment: 1–2 sentence explanation of the account’s effect and what the client should do (dispute, pay down, keep healthy, goodwill, etc.)
-
-⚠️ Rules:
-- Return strictly valid JSON
-- All property names and strings must use double quotes
-- No trailing commas, comments, or text outside the JSON
-- No markdown or explanations
-- Use proper casing, punctuation, and clean formatting
-- Never guess – only include facts that are visible
-Use the following late payment data to help you accurately tag late accounts, even if the report formatting is inconsistent:
 
 {late_summary_text}
 
@@ -271,11 +210,27 @@ Report text:
 ===
 """
 
+    return prompt, late_summary_text, inquiry_summary
+
+
+def _run_segment(
+    segment_text: str,
+    *,
+    is_identity_theft: bool,
+    output_json_path: Path,
+    ai_client: AIClient,
+    strategic_context: str | None,
+    prompt: str,
+    late_summary_text: str,
+    inquiry_summary: str,
+) -> tuple[dict, dict]:
+    """Run the existing prompt/analysis flow for a single bureau segment."""
     response = ai_client.chat_completion(
-        model="gpt-4-turbo",
+        model=ANALYSIS_MODEL_VERSION,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
     )
+
     usage = getattr(response, "usage", None)
     tokens_in = getattr(usage, "prompt_tokens", 0)
     tokens_out = getattr(usage, "completion_tokens", 0)
@@ -300,8 +255,6 @@ Report text:
     data, _ = parse_json(content)
     data = _validate_analysis_schema(data)
     return data, {"prompt_tokens": tokens_in, "completion_tokens": tokens_out}
-
-
 def _merge_accounts(dest: List[dict], new: List[dict]) -> None:
     """Merge account lists, combining bureau info."""
     index = {
@@ -391,15 +344,44 @@ def call_ai_analysis(
         error_code: str | int = 0
         data: dict = {}
         try:
-            data, usage = _run_segment(
+            prompt, late_summary_text, inquiry_summary = _generate_prompt(
                 seg_text,
                 is_identity_theft=is_identity_theft,
-                output_json_path=seg_path,
-                ai_client=ai_client,
                 strategic_context=strategic_context,
             )
-            tokens_in = usage.get("prompt_tokens", 0)
-            tokens_out = usage.get("completion_tokens", 0)
+            prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+            cache_entry = get_cached_analysis(
+                doc_fingerprint,
+                bureau,
+                prompt_hash,
+                ANALYSIS_MODEL_VERSION,
+                prompt_version=ANALYSIS_PROMPT_VERSION,
+                schema_version=ANALYSIS_SCHEMA_VERSION,
+            )
+            if cache_entry is not None:
+                data = cache_entry
+            else:
+                data, usage = _run_segment(
+                    seg_text,
+                    is_identity_theft=is_identity_theft,
+                    output_json_path=seg_path,
+                    ai_client=ai_client,
+                    strategic_context=strategic_context,
+                    prompt=prompt,
+                    late_summary_text=late_summary_text,
+                    inquiry_summary=inquiry_summary,
+                )
+                tokens_in = usage.get("prompt_tokens", 0)
+                tokens_out = usage.get("completion_tokens", 0)
+                store_cached_analysis(
+                    doc_fingerprint,
+                    bureau,
+                    prompt_hash,
+                    ANALYSIS_MODEL_VERSION,
+                    data,
+                    prompt_version=ANALYSIS_PROMPT_VERSION,
+                    schema_version=ANALYSIS_SCHEMA_VERSION,
+                )
         except Exception as exc:
             error_code = getattr(exc, "code", type(exc).__name__)
             raise

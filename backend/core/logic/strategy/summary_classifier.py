@@ -1,24 +1,50 @@
 import hashlib
 import json
 import logging
+import os
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Tuple
+from typing import Any, Mapping, Tuple
 
 from backend.core.logic.utils.json_utils import parse_json
 from backend.core.services.ai_client import AIClient
 
 logger = logging.getLogger(__name__)
 
+try:  # pragma: no cover - fallback for tests without app config
+    from backend.api.config import (
+        CLASSIFY_CACHE_ENABLED,
+        CLASSIFY_CACHE_MAXSIZE,
+        CLASSIFY_CACHE_TTL_SEC,
+    )
+except Exception:  # pragma: no cover
+    def _env_bool(name: str, default: bool) -> bool:
+        value = os.getenv(name)
+        if value is None:
+            return default
+        return value.lower() not in {"0", "false", "no"}
 
-@dataclass
-class _CacheEntry:
-    value: Mapping[str, str]
-    timestamp: float
-    ttl: float | None
+    CLASSIFY_CACHE_ENABLED = _env_bool("CLASSIFY_CACHE_ENABLED", True)
+    CLASSIFY_CACHE_MAXSIZE = int(os.getenv("CLASSIFY_CACHE_MAXSIZE", "5000"))
+    CLASSIFY_CACHE_TTL_SEC = int(os.getenv("CLASSIFY_CACHE_TTL_SEC", "0"))
 
 
-_CACHE: Dict[Tuple[str, str, str], _CacheEntry] = {}
+_CACHE: "OrderedDict[Tuple[str, str, str], Tuple[Mapping[str, str], float]]" = OrderedDict()
+_CACHE_HITS = 0
+_CACHE_MISSES = 0
+_CACHE_EVICTIONS = 0
+
+
+def _prune_expired() -> None:
+    if CLASSIFY_CACHE_TTL_SEC <= 0:
+        return
+    global _CACHE_EVICTIONS
+    now = time.time()
+    keys = [k for k, (_, ts) in _CACHE.items() if now - ts > CLASSIFY_CACHE_TTL_SEC]
+    for k in keys:
+        _CACHE.pop(k, None)
+        _CACHE_EVICTIONS += 1
 
 
 @dataclass
@@ -43,14 +69,25 @@ def summary_hash(summary: Mapping[str, Any]) -> str:
 def _cache_get(
     session_id: str, account_id: str, summary: Mapping[str, Any]
 ) -> Mapping[str, str] | None:
+    global _CACHE_HITS, _CACHE_MISSES
+    if not CLASSIFY_CACHE_ENABLED:
+        _CACHE_MISSES += 1
+        return None
     key = (session_id, account_id, summary_hash(summary))
-    entry = _CACHE.get(key)
-    if not entry:
+    item = _CACHE.get(key)
+    if not item:
+        _CACHE_MISSES += 1
         return None
-    if entry.ttl is not None and time.time() - entry.timestamp > entry.ttl:
+    value, ts = item
+    if CLASSIFY_CACHE_TTL_SEC > 0 and time.time() - ts > CLASSIFY_CACHE_TTL_SEC:
         _CACHE.pop(key, None)
+        _CACHE_MISSES += 1
+        global _CACHE_EVICTIONS
+        _CACHE_EVICTIONS += 1
         return None
-    return entry.value
+    _CACHE.move_to_end(key)
+    _CACHE_HITS += 1
+    return value
 
 
 def _cache_set(
@@ -58,10 +95,18 @@ def _cache_set(
     account_id: str,
     summary: Mapping[str, Any],
     value: Mapping[str, str],
-    ttl: float | None,
 ) -> None:
+    if not CLASSIFY_CACHE_ENABLED:
+        return
     key = (session_id, account_id, summary_hash(summary))
-    _CACHE[key] = _CacheEntry(value=value, timestamp=time.time(), ttl=ttl)
+    _prune_expired()
+    if key in _CACHE:
+        _CACHE.move_to_end(key)
+    _CACHE[key] = (value, time.time())
+    global _CACHE_EVICTIONS
+    while len(_CACHE) > CLASSIFY_CACHE_MAXSIZE:
+        _CACHE.popitem(last=False)
+        _CACHE_EVICTIONS += 1
 
 
 def invalidate_summary_cache(session_id: str, account_id: str | None = None) -> None:
@@ -72,6 +117,25 @@ def invalidate_summary_cache(session_id: str, account_id: str | None = None) -> 
     ]
     for k in keys:
         _CACHE.pop(k, None)
+
+
+def cache_hits() -> int:
+    return _CACHE_HITS
+
+
+def cache_misses() -> int:
+    return _CACHE_MISSES
+
+
+def cache_evictions() -> int:
+    return _CACHE_EVICTIONS
+
+
+def reset_cache() -> None:
+    """Clear cache and reset counters (for tests)."""
+    global _CACHE_HITS, _CACHE_MISSES, _CACHE_EVICTIONS
+    _CACHE.clear()
+    _CACHE_HITS = _CACHE_MISSES = _CACHE_EVICTIONS = 0
 
 
 _RULE_MAP = {
@@ -135,7 +199,6 @@ def classify_client_summary(
     *,
     session_id: str | None = None,
     account_id: str | None = None,
-    ttl: float | None = 24 * 3600,
 ) -> Mapping[str, str]:
     """Classify a structured summary into a dispute category and legal strategy.
 
@@ -174,7 +237,7 @@ def classify_client_summary(
         result["state_hook"] = _STATE_HOOKS[state]
     logger.info("Summary classification: %s -> %s", summary.get("account_id"), result)
     if session_id and account_id:
-        _cache_set(session_id, account_id, summary, result, ttl)
+        _cache_set(session_id, account_id, summary, result)
     return result
 
 
@@ -184,7 +247,6 @@ def classify_client_summaries(
     state: str | None = None,
     *,
     session_id: str | None = None,
-    ttl: float | None = 24 * 3600,
 ) -> Mapping[str, Mapping[str, str]]:
     """Classify multiple summaries in a single request.
 
@@ -236,7 +298,6 @@ def classify_client_summaries(
                     state,
                     session_id=session_id,
                     account_id=acc_id,
-                    ttl=ttl,
                 )
                 continue
 
@@ -248,7 +309,7 @@ def classify_client_summaries(
                 result["state_hook"] = _STATE_HOOKS[state]
             results[acc_id] = result
             if session_id and acc_id:
-                _cache_set(session_id, acc_id, summary, result, ttl)
+                _cache_set(session_id, acc_id, summary, result)
 
     return results
 
@@ -259,4 +320,8 @@ __all__ = [
     "invalidate_summary_cache",
     "summary_hash",
     "ClassificationRecord",
+    "cache_hits",
+    "cache_misses",
+    "cache_evictions",
+    "reset_cache",
 ]

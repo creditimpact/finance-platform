@@ -61,6 +61,9 @@ def test_call_ai_analysis_parses_json(tmp_path, monkeypatch):
     report_prompting = importlib.import_module(
         "backend.core.logic.report_analysis.report_prompting"
     )
+    from backend.core.logic.report_analysis import analysis_cache
+
+    analysis_cache.reset_cache()
     ra_flags.FLAGS.debug_store_raw = True
 
     assert ra_flags.FLAGS.debug_store_raw
@@ -74,7 +77,7 @@ def test_call_ai_analysis_parses_json(tmp_path, monkeypatch):
         ai_client=client,
         strategic_context="goal",
         request_id="req",
-        doc_fingerprint="fp",
+        doc_fingerprint="fp1",
     )
     assert data["inquiries"] == []
     assert data["prompt_version"] == report_prompting.ANALYSIS_PROMPT_VERSION
@@ -97,6 +100,9 @@ def test_call_ai_analysis_populates_defaults_and_logs(tmp_path, caplog):
     report_prompting = importlib.import_module(
         "backend.core.logic.report_analysis.report_prompting"
     )
+    from backend.core.logic.report_analysis import analysis_cache
+
+    analysis_cache.reset_cache()
 
     client = FakeAIClient()
     client.add_chat_response("{}")
@@ -109,7 +115,7 @@ def test_call_ai_analysis_populates_defaults_and_logs(tmp_path, caplog):
             ai_client=client,
             strategic_context="goal",
             request_id="req",
-            doc_fingerprint="fp",
+            doc_fingerprint="fp2",
         )
     assert data["negative_accounts"] == []
     assert data["summary_metrics"]["total_inquiries"] == 0
@@ -137,6 +143,9 @@ def test_call_ai_analysis_rejects_non_json(tmp_path, caplog):
     report_prompting = importlib.import_module(
         "backend.core.logic.report_analysis.report_prompting"
     )
+    from backend.core.logic.report_analysis import analysis_cache
+
+    analysis_cache.reset_cache()
 
     client = FakeAIClient()
     client.add_chat_response("not json")
@@ -148,7 +157,7 @@ def test_call_ai_analysis_rejects_non_json(tmp_path, caplog):
             out,
             ai_client=client,
             request_id="req",
-            doc_fingerprint="fp",
+            doc_fingerprint="fp3",
         )
     assert data["negative_accounts"] == []
     assert any(r.__dict__.get("validation_errors") for r in caplog.records)
@@ -169,6 +178,9 @@ def test_call_ai_analysis_merges_segments(tmp_path):
     report_prompting = importlib.import_module(
         "backend.core.logic.report_analysis.report_prompting"
     )
+    from backend.core.logic.report_analysis import analysis_cache
+
+    analysis_cache.reset_cache()
 
     client = FakeAIClient()
     client.add_chat_response(
@@ -185,7 +197,7 @@ def test_call_ai_analysis_merges_segments(tmp_path):
         out,
         ai_client=client,
         request_id="req",
-        doc_fingerprint="fp",
+        doc_fingerprint="fp4",
     )
     assert len(data["inquiries"]) == 2
     assert sorted(data["all_accounts"][0]["bureaus"]) == [
@@ -276,6 +288,9 @@ def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
     client.add_chat_response(response)
     client.add_chat_response(response)
 
+    from backend.core.logic.report_analysis import analysis_cache
+    analysis_cache.reset_cache()
+
     # Parsing stage
     monkeypatch.setattr(report_parsing, "extract_text_from_pdf", lambda p: "text")
     monkeypatch.setattr(analyze_report, "extract_inquiries", lambda text: [])
@@ -320,7 +335,7 @@ def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
         ai_client=client,
         strategic_context=default_goal,
         request_id="req",
-        doc_fingerprint="fp",
+        doc_fingerprint="fp5",
     )
 
     result = analyze_report.analyze_credit_report(

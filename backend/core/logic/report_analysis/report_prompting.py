@@ -97,6 +97,28 @@ def _split_text_by_bureau(text: str) -> Dict[str, str]:
     return segments
 
 
+def log_bureau_failure(
+    *,
+    error_code: str,
+    bureau: str,
+    expected_headings: int,
+    found_accounts: int,
+    tokens: int,
+    latency: float,
+) -> None:
+    """Emit structured failure log for alerting dashboards."""
+
+    payload = {
+        "error_code": error_code,
+        "bureau": bureau,
+        "expected_headings": expected_headings,
+        "found_accounts": found_accounts,
+        "tokens": tokens,
+        "latency": latency,
+    }
+    emit_event("bureau_failure", payload)
+
+
 def _generate_prompt(
     segment_text: str,
     *,
@@ -224,27 +246,36 @@ def _run_segment(
     prompt: str,
     late_summary_text: str,
     inquiry_summary: str,
-) -> tuple[dict, str | None]:
+) -> tuple[dict, str | None, int, int]:
     """Run the existing prompt/analysis flow for a single bureau segment.
 
-    Returns ``(data, error_code)`` where ``error_code`` is ``None`` on success or
-    one of ``BROKEN_JSON``, ``TIMEOUT``, ``EMPTY_OUTPUT`` for known failure
-    scenarios. Any unexpected exception will be logged and returned as its class
-    name.
+    Returns ``(data, error_code, tokens_in, tokens_out)`` where ``error_code`` is
+    ``None`` on success or one of ``BROKEN_JSON``, ``TIMEOUT``, ``EMPTY_OUTPUT``
+    for known failure scenarios. Any unexpected exception will be logged and
+    returned as its class name.
     """
+    tokens_in = tokens_out = 0
     try:
         response = ai_client.chat_completion(
             model=ANALYSIS_MODEL_VERSION,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
         )
+        usage = getattr(response, "usage", None)
+        if usage:
+            tokens_in = getattr(usage, "prompt_tokens", 0) or getattr(
+                usage, "input_tokens", 0
+            )
+            tokens_out = getattr(usage, "completion_tokens", 0) or getattr(
+                usage, "output_tokens", 0
+            )
     except TimeoutError:
         _validate_analysis_schema({})  # ensure validation errors get logged
-        return {}, "TIMEOUT"
+        return {}, "TIMEOUT", tokens_in, tokens_out
     except Exception as exc:  # pragma: no cover - defensive
         logging.exception("segment_call_failed", exc_info=exc)
         _validate_analysis_schema({})
-        return {}, type(exc).__name__
+        return {}, type(exc).__name__, tokens_in, tokens_out
 
     content = response.choices[0].message.content.strip()
 
@@ -265,15 +296,15 @@ def _run_segment(
 
     if not content:
         _validate_analysis_schema({})
-        return {}, "EMPTY_OUTPUT"
+        return {}, "EMPTY_OUTPUT", tokens_in, tokens_out
 
     data, parse_error = parse_json(content)
     if parse_error:
         data = _validate_analysis_schema({})
-        return data, "BROKEN_JSON"
+        return data, "BROKEN_JSON", tokens_in, tokens_out
 
     data = _validate_analysis_schema(data)
-    return data, None
+    return data, None, tokens_in, tokens_out
 
 
 def _merge_accounts(dest: List[dict], new: List[dict]) -> None:
@@ -368,6 +399,8 @@ def call_ai_analysis(
         tokens_in = tokens_out = 0
         while attempt < 3:
             attempt += 1
+            headings: List[tuple[str, str]] = []
+            attempt_start = time.time()
             try:
                 prompt, late_summary_text, inquiry_summary = _generate_prompt(
                     seg_text_attempt,
@@ -386,8 +419,9 @@ def call_ai_analysis(
                 if cache_entry is not None:
                     data = cache_entry
                     error_code = None
+                    tokens_in = tokens_out = 0
                 else:
-                    data, error_code = _run_segment(
+                    data, error_code, tokens_in, tokens_out = _run_segment(
                         seg_text_attempt,
                         is_identity_theft=is_identity_theft,
                         output_json_path=seg_path,
@@ -448,6 +482,17 @@ def call_ai_analysis(
             except Exception as exc:  # pragma: no cover - defensive
                 error_code = getattr(exc, "code", type(exc).__name__)
                 data = {}
+                tokens_in = tokens_out = 0
+            attempt_latency_ms = (time.time() - attempt_start) * 1000
+            if error_code:
+                log_bureau_failure(
+                    error_code=error_code,
+                    bureau=bureau,
+                    expected_headings=len(headings),
+                    found_accounts=len(data.get("all_accounts", [])),
+                    tokens=tokens_in + tokens_out,
+                    latency=attempt_latency_ms,
+                )
 
             logging.info(
                 "analysis_attempt",

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Mapping, Protocol
 
 from backend.audit.audit import emit_event
+from backend.analytics.analytics_tracker import emit_counter
 
 
 class Rulebook(Protocol):
@@ -14,9 +15,16 @@ class Rulebook(Protocol):
 def neutralize_admissions(statement: str) -> str:
     """Return a legally safe version of ``statement``.
 
-    This is currently a stub that returns the statement unchanged.
+    Currently performs a minimal replacement of first-person admissions and
+    emits a metrics counter when a change occurs.
     """
 
+    lowered = statement.lower()
+    if "i was late" in lowered:
+        emit_counter("stage_2_5.admission_neutralized")
+        return statement.replace("I was", "The consumer was").replace(
+            "i was", "The consumer was"
+        )
     return statement
 
 
@@ -25,10 +33,15 @@ def evaluate_rules(
 ) -> Dict[str, list]:
     """Evaluate ``normalized_statement`` against the ``rulebook``.
 
-    This stub returns empty results.
+    Emits a metrics counter and returns basic ``red_flags`` if admissions are
+    detected. The rulebook argument is accepted for future expansion.
     """
 
-    return {"rule_hits": [], "needs_evidence": [], "red_flags": []}
+    emit_counter("stage_2_5.rules_applied")
+    red_flags: list[str] = []
+    if "late" in normalized_statement.lower():
+        red_flags.append("late_payment")
+    return {"rule_hits": [], "needs_evidence": [], "red_flags": red_flags}
 
 
 def normalize_and_tag(

@@ -22,6 +22,28 @@ _AI_METRICS: Dict[str, float] = {
     "latency_ms": 0.0,
 }
 
+# Generic counters -----------------------------------------------------------
+
+_COUNTERS: Dict[str, int] = {}
+
+
+def emit_counter(name: str, increment: int = 1) -> None:
+    """Increment a named counter for analytics."""
+
+    _COUNTERS[name] = _COUNTERS.get(name, 0) + increment
+
+
+def get_counters() -> Dict[str, int]:
+    """Return current generic counters (for tests)."""
+
+    return _COUNTERS.copy()
+
+
+def reset_counters() -> None:
+    """Reset generic counters (for tests)."""
+
+    _COUNTERS.clear()
+
 
 def _write_cache_snapshot() -> None:
     """Persist current cache metrics to ``analytics_data`` and reset counters."""

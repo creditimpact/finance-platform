@@ -1,9 +1,89 @@
+import atexit
 import json
 import logging
-from backend.api import config
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Optional
+
+from backend.api import config
+
+# Cache metrics --------------------------------------------------------------
+
+_CACHE_METRICS: Dict[str, int] = {"hits": 0, "misses": 0, "evictions": 0}
+_OPS = 0
+_SNAPSHOT_INTERVAL = 100
+
+
+def _write_cache_snapshot() -> None:
+    """Persist current cache metrics to ``analytics_data`` and reset counters."""
+
+    global _OPS
+    analytics_dir = Path("analytics_data")
+    analytics_dir.mkdir(exist_ok=True)
+
+    now = datetime.now()
+    filename = analytics_dir / f"cache_{now.strftime('%Y-%m-%d_%H-%M-%S')}.json"
+
+    payload = {"timestamp": now.isoformat(), "cache": _CACHE_METRICS.copy()}
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+    for k in _CACHE_METRICS:
+        _CACHE_METRICS[k] = 0
+    _OPS = 0
+
+
+def _maybe_flush() -> None:
+    if _OPS >= _SNAPSHOT_INTERVAL:
+        _write_cache_snapshot()
+
+
+def _log_cache_event(key: str) -> None:
+    global _OPS
+    _CACHE_METRICS[key] += 1
+    _OPS += 1
+    _maybe_flush()
+
+
+def log_cache_hit() -> None:
+    """Record a classification cache hit."""
+
+    _log_cache_event("hits")
+
+
+def log_cache_miss() -> None:
+    """Record a classification cache miss."""
+
+    _log_cache_event("misses")
+
+
+def log_cache_eviction() -> None:
+    """Record a classification cache eviction."""
+
+    _log_cache_event("evictions")
+
+
+def get_cache_stats() -> Dict[str, int]:
+    """Return current cache metrics (for tests)."""
+
+    return _CACHE_METRICS.copy()
+
+
+def reset_cache_counters() -> None:
+    """Reset cache metrics (for tests)."""
+
+    global _OPS
+    for k in _CACHE_METRICS:
+        _CACHE_METRICS[k] = 0
+    _OPS = 0
+
+
+def _flush_on_exit() -> None:
+    if _OPS:
+        _write_cache_snapshot()
+
+
+atexit.register(_flush_on_exit)
 
 
 def save_analytics_snapshot(

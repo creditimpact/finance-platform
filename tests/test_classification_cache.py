@@ -1,6 +1,7 @@
 import importlib
 import time
 
+from backend.analytics import analytics_tracker
 from backend.core.logic.compliance.rules_loader import recompute_rules_version
 from backend.core.logic.letters.generate_custom_letters import (
     call_gpt_for_custom_letter,
@@ -188,6 +189,24 @@ def test_cache_ttl_expiry(monkeypatch):
     assert sc.cache_misses() == 2
     assert sc.cache_evictions() >= 1
     assert len(ai.chat_payloads) == 2
+
+
+def test_analytics_tracker_records_cache_events(monkeypatch):
+    analytics_tracker.reset_cache_counters()
+    sc = _reload_classifier(monkeypatch, CLASSIFY_CACHE_TTL_SEC="1")
+    ai = FakeAIClient()
+    summary = {"account_id": "1", "facts_summary": "a", "claimed_errors": []}
+    ai.add_response('{"category": "not_mine"}')
+    sc.classify_client_summary(summary, ai_client=ai, session_id="s", account_id="1")
+    ai.add_response('{"category": "not_mine"}')
+    sc.classify_client_summary(summary, ai_client=ai, session_id="s", account_id="1")
+    time.sleep(1.1)
+    ai.add_response('{"category": "not_mine"}')
+    sc.classify_client_summary(summary, ai_client=ai, session_id="s", account_id="1")
+    stats = analytics_tracker.get_cache_stats()
+    assert stats["hits"] == 1
+    assert stats["misses"] == 2
+    assert stats["evictions"] == 1
 
 
 def test_rules_version_mismatch_triggers_reclassify(monkeypatch):

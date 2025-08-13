@@ -7,6 +7,11 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Mapping, Tuple
 
+from backend.analytics.analytics_tracker import (
+    log_cache_eviction,
+    log_cache_hit,
+    log_cache_miss,
+)
 from backend.core.logic.compliance.rules_loader import recompute_rules_version
 from backend.core.logic.utils.json_utils import parse_json
 from backend.core.services.ai_client import AIClient
@@ -51,6 +56,7 @@ def _prune_expired() -> None:
     for k in keys:
         _CACHE.pop(k, None)
         _CACHE_EVICTIONS += 1
+        log_cache_eviction()
 
 
 @dataclass
@@ -84,21 +90,26 @@ def _cache_get(
     global _CACHE_HITS, _CACHE_MISSES
     if not CLASSIFY_CACHE_ENABLED:
         _CACHE_MISSES += 1
+        log_cache_miss()
         return None
     key = (session_id, account_id, summary_hash(summary), state or "", rules_version)
     item = _CACHE.get(key)
     if not item:
         _CACHE_MISSES += 1
+        log_cache_miss()
         return None
     value, ts = item
     if CLASSIFY_CACHE_TTL_SEC > 0 and time.time() - ts > CLASSIFY_CACHE_TTL_SEC:
         _CACHE.pop(key, None)
         _CACHE_MISSES += 1
+        log_cache_miss()
         global _CACHE_EVICTIONS
         _CACHE_EVICTIONS += 1
+        log_cache_eviction()
         return None
     _CACHE.move_to_end(key)
     _CACHE_HITS += 1
+    log_cache_hit()
     return value
 
 
@@ -121,6 +132,7 @@ def _cache_set(
     while len(_CACHE) > CLASSIFY_CACHE_MAXSIZE:
         _CACHE.popitem(last=False)
         _CACHE_EVICTIONS += 1
+        log_cache_eviction()
 
 
 def invalidate_summary_cache(session_id: str, account_id: str | None = None) -> None:

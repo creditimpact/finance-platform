@@ -614,7 +614,7 @@ def run_credit_repair_process(
                 else {}
             )
             stage_2_5[acc_id] = normalize_and_tag(
-                account_cls, facts_map.get(acc_id, {}), rulebook
+                account_cls, facts_map.get(acc_id, {}), rulebook, account_id=acc_id
             )
         if session_id:
             update_session(session_id, stage_2_5=stage_2_5)

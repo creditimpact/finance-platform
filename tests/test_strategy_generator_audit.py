@@ -5,8 +5,8 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from backend.audit.audit import create_audit_logger
-from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
 from backend.core.logic.compliance.constants import StrategistFailureReason
+from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
 from tests.helpers.fake_ai_client import FakeAIClient
 
 

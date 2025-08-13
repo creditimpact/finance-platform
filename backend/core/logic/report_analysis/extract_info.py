@@ -1,11 +1,13 @@
-import re
-import pdfplumber
 import logging
-from typing import Dict, List, Mapping
-from backend.core.logic.utils.names_normalization import normalize_bureau_name, BUREAUS
+import re
 from collections import Counter
-from backend.core.services.ai_client import AIClient
+from typing import Dict, List, Mapping
+
+import pdfplumber
+
 from backend.core.logic.utils.json_utils import parse_json
+from backend.core.logic.utils.names_normalization import BUREAUS, normalize_bureau_name
+from backend.core.services.ai_client import AIClient
 
 logging.getLogger("pdfplumber.page").setLevel(logging.ERROR)
 

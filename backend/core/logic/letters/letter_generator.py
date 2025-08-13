@@ -14,31 +14,30 @@ from pathlib import Path
 from typing import Any, List, Mapping
 
 from backend.audit.audit import AuditLevel, AuditLogger
-from backend.core.logic.utils.note_handling import get_client_address_lines
-
-from backend.core.logic.utils.names_normalization import normalize_creditor_name
-from backend.core.logic.strategy.strategy_engine import generate_strategy
+from backend.core.logic.compliance.compliance_pipeline import (
+    DEFAULT_DISPUTE_REASON,
+    ESCALATION_NOTE,
+    adapt_gpt_output,
+    run_compliance_pipeline,
+    sanitize_client_info,
+    sanitize_disputes,
+)
 from backend.core.logic.guardrails.summary_validator import (
     validate_structured_summaries,
 )
+from backend.core.logic.rendering import pdf_renderer
+from backend.core.logic.rendering.letter_rendering import render_dispute_letter_html
+from backend.core.logic.strategy.strategy_engine import generate_strategy
+from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+from backend.core.logic.utils.names_normalization import normalize_creditor_name
+from backend.core.logic.utils.note_handling import get_client_address_lines
+from backend.core.models import BureauPayload, ClientInfo
+from backend.core.models.account import Account, Inquiry
+from backend.core.models.letter import LetterAccount, LetterArtifact, LetterContext
+from backend.core.services.ai_client import AIClient
+
 from .dispute_preparation import prepare_disputes_and_inquiries
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
-from backend.core.logic.strategy.summary_classifier import ClassificationRecord
-from backend.core.models.letter import LetterContext, LetterArtifact, LetterAccount
-from backend.core.models.account import Account, Inquiry
-from backend.core.models import ClientInfo, BureauPayload
-from backend.core.services.ai_client import AIClient
-from backend.core.logic.rendering.letter_rendering import render_dispute_letter_html
-from backend.core.logic.rendering import pdf_renderer
-from backend.core.logic.compliance.compliance_pipeline import (
-    run_compliance_pipeline,
-    adapt_gpt_output,
-    sanitize_client_info,
-    sanitize_disputes,
-    DEFAULT_DISPUTE_REASON,
-    ESCALATION_NOTE,
-)
-
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple, Mapping
+from typing import Any, Dict, List, Mapping, Tuple
 
 from backend.core.logic.strategy.fallback_manager import determine_fallback_action
 from backend.core.logic.utils.names_normalization import normalize_creditor_name

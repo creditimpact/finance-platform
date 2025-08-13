@@ -1,16 +1,16 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Mapping
+from typing import Any, Dict, List, Mapping, Optional
 
-from backend.core.logic.utils.names_normalization import (
-    normalize_creditor_name,
-    normalize_bureau_name,
-)
-from backend.core.logic.utils.text_parsing import enforce_collection_status
-from backend.core.logic.strategy.fallback_manager import determine_fallback_action
 from backend.audit.audit import AuditLogger
 from backend.core.logic.compliance.constants import FallbackReason
+from backend.core.logic.strategy.fallback_manager import determine_fallback_action
+from backend.core.logic.utils.names_normalization import (
+    normalize_bureau_name,
+    normalize_creditor_name,
+)
+from backend.core.logic.utils.text_parsing import enforce_collection_status
 
 BUREAUS = ["Experian", "Equifax", "TransUnion"]
 

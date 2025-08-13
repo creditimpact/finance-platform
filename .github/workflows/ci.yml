@@ -21,4 +21,3 @@ jobs:
         run: python tools/import_sanity_check.py
       - name: Run tests
         run: DISABLE_PDF_RENDER=true pytest -q
-

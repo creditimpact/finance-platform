@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from backend.api.session_manager import update_session, get_session, update_intake
+from backend.api.session_manager import get_session, update_intake, update_session
 from backend.core.logic.strategy.strategy_engine import generate_strategy
 
 

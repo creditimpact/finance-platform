@@ -1,9 +1,8 @@
 import re
 from typing import Any, Mapping
 
-from backend.core.services.ai_client import AIClient
-
 from backend.core.logic.utils.json_utils import parse_json
+from backend.core.services.ai_client import AIClient
 
 _PROFANITY = [
     "damn",

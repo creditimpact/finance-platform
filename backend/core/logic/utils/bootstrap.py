@@ -22,8 +22,9 @@ def extract_all_accounts(sections: Mapping[str, Any]) -> List[dict]:
     Accounts are considered the same only when key fields match. This prevents
     different accounts from the same creditor from being merged together.
     """
-    from datetime import datetime
     import re
+    from datetime import datetime
+
     from backend.core.logic.utils.names_normalization import normalize_creditor_name
 
     def sanitize_number(num: str | None) -> str:

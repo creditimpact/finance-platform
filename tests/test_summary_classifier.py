@@ -1,8 +1,8 @@
 import json
 
 from backend.core.logic.strategy.summary_classifier import (
-    classify_client_summary,
     classify_client_summaries,
+    classify_client_summary,
     invalidate_summary_cache,
     reset_cache,
 )
@@ -65,9 +65,7 @@ def test_empty_summary_bypasses_ai():
 
 def test_batch_classification():
     ai = FakeAIClient()
-    ai.add_response(
-        '{"1": {"category": "not_mine"}, "2": {"category": "goodwill"}}'
-    )
+    ai.add_response('{"1": {"category": "not_mine"}, "2": {"category": "goodwill"}}')
     summaries = [
         {"account_id": "1", "facts_summary": "not mine", "claimed_errors": []},
         {"account_id": "2", "facts_summary": "goodwill", "claimed_errors": []},
@@ -110,9 +108,15 @@ def test_batch_fallback_missing_items_preserves_map():
     ai.add_response('{"category": "goodwill"}')
     ai.add_response('{"category": "identity_theft"}')
     summaries = [
-        {"account_id": str(i), "facts_summary": "not mine", "claimed_errors": []}
-        if i <= 8
-        else {"account_id": str(i), "facts_summary": "mystery", "claimed_errors": []}
+        (
+            {"account_id": str(i), "facts_summary": "not mine", "claimed_errors": []}
+            if i <= 8
+            else {
+                "account_id": str(i),
+                "facts_summary": "mystery",
+                "claimed_errors": [],
+            }
+        )
         for i in range(1, 11)
     ]
     res = classify_client_summaries(summaries, ai_client=ai)

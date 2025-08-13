@@ -1,7 +1,7 @@
-from pathlib import Path
+import importlib
 import sys
 import types
-import importlib
+from pathlib import Path
 
 import pytest
 
@@ -14,7 +14,9 @@ def test_extract_text_from_pdf_calls_pdf_ops(monkeypatch):
     called = {}
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [
-        str(Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils")
+        str(
+            Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils"
+        )
     ]
     sys.modules["backend.core.logic.utils"] = utils_pkg
 
@@ -41,7 +43,9 @@ def test_extract_text_from_pdf_calls_pdf_ops(monkeypatch):
 def test_call_ai_analysis_parses_json(tmp_path):
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [
-        str(Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils")
+        str(
+            Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils"
+        )
     ]
     sys.modules["backend.core.logic.utils"] = utils_pkg
 
@@ -65,7 +69,9 @@ def test_call_ai_analysis_parses_json(tmp_path):
 def test_sanitize_late_counts_removes_unrealistic():
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [
-        str(Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils")
+        str(
+            Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils"
+        )
     ]
     sys.modules["backend.core.logic.utils"] = utils_pkg
 
@@ -83,7 +89,9 @@ def test_sanitize_late_counts_removes_unrealistic():
 def test_merge_parser_inquiries():
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [
-        str(Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils")
+        str(
+            Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils"
+        )
     ]
     sys.modules["backend.core.logic.utils"] = utils_pkg
 
@@ -112,7 +120,9 @@ def test_merge_parser_inquiries():
 def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [
-        str(Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils")
+        str(
+            Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils"
+        )
     ]
     sys.modules["backend.core.logic.utils"] = utils_pkg
 
@@ -200,9 +210,7 @@ def test_analyze_credit_report_skips_ai(monkeypatch, tmp_path):
         raise AssertionError("AI should not be called")
 
     monkeypatch.setattr(report_prompting, "call_ai_analysis", boom)
-    monkeypatch.setattr(
-        report_parsing, "extract_text_from_pdf", lambda p: "dummy text"
-    )
+    monkeypatch.setattr(report_parsing, "extract_text_from_pdf", lambda p: "dummy text")
 
     result = analyze_report.analyze_credit_report(
         tmp_path / "dummy.pdf",

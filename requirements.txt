@@ -18,4 +18,3 @@ dirtyjson
 json-repair
 pyyaml
 pytest-env
-

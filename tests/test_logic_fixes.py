@@ -1,11 +1,12 @@
 """Regression tests for logic modules."""
 
 # ruff: noqa: E402
+import json
 import sys
 import types
-import json
 from pathlib import Path
 from unittest import mock
+
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -38,14 +39,18 @@ sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__:
 sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None))
 
 import backend.core.logic.rendering.instructions_generator as instructions_generator
-from backend.core.logic.letters.generate_goodwill_letters import generate_goodwill_letters
-from backend.core.logic.letters.letter_generator import generate_dispute_letters_for_all_bureaus
-from tests.helpers.fake_ai_client import FakeAIClient
+from backend.core.logic.letters.generate_goodwill_letters import (
+    generate_goodwill_letters,
+)
+from backend.core.logic.letters.letter_generator import (
+    generate_dispute_letters_for_all_bureaus,
+)
 from backend.core.logic.report_analysis.process_accounts import process_analyzed_report
 from backend.core.logic.utils.text_parsing import (
-    extract_late_history_blocks,
     extract_account_blocks,
+    extract_late_history_blocks,
 )
+from tests.helpers.fake_ai_client import FakeAIClient
 
 
 def test_dedup_without_numbers():
@@ -446,6 +451,7 @@ def test_letter_duplicate_accounts_removed():
         mock_d.side_effect = _cb
         fake = FakeAIClient()
         from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+
         classification_map = {"1": ClassificationRecord({}, {"category": "late"}, "")}
         with pytest.warns(UserWarning):
             generate_dispute_letters_for_all_bureaus(
@@ -524,6 +530,7 @@ def test_partial_account_number_deduplication():
         mock_d.side_effect = _cb
         fake = FakeAIClient()
         from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+
         classification_map = {"1": ClassificationRecord({}, {"category": "late"}, "")}
         with pytest.warns(UserWarning):
             generate_dispute_letters_for_all_bureaus(

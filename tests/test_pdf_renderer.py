@@ -1,6 +1,5 @@
-from pathlib import Path
 import types
-
+from pathlib import Path
 
 from backend.core.logic.rendering import pdf_renderer
 

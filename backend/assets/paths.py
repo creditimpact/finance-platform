@@ -7,7 +7,6 @@ throughout the codebase.
 
 from pathlib import Path
 
-
 ASSETS_ROOT = Path(__file__).parent
 
 
@@ -29,4 +28,3 @@ def fonts_path(name: str) -> str:
 def static_path(name: str) -> str:
     """Return the absolute path to a static asset."""
     return str(ASSETS_ROOT / "static" / name)
-

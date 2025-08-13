@@ -3,12 +3,16 @@ import types
 
 sys.modules["pdfkit"] = types.SimpleNamespace(configuration=lambda **kwargs: None)
 
-from backend.audit.audit import create_audit_logger  # noqa: E402
 from backend.analytics.analytics.strategist_failures import (  # noqa: E402
     tally_failure_reasons,
 )
-from backend.core.logic.compliance.constants import StrategistFailureReason  # noqa: E402
-from backend.core.logic.strategy.strategy_merger import merge_strategy_data  # noqa: E402
+from backend.audit.audit import create_audit_logger  # noqa: E402
+from backend.core.logic.compliance.constants import (  # noqa: E402
+    StrategistFailureReason,
+)
+from backend.core.logic.strategy.strategy_merger import (  # noqa: E402
+    merge_strategy_data,
+)
 from backend.core.models.account import Account  # noqa: E402
 from backend.core.models.strategy import StrategyPlan  # noqa: E402
 

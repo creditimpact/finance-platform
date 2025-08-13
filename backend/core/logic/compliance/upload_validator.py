@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import pdfplumber
 
 MIN_TEXT_CHARS = 300

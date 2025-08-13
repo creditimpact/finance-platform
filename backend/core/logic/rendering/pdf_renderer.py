@@ -23,7 +23,11 @@ def ensure_template_env(base_template_dir: Optional[str] = None) -> Environment:
         _template_env is None
         or getattr(_template_env.loader, "searchpath", [None])[0] != base_dir
     ):
-        _template_env = Environment(loader=FileSystemLoader(base_dir))
+        _template_env = Environment(
+            loader=FileSystemLoader(base_dir),
+            trim_blocks=True,
+            lstrip_blocks=True,
+        )
     return _template_env
 
 

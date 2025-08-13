@@ -4,8 +4,6 @@ import os
 from pathlib import Path
 from typing import Any, Iterable, List, Tuple
 
-from backend.assets.paths import fonts_path
-
 
 def extract_pdf_text_safe(pdf_path: Path, max_chars: int = 150000) -> str:
     """Return text from *pdf_path* while avoiding heavy dependencies at import time.
@@ -44,7 +42,9 @@ def convert_txts_to_pdfs(folder: Path):
     """
     # --- Guardrail for test mode / CI ---
     if os.getenv("DISABLE_PDF_RENDER", "").lower() in ("1", "true", "yes"):
-        print("[INFO] PDF rendering disabled via DISABLE_PDF_RENDER – skipping conversion.")
+        print(
+            "[INFO] PDF rendering disabled via DISABLE_PDF_RENDER – skipping conversion."
+        )
         return
 
     # Import locally so tests that skip PDF don't even load the lib
@@ -73,6 +73,7 @@ def convert_txts_to_pdfs(folder: Path):
 
 
 # --- Supporting docs utilities (used by goodwill_prompting / gpt_prompting etc.) ---
+
 
 def _iter_candidate_paths(sources: Any) -> Iterable[Path]:
     """
@@ -209,4 +210,3 @@ def gather_supporting_docs_text(sources: Any, max_chars: int = 4000) -> str:
     if len(blob) > max_chars:
         blob = blob[:max_chars] + "\n\n[TRUNCATED]"
     return blob
-

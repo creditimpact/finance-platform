@@ -1,11 +1,11 @@
+import importlib
 import json
 import sys
 from pathlib import Path
-import importlib
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from backend.api.session_manager import get_session, get_intake
+from backend.api.session_manager import get_intake, get_session
 
 
 def test_explanations_endpoint_stores_raw_and_structured(monkeypatch):

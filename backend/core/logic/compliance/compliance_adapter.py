@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any, Iterable, List, Set, Tuple, Mapping, MutableMapping
+from typing import Any, Iterable, List, Mapping, MutableMapping, Set, Tuple
 
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.logic.utils.text_parsing import CHARGEOFF_RE
 from backend.core.models.client import ClientInfo
-
 
 # Default dispute reason inserted when no custom note is provided.
 DEFAULT_DISPUTE_REASON = (

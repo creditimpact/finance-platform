@@ -1,18 +1,19 @@
-from flask import (
-    Blueprint,
-    render_template,
-    request,
-    redirect,
-    url_for,
-    session,
-    send_file,
-    abort,
-)
-from pathlib import Path
 import io
 import zipfile
+from pathlib import Path
 
+from flask import (
+    Blueprint,
+    abort,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    session,
+    url_for,
+)
 from telegram_alert import send_admin_login_alert
+
 from backend.api.config import get_app_config
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")

@@ -44,10 +44,14 @@ sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__:
 sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None))
 # -------------------------------------------------------------------
 
+from backend.core.logic.letters.letter_generator import (
+    generate_dispute_letters_for_all_bureaus,
+)
+from backend.core.logic.rendering.instructions_generator import (
+    generate_instruction_file,
+)
 from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
 from tests.helpers.fake_ai_client import FakeAIClient
-from backend.core.logic.letters.letter_generator import generate_dispute_letters_for_all_bureaus
-from backend.core.logic.rendering.instructions_generator import generate_instruction_file
 
 
 def test_full_letter_workflow():
@@ -173,6 +177,7 @@ def test_full_letter_workflow():
         out_dir = Path("output/test_flow")
         fake = FakeAIClient()
         from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+
         classification_map = {"a": ClassificationRecord({}, {"category": "late"}, "")}
         generate_dispute_letters_for_all_bureaus(
             client_info,

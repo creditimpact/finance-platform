@@ -45,7 +45,7 @@ def _basic_clean(content: str) -> str:
     cleaned = _UNQUOTED_KEY_RE.sub(
         lambda m: f'{m.group("prefix")}"{m.group("key")}"', cleaned
     )
-    cleaned = _MISSING_COMMA_VALUE_RE.sub(r'\1\2,\3', cleaned)
+    cleaned = _MISSING_COMMA_VALUE_RE.sub(r"\1\2,\3", cleaned)
     return cleaned
 
 

@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from backend.core.models.account import Account, Inquiry
-from backend.core.models.letter import LetterContext, LetterAccount
+from backend.core.models.letter import LetterAccount, LetterContext
 
 
 def test_account_roundtrip():

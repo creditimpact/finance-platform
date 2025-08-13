@@ -6,16 +6,16 @@ import re
 from typing import Optional
 
 from backend.core.logic.guardrails import fix_draft_with_guardrails
-from backend.core.services.ai_client import AIClient
 from backend.core.models.letter import LetterArtifact
+from backend.core.services.ai_client import AIClient
 
 # Re-export existing compliance helpers for compatibility
 from .compliance_adapter import (
+    DEFAULT_DISPUTE_REASON,
+    ESCALATION_NOTE,
     adapt_gpt_output,
     sanitize_client_info,
     sanitize_disputes,
-    DEFAULT_DISPUTE_REASON,
-    ESCALATION_NOTE,
 )
 
 

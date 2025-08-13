@@ -45,23 +45,27 @@ for path in TARGETS:
                     base = ann
                 if isinstance(base, ast.Name) and base.id in {"dict", "Dict"}:
                     suggested = SUGGESTIONS.get(arg.arg, "?")
-                    results.append({
-                        "module": mod,
-                        "function": func,
-                        "signature": f"param:{arg.arg}",
-                        "suggested_model": suggested,
-                    })
+                    results.append(
+                        {
+                            "module": mod,
+                            "function": func,
+                            "signature": f"param:{arg.arg}",
+                            "suggested_model": suggested,
+                        }
+                    )
             # return annotation
             if node.returns:
                 ret = node.returns
                 base = ret.value if isinstance(ret, ast.Subscript) else ret
                 if isinstance(base, ast.Name) and base.id in {"dict", "Dict"}:
-                    results.append({
-                        "module": mod,
-                        "function": func,
-                        "signature": "return",
-                        "suggested_model": "?",
-                    })
+                    results.append(
+                        {
+                            "module": mod,
+                            "function": func,
+                            "signature": "return",
+                            "suggested_model": "?",
+                        }
+                    )
 
 outfile = BASE_DIR / "dict_api_inventory.json"
 outfile.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")

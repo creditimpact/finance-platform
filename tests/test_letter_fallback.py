@@ -1,13 +1,14 @@
-from pathlib import Path
 import json
 import sys
+from pathlib import Path
+
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from backend.core.logic.letters.letter_generator import (
-    generate_all_dispute_letters_with_ai,
     DEFAULT_DISPUTE_REASON,
+    generate_all_dispute_letters_with_ai,
 )
 from tests.helpers.fake_ai_client import FakeAIClient
 

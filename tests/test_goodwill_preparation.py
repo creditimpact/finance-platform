@@ -1,6 +1,7 @@
 from backend.core.logic.letters.goodwill_preparation import (
-    prepare_account_summaries, select_goodwill_candidates)
-from tests.helpers.fake_ai_client import FakeAIClient
+    prepare_account_summaries,
+    select_goodwill_candidates,
+)
 
 
 def test_select_goodwill_candidates_detects_late_accounts():
@@ -32,6 +33,7 @@ def test_prepare_account_summaries_merges_and_enriches():
         ClassificationRecord,
         summary_hash,
     )
+
     record = ClassificationRecord(
         structured["a1"],
         {

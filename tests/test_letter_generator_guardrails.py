@@ -1,15 +1,14 @@
 import json
-from pathlib import Path
-
 import sys
+from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from backend.api.session_manager import get_session, update_session
 from backend.core.logic.guardrails import (
-    generate_letter_with_guardrails,
     fix_draft_with_guardrails,
+    generate_letter_with_guardrails,
 )
-from backend.api.session_manager import update_session, get_session
 from tests.helpers.fake_ai_client import FakeAIClient
 
 

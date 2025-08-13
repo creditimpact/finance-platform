@@ -1,9 +1,10 @@
 import pytest
+
+from backend.core.models import BureauPayload
 from backend.core.orchestrators import (
     extract_problematic_accounts_from_report,
     extract_problematic_accounts_from_report_dict,
 )
-from backend.core.models import BureauPayload
 
 
 def _mock_dependencies(monkeypatch, sections):

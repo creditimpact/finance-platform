@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, List, Dict
 import logging
+from dataclasses import dataclass
+from typing import Any, Dict, List
 
 from openai import OpenAI
 
@@ -84,6 +84,7 @@ def get_default_ai_client() -> AIClient:  # pragma: no cover - backwards compat
         "get_default_ai_client() has been removed. Build an AIClient via"
         " services.ai_client.build_ai_client and pass it explicitly."
     )
+
 
 class _StubAIClient:
     """Fallback AI client used when configuration is missing."""

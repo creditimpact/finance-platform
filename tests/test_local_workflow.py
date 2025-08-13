@@ -1,9 +1,9 @@
 """Integration-style tests for local workflow."""
 
 # ruff: noqa: E402
+import os
 import sys
 import types
-import os
 from pathlib import Path
 from unittest import mock
 
@@ -44,16 +44,16 @@ sys.modules.setdefault("fpdf", types.SimpleNamespace(FPDF=object))
 sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__: None))
 sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None))
 
-from backend.core.logic.letters.letter_generator import (
-    generate_dispute_letters_for_all_bureaus,
-)  # noqa: E402
-from backend.core.logic.letters.generate_goodwill_letters import (
-    generate_goodwill_letters,
-)  # noqa: E402
-from backend.core.logic.rendering.instructions_generator import (
-    generate_instruction_file,
-)  # noqa: E402
 import backend.core.logic.rendering.instructions_generator as instructions_generator  # noqa: E402
+from backend.core.logic.letters.generate_goodwill_letters import (  # noqa: E402
+    generate_goodwill_letters,
+)
+from backend.core.logic.letters.letter_generator import (  # noqa: E402
+    generate_dispute_letters_for_all_bureaus,
+)
+from backend.core.logic.rendering.instructions_generator import (  # noqa: E402
+    generate_instruction_file,
+)
 from tests.helpers.fake_ai_client import FakeAIClient  # noqa: E402
 
 
@@ -165,8 +165,8 @@ def test_minimal_workflow():
 
         out_dir = Path("output/test_local")
         fake = FakeAIClient()
-        from backend.core.models import ClientInfo, BureauPayload
         from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+        from backend.core.models import BureauPayload, ClientInfo
 
         client = ClientInfo.from_dict(client_info)
         bureau_models = {k: BureauPayload.from_dict(v) for k, v in bureau_data.items()}
@@ -217,9 +217,9 @@ def test_minimal_workflow():
 
 def test_skip_goodwill_when_identity_theft():
     import tempfile
-    from backend.core.orchestrators import run_credit_repair_process
 
     from backend.core.models import ClientInfo, ProofDocuments
+    from backend.core.orchestrators import run_credit_repair_process
 
     client_info = ClientInfo.from_dict(
         {
@@ -274,7 +274,8 @@ def test_skip_goodwill_when_identity_theft():
             mock.patch("orchestrators.send_email_with_attachment"),
             mock.patch("orchestrators.save_analytics_snapshot"),
             mock.patch(
-                "backend.core.logic.utils.bootstrap.extract_all_accounts", return_value=[]
+                "backend.core.logic.utils.bootstrap.extract_all_accounts",
+                return_value=[],
             ),
             mock.patch(
                 "backend.core.logic.compliance.upload_validator.move_uploaded_file",

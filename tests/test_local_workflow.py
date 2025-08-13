@@ -230,6 +230,7 @@ def test_skip_goodwill_when_identity_theft():
     )
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         proofs = ProofDocuments.from_dict({"smartcredit_report": tmp.name})
+        stage_2_5 = {}
         with (
             mock.patch.dict(
                 os.environ,
@@ -245,15 +246,6 @@ def test_skip_goodwill_when_identity_theft():
                 "orchestrators.process_client_intake", return_value=("session", {}, {})
             ),
             mock.patch("orchestrators.classify_client_responses", return_value={}),
-            mock.patch(
-                "orchestrators.analyze_credit_report",
-                return_value=(
-                    Path(tmp.name),
-                    {},
-                    {"Experian": {}},
-                    Path(tmp.name).parent,
-                ),
-            ),
             mock.patch("orchestrators.generate_strategy_plan", return_value={}),
             mock.patch(
                 "services.ai_client.build_ai_client", return_value=FakeAIClient()
@@ -287,8 +279,22 @@ def test_skip_goodwill_when_identity_theft():
             ),
             mock.patch("orchestrators.save_log_file"),
             mock.patch("shutil.copyfile"),
+            mock.patch(
+                "orchestrators.analyze_credit_report",
+                return_value=(
+                    Path(tmp.name),
+                    {"negative_accounts": [{"account_id": "1"}]},
+                    {"Experian": {}},
+                    Path(tmp.name).parent,
+                ),
+            ),
+            mock.patch(
+                "orchestrators.update_session",
+                side_effect=lambda s, **k: stage_2_5.update(k.get("stage_2_5", {})) or {},
+            ),
         ):
             run_credit_repair_process(client_info, proofs, True)
         assert not mock_goodwill.called
+        assert stage_2_5["1"]["legal_safe_summary"] == "No statement provided"
     if os.path.exists(tmp.name):
         os.remove(tmp.name)

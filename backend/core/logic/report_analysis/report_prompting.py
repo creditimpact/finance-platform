@@ -35,8 +35,10 @@ _OUTPUT_COST_PER_TOKEN = 0.03 / 1000
 _SCHEMA_PATH = Path(__file__).with_name("analysis_schema.json")
 _ANALYSIS_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
 _ANALYSIS_VALIDATOR = Draft7Validator(_ANALYSIS_SCHEMA)
-
-ANALYSIS_PROMPT_VERSION = 1
+# ANALYSIS_PROMPT_VERSION history:
+# 2: Add explicit JSON directive (Task 8)
+# 1: Initial version
+ANALYSIS_PROMPT_VERSION = 2
 ANALYSIS_SCHEMA_VERSION = 1
 
 
@@ -153,6 +155,8 @@ def _run_segment(
     )
 
     prompt = f"""{heading_summary}
+
+Respond with **valid JSON only**; use `null` or empty arrays when data is unknown; do **not** invent fields.
 
 You are a senior credit repair expert with deep knowledge of credit reports, FCRA regulations, dispute strategies, and client psychology.
 

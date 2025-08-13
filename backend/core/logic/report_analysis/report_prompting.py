@@ -406,6 +406,60 @@ def _merge_inquiries(dest: List[dict], new: List[dict]) -> None:
             )
 
 
+def _detect_segment_issues(seg_text: str, data: dict, bureau: str) -> List[tuple[str, List[str]]]:
+    """Return list of (issue_code, related_items) tuples for a segment.
+
+    Issues detected:
+
+    - ``MISSING_EXPECTED_ACCOUNT``: An account heading was parsed from
+      ``seg_text`` but no corresponding account was returned by the model.
+    - ``MERGED_ACCOUNTS``: The model returned an account referencing multiple
+      bureaus, suggesting separate accounts were merged together.
+    """
+
+    issues: List[tuple[str, List[str]]] = []
+
+    headings = extract_account_headings(seg_text)
+    account_names = {
+        normalize_creditor_name(a.get("name", ""))
+        for a in data.get("all_accounts", [])
+    }
+    missing = [raw for norm, raw in headings if norm not in account_names]
+    if missing:
+        issues.append(("MISSING_EXPECTED_ACCOUNT", missing))
+
+    merged = []
+    for acc in data.get("all_accounts", []):
+        bureaus = {normalize_bureau_name(b) for b in acc.get("bureaus", [])}
+        if len(bureaus) > 1 or (
+            bureau and normalize_bureau_name(bureau) not in bureaus
+        ):
+            merged.append(acc.get("name", ""))
+    if merged:
+        issues.append(("MERGED_ACCOUNTS", merged))
+
+    return issues
+
+
+def _build_remediation_hint(issue_code: str, items: List[str]) -> str:
+    """Generate a short hint text to address ``issue_code``."""
+
+    if issue_code == "MISSING_EXPECTED_ACCOUNT":
+        joined = ", ".join(items)
+        return (
+            "The report segment contains account headings that were missed in your "
+            f"analysis: {joined}. Ensure each of these accounts is analyzed and "
+            "included separately in the JSON output."
+        )
+    if issue_code == "MERGED_ACCOUNTS":
+        joined = ", ".join(items)
+        return (
+            f"Some accounts appear merged or list multiple bureaus ({joined}). "
+            "List each account separately and only include information for the current bureau."
+        )
+    return ""
+
+
 def call_ai_analysis(
     text: str,
     is_identity_theft: bool,
@@ -562,6 +616,70 @@ def call_ai_analysis(
                         : max(50, len(seg_text_attempt) // 2)
                     ]
 
+        tokens_total_in = tokens_in
+        tokens_total_out = tokens_out
+
+        if not error_code:
+            issues = _detect_segment_issues(seg_text, data, bureau)
+            passes = 0
+            while issues and passes < FLAGS.max_remediation_passes:
+                issue_code, items = issues[0]
+                hint = _build_remediation_hint(issue_code, items)
+                rem_prompt = prompt + "\n\n" + hint
+                logging.info(
+                    "analysis_remediation",
+                    extra={"bureau": bureau, "issue": issue_code, "pass": passes + 1},
+                )
+                new_data, new_err, ti, to = _run_segment(
+                    seg_text,
+                    is_identity_theft=is_identity_theft,
+                    output_json_path=seg_path,
+                    ai_client=ai_client,
+                    strategic_context=strategic_context,
+                    prompt=rem_prompt,
+                    late_summary_text=late_summary_text,
+                    inquiry_summary=inquiry_summary,
+                )
+                tokens_total_in += ti
+                tokens_total_out += to
+                if new_err:
+                    logging.warning(
+                        "analysis_remediation_failed",
+                        extra={
+                            "bureau": bureau,
+                            "issue": issue_code,
+                            "error_code": new_err,
+                        },
+                    )
+                    break
+
+                for key in [
+                    "negative_accounts",
+                    "open_accounts_with_issues",
+                    "positive_accounts",
+                    "high_utilization_accounts",
+                    "all_accounts",
+                ]:
+                    if new_data.get(key):
+                        if issue_code == "MERGED_ACCOUNTS":
+                            data[key] = new_data[key]
+                        else:
+                            _merge_accounts(data.setdefault(key, []), new_data[key])
+
+                if new_data.get("inquiries"):
+                    _merge_inquiries(data.setdefault("inquiries", []), new_data["inquiries"])
+
+                for key in [
+                    "personal_info_issues",
+                    "account_inquiry_matches",
+                    "strategic_recommendations",
+                ]:
+                    if new_data.get(key):
+                        data.setdefault(key, []).extend(new_data[key])
+
+                issues = _detect_segment_issues(seg_text, data, bureau)
+                passes += 1
+
         logging.info(
             "analysis_final",
             extra={
@@ -580,15 +698,15 @@ def call_ai_analysis(
                 "bureau": bureau,
                 "prompt_version": ANALYSIS_PROMPT_VERSION,
                 "schema_version": ANALYSIS_SCHEMA_VERSION,
-                "tokens_in": tokens_in,
-                "tokens_out": tokens_out,
+                "tokens_in": tokens_total_in,
+                "tokens_out": tokens_total_out,
                 "latency_ms": latency_ms,
                 "error_code": error_code or 0,
                 "attempts": attempt,
             },
         )
-        cost = tokens_in * _INPUT_COST_PER_TOKEN + tokens_out * _OUTPUT_COST_PER_TOKEN
-        log_ai_request(tokens_in, tokens_out, cost, latency_ms)
+        cost = tokens_total_in * _INPUT_COST_PER_TOKEN + tokens_total_out * _OUTPUT_COST_PER_TOKEN
+        log_ai_request(tokens_total_in, tokens_total_out, cost, latency_ms)
 
         if error_code or data.get("confidence", 1) < 0.7:
             needs_review = True

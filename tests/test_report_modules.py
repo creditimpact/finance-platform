@@ -229,7 +229,7 @@ def test_call_ai_analysis_retries_on_low_recall(tmp_path, caplog, monkeypatch):
     monkeypatch.setattr(
         report_prompting,
         "extract_account_headings",
-        lambda text: [("capital one", "Cap One"), ("chase bank", "Chase")],
+        lambda text: [("cap one", "Cap One"), ("chase", "Chase")],
     )
     monkeypatch.setattr(
         report_prompting,
@@ -237,6 +237,15 @@ def test_call_ai_analysis_retries_on_low_recall(tmp_path, caplog, monkeypatch):
         lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
     )
     monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
+    monkeypatch.setattr(
+        report_prompting, "normalize_creditor_name", lambda n: (n or "").lower()
+    )
+    monkeypatch.setattr(
+        report_prompting, "normalize_creditor_name", lambda n: (n or "").lower()
+    )
+    monkeypatch.setattr(
+        report_prompting, "normalize_creditor_name", lambda n: (n or "").lower()
+    )
 
     out = tmp_path / "result.json"
     with caplog.at_level(logging.INFO):
@@ -336,7 +345,7 @@ def test_call_ai_analysis_adds_confidence_and_flags(tmp_path, monkeypatch):
     monkeypatch.setattr(
         report_prompting,
         "extract_account_headings",
-        lambda text: [("capital one", "Cap One")],
+        lambda text: [("cap one", "Cap One")],
     )
     monkeypatch.setattr(
         report_prompting,
@@ -344,6 +353,9 @@ def test_call_ai_analysis_adds_confidence_and_flags(tmp_path, monkeypatch):
         lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
     )
     monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
+    monkeypatch.setattr(
+        report_prompting, "normalize_creditor_name", lambda n: (n or "").lower()
+    )
 
     out = tmp_path / "result.json"
     data = report_prompting.call_ai_analysis(
@@ -358,6 +370,134 @@ def test_call_ai_analysis_adds_confidence_and_flags(tmp_path, monkeypatch):
     assert data["all_accounts"][0]["confidence"] == 1.0
     assert "needs_human_review" in data
     assert "missing_bureaus" in data
+
+
+def test_call_ai_analysis_remediates_missing_account(tmp_path, monkeypatch):
+    utils_pkg = types.ModuleType("backend.core.logic.utils")
+    utils_pkg.__path__ = [
+        str(
+            Path(__file__).resolve().parents[1]
+            / "backend"
+            / "core"
+            / "logic"
+            / "utils"
+        )
+    ]
+    sys.modules["backend.core.logic.utils"] = utils_pkg
+
+    fake_pdf_ops = types.ModuleType("backend.core.logic.utils.pdf_ops")
+    fake_pdf_ops.extract_pdf_text_safe = lambda *a, **k: ""
+    sys.modules.setdefault("backend.core.logic.utils.pdf_ops", fake_pdf_ops)
+    report_prompting = importlib.import_module(
+        "backend.core.logic.report_analysis.report_prompting"
+    )
+    from backend.core.logic.report_analysis import analysis_cache
+
+    analysis_cache.reset_cache()
+
+    client = FakeAIClient()
+    client.add_chat_response(
+        '{"all_accounts": [{"name": "Cap One", "bureaus": ["Experian"]}, {"name": "Chase", "bureaus": ["Experian"]}, {"name": "Citi", "bureaus": ["Experian"]}], "inquiries": []}'
+    )
+    client.add_chat_response(
+        '{"all_accounts": [{"name": "Cap One", "bureaus": ["Experian"]}, {"name": "Chase", "bureaus": ["Experian"]}, {"name": "Citi", "bureaus": ["Experian"]}, {"name": "BofA", "bureaus": ["Experian"]}], "inquiries": []}'
+    )
+
+    monkeypatch.setattr(
+        report_prompting,
+        "extract_account_headings",
+            lambda text: [
+                ("cap one", "Cap One"),
+                ("chase", "Chase"),
+                ("citi", "Citi"),
+                ("bofa", "BofA"),
+            ],
+    )
+    monkeypatch.setattr(
+        report_prompting,
+        "extract_late_history_blocks",
+        lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
+    )
+    monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
+    monkeypatch.setattr(report_prompting, "normalize_creditor_name", lambda n: (n or "").lower())
+
+    out = tmp_path / "result.json"
+    data = report_prompting.call_ai_analysis(
+        "Experian section",
+        False,
+        out,
+        ai_client=client,
+        request_id="req",
+        doc_fingerprint="fp_rem_missing",
+    )
+
+    assert {a["name"] for a in data["all_accounts"]} == {
+        "Cap One",
+        "Chase",
+        "Citi",
+        "BofA",
+    }
+    assert len(client.chat_payloads) == 2
+    assert "BofA" in client.chat_payloads[1]["messages"][0]["content"]
+
+
+def test_call_ai_analysis_remediates_merged_account(tmp_path, monkeypatch):
+    utils_pkg = types.ModuleType("backend.core.logic.utils")
+    utils_pkg.__path__ = [
+        str(
+            Path(__file__).resolve().parents[1]
+            / "backend"
+            / "core"
+            / "logic"
+            / "utils"
+        )
+    ]
+    sys.modules["backend.core.logic.utils"] = utils_pkg
+
+    fake_pdf_ops = types.ModuleType("backend.core.logic.utils.pdf_ops")
+    fake_pdf_ops.extract_pdf_text_safe = lambda *a, **k: ""
+    sys.modules.setdefault("backend.core.logic.utils.pdf_ops", fake_pdf_ops)
+    report_prompting = importlib.import_module(
+        "backend.core.logic.report_analysis.report_prompting"
+    )
+    from backend.core.logic.report_analysis import analysis_cache
+
+    analysis_cache.reset_cache()
+
+    client = FakeAIClient()
+    client.add_chat_response(
+        '{"all_accounts": [{"name": "Cap One", "bureaus": ["Experian", "Equifax"]}], "inquiries": []}'
+    )
+    client.add_chat_response(
+        '{"all_accounts": [{"name": "Cap One", "bureaus": ["Experian"]}], "inquiries": []}'
+    )
+
+    monkeypatch.setattr(
+        report_prompting,
+        "extract_account_headings",
+        lambda text: [("cap one", "Cap One")],
+    )
+    monkeypatch.setattr(
+        report_prompting,
+        "extract_late_history_blocks",
+        lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
+    )
+    monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
+    monkeypatch.setattr(report_prompting, "normalize_creditor_name", lambda n: (n or "").lower())
+
+    out = tmp_path / "result.json"
+    data = report_prompting.call_ai_analysis(
+        "Experian section",
+        False,
+        out,
+        ai_client=client,
+        request_id="req",
+        doc_fingerprint="fp_rem_merge",
+    )
+
+    assert data["all_accounts"][0]["bureaus"] == ["Experian"]
+    assert len(client.chat_payloads) == 2
+    assert "current bureau" in client.chat_payloads[1]["messages"][0]["content"].lower()
 
 
 def test_sanitize_late_counts_removes_unrealistic():

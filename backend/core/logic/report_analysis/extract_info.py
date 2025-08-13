@@ -1,7 +1,7 @@
 import logging
 import re
 from collections import Counter
-from typing import Dict, List, Mapping
+from typing import Any, Dict, List, Mapping
 
 import pdfplumber
 
@@ -35,7 +35,7 @@ def extract_bureau_info_column_refined(
     ai_client: AIClient,
     client_info: dict | None = None,
     use_ai: bool = False,
-) -> Mapping[str, Dict[str, str]]:
+) -> Mapping[str, Any]:
     bureaus = BUREAUS
     data = {b: {"name": "", "dob": "", "current_address": ""} for b in bureaus}
     discrepancies = []
@@ -45,7 +45,7 @@ def extract_bureau_info_column_refined(
         words = page.extract_words()
         raw_text = page.extract_text()
 
-    columns = {b: [] for b in bureaus}
+    columns: Dict[str, List[Dict[str, Any]]] = {b: [] for b in bureaus}
     for w in words:
         x0 = float(w["x0"])
         if x0 < 200:

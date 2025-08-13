@@ -34,3 +34,14 @@ Ingests the uploaded PDF and produces bureau‑specific sections (`disputes`, `g
 ## Guardrails / constraints
 - Sanitization helpers ensure PII is normalized and late-payment data is validated.
 - Summaries should remain factual and neutral.
+
+## Output fields
+The JSON produced by this stage may include informational fields that are not
+yet consumed by downstream modules:
+
+- `confidence`: heuristic confidence score for AI parsing.
+- `needs_human_review`: flag indicating analysis uncertainty.
+- `missing_bureaus`: list of bureaus absent from the source report.
+
+These fields are optional and safely ignored by letter generation and
+instructions pipelines.

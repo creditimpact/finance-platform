@@ -13,6 +13,15 @@ _CACHE_METRICS: Dict[str, int] = {"hits": 0, "misses": 0, "evictions": 0}
 _OPS = 0
 _SNAPSHOT_INTERVAL = 100
 
+# AI usage metrics -----------------------------------------------------------
+
+_AI_METRICS: Dict[str, float] = {
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "cost": 0.0,
+    "latency_ms": 0.0,
+}
+
 
 def _write_cache_snapshot() -> None:
     """Persist current cache metrics to ``analytics_data`` and reset counters."""
@@ -76,6 +85,29 @@ def reset_cache_counters() -> None:
     for k in _CACHE_METRICS:
         _CACHE_METRICS[k] = 0
     _OPS = 0
+
+
+# AI usage helpers -----------------------------------------------------------
+
+def log_ai_request(tokens_in: int, tokens_out: int, cost: float, latency_ms: float) -> None:
+    """Record tokens, estimated cost, and latency for an AI call."""
+
+    _AI_METRICS["tokens_in"] += tokens_in
+    _AI_METRICS["tokens_out"] += tokens_out
+    _AI_METRICS["cost"] += cost
+    _AI_METRICS["latency_ms"] += latency_ms
+
+
+def get_ai_stats() -> Dict[str, float]:
+    """Return current AI usage metrics (for tests)."""
+
+    return _AI_METRICS.copy()
+
+
+def reset_ai_stats() -> None:
+    """Reset AI usage metrics (for tests)."""
+
+    _AI_METRICS.update(tokens_in=0, tokens_out=0, cost=0.0, latency_ms=0.0)
 
 
 def _flush_on_exit() -> None:

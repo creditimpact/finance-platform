@@ -197,6 +197,71 @@ def test_call_ai_analysis_retries_and_succeeds(tmp_path, caplog):
     assert any(r.__dict__.get("attempt") == 2 for r in attempts)
 
 
+def test_call_ai_analysis_retries_on_low_recall(tmp_path, caplog, monkeypatch):
+    utils_pkg = types.ModuleType("backend.core.logic.utils")
+    utils_pkg.__path__ = [
+        str(
+            Path(__file__).resolve().parents[1]
+            / "backend"
+            / "core"
+            / "logic"
+            / "utils"
+        )
+    ]
+    sys.modules["backend.core.logic.utils"] = utils_pkg
+
+    fake_pdf_ops = types.ModuleType("backend.core.logic.utils.pdf_ops")
+    fake_pdf_ops.extract_pdf_text_safe = lambda *a, **k: ""
+    sys.modules.setdefault("backend.core.logic.utils.pdf_ops", fake_pdf_ops)
+    report_prompting = importlib.import_module(
+        "backend.core.logic.report_analysis.report_prompting"
+    )
+    from backend.core.logic.report_analysis import analysis_cache
+
+    analysis_cache.reset_cache()
+
+    client = FakeAIClient()
+    client.add_chat_response('{"all_accounts": [{"name": "Cap One"}]}')
+    client.add_chat_response(
+        '{"all_accounts": [{"name": "Cap One"}, {"name": "Chase"}]}'
+    )
+
+    monkeypatch.setattr(
+        report_prompting,
+        "extract_account_headings",
+        lambda text: [("capital one", "Cap One"), ("chase bank", "Chase")],
+    )
+    monkeypatch.setattr(
+        report_prompting,
+        "extract_late_history_blocks",
+        lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
+    )
+    monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
+
+    out = tmp_path / "result.json"
+    with caplog.at_level(logging.INFO):
+        data = report_prompting.call_ai_analysis(
+            "text",
+            False,
+            out,
+            ai_client=client,
+            request_id="req",
+            doc_fingerprint="fp_low",
+        )
+    assert len(data["all_accounts"]) == 2
+    attempts = [r for r in caplog.records if r.__dict__.get("bureau")]
+    assert any(r.__dict__.get("attempt") == 1 for r in attempts)
+    assert any(r.__dict__.get("attempt") == 2 for r in attempts)
+    assert any(
+        "LOW_RECALL" in (r.__dict__.get("validation_errors") or [])
+        for r in caplog.records
+    )
+    assert any(
+        "Chase" in (r.__dict__.get("unmatched_headings") or [])
+        for r in caplog.records
+    )
+
+
 def test_call_ai_analysis_merges_segments(tmp_path):
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [

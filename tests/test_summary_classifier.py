@@ -12,9 +12,11 @@ def test_heuristic_identity_theft():
         "facts_summary": "This account is not mine and appears to be identity theft.",
         "claimed_errors": [],
     }
-    res = classify_client_summary(summary, ai_client=FakeAIClient())
+    ai = FakeAIClient()
+    res = classify_client_summary(summary, ai_client=ai)
     assert res["category"] in {"identity_theft", "not_mine"}
     assert "FCRA" in res["legal_tag"]
+    assert len(ai.chat_payloads) == 0
 
 
 def test_goodwill_mapping():
@@ -24,9 +26,11 @@ def test_goodwill_mapping():
         "dispute_type": "goodwill",
         "claimed_errors": [],
     }
-    res = classify_client_summary(summary, ai_client=FakeAIClient())
+    ai = FakeAIClient()
+    res = classify_client_summary(summary, ai_client=ai)
     assert res["category"] == "goodwill"
     assert res["dispute_approach"] == "goodwill_adjustment"
+    assert len(ai.chat_payloads) == 0
 
 
 def test_cache_and_invalidation():
@@ -46,6 +50,14 @@ def test_cache_and_invalidation():
     ai.add_response('{"category": "goodwill"}')
     classify_client_summary(summary, ai_client=ai, session_id="sess", account_id="1")
     assert len(ai.chat_payloads) == 2
+
+
+def test_empty_summary_bypasses_ai():
+    ai = FakeAIClient()
+    summary = {"account_id": "3", "facts_summary": "", "claimed_errors": []}
+    res = classify_client_summary(summary, ai_client=ai)
+    assert res["category"] == "inaccurate_reporting"
+    assert len(ai.chat_payloads) == 0
 
 
 def test_batch_classification():

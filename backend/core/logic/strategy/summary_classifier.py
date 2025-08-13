@@ -94,19 +94,29 @@ _STATE_HOOKS = {
 }
 
 
-def _heuristic_category(summary: Mapping[str, Any]) -> str:
+def _heuristic_category(summary: Mapping[str, Any]) -> tuple[str, bool]:
     text_bits = [
         summary.get("dispute_type", ""),
         summary.get("facts_summary", ""),
     ] + summary.get("claimed_errors", [])
-    text = " ".join([t.lower() for t in text_bits if isinstance(t, str)])
+    text = " ".join(
+        [t.lower().replace("_", " ") for t in text_bits if isinstance(t, str)]
+    ).strip()
+
+    if not text:
+        return "inaccurate_reporting", True
+
+    dispute_type = str(summary.get("dispute_type", "")).lower()
+    if dispute_type in _RULE_MAP:
+        return dispute_type, True
+
     if "identity" in text or "stolen" in text:
-        return "identity_theft"
+        return "identity_theft", True
     if "not mine" in text:
-        return "not_mine"
+        return "not_mine", True
     if "goodwill" in text:
-        return "goodwill"
-    return "inaccurate_reporting"
+        return "goodwill", True
+    return "inaccurate_reporting", False
 
 
 def classify_client_summary(
@@ -129,26 +139,25 @@ def classify_client_summary(
         if cached:
             return cached
 
-    category = None
-    prompt = (
-        "Classify the following structured credit dispute summary into one of "
-        "the categories: not_mine, inaccurate_reporting, identity_theft, goodwill. "
-        "Return only JSON with a 'category' field. Summary: "
-        f"{summary}"
-    )
-    try:
-        resp = ai_client.response_json(
-            prompt=prompt,
-            response_format={"type": "json_object"},
+    category, confident = _heuristic_category(summary)
+    if not confident:
+        prompt = (
+            "Classify the following structured credit dispute summary into one of "
+            "the categories: not_mine, inaccurate_reporting, identity_theft, goodwill. "
+            "Return only JSON with a 'category' field. Summary: "
+            f"{summary}"
         )
-        content = resp.output[0].content[0].text
-        data, _ = parse_json(content)
-        data = data or {}
-        category = data.get("category")
-    except Exception:
-        category = None
-    if not category:
-        category = _heuristic_category(summary)
+        try:
+            resp = ai_client.response_json(
+                prompt=prompt,
+                response_format={"type": "json_object"},
+            )
+            content = resp.output[0].content[0].text
+            data, _ = parse_json(content)
+            data = data or {}
+            category = data.get("category") or category
+        except Exception:
+            pass
 
     mapping = _RULE_MAP.get(category, _RULE_MAP["inaccurate_reporting"]).copy()
     result = {"category": category, **mapping}

@@ -237,8 +237,8 @@ Report text:
     return prompt, late_summary_text, inquiry_summary
 
 
-def _run_segment(
-    segment_text: str,
+def analyze_bureau(
+    text: str,
     *,
     is_identity_theft: bool,
     output_json_path: Path,
@@ -247,15 +247,25 @@ def _run_segment(
     prompt: str,
     late_summary_text: str,
     inquiry_summary: str,
-) -> tuple[dict, str | None, int, int]:
-    """Run the existing prompt/analysis flow for a single bureau segment.
+    hints: dict | None = None,
+) -> tuple[dict, str | None]:
+    """Run the prompt/analysis flow for a single bureau segment.
 
-    Returns ``(data, error_code, tokens_in, tokens_out)`` where ``error_code`` is
-    ``None`` on success or one of ``BROKEN_JSON``, ``TIMEOUT``, ``EMPTY_OUTPUT``
-    for known failure scenarios. Any unexpected exception will be logged and
-    returned as its class name.
+    Parameters are identical to the legacy ``_run_segment`` helper with the
+    addition of ``hints`` which may contain optional keys such as
+    ``expected_account_names`` or ``extra_instructions``. The function now
+    returns ``(data, error_code)``.
     """
     tokens_in = tokens_out = 0
+    hints = hints or {}
+    expected_accounts = hints.get("expected_account_names") or []
+    extra_instructions = hints.get("extra_instructions")
+    if expected_accounts:
+        prompt += "\n\nExpected account names:\n" + "\n".join(
+            f"- {a}" for a in expected_accounts
+        )
+    if extra_instructions:
+        prompt += "\n\n" + extra_instructions
     try:
         response = ai_client.chat_completion(
             model=ANALYSIS_MODEL_VERSION,
@@ -273,12 +283,12 @@ def _run_segment(
     except TimeoutError:
         data = _validate_analysis_schema({})  # ensure validation errors get logged
         data["confidence"] = 0.0
-        return data, "TIMEOUT", tokens_in, tokens_out
+        return data, "TIMEOUT"
     except Exception as exc:  # pragma: no cover - defensive
         logging.exception("segment_call_failed", exc_info=exc)
         data = _validate_analysis_schema({})
         data["confidence"] = 0.0
-        return data, type(exc).__name__, tokens_in, tokens_out
+        return data, type(exc).__name__
 
     content = response.choices[0].message.content.strip()
 
@@ -300,20 +310,24 @@ def _run_segment(
     if not content:
         data = _validate_analysis_schema({})
         data["confidence"] = 0.0
-        return data, "EMPTY_OUTPUT", tokens_in, tokens_out
+        return data, "EMPTY_OUTPUT"
 
     data, parse_error = parse_json(content)
     if parse_error:
         data = _validate_analysis_schema({})
         data["confidence"] = 0.0
-        return data, "BROKEN_JSON", tokens_in, tokens_out
+        return data, "BROKEN_JSON"
 
     data = _validate_analysis_schema(data)
 
     # ------------------------------------------------------------------
     # Basic confidence heuristic
     # ------------------------------------------------------------------
-    headings = extract_account_headings(segment_text)
+    headings = extract_account_headings(text)
+    if expected_accounts:
+        headings.extend(
+            (normalize_creditor_name(a), a) for a in expected_accounts
+        )
     if headings:
         account_names = set()
         for list_name in [
@@ -343,7 +357,7 @@ def _run_segment(
     for inq in data.get("inquiries", []):
         inq.setdefault("confidence", confidence)
 
-    return data, None, tokens_in, tokens_out
+    return data, None
 
 
 def _parse_date(date_str: str | None) -> datetime | None:
@@ -568,7 +582,6 @@ def call_ai_analysis(
         error_code: str | None = None
         attempt = 0
         seg_text_attempt = seg_text
-        tokens_in = tokens_out = 0
         while attempt < 3:
             attempt += 1
             headings: List[tuple[str, str]] = []
@@ -591,9 +604,8 @@ def call_ai_analysis(
                 if cache_entry is not None:
                     data = cache_entry
                     error_code = None
-                    tokens_in = tokens_out = 0
                 else:
-                    data, error_code, tokens_in, tokens_out = _run_segment(
+                    data, error_code = analyze_bureau(
                         seg_text_attempt,
                         is_identity_theft=is_identity_theft,
                         output_json_path=seg_path,
@@ -654,7 +666,6 @@ def call_ai_analysis(
             except Exception as exc:  # pragma: no cover - defensive
                 error_code = getattr(exc, "code", type(exc).__name__)
                 data = {}
-                tokens_in = tokens_out = 0
             attempt_latency_ms = (time.time() - attempt_start) * 1000
             if error_code:
                 log_bureau_failure(
@@ -662,7 +673,7 @@ def call_ai_analysis(
                     bureau=bureau,
                     expected_headings=len(headings),
                     found_accounts=len(data.get("all_accounts", [])),
-                    tokens=tokens_in + tokens_out,
+                    tokens=0,
                     latency=attempt_latency_ms,
                 )
 
@@ -684,8 +695,8 @@ def call_ai_analysis(
                         : max(50, len(seg_text_attempt) // 2)
                     ]
 
-        tokens_total_in = tokens_in
-        tokens_total_out = tokens_out
+        tokens_total_in = 0
+        tokens_total_out = 0
 
         if not error_code:
             issues = _detect_segment_issues(seg_text, data, bureau)
@@ -698,7 +709,7 @@ def call_ai_analysis(
                     "analysis_remediation",
                     extra={"bureau": bureau, "issue": issue_code, "pass": passes + 1},
                 )
-                new_data, new_err, ti, to = _run_segment(
+                new_data, new_err = analyze_bureau(
                     seg_text,
                     is_identity_theft=is_identity_theft,
                     output_json_path=seg_path,
@@ -708,8 +719,6 @@ def call_ai_analysis(
                     late_summary_text=late_summary_text,
                     inquiry_summary=inquiry_summary,
                 )
-                tokens_total_in += ti
-                tokens_total_out += to
                 if new_err:
                     logging.warning(
                         "analysis_remediation_failed",

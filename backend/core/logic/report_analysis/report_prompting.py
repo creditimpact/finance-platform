@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from copy import deepcopy
@@ -21,6 +22,7 @@ from backend.core.logic.utils.names_normalization import (
     normalize_bureau_name,
     normalize_creditor_name,
 )
+from backend.core.logic.utils.pii import redact_pii
 from backend.core.logic.utils.text_parsing import (
     extract_account_headings,
     extract_late_history_blocks,
@@ -33,6 +35,18 @@ _OUTPUT_COST_PER_TOKEN = 0.03 / 1000
 _SCHEMA_PATH = Path(__file__).with_name("analysis_schema.json")
 _ANALYSIS_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
 _ANALYSIS_VALIDATOR = Draft7Validator(_ANALYSIS_SCHEMA)
+
+try:  # pragma: no cover - fallback when app config is unavailable
+    from backend.api.config import ANALYSIS_DEBUG_STORE_RAW
+except Exception:  # pragma: no cover
+
+    def _env_bool(name: str, default: bool) -> bool:
+        value = os.getenv(name)
+        if value is None:
+            return default
+        return value.lower() not in {"0", "false", "no"}
+
+    ANALYSIS_DEBUG_STORE_RAW = _env_bool("ANALYSIS_DEBUG_STORE_RAW", False)
 
 
 def _apply_defaults(data: dict, schema: dict) -> None:
@@ -274,12 +288,16 @@ Report text:
         content = content.replace("```json", "").replace("```", "").strip()
 
     raw_path = output_json_path.with_name(output_json_path.stem + "_raw.txt")
-    with open(raw_path, "w", encoding="utf-8") as f:
-        f.write(content)
-        f.write("\n\n---\n[Debug] Late Payment Summary Used in Prompt:\n")
-        f.write(late_summary_text)
-        f.write("\n\n---\n[Debug] Inquiry Summary Used in Prompt:\n")
-        f.write(inquiry_summary)
+    if ANALYSIS_DEBUG_STORE_RAW:
+        red_content = redact_pii(content)
+        red_late = redact_pii(late_summary_text)
+        red_inquiry = redact_pii(inquiry_summary)
+        with open(raw_path, "w", encoding="utf-8") as f:
+            f.write(red_content)
+            f.write("\n\n---\n[Debug] Late Payment Summary Used in Prompt:\n")
+            f.write(red_late)
+            f.write("\n\n---\n[Debug] Inquiry Summary Used in Prompt:\n")
+            f.write(red_inquiry)
 
     data, _ = parse_json(content)
     data = _validate_analysis_schema(data)

@@ -39,6 +39,7 @@ def test_letters_do_not_access_raw_intake(monkeypatch, tmp_path):
         is_identity_theft,
         structured_summaries,
         state,
+        classification_map=None,
         audit=None,
         ai_client=None,
     ):
@@ -95,9 +96,20 @@ def test_letters_do_not_access_raw_intake(monkeypatch, tmp_path):
     }
 
     fake = FakeAIClient()
+    from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+
+    classification_map = {
+        "1": ClassificationRecord(structured["1"], {"category": "late"}, "")
+    }
     with pytest.warns(UserWarning):
         generate_all_dispute_letters_with_ai(
-            client_info, bureau_data, tmp_path, False, None, ai_client=fake
+            client_info,
+            bureau_data,
+            tmp_path,
+            False,
+            None,
+            ai_client=fake,
+            classification_map=classification_map,
         )
     with open(tmp_path / "Experian_gpt_response.json") as f:
         data = json.load(f)

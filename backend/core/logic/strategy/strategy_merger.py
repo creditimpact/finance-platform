@@ -202,7 +202,8 @@ def handle_strategy_fallbacks(
                             "reason": acc.get("advisor_comment")
                             or acc.get("analysis")
                             or raw_action,
-                            "classification": cls,
+                            "classification": getattr(cls, "classification", cls)
+                            or {},
                         },
                     )
 

@@ -166,14 +166,29 @@ def test_minimal_workflow():
         out_dir = Path("output/test_local")
         fake = FakeAIClient()
         from backend.core.models import ClientInfo, BureauPayload
+        from backend.core.logic.strategy.summary_classifier import ClassificationRecord
 
         client = ClientInfo.from_dict(client_info)
         bureau_models = {k: BureauPayload.from_dict(v) for k, v in bureau_data.items()}
+        classification_map = {"1": ClassificationRecord({}, {"category": "late"}, "")}
 
         generate_dispute_letters_for_all_bureaus(
-            client, bureau_models, out_dir, False, None, ai_client=fake
+            client,
+            bureau_models,
+            out_dir,
+            False,
+            None,
+            ai_client=fake,
+            classification_map=classification_map,
         )
-        generate_goodwill_letters(client, bureau_models, out_dir, None, ai_client=fake)
+        generate_goodwill_letters(
+            client,
+            bureau_models,
+            out_dir,
+            None,
+            ai_client=fake,
+            classification_map=classification_map,
+        )
         generate_instruction_file(client, bureau_models, False, out_dir, ai_client=fake)
         context, accounts_list = instructions_generator.prepare_instruction_data(
             client_info,

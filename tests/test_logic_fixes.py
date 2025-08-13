@@ -445,9 +445,17 @@ def test_letter_duplicate_accounts_removed():
 
         mock_d.side_effect = _cb
         fake = FakeAIClient()
+        from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+        classification_map = {"1": ClassificationRecord({}, {"category": "late"}, "")}
         with pytest.warns(UserWarning):
             generate_dispute_letters_for_all_bureaus(
-                {"name": "T"}, bureau_data, out_dir, False, None, ai_client=fake
+                {"name": "T"},
+                bureau_data,
+                out_dir,
+                False,
+                None,
+                ai_client=fake,
+                classification_map=classification_map,
             )
 
     assert len(sent.get("Experian", [])) == 2
@@ -515,9 +523,17 @@ def test_partial_account_number_deduplication():
 
         mock_d.side_effect = _cb
         fake = FakeAIClient()
+        from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+        classification_map = {"1": ClassificationRecord({}, {"category": "late"}, "")}
         with pytest.warns(UserWarning):
             generate_dispute_letters_for_all_bureaus(
-                {"name": "T"}, bureau_data, out_dir, False, None, ai_client=fake
+                {"name": "T"},
+                bureau_data,
+                out_dir,
+                False,
+                None,
+                ai_client=fake,
+                classification_map=classification_map,
             )
 
     assert len(sent.get("Experian", [])) == 1

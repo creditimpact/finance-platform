@@ -7,8 +7,7 @@ from typing import Any, List, Mapping
 
 from backend.audit.audit import AuditLevel, AuditLogger
 from backend.core.logic.compliance.rules_loader import get_neutral_phrase
-from backend.core.logic.strategy.summary_classifier import \
-    classify_client_summary
+from backend.core.logic.strategy.summary_classifier import ClassificationRecord
 from backend.core.logic.utils.json_utils import parse_json
 from backend.core.logic.utils.pdf_ops import gather_supporting_docs
 from backend.core.models.account import Account, Inquiry
@@ -25,9 +24,9 @@ def call_gpt_dispute_letter(
     is_identity_theft: bool,
     structured_summaries: Mapping[str, Mapping[str, Any]],
     state: str,
+    classification_map: Mapping[str, ClassificationRecord] | None,
     ai_client: AIClient,
     audit: AuditLogger | None = None,
-    classifier=classify_client_summary,
 ) -> LetterContext:
     """Generate GPT-powered dispute letter content."""
 
@@ -42,13 +41,10 @@ def call_gpt_dispute_letter(
     dispute_blocks = []
     for acc in disputes:
         struct = structured_summaries.get(acc.account_id or "", {})
-        classification = classifier(
-            struct,
-            ai_client=ai_client,
-            state=state,
-            session_id=session_id,
-            account_id=acc.account_id,
-        )
+        record = None
+        if classification_map:
+            record = classification_map.get(acc.account_id or "")
+        classification = record.classification if record else {}
         neutral_phrase, neutral_reason = get_neutral_phrase(
             classification.get("category"), struct
         )

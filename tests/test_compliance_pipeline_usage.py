@@ -18,16 +18,6 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
         "backend.core.logic.strategy.fallback_manager.determine_fallback_action",
         lambda *a, **k: "dispute",
     )
-    monkeypatch.setattr(
-        "backend.core.logic.strategy.summary_classifier.classify_client_summary",
-        lambda struct, ai_client=None, state=None, **kw: {"category": "not_mine"},
-    )
-    monkeypatch.setattr(
-        "backend.core.logic.strategy.summary_classifier.classify_client_summaries",
-        lambda summaries, ai_client=None, state=None, **kw: {
-            str(s.get("account_id")): {"category": "not_mine"} for s in summaries
-        },
-    )
     utils_pkg = types.ModuleType("backend.core.logic.letters.utils")
     pdf_ops_mod = types.SimpleNamespace(
         gather_supporting_docs=lambda *a, **k: ("", [], None)
@@ -43,8 +33,9 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
     )
 
     if doc_type == "dispute":
-        from backend.core.logic.letters.letter_generator import \
-            generate_all_dispute_letters_with_ai
+        from backend.core.logic.letters.letter_generator import (
+            generate_all_dispute_letters_with_ai,
+        )
 
         monkeypatch.setattr(
             "backend.core.logic.letters.letter_generator.run_compliance_pipeline",
@@ -55,9 +46,9 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
             "backend.core.logic.letters.letter_generator.generate_strategy",
             lambda session_id, bureau_data: {"dispute_items": {"1": {}}},
         )
-        monkeypatch.setattr(
-            "backend.core.logic.letters.letter_generator.call_gpt_dispute_letter",
-            lambda *a, **k: {
+
+        def fake_call_gpt(*a, **k):
+            return {
                 "opening_paragraph": "Opening",
                 "accounts": [
                     {
@@ -70,13 +61,18 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
                 ],
                 "inquiries": [],
                 "closing_paragraph": "Closing",
-            },
+            }
+
+        monkeypatch.setattr(
+            "backend.core.logic.letters.letter_generator.call_gpt_dispute_letter",
+            fake_call_gpt,
         )
         monkeypatch.setattr(
             "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
             lambda html, path: None,
         )
         from backend.core.models import BureauPayload, ClientInfo
+        from backend.core.logic.strategy.summary_classifier import ClassificationRecord
 
         client = ClientInfo.from_dict({"name": "Client", "session_id": "s1"})
         bureau_data = {
@@ -94,9 +90,18 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
                 }
             )
         }
+        classification_map = {
+            "1": ClassificationRecord({}, {"category": "not_mine"}, "")
+        }
         with pytest.warns(UserWarning):
             generate_all_dispute_letters_with_ai(
-                client, bureau_data, tmp_path, False, None, ai_client=FakeAIClient()
+                client,
+                bureau_data,
+                tmp_path,
+                False,
+                None,
+                ai_client=FakeAIClient(),
+                classification_map=classification_map,
             )
     elif doc_type == "instructions":
         from backend.core.logic.rendering.instructions_generator import \

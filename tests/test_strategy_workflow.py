@@ -172,8 +172,16 @@ def test_full_letter_workflow():
 
         out_dir = Path("output/test_flow")
         fake = FakeAIClient()
+        from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+        classification_map = {"a": ClassificationRecord({}, {"category": "late"}, "")}
         generate_dispute_letters_for_all_bureaus(
-            client_info, bureau_data, out_dir, False, None, ai_client=fake
+            client_info,
+            bureau_data,
+            out_dir,
+            False,
+            None,
+            ai_client=fake,
+            classification_map=classification_map,
         )
         generate_instruction_file(
             client_info, bureau_data, False, out_dir, strategy=strategy, ai_client=fake

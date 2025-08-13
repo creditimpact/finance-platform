@@ -270,12 +270,14 @@ def _run_segment(
                 usage, "output_tokens", 0
             )
     except TimeoutError:
-        _validate_analysis_schema({})  # ensure validation errors get logged
-        return {}, "TIMEOUT", tokens_in, tokens_out
+        data = _validate_analysis_schema({})  # ensure validation errors get logged
+        data["confidence"] = 0.0
+        return data, "TIMEOUT", tokens_in, tokens_out
     except Exception as exc:  # pragma: no cover - defensive
         logging.exception("segment_call_failed", exc_info=exc)
-        _validate_analysis_schema({})
-        return {}, type(exc).__name__, tokens_in, tokens_out
+        data = _validate_analysis_schema({})
+        data["confidence"] = 0.0
+        return data, type(exc).__name__, tokens_in, tokens_out
 
     content = response.choices[0].message.content.strip()
 
@@ -295,15 +297,51 @@ def _run_segment(
             f.write(red_inquiry)
 
     if not content:
-        _validate_analysis_schema({})
-        return {}, "EMPTY_OUTPUT", tokens_in, tokens_out
+        data = _validate_analysis_schema({})
+        data["confidence"] = 0.0
+        return data, "EMPTY_OUTPUT", tokens_in, tokens_out
 
     data, parse_error = parse_json(content)
     if parse_error:
         data = _validate_analysis_schema({})
+        data["confidence"] = 0.0
         return data, "BROKEN_JSON", tokens_in, tokens_out
 
     data = _validate_analysis_schema(data)
+
+    # ------------------------------------------------------------------
+    # Basic confidence heuristic
+    # ------------------------------------------------------------------
+    headings = extract_account_headings(segment_text)
+    if headings:
+        account_names = set()
+        for list_name in [
+            "all_accounts",
+            "negative_accounts",
+            "open_accounts_with_issues",
+            "positive_accounts",
+            "high_utilization_accounts",
+        ]:
+            for acc in data.get(list_name, []):
+                account_names.add(normalize_creditor_name(acc.get("name", "")))
+        unmatched_norms = {norm for norm, _ in headings if norm not in account_names}
+        confidence = (len(headings) - len(unmatched_norms)) / len(headings)
+    else:
+        confidence = 1.0
+    data["confidence"] = confidence
+
+    for list_name in [
+        "all_accounts",
+        "negative_accounts",
+        "open_accounts_with_issues",
+        "positive_accounts",
+        "high_utilization_accounts",
+    ]:
+        for acc in data.get(list_name, []):
+            acc.setdefault("confidence", confidence)
+    for inq in data.get("inquiries", []):
+        inq.setdefault("confidence", confidence)
+
     return data, None, tokens_in, tokens_out
 
 
@@ -327,6 +365,11 @@ def _merge_accounts(dest: List[dict], new: List[dict]) -> None:
             existing["bureaus"] = sorted(existing_bureaus | new_bureaus)
             for k, v in acc.items():
                 if k == "bureaus":
+                    continue
+                if k == "confidence":
+                    existing["confidence"] = max(
+                        existing.get("confidence", 0), v
+                    )
                     continue
                 if k not in existing or not existing[k]:
                     existing[k] = v
@@ -356,6 +399,11 @@ def _merge_inquiries(dest: List[dict], new: List[dict]) -> None:
             inq["bureau"] = normalize_bureau_name(inq.get("bureau"))
             dest.append(inq)
             index[key] = inq
+        else:
+            existing = index[key]
+            existing["confidence"] = max(
+                existing.get("confidence", 0), inq.get("confidence", 0)
+            )
 
 
 def call_ai_analysis(
@@ -371,6 +419,7 @@ def call_ai_analysis(
     """Analyze raw report text using an AI model and return parsed JSON."""
     logging.debug("analysis_flags", extra={"flags": FLAGS.__dict__})
     segments = _split_text_by_bureau(text) if FLAGS.chunk_by_bureau else {"Full": text}
+    missing_bureaus = [b for b in BUREAUS if b not in segments]
 
     aggregate: dict = {
         "negative_accounts": [],
@@ -384,6 +433,7 @@ def call_ai_analysis(
         "strategic_recommendations": [],
     }
     summary_metrics: dict = {}
+    needs_review = bool(missing_bureaus)
 
     for idx, (bureau, seg_text) in enumerate(segments.items()):
         seg_path = (
@@ -540,6 +590,9 @@ def call_ai_analysis(
         cost = tokens_in * _INPUT_COST_PER_TOKEN + tokens_out * _OUTPUT_COST_PER_TOKEN
         log_ai_request(tokens_in, tokens_out, cost, latency_ms)
 
+        if error_code or data.get("confidence", 1) < 0.7:
+            needs_review = True
+
         for key in [
             "negative_accounts",
             "open_accounts_with_issues",
@@ -574,5 +627,10 @@ def call_ai_analysis(
         aggregate["summary_metrics"] = summary_metrics
     aggregate["prompt_version"] = ANALYSIS_PROMPT_VERSION
     aggregate["schema_version"] = ANALYSIS_SCHEMA_VERSION
+    aggregate["needs_human_review"] = needs_review
+    if missing_bureaus:
+        aggregate["missing_bureaus"] = missing_bureaus
+    else:
+        aggregate["missing_bureaus"] = []
 
     return aggregate

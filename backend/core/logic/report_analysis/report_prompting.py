@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -9,7 +10,6 @@ import time
 from copy import deepcopy
 from pathlib import Path
 from typing import Dict, List
-import hashlib
 
 from jsonschema import Draft7Validator
 
@@ -29,6 +29,7 @@ from backend.core.logic.utils.text_parsing import (
     extract_late_history_blocks,
 )
 from backend.core.services.ai_client import AIClient
+
 from .analysis_cache import get_cached_analysis, store_cached_analysis
 
 _INPUT_COST_PER_TOKEN = 0.01 / 1000
@@ -223,17 +224,27 @@ def _run_segment(
     prompt: str,
     late_summary_text: str,
     inquiry_summary: str,
-) -> tuple[dict, dict]:
-    """Run the existing prompt/analysis flow for a single bureau segment."""
-    response = ai_client.chat_completion(
-        model=ANALYSIS_MODEL_VERSION,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1,
-    )
+) -> tuple[dict, str | None]:
+    """Run the existing prompt/analysis flow for a single bureau segment.
 
-    usage = getattr(response, "usage", None)
-    tokens_in = getattr(usage, "prompt_tokens", 0)
-    tokens_out = getattr(usage, "completion_tokens", 0)
+    Returns ``(data, error_code)`` where ``error_code`` is ``None`` on success or
+    one of ``BROKEN_JSON``, ``TIMEOUT``, ``EMPTY_OUTPUT`` for known failure
+    scenarios. Any unexpected exception will be logged and returned as its class
+    name.
+    """
+    try:
+        response = ai_client.chat_completion(
+            model=ANALYSIS_MODEL_VERSION,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+        )
+    except TimeoutError:
+        _validate_analysis_schema({})  # ensure validation errors get logged
+        return {}, "TIMEOUT"
+    except Exception as exc:  # pragma: no cover - defensive
+        logging.exception("segment_call_failed", exc_info=exc)
+        _validate_analysis_schema({})
+        return {}, type(exc).__name__
 
     content = response.choices[0].message.content.strip()
 
@@ -252,9 +263,19 @@ def _run_segment(
             f.write("\n\n---\n[Debug] Inquiry Summary Used in Prompt:\n")
             f.write(red_inquiry)
 
-    data, _ = parse_json(content)
+    if not content:
+        _validate_analysis_schema({})
+        return {}, "EMPTY_OUTPUT"
+
+    data, parse_error = parse_json(content)
+    if parse_error:
+        data = _validate_analysis_schema({})
+        return data, "BROKEN_JSON"
+
     data = _validate_analysis_schema(data)
-    return data, {"prompt_tokens": tokens_in, "completion_tokens": tokens_out}
+    return data, None
+
+
 def _merge_accounts(dest: List[dict], new: List[dict]) -> None:
     """Merge account lists, combining bureau info."""
     index = {
@@ -340,71 +361,101 @@ def call_ai_analysis(
             else output_json_path.with_name(f"{output_json_path.stem}_{bureau}.json")
         )
         start = time.time()
-        tokens_in = tokens_out = 0
-        error_code: str | int = 0
         data: dict = {}
-        try:
-            prompt, late_summary_text, inquiry_summary = _generate_prompt(
-                seg_text,
-                is_identity_theft=is_identity_theft,
-                strategic_context=strategic_context,
-            )
-            prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-            cache_entry = get_cached_analysis(
-                doc_fingerprint,
-                bureau,
-                prompt_hash,
-                ANALYSIS_MODEL_VERSION,
-                prompt_version=ANALYSIS_PROMPT_VERSION,
-                schema_version=ANALYSIS_SCHEMA_VERSION,
-            )
-            if cache_entry is not None:
-                data = cache_entry
-            else:
-                data, usage = _run_segment(
-                    seg_text,
+        error_code: str | None = None
+        attempt = 0
+        seg_text_attempt = seg_text
+        tokens_in = tokens_out = 0
+        while attempt < 3:
+            attempt += 1
+            try:
+                prompt, late_summary_text, inquiry_summary = _generate_prompt(
+                    seg_text_attempt,
                     is_identity_theft=is_identity_theft,
-                    output_json_path=seg_path,
-                    ai_client=ai_client,
                     strategic_context=strategic_context,
-                    prompt=prompt,
-                    late_summary_text=late_summary_text,
-                    inquiry_summary=inquiry_summary,
                 )
-                tokens_in = usage.get("prompt_tokens", 0)
-                tokens_out = usage.get("completion_tokens", 0)
-                store_cached_analysis(
+                prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+                cache_entry = get_cached_analysis(
                     doc_fingerprint,
                     bureau,
                     prompt_hash,
                     ANALYSIS_MODEL_VERSION,
-                    data,
                     prompt_version=ANALYSIS_PROMPT_VERSION,
                     schema_version=ANALYSIS_SCHEMA_VERSION,
                 )
-        except Exception as exc:
-            error_code = getattr(exc, "code", type(exc).__name__)
-            raise
-        finally:
-            latency_ms = (time.time() - start) * 1000
-            emit_event(
-                "report_segment",
-                {
-                    "request_id": request_id,
-                    "doc_fingerprint": doc_fingerprint,
+                if cache_entry is not None:
+                    data = cache_entry
+                    error_code = None
+                else:
+                    data, error_code = _run_segment(
+                        seg_text_attempt,
+                        is_identity_theft=is_identity_theft,
+                        output_json_path=seg_path,
+                        ai_client=ai_client,
+                        strategic_context=strategic_context,
+                        prompt=prompt,
+                        late_summary_text=late_summary_text,
+                        inquiry_summary=inquiry_summary,
+                    )
+                    if not error_code:
+                        store_cached_analysis(
+                            doc_fingerprint,
+                            bureau,
+                            prompt_hash,
+                            ANALYSIS_MODEL_VERSION,
+                            data,
+                            prompt_version=ANALYSIS_PROMPT_VERSION,
+                            schema_version=ANALYSIS_SCHEMA_VERSION,
+                        )
+            except Exception as exc:  # pragma: no cover - defensive
+                error_code = getattr(exc, "code", type(exc).__name__)
+                data = {}
+
+            logging.info(
+                "analysis_attempt",
+                extra={
                     "bureau": bureau,
-                    "prompt_version": ANALYSIS_PROMPT_VERSION,
-                    "schema_version": ANALYSIS_SCHEMA_VERSION,
-                    "tokens_in": tokens_in,
-                    "tokens_out": tokens_out,
-                    "latency_ms": latency_ms,
-                    "error_code": error_code,
+                    "attempt": attempt,
+                    "error_code": error_code or 0,
                 },
             )
-            cost = (
-                tokens_in * _INPUT_COST_PER_TOKEN + tokens_out * _OUTPUT_COST_PER_TOKEN
-            )
-            log_ai_request(tokens_in, tokens_out, cost, latency_ms)
+
+            if not error_code:
+                break
+            if attempt < 3:
+                time.sleep(0.5 * attempt)
+                if error_code in {"BROKEN_JSON", "TIMEOUT", "EMPTY_OUTPUT"}:
+                    seg_text_attempt = seg_text_attempt[
+                        : max(50, len(seg_text_attempt) // 2)
+                    ]
+
+        logging.info(
+            "analysis_final",
+            extra={
+                "bureau": bureau,
+                "attempts": attempt,
+                "final_error": error_code or 0,
+            },
+        )
+
+        latency_ms = (time.time() - start) * 1000
+        emit_event(
+            "report_segment",
+            {
+                "request_id": request_id,
+                "doc_fingerprint": doc_fingerprint,
+                "bureau": bureau,
+                "prompt_version": ANALYSIS_PROMPT_VERSION,
+                "schema_version": ANALYSIS_SCHEMA_VERSION,
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+                "latency_ms": latency_ms,
+                "error_code": error_code or 0,
+                "attempts": attempt,
+            },
+        )
+        cost = tokens_in * _INPUT_COST_PER_TOKEN + tokens_out * _OUTPUT_COST_PER_TOKEN
+        log_ai_request(tokens_in, tokens_out, cost, latency_ms)
 
         for key in [
             "negative_accounts",

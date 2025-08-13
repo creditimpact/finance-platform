@@ -128,11 +128,7 @@ def test_call_ai_analysis_rejects_non_json(tmp_path, caplog):
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [
         str(
-            Path(__file__).resolve().parents[1]
-            / "backend"
-            / "core"
-            / "logic"
-            / "utils"
+            Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils"
         )
     ]
     sys.modules["backend.core.logic.utils"] = utils_pkg
@@ -161,6 +157,44 @@ def test_call_ai_analysis_rejects_non_json(tmp_path, caplog):
         )
     assert data["negative_accounts"] == []
     assert any(r.__dict__.get("validation_errors") for r in caplog.records)
+
+
+def test_call_ai_analysis_retries_and_succeeds(tmp_path, caplog):
+    utils_pkg = types.ModuleType("backend.core.logic.utils")
+    utils_pkg.__path__ = [
+        str(
+            Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils"
+        )
+    ]
+    sys.modules["backend.core.logic.utils"] = utils_pkg
+
+    fake_pdf_ops = types.ModuleType("backend.core.logic.utils.pdf_ops")
+    fake_pdf_ops.extract_pdf_text_safe = lambda *a, **k: ""
+    sys.modules.setdefault("backend.core.logic.utils.pdf_ops", fake_pdf_ops)
+    report_prompting = importlib.import_module(
+        "backend.core.logic.report_analysis.report_prompting"
+    )
+    from backend.core.logic.report_analysis import analysis_cache
+
+    analysis_cache.reset_cache()
+
+    client = FakeAIClient()
+    client.add_chat_response("not json")
+    client.add_chat_response('{"inquiries": [], "all_accounts": []}')
+    out = tmp_path / "result.json"
+    with caplog.at_level(logging.INFO):
+        data = report_prompting.call_ai_analysis(
+            "text",
+            False,
+            out,
+            ai_client=client,
+            request_id="req",
+            doc_fingerprint="fp_retry",
+        )
+    assert data["inquiries"] == []
+    attempts = [r for r in caplog.records if r.__dict__.get("bureau")]
+    assert any(r.__dict__.get("attempt") == 1 for r in attempts)
+    assert any(r.__dict__.get("attempt") == 2 for r in attempts)
 
 
 def test_call_ai_analysis_merges_segments(tmp_path):
@@ -289,6 +323,7 @@ def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
     client.add_chat_response(response)
 
     from backend.core.logic.report_analysis import analysis_cache
+
     analysis_cache.reset_cache()
 
     # Parsing stage

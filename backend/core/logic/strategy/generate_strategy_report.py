@@ -23,6 +23,7 @@ class StrategyGenerator:
         supporting_docs_text: str = "",
         run_date: str | None = None,
         classification_map: Dict[str, Dict[str, Any]] | None = None,
+        stage_2_5_data: Dict[str, Dict[str, Any]] | None = None,
         audit: AuditLogger | None = None,
     ) -> dict:
         """Return a strategy JSON object for internal analyst review."""
@@ -35,6 +36,28 @@ class StrategyGenerator:
             else ""
         )
 
+
+        account_context: Dict[str, Dict[str, Any]] = {}
+        if classification_map:
+            for acc_id, cls in classification_map.items():
+                account_context.setdefault(acc_id, {})["classification"] = cls
+        if stage_2_5_data:
+            for acc_id, data in stage_2_5_data.items():
+                account_context.setdefault(acc_id, {}).update(
+                    {
+                        "legal_safe_summary": data.get("legal_safe_summary"),
+                        "suggested_dispute_frame": data.get("suggested_dispute_frame", ""),
+                        "rule_hits": data.get("rule_hits", []),
+                        "needs_evidence": data.get("needs_evidence", []),
+                        "red_flags": data.get("red_flags", []),
+                    }
+                )
+        context_section = (
+            "\nAccount context:\n" + json.dumps(account_context, indent=2)
+            if account_context
+            else ""
+        )
+
         prompt = f"""
 You are a credit repair strategist. Analyze the client's credit report data and propose a concise plan of action.
 Client name: {client_name}
@@ -42,19 +65,25 @@ Run date: {run_date}
 
 Credit report data:
 {json.dumps(bureau_data, indent=2)}
-{docs_section}
+{context_section}{docs_section}
 
 Return only a JSON object with this structure:
 {{
   "overview": "...",
   "accounts": [{{
+    "account_id": "",
     "name": "",
     "account_number": "",
     "status": "",
     "analysis": "",
     "recommendation": "",
     "alternative_options": [],
-    "flags": []
+    "flags": [],
+    "legal_safe_summary": "",
+    "suggested_dispute_frame": "",
+    "rule_hits": [],
+    "needs_evidence": [],
+    "red_flags": []
   }}],
   "global_recommendations": []
 }}
@@ -86,6 +115,20 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                 "strategist_failure",
                 {"failure_reason": failure_reason.value},
             )
+        if isinstance(report, dict) and stage_2_5_data:
+            for acc in report.get("accounts", []):
+                acc_id = str(acc.get("account_id", ""))
+                data = stage_2_5_data.get(acc_id)
+                if not data:
+                    continue
+                acc.setdefault("legal_safe_summary", data.get("legal_safe_summary"))
+                acc.setdefault(
+                    "suggested_dispute_frame", data.get("suggested_dispute_frame", "")
+                )
+                acc.setdefault("rule_hits", data.get("rule_hits", []))
+                acc.setdefault("needs_evidence", data.get("needs_evidence", []))
+                acc.setdefault("red_flags", data.get("red_flags", []))
+
         fix_draft_with_guardrails(
             json.dumps(report, indent=2),
             client_info.get("state"),
@@ -101,6 +144,7 @@ Ensure the response is strictly valid JSON: all property names and strings in do
         client_info: dict,
         run_date: str,
         base_dir: str = "Clients",
+        stage_2_5_data: Dict[str, Dict[str, Any]] | None = None,
     ) -> Path:
         """Save the strategy JSON under the client's folder and return the path."""
         safe_name = (
@@ -113,6 +157,18 @@ Ensure the response is strictly valid JSON: all property names and strings in do
             / f"{safe_name}_{session_id}"
         )
         folder.mkdir(parents=True, exist_ok=True)
+        if stage_2_5_data:
+            for acc in report.get("accounts", []):
+                acc_id = str(acc.get("account_id", ""))
+                data = stage_2_5_data.get(acc_id)
+                if data:
+                    acc.setdefault("legal_safe_summary", data.get("legal_safe_summary"))
+                    acc.setdefault(
+                        "suggested_dispute_frame", data.get("suggested_dispute_frame", "")
+                    )
+                    acc.setdefault("rule_hits", data.get("rule_hits", []))
+                    acc.setdefault("needs_evidence", data.get("needs_evidence", []))
+                    acc.setdefault("red_flags", data.get("red_flags", []))
         path = folder / "strategy.json"
         with open(path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2, ensure_ascii=False)

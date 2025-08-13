@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Protocol
 
+from backend.audit.audit import emit_event
+
 
 class Rulebook(Protocol):
     """Protocol representing a rulebook with a version attribute."""
@@ -30,7 +32,10 @@ def evaluate_rules(
 
 
 def normalize_and_tag(
-    account_cls: Dict[str, Any], account_facts: Dict[str, Any], rulebook: Rulebook
+    account_cls: Dict[str, Any],
+    account_facts: Dict[str, Any],
+    rulebook: Rulebook,
+    account_id: str | None = None,
 ) -> Dict[str, Any]:
     """Normalize user statements and tag accounts with rulebook metadata."""
 
@@ -45,7 +50,7 @@ def normalize_and_tag(
     if not rulebook_version and isinstance(rulebook, Mapping):
         rulebook_version = str(rulebook.get("version", ""))
 
-    return {
+    result = {
         "legal_safe_summary": legal_safe_summary,
         "suggested_dispute_frame": "",
         "rule_hits": evaluation.get("rule_hits", []),
@@ -53,6 +58,16 @@ def normalize_and_tag(
         "red_flags": evaluation.get("red_flags", []),
         "rulebook_version": rulebook_version,
     }
+    if account_id:
+        emit_event(
+            "rule_evaluated",
+            {
+                "account_id": account_id,
+                "rule_hits": result["rule_hits"],
+                "rulebook_version": rulebook_version,
+            },
+        )
+    return result
 
 
 __all__ = [

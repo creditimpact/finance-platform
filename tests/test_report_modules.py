@@ -8,6 +8,7 @@ import pytest
 
 # Ensure tests/helpers is importable
 sys.path.append(str(Path(__file__).resolve().parents[1]))
+import backend.core.logic.report_analysis.report_prompting as report_prompting
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
@@ -201,11 +202,7 @@ def test_call_ai_analysis_retries_on_low_recall(tmp_path, caplog, monkeypatch):
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [
         str(
-            Path(__file__).resolve().parents[1]
-            / "backend"
-            / "core"
-            / "logic"
-            / "utils"
+            Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils"
         )
     ]
     sys.modules["backend.core.logic.utils"] = utils_pkg
@@ -266,8 +263,7 @@ def test_call_ai_analysis_retries_on_low_recall(tmp_path, caplog, monkeypatch):
         for r in caplog.records
     )
     assert any(
-        "Chase" in (r.__dict__.get("unmatched_headings") or [])
-        for r in caplog.records
+        "Chase" in (r.__dict__.get("unmatched_headings") or []) for r in caplog.records
     )
 
 
@@ -318,11 +314,7 @@ def test_call_ai_analysis_adds_confidence_and_flags(tmp_path, monkeypatch):
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [
         str(
-            Path(__file__).resolve().parents[1]
-            / "backend"
-            / "core"
-            / "logic"
-            / "utils"
+            Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils"
         )
     ]
     sys.modules["backend.core.logic.utils"] = utils_pkg
@@ -376,11 +368,7 @@ def test_call_ai_analysis_remediates_missing_account(tmp_path, monkeypatch):
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [
         str(
-            Path(__file__).resolve().parents[1]
-            / "backend"
-            / "core"
-            / "logic"
-            / "utils"
+            Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils"
         )
     ]
     sys.modules["backend.core.logic.utils"] = utils_pkg
@@ -406,12 +394,12 @@ def test_call_ai_analysis_remediates_missing_account(tmp_path, monkeypatch):
     monkeypatch.setattr(
         report_prompting,
         "extract_account_headings",
-            lambda text: [
-                ("cap one", "Cap One"),
-                ("chase", "Chase"),
-                ("citi", "Citi"),
-                ("bofa", "BofA"),
-            ],
+        lambda text: [
+            ("cap one", "Cap One"),
+            ("chase", "Chase"),
+            ("citi", "Citi"),
+            ("bofa", "BofA"),
+        ],
     )
     monkeypatch.setattr(
         report_prompting,
@@ -419,7 +407,9 @@ def test_call_ai_analysis_remediates_missing_account(tmp_path, monkeypatch):
         lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
     )
     monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
-    monkeypatch.setattr(report_prompting, "normalize_creditor_name", lambda n: (n or "").lower())
+    monkeypatch.setattr(
+        report_prompting, "normalize_creditor_name", lambda n: (n or "").lower()
+    )
 
     out = tmp_path / "result.json"
     data = report_prompting.call_ai_analysis(
@@ -445,11 +435,7 @@ def test_call_ai_analysis_remediates_merged_account(tmp_path, monkeypatch):
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [
         str(
-            Path(__file__).resolve().parents[1]
-            / "backend"
-            / "core"
-            / "logic"
-            / "utils"
+            Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils"
         )
     ]
     sys.modules["backend.core.logic.utils"] = utils_pkg
@@ -483,7 +469,9 @@ def test_call_ai_analysis_remediates_merged_account(tmp_path, monkeypatch):
         lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
     )
     monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
-    monkeypatch.setattr(report_prompting, "normalize_creditor_name", lambda n: (n or "").lower())
+    monkeypatch.setattr(
+        report_prompting, "normalize_creditor_name", lambda n: (n or "").lower()
+    )
 
     out = tmp_path / "result.json"
     data = report_prompting.call_ai_analysis(
@@ -667,3 +655,62 @@ def test_analyze_credit_report_skips_ai(monkeypatch, tmp_path):
     assert result["negative_accounts"] == []
     assert result["prompt_version"] == report_prompting.ANALYSIS_PROMPT_VERSION
     assert result["schema_version"] == report_prompting.ANALYSIS_SCHEMA_VERSION
+
+
+def test_merge_accounts_under_merge():
+    dest = [
+        {
+            "name": "ACME BANK",
+            "opened_date": "01/01/2020",
+            "balance": "$1,000",
+            "bureaus": ["Experian"],
+            "confidence": 0.5,
+        }
+    ]
+    new = [
+        {
+            "name": "Acme Bank",
+            "opened_date": "01/05/2020",
+            "balance": "$1,005",
+            "bureaus": ["Experian"],
+            "confidence": 0.8,
+        }
+    ]
+    report_prompting._merge_accounts(dest, new)
+    assert len(dest) == 1
+    assert dest[0]["confidence"] == 0.8
+
+
+def test_merge_accounts_over_merge():
+    dest = [
+        {
+            "name": "ACME BANK",
+            "opened_date": "01/01/2020",
+            "balance": "$1,000",
+            "bureaus": ["Experian"],
+        }
+    ]
+    new = [
+        {
+            "name": "Acme Bank",
+            "opened_date": "03/15/2021",
+            "balance": "$5,000",
+            "bureaus": ["Experian"],
+        }
+    ]
+    report_prompting._merge_accounts(dest, new)
+    assert len(dest) == 2
+
+
+def test_merge_inquiries_under_merge():
+    dest = [{"creditor_name": "ACME BANK", "date": "01/01/2020", "bureau": "Experian"}]
+    new = [{"creditor_name": "Acme Bank", "date": "01/07/2020", "bureau": "Experian"}]
+    report_prompting._merge_inquiries(dest, new)
+    assert len(dest) == 1
+
+
+def test_merge_inquiries_over_merge():
+    dest = [{"creditor_name": "ACME BANK", "date": "01/01/2020", "bureau": "Experian"}]
+    new = [{"creditor_name": "Acme Bank", "date": "02/20/2020", "bureau": "Experian"}]
+    report_prompting._merge_inquiries(dest, new)
+    assert len(dest) == 2

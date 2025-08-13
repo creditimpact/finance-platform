@@ -57,21 +57,21 @@ def analyze_credit_report(
 
     raw_goal = client_info.get("goal", "").strip().lower()
     if raw_goal in ["", "not specified", "improve credit", "repair credit"]:
-        client_goal = (
+        strategic_context = (
             "Improve credit score significantly within the next 3-6 months using strategies such as authorized users, "
             "credit building tools, and removal of negative items."
         )
     else:
-        client_goal = client_info.get("goal", "Not specified")
+        strategic_context = client_info.get("goal", "Not specified")
 
     is_identity_theft = client_info.get("is_identity_theft", False)
     if run_ai:
         result = call_ai_analysis(
             text,
-            client_goal,
             is_identity_theft,
             Path(output_json_path),
             ai_client=ai_client,
+            strategic_context=strategic_context,
         )
     else:
         result = {

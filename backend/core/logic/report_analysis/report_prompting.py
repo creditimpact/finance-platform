@@ -11,10 +11,10 @@ from backend.core.services.ai_client import AIClient
 
 def call_ai_analysis(
     text: str,
-    client_goal: str,
     is_identity_theft: bool,
     output_json_path: Path,
     ai_client: AIClient,
+    strategic_context: str | None = None,
 ):
     """Analyze raw report text using an AI model and return parsed JSON.
 
@@ -22,8 +22,6 @@ def call_ai_analysis(
     ----------
     text:
         Raw text extracted from the report.
-    client_goal:
-        High level goal provided by the client.
     is_identity_theft:
         Flag indicating if the report relates to an identity theft case.
     output_json_path:
@@ -32,6 +30,9 @@ def call_ai_analysis(
     ai_client:
         Instance of :class:`services.ai_client.AIClient` used to make the
         request.
+    strategic_context:
+        Optional high level context derived from server-side ``client_info``
+        fields. This string is inserted directly into the prompt if provided.
 
     Returns
     -------
@@ -72,14 +73,17 @@ def call_ai_analysis(
     else:
         inquiry_summary = "\nNo inquiries were detected by the parser."
 
+    strategic_context_line = (
+        f'Strategic context: "{strategic_context}"\n' if strategic_context else ""
+    )
+
     prompt = f"""
 You are a senior credit repair expert with deep knowledge of credit reports, FCRA regulations, dispute strategies, and client psychology.
 
 Your task: deeply analyze the following SmartCredit report text and extract a structured JSON summary for use in automated dispute and goodwill letters, and personalized client instructions.
 
-Client goal: "{client_goal}"
 Identity theft case: {"Yes" if is_identity_theft else "No"}
-
+{strategic_context_line}
 Return only valid JSON with all property names in double quotes. No comments or extra text outside the JSON object.
 
 Return this exact JSON structure:

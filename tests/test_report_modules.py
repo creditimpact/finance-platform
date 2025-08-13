@@ -41,7 +41,12 @@ def test_extract_text_from_pdf_calls_pdf_ops(monkeypatch):
     assert called["max_chars"] == 150000
 
 
-def test_call_ai_analysis_parses_json(tmp_path):
+def test_call_ai_analysis_parses_json(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANALYSIS_DEBUG_STORE_RAW", "1")
+    import backend.api.config as conf
+
+    importlib.reload(conf)
+
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [
         str(
@@ -71,6 +76,7 @@ def test_call_ai_analysis_parses_json(tmp_path):
     )
     assert data["inquiries"] == []
     assert out.with_name(out.stem + "_raw.txt").exists()
+    report_prompting.ANALYSIS_DEBUG_STORE_RAW = False
 
 
 def test_call_ai_analysis_populates_defaults_and_logs(tmp_path, caplog):

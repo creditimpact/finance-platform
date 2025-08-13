@@ -34,6 +34,7 @@ def env_int(name: str, default: int) -> int:
 CLASSIFY_CACHE_ENABLED = env_bool("CLASSIFY_CACHE_ENABLED", True)
 CLASSIFY_CACHE_MAXSIZE = env_int("CLASSIFY_CACHE_MAXSIZE", 5000)
 CLASSIFY_CACHE_TTL_SEC = env_int("CLASSIFY_CACHE_TTL_SEC", 0)
+ANALYSIS_DEBUG_STORE_RAW = env_bool("ANALYSIS_DEBUG_STORE_RAW", False)
 
 
 @dataclass

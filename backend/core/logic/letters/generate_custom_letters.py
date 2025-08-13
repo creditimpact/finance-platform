@@ -45,14 +45,34 @@ def call_gpt_for_custom_letter(
     audit: AuditLogger | None,
     ai_client: AIClient,
 ) -> str:
+    from backend.api.session_manager import get_session, update_session
+    from backend.core.logic.strategy.summary_classifier import summary_hash
+    import time
+
     docs_line = f"Supporting documents summary:\n{docs_text}" if docs_text else ""
-    classification = classify_client_summary(
-        structured_summary,
-        ai_client,
-        state,
-        session_id=session_id,
-        account_id=structured_summary.get("account_id"),
-    )
+
+    acc_id = structured_summary.get("account_id")
+    session = get_session(session_id or "") or {}
+    cache = session.get("summary_classifications", {})
+    struct_hash = summary_hash(structured_summary)
+    cached = cache.get(acc_id) if acc_id and isinstance(cache, dict) else None
+    if cached and cached.get("summary_hash") == struct_hash:
+        classification = cached.get("classification", {})
+    else:
+        classification = classify_client_summary(
+            structured_summary,
+            ai_client,
+            state,
+            session_id=session_id,
+            account_id=acc_id,
+        )
+        if acc_id:
+            cache[acc_id] = {
+                "summary_hash": struct_hash,
+                "classified_at": time.time(),
+                "classification": classification,
+            }
+            update_session(session_id, summary_classifications=cache)
     neutral_phrase, neutral_reason = get_neutral_phrase(
         classification.get("category"), structured_summary
     )

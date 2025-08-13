@@ -21,7 +21,12 @@ class _CacheEntry:
 _CACHE: Dict[Tuple[str, str, str], _CacheEntry] = {}
 
 
-def _summary_hash(summary: Mapping[str, Any]) -> str:
+def summary_hash(summary: Mapping[str, Any]) -> str:
+    """Return a stable hash for ``summary``.
+
+    The hash is used to detect when a structured summary has changed so that
+    expensive AI classification calls can be skipped when possible.
+    """
     data = json.dumps(summary, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
@@ -29,7 +34,7 @@ def _summary_hash(summary: Mapping[str, Any]) -> str:
 def _cache_get(
     session_id: str, account_id: str, summary: Mapping[str, Any]
 ) -> Mapping[str, str] | None:
-    key = (session_id, account_id, _summary_hash(summary))
+    key = (session_id, account_id, summary_hash(summary))
     entry = _CACHE.get(key)
     if not entry:
         return None
@@ -46,7 +51,7 @@ def _cache_set(
     value: Mapping[str, str],
     ttl: float | None,
 ) -> None:
-    key = (session_id, account_id, _summary_hash(summary))
+    key = (session_id, account_id, summary_hash(summary))
     _CACHE[key] = _CacheEntry(value=value, timestamp=time.time(), ttl=ttl)
 
 
@@ -155,4 +160,4 @@ def classify_client_summary(
     return result
 
 
-__all__ = ["classify_client_summary", "invalidate_summary_cache"]
+__all__ = ["classify_client_summary", "invalidate_summary_cache", "summary_hash"]

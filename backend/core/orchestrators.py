@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from shutil import copyfile
 from typing import Any, Mapping
+import time
 
 from backend.analytics.analytics.strategist_failures import \
     tally_failure_reasons
@@ -72,17 +73,42 @@ def process_client_intake(client_info, audit):
 def classify_client_responses(
     structured_map, raw_map, client_info, audit, ai_client: AIClient
 ):
-    """Classify client summaries for each account."""
+    """Classify client summaries for each account.
+
+    Results are cached in the session store keyed by a hash of the structured
+    summary for each account.  Subsequent calls with the same summary skip the
+    expensive classification step and reuse the stored data.
+    """
+    from backend.api.session_manager import get_session, update_session
+    from backend.core.logic.strategy.summary_classifier import summary_hash
+
     classification_map: dict[str, dict] = {}
     session_id = client_info.get("session_id")
+    session = get_session(session_id or "") or {}
+    cache = session.get("summary_classifications", {}) if session_id else {}
+
+    updated = False
     for acc_id, struct in structured_map.items():
-        cls = classify_client_summary(
-            struct,
-            ai_client,
-            client_info.get("state"),
-            session_id=session_id,
-            account_id=acc_id,
-        )
+        struct_hash = summary_hash(struct)
+        cached = cache.get(acc_id) if isinstance(cache, dict) else None
+        cls = None
+        if cached and cached.get("summary_hash") == struct_hash:
+            cls = cached.get("classification", {})
+        else:
+            cls = classify_client_summary(
+                struct,
+                ai_client,
+                client_info.get("state"),
+                session_id=session_id,
+                account_id=acc_id,
+            )
+            if session_id:
+                cache[acc_id] = {
+                    "summary_hash": struct_hash,
+                    "classified_at": time.time(),
+                    "classification": cls,
+                }
+                updated = True
         classification_map[acc_id] = cls
         audit.log_account(
             acc_id,
@@ -93,6 +119,9 @@ def classify_client_responses(
                 "classification": cls,
             },
         )
+
+    if session_id and updated:
+        update_session(session_id, summary_classifications=cache)
     return classification_map
 
 

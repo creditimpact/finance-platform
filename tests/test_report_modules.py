@@ -60,7 +60,7 @@ def test_call_ai_analysis_parses_json(tmp_path):
     client.add_chat_response('{"inquiries": [], "all_accounts": []}')
     out = tmp_path / "result.json"
     data = report_prompting.call_ai_analysis(
-        "text", "goal", False, out, ai_client=client
+        "text", False, out, ai_client=client, strategic_context="goal"
     )
     assert data["inquiries"] == []
     assert out.with_name(out.stem + "_raw.txt").exists()
@@ -184,10 +184,10 @@ def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
 
     baseline = report_prompting.call_ai_analysis(
         "text",
-        default_goal,
         identity_theft,
         tmp_path / "baseline.json",
         ai_client=client,
+        strategic_context=default_goal,
     )
 
     result = analyze_report.analyze_credit_report(

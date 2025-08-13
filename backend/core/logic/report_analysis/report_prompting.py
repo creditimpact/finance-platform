@@ -397,6 +397,44 @@ def call_ai_analysis(
                         late_summary_text=late_summary_text,
                         inquiry_summary=inquiry_summary,
                     )
+                    headings = extract_account_headings(seg_text_attempt)
+                    if headings:
+                        account_names = set()
+                        for list_name in [
+                            "all_accounts",
+                            "negative_accounts",
+                            "open_accounts_with_issues",
+                            "positive_accounts",
+                            "high_utilization_accounts",
+                        ]:
+                            for acc in data.get(list_name, []):
+                                account_names.add(
+                                    normalize_creditor_name(acc.get("name", ""))
+                                )
+                        unmatched_norms = {
+                            norm for norm, _ in headings if norm not in account_names
+                        }
+                        unmatched_raws = [
+                            raw for norm, raw in headings if norm in unmatched_norms
+                        ]
+                        if unmatched_raws:
+                            logging.info(
+                                "negative_headings_without_accounts",
+                                extra={"unmatched_headings": unmatched_raws},
+                            )
+                        if not error_code and headings:
+                            match_rate = (
+                                (len(headings) - len(unmatched_norms)) / len(headings)
+                            ) * 100
+                            if match_rate < 70:
+                                logging.warning(
+                                    "low_recall_accounts",
+                                    extra={
+                                        "match_rate": match_rate,
+                                        "validation_errors": ["LOW_RECALL"],
+                                    },
+                                )
+                                error_code = "LOW_RECALL"
                     if not error_code:
                         store_cached_analysis(
                             doc_fingerprint,

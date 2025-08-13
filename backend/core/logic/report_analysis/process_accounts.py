@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, cast
 
 from backend.audit.audit import AuditLogger
 from backend.core.logic.compliance.constants import FallbackReason
@@ -105,7 +105,7 @@ def infer_recovery_summary(account: Account) -> str:
 
 def load_analyzed_report(json_path: Path) -> Mapping[str, Any]:
     with open(json_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        return cast(Mapping[str, Any], json.load(f))
 
 
 # 🎯 Process and categorize by bureau
@@ -123,7 +123,7 @@ def process_analyzed_report(
     """
     data = load_analyzed_report(Path(json_path))
 
-    output = {
+    output: Dict[str, Dict[str, List[Any]]] = {
         bureau: {
             "disputes": [],
             "goodwill": [],
@@ -211,8 +211,8 @@ def process_analyzed_report(
                 )
 
     # 4. Inquiries (exclude matched)
-    def norm(name: str) -> str:
-        return normalize_creditor_name(name or "")
+    def norm(name: str | None) -> str:
+        return cast(str, normalize_creditor_name(name or ""))
 
     matched_names = set()
     for match in data.get("account_inquiry_matches", []):

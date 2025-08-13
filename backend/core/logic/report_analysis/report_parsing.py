@@ -1,7 +1,7 @@
 """Utilities for parsing credit report PDFs into text and sections."""
 
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 
 def extract_text_from_pdf(pdf_path: str | Path) -> str:
@@ -23,14 +23,14 @@ def extract_text_from_pdf(pdf_path: str | Path) -> str:
     """
     from backend.core.logic.utils.pdf_ops import extract_pdf_text_safe
 
-    return extract_pdf_text_safe(Path(pdf_path), max_chars=150000)
+    return cast(str, extract_pdf_text_safe(Path(pdf_path), max_chars=150000))
 
 
 from backend.core.models.bureau import BureauAccount  # noqa: E402
 
 
 def bureau_data_from_dict(
-    data: Mapping[str, list[dict[str, Any]]]
+    data: Mapping[str, list[dict[str, Any]]],
 ) -> Mapping[str, list[BureauAccount]]:
     """Convert raw bureau ``data`` to typed ``BureauAccount`` objects.
 

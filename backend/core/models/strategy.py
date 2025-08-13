@@ -34,6 +34,11 @@ class StrategyItem:
     name: str
     account_number: Optional[str] = None
     recommendation: Recommendation | None = None
+    legal_safe_summary: Optional[str] = None
+    suggested_dispute_frame: Optional[str] = None
+    rule_hits: List[str] = field(default_factory=list)
+    needs_evidence: List[str] = field(default_factory=list)
+    red_flags: List[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "StrategyItem":
@@ -42,6 +47,11 @@ class StrategyItem:
             name=data.get("name", ""),
             account_number=data.get("account_number"),
             recommendation=Recommendation.from_dict(data) if data else None,
+            legal_safe_summary=data.get("legal_safe_summary"),
+            suggested_dispute_frame=data.get("suggested_dispute_frame"),
+            rule_hits=list(data.get("rule_hits", []) or []),
+            needs_evidence=list(data.get("needs_evidence", []) or []),
+            red_flags=list(data.get("red_flags", []) or []),
         )
 
     def to_dict(self) -> dict[str, Any]:

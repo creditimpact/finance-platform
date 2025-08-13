@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import time
 from copy import deepcopy
@@ -15,6 +14,7 @@ from jsonschema import Draft7Validator
 
 from backend.analytics.analytics_tracker import log_ai_request
 from backend.audit.audit import emit_event
+from backend.core.logic.report_analysis.flags import FLAGS
 from backend.core.logic.utils.inquiries import extract_inquiries
 from backend.core.logic.utils.json_utils import parse_json
 from backend.core.logic.utils.names_normalization import (
@@ -38,18 +38,6 @@ _ANALYSIS_VALIDATOR = Draft7Validator(_ANALYSIS_SCHEMA)
 
 ANALYSIS_PROMPT_VERSION = 1
 ANALYSIS_SCHEMA_VERSION = 1
-
-try:  # pragma: no cover - fallback when app config is unavailable
-    from backend.api.config import ANALYSIS_DEBUG_STORE_RAW
-except Exception:  # pragma: no cover
-
-    def _env_bool(name: str, default: bool) -> bool:
-        value = os.getenv(name)
-        if value is None:
-            return default
-        return value.lower() not in {"0", "false", "no"}
-
-    ANALYSIS_DEBUG_STORE_RAW = _env_bool("ANALYSIS_DEBUG_STORE_RAW", False)
 
 
 def _apply_defaults(data: dict, schema: dict) -> None:
@@ -112,13 +100,16 @@ def _run_segment(
     strategic_context: str | None,
 ) -> tuple[dict, dict]:
     """Run the existing prompt/analysis flow for a single bureau segment."""
-    headings = extract_account_headings(segment_text)
-    if headings:
-        heading_summary = "Account Headings:\n" + "\n".join(
-            f"- {norm.title()} (raw: {raw})" for norm, raw in headings
-        )
+    if FLAGS.inject_headings:
+        headings = extract_account_headings(segment_text)
+        if headings:
+            heading_summary = "Account Headings:\n" + "\n".join(
+                f"- {norm.title()} (raw: {raw})" for norm, raw in headings
+            )
+        else:
+            heading_summary = "Account Headings:\n- None detected"
     else:
-        heading_summary = "Account Headings:\n- None detected"
+        heading_summary = ""
 
     late_blocks, late_raw_map = extract_late_history_blocks(
         segment_text, return_raw_map=True
@@ -291,7 +282,7 @@ Report text:
         content = content.replace("```json", "").replace("```", "").strip()
 
     raw_path = output_json_path.with_name(output_json_path.stem + "_raw.txt")
-    if ANALYSIS_DEBUG_STORE_RAW:
+    if FLAGS.debug_store_raw:
         red_content = redact_pii(content)
         red_late = redact_pii(late_summary_text)
         red_inquiry = redact_pii(inquiry_summary)
@@ -369,7 +360,8 @@ def call_ai_analysis(
     doc_fingerprint: str,
 ):
     """Analyze raw report text using an AI model and return parsed JSON."""
-    segments = _split_text_by_bureau(text)
+    logging.debug("analysis_flags", extra={"flags": FLAGS.__dict__})
+    segments = _split_text_by_bureau(text) if FLAGS.chunk_by_bureau else {"Full": text}
 
     aggregate: dict = {
         "negative_accounts": [],

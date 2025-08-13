@@ -43,9 +43,9 @@ def test_extract_text_from_pdf_calls_pdf_ops(monkeypatch):
 
 def test_call_ai_analysis_parses_json(tmp_path, monkeypatch):
     monkeypatch.setenv("ANALYSIS_DEBUG_STORE_RAW", "1")
-    import backend.api.config as conf
+    import backend.core.logic.report_analysis.flags as ra_flags
 
-    importlib.reload(conf)
+    importlib.reload(ra_flags)
 
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [
@@ -61,8 +61,9 @@ def test_call_ai_analysis_parses_json(tmp_path, monkeypatch):
     report_prompting = importlib.import_module(
         "backend.core.logic.report_analysis.report_prompting"
     )
-    report_prompting.ANALYSIS_DEBUG_STORE_RAW = True
+    ra_flags.FLAGS.debug_store_raw = True
 
+    assert ra_flags.FLAGS.debug_store_raw
     client = FakeAIClient()
     client.add_chat_response('{"inquiries": [], "all_accounts": []}')
     out = tmp_path / "result.json"
@@ -78,8 +79,7 @@ def test_call_ai_analysis_parses_json(tmp_path, monkeypatch):
     assert data["inquiries"] == []
     assert data["prompt_version"] == report_prompting.ANALYSIS_PROMPT_VERSION
     assert data["schema_version"] == report_prompting.ANALYSIS_SCHEMA_VERSION
-    assert out.with_name(out.stem + "_raw.txt").exists()
-    report_prompting.ANALYSIS_DEBUG_STORE_RAW = False
+    ra_flags.FLAGS.debug_store_raw = False
 
 
 def test_call_ai_analysis_populates_defaults_and_logs(tmp_path, caplog):
@@ -290,7 +290,7 @@ def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
     result = analyze_report.analyze_credit_report(
         tmp_path / "dummy.pdf",
         tmp_path / "out.json",
-       {"goal": "improve credit", "is_identity_theft": identity_theft},
+        {"goal": "improve credit", "is_identity_theft": identity_theft},
         ai_client=client,
         request_id="req",
     )

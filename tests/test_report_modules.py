@@ -305,6 +305,61 @@ def test_call_ai_analysis_merges_segments(tmp_path):
     ]
 
 
+def test_call_ai_analysis_adds_confidence_and_flags(tmp_path, monkeypatch):
+    utils_pkg = types.ModuleType("backend.core.logic.utils")
+    utils_pkg.__path__ = [
+        str(
+            Path(__file__).resolve().parents[1]
+            / "backend"
+            / "core"
+            / "logic"
+            / "utils"
+        )
+    ]
+    sys.modules["backend.core.logic.utils"] = utils_pkg
+
+    fake_pdf_ops = types.ModuleType("backend.core.logic.utils.pdf_ops")
+    fake_pdf_ops.extract_pdf_text_safe = lambda *a, **k: ""
+    sys.modules.setdefault("backend.core.logic.utils.pdf_ops", fake_pdf_ops)
+    report_prompting = importlib.import_module(
+        "backend.core.logic.report_analysis.report_prompting"
+    )
+    from backend.core.logic.report_analysis import analysis_cache
+
+    analysis_cache.reset_cache()
+
+    client = FakeAIClient()
+    client.add_chat_response(
+        '{"all_accounts": [{"name": "Cap One", "bureaus": ["Experian"]}], "inquiries": []}'
+    )
+
+    monkeypatch.setattr(
+        report_prompting,
+        "extract_account_headings",
+        lambda text: [("capital one", "Cap One")],
+    )
+    monkeypatch.setattr(
+        report_prompting,
+        "extract_late_history_blocks",
+        lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
+    )
+    monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
+
+    out = tmp_path / "result.json"
+    data = report_prompting.call_ai_analysis(
+        "Experian section",
+        False,
+        out,
+        ai_client=client,
+        request_id="req",
+        doc_fingerprint="fp_conf",
+    )
+
+    assert data["all_accounts"][0]["confidence"] == 1.0
+    assert "needs_human_review" in data
+    assert "missing_bureaus" in data
+
+
 def test_sanitize_late_counts_removes_unrealistic():
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [

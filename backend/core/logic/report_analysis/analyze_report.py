@@ -100,6 +100,8 @@ def analyze_credit_report(
             "high_utilization_accounts": [],
             "all_accounts": [],
             "inquiries": [],
+            "needs_human_review": False,
+            "missing_bureaus": [],
         }
 
     result["prompt_version"] = ANALYSIS_PROMPT_VERSION

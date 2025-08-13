@@ -8,6 +8,7 @@ import logging
 import re
 import time
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 
@@ -345,68 +346,136 @@ def _run_segment(
     return data, None, tokens_in, tokens_out
 
 
+def _parse_date(date_str: str | None) -> datetime | None:
+    """Parse a date string using common formats."""
+    if not date_str:
+        return None
+    for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%m.%d.%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(date_str, fmt)
+        except Exception:
+            continue
+    return None
+
+
+def _date_bucket(date_str: str | None) -> int | None:
+    """Return a 7-day bucket identifier for ``date_str``."""
+    dt = _parse_date(date_str)
+    if not dt:
+        return None
+    return dt.toordinal() // 7
+
+
+def _balance_bucket(balance: str | None) -> int | None:
+    """Bucketize balance amounts to $100 increments."""
+    if balance is None:
+        return None
+    clean = re.sub(r"[^0-9.]+", "", str(balance))
+    if not clean:
+        return None
+    try:
+        amount = float(clean)
+    except Exception:
+        return None
+    return int(amount // 100)
+
+
 def _merge_accounts(dest: List[dict], new: List[dict]) -> None:
-    """Merge account lists, combining bureau info."""
-    index = {
-        (normalize_creditor_name(a.get("name", "")), a.get("account_number")): a
-        for a in dest
-    }
-    for acc in new:
-        key = (
-            normalize_creditor_name(acc.get("name", "")),
-            acc.get("account_number"),
+    """Merge account lists using weighted keys."""
+
+    def _account_keys(acc: dict, include_variants: bool) -> List[tuple]:
+        name = normalize_creditor_name(acc.get("name", ""))
+        bucket = _date_bucket(acc.get("opened_date"))
+        bal_bucket = _balance_bucket(acc.get("balance"))
+        bureaus = acc.get("bureaus") or (
+            [acc.get("bureau")] if acc.get("bureau") else []
         )
-        existing = index.get(key)
+        bureaus = [normalize_bureau_name(b) for b in bureaus]
+        bureaus.append(None)
+        buckets = [bucket]
+        if include_variants and bucket is not None:
+            buckets.extend([bucket - 1, bucket + 1])
+        keys = []
+        for b in bureaus:
+            for db in buckets:
+                keys.append((name, db, bal_bucket, b))
+        return keys
+
+    index: dict[tuple, dict] = {}
+    for a in dest:
+        bureaus = a.get("bureaus") or ([a.get("bureau")] if a.get("bureau") else [])
+        a["bureaus"] = [normalize_bureau_name(b) for b in bureaus]
+        for key in _account_keys(a, include_variants=False):
+            index[key] = a
+
+    for acc in new:
+        bureaus = acc.get("bureaus") or (
+            [acc.get("bureau")] if acc.get("bureau") else []
+        )
+        bureaus = [normalize_bureau_name(b) for b in bureaus]
+        acc["bureaus"] = bureaus
+        existing = None
+        for key in _account_keys(acc, include_variants=True):
+            if key in index:
+                existing = index[key]
+                break
         if existing:
             existing_bureaus = {
                 normalize_bureau_name(b) for b in existing.get("bureaus", [])
             }
-            new_bureaus = {normalize_bureau_name(b) for b in acc.get("bureaus", [])}
-            existing["bureaus"] = sorted(existing_bureaus | new_bureaus)
+            existing["bureaus"] = sorted(existing_bureaus | set(bureaus))
             for k, v in acc.items():
                 if k == "bureaus":
                     continue
                 if k == "confidence":
-                    existing["confidence"] = max(
-                        existing.get("confidence", 0), v
-                    )
+                    existing["confidence"] = max(existing.get("confidence", 0), v)
                     continue
                 if k not in existing or not existing[k]:
                     existing[k] = v
+            for key in _account_keys(existing, include_variants=False):
+                index[key] = existing
         else:
-            acc["bureaus"] = [normalize_bureau_name(b) for b in acc.get("bureaus", [])]
             dest.append(acc)
-            index[key] = acc
+            for key in _account_keys(acc, include_variants=False):
+                index[key] = acc
 
 
 def _merge_inquiries(dest: List[dict], new: List[dict]) -> None:
-    """Merge inquiry lists without duplicates."""
-    index = {
-        (
-            normalize_creditor_name(i.get("creditor_name")),
-            i.get("date"),
-            normalize_bureau_name(i.get("bureau")),
-        ): i
-        for i in dest
-    }
+    """Merge inquiry lists without duplicates using weighted keys."""
+
+    def _inq_keys(inq: dict, include_variants: bool) -> List[tuple]:
+        name = normalize_creditor_name(inq.get("creditor_name"))
+        bucket = _date_bucket(inq.get("date"))
+        bureau = normalize_bureau_name(inq.get("bureau"))
+        buckets = [bucket]
+        if include_variants and bucket is not None:
+            buckets.extend([bucket - 1, bucket + 1])
+        return [(name, b, 0, bureau) for b in buckets]
+
+    index = {}
+    for i in dest:
+        for key in _inq_keys(i, include_variants=False):
+            index[key] = i
     for inq in new:
-        key = (
-            normalize_creditor_name(inq.get("creditor_name")),
-            inq.get("date"),
-            normalize_bureau_name(inq.get("bureau")),
-        )
-        if key not in index:
-            inq["bureau"] = normalize_bureau_name(inq.get("bureau"))
-            dest.append(inq)
-            index[key] = inq
-        else:
-            existing = index[key]
+        existing = None
+        for key in _inq_keys(inq, include_variants=True):
+            if key in index:
+                existing = index[key]
+                break
+        if existing:
             existing["confidence"] = max(
                 existing.get("confidence", 0), inq.get("confidence", 0)
             )
+        else:
+            inq["bureau"] = normalize_bureau_name(inq.get("bureau"))
+            dest.append(inq)
+            for key in _inq_keys(inq, include_variants=False):
+                index[key] = inq
 
 
-def _detect_segment_issues(seg_text: str, data: dict, bureau: str) -> List[tuple[str, List[str]]]:
+def _detect_segment_issues(
+    seg_text: str, data: dict, bureau: str
+) -> List[tuple[str, List[str]]]:
     """Return list of (issue_code, related_items) tuples for a segment.
 
     Issues detected:
@@ -421,8 +490,7 @@ def _detect_segment_issues(seg_text: str, data: dict, bureau: str) -> List[tuple
 
     headings = extract_account_headings(seg_text)
     account_names = {
-        normalize_creditor_name(a.get("name", ""))
-        for a in data.get("all_accounts", [])
+        normalize_creditor_name(a.get("name", "")) for a in data.get("all_accounts", [])
     }
     missing = [raw for norm, raw in headings if norm not in account_names]
     if missing:
@@ -667,7 +735,9 @@ def call_ai_analysis(
                             _merge_accounts(data.setdefault(key, []), new_data[key])
 
                 if new_data.get("inquiries"):
-                    _merge_inquiries(data.setdefault("inquiries", []), new_data["inquiries"])
+                    _merge_inquiries(
+                        data.setdefault("inquiries", []), new_data["inquiries"]
+                    )
 
                 for key in [
                     "personal_info_issues",
@@ -705,7 +775,10 @@ def call_ai_analysis(
                 "attempts": attempt,
             },
         )
-        cost = tokens_total_in * _INPUT_COST_PER_TOKEN + tokens_total_out * _OUTPUT_COST_PER_TOKEN
+        cost = (
+            tokens_total_in * _INPUT_COST_PER_TOKEN
+            + tokens_total_out * _OUTPUT_COST_PER_TOKEN
+        )
         log_ai_request(tokens_total_in, tokens_total_out, cost, latency_ms)
 
         if error_code or data.get("confidence", 1) < 0.7:

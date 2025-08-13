@@ -1,13 +1,16 @@
 import importlib
 import time
 
-from backend.core.orchestrators import classify_client_responses
-from backend.core.logic.letters.generate_custom_letters import call_gpt_for_custom_letter
+from backend.core.logic.compliance.rules_loader import recompute_rules_version
+from backend.core.logic.letters.generate_custom_letters import (
+    call_gpt_for_custom_letter,
+)
 from backend.core.logic.letters.goodwill_preparation import prepare_account_summaries
 from backend.core.logic.strategy.summary_classifier import (
-    summary_hash,
     ClassificationRecord,
+    summary_hash,
 )
+from backend.core.orchestrators import classify_client_responses
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
@@ -26,9 +29,7 @@ def test_classify_client_responses_writes_metadata(monkeypatch):
     def fake_get(session_id: str):
         return store.get(session_id)
 
-    monkeypatch.setattr(
-        "backend.api.session_manager.update_session", fake_update
-    )
+    monkeypatch.setattr("backend.api.session_manager.update_session", fake_update)
     monkeypatch.setattr("backend.api.session_manager.get_session", fake_get)
 
     structured = {
@@ -47,6 +48,8 @@ def test_classify_client_responses_writes_metadata(monkeypatch):
     meta = store["sess1"]["summary_classifications"]["1"]
     assert meta["classification"]["category"] == "not_mine"
     assert meta["summary_hash"] == summary_hash(structured["1"])
+    assert meta["state"] == "CA"
+    assert meta["rules_version"] == recompute_rules_version()
 
 
 class FakeAudit:
@@ -60,7 +63,12 @@ def test_custom_letter_uses_cached_classification(monkeypatch):
     summary = {"account_id": "1", "facts_summary": "hi", "claimed_errors": []}
     record = ClassificationRecord(
         summary,
-        {"category": "goodwill", "legal_tag": "TAG", "dispute_approach": "A", "tone": "T"},
+        {
+            "category": "goodwill",
+            "legal_tag": "TAG",
+            "dispute_approach": "A",
+            "tone": "T",
+        },
         summary_hash(summary),
     )
     monkeypatch.setattr(
@@ -122,8 +130,10 @@ def _reload_classifier(monkeypatch, **env):
     for k, v in env.items():
         monkeypatch.setenv(k, str(v))
     import backend.api.config as conf
+
     importlib.reload(conf)
     import backend.core.logic.strategy.summary_classifier as sc
+
     importlib.reload(sc)
     sc.reset_cache()
     return sc
@@ -154,10 +164,14 @@ def test_cache_eviction_on_maxsize(monkeypatch):
     ai = FakeAIClient()
     for i, summary in enumerate(summaries, 1):
         ai.add_response('{"category": "not_mine"}')
-        sc.classify_client_summary(summary, ai_client=ai, session_id="s", account_id=str(i))
+        sc.classify_client_summary(
+            summary, ai_client=ai, session_id="s", account_id=str(i)
+        )
     assert sc.cache_evictions() == 1
     ai.add_response('{"category": "not_mine"}')
-    sc.classify_client_summary(summaries[0], ai_client=ai, session_id="s", account_id="1")
+    sc.classify_client_summary(
+        summaries[0], ai_client=ai, session_id="s", account_id="1"
+    )
     assert len(ai.chat_payloads) == 4
 
 
@@ -173,4 +187,45 @@ def test_cache_ttl_expiry(monkeypatch):
     assert sc.cache_hits() == 0
     assert sc.cache_misses() == 2
     assert sc.cache_evictions() >= 1
+    assert len(ai.chat_payloads) == 2
+
+
+def test_rules_version_mismatch_triggers_reclassify(monkeypatch):
+    sc = _reload_classifier(monkeypatch)
+    ai = FakeAIClient()
+    summary = {"account_id": "1", "facts_summary": "a", "claimed_errors": []}
+    ai.add_response('{"category": "not_mine"}')
+    sc.classify_client_summary(
+        summary, ai_client=ai, session_id="s", account_id="1", state="CA"
+    )
+    sc.RULES_VERSION = "different"
+    ai.add_response('{"category": "not_mine"}')
+    sc.classify_client_summary(
+        summary, ai_client=ai, session_id="s", account_id="1", state="CA"
+    )
+    assert sc.cache_hits() == 0
+    assert sc.cache_misses() == 2
+    assert len(ai.chat_payloads) == 2
+
+
+def test_state_variation_uses_separate_cache(monkeypatch):
+    sc = _reload_classifier(monkeypatch)
+    ai = FakeAIClient()
+    summary = {"account_id": "1", "facts_summary": "a", "claimed_errors": []}
+    ai.add_response('{"category": "not_mine"}')
+    sc.classify_client_summary(
+        summary, ai_client=ai, session_id="s", account_id="1", state="CA"
+    )
+    ai.add_response('{"category": "not_mine"}')
+    sc.classify_client_summary(
+        summary, ai_client=ai, session_id="s", account_id="1", state="NY"
+    )
+    sc.classify_client_summary(
+        summary, ai_client=ai, session_id="s", account_id="1", state="CA"
+    )
+    sc.classify_client_summary(
+        summary, ai_client=ai, session_id="s", account_id="1", state="NY"
+    )
+    assert sc.cache_hits() == 2
+    assert sc.cache_misses() == 2
     assert len(ai.chat_payloads) == 2

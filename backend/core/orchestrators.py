@@ -7,30 +7,44 @@ steps of the credit repair workflow.  All core orchestration lives here;
 """
 
 import os
+import time
 import warnings
 from datetime import datetime
 from pathlib import Path
 from shutil import copyfile
 from typing import Any, Mapping
-import time
 
-from backend.analytics.analytics.strategist_failures import \
-    tally_failure_reasons
+from backend.analytics.analytics.strategist_failures import tally_failure_reasons
 from backend.analytics.analytics_tracker import save_analytics_snapshot
 from backend.api.config import AppConfig, get_app_config
 from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLevel
 from backend.core.email_sender import send_email_with_attachment
 from backend.core.logic.compliance.constants import StrategistFailureReason
-from backend.core.logic.report_analysis.extract_info import \
-    extract_bureau_info_column_refined
-from backend.core.logic.strategy.summary_classifier import classify_client_summaries
-from backend.core.logic.utils.pdf_ops import (convert_txts_to_pdfs,
-                                              gather_supporting_docs_text)
+from backend.core.logic.report_analysis.extract_info import (
+    extract_bureau_info_column_refined,
+)
+from backend.core.logic.strategy.summary_classifier import (
+    RULES_VERSION,
+    ClassificationRecord,
+    classify_client_summaries,
+    summary_hash,
+)
+from backend.core.logic.utils.pdf_ops import (
+    convert_txts_to_pdfs,
+    gather_supporting_docs_text,
+)
 from backend.core.logic.utils.report_sections import (
-    extract_summary_from_sections, filter_sections_by_bureau)
-from backend.core.models import (BureauAccount, BureauPayload, ClientInfo,
-                                 Inquiry, ProofDocuments)
+    extract_summary_from_sections,
+    filter_sections_by_bureau,
+)
+from backend.core.models import (
+    BureauAccount,
+    BureauPayload,
+    ClientInfo,
+    Inquiry,
+    ProofDocuments,
+)
 from backend.core.services.ai_client import AIClient, get_ai_client
 
 
@@ -79,25 +93,31 @@ def classify_client_responses(
     expensive classification step and reuse the stored data.
     """
     from backend.api.session_manager import get_session, update_session
-    from backend.core.logic.strategy.summary_classifier import (
-        summary_hash,
-        ClassificationRecord,
-    )
 
     classification_map: dict[str, ClassificationRecord] = {}
     session_id = client_info.get("session_id")
     session = get_session(session_id or "") or {}
     cache = session.get("summary_classifications", {}) if session_id else {}
+    state = client_info.get("state")
 
     updated = False
     to_process: list[tuple[str, dict, str]] = []
     for acc_id, struct in structured_map.items():
         struct_hash = summary_hash(struct)
         cached = cache.get(acc_id) if isinstance(cache, dict) else None
-        if cached and cached.get("summary_hash") == struct_hash:
+        if (
+            cached
+            and cached.get("summary_hash") == struct_hash
+            and cached.get("state") == state
+            and cached.get("rules_version") == RULES_VERSION
+        ):
             cls = cached.get("classification", {})
             classification_map[acc_id] = ClassificationRecord(
-                summary=struct, classification=cls, summary_hash=struct_hash
+                summary=struct,
+                classification=cls,
+                summary_hash=struct_hash,
+                state=state,
+                rules_version=RULES_VERSION,
             )
         else:
             enriched = dict(struct)
@@ -116,13 +136,19 @@ def classify_client_responses(
         for acc_id, _summary, struct_hash in batch:
             cls = batch_results.get(acc_id, {})
             classification_map[acc_id] = ClassificationRecord(
-                summary=_summary, classification=cls, summary_hash=struct_hash
+                summary=_summary,
+                classification=cls,
+                summary_hash=struct_hash,
+                state=state,
+                rules_version=RULES_VERSION,
             )
             if session_id:
                 cache[acc_id] = {
                     "summary_hash": struct_hash,
                     "classified_at": time.time(),
                     "classification": cls,
+                    "state": state,
+                    "rules_version": RULES_VERSION,
                 }
                 updated = True
 
@@ -154,9 +180,12 @@ def analyze_credit_report(
     """Ingest and analyze the client's credit report."""
     from backend.api.session_manager import update_session
     from backend.core.logic.compliance.upload_validator import (
-        is_safe_pdf, move_uploaded_file)
-    from backend.core.logic.report_analysis.analyze_report import \
-        analyze_credit_report as analyze_report_logic
+        is_safe_pdf,
+        move_uploaded_file,
+    )
+    from backend.core.logic.report_analysis.analyze_report import (
+        analyze_credit_report as analyze_report_logic,
+    )
     from backend.core.logic.utils.bootstrap import get_current_month
 
     uploaded_path = proofs_files.get("smartcredit_report")
@@ -240,8 +269,7 @@ def generate_strategy_plan(
     ai_client: AIClient,
 ):
     """Generate and merge the strategy plan."""
-    from backend.core.logic.strategy.generate_strategy_report import \
-        StrategyGenerator
+    from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
     from backend.core.logic.strategy.strategy_merger import merge_strategy_data
 
     docs_text = gather_supporting_docs_text(session_id)
@@ -309,14 +337,18 @@ def generate_letters(
     app_config: AppConfig | None = None,
 ):
     """Create all client letters and supporting files."""
-    from backend.core.logic.letters.generate_custom_letters import \
-        generate_custom_letters
-    from backend.core.logic.letters.generate_goodwill_letters import \
-        generate_goodwill_letters
-    from backend.core.logic.letters.letter_generator import \
-        generate_all_dispute_letters_with_ai
-    from backend.core.logic.rendering.instructions_generator import \
-        generate_instruction_file
+    from backend.core.logic.letters.generate_custom_letters import (
+        generate_custom_letters,
+    )
+    from backend.core.logic.letters.generate_goodwill_letters import (
+        generate_goodwill_letters,
+    )
+    from backend.core.logic.letters.letter_generator import (
+        generate_all_dispute_letters_with_ai,
+    )
+    from backend.core.logic.rendering.instructions_generator import (
+        generate_instruction_file,
+    )
     from backend.core.logic.utils.bootstrap import extract_all_accounts
 
     print("[INFO] Generating dispute letters...")
@@ -596,7 +628,9 @@ def run_credit_repair_process(
             audit.save(today_folder)
             if app_config.export_trace_file:
                 from backend.audit.trace_exporter import (
-                    export_trace_breakdown, export_trace_file)
+                    export_trace_breakdown,
+                    export_trace_file,
+                )
 
                 export_trace_file(audit, session_id)
                 export_trace_breakdown(
@@ -623,9 +657,12 @@ def extract_problematic_accounts_from_report(
     """Return problematic accounts extracted from the report for user review."""
     from backend.api.session_manager import update_session
     from backend.core.logic.compliance.upload_validator import (
-        is_safe_pdf, move_uploaded_file)
-    from backend.core.logic.report_analysis.analyze_report import \
-        analyze_credit_report as analyze_report_logic
+        is_safe_pdf,
+        move_uploaded_file,
+    )
+    from backend.core.logic.report_analysis.analyze_report import (
+        analyze_credit_report as analyze_report_logic,
+    )
 
     session_id = session_id or "session"
     pdf_path = move_uploaded_file(Path(file_path), session_id)

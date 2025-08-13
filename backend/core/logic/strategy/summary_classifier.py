@@ -7,6 +7,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Mapping, Tuple
 
+from backend.core.logic.compliance.rules_loader import recompute_rules_version
 from backend.core.logic.utils.json_utils import parse_json
 from backend.core.services.ai_client import AIClient
 
@@ -19,6 +20,7 @@ try:  # pragma: no cover - fallback for tests without app config
         CLASSIFY_CACHE_TTL_SEC,
     )
 except Exception:  # pragma: no cover
+
     def _env_bool(name: str, default: bool) -> bool:
         value = os.getenv(name)
         if value is None:
@@ -30,7 +32,11 @@ except Exception:  # pragma: no cover
     CLASSIFY_CACHE_TTL_SEC = int(os.getenv("CLASSIFY_CACHE_TTL_SEC", "0"))
 
 
-_CACHE: "OrderedDict[Tuple[str, str, str], Tuple[Mapping[str, str], float]]" = OrderedDict()
+RULES_VERSION = recompute_rules_version()
+
+_CACHE: (
+    "OrderedDict[Tuple[str, str, str, str, str], Tuple[Mapping[str, str], float]]"
+) = OrderedDict()
 _CACHE_HITS = 0
 _CACHE_MISSES = 0
 _CACHE_EVICTIONS = 0
@@ -54,6 +60,8 @@ class ClassificationRecord:
     summary: Mapping[str, Any]
     classification: Mapping[str, str]
     summary_hash: str
+    state: str | None = None
+    rules_version: str | None = None
 
 
 def summary_hash(summary: Mapping[str, Any]) -> str:
@@ -67,13 +75,17 @@ def summary_hash(summary: Mapping[str, Any]) -> str:
 
 
 def _cache_get(
-    session_id: str, account_id: str, summary: Mapping[str, Any]
+    session_id: str,
+    account_id: str,
+    summary: Mapping[str, Any],
+    state: str | None,
+    rules_version: str,
 ) -> Mapping[str, str] | None:
     global _CACHE_HITS, _CACHE_MISSES
     if not CLASSIFY_CACHE_ENABLED:
         _CACHE_MISSES += 1
         return None
-    key = (session_id, account_id, summary_hash(summary))
+    key = (session_id, account_id, summary_hash(summary), state or "", rules_version)
     item = _CACHE.get(key)
     if not item:
         _CACHE_MISSES += 1
@@ -94,11 +106,13 @@ def _cache_set(
     session_id: str,
     account_id: str,
     summary: Mapping[str, Any],
+    state: str | None,
+    rules_version: str,
     value: Mapping[str, str],
 ) -> None:
     if not CLASSIFY_CACHE_ENABLED:
         return
-    key = (session_id, account_id, summary_hash(summary))
+    key = (session_id, account_id, summary_hash(summary), state or "", rules_version)
     _prune_expired()
     if key in _CACHE:
         _CACHE.move_to_end(key)
@@ -207,7 +221,7 @@ def classify_client_summary(
     """
 
     if session_id and account_id:
-        cached = _cache_get(session_id, account_id, summary)
+        cached = _cache_get(session_id, account_id, summary, state, RULES_VERSION)
         if cached:
             return cached
 
@@ -237,7 +251,7 @@ def classify_client_summary(
         result["state_hook"] = _STATE_HOOKS[state]
     logger.info("Summary classification: %s -> %s", summary.get("account_id"), result)
     if session_id and account_id:
-        _cache_set(session_id, account_id, summary, result)
+        _cache_set(session_id, account_id, summary, state, RULES_VERSION, result)
     return result
 
 
@@ -261,7 +275,7 @@ def classify_client_summaries(
     for summary in summaries:
         acc_id = str(summary.get("account_id", ""))
         if session_id and acc_id:
-            cached = _cache_get(session_id, acc_id, summary)
+            cached = _cache_get(session_id, acc_id, summary, state, RULES_VERSION)
             if cached:
                 results[acc_id] = cached
                 continue
@@ -301,15 +315,13 @@ def classify_client_summaries(
                 )
                 continue
 
-            mapping = _RULE_MAP.get(
-                category, _RULE_MAP["inaccurate_reporting"]
-            ).copy()
+            mapping = _RULE_MAP.get(category, _RULE_MAP["inaccurate_reporting"]).copy()
             result = {"category": category, **mapping}
             if state and state in _STATE_HOOKS:
                 result["state_hook"] = _STATE_HOOKS[state]
             results[acc_id] = result
             if session_id and acc_id:
-                _cache_set(session_id, acc_id, summary, result)
+                _cache_set(session_id, acc_id, summary, state, RULES_VERSION, result)
 
     return results
 
@@ -324,4 +336,5 @@ __all__ = [
     "cache_misses",
     "cache_evictions",
     "reset_cache",
+    "RULES_VERSION",
 ]

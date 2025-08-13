@@ -1,8 +1,11 @@
+import hashlib
 from importlib.resources import files
-import yaml
 from typing import Any, Mapping
 
+import yaml
+
 RULES_PKG = "backend.core.rules"
+_RULES_VERSION: str | None = None
 
 
 def _load_yaml(filename: str):
@@ -81,3 +84,15 @@ def load_state_rules() -> Mapping[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("state_rules.yaml must define a mapping")
     return data
+
+
+def recompute_rules_version() -> str:
+    """Recompute and return the current rules version hash."""
+
+    global _RULES_VERSION
+    sha = hashlib.sha256()
+    pkg = files(RULES_PKG)
+    for path in sorted(p for p in pkg.iterdir() if p.name.endswith((".yml", ".yaml"))):
+        sha.update(path.read_bytes())
+    _RULES_VERSION = sha.hexdigest()
+    return _RULES_VERSION

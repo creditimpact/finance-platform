@@ -10,6 +10,8 @@ Invoked after report analysis and strategy generation to persist summary statist
 - `__init__.py`: package marker.
 - `analytics_tracker.py`: write JSON analytics snapshots to disk.
   - Key function: `save_analytics_snapshot()`.
+  - Exposes cache counters: `log_cache_hit`, `log_cache_miss`, `log_cache_eviction`.
+  - Writes cache metrics JSON every 100 events or on shutdown.
   - Internal deps: `backend.api.config`.
 - `analytics/` – helper subpackage (e.g., `strategist_failures.py`) providing counters; no separate README.
 
@@ -18,3 +20,12 @@ Invoked after report analysis and strategy generation to persist summary statist
 
 ## Guardrails / constraints
 - Intended for internal use only; avoid storing sensitive client data in snapshots.
+
+### Cache metrics example
+
+```
+{
+  "timestamp": "2024-05-06T12:00:00",
+  "cache": {"hits": 10, "misses": 2, "evictions": 1}
+}
+```

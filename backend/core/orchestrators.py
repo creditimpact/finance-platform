@@ -24,8 +24,7 @@ from backend.core.email_sender import send_email_with_attachment
 from backend.core.logic.compliance.constants import StrategistFailureReason
 from backend.core.logic.report_analysis.extract_info import \
     extract_bureau_info_column_refined
-from backend.core.logic.strategy.summary_classifier import \
-    classify_client_summary
+from backend.core.logic.strategy.summary_classifier import classify_client_summaries
 from backend.core.logic.utils.pdf_ops import (convert_txts_to_pdfs,
                                               gather_supporting_docs_text)
 from backend.core.logic.utils.report_sections import (
@@ -88,20 +87,29 @@ def classify_client_responses(
     cache = session.get("summary_classifications", {}) if session_id else {}
 
     updated = False
+    to_process: list[tuple[str, dict, str]] = []
     for acc_id, struct in structured_map.items():
         struct_hash = summary_hash(struct)
         cached = cache.get(acc_id) if isinstance(cache, dict) else None
-        cls = None
         if cached and cached.get("summary_hash") == struct_hash:
-            cls = cached.get("classification", {})
+            classification_map[acc_id] = cached.get("classification", {})
         else:
-            cls = classify_client_summary(
-                struct,
-                ai_client,
-                client_info.get("state"),
-                session_id=session_id,
-                account_id=acc_id,
-            )
+            enriched = dict(struct)
+            enriched.setdefault("account_id", acc_id)
+            to_process.append((acc_id, enriched, struct_hash))
+
+    for i in range(0, len(to_process), 10):
+        batch = to_process[i : i + 10]
+        summaries = [item[1] for item in batch]
+        batch_results = classify_client_summaries(
+            summaries,
+            ai_client,
+            client_info.get("state"),
+            session_id=session_id,
+        )
+        for acc_id, _summary, struct_hash in batch:
+            cls = batch_results.get(acc_id, {})
+            classification_map[acc_id] = cls
             if session_id:
                 cache[acc_id] = {
                     "summary_hash": struct_hash,
@@ -109,14 +117,15 @@ def classify_client_responses(
                     "classification": cls,
                 }
                 updated = True
-        classification_map[acc_id] = cls
+
+    for acc_id, struct in structured_map.items():
         audit.log_account(
             acc_id,
             {
                 "stage": "explanation",
                 "raw_explanation": raw_map.get(acc_id, ""),
                 "structured_summary": struct,
-                "classification": cls,
+                "classification": classification_map.get(acc_id, {}),
             },
         )
 

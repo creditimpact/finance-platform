@@ -38,9 +38,11 @@ def test_classify_client_responses_writes_metadata(monkeypatch):
     client_info = {"session_id": "sess1", "state": "CA"}
 
     ai = FakeAIClient()
-    ai.add_response('{"category": "not_mine"}')
+    ai.add_response('{"1": {"category": "not_mine"}}')
 
-    classify_client_responses(structured, raw, client_info, audit=FakeAudit(), ai_client=ai)
+    classify_client_responses(
+        structured, raw, client_info, audit=FakeAudit(), ai_client=ai
+    )
 
     meta = store["sess1"]["summary_classifications"]["1"]
     assert meta["classification"]["category"] == "not_mine"

@@ -160,4 +160,84 @@ def classify_client_summary(
     return result
 
 
-__all__ = ["classify_client_summary", "invalidate_summary_cache", "summary_hash"]
+def classify_client_summaries(
+    summaries: list[Mapping[str, Any]],
+    ai_client: AIClient,
+    state: str | None = None,
+    *,
+    session_id: str | None = None,
+    ttl: float | None = 24 * 3600,
+) -> Mapping[str, Mapping[str, str]]:
+    """Classify multiple summaries in a single request.
+
+    ``summaries`` should contain an ``account_id`` field for each entry.  The
+    return value maps each ``account_id`` to its classification result.  Any
+    summaries missing from the batch response fall back to individual
+    classification via :func:`classify_client_summary`.
+    """
+
+    results: dict[str, Mapping[str, str]] = {}
+    to_classify: list[Mapping[str, Any]] = []
+    for summary in summaries:
+        acc_id = str(summary.get("account_id", ""))
+        if session_id and acc_id:
+            cached = _cache_get(session_id, acc_id, summary)
+            if cached:
+                results[acc_id] = cached
+                continue
+        to_classify.append(summary)
+
+    if to_classify:
+        prompt = (
+            "Classify the following structured credit dispute summaries into the "
+            "categories: not_mine, inaccurate_reporting, identity_theft, goodwill. "
+            "Return a JSON object keyed by account_id with a 'category' field for "
+            "each entry. Summaries: "
+            f"{to_classify}"
+        )
+        data: Mapping[str, Any] | None = None
+        try:
+            resp = ai_client.response_json(
+                prompt=prompt, response_format={"type": "json_object"}
+            )
+            content = resp.output[0].content[0].text
+            data, _ = parse_json(content)
+        except Exception:
+            data = None
+
+        for summary in to_classify:
+            acc_id = str(summary.get("account_id", ""))
+            item = data.get(acc_id) if isinstance(data, Mapping) else None
+            category = item.get("category") if isinstance(item, Mapping) else None
+            if not category:
+                # Fall back to single-item classification which also handles
+                # caching and heuristics.
+                results[acc_id] = classify_client_summary(
+                    summary,
+                    ai_client,
+                    state,
+                    session_id=session_id,
+                    account_id=acc_id,
+                    ttl=ttl,
+                )
+                continue
+
+            mapping = _RULE_MAP.get(
+                category, _RULE_MAP["inaccurate_reporting"]
+            ).copy()
+            result = {"category": category, **mapping}
+            if state and state in _STATE_HOOKS:
+                result["state_hook"] = _STATE_HOOKS[state]
+            results[acc_id] = result
+            if session_id and acc_id:
+                _cache_set(session_id, acc_id, summary, result, ttl)
+
+    return results
+
+
+__all__ = [
+    "classify_client_summary",
+    "classify_client_summaries",
+    "invalidate_summary_cache",
+    "summary_hash",
+]

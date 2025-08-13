@@ -22,6 +22,12 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
         "backend.core.logic.strategy.summary_classifier.classify_client_summary",
         lambda struct, ai_client=None, state=None, **kw: {"category": "not_mine"},
     )
+    monkeypatch.setattr(
+        "backend.core.logic.strategy.summary_classifier.classify_client_summaries",
+        lambda summaries, ai_client=None, state=None, **kw: {
+            str(s.get("account_id")): {"category": "not_mine"} for s in summaries
+        },
+    )
     utils_pkg = types.ModuleType("backend.core.logic.letters.utils")
     pdf_ops_mod = types.SimpleNamespace(
         gather_supporting_docs=lambda *a, **k: ("", [], None)

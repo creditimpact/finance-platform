@@ -24,6 +24,7 @@ from backend.core.logic.compliance.constants import StrategistFailureReason
 from backend.core.logic.report_analysis.extract_info import (
     extract_bureau_info_column_refined,
 )
+from backend.core.logic.strategy.normalizer_2_5 import normalize_and_tag
 from backend.core.logic.strategy.summary_classifier import (
     RULES_VERSION,
     ClassificationRecord,
@@ -46,6 +47,8 @@ from backend.core.models import (
     ProofDocuments,
 )
 from backend.core.services.ai_client import AIClient, get_ai_client
+from backend.policy.policy_loader import load_rulebook
+from backend.api.session_manager import update_session
 
 
 def process_client_intake(client_info, audit):
@@ -586,9 +589,35 @@ def run_credit_repair_process(
         classification_map = classify_client_responses(
             structured_map, raw_map, client_info, audit, ai_client
         )
+        rulebook = load_rulebook()
         pdf_path, sections, bureau_data, today_folder = analyze_credit_report(
             proofs_files, session_id, client_info, audit, log_messages, ai_client
         )
+        facts_map: dict[str, dict[str, Any]] = {}
+        for key in (
+            "negative_accounts",
+            "open_accounts_with_issues",
+            "high_utilization_accounts",
+            "positive_accounts",
+            "all_accounts",
+        ):
+            for acc in sections.get(key, []):
+                acc_id = str(acc.get("account_id") or "")
+                if acc_id:
+                    facts_map[acc_id] = acc
+        stage_2_5: dict[str, Any] = {}
+        for acc_id in set(facts_map) | set(classification_map):
+            record = classification_map.get(acc_id)
+            account_cls = (
+                {**record.summary, **record.classification}
+                if record
+                else {}
+            )
+            stage_2_5[acc_id] = normalize_and_tag(
+                account_cls, facts_map.get(acc_id, {}), rulebook
+            )
+        if session_id:
+            update_session(session_id, stage_2_5=stage_2_5)
         strategy = generate_strategy_plan(
             client_info,
             bureau_data,

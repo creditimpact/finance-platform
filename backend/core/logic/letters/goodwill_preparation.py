@@ -7,12 +7,16 @@ goodwill adjustment letters and shape account data for AI prompting.
 from __future__ import annotations
 
 import re
+import time
 from typing import Any, Dict, List, Mapping
 
+from backend.api.session_manager import get_session, update_session
 from backend.audit.audit import AuditLogger
 from backend.core.logic.compliance.rules_loader import get_neutral_phrase
-from backend.core.logic.strategy.summary_classifier import \
-    classify_client_summary
+from backend.core.logic.strategy.summary_classifier import (
+    classify_client_summary,
+    summary_hash,
+)
 from backend.core.logic.utils.names_normalization import \
     normalize_creditor_name
 from backend.core.logic.utils.text_parsing import has_late_indicator
@@ -215,13 +219,37 @@ def prepare_account_summaries(
         if structured_summaries:
             struct = structured_summaries.get(acc.get("account_id"), {})
             summary["structured_summary"] = struct
-            cls = classify_client_summary(
-                struct,
-                ai_client,
-                state,
-                session_id=session_id,
-                account_id=acc.get("account_id"),
-            )
+            acc_id = acc.get("account_id")
+            cls = None
+            if acc_id and session_id:
+                session = get_session(session_id) or {}
+                cache = session.get("summary_classifications", {})
+                struct_hash = summary_hash(struct)
+                cached = cache.get(acc_id) if isinstance(cache, dict) else None
+                if cached and cached.get("summary_hash") == struct_hash:
+                    cls = cached.get("classification", {})
+                else:
+                    cls = classify_client_summary(
+                        struct,
+                        ai_client,
+                        state,
+                        session_id=session_id,
+                        account_id=acc_id,
+                    )
+                    cache[acc_id] = {
+                        "summary_hash": struct_hash,
+                        "classified_at": time.time(),
+                        "classification": cls,
+                    }
+                    update_session(session_id, summary_classifications=cache)
+            else:
+                cls = classify_client_summary(
+                    struct,
+                    ai_client,
+                    state,
+                    session_id=session_id,
+                    account_id=acc_id,
+                )
             summary.update(
                 {
                     "dispute_reason": cls.get("category"),

@@ -114,6 +114,24 @@ Provide these in a `.env` file:
 
 Secrets are never committed to the repository.
 
+## Classification Cache
+
+The stage 2 summary classifier caches each account's classification to avoid
+repeated LLM calls. Keys combine `session_id`, `account_id`, the structured
+summary hash, client `state`, and the active rules version. Cache entries are
+evicted on manual invalidation, TTL expiry, or when the least recently used
+record exceeds `CLASSIFY_CACHE_MAXSIZE`.
+
+**Environment flags**
+- `CLASSIFY_CACHE_ENABLED` – disable caching when set to `0` (default `1`).
+- `CLASSIFY_CACHE_MAXSIZE` – maximum number of cached classifications.
+- `CLASSIFY_CACHE_TTL_SEC` – seconds before a cache entry expires; `0` keeps
+  entries indefinitely.
+
+**Production note:** This is an in-memory, per-process cache. Deployments with
+multiple worker processes keep separate caches, so hit rates decrease as worker
+counts grow.
+
 ## PDF Rendering
 
 PDF generation is disabled by default with `DISABLE_PDF_RENDER=true`. To enable PDFs, install [wkhtmltopdf](https://wkhtmltopdf.org/) and unset the flag.

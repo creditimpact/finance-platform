@@ -5,16 +5,16 @@ from __future__ import annotations
 import json
 from typing import Any, List, Mapping
 
-from backend.core.services.ai_client import AIClient
-
 from backend.audit.audit import AuditLevel, AuditLogger
-from backend.core.logic.utils.json_utils import parse_json
 from backend.core.logic.compliance.rules_loader import get_neutral_phrase
-from backend.core.logic.strategy.summary_classifier import classify_client_summary
+from backend.core.logic.strategy.summary_classifier import \
+    classify_client_summary
+from backend.core.logic.utils.json_utils import parse_json
 from backend.core.logic.utils.pdf_ops import gather_supporting_docs
 from backend.core.models.account import Account, Inquiry
-from backend.core.models.letter import LetterContext
 from backend.core.models.client import ClientInfo
+from backend.core.models.letter import LetterContext
+from backend.core.services.ai_client import AIClient
 
 
 def call_gpt_dispute_letter(
@@ -37,11 +37,18 @@ def call_gpt_dispute_letter(
         else dict(client_info)
     )
     client_name = client_dict.get("legal_name") or client_dict.get("name", "Client")
+    session_id = client_dict.get("session_id", "")
 
     dispute_blocks = []
     for acc in disputes:
         struct = structured_summaries.get(acc.account_id or "", {})
-        classification = classifier(struct, state)
+        classification = classifier(
+            struct,
+            ai_client=ai_client,
+            state=state,
+            session_id=session_id,
+            account_id=acc.account_id,
+        )
         neutral_phrase, neutral_reason = get_neutral_phrase(
             classification.get("category"), struct
         )
@@ -128,7 +135,6 @@ Unauthorized Inquiries:
 {instruction_text}
 """
 
-    session_id = client_dict.get("session_id", "")
     docs_text, doc_names, _ = gather_supporting_docs(session_id)
     if docs_text:
         if audit and audit.level is AuditLevel.VERBOSE:

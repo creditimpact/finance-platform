@@ -1,6 +1,6 @@
 import sys
-from pathlib import Path
 import types
+from pathlib import Path
 
 import pdfkit
 import pytest
@@ -20,7 +20,7 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
     )
     monkeypatch.setattr(
         "backend.core.logic.strategy.summary_classifier.classify_client_summary",
-        lambda struct, ai_client=None, state=None: {"category": "not_mine"},
+        lambda struct, ai_client=None, state=None, **kw: {"category": "not_mine"},
     )
     utils_pkg = types.ModuleType("backend.core.logic.letters.utils")
     pdf_ops_mod = types.SimpleNamespace(
@@ -37,9 +37,8 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
     )
 
     if doc_type == "dispute":
-        from backend.core.logic.letters.letter_generator import (
-            generate_all_dispute_letters_with_ai,
-        )
+        from backend.core.logic.letters.letter_generator import \
+            generate_all_dispute_letters_with_ai
 
         monkeypatch.setattr(
             "backend.core.logic.letters.letter_generator.run_compliance_pipeline",
@@ -71,7 +70,7 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
             "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
             lambda html, path: None,
         )
-        from backend.core.models import ClientInfo, BureauPayload
+        from backend.core.models import BureauPayload, ClientInfo
 
         client = ClientInfo.from_dict({"name": "Client", "session_id": "s1"})
         bureau_data = {
@@ -94,7 +93,8 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
                 client, bureau_data, tmp_path, False, None, ai_client=FakeAIClient()
             )
     elif doc_type == "instructions":
-        from backend.core.logic.rendering.instructions_generator import generate_instruction_file
+        from backend.core.logic.rendering.instructions_generator import \
+            generate_instruction_file
 
         monkeypatch.setattr(
             "backend.core.logic.rendering.instructions_generator.run_compliance_pipeline",
@@ -109,7 +109,7 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
             "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
             lambda html, path: None,
         )
-        from backend.core.models import ClientInfo, BureauPayload
+        from backend.core.models import BureauPayload, ClientInfo
 
         client = ClientInfo.from_dict({"name": "Client", "session_id": "s2"})
         bureau_data = {
@@ -131,9 +131,8 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
             client, bureau_data, False, tmp_path / "inst", ai_client=FakeAIClient()
         )
     else:  # goodwill
-        from backend.core.logic.letters.generate_goodwill_letters import (
-            generate_goodwill_letter_with_ai,
-        )
+        from backend.core.logic.letters.generate_goodwill_letters import \
+            generate_goodwill_letter_with_ai
 
         monkeypatch.setattr(
             "backend.core.logic.letters.generate_goodwill_letters.run_compliance_pipeline",

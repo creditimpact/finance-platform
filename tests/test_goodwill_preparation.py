@@ -1,7 +1,5 @@
 from backend.core.logic.letters.goodwill_preparation import (
-    select_goodwill_candidates,
-    prepare_account_summaries,
-)
+    prepare_account_summaries, select_goodwill_candidates)
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
@@ -31,7 +29,7 @@ def test_prepare_account_summaries_merges_and_enriches():
     ]
     structured = {"a1": {"account_id": "a1", "dispute_type": "goodwill"}}
     summaries = prepare_account_summaries(
-        accounts, structured, state="CA", ai_client=FakeAIClient()
+        accounts, structured, state="CA", session_id="sess", ai_client=FakeAIClient()
     )
     assert len(summaries) == 1
     summary = summaries[0]

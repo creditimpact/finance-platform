@@ -4,7 +4,8 @@ import threading
 from typing import Any, Dict
 
 from backend.assets.paths import data_path
-
+from backend.core.logic.strategy.summary_classifier import \
+    invalidate_summary_cache
 
 # Standard session data that can be safely accessed by most modules.
 SESSION_FILE = data_path("sessions.json")
@@ -50,6 +51,8 @@ def update_session(session_id: str, **kwargs: Any) -> Dict[str, Any]:
     with _lock:
         sessions = _load_sessions()
         session = sessions.get(session_id, {})
+        if "structured_summaries" in kwargs:
+            invalidate_summary_cache(session_id)
         session.update(kwargs)
         sessions[session_id] = session
         _save_sessions(sessions)

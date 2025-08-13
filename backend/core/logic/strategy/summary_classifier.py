@@ -1,11 +1,64 @@
+import hashlib
+import json
 import logging
-from typing import Any, Mapping
-
-from backend.core.services.ai_client import AIClient
+import time
+from dataclasses import dataclass
+from typing import Any, Dict, Mapping, Tuple
 
 from backend.core.logic.utils.json_utils import parse_json
+from backend.core.services.ai_client import AIClient
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _CacheEntry:
+    value: Mapping[str, str]
+    timestamp: float
+    ttl: float | None
+
+
+_CACHE: Dict[Tuple[str, str, str], _CacheEntry] = {}
+
+
+def _summary_hash(summary: Mapping[str, Any]) -> str:
+    data = json.dumps(summary, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+def _cache_get(
+    session_id: str, account_id: str, summary: Mapping[str, Any]
+) -> Mapping[str, str] | None:
+    key = (session_id, account_id, _summary_hash(summary))
+    entry = _CACHE.get(key)
+    if not entry:
+        return None
+    if entry.ttl is not None and time.time() - entry.timestamp > entry.ttl:
+        _CACHE.pop(key, None)
+        return None
+    return entry.value
+
+
+def _cache_set(
+    session_id: str,
+    account_id: str,
+    summary: Mapping[str, Any],
+    value: Mapping[str, str],
+    ttl: float | None,
+) -> None:
+    key = (session_id, account_id, _summary_hash(summary))
+    _CACHE[key] = _CacheEntry(value=value, timestamp=time.time(), ttl=ttl)
+
+
+def invalidate_summary_cache(session_id: str, account_id: str | None = None) -> None:
+    keys = [
+        k
+        for k in list(_CACHE)
+        if k[0] == session_id and (account_id is None or k[1] == account_id)
+    ]
+    for k in keys:
+        _CACHE.pop(k, None)
+
 
 _RULE_MAP = {
     "identity_theft": {
@@ -55,14 +108,21 @@ def classify_client_summary(
     summary: Mapping[str, Any],
     ai_client: AIClient,
     state: str | None = None,
+    *,
+    session_id: str | None = None,
+    account_id: str | None = None,
+    ttl: float | None = 24 * 3600,
 ) -> Mapping[str, str]:
     """Classify a structured summary into a dispute category and legal strategy.
 
-    Falls back to a lightweight keyword heuristic when the API call fails. The
-    return value always contains the keys ``category``, ``legal_tag``,
-    ``dispute_approach`` and ``tone``. A ``state_hook`` is included when a
-    supported state modifier applies.
+    When ``session_id`` and ``account_id`` are provided the result is cached
+    using those identifiers and a hash of ``summary``.
     """
+
+    if session_id and account_id:
+        cached = _cache_get(session_id, account_id, summary)
+        if cached:
+            return cached
 
     category = None
     prompt = (
@@ -90,4 +150,9 @@ def classify_client_summary(
     if state and state in _STATE_HOOKS:
         result["state_hook"] = _STATE_HOOKS[state]
     logger.info("Summary classification: %s -> %s", summary.get("account_id"), result)
+    if session_id and account_id:
+        _cache_set(session_id, account_id, summary, result, ttl)
     return result
+
+
+__all__ = ["classify_client_summary", "invalidate_summary_cache"]

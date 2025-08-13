@@ -1,12 +1,12 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from backend.core.logic.letters.letter_generator import call_gpt_dispute_letter
 from backend.core.logic.compliance import rules_loader
-from tests.helpers.fake_ai_client import FakeAIClient
+from backend.core.logic.letters.letter_generator import call_gpt_dispute_letter
 from backend.core.models.account import Account
+from tests.helpers.fake_ai_client import FakeAIClient
 
 
 def test_dispute_prompt_includes_neutral_phrase(monkeypatch):
@@ -17,7 +17,7 @@ def test_dispute_prompt_includes_neutral_phrase(monkeypatch):
 
     monkeypatch.setattr(
         "backend.core.logic.letters.letter_generator.classify_client_summary",
-        lambda struct, ai_client, state=None: {"category": "not_mine"},
+        lambda struct, ai_client, state=None, **kw: {"category": "not_mine"},
     )
 
     structured = {"explanation": "I never opened this"}

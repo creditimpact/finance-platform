@@ -1,26 +1,28 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Mapping
-from jinja2 import Environment, FileSystemLoader
-from backend.assets.paths import templates_path
+
 import pdfkit
-from backend.core.logic.utils.pdf_ops import gather_supporting_docs
-from backend.core.logic.strategy.summary_classifier import classify_client_summary
-from backend.api.session_manager import get_session
-from backend.core.logic.guardrails import generate_letter_with_guardrails
-from backend.core.logic.guardrails.summary_validator import (
-    validate_structured_summaries,
-)
-from backend.core.logic.compliance.rules_loader import get_neutral_phrase
-from backend.audit.audit import AuditLogger, AuditLevel
-from backend.core.services.ai_client import AIClient
+from jinja2 import Environment, FileSystemLoader
+
 from backend.api.config import get_app_config
+from backend.api.session_manager import get_session
+from backend.assets.paths import templates_path
+from backend.audit.audit import AuditLevel, AuditLogger
+from backend.core.logic.compliance.rules_loader import get_neutral_phrase
+from backend.core.logic.guardrails import generate_letter_with_guardrails
+from backend.core.logic.guardrails.summary_validator import \
+    validate_structured_summaries
+from backend.core.logic.strategy.summary_classifier import \
+    classify_client_summary
+from backend.core.logic.utils.pdf_ops import gather_supporting_docs
 from backend.core.models.account import Account
-from backend.core.models.client import ClientInfo
 from backend.core.models.bureau import BureauPayload
+from backend.core.models.client import ClientInfo
+from backend.core.services.ai_client import AIClient
 
 env = Environment(loader=FileSystemLoader(templates_path("")))
 template = env.get_template("general_letter_template.html")
@@ -44,7 +46,13 @@ def call_gpt_for_custom_letter(
     ai_client: AIClient,
 ) -> str:
     docs_line = f"Supporting documents summary:\n{docs_text}" if docs_text else ""
-    classification = classify_client_summary(structured_summary, ai_client, state)
+    classification = classify_client_summary(
+        structured_summary,
+        ai_client,
+        state,
+        session_id=session_id,
+        account_id=structured_summary.get("account_id"),
+    )
     neutral_phrase, neutral_reason = get_neutral_phrase(
         classification.get("category"), structured_summary
     )

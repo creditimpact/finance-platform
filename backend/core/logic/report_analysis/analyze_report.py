@@ -20,6 +20,7 @@ from backend.core.logic.utils.inquiries import extract_inquiries
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.logic.utils.text_parsing import (
     enforce_collection_status,
+    extract_account_headings,
     extract_late_history_blocks,
 )
 from backend.core.services.ai_client import AIClient, get_ai_client
@@ -30,6 +31,7 @@ from .report_postprocessing import (
     _inject_missing_late_accounts,
     _merge_parser_inquiries,
     _sanitize_late_counts,
+    _reconcile_account_headings,
     validate_analysis_sanity,
 )
 from .report_prompting import call_ai_analysis
@@ -51,6 +53,9 @@ def analyze_credit_report(
     text = extract_text_from_pdf(pdf_path)
     if not text.strip():
         raise ValueError("[ERROR] No text extracted from PDF")
+
+    headings = extract_account_headings(text)
+    heading_map = {norm: raw for norm, raw in headings}
 
     def detected_late_phrases(txt: str) -> bool:
         return bool(re.search(r"late|past due", txt, re.I))
@@ -82,6 +87,8 @@ def analyze_credit_report(
             "all_accounts": [],
             "inquiries": [],
         }
+
+    _reconcile_account_headings(result, heading_map)
 
     parsed_inquiries = extract_inquiries(text)
     if parsed_inquiries:

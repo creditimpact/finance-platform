@@ -204,6 +204,40 @@ def extract_account_blocks(text: str, debug: bool = False) -> list[list[str]]:
     return blocks
 
 
+def extract_account_headings(text: str) -> list[tuple[str, str]]:
+    """Return unique normalized account headings found in ``text``.
+
+    The function leverages :func:`extract_account_blocks` to locate candidate
+    account sections and then normalizes their headings using
+    :func:`names_normalization.normalize_creditor_name`.  Only the first
+    occurrence of each normalized name is retained in the returned list.
+
+    Parameters
+    ----------
+    text:
+        Raw text extracted from a credit report PDF.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        Tuples of ``(normalized_name, raw_heading)``.
+    """
+
+    from .names_normalization import normalize_creditor_name
+
+    headings: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for block in extract_account_blocks(text):
+        if not block:
+            continue
+        raw = block[0].strip()
+        norm = normalize_creditor_name(raw)
+        if norm and norm not in seen:
+            headings.append((norm, raw))
+            seen.add(norm)
+    return headings
+
+
 def parse_late_history_from_block(
     block: list[str], debug: bool = False
 ) -> dict[str, dict[str, int]]:

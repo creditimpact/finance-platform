@@ -174,6 +174,9 @@ def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
         report_postprocessing, "_merge_parser_inquiries", lambda res, parsed: None
     )
     monkeypatch.setattr(
+        report_postprocessing, "_reconcile_account_headings", lambda res, headings: None
+    )
+    monkeypatch.setattr(
         report_postprocessing, "validate_analysis_sanity", lambda res: []
     )
 

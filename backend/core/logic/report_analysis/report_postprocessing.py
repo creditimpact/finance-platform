@@ -70,6 +70,41 @@ def _merge_parser_inquiries(result: dict, parsed: List[dict]):
 
 
 # ---------------------------------------------------------------------------
+# Account heading reconciliation
+# ---------------------------------------------------------------------------
+
+
+def _reconcile_account_headings(result: dict, headings: Mapping[str, str]) -> None:
+    """Align AI account names with parser-detected headings."""
+
+    if not headings:
+        return
+
+    seen = set()
+    sections = [
+        "all_accounts",
+        "negative_accounts",
+        "open_accounts_with_issues",
+        "positive_accounts",
+        "high_utilization_accounts",
+    ]
+    for sec in sections:
+        for acc in result.get(sec, []):
+            raw = acc.get("name", "")
+            norm = normalize_creditor_name(raw)
+            if norm in headings:
+                if headings[norm] != raw:
+                    acc["name"] = headings[norm]
+                seen.add(norm)
+
+    for norm, raw in headings.items():
+        if norm not in seen:
+            print(
+                f"[WARN] Parser detected account heading '{raw}' missing from AI output"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Late payment utilities
 # ---------------------------------------------------------------------------
 

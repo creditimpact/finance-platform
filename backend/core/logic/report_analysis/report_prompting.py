@@ -1,10 +1,18 @@
 """Prompt construction and AI calls for credit report analysis."""
 
+from __future__ import annotations
+
+import re
 from pathlib import Path
+from typing import Dict, List
 
 from backend.core.logic.utils.inquiries import extract_inquiries
 from backend.core.logic.utils.json_utils import parse_json
-from backend.core.logic.utils.names_normalization import normalize_creditor_name
+from backend.core.logic.utils.names_normalization import (
+    BUREAUS,
+    normalize_bureau_name,
+    normalize_creditor_name,
+)
 from backend.core.logic.utils.text_parsing import (
     extract_account_headings,
     extract_late_history_blocks,
@@ -12,38 +20,33 @@ from backend.core.logic.utils.text_parsing import (
 from backend.core.services.ai_client import AIClient
 
 
-def call_ai_analysis(
-    text: str,
+def _split_text_by_bureau(text: str) -> Dict[str, str]:
+    """Return mapping of bureau name to its text segment."""
+    positions: Dict[str, int] = {}
+    for bureau in BUREAUS:
+        match = re.search(bureau, text, re.I)
+        if match:
+            positions[bureau] = match.start()
+    if not positions:
+        return {"Full": text}
+    sorted_pos = sorted(positions.items(), key=lambda x: x[1])
+    segments: Dict[str, str] = {}
+    for i, (bureau, start) in enumerate(sorted_pos):
+        end = sorted_pos[i + 1][1] if i + 1 < len(sorted_pos) else len(text)
+        segments[bureau] = text[start:end]
+    return segments
+
+
+def _run_segment(
+    segment_text: str,
+    *,
     is_identity_theft: bool,
     output_json_path: Path,
     ai_client: AIClient,
-    strategic_context: str | None = None,
-):
-    """Analyze raw report text using an AI model and return parsed JSON.
-
-    Parameters
-    ----------
-    text:
-        Raw text extracted from the report.
-    is_identity_theft:
-        Flag indicating if the report relates to an identity theft case.
-    output_json_path:
-        Location where the resulting JSON (and raw response debug file) should
-        be written.
-    ai_client:
-        Instance of :class:`services.ai_client.AIClient` used to make the
-        request.
-    strategic_context:
-        Optional high level context derived from server-side ``client_info``
-        fields. This string is inserted directly into the prompt if provided.
-
-    Returns
-    -------
-    dict
-        Parsed JSON result from the AI model.
-    """
-    headings = extract_account_headings(text)
-
+    strategic_context: str | None,
+) -> dict:
+    """Run the existing prompt/analysis flow for a single bureau segment."""
+    headings = extract_account_headings(segment_text)
     if headings:
         heading_summary = "Account Headings:\n" + "\n".join(
             f"- {norm.title()} (raw: {raw})" for norm, raw in headings
@@ -51,7 +54,9 @@ def call_ai_analysis(
     else:
         heading_summary = "Account Headings:\n- None detected"
 
-    late_blocks, late_raw_map = extract_late_history_blocks(text, return_raw_map=True)
+    late_blocks, late_raw_map = extract_late_history_blocks(
+        segment_text, return_raw_map=True
+    )
     if late_blocks:
         late_summary_text = "Late payment history extracted from report:\n"
         for account, bureaus in late_blocks.items():
@@ -66,7 +71,9 @@ def call_ai_analysis(
                     thirty == 2 and not sixty and not ninety
                 ):
                     goodwill = True
-                line = f"- {account} (raw: {raw}) ({bureau}): {', '.join(parts)}"
+                line = (
+                    f"- {account} (raw: {raw}) ({bureau}): {', '.join(parts)}"
+                )
                 if goodwill:
                     line += " \u2192 Possible goodwill candidate"
                 late_summary_text += line + "\n"
@@ -76,10 +83,11 @@ def call_ai_analysis(
             "Do not infer or guess late payment history unless clearly shown."
         )
 
-    inquiry_list = extract_inquiries(text)
+    inquiry_list = extract_inquiries(segment_text)
     if inquiry_list:
         inquiry_summary = "\nParsed inquiries from report:\n" + "\n".join(
-            f"- {normalize_creditor_name(i['creditor_name'])} (raw: {i['creditor_name']}) {i['date']} ({i['bureau']})"
+            f"- {normalize_creditor_name(i['creditor_name'])} "
+            f"(raw: {i['creditor_name']}) {i['date']} ({i['bureau']})"
             for i in inquiry_list
         )
     else:
@@ -89,16 +97,14 @@ def call_ai_analysis(
         f'Strategic context: "{strategic_context}"\n' if strategic_context else ""
     )
 
-    prompt = f"""
-{heading_summary}
+    prompt = f"""{heading_summary}
 
 You are a senior credit repair expert with deep knowledge of credit reports, FCRA regulations, dispute strategies, and client psychology.
 
 Your task: deeply analyze the following SmartCredit report text and extract a structured JSON summary for use in automated dispute and goodwill letters, and personalized client instructions.
 
 Identity theft case: {"Yes" if is_identity_theft else "No"}
-{strategic_context_line}
-Return only valid JSON with all property names in double quotes. No comments or extra text outside the JSON object.
+{strategic_context_line}Return only valid JSON with all property names in double quotes. No comments or extra text outside the JSON object.
 
 Return this exact JSON structure:
 
@@ -115,7 +121,7 @@ Return this exact JSON structure:
    - is_suspected_identity_theft: true/false
    - dispute_type: "identity_theft" / "unauthorized_or_unverified" / "inaccurate_reporting"
    - impact: short sentence describing how this negatively affects the client
-   - advisor_comment: 1â€"2 sentences explaining what weâ€™re doing about this account and why.
+   - advisor_comment: 1–2 sentences explaining what we’re doing about this account and why.
 
 3. open_accounts_with_issues: Non-collection accounts with any late payment history or remarks like "past due", "derogatory", etc. Look carefully for text such as "30 days late", "60 days late", or "past due" even if formatting is odd. If an account is otherwise in good standing with only one or two late payments, mark ``goodwill_candidate`` true.
    Include:
@@ -180,20 +186,20 @@ Return this exact JSON structure:
    - "Lower utilization on Capital One"
    - "Dispute Midland account with Experian"
 
-10. all_accounts: âœ... For every account (positive or negative), return:
+10. all_accounts: ✓ For every account (positive or negative), return:
    - name
    - bureaus
    - status
    - utilization (if available)
-   - advisor_comment: 1â€"2 sentence explanation of the accountâ€™s effect and what the client should do (dispute, pay down, keep healthy, goodwill, etc.)
+   - advisor_comment: 1–2 sentence explanation of the account’s effect and what the client should do (dispute, pay down, keep healthy, goodwill, etc.)
 
-âš ï¸ Rules:
+⚠️ Rules:
 - Return strictly valid JSON
 - All property names and strings must use double quotes
 - No trailing commas, comments, or text outside the JSON
 - No markdown or explanations
 - Use proper casing, punctuation, and clean formatting
-- Never guess â€" only include facts that are visible
+- Never guess – only include facts that are visible
 Use the following late payment data to help you accurately tag late accounts, even if the report formatting is inconsistent:
 
 {late_summary_text}
@@ -202,7 +208,7 @@ Use the following late payment data to help you accurately tag late accounts, ev
 
 Report text:
 ===
-{text}
+{segment_text}
 ===
 """
 
@@ -227,3 +233,131 @@ Report text:
 
     data, _ = parse_json(content)
     return data
+
+
+def _merge_accounts(dest: List[dict], new: List[dict]) -> None:
+    """Merge account lists, combining bureau info."""
+    index = {
+        (normalize_creditor_name(a.get("name", "")), a.get("account_number")): a
+        for a in dest
+    }
+    for acc in new:
+        key = (
+            normalize_creditor_name(acc.get("name", "")),
+            acc.get("account_number"),
+        )
+        existing = index.get(key)
+        if existing:
+            existing_bureaus = {
+                normalize_bureau_name(b) for b in existing.get("bureaus", [])
+            }
+            new_bureaus = {
+                normalize_bureau_name(b) for b in acc.get("bureaus", [])
+            }
+            existing["bureaus"] = sorted(existing_bureaus | new_bureaus)
+            for k, v in acc.items():
+                if k == "bureaus":
+                    continue
+                if k not in existing or not existing[k]:
+                    existing[k] = v
+        else:
+            acc["bureaus"] = [normalize_bureau_name(b) for b in acc.get("bureaus", [])]
+            dest.append(acc)
+            index[key] = acc
+
+
+def _merge_inquiries(dest: List[dict], new: List[dict]) -> None:
+    """Merge inquiry lists without duplicates."""
+    index = {
+        (
+            normalize_creditor_name(i.get("creditor_name")),
+            i.get("date"),
+            normalize_bureau_name(i.get("bureau")),
+        ): i
+        for i in dest
+    }
+    for inq in new:
+        key = (
+            normalize_creditor_name(inq.get("creditor_name")),
+            inq.get("date"),
+            normalize_bureau_name(inq.get("bureau")),
+        )
+        if key not in index:
+            inq["bureau"] = normalize_bureau_name(inq.get("bureau"))
+            dest.append(inq)
+            index[key] = inq
+
+
+def call_ai_analysis(
+    text: str,
+    is_identity_theft: bool,
+    output_json_path: Path,
+    ai_client: AIClient,
+    strategic_context: str | None = None,
+):
+    """Analyze raw report text using an AI model and return parsed JSON."""
+    segments = _split_text_by_bureau(text)
+
+    aggregate: dict = {
+        "negative_accounts": [],
+        "open_accounts_with_issues": [],
+        "positive_accounts": [],
+        "high_utilization_accounts": [],
+        "all_accounts": [],
+        "inquiries": [],
+    }
+    summary_metrics: dict = {}
+
+    for idx, (bureau, seg_text) in enumerate(segments.items()):
+        seg_path = (
+            output_json_path
+            if idx == 0
+            else output_json_path.with_name(f"{output_json_path.stem}_{bureau}.json")
+        )
+        data = _run_segment(
+            seg_text,
+            is_identity_theft=is_identity_theft,
+            output_json_path=seg_path,
+            ai_client=ai_client,
+            strategic_context=strategic_context,
+        )
+
+        for key in [
+            "negative_accounts",
+            "open_accounts_with_issues",
+            "positive_accounts",
+            "high_utilization_accounts",
+            "all_accounts",
+        ]:
+            if data.get(key):
+                _merge_accounts(aggregate[key], data[key])
+
+        if data.get("inquiries"):
+            _merge_inquiries(aggregate["inquiries"], data["inquiries"])
+
+        if data.get("summary_metrics"):
+            for k, v in data["summary_metrics"].items():
+                if isinstance(v, bool):
+                    summary_metrics[k] = summary_metrics.get(k, False) or v
+                elif isinstance(v, list):
+                    summary_metrics[k] = sorted(
+                        set(summary_metrics.get(k, []) + v)
+                    )
+                elif isinstance(v, (int, float)):
+                    summary_metrics[k] = summary_metrics.get(k, 0) + v
+
+        for key in [
+            "personal_info_issues",
+            "account_inquiry_matches",
+            "strategic_recommendations",
+        ]:
+            if data.get(key):
+                aggregate.setdefault(key, [])
+                aggregate[key].extend(data[key])
+
+    if summary_metrics:
+        aggregate["summary_metrics"] = summary_metrics
+
+    return aggregate
+
+

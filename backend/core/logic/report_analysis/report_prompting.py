@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Dict, List
+
+from jsonschema import Draft7Validator
 
 from backend.analytics.analytics_tracker import log_ai_request
 from backend.audit.audit import emit_event
@@ -24,6 +29,44 @@ from backend.core.services.ai_client import AIClient
 
 _INPUT_COST_PER_TOKEN = 0.01 / 1000
 _OUTPUT_COST_PER_TOKEN = 0.03 / 1000
+
+_SCHEMA_PATH = Path(__file__).with_name("analysis_schema.json")
+_ANALYSIS_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+_ANALYSIS_VALIDATOR = Draft7Validator(_ANALYSIS_SCHEMA)
+
+
+def _apply_defaults(data: dict, schema: dict) -> None:
+    """Recursively populate defaults based on ``schema``."""
+    for key, subschema in schema.get("properties", {}).items():
+        if key not in data:
+            if "default" in subschema:
+                data[key] = deepcopy(subschema["default"])
+            else:
+                t = subschema.get("type")
+                if t == "array":
+                    data[key] = []
+                elif t in {"number", "integer"}:
+                    data[key] = 0
+                elif t == "boolean":
+                    data[key] = False
+                elif t == "object":
+                    data[key] = {}
+            if subschema.get("type") == "object" and isinstance(data[key], dict):
+                _apply_defaults(data[key], subschema)
+        elif subschema.get("type") == "object" and isinstance(data[key], dict):
+            _apply_defaults(data[key], subschema)
+
+
+def _validate_analysis_schema(data: dict) -> dict:
+    """Validate ``data`` against the analysis schema and fill defaults."""
+    errors = [e.message for e in _ANALYSIS_VALIDATOR.iter_errors(data)]
+    if errors:
+        logging.warning(
+            "report_analysis_schema_validation_failed",
+            extra={"validation_errors": errors},
+        )
+    _apply_defaults(data, _ANALYSIS_SCHEMA)
+    return data
 
 
 def _split_text_by_bureau(text: str) -> Dict[str, str]:
@@ -77,9 +120,7 @@ def _run_segment(
                     thirty == 2 and not sixty and not ninety
                 ):
                     goodwill = True
-                line = (
-                    f"- {account} (raw: {raw}) ({bureau}): {', '.join(parts)}"
-                )
+                line = f"- {account} (raw: {raw}) ({bureau}): {', '.join(parts)}"
                 if goodwill:
                     line += " \u2192 Possible goodwill candidate"
                 late_summary_text += line + "\n"
@@ -241,6 +282,7 @@ Report text:
         f.write(inquiry_summary)
 
     data, _ = parse_json(content)
+    data = _validate_analysis_schema(data)
     return data, {"prompt_tokens": tokens_in, "completion_tokens": tokens_out}
 
 
@@ -260,9 +302,7 @@ def _merge_accounts(dest: List[dict], new: List[dict]) -> None:
             existing_bureaus = {
                 normalize_bureau_name(b) for b in existing.get("bureaus", [])
             }
-            new_bureaus = {
-                normalize_bureau_name(b) for b in acc.get("bureaus", [])
-            }
+            new_bureaus = {normalize_bureau_name(b) for b in acc.get("bureaus", [])}
             existing["bureaus"] = sorted(existing_bureaus | new_bureaus)
             for k, v in acc.items():
                 if k == "bureaus":
@@ -317,6 +357,9 @@ def call_ai_analysis(
         "high_utilization_accounts": [],
         "all_accounts": [],
         "inquiries": [],
+        "personal_info_issues": [],
+        "account_inquiry_matches": [],
+        "strategic_recommendations": [],
     }
     summary_metrics: dict = {}
 
@@ -358,8 +401,7 @@ def call_ai_analysis(
                 },
             )
             cost = (
-                tokens_in * _INPUT_COST_PER_TOKEN
-                + tokens_out * _OUTPUT_COST_PER_TOKEN
+                tokens_in * _INPUT_COST_PER_TOKEN + tokens_out * _OUTPUT_COST_PER_TOKEN
             )
             log_ai_request(tokens_in, tokens_out, cost, latency_ms)
 
@@ -381,9 +423,7 @@ def call_ai_analysis(
                 if isinstance(v, bool):
                     summary_metrics[k] = summary_metrics.get(k, False) or v
                 elif isinstance(v, list):
-                    summary_metrics[k] = sorted(
-                        set(summary_metrics.get(k, []) + v)
-                    )
+                    summary_metrics[k] = sorted(set(summary_metrics.get(k, []) + v))
                 elif isinstance(v, (int, float)):
                     summary_metrics[k] = summary_metrics.get(k, 0) + v
 
@@ -393,12 +433,9 @@ def call_ai_analysis(
             "strategic_recommendations",
         ]:
             if data.get(key):
-                aggregate.setdefault(key, [])
                 aggregate[key].extend(data[key])
 
     if summary_metrics:
         aggregate["summary_metrics"] = summary_metrics
 
     return aggregate
-
-

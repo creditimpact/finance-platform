@@ -1,4 +1,5 @@
 import importlib
+import logging
 import sys
 import types
 from pathlib import Path
@@ -72,15 +73,45 @@ def test_call_ai_analysis_parses_json(tmp_path):
     assert out.with_name(out.stem + "_raw.txt").exists()
 
 
+def test_call_ai_analysis_populates_defaults_and_logs(tmp_path, caplog):
+    utils_pkg = types.ModuleType("backend.core.logic.utils")
+    utils_pkg.__path__ = [
+        str(
+            Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils"
+        )
+    ]
+    sys.modules["backend.core.logic.utils"] = utils_pkg
+
+    fake_pdf_ops = types.ModuleType("backend.core.logic.utils.pdf_ops")
+    fake_pdf_ops.extract_pdf_text_safe = lambda *a, **k: ""
+    sys.modules.setdefault("backend.core.logic.utils.pdf_ops", fake_pdf_ops)
+    report_prompting = importlib.import_module(
+        "backend.core.logic.report_analysis.report_prompting"
+    )
+
+    client = FakeAIClient()
+    client.add_chat_response("{}")
+    out = tmp_path / "result.json"
+    with caplog.at_level(logging.WARNING):
+        data = report_prompting.call_ai_analysis(
+            "text",
+            False,
+            out,
+            ai_client=client,
+            strategic_context="goal",
+            request_id="req",
+            doc_fingerprint="fp",
+        )
+    assert data["negative_accounts"] == []
+    assert data["summary_metrics"]["total_inquiries"] == 0
+    assert any(r.__dict__.get("validation_errors") for r in caplog.records)
+
+
 def test_call_ai_analysis_merges_segments(tmp_path):
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [
         str(
-            Path(__file__).resolve().parents[1]
-            / "backend"
-            / "core"
-            / "logic"
-            / "utils"
+            Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils"
         )
     ]
     sys.modules["backend.core.logic.utils"] = utils_pkg

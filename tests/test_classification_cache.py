@@ -1,5 +1,4 @@
-import time
-
+import importlib
 import time
 
 from backend.core.orchestrators import classify_client_responses
@@ -117,3 +116,61 @@ def test_goodwill_preparation_uses_cached_classification(monkeypatch):
     )
     assert res[0]["dispute_reason"] == "goodwill"
     assert res[0]["neutral_phrase"] == "NP"
+
+
+def _reload_classifier(monkeypatch, **env):
+    for k, v in env.items():
+        monkeypatch.setenv(k, str(v))
+    import backend.api.config as conf
+    importlib.reload(conf)
+    import backend.core.logic.strategy.summary_classifier as sc
+    importlib.reload(sc)
+    sc.reset_cache()
+    return sc
+
+
+def test_cache_disabled(monkeypatch):
+    sc = _reload_classifier(monkeypatch, CLASSIFY_CACHE_ENABLED="0")
+    ai = FakeAIClient()
+    ai.add_response('{"category": "not_mine"}')
+    summary = {"account_id": "1", "facts_summary": "a", "claimed_errors": []}
+    sc.classify_client_summary(summary, ai_client=ai, session_id="s", account_id="1")
+    ai.add_response('{"category": "not_mine"}')
+    sc.classify_client_summary(summary, ai_client=ai, session_id="s", account_id="1")
+    assert sc.cache_hits() == 0
+    assert sc.cache_misses() == 2
+    assert len(ai.chat_payloads) == 2
+
+
+def test_cache_eviction_on_maxsize(monkeypatch):
+    sc = _reload_classifier(
+        monkeypatch, CLASSIFY_CACHE_MAXSIZE="2", CLASSIFY_CACHE_ENABLED="1"
+    )
+    summaries = [
+        {"account_id": "1", "facts_summary": "a", "claimed_errors": []},
+        {"account_id": "2", "facts_summary": "b", "claimed_errors": []},
+        {"account_id": "3", "facts_summary": "c", "claimed_errors": []},
+    ]
+    ai = FakeAIClient()
+    for i, summary in enumerate(summaries, 1):
+        ai.add_response('{"category": "not_mine"}')
+        sc.classify_client_summary(summary, ai_client=ai, session_id="s", account_id=str(i))
+    assert sc.cache_evictions() == 1
+    ai.add_response('{"category": "not_mine"}')
+    sc.classify_client_summary(summaries[0], ai_client=ai, session_id="s", account_id="1")
+    assert len(ai.chat_payloads) == 4
+
+
+def test_cache_ttl_expiry(monkeypatch):
+    sc = _reload_classifier(monkeypatch, CLASSIFY_CACHE_TTL_SEC="1")
+    ai = FakeAIClient()
+    summary = {"account_id": "1", "facts_summary": "a", "claimed_errors": []}
+    ai.add_response('{"category": "not_mine"}')
+    sc.classify_client_summary(summary, ai_client=ai, session_id="s", account_id="1")
+    time.sleep(1.1)
+    ai.add_response('{"category": "not_mine"}')
+    sc.classify_client_summary(summary, ai_client=ai, session_id="s", account_id="1")
+    assert sc.cache_hits() == 0
+    assert sc.cache_misses() == 2
+    assert sc.cache_evictions() >= 1
+    assert len(ai.chat_payloads) == 2

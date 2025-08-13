@@ -12,6 +12,30 @@ if not _logger.handlers:
 _logger.setLevel(logging.INFO)
 
 
+def env_bool(name: str, default: bool) -> bool:
+    """Read a boolean environment variable."""
+
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.lower() not in {"0", "false", "no"}
+
+
+def env_int(name: str, default: int) -> int:
+    """Read an integer environment variable with fallback."""
+
+    value = os.getenv(name)
+    try:
+        return int(value) if value is not None else default
+    except ValueError:
+        return default
+
+
+CLASSIFY_CACHE_ENABLED = env_bool("CLASSIFY_CACHE_ENABLED", True)
+CLASSIFY_CACHE_MAXSIZE = env_int("CLASSIFY_CACHE_MAXSIZE", 5000)
+CLASSIFY_CACHE_TTL_SEC = env_int("CLASSIFY_CACHE_TTL_SEC", 0)
+
+
 @dataclass
 class AppConfig:
     """Application configuration loaded from the environment."""

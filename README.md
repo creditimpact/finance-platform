@@ -108,6 +108,9 @@ Provide these in a `.env` file:
 - `OPENAI_API_KEY` – required for LLM calls.
 - `ADMIN_PASSWORD` – password for admin endpoints.
 - `OPENAI_BASE_URL` – optional override for OpenAI's URL.
+- `CLASSIFY_CACHE_ENABLED` – set to `0` to disable summary classification caching (default `1`).
+- `CLASSIFY_CACHE_MAXSIZE` – maximum entries for the summary classification cache (default `5000`).
+- `CLASSIFY_CACHE_TTL_SEC` – expiration in seconds for cached classifications; `0` disables TTL.
 
 Secrets are never committed to the repository.
 

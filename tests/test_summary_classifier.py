@@ -1,4 +1,5 @@
-from backend.core.logic.strategy.summary_classifier import classify_client_summary
+from backend.core.logic.strategy.summary_classifier import (
+    classify_client_summary, invalidate_summary_cache)
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
@@ -23,3 +24,22 @@ def test_goodwill_mapping():
     res = classify_client_summary(summary, ai_client=FakeAIClient())
     assert res["category"] == "goodwill"
     assert res["dispute_approach"] == "goodwill_adjustment"
+
+
+def test_cache_and_invalidation():
+    ai = FakeAIClient()
+    ai.add_response('{"category": "not_mine"}')
+    summary = {"account_id": "1", "facts_summary": "I dispute", "claimed_errors": []}
+    res1 = classify_client_summary(
+        summary, ai_client=ai, session_id="sess", account_id="1"
+    )
+    assert len(ai.chat_payloads) == 1
+    res2 = classify_client_summary(
+        summary, ai_client=ai, session_id="sess", account_id="1"
+    )
+    assert res1 == res2
+    assert len(ai.chat_payloads) == 1
+    invalidate_summary_cache("sess", "1")
+    ai.add_response('{"category": "goodwill"}')
+    classify_client_summary(summary, ai_client=ai, session_id="sess", account_id="1")
+    assert len(ai.chat_payloads) == 2

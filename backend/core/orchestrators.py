@@ -8,36 +8,30 @@ steps of the credit repair workflow.  All core orchestration lives here;
 
 import os
 import warnings
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from shutil import copyfile
 from typing import Any, Mapping
 
-from backend.audit.audit import AuditLevel
-from backend.core.logic.report_analysis.extract_info import extract_bureau_info_column_refined
-from backend.core.logic.utils.pdf_ops import (
-    convert_txts_to_pdfs,
-    gather_supporting_docs_text,
-)
-from backend.core.logic.utils.report_sections import (
-    filter_sections_by_bureau,
-    extract_summary_from_sections,
-)
-from backend.core.logic.strategy.summary_classifier import classify_client_summary
-from backend.core.logic.compliance.constants import StrategistFailureReason
+from backend.analytics.analytics.strategist_failures import \
+    tally_failure_reasons
 from backend.analytics.analytics_tracker import save_analytics_snapshot
-from backend.analytics.analytics.strategist_failures import tally_failure_reasons
-from backend.core.email_sender import send_email_with_attachment
-from backend.core.services.ai_client import AIClient, get_ai_client
 from backend.api.config import AppConfig, get_app_config
 from backend.assets.paths import templates_path
-from backend.core.models import (
-    ClientInfo,
-    ProofDocuments,
-    BureauPayload,
-    BureauAccount,
-    Inquiry,
-)
+from backend.audit.audit import AuditLevel
+from backend.core.email_sender import send_email_with_attachment
+from backend.core.logic.compliance.constants import StrategistFailureReason
+from backend.core.logic.report_analysis.extract_info import \
+    extract_bureau_info_column_refined
+from backend.core.logic.strategy.summary_classifier import \
+    classify_client_summary
+from backend.core.logic.utils.pdf_ops import (convert_txts_to_pdfs,
+                                              gather_supporting_docs_text)
+from backend.core.logic.utils.report_sections import (
+    extract_summary_from_sections, filter_sections_by_bureau)
+from backend.core.models import (BureauAccount, BureauPayload, ClientInfo,
+                                 Inquiry, ProofDocuments)
+from backend.core.services.ai_client import AIClient, get_ai_client
 
 
 def process_client_intake(client_info, audit):
@@ -80,8 +74,15 @@ def classify_client_responses(
 ):
     """Classify client summaries for each account."""
     classification_map: dict[str, dict] = {}
+    session_id = client_info.get("session_id")
     for acc_id, struct in structured_map.items():
-        cls = classify_client_summary(struct, ai_client, client_info.get("state"))
+        cls = classify_client_summary(
+            struct,
+            ai_client,
+            client_info.get("state"),
+            session_id=session_id,
+            account_id=acc_id,
+        )
         classification_map[acc_id] = cls
         audit.log_account(
             acc_id,
@@ -104,11 +105,11 @@ def analyze_credit_report(
     ai_client: AIClient | None = None,
 ):
     """Ingest and analyze the client's credit report."""
-    from backend.core.logic.compliance.upload_validator import is_safe_pdf, move_uploaded_file
     from backend.api.session_manager import update_session
-    from backend.core.logic.report_analysis.analyze_report import (
-        analyze_credit_report as analyze_report_logic,
-    )
+    from backend.core.logic.compliance.upload_validator import (
+        is_safe_pdf, move_uploaded_file)
+    from backend.core.logic.report_analysis.analyze_report import \
+        analyze_credit_report as analyze_report_logic
     from backend.core.logic.utils.bootstrap import get_current_month
 
     uploaded_path = proofs_files.get("smartcredit_report")
@@ -192,8 +193,9 @@ def generate_strategy_plan(
     ai_client: AIClient,
 ):
     """Generate and merge the strategy plan."""
+    from backend.core.logic.strategy.generate_strategy_report import \
+        StrategyGenerator
     from backend.core.logic.strategy.strategy_merger import merge_strategy_data
-    from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
 
     docs_text = gather_supporting_docs_text(session_id)
     strat_gen = StrategyGenerator(ai_client=ai_client)
@@ -255,11 +257,15 @@ def generate_letters(
     app_config: AppConfig | None = None,
 ):
     """Create all client letters and supporting files."""
+    from backend.core.logic.letters.generate_custom_letters import \
+        generate_custom_letters
+    from backend.core.logic.letters.generate_goodwill_letters import \
+        generate_goodwill_letters
+    from backend.core.logic.letters.letter_generator import \
+        generate_all_dispute_letters_with_ai
+    from backend.core.logic.rendering.instructions_generator import \
+        generate_instruction_file
     from backend.core.logic.utils.bootstrap import extract_all_accounts
-    from backend.core.logic.letters.letter_generator import generate_all_dispute_letters_with_ai
-    from backend.core.logic.rendering.instructions_generator import generate_instruction_file
-    from backend.core.logic.letters.generate_goodwill_letters import generate_goodwill_letters
-    from backend.core.logic.letters.generate_custom_letters import generate_custom_letters
 
     print("[INFO] Generating dispute letters...")
     generate_all_dispute_letters_with_ai(
@@ -530,9 +536,7 @@ def run_credit_repair_process(
             audit.save(today_folder)
             if app_config.export_trace_file:
                 from backend.audit.trace_exporter import (
-                    export_trace_file,
-                    export_trace_breakdown,
-                )
+                    export_trace_breakdown, export_trace_file)
 
                 export_trace_file(audit, session_id)
                 export_trace_breakdown(
@@ -557,11 +561,11 @@ def extract_problematic_accounts_from_report(
     file_path: str, session_id: str | None = None
 ) -> "BureauPayload":
     """Return problematic accounts extracted from the report for user review."""
-    from backend.core.logic.compliance.upload_validator import is_safe_pdf, move_uploaded_file
     from backend.api.session_manager import update_session
-    from backend.core.logic.report_analysis.analyze_report import (
-        analyze_credit_report as analyze_report_logic,
-    )
+    from backend.core.logic.compliance.upload_validator import (
+        is_safe_pdf, move_uploaded_file)
+    from backend.core.logic.report_analysis.analyze_report import \
+        analyze_credit_report as analyze_report_logic
 
     session_id = session_id or "session"
     pdf_path = move_uploaded_file(Path(file_path), session_id)
@@ -591,7 +595,9 @@ def extract_problematic_accounts_from_report(
         ],
         inquiries=[
             Inquiry.from_dict(d)
-            for d in sections.get("unauthorized_inquiries", sections.get("inquiries", []))
+            for d in sections.get(
+                "unauthorized_inquiries", sections.get("inquiries", [])
+            )
         ],
     )
 

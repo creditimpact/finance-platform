@@ -5,21 +5,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-from backend.audit.audit import AuditLogger
-from backend.core.services.ai_client import AIClient
-from backend.api.session_manager import get_session
-from backend.core.logic.guardrails.summary_validator import (
-    validate_structured_summaries,
-)
-
 import backend.core.logic.letters.goodwill_preparation as goodwill_preparation
 import backend.core.logic.letters.goodwill_prompting as goodwill_prompting
 import backend.core.logic.letters.goodwill_rendering as goodwill_rendering
+from backend.api.session_manager import get_session
+from backend.audit.audit import AuditLogger
+from backend.core.logic.compliance.compliance_pipeline import \
+    run_compliance_pipeline
+from backend.core.logic.guardrails.summary_validator import \
+    validate_structured_summaries
 from backend.core.logic.rendering import pdf_renderer
 from backend.core.logic.utils.pdf_ops import gather_supporting_docs
-from backend.core.logic.compliance.compliance_pipeline import run_compliance_pipeline
-from backend.core.models import ClientInfo, BureauPayload
+from backend.core.models import BureauPayload, ClientInfo
 from backend.core.models.account import Account
+from backend.core.services.ai_client import AIClient
 
 # ---------------------------------------------------------------------------
 # Orchestrator functions
@@ -54,6 +53,7 @@ def generate_goodwill_letter_with_ai(
         account_dicts,
         structured_summaries,
         client_info.get("state"),
+        session_id,
         audit=audit,
         ai_client=ai_client,
     )

@@ -15,7 +15,7 @@ def test_orchestrator_invokes_compliance(monkeypatch, tmp_path):
     monkeypatch.setattr(
         generate_goodwill_letters.goodwill_preparation,
         "prepare_account_summaries",
-        lambda accounts, structured, state, audit=None, ai_client=None: accounts,
+        lambda accounts, structured, state, session_id, audit=None, ai_client=None: accounts,
     )
 
     def fake_prompt(**kwargs):

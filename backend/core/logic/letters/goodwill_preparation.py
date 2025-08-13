@@ -8,14 +8,16 @@ from __future__ import annotations
 
 import re
 from typing import Any, Dict, List, Mapping
-from backend.core.models.client import ClientInfo
 
 from backend.audit.audit import AuditLogger
-from backend.core.services.ai_client import AIClient
-from backend.core.logic.utils.text_parsing import has_late_indicator
-from backend.core.logic.utils.names_normalization import normalize_creditor_name
-from backend.core.logic.strategy.summary_classifier import classify_client_summary
 from backend.core.logic.compliance.rules_loader import get_neutral_phrase
+from backend.core.logic.strategy.summary_classifier import \
+    classify_client_summary
+from backend.core.logic.utils.names_normalization import \
+    normalize_creditor_name
+from backend.core.logic.utils.text_parsing import has_late_indicator
+from backend.core.models.client import ClientInfo
+from backend.core.services.ai_client import AIClient
 
 
 def select_goodwill_candidates(
@@ -139,6 +141,7 @@ def prepare_account_summaries(
     accounts: List[Dict[str, Any]],
     structured_summaries: Dict[str, Dict[str, Any]] | None,
     state: str | None,
+    session_id: str | None,
     *,
     audit: AuditLogger | None = None,
     ai_client: AIClient,
@@ -212,7 +215,13 @@ def prepare_account_summaries(
         if structured_summaries:
             struct = structured_summaries.get(acc.get("account_id"), {})
             summary["structured_summary"] = struct
-            cls = classify_client_summary(struct, ai_client, state)
+            cls = classify_client_summary(
+                struct,
+                ai_client,
+                state,
+                session_id=session_id,
+                account_id=acc.get("account_id"),
+            )
             summary.update(
                 {
                     "dispute_reason": cls.get("category"),

@@ -31,17 +31,121 @@ def neutralize_admissions(statement: str) -> str:
 def evaluate_rules(
     normalized_statement: str, account_facts: Dict[str, Any], rulebook: Rulebook
 ) -> Dict[str, list]:
-    """Evaluate ``normalized_statement`` against the ``rulebook``.
-
-    Emits a metrics counter and returns basic ``red_flags`` if admissions are
-    detected. The rulebook argument is accepted for future expansion.
-    """
+    """Evaluate ``normalized_statement`` and ``account_facts`` against rules."""
 
     emit_counter("stage_2_5.rules_applied")
+
+    # Build accessors for rulebook data
+    rules = getattr(rulebook, "rules", None)
+    if rules is None and isinstance(rulebook, Mapping):
+        rules = rulebook.get("rules", [])
+
+    flags = getattr(rulebook, "flags", None)
+    if flags is None and isinstance(rulebook, Mapping):
+        flags = rulebook.get("flags", {})
+
+    precedence = getattr(rulebook, "precedence", None)
+    if precedence is None and isinstance(rulebook, Mapping):
+        precedence = rulebook.get("precedence", [])
+
+    exclusions = getattr(rulebook, "exclusions", None)
+    if exclusions is None and isinstance(rulebook, Mapping):
+        exclusions = rulebook.get("exclusions", {})
+
     red_flags: list[str] = []
     if "late" in normalized_statement.lower():
         red_flags.append("late_payment")
-    return {"rule_hits": [], "needs_evidence": [], "red_flags": red_flags}
+
+    def get_value(path: str) -> Any:
+        if path == "statement" or path == "normalized_statement":
+            return normalized_statement
+        if path.startswith("flags."):
+            target = flags
+            for part in path.split(".")[1:]:
+                if isinstance(target, Mapping):
+                    target = target.get(part)
+                else:
+                    return None
+            return target
+        target: Any = account_facts
+        for part in path.split("."):
+            if isinstance(target, Mapping):
+                target = target.get(part)
+            else:
+                return None
+        return target
+
+    def eval_cond(cond: Mapping[str, Any]) -> bool:
+        if "all" in cond:
+            return all(eval_cond(c) for c in cond["all"])
+        if "any" in cond:
+            return any(eval_cond(c) for c in cond["any"])
+        field = cond.get("field", "")
+        value = get_value(field)
+        if "eq" in cond:
+            return value == cond["eq"]
+        if "ne" in cond:
+            return value != cond["ne"]
+        if "lt" in cond:
+            try:
+                return value < cond["lt"]
+            except TypeError:
+                return False
+        if "lte" in cond:
+            try:
+                return value <= cond["lte"]
+            except TypeError:
+                return False
+        if "gt" in cond:
+            try:
+                return value > cond["gt"]
+            except TypeError:
+                return False
+        if "gte" in cond:
+            try:
+                return value >= cond["gte"]
+            except TypeError:
+                return False
+        return False
+
+    triggered: Dict[str, Mapping[str, Any]] = {}
+    for rule in rules or []:
+        when = rule.get("when")
+        if when and eval_cond(when):
+            triggered[rule["id"]] = rule.get("effect", {})
+
+    precedence_map = {rid: i for i, rid in enumerate(precedence or [])}
+    sorted_hits = sorted(
+        triggered.items(), key=lambda item: precedence_map.get(item[0], len(precedence_map))
+    )
+
+    final_hits: list[str] = []
+    needs_evidence: list[str] = []
+    suggested_dispute_frame = ""
+    suppressed: set[str] = set()
+
+    for rule_id, effect in sorted_hits:
+        if rule_id in suppressed:
+            continue
+        final_hits.extend(effect.get("rule_hits", [rule_id]))
+        needs_evidence.extend(effect.get("needs_evidence", []))
+        if not suggested_dispute_frame and effect.get("suggested_dispute_frame"):
+            suggested_dispute_frame = effect["suggested_dispute_frame"]
+        for ex in (exclusions or {}).get(rule_id, []):
+            suppressed.add(ex)
+
+    # Deduplicate while preserving order
+    seen_hits: set[str] = set()
+    final_hits = [x for x in final_hits if not (x in seen_hits or seen_hits.add(x))]
+    seen_ev: set[str] = set()
+    needs_evidence = [x for x in needs_evidence if not (x in seen_ev or seen_ev.add(x))]
+
+    return {
+        "rule_hits": final_hits,
+        "needs_evidence": needs_evidence,
+        "red_flags": red_flags,
+        "suggested_dispute_frame": suggested_dispute_frame,
+    }
 
 
 def normalize_and_tag(

@@ -23,6 +23,7 @@ class AuditLogger:
         "strategy_generated",
         "strategy_merged",
         "strategy_decision",
+        "strategy_rule_enforcement",
         "pre_strategy_fallback",
         "strategy_fallback",
     }

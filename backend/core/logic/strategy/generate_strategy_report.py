@@ -14,6 +14,8 @@ from backend.core.logic.compliance.constants import (
 from backend.core.logic.guardrails import fix_draft_with_guardrails
 from backend.core.logic.utils.json_utils import parse_json
 from backend.core.services.ai_client import AIClient
+from backend.core.logic.policy import get_precedence, precedence_version
+from backend.policy.policy_loader import load_rulebook
 
 
 # Mapping of rule hits to required or forbidden recommendations
@@ -60,6 +62,11 @@ class StrategyGenerator:
 
         policy_context: Dict[str, Dict[str, Any]] = {}
         rule_policies: Dict[str, Dict[str, Dict[str, list[str]]]] = {}
+        precedence_map: Dict[str, int] = {}
+        if stage_2_5_data:
+            rb = load_rulebook()
+            precedence = get_precedence(rb)
+            precedence_map = {rid: i for i, rid in enumerate(precedence)}
         if classification_map:
             for acc_id, cls in classification_map.items():
                 cls_data = getattr(cls, "classification", cls)
@@ -76,7 +83,11 @@ class StrategyGenerator:
                 allowed_actions: list[str] = []
                 forbidden_actions: list[str] = []
                 rule_action_map: Dict[str, Dict[str, list[str]]] = {}
-                for hit in data.get("rule_hits", []):
+                hits_sorted = sorted(
+                    data.get("rule_hits", []),
+                    key=lambda rid: precedence_map.get(rid, len(precedence_map)),
+                )
+                for hit in hits_sorted:
                     mapping = _RULE_ACTIONS.get(hit)
                     if mapping:
                         rule_action_map[hit] = mapping
@@ -96,6 +107,9 @@ class StrategyGenerator:
                         "rulebook_version": data.get("rulebook_version", ""),
                         "allowed_actions": allowed_actions,
                         "forbidden_actions": forbidden_actions,
+                        "precedence_version": data.get(
+                            "precedence_version", precedence_version
+                        ),
                     }
                 )
         policy_section = (
@@ -203,6 +217,9 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                 acc.setdefault(
                     "rulebook_version", data.get("rulebook_version", "")
                 )
+                acc.setdefault(
+                    "precedence_version", data.get("precedence_version", precedence_version)
+                )
 
                 policy = rule_policies.get(acc_id, {})
                 allowed_actions: list[str] = []
@@ -229,18 +246,15 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                             break
                     if override:
                         break
-
-                if not override:
-                    for rule_id, details in policy.items():
-                        for required in details.get("required", []):
-                            if required.lower() not in rec_lower:
-                                acc["recommendation"] = required
-                                override = True
-                                enforced_rules.append(rule_id)
-                                reason = f"{required} required by {rule_id}"
-                                break
-                        if override:
+                    for required in details.get("required", []):
+                        if required.lower() not in rec_lower:
+                            acc["recommendation"] = required
+                            override = True
+                            enforced_rules.append(rule_id)
+                            reason = f"{required} required by {rule_id}"
                             break
+                    if override:
+                        break
 
                 if override:
                     acc["policy_override"] = True
@@ -329,6 +343,7 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                         "red_flags": [],
                         "prohibited_admission_detected": False,
                         "rulebook_version": "",
+                        "precedence_version": "",
                         "action_tag": "",
                         "priority": "",
                         "legal_notes": [],
@@ -346,6 +361,7 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                 "red_flags",
                 "prohibited_admission_detected",
                 "rulebook_version",
+                "precedence_version",
             ):
                 if key in data_25:
                     acc[key] = data_25.get(key, acc[key])
@@ -404,6 +420,9 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                 data.get("prohibited_admission_detected", False),
             )
             acc.setdefault("rulebook_version", data.get("rulebook_version", ""))
+            acc.setdefault(
+                "precedence_version", data.get("precedence_version", precedence_version)
+            )
 
             # Stage 2 defaults
             acc.setdefault("account_number", "")

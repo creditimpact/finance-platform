@@ -7,6 +7,7 @@ from backend.core.logic.letters.letter_generator import (
 from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
 from backend.core.logic.strategy.summary_classifier import ClassificationRecord
 from tests.helpers.fake_ai_client import FakeAIClient
+from backend.core.logic.policy import precedence_version
 
 
 def test_letters_generate_when_strategy_llm_returns_junk(tmp_path, monkeypatch):
@@ -24,6 +25,7 @@ def test_letters_generate_when_strategy_llm_returns_junk(tmp_path, monkeypatch):
             "red_flags": [],
             "prohibited_admission_detected": False,
             "rulebook_version": "",
+            "precedence_version": precedence_version,
         }
     }
 

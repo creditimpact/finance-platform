@@ -7,6 +7,7 @@ from jsonschema import ValidationError
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from backend.core.logic.strategy.normalizer_2_5 import normalize_and_tag
+from backend.core.logic.policy import precedence_version
 
 
 class DummyRulebook:
@@ -28,6 +29,7 @@ def test_missing_user_statement(rulebook: DummyRulebook) -> None:
     assert result["red_flags"] == []
     assert result["prohibited_admission_detected"] is False
     assert result["rulebook_version"] == "2024-01"
+    assert result["precedence_version"] == precedence_version
 
 
 def test_statement_passthrough(rulebook: DummyRulebook) -> None:

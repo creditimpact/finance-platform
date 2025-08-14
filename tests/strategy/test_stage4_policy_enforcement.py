@@ -4,6 +4,7 @@ import pytest
 
 from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
 from tests.helpers.fake_ai_client import FakeAIClient
+from backend.core.logic.policy import precedence_version
 
 
 @pytest.fixture
@@ -58,8 +59,8 @@ def strategy_generator(monkeypatch) -> StrategyGenerator:
 @pytest.fixture
 def stage_4_output(strategy_generator: StrategyGenerator) -> dict:
     stage_2_5_data = {
-        "1": {"rule_hits": ["no_goodwill_on_collections"]},
-        "2": {"rule_hits": ["fraud_flow"]},
+        "1": {"rule_hits": ["no_goodwill_on_collections"], "precedence_version": precedence_version},
+        "2": {"rule_hits": ["fraud_flow"], "precedence_version": precedence_version},
     }
     return strategy_generator.generate({}, {}, stage_2_5_data=stage_2_5_data)
 
@@ -73,8 +74,10 @@ def test_policy_enforcement_applies_overrides(stage_4_output: dict) -> None:
     assert acc1["policy_override"] is True
     assert acc1["enforced_rules"] == ["no_goodwill_on_collections"]
     assert acc1["rule_hits"] == ["no_goodwill_on_collections"]
+    assert acc1["precedence_version"] == precedence_version
 
     assert acc2["recommendation"] == "Fraud dispute"
     assert acc2["policy_override"] is True
     assert acc2["enforced_rules"] == ["fraud_flow"]
     assert acc2["rule_hits"] == ["fraud_flow"]
+    assert acc2["precedence_version"] == precedence_version

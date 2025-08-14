@@ -30,6 +30,7 @@
           "red_flags",
           "prohibited_admission_detected",
           "rulebook_version",
+          "precedence_version",
           "action_tag",
           "priority",
           "legal_notes",
@@ -56,6 +57,7 @@
           "red_flags": {"type": "array", "items": {"type": "string"}, "default": []},
           "prohibited_admission_detected": {"type": "boolean", "default": false},
           "rulebook_version": {"type": "string", "default": ""},
+          "precedence_version": {"type": "string", "default": ""},
           "action_tag": {
             "type": "string",
             "enum": ["", "dispute", "goodwill", "custom_letter", "ignore"],

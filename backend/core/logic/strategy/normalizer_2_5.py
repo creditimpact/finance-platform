@@ -14,6 +14,7 @@ from backend.analytics.analytics_tracker import emit_counter, get_counters, set_
 from backend.core.logic.utils.pii import redact_pii
 from backend.core.logic.utils.json_utils import parse_json
 from backend.core.services.ai_client import get_ai_client
+from backend.core.logic.policy import get_precedence, precedence_version
 
 
 class Rulebook(Protocol):
@@ -214,9 +215,7 @@ def evaluate_rules(
     if flags is None and isinstance(rulebook, Mapping):
         flags = rulebook.get("flags", {})
 
-    precedence = getattr(rulebook, "precedence", None)
-    if precedence is None and isinstance(rulebook, Mapping):
-        precedence = rulebook.get("precedence", [])
+    precedence = get_precedence(rulebook)
 
     exclusions = getattr(rulebook, "exclusions", None)
     if exclusions is None and isinstance(rulebook, Mapping):
@@ -373,6 +372,7 @@ def normalize_and_tag(
             "legal_safe_summary": legal_safe_summary,
             "prohibited_admission_detected": admission_detected,
             "rulebook_version": rulebook_version,
+            "precedence_version": precedence_version,
         }
     )
     result["red_flags"] = list(
@@ -401,6 +401,7 @@ def normalize_and_tag(
                 "account_id": redact_pii(str(account_id)),
                 "rule_hits": result["rule_hits"],
                 "rulebook_version": rulebook_version,
+                "precedence_version": precedence_version,
             },
         )
     return result

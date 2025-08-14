@@ -37,35 +37,46 @@ class StrategyGenerator:
         )
 
 
-        account_context: Dict[str, Dict[str, Any]] = {}
+        policy_context: Dict[str, Dict[str, Any]] = {}
         if classification_map:
             for acc_id, cls in classification_map.items():
-                account_context.setdefault(acc_id, {})["classification"] = cls
+                policy_context.setdefault(acc_id, {}).update(
+                    {
+                        "category": cls.get("category"),
+                        "legal_tag": cls.get("legal_tag"),
+                        "dispute_approach": cls.get("dispute_approach"),
+                        "tone": cls.get("tone"),
+                    }
+                )
         if stage_2_5_data:
             for acc_id, data in stage_2_5_data.items():
-                account_context.setdefault(acc_id, {}).update(
+                policy_context.setdefault(acc_id, {}).update(
                     {
                         "legal_safe_summary": data.get("legal_safe_summary"),
                         "suggested_dispute_frame": data.get("suggested_dispute_frame", ""),
                         "rule_hits": data.get("rule_hits", []),
                         "needs_evidence": data.get("needs_evidence", []),
                         "red_flags": data.get("red_flags", []),
+                        "prohibited_admission_detected": data.get(
+                            "prohibited_admission_detected", False
+                        ),
+                        "rulebook_version": data.get("rulebook_version", ""),
                     }
                 )
-        context_section = (
-            "\nAccount context:\n" + json.dumps(account_context, indent=2)
-            if account_context
+        policy_section = (
+            "\nAccount policy context:\n" + json.dumps(policy_context, indent=2)
+            if policy_context
             else ""
         )
 
         prompt = f"""
-You are a credit repair strategist. Analyze the client's credit report data and propose a concise plan of action.
+You are a credit repair strategist. Analyze the client's credit report data and propose a concise plan of action. Base all recommendations on the supplied classification and rule hits; do not contradict them.
 Client name: {client_name}
 Run date: {run_date}
-
+{policy_section}
 Credit report data:
 {json.dumps(bureau_data, indent=2)}
-{context_section}{docs_section}
+{docs_section}
 
 Return only a JSON object with this structure:
 {{
@@ -128,6 +139,13 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                 acc.setdefault("rule_hits", data.get("rule_hits", []))
                 acc.setdefault("needs_evidence", data.get("needs_evidence", []))
                 acc.setdefault("red_flags", data.get("red_flags", []))
+                acc.setdefault(
+                    "prohibited_admission_detected",
+                    data.get("prohibited_admission_detected", False),
+                )
+                acc.setdefault(
+                    "rulebook_version", data.get("rulebook_version", "")
+                )
 
         fix_draft_with_guardrails(
             json.dumps(report, indent=2),
@@ -169,6 +187,13 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                     acc.setdefault("rule_hits", data.get("rule_hits", []))
                     acc.setdefault("needs_evidence", data.get("needs_evidence", []))
                     acc.setdefault("red_flags", data.get("red_flags", []))
+                    acc.setdefault(
+                        "prohibited_admission_detected",
+                        data.get("prohibited_admission_detected", False),
+                    )
+                    acc.setdefault(
+                        "rulebook_version", data.get("rulebook_version", "")
+                    )
         path = folder / "strategy.json"
         with open(path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2, ensure_ascii=False)

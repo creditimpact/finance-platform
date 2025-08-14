@@ -17,6 +17,7 @@ from typing import Any, Mapping
 from backend.analytics.analytics.strategist_failures import tally_failure_reasons
 from backend.analytics.analytics_tracker import save_analytics_snapshot
 from backend.api.config import AppConfig, get_app_config
+from backend.api.session_manager import update_session
 from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLevel
 from backend.core.email_sender import send_email_with_attachment
@@ -48,7 +49,6 @@ from backend.core.models import (
 )
 from backend.core.services.ai_client import AIClient, get_ai_client
 from backend.policy.policy_loader import load_rulebook
-from backend.api.session_manager import update_session
 
 
 def process_client_intake(client_info, audit):
@@ -215,7 +215,11 @@ def analyze_credit_report(
     print("[INFO] Analyzing report with GPT...")
     analyzed_json_path = Path("output/analyzed_report.json")
     sections = analyze_report_logic(
-        pdf_path, analyzed_json_path, client_info, ai_client=ai_client, request_id=session_id
+        pdf_path,
+        analyzed_json_path,
+        client_info,
+        ai_client=ai_client,
+        request_id=session_id,
     )
     client_info.update(sections)
     log_messages.append("[INFO] Report analyzed.")
@@ -266,6 +270,7 @@ def generate_strategy_plan(
     client_info,
     bureau_data,
     classification_map,
+    stage_2_5_data,
     session_id,
     audit,
     log_messages,
@@ -295,6 +300,7 @@ def generate_strategy_plan(
         classification_map={
             k: v.classification for k, v in (classification_map or {}).items()
         },
+        stage_2_5_data=stage_2_5_data,
         audit=audit,
     )
     if not strategy or not strategy.get("accounts"):
@@ -302,7 +308,12 @@ def generate_strategy_plan(
             "strategist_failure",
             {"failure_reason": StrategistFailureReason.EMPTY_OUTPUT},
         )
-    strat_gen.save_report(strategy, client_info, datetime.now().strftime("%Y-%m-%d"))
+    strat_gen.save_report(
+        strategy,
+        client_info,
+        datetime.now().strftime("%Y-%m-%d"),
+        stage_2_5_data=stage_2_5_data,
+    )
     audit.log_step("strategy_generated", strategy)
 
     merge_strategy_data(
@@ -608,11 +619,7 @@ def run_credit_repair_process(
         stage_2_5: dict[str, Any] = {}
         for acc_id in set(facts_map) | set(classification_map):
             record = classification_map.get(acc_id)
-            account_cls = (
-                {**record.summary, **record.classification}
-                if record
-                else {}
-            )
+            account_cls = {**record.summary, **record.classification} if record else {}
             stage_2_5[acc_id] = normalize_and_tag(
                 account_cls, facts_map.get(acc_id, {}), rulebook, account_id=acc_id
             )
@@ -622,6 +629,7 @@ def run_credit_repair_process(
             client_info,
             bureau_data,
             classification_map,
+            stage_2_5,
             session_id,
             audit,
             log_messages,

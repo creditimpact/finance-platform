@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from typing import Any, Dict, List, Mapping
 
 from backend.api.session_manager import get_session, update_session
-from backend.core.logic.compliance.rules_loader import load_rules
 from backend.core.logic.guardrails.summary_validator import (
     validate_structured_summaries,
 )
@@ -79,9 +78,9 @@ def generate_strategy(
     """Build a comprehensive strategy document for a given session.
 
     The strategy combines sanitized client summaries (``structured_summaries``),
-    the current rulebook, a snapshot of the provided credit report data and
-    recent outcome telemetry. Raw client explanations are intentionally
-    excluded to prevent accidental leakage into any generated letters.
+    a snapshot of the provided credit report data and recent outcome telemetry.
+    Raw client explanations are intentionally excluded to prevent accidental
+    leakage into any generated letters.
     """
 
     session = get_session(session_id) or {}
@@ -91,7 +90,6 @@ def generate_strategy(
 
     strategy: Dict[str, Any] = {
         "generated_at": datetime.now(UTC).isoformat(),
-        "rules": load_rules(),
         "dispute_items": structured,
         "bureau_data": bureau_data,
         "historical_outcomes": get_outcomes(),

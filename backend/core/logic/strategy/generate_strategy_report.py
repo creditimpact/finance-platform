@@ -62,12 +62,13 @@ class StrategyGenerator:
         rule_policies: Dict[str, Dict[str, Dict[str, list[str]]]] = {}
         if classification_map:
             for acc_id, cls in classification_map.items():
+                cls_data = getattr(cls, "classification", cls)
                 policy_context.setdefault(acc_id, {}).update(
                     {
-                        "category": cls.get("category"),
-                        "legal_tag": cls.get("legal_tag"),
-                        "dispute_approach": cls.get("dispute_approach"),
-                        "tone": cls.get("tone"),
+                        "category": cls_data.get("category"),
+                        "legal_tag": cls_data.get("legal_tag"),
+                        "dispute_approach": cls_data.get("dispute_approach"),
+                        "tone": cls_data.get("tone"),
                     }
                 )
         if stage_2_5_data:
@@ -134,33 +135,55 @@ Return only a JSON object with this structure:
 }}
 Ensure the response is strictly valid JSON: all property names and strings in double quotes, no trailing commas or comments, and no text outside the JSON.
 """
-        response = self.ai_client.chat_completion(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-        )
-        raw_content = response.choices[0].message.content
-        if audit:
-            audit.log_step("strategist_raw_output", {"content": raw_content})
-        content = (raw_content or "").strip()
-        if content.startswith("```"):
-            content = content.replace("```json", "").replace("```", "").strip()
-        report, error_reason = parse_json(content)
         expected_keys = {"overview", "accounts", "global_recommendations"}
+        report = None
         failure_reason = None
-        if not raw_content:
-            failure_reason = StrategistFailureReason.EMPTY_OUTPUT
-        else:
-            if error_reason is not None or not isinstance(report, dict) or not report:
-                failure_reason = StrategistFailureReason.UNRECOGNIZED_FORMAT
-            elif not expected_keys.issubset(report):
-                failure_reason = StrategistFailureReason.SCHEMA_ERROR
-        if audit and failure_reason:
-            audit.log_step(
-                "strategist_failure",
-                {"failure_reason": failure_reason.value},
+        for attempt in range(2):
+            response = self.ai_client.chat_completion(
+                model="gpt-4",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
             )
-        if isinstance(report, dict) and stage_2_5_data:
+            raw_content = response.choices[0].message.content
+            if audit:
+                audit.log_step(
+                    "strategist_raw_output",
+                    {"content": raw_content, "attempt": attempt + 1},
+                )
+            content = (raw_content or "").strip()
+            if content.startswith("```"):
+                content = content.replace("```json", "").replace("```", "").strip()
+            parsed, error_reason = parse_json(content)
+            if not raw_content:
+                current_reason = StrategistFailureReason.EMPTY_OUTPUT
+            elif (
+                error_reason is not None
+                or not isinstance(parsed, dict)
+                or not parsed
+            ):
+                current_reason = StrategistFailureReason.UNRECOGNIZED_FORMAT
+            elif not expected_keys.issubset(parsed):
+                current_reason = StrategistFailureReason.SCHEMA_ERROR
+            else:
+                report = parsed
+                failure_reason = None
+                break
+            if failure_reason is None:
+                failure_reason = current_reason
+
+        if report is None:
+            if audit and failure_reason:
+                audit.log_step(
+                    "strategist_failure",
+                    {"failure_reason": failure_reason.value},
+                )
+            return self._build_minimal_strategy(
+                bureau_data,
+                stage_2_5_data or {},
+                classification_map or {},
+            )
+
+        if stage_2_5_data:
             for acc in report.get("accounts", []):
                 acc_id = str(acc.get("account_id", ""))
                 data = stage_2_5_data.get(acc_id)
@@ -272,6 +295,77 @@ Ensure the response is strictly valid JSON: all property names and strings in do
             except Exception:
                 pass
         return report
+
+    def _build_minimal_strategy(
+        self,
+        bureau_data: Dict[str, Any],
+        stage_2_5_data: Dict[str, Dict[str, Any]],
+        classification_map: Dict[str, Dict[str, Any]],
+    ) -> dict:
+        """Construct a minimal strategy object from deterministic inputs."""
+
+        accounts: Dict[str, Dict[str, Any]] = {}
+        for payload in bureau_data.values():
+            for items in payload.values():
+                if not isinstance(items, list):
+                    continue
+                for entry in items:
+                    acc_id = str(entry.get("account_id", ""))
+                    if not acc_id or acc_id in accounts:
+                        continue
+                    accounts[acc_id] = {
+                        "account_id": acc_id,
+                        "name": entry.get("name", ""),
+                        "account_number": entry.get("account_number", ""),
+                        "status": entry.get("status", ""),
+                        "analysis": "",
+                        "recommendation": "",
+                        "alternative_options": [],
+                        "flags": [],
+                        "legal_safe_summary": "",
+                        "suggested_dispute_frame": "",
+                        "rule_hits": [],
+                        "needs_evidence": [],
+                        "red_flags": [],
+                        "prohibited_admission_detected": False,
+                        "rulebook_version": "",
+                        "action_tag": "",
+                        "priority": "",
+                        "legal_notes": [],
+                        "enforced_rules": [],
+                        "policy_override_reason": "",
+                    }
+
+        for acc_id, acc in accounts.items():
+            data_25 = stage_2_5_data.get(acc_id, {})
+            for key in (
+                "legal_safe_summary",
+                "suggested_dispute_frame",
+                "rule_hits",
+                "needs_evidence",
+                "red_flags",
+                "prohibited_admission_detected",
+                "rulebook_version",
+            ):
+                if key in data_25:
+                    acc[key] = data_25.get(key, acc[key])
+
+            cls_record = classification_map.get(acc_id)
+            cls = getattr(cls_record, "classification", cls_record) or {}
+            if cls.get("flags"):
+                acc["flags"] = cls.get("flags", [])
+            raw_tag = cls.get("action_tag")
+            if raw_tag:
+                tag, _ = normalize_action_tag(raw_tag)
+                acc["action_tag"] = tag
+            acc["priority"] = cls.get("priority", acc["priority"])
+            acc["legal_notes"] = cls.get("legal_notes", acc["legal_notes"])
+
+        return {
+            "overview": "",
+            "accounts": list(accounts.values()),
+            "global_recommendations": [],
+        }
 
     def save_report(
         self,

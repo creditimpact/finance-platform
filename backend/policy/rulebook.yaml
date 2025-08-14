@@ -1,4 +1,144 @@
-version: "1.0"
-limits: {}
-flags: {}
-rules: []
+version: "1.1.0"
+
+limits:
+  D_VALIDATION_WINDOW_DAYS: 30
+  MOV_WINDOW_DAYS: 15
+  UTILIZATION_HIGH: 0.90
+  GOODWILL_MIN_AGE_MONTHS: 6
+  INQUIRY_AGE_MONTHS: 24
+  MEDICAL_SMALL_DOLLAR: 500
+
+flags:
+  NO_GOODWILL_ON_COLLECTIONS: true
+  REQUIRE_ID_THEFT_EVIDENCE: true
+  ENABLE_MEDICAL_POLICY: true
+
+# סדר הפעלה (גבוה → נמוך)
+precedence:
+  - E_IDENTITY
+  - D_VALIDATION
+  - C_MOV
+  - H_OBSOL
+  - A_CRA_DISPUTE
+  - B_DIRECT_DISPUTE
+  - L_DUPLICATE_TRADELINE
+  - M_UNAUTHORIZED_INQUIRY
+  - J_MEDICAL
+  - K_UTILIZATION_PAYDOWN
+  - F_GOODWILL
+  - G_PFD
+  - I_CEASE
+
+# חוקים שמבטלים/מדכאים אחרים (rule → [rules])
+exclusions:
+  E_IDENTITY: [F_GOODWILL, G_PFD, D_VALIDATION, A_CRA_DISPUTE, B_DIRECT_DISPUTE, H_OBSOL]
+  D_VALIDATION: [A_CRA_DISPUTE, B_DIRECT_DISPUTE]
+  H_OBSOL: [G_PFD]
+
+rules:
+  # --- 1) Identity theft / Fraud flow ---
+  - id: E_IDENTITY
+    when: identity_theft == true
+    effect:
+      action_tag: fraud_dispute
+      priority: High
+      flags: [fraud_flow]
+      legal_notes: ["FCRA 605B"]
+      needs_evidence: ${flags.REQUIRE_ID_THEFT_EVIDENCE AND (has_id_theft_affidavit == false)}
+
+  # --- 2) Collector 30-day validation window (FDCPA 1692g) ---
+  - id: D_VALIDATION
+    when: (type == 'collection') AND (days_since_first_contact <= ${limits.D_VALIDATION_WINDOW_DAYS})
+    effect:
+      action_tag: debt_validation
+      priority: High
+      legal_notes: ["FDCPA 1692g"]
+
+  # --- 3) MoV 15-day window אחרי תוצאה 'verified' מה-CRA ---
+  - id: C_MOV
+    when: (cra_last_result == 'verified') AND (days_since_cra_result <= ${limits.MOV_WINDOW_DAYS})
+    effect:
+      action_tag: mov
+      priority: High
+      legal_notes: ["FCRA 611(a)(6)-(7)"]
+
+  # --- 4) Obsolescence (התיישנות דיווח) ---
+  - id: H_OBSOL
+    when: ((type == 'bankruptcy') AND (years_since_bankruptcy >= 10)) OR ((type != 'inquiry') AND (years_since_dofd >= 7))
+    effect:
+      action_tag: obsolescence
+      priority: High
+      legal_notes: ["FCRA 605"]
+
+  # --- 5) Bureau dispute (אינאקורטיות/חוסר מידע/חוסר יכולת אימות) ---
+  - id: A_CRA_DISPUTE
+    when: (is_inaccurate_or_incomplete == true) OR (not_able_to_verify == true)
+    effect:
+      action_tag: bureau_dispute
+      priority: High
+      legal_notes: ["FCRA 611"]
+
+  # --- 6) Direct dispute (יש כתובת ישירה של furnisher) ---
+  - id: B_DIRECT_DISPUTE
+    when: (is_inaccurate_or_incomplete == true) AND (has_direct_dispute_address == true)
+    effect:
+      action_tag: direct_dispute
+      priority: High
+      legal_notes: ["FACTA/CFPB reasonable investigation"]
+
+  # --- 7) Duplicate tradeline (לחסום כפילויות) ---
+  - id: L_DUPLICATE_TRADELINE
+    when: is_duplicate == true
+    effect:
+      action_tag: bureau_dispute
+      priority: Medium
+      flags: [duplicate_tradeline]
+      legal_notes: ["FCRA 611"]
+
+  # --- 8) Unauthorized / stale inquiry ---
+  - id: M_UNAUTHORIZED_INQUIRY
+    when: (type == 'inquiry') AND ((unauthorized_inquiry == true) OR (inquiry_age_months >= ${limits.INQUIRY_AGE_MONTHS}))
+    effect:
+      action_tag: inquiry_dispute
+      priority: Medium
+      legal_notes: ["FCRA 611"]
+
+  # --- 9) Medical policy (קטן/שולם) ---
+  - id: J_MEDICAL
+    when: (type == 'medical') AND ( ${flags.ENABLE_MEDICAL_POLICY} == true ) AND ( (amount < ${limits.MEDICAL_SMALL_DOLLAR}) OR (status == 'paid') )
+    effect:
+      action_tag: medical_dispute
+      priority: Medium
+      legal_notes: ["FCRA 611", "CRA medical policy"]
+
+  # --- 10) High utilization on open revolving (לשלם לפני מחלוקת) ---
+  - id: K_UTILIZATION_PAYDOWN
+    when: (is_open_revolving == true) AND (utilization >= ${limits.UTILIZATION_HIGH})
+    effect:
+      action_tag: paydown_first
+      priority: Medium
+      flags: [paydown_first]
+
+  # --- 11) Goodwill (מאותתים כמוצא “רך” ללייטס בלבד) ---
+  - id: F_GOODWILL
+    when: (type == 'late') AND (account_history_good == true) AND (months_since_last_late >= ${limits.GOODWILL_MIN_AGE_MONTHS}) AND (no_late_pattern == true) AND ( ${flags.NO_GOODWILL_ON_COLLECTIONS} == true ? (status != 'collection') : true )
+    effect:
+      action_tag: goodwill
+      priority: Low
+      legal_notes: ["Voluntary"]
+
+  # --- 12) Pay-for-Delete (מוצא אחרון בקולקשנז כשאין עילות אחרות) ---
+  - id: G_PFD
+    when: (type == 'collection') AND (is_inaccurate_or_incomplete != true) AND (not_able_to_verify != true) AND (years_since_dofd < 7) AND (identity_theft != true)
+    effect:
+      action_tag: pay_for_delete
+      priority: Low
+      legal_notes: ["Voluntary"]
+
+  # --- 13) Cease & Desist (תמיד אם ביקש) ---
+  - id: I_CEASE
+    when: (requests_cease_and_desist == true)
+    effect:
+      action_tag: cease_and_desist
+      priority: Low
+      legal_notes: ["FDCPA 1692c(c)"]

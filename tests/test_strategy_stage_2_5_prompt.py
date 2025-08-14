@@ -4,6 +4,7 @@ from unittest import mock
 
 from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
 from tests.helpers.fake_ai_client import FakeAIClient
+from backend.core.logic.policy import precedence_version
 
 
 def test_stage_2_5_data_included_in_prompt_and_saved(tmp_path):
@@ -26,6 +27,7 @@ def test_stage_2_5_data_included_in_prompt_and_saved(tmp_path):
             "rule_hits": ["E_IDENTITY"],
             "needs_evidence": ["identity_theft_affidavit"],
             "red_flags": ["admission_of_fault"],
+            "precedence_version": precedence_version,
         }
     }
     with mock.patch(
@@ -54,6 +56,7 @@ def test_stage_2_5_data_included_in_prompt_and_saved(tmp_path):
     assert acc["rule_hits"] == ["E_IDENTITY"]
     assert acc["needs_evidence"] == ["identity_theft_affidavit"]
     assert acc["red_flags"] == ["admission_of_fault"]
+    assert acc["precedence_version"] == precedence_version
     assert acc["action_tag"] == ""
     assert acc["priority"] == ""
     assert acc["legal_notes"] == []

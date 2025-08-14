@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from backend.core.logic.strategy.normalizer_2_5 import normalize_and_tag
+from backend.core.logic.policy import precedence_version
 
 
 class DummyRulebook:
@@ -26,4 +27,5 @@ def test_emits_rule_event(monkeypatch):
         "account_id": "123",
         "rule_hits": [],
         "rulebook_version": "2024-01",
+        "precedence_version": precedence_version,
     }

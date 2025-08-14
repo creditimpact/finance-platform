@@ -12,7 +12,8 @@
     "needs_evidence",
     "red_flags",
     "prohibited_admission_detected",
-    "rulebook_version"
+    "rulebook_version",
+    "precedence_version"
   ],
   "properties": {
     "legal_safe_summary": {
@@ -117,6 +118,11 @@
       "type": "string",
       "description": "Semantic version of backend/policy/rulebook.yaml used during evaluation.",
       "default": ""
+    },
+    "precedence_version": {
+      "type": "string",
+      "description": "Version of rule precedence helper used during evaluation.",
+      "default": ""
     }
   },
   "examples": [
@@ -127,7 +133,8 @@
       "needs_evidence": [],
       "red_flags": ["admission_of_fault"],
       "prohibited_admission_detected": true,
-      "rulebook_version": "1.1.0"
+      "rulebook_version": "1.1.0",
+      "precedence_version": "1"
     },
     {
       "legal_safe_summary": "Client reports identity theft and requests verification.",
@@ -136,7 +143,8 @@
       "needs_evidence": ["identity_theft_affidavit"],
       "red_flags": [],
       "prohibited_admission_detected": false,
-      "rulebook_version": "1.1.0"
+      "rulebook_version": "1.1.0",
+      "precedence_version": "1"
     },
     {
       "legal_safe_summary": "No statement provided.",
@@ -145,7 +153,8 @@
       "needs_evidence": [],
       "red_flags": [],
       "prohibited_admission_detected": false,
-      "rulebook_version": "1.1.0"
+      "rulebook_version": "1.1.0",
+      "precedence_version": "1"
     }
   ]
 }

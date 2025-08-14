@@ -3,6 +3,7 @@ import json
 from backend.analytics.analytics_tracker import get_counters, reset_counters
 from backend.audit.audit import create_audit_logger
 from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
+from backend.core.logic.policy import precedence_version
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
@@ -63,8 +64,8 @@ def test_policy_based_overrides(monkeypatch):
     generator = StrategyGenerator(ai_client=fake)
     audit = create_audit_logger("test")
     stage_2_5_data = {
-        "1": {"rule_hits": ["no_goodwill_on_collections"]},
-        "2": {"rule_hits": ["fraud_flow"]},
+        "1": {"rule_hits": ["no_goodwill_on_collections"], "precedence_version": precedence_version},
+        "2": {"rule_hits": ["fraud_flow"], "precedence_version": precedence_version},
     }
     result = generator.generate({}, {}, stage_2_5_data=stage_2_5_data, audit=audit)
 
@@ -75,11 +76,13 @@ def test_policy_based_overrides(monkeypatch):
     assert acc1["policy_override"] is True
     assert acc1["enforced_rules"] == ["no_goodwill_on_collections"]
     assert "no_goodwill_on_collections" in acc1["policy_override_reason"]
+    assert acc1["precedence_version"] == precedence_version
 
     assert acc2["recommendation"] == "Fraud dispute"
     assert acc2["policy_override"] is True
     assert acc2["enforced_rules"] == ["fraud_flow"]
     assert "fraud_flow" in acc2["policy_override_reason"]
+    assert acc2["precedence_version"] == precedence_version
 
     counters = get_counters()
     assert counters["strategy.rule_hit_total"] == 2

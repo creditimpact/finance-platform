@@ -1,0 +1,9 @@
+- id: late_payment_en
+  pattern: '(?i)\bi was late\b'
+  replacement: 'Creditor reports lateness; client requests validation.'
+- id: my_fault_en
+  pattern: '(?i)\bmy fault\b'
+  replacement: 'Client disputes the accuracy and requests verification.'
+- id: mi_culpa_es
+  pattern: '(?i)\bmi culpa\b'
+  replacement: 'El cliente disputa la precisión y solicita verificación.'

@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "required": [
+    "legal_safe_summary",
+    "suggested_dispute_frame",
+    "rule_hits",
+    "needs_evidence",
+    "red_flags",
+    "prohibited_admission_detected",
+    "rulebook_version"
+  ],
+  "properties": {
+    "legal_safe_summary": { "type": "string" },
+    "suggested_dispute_frame": { "type": "string" },
+    "rule_hits": { "type": "array", "items": { "type": "string" } },
+    "needs_evidence": { "type": "array", "items": { "type": "string" } },
+    "red_flags": { "type": "array", "items": { "type": "string" } },
+    "prohibited_admission_detected": { "type": "boolean" },
+    "rulebook_version": { "type": "string" }
+  }
+}

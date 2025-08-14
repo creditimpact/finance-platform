@@ -4,6 +4,7 @@ import re
 from typing import Any, Literal, TypedDict
 
 from backend.core.logic.compliance.rules_loader import load_rules, load_state_rules
+from backend.core.logic.utils.pii import redact_pii
 from backend.core.models.letter import LetterContext
 
 
@@ -49,7 +50,7 @@ def check_letter(
                         "message": rule.get("description", ""),
                     }
                 )
-            modified_text = regex.sub("[REDACTED]", modified_text)
+    modified_text = redact_pii(modified_text)
 
     # Apply other systemic rules
     for rule in rules:

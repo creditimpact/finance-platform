@@ -28,7 +28,9 @@ def test_utils_smoke(tmp_path: Path):
     filtered = filter_sections_by_bureau(sections, "Experian")
     assert filtered["disputes"]
 
-    red = redact_pii("email test@example.com phone 555-111-2222 ssn 123-45-6789")
-    assert "test@example.com" not in red
-    assert "555-111-2222" not in red
-    assert "123-45-6789" not in red
+    red = redact_pii(
+        "email test@example.com phone 555-111-2222 ssn 123-45-6789 account 999999999999"
+    )
+    assert red.count("[REDACTED]") == 2
+    assert "***-**-6789" in red
+    assert "****9999" in red

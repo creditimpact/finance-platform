@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from backend.api import config
+from backend.core.logic.utils.pii import redact_pii
 
 # Cache metrics --------------------------------------------------------------
 
@@ -194,6 +195,6 @@ def save_analytics_snapshot(
         snapshot["strategist_failures"] = strategist_failures
 
     with open(filename, "w", encoding="utf-8") as f:
-        json.dump(snapshot, f, indent=2)
+        f.write(redact_pii(json.dumps(snapshot, indent=2)))
 
     print(f"[📊] Analytics snapshot saved: {filename}")

@@ -257,13 +257,20 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                     },
                 )
 
-        fix_draft_with_guardrails(
+        guardrails_result = fix_draft_with_guardrails(
             json.dumps(report, indent=2),
             client_info.get("state"),
             {},
             client_info.get("session_id", ""),
             "strategy",
+            ai_client=self.ai_client,
         )
+        if guardrails_result:
+            fixed_text, _, _ = guardrails_result
+            try:
+                report = json.loads(fixed_text)
+            except Exception:
+                pass
         return report
 
     def save_report(

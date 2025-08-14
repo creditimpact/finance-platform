@@ -27,19 +27,58 @@ def rulebook() -> DummyRulebook:
 
 
 def test_admission_neutralized_with_red_flags(rulebook: DummyRulebook) -> None:
-    account_cls = {"user_statement_raw": "I was late paying this account"}
+    account_cls = {"user_statement_raw": "I owe them money"}
     result = normalize_and_tag(account_cls, {}, rulebook)
-    assert result["legal_safe_summary"] == "The consumer was late paying this account"
-    assert result["red_flags"] == ["late_payment"]
+    assert (
+        result["legal_safe_summary"]
+        == "Creditor reports a debt; consumer requests verification."
+    )
+    assert result["red_flags"] == ["admission_of_debt"]
+    assert result["prohibited_admission_detected"] is True
     counters = get_counters()
-    assert counters["stage_2_5.admission_neutralized"] == 1
+    assert counters["stage_2_5.admission_neutralized_total"] == 1
     assert counters["stage_2_5.rules_applied"] == 1
+
+
+def test_spanish_admission_detected(rulebook: DummyRulebook) -> None:
+    account_cls = {"user_statement_raw": "Pagué tarde en esta cuenta"}
+    result = normalize_and_tag(account_cls, {}, rulebook)
+    assert (
+        result["legal_safe_summary"]
+        == "Creditor reports a late payment; consumer requests verification."
+    )
+    assert result["red_flags"] == ["late_payment"]
+    assert result["prohibited_admission_detected"] is True
+    counters = get_counters()
+    assert counters["stage_2_5.admission_neutralized_total"] == 1
 
 
 def test_placeholder_handled(rulebook: DummyRulebook) -> None:
     result = normalize_and_tag({}, {}, rulebook)
     assert result["legal_safe_summary"] == "No statement provided"
     assert result["red_flags"] == []
+    assert result["prohibited_admission_detected"] is False
     counters = get_counters()
-    assert counters.get("stage_2_5.admission_neutralized", 0) == 0
+    assert counters.get("stage_2_5.admission_neutralized_total", 0) == 0
     assert counters["stage_2_5.rules_applied"] == 1
+
+
+def test_admission_emits_event(rulebook: DummyRulebook, monkeypatch) -> None:
+    events = []
+
+    def fake_emit(event, payload):
+        events.append((event, payload))
+
+    monkeypatch.setattr(
+        "backend.core.logic.strategy.normalizer_2_5.emit_event", fake_emit
+    )
+    account_cls = {"user_statement_raw": "I owe them money"}
+    normalize_and_tag(account_cls, {}, rulebook)
+    assert events
+    event, payload = events[0]
+    assert event == "admission_neutralized"
+    assert payload["raw_statement"] == "I owe them money"
+    assert (
+        payload["summary"]
+        == "Creditor reports a debt; consumer requests verification."
+    )

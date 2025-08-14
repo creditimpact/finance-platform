@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Protocol
+import re
+from typing import Any, Dict, Mapping, Protocol, Tuple
 
 from backend.audit.audit import emit_event
 from backend.analytics.analytics_tracker import emit_counter
+from backend.core.logic.utils.pii import redact_pii
 
 
 class Rulebook(Protocol):
@@ -12,20 +14,52 @@ class Rulebook(Protocol):
     version: str
 
 
-def neutralize_admissions(statement: str) -> str:
+# Regex patterns to detect admissions and their corresponding red flags and summaries
+ADMISSION_PATTERNS: Tuple[Tuple[re.Pattern[str], str, str], ...] = (
+    (
+        re.compile(r"\bmy fault\b", re.IGNORECASE),
+        "admission_of_fault",
+        "Creditor reports an issue; consumer requests verification.",
+    ),
+    (
+        re.compile(r"\bi owe\b", re.IGNORECASE),
+        "admission_of_debt",
+        "Creditor reports a debt; consumer requests verification.",
+    ),
+    (
+        re.compile(r"\bpagu[eé] tarde\b", re.IGNORECASE),
+        "late_payment",
+        "Creditor reports a late payment; consumer requests verification.",
+    ),
+)
+
+
+def neutralize_admissions(statement: str) -> Tuple[str, list[str], bool]:
     """Return a legally safe version of ``statement``.
 
-    Currently performs a minimal replacement of first-person admissions and
-    emits a metrics counter when a change occurs.
+    Matches known admission phrases and rewrites the statement into a
+    verification-focused summary. Returns the summary, any red flags detected,
+    and whether a prohibited admission was present.
     """
 
     lowered = statement.lower()
-    if "i was late" in lowered:
-        emit_counter("stage_2_5.admission_neutralized")
-        return statement.replace("I was", "The consumer was").replace(
-            "i was", "The consumer was"
+    red_flags: list[str] = []
+    summary = statement
+    prohibited = False
+    for pattern, flag, replacement in ADMISSION_PATTERNS:
+        if pattern.search(lowered):
+            red_flags.append(flag)
+            summary = replacement
+            prohibited = True
+
+    if prohibited:
+        emit_counter("stage_2_5.admission_neutralized_total")
+        emit_event(
+            "admission_neutralized",
+            {"raw_statement": redact_pii(statement)[:100], "summary": summary},
         )
-    return statement
+
+    return summary, red_flags, prohibited
 
 
 def evaluate_rules(
@@ -161,18 +195,25 @@ def normalize_and_tag(
         or account_facts.get("user_statement_raw")
         or "No statement provided"
     )
-    legal_safe_summary = neutralize_admissions(user_statement_raw)
+    legal_safe_summary, admission_flags, admission_detected = neutralize_admissions(
+        user_statement_raw
+    )
     evaluation = evaluate_rules(legal_safe_summary, account_facts, rulebook)
     rulebook_version = getattr(rulebook, "version", "")
     if not rulebook_version and isinstance(rulebook, Mapping):
         rulebook_version = str(rulebook.get("version", ""))
+
+    red_flags = list(
+        dict.fromkeys(evaluation.get("red_flags", []) + admission_flags)
+    )
 
     result = {
         "legal_safe_summary": legal_safe_summary,
         "suggested_dispute_frame": "",
         "rule_hits": evaluation.get("rule_hits", []),
         "needs_evidence": evaluation.get("needs_evidence", []),
-        "red_flags": evaluation.get("red_flags", []),
+        "red_flags": red_flags,
+        "prohibited_admission_detected": admission_detected,
         "rulebook_version": rulebook_version,
     }
     if account_id:

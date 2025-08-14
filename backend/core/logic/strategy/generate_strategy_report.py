@@ -3,8 +3,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
+from jsonschema import Draft7Validator, ValidationError
+
 from backend.audit.audit import AuditLogger
-from backend.core.logic.compliance.constants import StrategistFailureReason
+from backend.core.logic.compliance.constants import (
+    StrategistFailureReason,
+    normalize_action_tag,
+)
 from backend.core.logic.guardrails import fix_draft_with_guardrails
 from backend.core.logic.utils.json_utils import parse_json
 from backend.core.services.ai_client import AIClient
@@ -18,6 +23,11 @@ _RULE_ACTIONS: Dict[str, Dict[str, list[str]]] = {
 
 # Default recommendation if the model suggests a forbidden action
 _SAFE_FALLBACK_RECOMMENDATION = "Dispute with bureau"
+
+
+_SCHEMA_PATH = Path(__file__).with_name("strategy_schema.json")
+_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+_VALIDATOR = Draft7Validator(_SCHEMA)
 
 
 class StrategyGenerator:
@@ -241,25 +251,48 @@ Ensure the response is strictly valid JSON: all property names and strings in do
             / f"{safe_name}_{session_id}"
         )
         folder.mkdir(parents=True, exist_ok=True)
-        if stage_2_5_data:
-            for acc in report.get("accounts", []):
-                acc_id = str(acc.get("account_id", ""))
-                data = stage_2_5_data.get(acc_id)
-                if data:
-                    acc.setdefault("legal_safe_summary", data.get("legal_safe_summary"))
-                    acc.setdefault(
-                        "suggested_dispute_frame", data.get("suggested_dispute_frame", "")
-                    )
-                    acc.setdefault("rule_hits", data.get("rule_hits", []))
-                    acc.setdefault("needs_evidence", data.get("needs_evidence", []))
-                    acc.setdefault("red_flags", data.get("red_flags", []))
-                    acc.setdefault(
-                        "prohibited_admission_detected",
-                        data.get("prohibited_admission_detected", False),
-                    )
-                    acc.setdefault(
-                        "rulebook_version", data.get("rulebook_version", "")
-                    )
+        for acc in report.get("accounts", []):
+            acc_id = str(acc.get("account_id", ""))
+            if stage_2_5_data:
+                data = stage_2_5_data.get(acc_id, {})
+            else:
+                data = {}
+            acc.setdefault("legal_safe_summary", data.get("legal_safe_summary", ""))
+            acc.setdefault(
+                "suggested_dispute_frame", data.get("suggested_dispute_frame", "")
+            )
+            acc.setdefault("rule_hits", data.get("rule_hits", []))
+            acc.setdefault("needs_evidence", data.get("needs_evidence", []))
+            acc.setdefault("red_flags", data.get("red_flags", []))
+            acc.setdefault(
+                "prohibited_admission_detected",
+                data.get("prohibited_admission_detected", False),
+            )
+            acc.setdefault("rulebook_version", data.get("rulebook_version", ""))
+
+            # Stage 2 defaults
+            acc.setdefault("account_number", "")
+            acc.setdefault("status", "")
+            acc.setdefault("analysis", "")
+            acc.setdefault("recommendation", "")
+            acc.setdefault("alternative_options", [])
+            acc.setdefault("flags", [])
+
+            # Enforcement metadata
+            tag, _ = normalize_action_tag(acc.get("recommendation"))
+            acc.setdefault("action_tag", tag)
+            acc.setdefault("priority", "")
+            acc.setdefault("legal_notes", [])
+            acc.setdefault("enforced_rules", acc.get("enforced_rules", []))
+            acc.setdefault("policy_override_reason", acc.get("policy_override_reason", ""))
+
+            # Ensure optional enforcement flag exists
+            acc.setdefault("policy_override", acc.get("policy_override", False))
+
+        try:
+            _VALIDATOR.validate(report)
+        except ValidationError as exc:
+            raise ValueError(f"strategy schema validation failed: {exc.message}") from exc
         path = folder / "strategy.json"
         with open(path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2, ensure_ascii=False)

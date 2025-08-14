@@ -18,10 +18,13 @@ from backend.core.logic.policy import get_precedence, precedence_version
 from backend.policy.policy_loader import load_rulebook
 
 
-# Mapping of rule hits to required or forbidden recommendations
+# Mapping of rule hits to enforced actions or flags
 _RULE_ACTIONS: Dict[str, Dict[str, list[str]]] = {
-    "no_goodwill_on_collections": {"forbidden": ["Goodwill"]},
-    "fraud_flow": {"required": ["Fraud dispute"]},
+    "no_goodwill_on_collections": {"forbidden_actions": ["Goodwill"]},
+    "fraud_flow": {"required_actions": ["Fraud dispute"]},
+    "paydown_first": {"required_actions": ["Pay down before disputing"]},
+    "duplicate_tradeline": {"forbidden_actions": ["Dispute with bureau"]},
+    "unauthorized_inquiry": {"flags": ["unauthorized_inquiry"]},
 }
 
 # Default recommendation if the model suggests a forbidden action
@@ -80,8 +83,9 @@ class StrategyGenerator:
                 )
         if stage_2_5_data:
             for acc_id, data in stage_2_5_data.items():
-                allowed_actions: list[str] = []
+                required_actions: list[str] = []
                 forbidden_actions: list[str] = []
+                rule_flags: list[str] = []
                 rule_action_map: Dict[str, Dict[str, list[str]]] = {}
                 hits_sorted = sorted(
                     data.get("rule_hits", []),
@@ -91,8 +95,9 @@ class StrategyGenerator:
                     mapping = _RULE_ACTIONS.get(hit)
                     if mapping:
                         rule_action_map[hit] = mapping
-                        allowed_actions.extend(mapping.get("required", []))
-                        forbidden_actions.extend(mapping.get("forbidden", []))
+                        required_actions.extend(mapping.get("required_actions", []))
+                        forbidden_actions.extend(mapping.get("forbidden_actions", []))
+                        rule_flags.extend(mapping.get("flags", []))
                 rule_policies[acc_id] = rule_action_map
                 policy_context.setdefault(acc_id, {}).update(
                     {
@@ -105,8 +110,9 @@ class StrategyGenerator:
                             "prohibited_admission_detected", False
                         ),
                         "rulebook_version": data.get("rulebook_version", ""),
-                        "allowed_actions": allowed_actions,
+                        "required_actions": required_actions,
                         "forbidden_actions": forbidden_actions,
+                        "flags": rule_flags,
                         "precedence_version": data.get(
                             "precedence_version", precedence_version
                         ),
@@ -222,13 +228,19 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                 )
 
                 policy = rule_policies.get(acc_id, {})
-                allowed_actions: list[str] = []
+                required_actions: list[str] = []
                 forbidden_actions: list[str] = []
+                rule_flags: list[str] = []
                 for details in policy.values():
-                    allowed_actions.extend(details.get("required", []))
-                    forbidden_actions.extend(details.get("forbidden", []))
-                acc.setdefault("allowed_actions", allowed_actions)
-                acc.setdefault("forbidden_actions", forbidden_actions)
+                    required_actions.extend(details.get("required_actions", []))
+                    forbidden_actions.extend(details.get("forbidden_actions", []))
+                    rule_flags.extend(details.get("flags", []))
+                if required_actions:
+                    acc.setdefault("required_actions", required_actions)
+                if forbidden_actions:
+                    acc.setdefault("forbidden_actions", forbidden_actions)
+                if rule_flags:
+                    acc["flags"] = list(dict.fromkeys(acc.get("flags", []) + rule_flags))
 
                 recommendation = acc.get("recommendation", "")
                 rec_lower = recommendation.lower()
@@ -237,7 +249,7 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                 reason = ""
 
                 for rule_id, details in policy.items():
-                    for forbidden in details.get("forbidden", []):
+                    for forbidden in details.get("forbidden_actions", []):
                         if forbidden.lower() in rec_lower:
                             acc["recommendation"] = _SAFE_FALLBACK_RECOMMENDATION
                             override = True
@@ -246,7 +258,7 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                             break
                     if override:
                         break
-                    for required in details.get("required", []):
+                    for required in details.get("required_actions", []):
                         if required.lower() not in rec_lower:
                             acc["recommendation"] = required
                             override = True
@@ -336,6 +348,8 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                         "recommendation": "",
                         "alternative_options": [],
                         "flags": [],
+                        "required_actions": [],
+                        "forbidden_actions": [],
                         "legal_safe_summary": "",
                         "suggested_dispute_frame": "",
                         "rule_hits": [],

@@ -116,8 +116,7 @@
     "rulebook_version": {
       "type": "string",
       "description": "Semantic version of backend/policy/rulebook.yaml used during evaluation.",
-      "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "default": "1.1.0"
+      "default": ""
     }
   },
   "examples": [

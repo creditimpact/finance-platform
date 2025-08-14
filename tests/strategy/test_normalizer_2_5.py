@@ -25,6 +25,7 @@ def test_missing_user_statement(rulebook: DummyRulebook) -> None:
     assert result["rule_hits"] == []
     assert result["needs_evidence"] == []
     assert result["red_flags"] == []
+    assert result["prohibited_admission_detected"] is False
     assert result["rulebook_version"] == "2024-01"
 
 
@@ -32,3 +33,4 @@ def test_statement_passthrough(rulebook: DummyRulebook) -> None:
     account_cls = {"user_statement_raw": "I paid on time"}
     result = normalize_and_tag(account_cls, {}, rulebook)
     assert result["legal_safe_summary"] == "I paid on time"
+    assert result["prohibited_admission_detected"] is False

@@ -298,3 +298,103 @@ def test_skip_goodwill_when_identity_theft():
         assert stage_2_5["1"]["legal_safe_summary"] == "No statement provided"
     if os.path.exists(tmp.name):
         os.remove(tmp.name)
+
+def test_stage_2_5_data_propagates_to_strategy():
+    import tempfile
+    from backend.core.models import ClientInfo, ProofDocuments
+    from backend.core.orchestrators import run_credit_repair_process
+    from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
+
+    client_info = ClientInfo.from_dict(
+        {
+            "name": "Jane Test",
+            "email": "jane@example.com",
+            "session_id": "test",
+        }
+    )
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        proofs = ProofDocuments.from_dict({"smartcredit_report": tmp.name})
+        captured = {}
+        stage_2_5 = {}
+
+        def fake_generate_letters(*args, **kwargs):
+            captured["strategy"] = args[5]
+
+        def fake_save_report(self, report, client_info, run_date, base_dir="Clients", stage_2_5_data=None):
+            if stage_2_5_data:
+                for acc in report.get("accounts", []):
+                    acc_id = str(acc.get("account_id", ""))
+                    data = stage_2_5_data.get(acc_id, {})
+                    acc.setdefault("legal_safe_summary", data.get("legal_safe_summary"))
+                    acc.setdefault("suggested_dispute_frame", data.get("suggested_dispute_frame", ""))
+                    acc.setdefault("rule_hits", data.get("rule_hits", []))
+                    acc.setdefault("needs_evidence", data.get("needs_evidence", []))
+                    acc.setdefault("red_flags", data.get("red_flags", []))
+            return Path(tmp.name)
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", "test"),
+                    "SMTP_SERVER": "x",
+                    "SMTP_PORT": "587",
+                    "SMTP_USERNAME": "x",
+                    "SMTP_PASSWORD": "x",
+                },
+            ),
+            mock.patch("orchestrators.process_client_intake", return_value=("session", {}, {})),
+            mock.patch("orchestrators.classify_client_responses", return_value={}),
+            mock.patch("services.ai_client.build_ai_client", return_value=FakeAIClient()),
+            mock.patch("orchestrators.generate_letters", side_effect=fake_generate_letters),
+            mock.patch("orchestrators.finalize_outputs"),
+            mock.patch(
+                "orchestrators.analyze_credit_report",
+                return_value=(
+                    Path(tmp.name),
+                    {
+                        "negative_accounts": [
+                            {
+                                "account_id": "1",
+                                "identity_theft": True,
+                                "has_id_theft_affidavit": False,
+                                "user_statement_raw": "This is not my account",
+                            }
+                        ],
+                        "all_accounts": [
+                            {
+                                "account_id": "1",
+                                "identity_theft": True,
+                                "has_id_theft_affidavit": False,
+                                "user_statement_raw": "This is not my account",
+                            }
+                        ],
+                    },
+                    {"Experian": {}},
+                    Path(tmp.name).parent,
+                ),
+            ),
+            mock.patch(
+                "orchestrators.update_session",
+                side_effect=lambda s, **k: stage_2_5.update(k.get("stage_2_5", {})) or {},
+            ),
+            mock.patch.object(
+                StrategyGenerator,
+                "generate",
+                return_value={
+                    "overview": "",
+                    "accounts": [{"account_id": "1", "name": "Acc"}],
+                    "global_recommendations": [],
+                },
+            ),
+            mock.patch.object(StrategyGenerator, "save_report", fake_save_report),
+        ):
+            run_credit_repair_process(client_info, proofs, True)
+        acc = captured["strategy"]["accounts"][0]
+        assert acc["rule_hits"] == ["E_IDENTITY", "E_IDENTITY_NEEDS_AFFIDAVIT"]
+        assert acc["needs_evidence"] == ["identity_theft_affidavit"]
+        assert acc["suggested_dispute_frame"] == "fraud"
+        assert acc["red_flags"] == []
+        assert acc["legal_safe_summary"] == "This is not my account"
+    if os.path.exists(tmp.name):
+        os.remove(tmp.name)

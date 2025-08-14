@@ -7,6 +7,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from backend.core.logic.utils.pii import redact_pii
+
 
 class AuditLevel(Enum):
     ESSENTIAL = 1
@@ -68,7 +70,8 @@ class AuditLogger:
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / "audit.json"
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, indent=2)
+            json_data = json.dumps(self.data, indent=2)
+            f.write(redact_pii(json_data))
         return path
 
 
@@ -86,4 +89,4 @@ _logger = logging.getLogger(__name__)
 def emit_event(event: str, payload: Dict[str, Any]) -> None:
     """Emit a structured audit log entry for external monitoring."""
 
-    _logger.info("%s %s", event, json.dumps(payload))
+    _logger.info("%s %s", event, redact_pii(json.dumps(payload)))

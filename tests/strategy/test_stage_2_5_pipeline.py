@@ -82,8 +82,8 @@ def test_admission_emits_event(rulebook: DummyRulebook, monkeypatch) -> None:
     assert events
     event, payload = events[0]
     assert event == "admission_neutralized"
-    assert payload["account_id"] == "[REDACTED]"
-    assert payload["raw_statement"] == "I owe on account [REDACTED]"
+    assert payload["account_id"] == "****9012"
+    assert payload["raw_statement"] == "I owe on account ****9012"
     assert (
         payload["summary"]
         == "Creditor reports a debt; consumer requests verification."
@@ -140,4 +140,4 @@ def test_ai_assist_emits_event(rulebook: DummyRulebook, monkeypatch) -> None:
     ai_events = [e for e in events if e[0] == "admission_ai_checked"]
     assert ai_events
     _, payload = ai_events[0]
-    assert payload["account_id"] == "[REDACTED]"
+    assert payload["account_id"] == "****9012"

@@ -22,10 +22,12 @@ def test_admissions_replaced_and_ca_disclosure():
 
 
 def test_pii_masked_and_violation_recorded():
-    text = "My SSN is 123-45-6789"
+    text = "My SSN is 123-45-6789 and account 0000111122223333"
     cleaned, violations = check_letter(text, state=None, context={})
     assert "123-45-6789" not in cleaned
-    assert "[REDACTED]" in cleaned
+    assert "0000111122223333" not in cleaned
+    assert "***-**-6789" in cleaned
+    assert "****3333" in cleaned
     assert any(
         v["rule_id"] == "RULE_PII_LIMIT" and v["severity"] == "critical"
         for v in violations

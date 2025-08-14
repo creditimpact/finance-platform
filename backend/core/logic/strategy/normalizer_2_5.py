@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 from typing import Any, Dict, Mapping, Protocol, Tuple
+
+from jsonschema import Draft7Validator, ValidationError
 
 from backend.audit.audit import emit_event
 from backend.analytics.analytics_tracker import emit_counter
@@ -32,6 +36,18 @@ ADMISSION_PATTERNS: Tuple[Tuple[re.Pattern[str], str, str], ...] = (
         "Creditor reports a late payment; consumer requests verification.",
     ),
 )
+
+_SCHEMA_PATH = Path(__file__).with_name("stage_2_5_schema.json")
+_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+_VALIDATOR = Draft7Validator(_SCHEMA)
+
+
+def _fill_defaults(data: Dict[str, Any]) -> None:
+    """Populate ``data`` with default values from the schema."""
+
+    for key, subschema in _SCHEMA.get("properties", {}).items():
+        if key not in data and "default" in subschema:
+            data[key] = json.loads(json.dumps(subschema["default"]))
 
 
 def neutralize_admissions(statement: str) -> Tuple[str, list[str], bool]:
@@ -203,19 +219,21 @@ def normalize_and_tag(
     if not rulebook_version and isinstance(rulebook, Mapping):
         rulebook_version = str(rulebook.get("version", ""))
 
-    red_flags = list(
-        dict.fromkeys(evaluation.get("red_flags", []) + admission_flags)
+    result = evaluation.copy()
+    result.update(
+        {
+            "legal_safe_summary": legal_safe_summary,
+            "prohibited_admission_detected": admission_detected,
+            "rulebook_version": rulebook_version,
+        }
+    )
+    result["red_flags"] = list(
+        dict.fromkeys(result.get("red_flags", []) + admission_flags)
     )
 
-    result = {
-        "legal_safe_summary": legal_safe_summary,
-        "suggested_dispute_frame": "",
-        "rule_hits": evaluation.get("rule_hits", []),
-        "needs_evidence": evaluation.get("needs_evidence", []),
-        "red_flags": red_flags,
-        "prohibited_admission_detected": admission_detected,
-        "rulebook_version": rulebook_version,
-    }
+    _fill_defaults(result)
+    _VALIDATOR.validate(result)
+
     if account_id:
         emit_event(
             "rule_evaluated",
@@ -233,4 +251,5 @@ __all__ = [
     "neutralize_admissions",
     "evaluate_rules",
     "Rulebook",
+    "ValidationError",
 ]

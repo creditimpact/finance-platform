@@ -5,7 +5,8 @@ from typing import Any, Dict
 
 from jsonschema import Draft7Validator, ValidationError
 
-from backend.audit.audit import AuditLogger
+from backend.audit.audit import AuditLogger, emit_event
+from backend.analytics.analytics_tracker import emit_counter
 from backend.core.logic.compliance.constants import (
     StrategistFailureReason,
     normalize_action_tag,
@@ -222,6 +223,39 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                     acc["policy_override"] = True
                     acc["policy_override_reason"] = reason
                     acc["enforced_rules"] = enforced_rules
+
+                rule_hits = acc.get("rule_hits", [])
+                emit_counter("strategy.rule_hit_total", len(rule_hits))
+                if acc.get("policy_override"):
+                    emit_counter("strategy.policy_override_total")
+
+                if audit:
+                    audit.log_account(
+                        acc_id,
+                        {
+                            "stage": "strategy_rule_enforcement",
+                            "rule_hits": rule_hits,
+                            "applied_rules": enforced_rules,
+                            "policy_override": acc.get("policy_override", False),
+                            "suggested_dispute_frame": acc.get(
+                                "suggested_dispute_frame", ""
+                            ),
+                        },
+                    )
+
+                emit_event(
+                    "strategy_rule_enforcement",
+                    {
+                        "account_id": acc_id,
+                        "rule_hits": rule_hits,
+                        "applied_rules": enforced_rules,
+                        "policy_override": acc.get("policy_override", False),
+                        "suggested_dispute_frame": acc.get(
+                            "suggested_dispute_frame", ""
+                        ),
+                        "final_recommendation": acc.get("recommendation", ""),
+                    },
+                )
 
         fix_draft_with_guardrails(
             json.dumps(report, indent=2),

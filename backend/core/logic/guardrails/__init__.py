@@ -1,3 +1,4 @@
+import json
 from typing import Any, List, Tuple
 
 from backend.api.session_manager import get_session, update_session
@@ -94,8 +95,24 @@ def fix_draft_with_guardrails(
     ai_client: AIClient,
 ) -> Tuple[str, List[RuleViolation], int]:
     """Check and optionally repair an existing draft letter."""
-
+    original_fields: dict[str, dict[str, Any]] = {}
+    try:
+        data = json.loads(draft_text)
+        for acc in data.get("accounts", []):
+            acc_id = str(acc.get("account_id", ""))
+            if acc_id:
+                original_fields[acc_id] = {
+                    "action_tag": acc.get("action_tag"),
+                    "priority": acc.get("priority"),
+                    "flags": acc.get("flags"),
+                }
+    except Exception:
+        pass
     text, violations = check_letter(draft_text, state, context)
+    if original_fields:
+        idx = text.rfind("}")
+        if idx != -1:
+            text = text[: idx + 1]
     iterations = 1
     critical = [v for v in violations if v["severity"] == "critical"]
     messages = [
@@ -118,11 +135,27 @@ def fix_draft_with_guardrails(
         if text.startswith("```"):
             text = text.replace("```", "").strip()
         text, violations = check_letter(text, state, context)
+        if original_fields:
+            idx = text.rfind("}")
+            if idx != -1:
+                text = text[: idx + 1]
         iterations += 1
         critical = [v for v in violations if v["severity"] == "critical"]
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "assistant", "content": text},
         ]
+    try:
+        data = json.loads(text)
+        for acc in data.get("accounts", []):
+            acc_id = str(acc.get("account_id", ""))
+            if acc_id in original_fields:
+                original = original_fields[acc_id]
+                for field in ("action_tag", "priority", "flags"):
+                    if field in original and original[field] is not None:
+                        acc[field] = original[field]
+        text = json.dumps(data, indent=2)
+    except Exception:
+        pass
     _record_letter(session_id, letter_type, text, violations, iterations)
     return text, violations, iterations

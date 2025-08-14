@@ -49,7 +49,13 @@ def test_stage_2_5_data_included_in_prompt_and_saved(tmp_path):
         stage_2_5_data=stage_2_5,
     )
     saved = json.loads(Path(path).read_text())
-    assert saved["accounts"][0]["legal_safe_summary"] == "Safe summary"
-    assert saved["accounts"][0]["rule_hits"] == ["E_IDENTITY"]
-    assert saved["accounts"][0]["needs_evidence"] == ["identity_theft_affidavit"]
-    assert saved["accounts"][0]["red_flags"] == ["admission_of_fault"]
+    acc = saved["accounts"][0]
+    assert acc["legal_safe_summary"] == "Safe summary"
+    assert acc["rule_hits"] == ["E_IDENTITY"]
+    assert acc["needs_evidence"] == ["identity_theft_affidavit"]
+    assert acc["red_flags"] == ["admission_of_fault"]
+    assert acc["action_tag"] == ""
+    assert acc["priority"] == ""
+    assert acc["legal_notes"] == []
+    assert acc["enforced_rules"] == []
+    assert acc["policy_override_reason"] == ""

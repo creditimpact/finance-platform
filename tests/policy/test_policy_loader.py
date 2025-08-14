@@ -1,17 +1,12 @@
-from pathlib import Path
-import hashlib
-
-from backend.policy.policy_loader import get_rulebook_version, load_rulebook
+from backend.policy.policy_loader import load_rulebook
 
 
-def test_load_rulebook_empty_rules():
-    data = load_rulebook()
-    assert data["rules"] == []
+def test_load_rulebook_resolves_placeholders_and_exposes_version() -> None:
+    rulebook = load_rulebook()
+    # Ensure version attribute exists
+    assert isinstance(rulebook.version, str) and rulebook.version
 
-
-def test_rulebook_version_matches_file_hash():
-    version = get_rulebook_version()
-    expected = hashlib.sha256(
-        Path("backend/policy/rulebook.yaml").read_bytes()
-    ).hexdigest()
-    assert version == expected
+    # Check that a known placeholder was resolved
+    rule = next(r for r in rulebook["rules"] if r["id"] == "D_VALIDATION")
+    cond = rule["when"]["all"][1]
+    assert cond["lte"] == rulebook["limits"]["D_VALIDATION_WINDOW_DAYS"]

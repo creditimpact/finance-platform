@@ -1,4 +1,4 @@
-version: "1.1.0"
+version: "1.2.0"
 
 limits:
   D_VALIDATION_WINDOW_DAYS: 30        # חלון אימות מול גובה־חוב (FDCPA 1692g)
@@ -251,4 +251,5 @@ rules:
       legal_notes: ["FDCPA 1692c(c)"]
       action_tag: cease_and_desist
       priority: Low
+
       

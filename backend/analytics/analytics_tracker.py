@@ -24,23 +24,30 @@ _AI_METRICS: Dict[str, float] = {
 
 # Generic counters -----------------------------------------------------------
 
-_COUNTERS: Dict[str, int] = {}
+# Metrics are stored as floats to support both counters and timers.
+_COUNTERS: Dict[str, float] = {}
 
 
-def emit_counter(name: str, increment: int = 1) -> None:
-    """Increment a named counter for analytics."""
+def emit_counter(name: str, increment: float = 1) -> None:
+    """Increment a named metric for analytics."""
 
     _COUNTERS[name] = _COUNTERS.get(name, 0) + increment
 
 
-def get_counters() -> Dict[str, int]:
-    """Return current generic counters (for tests)."""
+def set_metric(name: str, value: float) -> None:
+    """Set a named metric to an explicit value."""
+
+    _COUNTERS[name] = value
+
+
+def get_counters() -> Dict[str, float]:
+    """Return current generic metrics (for tests)."""
 
     return _COUNTERS.copy()
 
 
 def reset_counters() -> None:
-    """Reset generic counters (for tests)."""
+    """Reset generic metrics (for tests)."""
 
     _COUNTERS.clear()
 

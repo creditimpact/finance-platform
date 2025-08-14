@@ -4,11 +4,12 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Dict, Mapping, Protocol, Tuple
+import time
 
 from jsonschema import Draft7Validator, ValidationError
 
 from backend.audit.audit import emit_event
-from backend.analytics.analytics_tracker import emit_counter
+from backend.analytics.analytics_tracker import emit_counter, get_counters, set_metric
 from backend.core.logic.utils.pii import redact_pii
 
 
@@ -50,7 +51,7 @@ def _fill_defaults(data: Dict[str, Any]) -> None:
             data[key] = json.loads(json.dumps(subschema["default"]))
 
 
-def neutralize_admissions(statement: str) -> Tuple[str, list[str], bool]:
+def neutralize_admissions(statement: str, account_id: str | None = None) -> Tuple[str, list[str], bool]:
     """Return a legally safe version of ``statement``.
 
     Matches known admission phrases and rewrites the statement into a
@@ -69,11 +70,14 @@ def neutralize_admissions(statement: str) -> Tuple[str, list[str], bool]:
             prohibited = True
 
     if prohibited:
-        emit_counter("stage_2_5.admission_neutralized_total")
-        emit_event(
-            "admission_neutralized",
-            {"raw_statement": redact_pii(statement)[:100], "summary": summary},
-        )
+        emit_counter("s2_5_admissions_detected_total")
+        payload = {
+            "raw_statement": redact_pii(statement)[:100],
+            "summary": summary,
+        }
+        if account_id:
+            payload["account_id"] = redact_pii(str(account_id))
+        emit_event("admission_neutralized", payload)
 
     return summary, red_flags, prohibited
 
@@ -82,8 +86,6 @@ def evaluate_rules(
     normalized_statement: str, account_facts: Dict[str, Any], rulebook: Rulebook
 ) -> Dict[str, list]:
     """Evaluate ``normalized_statement`` and ``account_facts`` against rules."""
-
-    emit_counter("stage_2_5.rules_applied")
 
     # Build accessors for rulebook data
     rules = getattr(rulebook, "rules", None)
@@ -205,6 +207,8 @@ def normalize_and_tag(
     account_id: str | None = None,
 ) -> Dict[str, Any]:
     """Normalize user statements and tag accounts with rulebook metadata."""
+    start = time.perf_counter()
+    emit_counter("s2_5_accounts_total")
 
     user_statement_raw = (
         account_cls.get("user_statement_raw")
@@ -212,7 +216,7 @@ def normalize_and_tag(
         or "No statement provided"
     )
     legal_safe_summary, admission_flags, admission_detected = neutralize_admissions(
-        user_statement_raw
+        user_statement_raw, account_id
     )
     evaluation = evaluate_rules(legal_safe_summary, account_facts, rulebook)
     rulebook_version = getattr(rulebook, "version", "")
@@ -234,11 +238,23 @@ def normalize_and_tag(
     _fill_defaults(result)
     _VALIDATOR.validate(result)
 
+    emit_counter("s2_5_rule_hits_total", len(result["rule_hits"]))
+    emit_counter("s2_5_needs_evidence_total", len(result["needs_evidence"]))
+    latency_ms = (time.perf_counter() - start) * 1000
+    emit_counter("s2_5_latency_ms", latency_ms)
+    counters = get_counters()
+    if counters.get("s2_5_accounts_total"):
+        set_metric(
+            "s2_5_rule_hits_per_account",
+            counters.get("s2_5_rule_hits_total", 0)
+            / counters["s2_5_accounts_total"],
+        )
+
     if account_id:
         emit_event(
             "rule_evaluated",
             {
-                "account_id": account_id,
+                "account_id": redact_pii(str(account_id)),
                 "rule_hits": result["rule_hits"],
                 "rulebook_version": rulebook_version,
             },

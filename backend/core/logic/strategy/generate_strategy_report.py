@@ -10,6 +10,16 @@ from backend.core.logic.utils.json_utils import parse_json
 from backend.core.services.ai_client import AIClient
 
 
+# Mapping of rule hits to required or forbidden recommendations
+_RULE_ACTIONS: Dict[str, Dict[str, list[str]]] = {
+    "no_goodwill_on_collections": {"forbidden": ["Goodwill"]},
+    "fraud_flow": {"required": ["Fraud dispute"]},
+}
+
+# Default recommendation if the model suggests a forbidden action
+_SAFE_FALLBACK_RECOMMENDATION = "Dispute with bureau"
+
+
 class StrategyGenerator:
     """Generate an internal strategic analysis using GPT-4."""
 
@@ -38,6 +48,7 @@ class StrategyGenerator:
 
 
         policy_context: Dict[str, Dict[str, Any]] = {}
+        rule_policies: Dict[str, Dict[str, Dict[str, list[str]]]] = {}
         if classification_map:
             for acc_id, cls in classification_map.items():
                 policy_context.setdefault(acc_id, {}).update(
@@ -50,6 +61,16 @@ class StrategyGenerator:
                 )
         if stage_2_5_data:
             for acc_id, data in stage_2_5_data.items():
+                allowed_actions: list[str] = []
+                forbidden_actions: list[str] = []
+                rule_action_map: Dict[str, Dict[str, list[str]]] = {}
+                for hit in data.get("rule_hits", []):
+                    mapping = _RULE_ACTIONS.get(hit)
+                    if mapping:
+                        rule_action_map[hit] = mapping
+                        allowed_actions.extend(mapping.get("required", []))
+                        forbidden_actions.extend(mapping.get("forbidden", []))
+                rule_policies[acc_id] = rule_action_map
                 policy_context.setdefault(acc_id, {}).update(
                     {
                         "legal_safe_summary": data.get("legal_safe_summary"),
@@ -61,6 +82,8 @@ class StrategyGenerator:
                             "prohibited_admission_detected", False
                         ),
                         "rulebook_version": data.get("rulebook_version", ""),
+                        "allowed_actions": allowed_actions,
+                        "forbidden_actions": forbidden_actions,
                     }
                 )
         policy_section = (
@@ -146,6 +169,49 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                 acc.setdefault(
                     "rulebook_version", data.get("rulebook_version", "")
                 )
+
+                policy = rule_policies.get(acc_id, {})
+                allowed_actions: list[str] = []
+                forbidden_actions: list[str] = []
+                for details in policy.values():
+                    allowed_actions.extend(details.get("required", []))
+                    forbidden_actions.extend(details.get("forbidden", []))
+                acc.setdefault("allowed_actions", allowed_actions)
+                acc.setdefault("forbidden_actions", forbidden_actions)
+
+                recommendation = acc.get("recommendation", "")
+                rec_lower = recommendation.lower()
+                override = False
+                enforced_rules: list[str] = []
+                reason = ""
+
+                for rule_id, details in policy.items():
+                    for forbidden in details.get("forbidden", []):
+                        if forbidden.lower() in rec_lower:
+                            acc["recommendation"] = _SAFE_FALLBACK_RECOMMENDATION
+                            override = True
+                            enforced_rules.append(rule_id)
+                            reason = f"{forbidden} forbidden by {rule_id}"
+                            break
+                    if override:
+                        break
+
+                if not override:
+                    for rule_id, details in policy.items():
+                        for required in details.get("required", []):
+                            if required.lower() not in rec_lower:
+                                acc["recommendation"] = required
+                                override = True
+                                enforced_rules.append(rule_id)
+                                reason = f"{required} required by {rule_id}"
+                                break
+                        if override:
+                            break
+
+                if override:
+                    acc["policy_override"] = True
+                    acc["policy_override_reason"] = reason
+                    acc["enforced_rules"] = enforced_rules
 
         fix_draft_with_guardrails(
             json.dumps(report, indent=2),

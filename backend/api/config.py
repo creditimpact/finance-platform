@@ -31,10 +31,22 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
+def env_float(name: str, default: float) -> float:
+    """Read a floating point environment variable with fallback."""
+
+    value = os.getenv(name)
+    try:
+        return float(value) if value is not None else default
+    except ValueError:
+        return default
+
+
 CLASSIFY_CACHE_ENABLED = env_bool("CLASSIFY_CACHE_ENABLED", True)
 CLASSIFY_CACHE_MAXSIZE = env_int("CLASSIFY_CACHE_MAXSIZE", 5000)
 CLASSIFY_CACHE_TTL_SEC = env_int("CLASSIFY_CACHE_TTL_SEC", 0)
 ANALYSIS_DEBUG_STORE_RAW = env_bool("ANALYSIS_DEBUG_STORE_RAW", False)
+STAGE4_POLICY_ENFORCEMENT = env_bool("STAGE4_POLICY_ENFORCEMENT", False)
+STAGE4_POLICY_CANARY = env_float("STAGE4_POLICY_CANARY", 0.0)
 
 
 @dataclass

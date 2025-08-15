@@ -32,6 +32,12 @@ from backend.core.logic.utils.text_parsing import (
 from backend.core.services.ai_client import AIClient
 
 from .analysis_cache import get_cached_analysis, store_cached_analysis
+from .extractors import (
+    extract_account_number_masks,
+    extract_account_statuses,
+    extract_dofd,
+    extract_inquiry_dates,
+)
 
 _INPUT_COST_PER_TOKEN = 0.01 / 1000
 _OUTPUT_COST_PER_TOKEN = 0.03 / 1000
@@ -468,7 +474,7 @@ def analyze_bureau(
     for list_name in [
         "all_accounts",
         "negative_accounts",
-        "open_accounts_with_issues",
+       "open_accounts_with_issues",
         "positive_accounts",
         "high_utilization_accounts",
     ]:
@@ -476,6 +482,46 @@ def analyze_bureau(
             acc.setdefault("confidence", confidence)
     for inq in data.get("inquiries", []):
         inq.setdefault("confidence", confidence)
+    # ------------------------------------------------------------------
+    # Cross-check extractor results against model output
+    # ------------------------------------------------------------------
+    masks = extract_account_number_masks(text)
+    statuses = extract_account_statuses(text)
+    dofds = extract_dofd(text)
+    inquiry_dates = extract_inquiry_dates(text)
+
+    account_lists = [
+        "all_accounts",
+        "negative_accounts",
+        "open_accounts_with_issues",
+        "positive_accounts",
+        "high_utilization_accounts",
+    ]
+    for list_name in account_lists:
+        for acc in data.get(list_name, []):
+            name_norm = normalize_creditor_name(acc.get("name", ""))
+            corrected = False
+            mask = masks.get(name_norm)
+            status = statuses.get(name_norm)
+            dofd = dofds.get(name_norm)
+            if mask and acc.get("account_number") != mask:
+                acc["account_number"] = mask
+                corrected = True
+            if status and acc.get("status") != status:
+                acc["status"] = status
+                corrected = True
+            if dofd and acc.get("dofd") != dofd:
+                acc["dofd"] = dofd
+                corrected = True
+            if corrected:
+                acc["remediation_applied"] = True
+
+    for inq in data.get("inquiries", []):
+        name_norm = normalize_creditor_name(inq.get("creditor_name", ""))
+        ext_date = inquiry_dates.get(name_norm)
+        if ext_date and inq.get("date") != ext_date:
+            inq["date"] = ext_date
+            inq["remediation_applied"] = True
 
     return data, None
 

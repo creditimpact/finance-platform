@@ -54,8 +54,16 @@ def call_gpt_for_custom_letter(
     classification = (
         classification_record.classification if classification_record else {}
     )
+    debt_type = structured_summary.get("debt_type")
+    dispute_reason = classification.get("category")
+    if not (debt_type and dispute_reason):
+        if not api_config.ALLOW_CUSTOM_LETTERS_WITHOUT_STRATEGY:
+            return "strategy_context_required"
+        emit_event("strategy_applied", {"strategy_applied": False})
+        debt_type = debt_type or "unknown"
+        dispute_reason = dispute_reason or "unknown"
     neutral_phrase, neutral_reason = get_neutral_phrase(
-        classification.get("category"), structured_summary
+        dispute_reason, structured_summary
     )
     prompt = f"""
 Neutral legal phrase for this dispute type:
@@ -86,8 +94,8 @@ Please draft a compliant letter body that blends the neutral legal phrase with t
         prompt,
         state,
         {
-            "debt_type": structured_summary.get("debt_type"),
-            "dispute_reason": classification.get("category"),
+            "debt_type": debt_type,
+            "dispute_reason": dispute_reason,
         },
         session_id,
         "custom",

@@ -61,7 +61,12 @@ class FakeAudit:
 
 
 def test_custom_letter_uses_cached_classification(monkeypatch):
-    summary = {"account_id": "1", "facts_summary": "hi", "claimed_errors": []}
+    summary = {
+        "account_id": "1",
+        "facts_summary": "hi",
+        "claimed_errors": [],
+        "debt_type": "credit_card",
+    }
     record = ClassificationRecord(
         summary,
         {

@@ -84,14 +84,33 @@ def generate_goodwill_letter_with_ai(
     *,
     ai_client: AIClient,
     classification_map: Mapping[str, ClassificationRecord] | None = None,
+    strategy: Mapping[str, Any] | None = None,
 ) -> None:
     """Generate a single goodwill letter for ``creditor``."""
+
+    if not strategy:
+        emit_event(
+            "goodwill_policy_override",
+            {"policy_override_reason": "collection_no_goodwill"},
+        )
+        return
 
     if isinstance(client, dict):  # pragma: no cover - backward compat
         client = ClientInfo.from_dict(client)
     account_objs = [
         Account.from_dict(a) if isinstance(a, dict) else a for a in accounts
     ]
+
+    for acc in account_objs:
+        if (acc.action_tag or acc.to_dict().get("action_tag")) == "collection":
+            emit_event(
+                "goodwill_policy_override",
+                {
+                    "policy_override_reason": "collection_no_goodwill",
+                    "account_id": acc.account_id,
+                },
+            )
+            return
     client_info = client.to_dict()
     account_dicts = [a.to_dict() for a in account_objs]
     session_id = client_info.get("session_id")
@@ -213,6 +232,7 @@ def generate_goodwill_letters(
             audit,
             ai_client=ai_client,
             classification_map=classification_map,
+            strategy=strategy,
         )
 
 

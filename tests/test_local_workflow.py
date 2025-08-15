@@ -188,6 +188,7 @@ def test_minimal_workflow():
             None,
             ai_client=fake,
             classification_map=classification_map,
+            strategy={"accounts": [account_dispute, account_goodwill]},
         )
         generate_instruction_file(client, bureau_models, False, out_dir, ai_client=fake)
         context, accounts_list = instructions_generator.prepare_instruction_data(
@@ -290,7 +291,8 @@ def test_skip_goodwill_when_identity_theft():
             ),
             mock.patch(
                 "orchestrators.update_session",
-                side_effect=lambda s, **k: stage_2_5.update(k.get("stage_2_5", {})) or {},
+                side_effect=lambda s, **k: stage_2_5.update(k.get("stage_2_5", {}))
+                or {},
             ),
         ):
             run_credit_repair_process(client_info, proofs, True)
@@ -299,11 +301,13 @@ def test_skip_goodwill_when_identity_theft():
     if os.path.exists(tmp.name):
         os.remove(tmp.name)
 
+
 def test_stage_2_5_data_propagates_to_strategy():
     import tempfile
+
+    from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
     from backend.core.models import ClientInfo, ProofDocuments
     from backend.core.orchestrators import run_credit_repair_process
-    from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
 
     client_info = ClientInfo.from_dict(
         {
@@ -320,13 +324,18 @@ def test_stage_2_5_data_propagates_to_strategy():
         def fake_generate_letters(*args, **kwargs):
             captured["strategy"] = args[5]
 
-        def fake_save_report(self, report, client_info, run_date, base_dir="Clients", stage_2_5_data=None):
+        def fake_save_report(
+            self, report, client_info, run_date, base_dir="Clients", stage_2_5_data=None
+        ):
             if stage_2_5_data:
                 for acc in report.get("accounts", []):
                     acc_id = str(acc.get("account_id", ""))
                     data = stage_2_5_data.get(acc_id, {})
                     acc.setdefault("legal_safe_summary", data.get("legal_safe_summary"))
-                    acc.setdefault("suggested_dispute_frame", data.get("suggested_dispute_frame", ""))
+                    acc.setdefault(
+                        "suggested_dispute_frame",
+                        data.get("suggested_dispute_frame", ""),
+                    )
                     acc.setdefault("rule_hits", data.get("rule_hits", []))
                     acc.setdefault("needs_evidence", data.get("needs_evidence", []))
                     acc.setdefault("red_flags", data.get("red_flags", []))
@@ -343,10 +352,16 @@ def test_stage_2_5_data_propagates_to_strategy():
                     "SMTP_PASSWORD": "x",
                 },
             ),
-            mock.patch("orchestrators.process_client_intake", return_value=("session", {}, {})),
+            mock.patch(
+                "orchestrators.process_client_intake", return_value=("session", {}, {})
+            ),
             mock.patch("orchestrators.classify_client_responses", return_value={}),
-            mock.patch("services.ai_client.build_ai_client", return_value=FakeAIClient()),
-            mock.patch("orchestrators.generate_letters", side_effect=fake_generate_letters),
+            mock.patch(
+                "services.ai_client.build_ai_client", return_value=FakeAIClient()
+            ),
+            mock.patch(
+                "orchestrators.generate_letters", side_effect=fake_generate_letters
+            ),
             mock.patch("orchestrators.finalize_outputs"),
             mock.patch(
                 "orchestrators.analyze_credit_report",
@@ -376,7 +391,8 @@ def test_stage_2_5_data_propagates_to_strategy():
             ),
             mock.patch(
                 "orchestrators.update_session",
-                side_effect=lambda s, **k: stage_2_5.update(k.get("stage_2_5", {})) or {},
+                side_effect=lambda s, **k: stage_2_5.update(k.get("stage_2_5", {}))
+                or {},
             ),
             mock.patch.object(
                 StrategyGenerator,

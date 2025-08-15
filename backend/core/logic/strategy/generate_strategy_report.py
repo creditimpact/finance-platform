@@ -1,12 +1,13 @@
 import json
 import random
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
 from jsonschema import Draft7Validator, ValidationError
 
-from backend.analytics.analytics_tracker import emit_counter
+from backend.analytics.analytics_tracker import emit_counter, log_ai_request
 from backend.api.config import STAGE4_POLICY_CANARY, STAGE4_POLICY_ENFORCEMENT
 from backend.audit.audit import AuditLogger, emit_event
 from backend.core.cache.strategy_cache import get_cached_strategy, store_cached_strategy
@@ -23,6 +24,9 @@ from backend.policy.policy_loader import load_rulebook
 STRATEGY_MODEL_VERSION = "gpt-4"
 STRATEGY_PROMPT_VERSION = 1
 STRATEGY_SCHEMA_VERSION = 1
+
+_INPUT_COST_PER_TOKEN = 0.01 / 1000
+_OUTPUT_COST_PER_TOKEN = 0.03 / 1000
 
 
 # Mapping of rule hits to enforced actions or flags
@@ -185,11 +189,20 @@ Ensure the response is strictly valid JSON: all property names and strings in do
         report = None
         failure_reason = None
         for attempt in range(2):
+            start = time.perf_counter()
             response = self.ai_client.chat_completion(
                 model="gpt-4",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
             )
+            latency_ms = (time.perf_counter() - start) * 1000
+            usage = getattr(response, "usage", None)
+            tokens_in = getattr(usage, "prompt_tokens", 0)
+            tokens_out = getattr(usage, "completion_tokens", 0)
+            cost_est = (
+                tokens_in * _INPUT_COST_PER_TOKEN + tokens_out * _OUTPUT_COST_PER_TOKEN
+            )
+            log_ai_request(tokens_in, tokens_out, cost_est, latency_ms)
             raw_content = response.choices[0].message.content
             if audit:
                 audit.log_step(
@@ -320,12 +333,15 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                         {
                             "stage": "strategy_rule_enforcement",
                             "rule_hits": rule_hits,
-                            "applied_rules": enforced_rules if enforcement_active else [],
+                            "applied_rules": (
+                                enforced_rules if enforcement_active else []
+                            ),
                             "would_apply": enforced_rules if shadow else [],
                             "policy_override": override and enforcement_active,
                             "shadow": shadow,
                             "suggested_dispute_frame": acc.get(
-                                "suggested_dispute_frame", "",
+                                "suggested_dispute_frame",
+                                "",
                             ),
                         },
                     )
@@ -340,9 +356,12 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                         "policy_override": override and enforcement_active,
                         "shadow": shadow,
                         "suggested_dispute_frame": acc.get(
-                            "suggested_dispute_frame", "",
+                            "suggested_dispute_frame",
+                            "",
                         ),
-                        "final_recommendation": acc.get("recommendation", recommendation),
+                        "final_recommendation": acc.get(
+                            "recommendation", recommendation
+                        ),
                     },
                 )
 

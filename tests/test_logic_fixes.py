@@ -168,6 +168,7 @@ def test_goodwill_generation():
             out_dir,
             None,
             ai_client=fake,
+            strategy={"accounts": [{"account_id": "1", "action_tag": "goodwill"}]},
         )
     assert "Card Co" in sent
     print("goodwill ok")
@@ -210,7 +211,12 @@ def test_goodwill_on_closed_account():
         mock_g.side_effect = _cb
         fake = FakeAIClient()
         generate_goodwill_letters(
-            {"name": "T"}, bureau_data, out_dir, None, ai_client=fake
+            {"name": "T"},
+            bureau_data,
+            out_dir,
+            None,
+            ai_client=fake,
+            strategy={"accounts": [{"account_id": "1", "action_tag": "goodwill"}]},
         )
     assert "Old Card" in called
     print("goodwill closed ok")
@@ -242,7 +248,12 @@ def test_skip_goodwill_when_no_late_payments():
         out_dir = Path("output/tmp3")
         out_dir.mkdir(parents=True, exist_ok=True)
         generate_goodwill_letters(
-            {"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient()
+            {"name": "T"},
+            bureau_data,
+            out_dir,
+            None,
+            ai_client=FakeAIClient(),
+            strategy={"accounts": [{"account_id": "1", "action_tag": "goodwill"}]},
         )
     assert not mock_g.called
     print("goodwill skip ok")
@@ -274,7 +285,12 @@ def test_skip_goodwill_on_collections():
         out_dir = Path("output/tmp4")
         out_dir.mkdir(parents=True, exist_ok=True)
         generate_goodwill_letters(
-            {"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient()
+            {"name": "T"},
+            bureau_data,
+            out_dir,
+            None,
+            ai_client=FakeAIClient(),
+            strategy={"accounts": [{"account_id": "1", "action_tag": "goodwill"}]},
         )
     assert not mock_g.called
     print("goodwill collection skip ok")
@@ -306,7 +322,12 @@ def test_skip_goodwill_edge_statuses():
         out_dir = Path("output/tmp4a")
         out_dir.mkdir(parents=True, exist_ok=True)
         generate_goodwill_letters(
-            {"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient()
+            {"name": "T"},
+            bureau_data,
+            out_dir,
+            None,
+            ai_client=FakeAIClient(),
+            strategy={"accounts": [{"account_id": "1", "action_tag": "goodwill"}]},
         )
     assert not mock_g.called
     print("goodwill edge skip ok")
@@ -576,7 +597,12 @@ def test_skip_goodwill_for_disputed_account():
         out_dir = Path("output/tmp_dupe_skip")
         out_dir.mkdir(parents=True, exist_ok=True)
         generate_goodwill_letters(
-            {"name": "T"}, bureau_data, out_dir, None, ai_client=FakeAIClient()
+            {"name": "T"},
+            bureau_data,
+            out_dir,
+            None,
+            ai_client=FakeAIClient(),
+            strategy={"accounts": [{"account_id": "1", "action_tag": "goodwill"}]},
         )
 
     assert not mock_g.called

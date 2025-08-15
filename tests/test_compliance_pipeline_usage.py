@@ -181,6 +181,15 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
             {"name": "Client", "session_id": "s3"},
             output,
             ai_client=FakeAIClient(),
+            strategy={
+                "accounts": [
+                    {
+                        "name": "Creditor",
+                        "account_number": "1",
+                        "action_tag": "goodwill",
+                    }
+                ]
+            },
         )
 
     assert doc_type in calls

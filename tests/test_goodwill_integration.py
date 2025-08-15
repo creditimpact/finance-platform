@@ -71,6 +71,11 @@ def test_orchestrator_invokes_compliance(monkeypatch, tmp_path):
     client_info = {"legal_name": "John Doe", "session_id": "s1", "state": "CA"}
     bureau_data = {}
     generate_goodwill_letters.generate_goodwill_letters(
-        client_info, bureau_data, tmp_path, audit=None, ai_client=ai
+        client_info,
+        bureau_data,
+        tmp_path,
+        audit=None,
+        ai_client=ai,
+        strategy={"accounts": [{"account_id": "1", "action_tag": "goodwill"}]},
     )
     assert calls  # compliance pipeline was invoked

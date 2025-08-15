@@ -179,7 +179,13 @@ def test_goodwill_letter_ignores_emotional_text(monkeypatch, tmp_path):
     accounts = [{"name": "Creditor", "account_number": "1", "action_tag": "goodwill"}]
 
     generate_goodwill_letter_with_ai(
-        "Creditor", accounts, client_info, tmp_path, None, ai_client=fake2
+        "Creditor",
+        accounts,
+        client_info,
+        tmp_path,
+        None,
+        ai_client=fake2,
+        strategy={"accounts": accounts},
     )
     with open(tmp_path / "Creditor_gpt_response.json") as f:
         data = json.load(f)

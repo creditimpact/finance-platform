@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -170,17 +171,6 @@ def generate_custom_letter(
     strategy_applied = bool(
         structured_summary.get("debt_type") and classification.get("category")
     )
-    emit_event(
-        "strategy_applied",
-        {
-            "account_id": account.get("account_id"),
-            "strategy_applied": strategy_applied,
-            "action_tag_before": action_before,
-            "action_tag_after": action_after,
-            "override_reason": account.get("policy_override_reason", ""),
-        },
-    )
-
     if (
         api_config.STAGE4_POLICY_ENFORCEMENT
         and action_after == "goodwill"
@@ -204,6 +194,16 @@ def generate_custom_letter(
                     "policy_override_reason": "collection_no_goodwill",
                 },
             )
+        emit_event(
+            "strategy_applied",
+            {
+                "account_id": account.get("account_id"),
+                "strategy_applied": strategy_applied,
+                "action_tag_before": action_before,
+                "action_tag_after": action_after,
+                "override_reason": "collection_no_goodwill",
+            },
+        )
         return
 
     docs_text, doc_names, _ = gather_supporting_docs(session_id)
@@ -223,6 +223,35 @@ def generate_custom_letter(
         audit,
         ai_client,
     )
+
+    forbidden_actions = [
+        str(a).lower() for a in account.get("forbidden_actions", [])
+    ]
+    if "goodwill" in forbidden_actions and "goodwill" in body_paragraph.lower():
+        body_paragraph = re.sub(r"(?i)good\s*-?will", "", body_paragraph)
+        account["policy_override_reason"] = "custom_prompt_policy_conflict"
+        log_policy_override_reason("custom_prompt_policy_conflict")
+        emit_event(
+            "strategy_applied",
+            {
+                "account_id": account.get("account_id"),
+                "strategy_applied": strategy_applied,
+                "action_tag_before": action_before,
+                "action_tag_after": action_after,
+                "override_reason": "custom_prompt_policy_conflict",
+            },
+        )
+    else:
+        emit_event(
+            "strategy_applied",
+            {
+                "account_id": account.get("account_id"),
+                "strategy_applied": strategy_applied,
+                "action_tag_before": action_before,
+                "action_tag_after": action_after,
+                "override_reason": account.get("policy_override_reason", ""),
+            },
+        )
 
     greeting = f"Dear {recipient}" if recipient else "To whom it may concern"
 

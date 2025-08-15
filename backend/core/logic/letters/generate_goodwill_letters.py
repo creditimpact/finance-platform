@@ -11,6 +11,10 @@ import backend.core.logic.letters.goodwill_rendering as goodwill_rendering
 from backend.api import config as api_config
 from backend.api.session_manager import get_session
 from backend.audit.audit import AuditLogger, emit_event
+from backend.analytics.analytics_tracker import (
+    log_letter_without_strategy,
+    log_policy_override_reason,
+)
 from backend.core.logic.compliance.compliance_pipeline import run_compliance_pipeline
 from backend.core.logic.guardrails.summary_validator import (
     validate_structured_summaries,
@@ -56,17 +60,31 @@ def _apply_strategy_fields(
                         _last4(acc.get("account_number")),
                     )
                     strat = index.get(key)
-                    if not strat:
-                        continue
-                    for field in [
-                        "action_tag",
-                        "priority",
-                        "needs_evidence",
-                        "legal_notes",
-                        "flags",
-                    ]:
-                        if strat.get(field) is not None and not acc.get(field):
-                            acc[field] = strat[field]
+                    before = acc.get("action_tag")
+                    applied = False
+                    override_reason = ""
+                    if strat:
+                        applied = True
+                        override_reason = strat.get("policy_override_reason", "")
+                        for field in [
+                            "action_tag",
+                            "priority",
+                            "needs_evidence",
+                            "legal_notes",
+                            "flags",
+                        ]:
+                            if strat.get(field) is not None and not acc.get(field):
+                                acc[field] = strat[field]
+                    emit_event(
+                        "strategy_applied",
+                        {
+                            "account_id": acc.get("account_id"),
+                            "strategy_applied": applied,
+                            "action_tag_before": before,
+                            "action_tag_after": acc.get("action_tag"),
+                            "override_reason": override_reason,
+                        },
+                    )
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +111,8 @@ def generate_goodwill_letter_with_ai(
             "goodwill_policy_override",
             {"policy_override_reason": "collection_no_goodwill"},
         )
+        log_letter_without_strategy()
+        log_policy_override_reason("collection_no_goodwill")
         return
 
     if isinstance(client, dict):  # pragma: no cover - backward compat
@@ -110,6 +130,7 @@ def generate_goodwill_letter_with_ai(
                     "account_id": acc.account_id,
                 },
             )
+            log_policy_override_reason("collection_no_goodwill")
             return
     client_info = client.to_dict()
     account_dicts = [a.to_dict() for a in account_objs]

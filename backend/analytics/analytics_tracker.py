@@ -124,10 +124,28 @@ def log_policy_violations_prevented(count: int) -> None:
     emit_counter("policy_violations_prevented_count", count)
 
 
-def log_guardrail_fix() -> None:
-    """Record that guardrails triggered a follow-up fix."""
+def log_letter_without_strategy() -> None:
+    """Record that a letter was attempted without strategy context."""
+
+    emit_counter("letters_without_strategy_context")
+
+
+def log_policy_override_reason(reason: str) -> None:
+    """Record a policy override along with the associated reason."""
+    sanitized = str(reason).replace(" ", "_")
+    emit_counter(f"policy_override_reason.{sanitized}")
+
+
+def log_guardrail_fix(letter_type: str | None = None) -> None:
+    """Record that guardrails triggered a follow-up fix.
+
+    ``letter_type`` allows tracking fixes by document category while also
+    keeping a global total for backward compatibility.
+    """
 
     emit_counter("guardrail_fix_count")
+    if letter_type:
+        emit_counter(f"guardrail_fix_count.{letter_type}")
 
 
 # AI usage helpers -----------------------------------------------------------

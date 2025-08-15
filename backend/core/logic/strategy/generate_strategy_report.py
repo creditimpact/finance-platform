@@ -10,6 +10,7 @@ from jsonschema import Draft7Validator, ValidationError
 from backend.analytics.analytics_tracker import emit_counter, log_ai_request
 from backend.api.config import STAGE4_POLICY_CANARY, STAGE4_POLICY_ENFORCEMENT
 from backend.audit.audit import AuditLogger, emit_event
+from backend.analytics.analytics_tracker import log_policy_override_reason
 from backend.core.cache.strategy_cache import get_cached_strategy, store_cached_strategy
 from backend.core.logic.compliance.constants import (
     StrategistFailureReason,
@@ -327,6 +328,7 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                 emit_counter("strategy.rule_hit_total", len(rule_hits))
                 if override and enforcement_active:
                     emit_counter("strategy.policy_override_total")
+                    log_policy_override_reason(reason)
 
                 if audit:
                     audit.log_account(

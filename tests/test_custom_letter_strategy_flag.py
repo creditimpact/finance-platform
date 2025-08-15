@@ -2,6 +2,7 @@ import pytest
 
 from backend.core.logic.letters.generate_custom_letters import call_gpt_for_custom_letter
 from backend.core.logic.guardrails import generate_letter_with_guardrails
+from backend.analytics.analytics_tracker import get_counters, reset_counters
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
@@ -60,6 +61,7 @@ def test_flag_allows_call_gpt_without_strategy(monkeypatch):
         lambda e, p: events.append((e, p)),
     )
     _patch_flag(monkeypatch, True)
+    reset_counters()
     fake = FakeAIClient()
     fake.add_chat_response("letter body")
     res = call_gpt_for_custom_letter(
@@ -77,6 +79,8 @@ def test_flag_allows_call_gpt_without_strategy(monkeypatch):
     )
     assert res.startswith("letter body")
     assert any(e == "strategy_applied" and not p["strategy_applied"] for e, p in events)
+    counters = get_counters()
+    assert counters["letters_without_strategy_context"] == 1
 
 
 def test_flag_allows_guardrails_without_strategy(monkeypatch):
@@ -85,6 +89,7 @@ def test_flag_allows_guardrails_without_strategy(monkeypatch):
         "backend.core.logic.guardrails.emit_event", lambda e, p: events.append((e, p))
     )
     _patch_flag(monkeypatch, True)
+    reset_counters()
     fake = FakeAIClient()
     fake.add_chat_response("body")
     res, viol, _ = generate_letter_with_guardrails(
@@ -92,3 +97,5 @@ def test_flag_allows_guardrails_without_strategy(monkeypatch):
     )
     assert res.startswith("body")
     assert any(e == "strategy_applied" and not p["strategy_applied"] for e, p in events)
+    counters = get_counters()
+    assert counters["letters_without_strategy_context"] == 1

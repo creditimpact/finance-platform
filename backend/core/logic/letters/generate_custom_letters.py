@@ -13,6 +13,7 @@ from backend.api.config import get_app_config
 from backend.api.session_manager import get_session
 from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLevel, AuditLogger, emit_event
+from backend.analytics.analytics_tracker import log_letter_without_strategy
 from backend.core.logic.compliance.rules_loader import get_neutral_phrase
 from backend.core.logic.guardrails import generate_letter_with_guardrails
 from backend.core.logic.guardrails.summary_validator import (
@@ -57,6 +58,7 @@ def call_gpt_for_custom_letter(
     debt_type = structured_summary.get("debt_type")
     dispute_reason = classification.get("category")
     if not (debt_type and dispute_reason):
+        log_letter_without_strategy()
         if not api_config.ALLOW_CUSTOM_LETTERS_WITHOUT_STRATEGY:
             return "strategy_context_required"
         emit_event("strategy_applied", {"strategy_applied": False})
@@ -160,6 +162,22 @@ def generate_custom_letter(
         classification_map.get(account.get("account_id"))
         if classification_map
         else None
+    )
+    classification = (
+        classification_record.classification if classification_record else {}
+    )
+    action_before = classification.get("action_tag", "")
+    action_after = account.get("action_tag", action_before)
+    strategy_applied = bool(structured_summary.get("debt_type") and classification.get("category"))
+    emit_event(
+        "strategy_applied",
+        {
+            "account_id": account.get("account_id"),
+            "strategy_applied": strategy_applied,
+            "action_tag_before": action_before,
+            "action_tag_after": action_after,
+            "override_reason": account.get("policy_override_reason", ""),
+        },
     )
     body_paragraph = call_gpt_for_custom_letter(
         client_name,

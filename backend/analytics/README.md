@@ -15,6 +15,14 @@ Invoked after report analysis and strategy generation to persist summary statist
   - Internal deps: `backend.api.config`.
 - `analytics/` – helper subpackage (e.g., `strategist_failures.py`) providing counters; no separate README.
 
+### Monitoring counters
+
+Common counters emitted for dashboards:
+
+- `letters_without_strategy_context` – attempts to generate letters without required strategy data.
+- `guardrail_fix_count.{letter_type}` – number of guardrail remediation passes by letter type.
+- `policy_override_reason.{reason}` – policy-based overrides grouped by reason.
+
 ## Entry points
 - `analytics_tracker.save_analytics_snapshot`
 

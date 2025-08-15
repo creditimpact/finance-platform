@@ -77,17 +77,31 @@ def _apply_strategy_fields(
                         _last4(acc.get("account_number")),
                     )
                     strat = index.get(key)
-                    if not strat:
-                        continue
-                    for field in [
-                        "action_tag",
-                        "priority",
-                        "needs_evidence",
-                        "legal_notes",
-                        "flags",
-                    ]:
-                        if strat.get(field) is not None and not acc.get(field):
-                            acc[field] = strat[field]
+                    before = acc.get("action_tag")
+                    applied = False
+                    override_reason = ""
+                    if strat:
+                        applied = True
+                        override_reason = strat.get("policy_override_reason", "")
+                        for field in [
+                            "action_tag",
+                            "priority",
+                            "needs_evidence",
+                            "legal_notes",
+                            "flags",
+                        ]:
+                            if strat.get(field) is not None and not acc.get(field):
+                                acc[field] = strat[field]
+                    emit_event(
+                        "strategy_applied",
+                        {
+                            "account_id": acc.get("account_id"),
+                            "strategy_applied": applied,
+                            "action_tag_before": before,
+                            "action_tag_after": acc.get("action_tag"),
+                            "override_reason": override_reason,
+                        },
+                    )
 
 
 def call_gpt_dispute_letter(

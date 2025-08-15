@@ -43,6 +43,7 @@ def test_autofix_and_no_raw_explanation(monkeypatch, tmp_path):
     counters = get_counters()
     assert counters["policy_violations_prevented_count"] >= 1
     assert counters["guardrail_fix_count"] == 1
+    assert counters["guardrail_fix_count.dispute"] == 1
 
 
 def test_state_clause_added(monkeypatch):

@@ -7,7 +7,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from backend.core.logic.utils.pii import redact_pii
+from backend.core.logic.utils.pii import mask_account_fields, redact_pii
 
 
 class AuditLevel(Enum):
@@ -46,7 +46,7 @@ class AuditLogger:
             {
                 "stage": stage,
                 "timestamp": datetime.now(UTC).isoformat(),
-                "details": details or {},
+                "details": mask_account_fields(details or {}),
             }
         )
 
@@ -58,7 +58,7 @@ class AuditLogger:
             return
         acc = self.data["accounts"].setdefault(str(account_id), [])
         entry = {"timestamp": datetime.now(UTC).isoformat()}
-        entry.update(info)
+        entry.update(mask_account_fields(info))
         acc.append(entry)
 
     def log_error(self, message: str) -> None:

@@ -17,6 +17,15 @@ from backend.core.services.ai_client import AIClient
 from backend.core.logic.policy import get_precedence, precedence_version
 from backend.policy.policy_loader import load_rulebook
 
+from backend.core.cache.strategy_cache import (
+    get_cached_strategy,
+    store_cached_strategy,
+)
+
+STRATEGY_MODEL_VERSION = "gpt-4"
+STRATEGY_PROMPT_VERSION = 1
+STRATEGY_SCHEMA_VERSION = 1
+
 
 # Mapping of rule hits to enforced actions or flags
 _RULE_ACTIONS: Dict[str, Dict[str, list[str]]] = {
@@ -61,6 +70,18 @@ class StrategyGenerator:
             if supporting_docs_text
             else ""
         )
+
+        cls_serializable = {acc_id: getattr(cls, "classification", cls) for acc_id, cls in (classification_map or {}).items()}
+        cache_entry = get_cached_strategy(
+            bureau_data,
+            stage_2_5_data or {},
+            cls_serializable,
+            STRATEGY_MODEL_VERSION,
+            prompt_version=STRATEGY_PROMPT_VERSION,
+            schema_version=STRATEGY_SCHEMA_VERSION,
+        )
+        if cache_entry is not None:
+            return cache_entry
 
 
         policy_context: Dict[str, Dict[str, Any]] = {}
@@ -197,12 +218,23 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                     "strategist_failure",
                     {"failure_reason": failure_reason.value},
                 )
-            return self._build_minimal_strategy(
+            minimal = self._build_minimal_strategy(
                 bureau_data,
                 stage_2_5_data or {},
                 classification_map or {},
             )
-
+            minimal["prompt_version"] = STRATEGY_PROMPT_VERSION
+            minimal["schema_version"] = STRATEGY_SCHEMA_VERSION
+            store_cached_strategy(
+                bureau_data,
+                stage_2_5_data or {},
+                cls_serializable,
+                STRATEGY_MODEL_VERSION,
+                minimal,
+                prompt_version=STRATEGY_PROMPT_VERSION,
+                schema_version=STRATEGY_SCHEMA_VERSION,
+            )
+            return minimal
         if stage_2_5_data:
             for acc in report.get("accounts", []):
                 acc_id = str(acc.get("account_id", ""))
@@ -320,6 +352,17 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                 report = json.loads(fixed_text)
             except Exception:
                 pass
+        report["prompt_version"] = STRATEGY_PROMPT_VERSION
+        report["schema_version"] = STRATEGY_SCHEMA_VERSION
+        store_cached_strategy(
+            bureau_data,
+            stage_2_5_data or {},
+            cls_serializable,
+            STRATEGY_MODEL_VERSION,
+            report,
+            prompt_version=STRATEGY_PROMPT_VERSION,
+            schema_version=STRATEGY_SCHEMA_VERSION,
+        )
         return report
 
     def _build_minimal_strategy(

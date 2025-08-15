@@ -710,23 +710,27 @@ def _detect_segment_issues(
     return issues
 
 
-def _build_remediation_hint(issue_code: str, items: List[str]) -> str:
-    """Generate a short hint text to address ``issue_code``."""
+def _build_remediation_hint(issue_code: str, items: List[str]) -> tuple[str, dict]:
+    """Generate prompt text and hint metadata to address ``issue_code``."""
 
     if issue_code == "MISSING_EXPECTED_ACCOUNT":
         joined = ", ".join(items)
-        return (
+        text = (
             "The report segment contains account headings that were missed in your "
             f"analysis: {joined}. Ensure each of these accounts is analyzed and "
             "included separately in the JSON output."
         )
+        return text, {"expected_account_names": items}
     if issue_code == "MERGED_ACCOUNTS":
         joined = ", ".join(items)
-        return (
+        text = (
             f"Some accounts appear merged or list multiple bureaus ({joined}). "
             "List each account separately and only include information for the current bureau."
         )
-    return ""
+        return text, {
+            "extra_instructions": "List each account separately and only include information for the current bureau.",
+        }
+    return "", {}
 
 
 def call_ai_analysis(
@@ -902,11 +906,11 @@ def call_ai_analysis(
             passes = 0
             while issues and passes < FLAGS.max_remediation_passes:
                 issue_code, items = issues[0]
-                hint = _build_remediation_hint(issue_code, items)
-                rem_prompt = prompt + "\n\n" + hint
+                hint_text, hint_meta = _build_remediation_hint(issue_code, items)
+                rem_prompt = prompt + ("\n\n" + hint_text if hint_text else "")
                 logging.info(
                     "analysis_remediation",
-                    extra={"bureau": bureau, "issue": issue_code, "pass": passes + 1},
+                    extra={"bureau": bureau, "issue": issue_code, "repair_step": passes + 1},
                 )
                 new_data, new_err = analyze_bureau(
                     seg_text,
@@ -917,6 +921,7 @@ def call_ai_analysis(
                     prompt=rem_prompt,
                     late_summary_text=late_summary_text,
                     inquiry_summary=inquiry_summary,
+                    hints=hint_meta,
                 )
                 if new_err:
                     logging.warning(
@@ -925,6 +930,7 @@ def call_ai_analysis(
                             "bureau": bureau,
                             "issue": issue_code,
                             "error_code": new_err,
+                            "repair_step": passes + 1,
                         },
                     )
                     break
@@ -957,6 +963,18 @@ def call_ai_analysis(
 
                 issues = _detect_segment_issues(seg_text, data, bureau)
                 passes += 1
+
+            if issues and not error_code:
+                error_code = issues[0][0]
+                headings = extract_account_headings(seg_text)
+                log_bureau_failure(
+                    error_code=error_code,
+                    bureau=bureau,
+                    expected_headings=len(headings),
+                    found_accounts=len(data.get("all_accounts", [])),
+                    tokens=0,
+                    latency=(time.time() - start) * 1000,
+                )
 
         logging.info(
             "analysis_final",

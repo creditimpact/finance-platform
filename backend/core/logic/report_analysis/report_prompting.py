@@ -92,6 +92,9 @@ def _validate_analysis_schema(data: dict) -> dict:
     return data
 
 
+# Example object matching the analysis schema used in prompts
+_SCHEMA_EXAMPLE = json.dumps(_validate_analysis_schema({}), indent=2)
+
 def _split_text_by_bureau(text: str) -> Dict[str, str]:
     """Return mapping of bureau name to its text segment."""
     positions: Dict[str, int] = {}
@@ -278,9 +281,12 @@ def analyze_bureau(
     if extra_instructions:
         prompt += "\n\n" + extra_instructions
     try:
+        prompt_with_schema = (
+            prompt + "\n\nJSON schema exemplar:\n" + _SCHEMA_EXAMPLE
+        )
         response = ai_client.chat_completion(
             model=ANALYSIS_MODEL_VERSION,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": prompt_with_schema}],
             temperature=0.1,
         )
         usage = getattr(response, "usage", None)
@@ -330,6 +336,10 @@ def analyze_bureau(
         return data, "BROKEN_JSON"
 
     data = _validate_analysis_schema(data)
+    validation_errors = list(_ANALYSIS_VALIDATOR.iter_errors(data))
+    if validation_errors:
+        data["confidence"] = 0.0
+        return data, "SCHEMA_VALIDATION_FAILED"
 
     # ------------------------------------------------------------------
     # Basic confidence heuristic

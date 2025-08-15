@@ -58,7 +58,10 @@ Legacy documentation and sample artifacts retained for historical reference. See
 Python backend powering ingestion, analysis, strategy generation, letter creation, analytics, and auditing. Key subpackages include [api](backend/api/README.md), [core](backend/core/README.md), [analytics](backend/analytics/README.md), [audit](backend/audit/README.md), and [assets](backend/assets/README.md).
 
 ### docs
-Reference materials such as data models and contributing guides. No dedicated README; browse files within [`docs`](docs) for deeper documentation.
+Reference materials such as data models, stage guides, and contributing
+instructions. Includes pipeline docs like [Stage 2.5](docs/STAGE_2_5.md)
+and [Stage 3 Hardening](docs/stage3_hardening.md). No dedicated README;
+browse files within [`docs`](docs) for deeper documentation.
 
 ### frontend
 React client that interacts with the API to upload reports and display results. See [frontend/README.md](frontend/README.md) for build and run instructions.

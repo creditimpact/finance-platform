@@ -171,11 +171,7 @@ def generate_custom_letter(
     strategy_applied = bool(
         structured_summary.get("debt_type") and classification.get("category")
     )
-    if (
-        api_config.STAGE4_POLICY_ENFORCEMENT
-        and action_after == "goodwill"
-        and classification.get("category") == "collection"
-    ):
+    if action_after == "goodwill" and classification.get("category") == "collection":
         emit_event(
             "goodwill_policy_override",
             {
@@ -202,6 +198,7 @@ def generate_custom_letter(
                 "action_tag_before": action_before,
                 "action_tag_after": action_after,
                 "override_reason": "collection_no_goodwill",
+                "policy_override_reason": "collection_no_goodwill",
             },
         )
         return

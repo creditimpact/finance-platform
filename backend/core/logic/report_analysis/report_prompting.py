@@ -38,6 +38,7 @@ from .extractors import (
     extract_dofd,
     extract_inquiry_dates,
 )
+from .confidence import combine_confidence
 
 _INPUT_COST_PER_TOKEN = 0.01 / 1000
 _OUTPUT_COST_PER_TOKEN = 0.03 / 1000
@@ -57,7 +58,7 @@ ANALYSIS_SCHEMA_VERSION = 1
 # locating bureau sections in raw report text.
 _BUREAU_REGEXES = {
     bureau: re.compile(
-        r"(?:^|\n|\f)\s*" + r"[\s-]*".join(re.escape(ch) for ch in bureau) + r"\b",
+        r"(?:^|\s|\f)\s*" + r"[\s-]*".join(re.escape(ch) for ch in bureau) + r"\b",
         re.IGNORECASE,
     )
     for bureau in BUREAUS
@@ -405,11 +406,13 @@ def analyze_bureau(
     except TimeoutError:
         data = _validate_analysis_schema({})  # ensure validation errors get logged
         data["confidence"] = 0.0
+        data["needs_human_review"] = True
         return data, "TIMEOUT"
     except Exception as exc:  # pragma: no cover - defensive
         logging.exception("segment_call_failed", exc_info=exc)
         data = _validate_analysis_schema({})
         data["confidence"] = 0.0
+        data["needs_human_review"] = True
         return data, type(exc).__name__
 
     content = response.choices[0].message.content.strip()
@@ -432,22 +435,25 @@ def analyze_bureau(
     if not content:
         data = _validate_analysis_schema({})
         data["confidence"] = 0.0
+        data["needs_human_review"] = True
         return data, "EMPTY_OUTPUT"
 
     data, parse_error = parse_json(content)
     if parse_error:
         data = _validate_analysis_schema({})
         data["confidence"] = 0.0
+        data["needs_human_review"] = True
         return data, "BROKEN_JSON"
 
     data = _validate_analysis_schema(data)
     validation_errors = list(_ANALYSIS_VALIDATOR.iter_errors(data))
     if validation_errors:
         data["confidence"] = 0.0
+        data["needs_human_review"] = True
         return data, "SCHEMA_VALIDATION_FAILED"
 
     # ------------------------------------------------------------------
-    # Basic confidence heuristic
+    # Heading coverage
     # ------------------------------------------------------------------
     headings = extract_account_headings(text)
     if expected_accounts:
@@ -466,22 +472,10 @@ def analyze_bureau(
             for acc in data.get(list_name, []):
                 account_names.add(normalize_creditor_name(acc.get("name", "")))
         unmatched_norms = {norm for norm, _ in headings if norm not in account_names}
-        confidence = (len(headings) - len(unmatched_norms)) / len(headings)
+        heading_coverage = (len(headings) - len(unmatched_norms)) / len(headings)
     else:
-        confidence = 1.0
-    data["confidence"] = confidence
+        heading_coverage = 1.0
 
-    for list_name in [
-        "all_accounts",
-        "negative_accounts",
-       "open_accounts_with_issues",
-        "positive_accounts",
-        "high_utilization_accounts",
-    ]:
-        for acc in data.get(list_name, []):
-            acc.setdefault("confidence", confidence)
-    for inq in data.get("inquiries", []):
-        inq.setdefault("confidence", confidence)
     # ------------------------------------------------------------------
     # Cross-check extractor results against model output
     # ------------------------------------------------------------------
@@ -490,6 +484,8 @@ def analyze_bureau(
     dofds = extract_dofd(text)
     inquiry_dates = extract_inquiry_dates(text)
 
+    total_checks = 0
+    disagreements = 0
     account_lists = [
         "all_accounts",
         "negative_accounts",
@@ -500,28 +496,53 @@ def analyze_bureau(
     for list_name in account_lists:
         for acc in data.get(list_name, []):
             name_norm = normalize_creditor_name(acc.get("name", ""))
-            corrected = False
             mask = masks.get(name_norm)
             status = statuses.get(name_norm)
             dofd = dofds.get(name_norm)
-            if mask and acc.get("account_number") != mask:
-                acc["account_number"] = mask
-                corrected = True
-            if status and acc.get("status") != status:
-                acc["status"] = status
-                corrected = True
-            if dofd and acc.get("dofd") != dofd:
-                acc["dofd"] = dofd
-                corrected = True
-            if corrected:
-                acc["remediation_applied"] = True
+            if mask:
+                total_checks += 1
+                if acc.get("account_number") != mask:
+                    disagreements += 1
+                    acc["account_number"] = mask
+                    acc["remediation_applied"] = True
+            if status:
+                total_checks += 1
+                if acc.get("status") != status:
+                    disagreements += 1
+                    acc["status"] = status
+                    acc["remediation_applied"] = True
+            if dofd:
+                total_checks += 1
+                if acc.get("dofd") != dofd:
+                    disagreements += 1
+                    acc["dofd"] = dofd
+                    acc["remediation_applied"] = True
 
     for inq in data.get("inquiries", []):
         name_norm = normalize_creditor_name(inq.get("creditor_name", ""))
         ext_date = inquiry_dates.get(name_norm)
-        if ext_date and inq.get("date") != ext_date:
-            inq["date"] = ext_date
-            inq["remediation_applied"] = True
+        if ext_date:
+            total_checks += 1
+            if inq.get("date") != ext_date:
+                disagreements += 1
+                inq["date"] = ext_date
+                inq["remediation_applied"] = True
+
+    extractor_agreement = (
+        (total_checks - disagreements) / total_checks if total_checks else 1.0
+    )
+
+    confidence = combine_confidence(
+        heading_coverage, schema_valid=True, extractor_agreement=extractor_agreement
+    )
+    data["confidence"] = confidence
+    data["needs_human_review"] = confidence < 0.7
+
+    for list_name in account_lists:
+        for acc in data.get(list_name, []):
+            acc.setdefault("confidence", confidence)
+    for inq in data.get("inquiries", []):
+        inq.setdefault("confidence", confidence)
 
     return data, None
 
@@ -968,7 +989,7 @@ def call_ai_analysis(
         )
         log_ai_request(tokens_total_in, tokens_total_out, cost, latency_ms)
 
-        if error_code or data.get("confidence", 1) < 0.7:
+        if error_code or data.get("needs_human_review"):
             needs_review = True
 
         for key in [

@@ -761,6 +761,7 @@ def call_ai_analysis(
     }
     summary_metrics: dict = {}
     needs_review = bool(missing_bureaus)
+    bureau_sections: List[dict] = []
 
     for idx, (bureau, seg_text) in enumerate(segments.items()):
         seg_path = (
@@ -1010,6 +1011,15 @@ def call_ai_analysis(
         if error_code or data.get("needs_human_review"):
             needs_review = True
 
+        # capture per-bureau data before merging
+        per_bureau = {
+            **data,
+            "bureau": bureau,
+            "error_code": error_code,
+            "is_missing": False,
+        }
+        bureau_sections.append(per_bureau)
+
         for key in [
             "negative_accounts",
             "open_accounts_with_issues",
@@ -1049,5 +1059,28 @@ def call_ai_analysis(
         aggregate["missing_bureaus"] = missing_bureaus
     else:
         aggregate["missing_bureaus"] = []
+
+    # add placeholder sections for any missing bureaus
+    for bureau in missing_bureaus:
+        bureau_sections.append(
+            {
+                "bureau": bureau,
+                "negative_accounts": [],
+                "open_accounts_with_issues": [],
+                "positive_accounts": [],
+                "high_utilization_accounts": [],
+                "all_accounts": [],
+                "inquiries": [],
+                "personal_info_issues": [],
+                "account_inquiry_matches": [],
+                "strategic_recommendations": [],
+                "confidence": 0.0,
+                "needs_human_review": True,
+                "error_code": "MISSING_BUREAU",
+                "is_missing": True,
+            }
+        )
+
+    aggregate["bureau_sections"] = bureau_sections
 
     return aggregate

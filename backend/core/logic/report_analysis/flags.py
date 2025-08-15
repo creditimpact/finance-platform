@@ -31,7 +31,7 @@ class AnalysisFlags:
     inject_headings: bool = _env_bool("ANALYSIS_INJECT_HEADINGS", True)
     cache_enabled: bool = _env_bool("ANALYSIS_CACHE_ENABLED", True)
     debug_store_raw: bool = _env_bool("ANALYSIS_DEBUG_STORE_RAW", False)
-    max_remediation_passes: int = _env_int("ANALYSIS_MAX_REMEDIATION_PASSES", 2)
+    max_remediation_passes: int = _env_int("ANALYSIS_MAX_REMEDIATION_PASSES", 3)
     max_segment_tokens: int = _env_int("ANALYSIS_MAX_SEGMENT_TOKENS", 8000)
 
 

@@ -8,6 +8,8 @@ from backend.analytics.analytics_tracker import (
     log_policy_violations_prevented,
 )
 from backend.api.session_manager import get_session, update_session
+from backend.api import config as api_config
+from backend.audit.audit import emit_event
 from backend.core.logic.compliance.rule_checker import RuleViolation, check_letter
 from backend.core.logic.compliance.rules_loader import load_rules
 from backend.core.models.letter import LetterContext
@@ -53,6 +55,12 @@ def _record_letter(
     update_session(session_id, letters_generated=letters)
 
 
+def _get_val(ctx: LetterContext | dict[str, Any], key: str) -> Any:
+    if isinstance(ctx, dict):
+        return ctx.get(key)
+    return getattr(ctx, key, None)
+
+
 def generate_letter_with_guardrails(
     user_prompt: str,
     state: str | None,
@@ -62,6 +70,15 @@ def generate_letter_with_guardrails(
     ai_client: AIClient,
 ) -> Tuple[str, List[RuleViolation], int]:
     """Generate a letter via LLM and ensure compliance with rule checker."""
+    if (
+        letter_type == "custom"
+        and not (
+            _get_val(context, "debt_type") and _get_val(context, "dispute_reason")
+        )
+    ):
+        if not api_config.ALLOW_CUSTOM_LETTERS_WITHOUT_STRATEGY:
+            return "strategy_context_required", [], 0
+        emit_event("strategy_applied", {"strategy_applied": False})
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},

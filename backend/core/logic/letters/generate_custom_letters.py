@@ -13,7 +13,10 @@ from backend.api.config import get_app_config
 from backend.api.session_manager import get_session
 from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLevel, AuditLogger, emit_event
-from backend.analytics.analytics_tracker import log_letter_without_strategy
+from backend.analytics.analytics_tracker import (
+    log_letter_without_strategy,
+    log_policy_override_reason,
+)
 from backend.core.logic.compliance.rules_loader import get_neutral_phrase
 from backend.core.logic.guardrails import generate_letter_with_guardrails
 from backend.core.logic.guardrails.summary_validator import (
@@ -154,10 +157,6 @@ def generate_custom_letter(
     structured_summaries = validate_structured_summaries(structured_summaries)
     structured_summary = structured_summaries.get(account.get("account_id"), {})
 
-    docs_text, doc_names, _ = gather_supporting_docs(session_id)
-    if docs_text and audit and audit.level is AuditLevel.VERBOSE:
-        print(f"[INFO] Including supplemental docs for custom letter to {recipient}.")
-
     classification_record = (
         classification_map.get(account.get("account_id"))
         if classification_map
@@ -168,7 +167,9 @@ def generate_custom_letter(
     )
     action_before = classification.get("action_tag", "")
     action_after = account.get("action_tag", action_before)
-    strategy_applied = bool(structured_summary.get("debt_type") and classification.get("category"))
+    strategy_applied = bool(
+        structured_summary.get("debt_type") and classification.get("category")
+    )
     emit_event(
         "strategy_applied",
         {
@@ -179,6 +180,36 @@ def generate_custom_letter(
             "override_reason": account.get("policy_override_reason", ""),
         },
     )
+
+    if (
+        api_config.STAGE4_POLICY_ENFORCEMENT
+        and action_after == "goodwill"
+        and classification.get("category") == "collection"
+    ):
+        emit_event(
+            "goodwill_policy_override",
+            {
+                "policy_override_reason": "collection_no_goodwill",
+                "account_id": account.get("account_id"),
+            },
+        )
+        log_letter_without_strategy()
+        log_policy_override_reason("collection_no_goodwill")
+        if audit:
+            audit.log_account(
+                account.get("account_id"),
+                {
+                    "stage": "strategy_rule_enforcement",
+                    "policy_override": True,
+                    "policy_override_reason": "collection_no_goodwill",
+                },
+            )
+        return
+
+    docs_text, doc_names, _ = gather_supporting_docs(session_id)
+    if docs_text and audit and audit.level is AuditLevel.VERBOSE:
+        print(f"[INFO] Including supplemental docs for custom letter to {recipient}.")
+
     body_paragraph = call_gpt_for_custom_letter(
         client_name,
         recipient,

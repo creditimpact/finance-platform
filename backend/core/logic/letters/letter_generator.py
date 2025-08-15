@@ -49,6 +49,42 @@ CREDIT_BUREAU_ADDRESSES = {
 }
 
 
+def _apply_strategy_fields(
+    bureau_data: Mapping[str, Any], strategy_accounts: list[dict[str, Any]]
+) -> None:
+    """Merge strategist metadata into ``bureau_data`` accounts."""
+
+    def _norm(name: str) -> str:
+        return normalize_creditor_name(name or "")
+
+    def _last4(num: str | None) -> str:
+        digits = "".join(c for c in str(num or "") if c.isdigit())
+        return digits[-4:]
+
+    index: dict[tuple[str, str], dict[str, Any]] = {}
+    for acc in strategy_accounts:
+        key = (_norm(acc.get("name", "")), _last4(acc.get("account_number")))
+        index[key] = acc
+
+    for payload in bureau_data.values():
+        for section in payload.values():
+            if isinstance(section, list):
+                for acc in section:
+                    key = (_norm(acc.get("name", "")), _last4(acc.get("account_number")))
+                    strat = index.get(key)
+                    if not strat:
+                        continue
+                    for field in [
+                        "action_tag",
+                        "priority",
+                        "needs_evidence",
+                        "legal_notes",
+                        "flags",
+                    ]:
+                        if strat.get(field) is not None and not acc.get(field):
+                            acc[field] = strat[field]
+
+
 def call_gpt_dispute_letter(
     *args,
     audit: AuditLogger | None = None,
@@ -108,6 +144,7 @@ def generate_all_dispute_letters_with_ai(
 
     session_id = client_info.get("session_id", "")
     strategy = generate_strategy(session_id, bureau_data)
+    _apply_strategy_fields(bureau_data, strategy.get("accounts", []))
     strategy_summaries = validate_structured_summaries(
         strategy.get("dispute_items", {})
     )

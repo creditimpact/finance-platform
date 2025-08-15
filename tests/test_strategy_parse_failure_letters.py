@@ -85,9 +85,6 @@ def test_letters_generate_when_strategy_llm_returns_junk(tmp_path, monkeypatch):
     assert acc["legal_notes"] == ["FCRA 611"]
     assert acc["needs_evidence"] == ["identity_theft_affidavit"]
 
-    bureau_data["Experian"]["disputes"][0]["action_tag"] = acc["action_tag"]
-    bureau_data["Experian"]["disputes"][0]["recommended_action"] = "Dispute"
-
     monkeypatch.setattr(
         "backend.core.logic.letters.letter_generator.call_gpt_dispute_letter",
         lambda *a, **k: {
@@ -107,7 +104,10 @@ def test_letters_generate_when_strategy_llm_returns_junk(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "backend.core.logic.letters.letter_generator.generate_strategy",
-        lambda session_id, bureau: {"dispute_items": {"1": {}}},
+        lambda session_id, bureau: {
+            "dispute_items": {"1": {}},
+            "accounts": [acc],
+        },
     )
     monkeypatch.setattr(
         "backend.core.logic.letters.letter_generator.render_dispute_letter_html",

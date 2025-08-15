@@ -8,8 +8,22 @@ from tests.helpers.fake_ai_client import FakeAIClient
 
 
 def test_policy_based_overrides(monkeypatch):
+    monkeypatch.setenv("STAGE4_POLICY_ENFORCEMENT", "1")
+    monkeypatch.setattr("backend.api.config.STAGE4_POLICY_ENFORCEMENT", True)
+    monkeypatch.setattr(
+        "backend.core.logic.strategy.generate_strategy_report.STAGE4_POLICY_ENFORCEMENT",
+        True,
+    )
     monkeypatch.setattr(
         "backend.core.logic.strategy.generate_strategy_report.fix_draft_with_guardrails",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "backend.core.logic.strategy.generate_strategy_report.get_cached_strategy",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "backend.core.logic.strategy.generate_strategy_report.store_cached_strategy",
         lambda *a, **k: None,
     )
 

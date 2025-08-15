@@ -1,4 +1,5 @@
 import json
+import random
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
@@ -6,6 +7,7 @@ from typing import Any, Dict
 from jsonschema import Draft7Validator, ValidationError
 
 from backend.analytics.analytics_tracker import emit_counter
+from backend.api.config import STAGE4_POLICY_CANARY, STAGE4_POLICY_ENFORCEMENT
 from backend.audit.audit import AuditLogger, emit_event
 from backend.core.cache.strategy_cache import get_cached_strategy, store_cached_strategy
 from backend.core.logic.compliance.constants import (
@@ -81,6 +83,9 @@ class StrategyGenerator:
         )
         if cache_entry is not None:
             return cache_entry
+        enforcement_active = STAGE4_POLICY_ENFORCEMENT or (
+            random.random() < STAGE4_POLICY_CANARY
+        )
 
         policy_context: Dict[str, Dict[str, Any]] = {}
         rule_policies: Dict[str, Dict[str, Dict[str, list[str]]]] = {}
@@ -280,7 +285,7 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                 for rule_id, details in policy.items():
                     for forbidden in details.get("forbidden_actions", []):
                         if forbidden.lower() in rec_lower:
-                            acc["recommendation"] = _SAFE_FALLBACK_RECOMMENDATION
+                            recommendation = _SAFE_FALLBACK_RECOMMENDATION
                             override = True
                             enforced_rules.append(rule_id)
                             reason = f"{forbidden} forbidden by {rule_id}"
@@ -289,7 +294,7 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                         break
                     for required in details.get("required_actions", []):
                         if required.lower() not in rec_lower:
-                            acc["recommendation"] = required
+                            recommendation = required
                             override = True
                             enforced_rules.append(rule_id)
                             reason = f"{required} required by {rule_id}"
@@ -297,14 +302,16 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                     if override:
                         break
 
-                if override:
+                shadow = override and not enforcement_active
+                if override and enforcement_active:
+                    acc["recommendation"] = recommendation
                     acc["policy_override"] = True
                     acc["policy_override_reason"] = reason
                     acc["enforced_rules"] = enforced_rules
 
                 rule_hits = acc.get("rule_hits", [])
                 emit_counter("strategy.rule_hit_total", len(rule_hits))
-                if acc.get("policy_override"):
+                if override and enforcement_active:
                     emit_counter("strategy.policy_override_total")
 
                 if audit:
@@ -313,10 +320,12 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                         {
                             "stage": "strategy_rule_enforcement",
                             "rule_hits": rule_hits,
-                            "applied_rules": enforced_rules,
-                            "policy_override": acc.get("policy_override", False),
+                            "applied_rules": enforced_rules if enforcement_active else [],
+                            "would_apply": enforced_rules if shadow else [],
+                            "policy_override": override and enforcement_active,
+                            "shadow": shadow,
                             "suggested_dispute_frame": acc.get(
-                                "suggested_dispute_frame", ""
+                                "suggested_dispute_frame", "",
                             ),
                         },
                     )
@@ -326,12 +335,14 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                     {
                         "account_id": acc_id,
                         "rule_hits": rule_hits,
-                        "applied_rules": enforced_rules,
-                        "policy_override": acc.get("policy_override", False),
+                        "applied_rules": enforced_rules if enforcement_active else [],
+                        "would_apply": enforced_rules if shadow else [],
+                        "policy_override": override and enforcement_active,
+                        "shadow": shadow,
                         "suggested_dispute_frame": acc.get(
-                            "suggested_dispute_frame", ""
+                            "suggested_dispute_frame", "",
                         ),
-                        "final_recommendation": acc.get("recommendation", ""),
+                        "final_recommendation": acc.get("recommendation", recommendation),
                     },
                 )
 

@@ -14,7 +14,10 @@ from typing import Any, Dict
 _EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _PHONE_RE = re.compile(r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b")
 _SSN_RE = re.compile(r"\b(?:\d{3}[- ]\d{2}[- ]\d{4}|\d{9})\b")
-_ACCOUNT_RE = re.compile(r"\b(?:\d[ -]?){11,15}\d\b")
+# Match common "last-4" SSN patterns such as "ssn 1234" or "ssn:1234"
+_SSN_LAST4_RE = re.compile(r"(?i)(ssn[\s:#-]*)(\d{4})")
+# Allow account numbers with spaces or hyphens between groups of digits
+_ACCOUNT_RE = re.compile(r"\b(?:\d{4}[ -]?){2,4}\d{4}\b")
 
 
 def redact_pii(text: str) -> str:
@@ -25,6 +28,9 @@ def redact_pii(text: str) -> str:
     redacted = _PHONE_RE.sub("[REDACTED]", redacted)
     redacted = _SSN_RE.sub(
         lambda m: "***-**-" + re.sub(r"\D", "", m.group())[-4:], redacted
+    )
+    redacted = _SSN_LAST4_RE.sub(
+        lambda m: m.group(1) + "***-**-" + m.group(2), redacted
     )
     redacted = _ACCOUNT_RE.sub(
         lambda m: "****" + re.sub(r"\D", "", m.group())[-4:], redacted

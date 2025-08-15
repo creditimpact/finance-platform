@@ -16,10 +16,51 @@ from backend.core.logic.guardrails.summary_validator import (
 )
 from backend.core.logic.rendering import pdf_renderer
 from backend.core.logic.strategy.summary_classifier import ClassificationRecord
+from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.logic.utils.pdf_ops import gather_supporting_docs
 from backend.core.models import BureauPayload, ClientInfo
 from backend.core.models.account import Account
 from backend.core.services.ai_client import AIClient
+
+# ---------------------------------------------------------------------------
+# Helper
+# ---------------------------------------------------------------------------
+
+
+def _apply_strategy_fields(
+    bureau_data: Mapping[str, Any], strategy_accounts: list[dict[str, Any]]
+) -> None:
+    """Merge strategist metadata into ``bureau_data`` accounts."""
+
+    def _norm(name: str) -> str:
+        return normalize_creditor_name(name or "")
+
+    def _last4(num: str | None) -> str:
+        digits = "".join(c for c in str(num or "") if c.isdigit())
+        return digits[-4:]
+
+    index: dict[tuple[str, str], dict[str, Any]] = {}
+    for acc in strategy_accounts:
+        key = (_norm(acc.get("name", "")), _last4(acc.get("account_number")))
+        index[key] = acc
+
+    for payload in bureau_data.values():
+        for section in payload.values():
+            if isinstance(section, list):
+                for acc in section:
+                    key = (_norm(acc.get("name", "")), _last4(acc.get("account_number")))
+                    strat = index.get(key)
+                    if not strat:
+                        continue
+                    for field in [
+                        "action_tag",
+                        "priority",
+                        "needs_evidence",
+                        "legal_notes",
+                        "flags",
+                    ]:
+                        if strat.get(field) is not None and not acc.get(field):
+                            acc[field] = strat[field]
 
 # ---------------------------------------------------------------------------
 # Orchestrator functions
@@ -96,6 +137,7 @@ def generate_goodwill_letters(
     ai_client: AIClient,
     identity_theft: bool = False,
     classification_map: Mapping[str, ClassificationRecord] | None = None,
+    strategy: Mapping[str, Any] | None = None,
 ) -> None:
     """Generate goodwill letters for all eligible creditors in ``bureau_data``.
 
@@ -126,8 +168,11 @@ def generate_goodwill_letters(
         for k, v in bureau_map.items()
     }
 
+    if strategy:
+        _apply_strategy_fields(bureau_data, strategy.get("accounts", []))
+
     goodwill_accounts = goodwill_preparation.select_goodwill_candidates(
-        client_info, bureau_data
+        client_info, bureau_data, strategy=strategy
     )
     for creditor, accounts in goodwill_accounts.items():
         account_objs = [

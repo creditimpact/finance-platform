@@ -73,6 +73,11 @@ def build_instruction_html(context: LetterContext | dict[str, Any]) -> str:
                 f"<strong>Strategist Action:</strong> {html_utils.escape(acc['recommended_action'])}"
             )
 
+        if acc.get("needs_evidence"):
+            action_lines.append(
+                f"<strong>Evidence Needed:</strong> {', '.join(acc.get('needs_evidence', []))}"
+            )
+
         letters = acc.get("letters", [])
         if letters:
             action_lines.append(
@@ -196,9 +201,9 @@ def build_instruction_html(context: LetterContext | dict[str, Any]) -> str:
         if items or account_tips:
             joined = "".join(items)
             extra = "".join(account_tips)
-        strategy_block = (
-            "<h2>Strategist Recommendations</h2><ul>" + joined + extra + "</ul>"
-        )
+            strategy_block = (
+                "<h2>Strategist Recommendations</h2><ul>" + joined + extra + "</ul>"
+            )
 
     closing_block = (
         "<p><strong>You're in control of your credit journey - "

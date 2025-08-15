@@ -40,20 +40,24 @@ def call_gpt_dispute_letter(
 
     dispute_blocks = []
     for acc in disputes:
-        struct = structured_summaries.get(acc.account_id or "", {})
+        acc_dict = acc.to_dict() if isinstance(acc, Account) else dict(acc)
+        struct = structured_summaries.get(acc_dict.get("account_id", ""), {})
         record = None
         if classification_map:
-            record = classification_map.get(acc.account_id or "")
+            record = classification_map.get(acc_dict.get("account_id", ""))
         classification = record.classification if record else {}
         neutral_phrase, neutral_reason = get_neutral_phrase(
             classification.get("category"), struct
         )
         block = {
-            "name": acc.name or "Unknown",
-            "account_number": (acc.account_number or "").replace("*", "") or "N/A",
-            "status": acc.reported_status or acc.status or "N/A",
+            "name": acc_dict.get("name") or "Unknown",
+            "account_number": (acc_dict.get("account_number") or "").replace("*", "")
+            or "N/A",
+            "status": acc_dict.get("reported_status")
+            or acc_dict.get("status")
+            or "N/A",
             "dispute_type": classification.get(
-                "category", acc.dispute_type or "unspecified"
+                "category", acc_dict.get("dispute_type") or "unspecified"
             ),
             "legal_hook": classification.get("legal_tag"),
             "tone": classification.get("tone"),
@@ -64,18 +68,24 @@ def call_gpt_dispute_letter(
             block["neutral_phrase"] = neutral_phrase
         if classification.get("state_hook"):
             block["state_hook"] = classification["state_hook"]
-        if acc.advisor_comment:
-            block["advisor_comment"] = acc.advisor_comment
-        if acc.action_tag:
-            block["action_tag"] = acc.action_tag
-        if acc.recommended_action:
-            block["recommended_action"] = acc.recommended_action
-        if acc.flags:
-            block["flags"] = acc.flags
+        if acc_dict.get("advisor_comment"):
+            block["advisor_comment"] = acc_dict["advisor_comment"]
+        if acc_dict.get("action_tag"):
+            block["action_tag"] = acc_dict["action_tag"]
+        if acc_dict.get("recommended_action"):
+            block["recommended_action"] = acc_dict["recommended_action"]
+        if acc_dict.get("flags"):
+            block["flags"] = acc_dict["flags"]
+        if acc_dict.get("priority"):
+            block["priority"] = acc_dict["priority"]
+        if acc_dict.get("needs_evidence"):
+            block["needs_evidence"] = acc_dict["needs_evidence"]
+        if acc_dict.get("legal_notes"):
+            block["legal_notes"] = acc_dict["legal_notes"]
         dispute_blocks.append(block)
         if audit:
             audit.log_account(
-                acc.account_id or acc.name,
+                acc_dict.get("account_id") or acc_dict.get("name"),
                 {
                     "stage": "dispute_letter",
                     "bureau": bureau_name,
@@ -83,7 +93,7 @@ def call_gpt_dispute_letter(
                     "classification": classification,
                     "neutral_phrase": neutral_phrase,
                     "neutral_phrase_reason": neutral_reason,
-                    "recommended_action": acc.recommended_action,
+                    "recommended_action": acc_dict.get("recommended_action"),
                 },
             )
 

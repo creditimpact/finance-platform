@@ -84,6 +84,15 @@ def prepare_instruction_data(
             return ""
         return re.sub(r"\D", "", num)
 
+    strategy_index: Dict[Tuple[str, str], dict] = {}
+    if strategy:
+        for acc in strategy.get("accounts", []):
+            key = (
+                normalize_creditor_name(acc.get("name", "")),
+                sanitize_number(acc.get("account_number"))[-4:],
+            )
+            strategy_index[key] = acc
+
     def can_merge(existing: dict, new: dict) -> bool:
         """Return True if the two account records likely refer to the same account."""
         name1 = normalize_creditor_name(existing.get("name", "")).lower()
@@ -107,6 +116,29 @@ def prepare_instruction_data(
             acc_copy = acc.copy()
             acc_copy.setdefault("bureaus", acc.get("bureaus", [bureau]))
             acc_copy.setdefault("categories", set(acc.get("categories", [])))
+            strat_key = (
+                normalize_creditor_name(acc_copy.get("name", "")),
+                sanitize_number(acc_copy.get("account_number"))[-4:],
+            )
+            strat = strategy_index.get(strat_key)
+            if strat:
+                for field in [
+                    "action_tag",
+                    "priority",
+                    "needs_evidence",
+                    "legal_notes",
+                    "flags",
+                    "recommended_action",
+                    "advisor_comment",
+                    "status",
+                    "utilization",
+                    "dispute_type",
+                    "goodwill_candidate",
+                    "letter_type",
+                    "custom_letter_note",
+                ]:
+                    if strat.get(field) is not None and not acc_copy.get(field):
+                        acc_copy[field] = strat[field]
 
             merged = False
             for existing in all_accounts:
@@ -115,6 +147,10 @@ def prepare_instruction_data(
                     existing["categories"].update(acc_copy.get("categories", []))
                     for field in [
                         "action_tag",
+                        "priority",
+                        "needs_evidence",
+                        "legal_notes",
+                        "flags",
                         "recommended_action",
                         "advisor_comment",
                         "status",
@@ -147,6 +183,10 @@ def prepare_instruction_data(
                 existing["categories"].update(acc.get("categories", []))
                 for field in [
                     "action_tag",
+                    "priority",
+                    "needs_evidence",
+                    "legal_notes",
+                    "flags",
                     "recommended_action",
                     "advisor_comment",
                     "status",
@@ -251,6 +291,10 @@ def prepare_instruction_data(
             "action_tag": action_tag,
             "recommended_action": recommended_action,
             "advisor_comment": advisor_comment,
+            "priority": acc.get("priority"),
+            "needs_evidence": acc.get("needs_evidence"),
+            "legal_notes": acc.get("legal_notes"),
+            "flags": acc.get("flags"),
         }
         action_sentence = generate_account_action(action_context, ai_client)
 
@@ -265,6 +309,10 @@ def prepare_instruction_data(
             "action_tag": action_tag,
             "recommended_action": recommended_action,
             "advisor_comment": advisor_comment,
+            "priority": acc.get("priority"),
+            "needs_evidence": acc.get("needs_evidence"),
+            "legal_notes": acc.get("legal_notes"),
+            "flags": acc.get("flags"),
             "late_payments": acc.get("late_payments"),
             "letters": letters,
             "action_sentence": action_sentence,

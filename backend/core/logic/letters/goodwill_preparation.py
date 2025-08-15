@@ -20,6 +20,8 @@ from backend.core.models.client import ClientInfo
 def select_goodwill_candidates(
     client_info: ClientInfo | Mapping[str, Any],
     bureau_data: Mapping[str, Any],
+    *,
+    strategy: Mapping[str, Any] | None = None,
 ) -> Mapping[str, List[Dict[str, Any]]]:
     """Return a mapping of creditor name to accounts needing goodwill letters.
 
@@ -32,6 +34,15 @@ def select_goodwill_candidates(
 
     def clean_num(num: str | None) -> str:
         return re.sub(r"\D", "", num or "")
+
+    strategy_index: Dict[tuple[str, str], Dict[str, Any]] = {}
+    if strategy:
+        for acc in strategy.get("accounts", []):
+            key = (
+                normalize_creditor_name(acc.get("name", "")),
+                clean_num(acc.get("account_number"))[-4:],
+            )
+            strategy_index[key] = acc
 
     dispute_map: Dict[str, set[str]] = {}
     for content in bureau_data.values():
@@ -53,6 +64,24 @@ def select_goodwill_candidates(
             )
 
     def consider_account(account: Dict[str, Any]) -> None:
+        strat_key = (
+            normalize_creditor_name(account.get("name", "")),
+            clean_num(account.get("account_number"))[-4:],
+        )
+        strat = strategy_index.get(strat_key)
+        if strat:
+            for field in [
+                "action_tag",
+                "priority",
+                "needs_evidence",
+                "legal_notes",
+                "flags",
+            ]:
+                if strat.get(field) is not None and not account.get(field):
+                    account[field] = strat[field]
+            if strat.get("action_tag") and strat["action_tag"].lower() != "goodwill":
+                return
+
         status_text = str(
             account.get("status")
             or account.get("account_status")
@@ -252,6 +281,12 @@ def prepare_account_summaries(
             summary["recommended_action"] = acc.get("recommended_action")
         if acc.get("flags"):
             summary["flags"] = acc.get("flags")
+        if acc.get("priority"):
+            summary["priority"] = acc.get("priority")
+        if acc.get("needs_evidence"):
+            summary["needs_evidence"] = acc.get("needs_evidence")
+        if acc.get("legal_notes"):
+            summary["legal_notes"] = acc.get("legal_notes")
 
         account_summaries.append(summary)
 

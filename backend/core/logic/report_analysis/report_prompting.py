@@ -112,6 +112,105 @@ def _split_text_by_bureau(text: str) -> Dict[str, str]:
     return segments
 
 
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate used for chunking heuristics."""
+    return len(text.split())
+
+
+_SECTION_REGEXES = {
+    "Accounts": re.compile(r"\baccounts?\b", re.IGNORECASE),
+    "Collections": re.compile(r"\bcollections?\b", re.IGNORECASE),
+    "Inquiries": re.compile(r"\binquiries?\b", re.IGNORECASE),
+}
+
+
+def _split_by_subsections(text: str) -> Dict[str, str]:
+    """Split a large bureau segment into subsection chunks."""
+    positions: Dict[str, int] = {}
+    for name, pattern in _SECTION_REGEXES.items():
+        match = pattern.search(text)
+        if match:
+            positions[name] = match.start()
+    if not positions:
+        return {"Full": text}
+    sorted_pos = sorted(positions.items(), key=lambda x: x[1])
+    segments: Dict[str, str] = {}
+    for i, (name, start) in enumerate(sorted_pos):
+        end = sorted_pos[i + 1][1] if i + 1 < len(sorted_pos) else len(text)
+        segments[name] = text[start:end]
+    return segments
+
+
+def _analyze_large_segment(
+    seg_text: str,
+    *,
+    bureau: str,
+    seg_path: Path,
+    is_identity_theft: bool,
+    strategic_context: str | None,
+    ai_client: AIClient,
+) -> tuple[dict, str | None]:
+    """Analyze an oversized bureau segment by subsections."""
+    subsections = _split_by_subsections(seg_text)
+    combined: dict = {
+        "negative_accounts": [],
+        "open_accounts_with_issues": [],
+        "positive_accounts": [],
+        "high_utilization_accounts": [],
+        "all_accounts": [],
+        "inquiries": [],
+        "personal_info_issues": [],
+        "account_inquiry_matches": [],
+        "strategic_recommendations": [],
+    }
+    error_code: str | None = None
+    for idx, (section, text_part) in enumerate(subsections.items()):
+        part_path = (
+            seg_path if idx == 0 else seg_path.with_name(f"{seg_path.stem}_{section}.json")
+        )
+        prompt, late_summary_text, inquiry_summary = _generate_prompt(
+            text_part,
+            is_identity_theft=is_identity_theft,
+            strategic_context=strategic_context,
+        )
+        data, err = analyze_bureau(
+            text_part,
+            is_identity_theft=is_identity_theft,
+            output_json_path=part_path,
+            ai_client=ai_client,
+            strategic_context=strategic_context,
+            prompt=prompt,
+            late_summary_text=late_summary_text,
+            inquiry_summary=inquiry_summary,
+        )
+        if err:
+            error_code = err
+            break
+        for key in [
+            "negative_accounts",
+            "open_accounts_with_issues",
+            "positive_accounts",
+            "high_utilization_accounts",
+            "all_accounts",
+        ]:
+            if data.get(key):
+                _merge_accounts(combined[key], data[key])
+        if data.get("inquiries"):
+            _merge_inquiries(combined["inquiries"], data["inquiries"])
+        for key in [
+            "personal_info_issues",
+            "account_inquiry_matches",
+            "strategic_recommendations",
+        ]:
+            if data.get(key):
+                combined[key].extend(data[key])
+        if data.get("summary_metrics"):
+            combined.setdefault("summary_metrics", {}).update(data["summary_metrics"])
+        if data.get("needs_human_review"):
+            combined["needs_human_review"] = True
+    return combined, error_code
+
+
 def log_bureau_failure(
     *,
     error_code: str,
@@ -599,127 +698,139 @@ def call_ai_analysis(
             else output_json_path.with_name(f"{output_json_path.stem}_{bureau}.json")
         )
         start = time.time()
+        is_large = _estimate_tokens(seg_text) > FLAGS.max_segment_tokens
         data: dict = {}
         error_code: str | None = None
-        attempt = 0
-        seg_text_attempt = seg_text
-        while attempt < 3:
-            attempt += 1
-            headings: List[tuple[str, str]] = []
-            attempt_start = time.time()
-            try:
-                prompt, late_summary_text, inquiry_summary = _generate_prompt(
-                    seg_text_attempt,
-                    is_identity_theft=is_identity_theft,
-                    strategic_context=strategic_context,
-                )
-                prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-                cache_entry = get_cached_analysis(
-                    doc_fingerprint,
-                    bureau,
-                    prompt_hash,
-                    ANALYSIS_MODEL_VERSION,
-                    prompt_version=ANALYSIS_PROMPT_VERSION,
-                    schema_version=ANALYSIS_SCHEMA_VERSION,
-                )
-                if cache_entry is not None:
-                    data = cache_entry
-                    error_code = None
-                else:
-                    data, error_code = analyze_bureau(
+        attempt = 1
+        if is_large:
+            data, error_code = _analyze_large_segment(
+                seg_text,
+                bureau=bureau,
+                seg_path=seg_path,
+                is_identity_theft=is_identity_theft,
+                strategic_context=strategic_context,
+                ai_client=ai_client,
+            )
+        else:
+            seg_text_attempt = seg_text
+            attempt = 0
+            while attempt < 3:
+                attempt += 1
+                headings: List[tuple[str, str]] = []
+                attempt_start = time.time()
+                try:
+                    prompt, late_summary_text, inquiry_summary = _generate_prompt(
                         seg_text_attempt,
                         is_identity_theft=is_identity_theft,
-                        output_json_path=seg_path,
-                        ai_client=ai_client,
                         strategic_context=strategic_context,
-                        prompt=prompt,
-                        late_summary_text=late_summary_text,
-                        inquiry_summary=inquiry_summary,
                     )
-                    headings = extract_account_headings(seg_text_attempt)
-                    if headings:
-                        account_names = set()
-                        for list_name in [
-                            "all_accounts",
-                            "negative_accounts",
-                            "open_accounts_with_issues",
-                            "positive_accounts",
-                            "high_utilization_accounts",
-                        ]:
-                            for acc in data.get(list_name, []):
-                                account_names.add(
-                                    normalize_creditor_name(acc.get("name", ""))
-                                )
-                        unmatched_norms = {
-                            norm for norm, _ in headings if norm not in account_names
-                        }
-                        unmatched_raws = [
-                            raw for norm, raw in headings if norm in unmatched_norms
-                        ]
-                        if unmatched_raws:
-                            logging.info(
-                                "negative_headings_without_accounts",
-                                extra={"unmatched_headings": unmatched_raws},
-                            )
-                        if not error_code and headings:
-                            match_rate = (
-                                (len(headings) - len(unmatched_norms)) / len(headings)
-                            ) * 100
-                            if match_rate < 70:
-                                logging.warning(
-                                    "low_recall_accounts",
-                                    extra={
-                                        "match_rate": match_rate,
-                                        "validation_errors": ["LOW_RECALL"],
-                                    },
-                                )
-                                error_code = "LOW_RECALL"
-                    if not error_code:
-                        store_cached_analysis(
-                            doc_fingerprint,
-                            bureau,
-                            prompt_hash,
-                            ANALYSIS_MODEL_VERSION,
-                            data,
-                            prompt_version=ANALYSIS_PROMPT_VERSION,
-                            schema_version=ANALYSIS_SCHEMA_VERSION,
+                    prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+                    cache_entry = get_cached_analysis(
+                        doc_fingerprint,
+                        bureau,
+                        prompt_hash,
+                        ANALYSIS_MODEL_VERSION,
+                        prompt_version=ANALYSIS_PROMPT_VERSION,
+                        schema_version=ANALYSIS_SCHEMA_VERSION,
+                    )
+                    if cache_entry is not None:
+                        data = cache_entry
+                        error_code = None
+                    else:
+                        data, error_code = analyze_bureau(
+                            seg_text_attempt,
+                            is_identity_theft=is_identity_theft,
+                            output_json_path=seg_path,
+                            ai_client=ai_client,
+                            strategic_context=strategic_context,
+                            prompt=prompt,
+                            late_summary_text=late_summary_text,
+                            inquiry_summary=inquiry_summary,
                         )
-            except Exception as exc:  # pragma: no cover - defensive
-                error_code = getattr(exc, "code", type(exc).__name__)
-                data = {}
-            attempt_latency_ms = (time.time() - attempt_start) * 1000
-            if error_code:
-                log_bureau_failure(
-                    error_code=error_code,
-                    bureau=bureau,
-                    expected_headings=len(headings),
-                    found_accounts=len(data.get("all_accounts", [])),
-                    tokens=0,
-                    latency=attempt_latency_ms,
+                        headings = extract_account_headings(seg_text_attempt)
+                        if headings:
+                            account_names = set()
+                            for list_name in [
+                                "all_accounts",
+                                "negative_accounts",
+                                "open_accounts_with_issues",
+                                "positive_accounts",
+                                "high_utilization_accounts",
+                            ]:
+                                for acc in data.get(list_name, []):
+                                    account_names.add(
+                                        normalize_creditor_name(acc.get("name", ""))
+                                    )
+                            unmatched_norms = {
+                                norm for norm, _ in headings if norm not in account_names
+                            }
+                            unmatched_raws = [
+                                raw for norm, raw in headings if norm in unmatched_norms
+                            ]
+                            if unmatched_raws:
+                                logging.info(
+                                    "negative_headings_without_accounts",
+                                    extra={"unmatched_headings": unmatched_raws},
+                                )
+                            if not error_code and headings:
+                                match_rate = (
+                                    (len(headings) - len(unmatched_norms)) / len(headings)
+                                ) * 100
+                                if match_rate < 70:
+                                    logging.warning(
+                                        "low_recall_accounts",
+                                        extra={
+                                            "match_rate": match_rate,
+                                            "validation_errors": ["LOW_RECALL"],
+                                        },
+                                    )
+                                    error_code = "LOW_RECALL"
+                        if not error_code:
+                            store_cached_analysis(
+                                doc_fingerprint,
+                                bureau,
+                                prompt_hash,
+                                ANALYSIS_MODEL_VERSION,
+                                data,
+                                prompt_version=ANALYSIS_PROMPT_VERSION,
+                                schema_version=ANALYSIS_SCHEMA_VERSION,
+                            )
+                except Exception as exc:  # pragma: no cover - defensive
+                    error_code = getattr(exc, "code", type(exc).__name__)
+                    data = {}
+                attempt_latency_ms = (time.time() - attempt_start) * 1000
+                if error_code:
+                    log_bureau_failure(
+                        error_code=error_code,
+                        bureau=bureau,
+                        expected_headings=len(headings),
+                        found_accounts=len(data.get("all_accounts", [])),
+                        tokens=0,
+                        latency=attempt_latency_ms,
+                    )
+
+                logging.info(
+                    "analysis_attempt",
+                    extra={
+                        "bureau": bureau,
+                        "attempt": attempt,
+                        "error_code": error_code or 0,
+                    },
                 )
 
-            logging.info(
-                "analysis_attempt",
-                extra={
-                    "bureau": bureau,
-                    "attempt": attempt,
-                    "error_code": error_code or 0,
-                },
-            )
-
-            if not error_code:
-                break
-            if attempt < 3:
-                time.sleep(0.5 * attempt)
-                if error_code in {"BROKEN_JSON", "TIMEOUT", "EMPTY_OUTPUT"}:
-                    seg_text_attempt = seg_text_attempt[
-                        : max(50, len(seg_text_attempt) // 2)
-                    ]
+                if not error_code:
+                    break
+                if attempt < 3:
+                    time.sleep(0.5 * attempt)
+                    if error_code in {"BROKEN_JSON", "TIMEOUT", "EMPTY_OUTPUT"}:
+                        seg_text_attempt = seg_text_attempt[
+                            : max(50, len(seg_text_attempt) // 2)
+                        ]
 
         tokens_total_in = 0
         tokens_total_out = 0
 
-        if not error_code:
+        if not error_code and not is_large:
             issues = _detect_segment_issues(seg_text, data, bureau)
             passes = 0
             while issues and passes < FLAGS.max_remediation_passes:

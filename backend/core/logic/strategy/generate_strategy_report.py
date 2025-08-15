@@ -18,6 +18,7 @@ from backend.core.logic.compliance.constants import (
 from backend.core.logic.guardrails import fix_draft_with_guardrails
 from backend.core.logic.policy import get_precedence, precedence_version
 from backend.core.logic.utils.json_utils import parse_json
+from backend.core.logic.utils.pii import mask_account_fields
 from backend.core.services.ai_client import AIClient
 from backend.policy.policy_loader import load_rulebook
 
@@ -540,5 +541,5 @@ Ensure the response is strictly valid JSON: all property names and strings in do
             ) from exc
         path = folder / "strategy.json"
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2, ensure_ascii=False)
+            json.dump(mask_account_fields(report), f, indent=2, ensure_ascii=False)
         return path

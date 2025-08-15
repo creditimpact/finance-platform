@@ -7,7 +7,9 @@ last four digits for audit/debugging purposes.
 
 from __future__ import annotations
 
+import json
 import re
+from typing import Any, Dict
 
 _EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _PHONE_RE = re.compile(r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b")
@@ -28,3 +30,9 @@ def redact_pii(text: str) -> str:
         lambda m: "****" + re.sub(r"\D", "", m.group())[-4:], redacted
     )
     return redacted
+
+
+def mask_account_fields(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy of ``data`` with account numbers and SSNs masked."""
+
+    return json.loads(redact_pii(json.dumps(data)))

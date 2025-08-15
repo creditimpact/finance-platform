@@ -8,8 +8,9 @@ from typing import Any, Mapping
 import backend.core.logic.letters.goodwill_preparation as goodwill_preparation
 import backend.core.logic.letters.goodwill_prompting as goodwill_prompting
 import backend.core.logic.letters.goodwill_rendering as goodwill_rendering
+from backend.api import config as api_config
 from backend.api.session_manager import get_session
-from backend.audit.audit import AuditLogger
+from backend.audit.audit import AuditLogger, emit_event
 from backend.core.logic.compliance.compliance_pipeline import run_compliance_pipeline
 from backend.core.logic.guardrails.summary_validator import (
     validate_structured_summaries,
@@ -21,6 +22,8 @@ from backend.core.logic.utils.pdf_ops import gather_supporting_docs
 from backend.core.models import BureauPayload, ClientInfo
 from backend.core.models.account import Account
 from backend.core.services.ai_client import AIClient
+
+from .utils import StrategyContextMissing, ensure_strategy_context
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -48,7 +51,10 @@ def _apply_strategy_fields(
         for section in payload.values():
             if isinstance(section, list):
                 for acc in section:
-                    key = (_norm(acc.get("name", "")), _last4(acc.get("account_number")))
+                    key = (
+                        _norm(acc.get("name", "")),
+                        _last4(acc.get("account_number")),
+                    )
                     strat = index.get(key)
                     if not strat:
                         continue
@@ -61,6 +67,7 @@ def _apply_strategy_fields(
                     ]:
                         if strat.get(field) is not None and not acc.get(field):
                             acc[field] = strat[field]
+
 
 # ---------------------------------------------------------------------------
 # Orchestrator functions
@@ -170,6 +177,25 @@ def generate_goodwill_letters(
 
     if strategy:
         _apply_strategy_fields(bureau_data, strategy.get("accounts", []))
+
+    all_accounts: list[Account] = []
+    for payload in bureau_data.values():
+        for section in payload.values():
+            if isinstance(section, list):
+                all_accounts.extend(
+                    Account.from_dict(a) if isinstance(a, dict) else a for a in section
+                )
+    try:
+        ensure_strategy_context(
+            all_accounts,
+            api_config.STAGE4_POLICY_ENFORCEMENT,
+        )
+    except StrategyContextMissing as exc:  # pragma: no cover - enforcement
+        emit_event(
+            "strategy_context_missing",
+            {"account_id": exc.account_id, "letter_type": "goodwill"},
+        )
+        raise
 
     goodwill_accounts = goodwill_preparation.select_goodwill_candidates(
         client_info, bureau_data, strategy=strategy

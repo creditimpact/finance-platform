@@ -8,10 +8,11 @@ from typing import Any, Mapping
 import pdfkit
 from jinja2 import Environment, FileSystemLoader
 
+from backend.api import config as api_config
 from backend.api.config import get_app_config
 from backend.api.session_manager import get_session
 from backend.assets.paths import templates_path
-from backend.audit.audit import AuditLevel, AuditLogger
+from backend.audit.audit import AuditLevel, AuditLogger, emit_event
 from backend.core.logic.compliance.rules_loader import get_neutral_phrase
 from backend.core.logic.guardrails import generate_letter_with_guardrails
 from backend.core.logic.guardrails.summary_validator import (
@@ -23,6 +24,8 @@ from backend.core.models.account import Account
 from backend.core.models.bureau import BureauPayload
 from backend.core.models.client import ClientInfo
 from backend.core.services.ai_client import AIClient
+
+from .utils import StrategyContextMissing, ensure_strategy_context
 
 env = Environment(loader=FileSystemLoader(templates_path("")))
 template = env.get_template("general_letter_template.html")
@@ -119,6 +122,15 @@ def generate_custom_letter(
     run_date: str | None = None,
     wkhtmltopdf_path: str | None = None,
 ) -> None:
+    try:
+        ensure_strategy_context([account], api_config.STAGE4_POLICY_ENFORCEMENT)
+    except StrategyContextMissing as exc:  # pragma: no cover - enforcement
+        emit_event(
+            "strategy_context_missing",
+            {"account_id": exc.account_id, "letter_type": "custom"},
+        )
+        raise
+
     client_name = client_info.get("legal_name") or client_info.get("name", "Client")
     date_str = run_date or datetime.now().strftime("%B %d, %Y")
     recipient = account.get("name", "")

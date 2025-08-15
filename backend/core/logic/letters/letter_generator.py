@@ -13,7 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Mapping
 
-from backend.audit.audit import AuditLevel, AuditLogger
+from backend.api import config as api_config
+from backend.audit.audit import AuditLevel, AuditLogger, emit_event
 from backend.core.logic.compliance.compliance_pipeline import (
     DEFAULT_DISPUTE_REASON,
     ESCALATION_NOTE,
@@ -38,6 +39,7 @@ from backend.core.services.ai_client import AIClient
 
 from .dispute_preparation import prepare_disputes_and_inquiries
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
+from .utils import StrategyContextMissing, ensure_strategy_context
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +72,10 @@ def _apply_strategy_fields(
         for section in payload.values():
             if isinstance(section, list):
                 for acc in section:
-                    key = (_norm(acc.get("name", "")), _last4(acc.get("account_number")))
+                    key = (
+                        _norm(acc.get("name", "")),
+                        _last4(acc.get("account_number")),
+                    )
                     strat = index.get(key)
                     if not strat:
                         continue
@@ -145,6 +150,17 @@ def generate_all_dispute_letters_with_ai(
     session_id = client_info.get("session_id", "")
     strategy = generate_strategy(session_id, bureau_data)
     _apply_strategy_fields(bureau_data, strategy.get("accounts", []))
+    try:
+        ensure_strategy_context(
+            strategy.get("accounts", []),
+            api_config.STAGE4_POLICY_ENFORCEMENT,
+        )
+    except StrategyContextMissing as exc:  # pragma: no cover - enforcement
+        emit_event(
+            "strategy_context_missing",
+            {"account_id": exc.account_id, "letter_type": "dispute"},
+        )
+        raise
     strategy_summaries = validate_structured_summaries(
         strategy.get("dispute_items", {})
     )

@@ -542,6 +542,9 @@ def analyze_bureau(
             acc.setdefault("confidence", confidence)
     for inq in data.get("inquiries", []):
         inq.setdefault("confidence", confidence)
+    data.setdefault("summary_metrics", {})
+    data["summary_metrics"]["stage3_tokens_in"] = _tokens_in
+    data["summary_metrics"]["stage3_tokens_out"] = _tokens_out
 
     return data, None
 
@@ -773,6 +776,10 @@ def call_ai_analysis(
         data: dict = {}
         error_code: str | None = None
         attempt = 1
+        tokens_total_in = 0
+        tokens_total_out = 0
+        cache_hit = False
+        passes = 0
         if is_large:
             data, error_code = _analyze_large_segment(
                 seg_text,
@@ -806,6 +813,7 @@ def call_ai_analysis(
                     if cache_entry is not None:
                         data = cache_entry
                         error_code = None
+                        cache_hit = True
                     else:
                         data, error_code = analyze_bureau(
                             seg_text_attempt,
@@ -816,6 +824,12 @@ def call_ai_analysis(
                             prompt=prompt,
                             late_summary_text=late_summary_text,
                             inquiry_summary=inquiry_summary,
+                        )
+                        tokens_total_in += data.get("summary_metrics", {}).get(
+                            "stage3_tokens_in", 0
+                        )
+                        tokens_total_out += data.get("summary_metrics", {}).get(
+                            "stage3_tokens_out", 0
                         )
                         headings = extract_account_headings(seg_text_attempt)
                         if headings:
@@ -899,12 +913,8 @@ def call_ai_analysis(
                             : max(50, len(seg_text_attempt) // 2)
                         ]
 
-        tokens_total_in = 0
-        tokens_total_out = 0
-
         if not error_code and not is_large:
             issues = _detect_segment_issues(seg_text, data, bureau)
-            passes = 0
             while issues and passes < FLAGS.max_remediation_passes:
                 issue_code, items = issues[0]
                 hint_text, hint_meta = _build_remediation_hint(issue_code, items)
@@ -927,6 +937,12 @@ def call_ai_analysis(
                     late_summary_text=late_summary_text,
                     inquiry_summary=inquiry_summary,
                     hints=hint_meta,
+                )
+                tokens_total_in += new_data.get("summary_metrics", {}).get(
+                    "stage3_tokens_in", 0
+                )
+                tokens_total_out += new_data.get("summary_metrics", {}).get(
+                    "stage3_tokens_out", 0
                 )
                 if new_err:
                     logging.warning(
@@ -991,6 +1007,10 @@ def call_ai_analysis(
         )
 
         latency_ms = (time.time() - start) * 1000
+        cost = (
+            tokens_total_in * _INPUT_COST_PER_TOKEN
+            + tokens_total_out * _OUTPUT_COST_PER_TOKEN
+        )
         emit_event(
             "report_segment",
             {
@@ -999,16 +1019,19 @@ def call_ai_analysis(
                 "bureau": bureau,
                 "prompt_version": ANALYSIS_PROMPT_VERSION,
                 "schema_version": ANALYSIS_SCHEMA_VERSION,
-                "tokens_in": tokens_total_in,
-                "tokens_out": tokens_total_out,
+                "stage3_tokens_in": tokens_total_in,
+                "stage3_tokens_out": tokens_total_out,
                 "latency_ms": latency_ms,
+                "cost_est": cost,
+                "cache_hit": cache_hit,
                 "error_code": error_code or 0,
+                "confidence": data.get("confidence", 0.0),
+                "needs_human_review": data.get("needs_human_review", False),
+                "missing_bureaus": missing_bureaus,
+                "repair_count": passes,
+                "remediation_applied": passes > 0,
                 "attempts": attempt,
             },
-        )
-        cost = (
-            tokens_total_in * _INPUT_COST_PER_TOKEN
-            + tokens_total_out * _OUTPUT_COST_PER_TOKEN
         )
         log_ai_request(tokens_total_in, tokens_total_out, cost, latency_ms)
 

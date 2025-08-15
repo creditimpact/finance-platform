@@ -32,13 +32,13 @@ from backend.core.logic.utils.text_parsing import (
 from backend.core.services.ai_client import AIClient
 
 from .analysis_cache import get_cached_analysis, store_cached_analysis
+from .confidence import combine_confidence
 from .extractors import (
     extract_account_number_masks,
     extract_account_statuses,
     extract_dofd,
     extract_inquiry_dates,
 )
-from .confidence import combine_confidence
 
 _INPUT_COST_PER_TOKEN = 0.01 / 1000
 _OUTPUT_COST_PER_TOKEN = 0.03 / 1000
@@ -101,6 +101,7 @@ def _validate_analysis_schema(data: dict) -> dict:
 
 # Example object matching the analysis schema used in prompts
 _SCHEMA_EXAMPLE = json.dumps(_validate_analysis_schema({}), indent=2)
+
 
 def _split_text_by_bureau(text: str) -> Dict[str, str]:
     """Return mapping of bureau name to its text segment."""
@@ -173,7 +174,9 @@ def _analyze_large_segment(
     error_code: str | None = None
     for idx, (section, text_part) in enumerate(subsections.items()):
         part_path = (
-            seg_path if idx == 0 else seg_path.with_name(f"{seg_path.stem}_{section}.json")
+            seg_path
+            if idx == 0
+            else seg_path.with_name(f"{seg_path.stem}_{section}.json")
         )
         prompt, late_summary_text, inquiry_summary = _generate_prompt(
             text_part,
@@ -376,7 +379,7 @@ def analyze_bureau(
     ``expected_account_names`` or ``extra_instructions``. The function now
     returns ``(data, error_code)``.
     """
-    tokens_in = tokens_out = 0
+    _tokens_in = _tokens_out = 0
     hints = hints or {}
     expected_accounts = hints.get("expected_account_names") or []
     extra_instructions = hints.get("extra_instructions")
@@ -387,9 +390,7 @@ def analyze_bureau(
     if extra_instructions:
         prompt += "\n\n" + extra_instructions
     try:
-        prompt_with_schema = (
-            prompt + "\n\nJSON schema exemplar:\n" + _SCHEMA_EXAMPLE
-        )
+        prompt_with_schema = prompt + "\n\nJSON schema exemplar:\n" + _SCHEMA_EXAMPLE
         response = ai_client.chat_completion(
             model=ANALYSIS_MODEL_VERSION,
             messages=[{"role": "user", "content": prompt_with_schema}],
@@ -397,10 +398,10 @@ def analyze_bureau(
         )
         usage = getattr(response, "usage", None)
         if usage:
-            tokens_in = getattr(usage, "prompt_tokens", 0) or getattr(
+            _tokens_in = getattr(usage, "prompt_tokens", 0) or getattr(
                 usage, "input_tokens", 0
             )
-            tokens_out = getattr(usage, "completion_tokens", 0) or getattr(
+            _tokens_out = getattr(usage, "completion_tokens", 0) or getattr(
                 usage, "output_tokens", 0
             )
     except TimeoutError:
@@ -457,9 +458,7 @@ def analyze_bureau(
     # ------------------------------------------------------------------
     headings = extract_account_headings(text)
     if expected_accounts:
-        headings.extend(
-            (normalize_creditor_name(a), a) for a in expected_accounts
-        )
+        headings.extend((normalize_creditor_name(a), a) for a in expected_accounts)
     if headings:
         account_names = set()
         for list_name in [
@@ -802,8 +801,7 @@ def call_ai_analysis(
                         bureau,
                         prompt_hash,
                         ANALYSIS_MODEL_VERSION,
-                        prompt_version=ANALYSIS_PROMPT_VERSION,
-                        schema_version=ANALYSIS_SCHEMA_VERSION,
+                        ANALYSIS_SCHEMA_VERSION,
                     )
                     if cache_entry is not None:
                         data = cache_entry
@@ -834,7 +832,9 @@ def call_ai_analysis(
                                         normalize_creditor_name(acc.get("name", ""))
                                     )
                             unmatched_norms = {
-                                norm for norm, _ in headings if norm not in account_names
+                                norm
+                                for norm, _ in headings
+                                if norm not in account_names
                             }
                             unmatched_raws = [
                                 raw for norm, raw in headings if norm in unmatched_norms
@@ -846,7 +846,8 @@ def call_ai_analysis(
                                 )
                             if not error_code and headings:
                                 match_rate = (
-                                    (len(headings) - len(unmatched_norms)) / len(headings)
+                                    (len(headings) - len(unmatched_norms))
+                                    / len(headings)
                                 ) * 100
                                 if match_rate < 70:
                                     logging.warning(
@@ -864,8 +865,7 @@ def call_ai_analysis(
                                 prompt_hash,
                                 ANALYSIS_MODEL_VERSION,
                                 data,
-                                prompt_version=ANALYSIS_PROMPT_VERSION,
-                                schema_version=ANALYSIS_SCHEMA_VERSION,
+                                ANALYSIS_SCHEMA_VERSION,
                             )
                 except Exception as exc:  # pragma: no cover - defensive
                     error_code = getattr(exc, "code", type(exc).__name__)
@@ -911,7 +911,11 @@ def call_ai_analysis(
                 rem_prompt = prompt + ("\n\n" + hint_text if hint_text else "")
                 logging.info(
                     "analysis_remediation",
-                    extra={"bureau": bureau, "issue": issue_code, "repair_step": passes + 1},
+                    extra={
+                        "bureau": bureau,
+                        "issue": issue_code,
+                        "repair_step": passes + 1,
+                    },
                 )
                 new_data, new_err = analyze_bureau(
                     seg_text,

@@ -1,11 +1,20 @@
 import json
+import time
 from typing import Any, List, Tuple
 
+from backend.analytics.analytics_tracker import (
+    log_ai_request,
+    log_guardrail_fix,
+    log_policy_violations_prevented,
+)
 from backend.api.session_manager import get_session, update_session
 from backend.core.logic.compliance.rule_checker import RuleViolation, check_letter
 from backend.core.logic.compliance.rules_loader import load_rules
 from backend.core.models.letter import LetterContext
 from backend.core.services.ai_client import AIClient
+
+_INPUT_COST_PER_TOKEN = 0.01 / 1000
+_OUTPUT_COST_PER_TOKEN = 0.03 / 1000
 
 
 def _build_system_prompt() -> str:
@@ -63,17 +72,27 @@ def generate_letter_with_guardrails(
     violations: List[RuleViolation] = []
     while iterations < 2:
         iterations += 1
+        start = time.perf_counter()
         response = ai_client.chat_completion(
             messages=messages,
             temperature=0.3,
         )
+        latency_ms = (time.perf_counter() - start) * 1000
+        usage = getattr(response, "usage", None)
+        tokens_in = getattr(usage, "prompt_tokens", 0)
+        tokens_out = getattr(usage, "completion_tokens", 0)
+        cost = tokens_in * _INPUT_COST_PER_TOKEN + tokens_out * _OUTPUT_COST_PER_TOKEN
+        log_ai_request(tokens_in, tokens_out, cost, latency_ms)
         text = response.choices[0].message.content.strip()
         if text.startswith("```"):
             text = text.replace("```", "").strip()
         text, violations = check_letter(text, state, context)
+        if violations:
+            log_policy_violations_prevented(len(violations))
         critical = [v for v in violations if v["severity"] == "critical"]
         if not critical or iterations >= 2:
             break
+        log_guardrail_fix()
         rule_list = ", ".join(v["rule_id"] for v in critical)
         messages.append({"role": "assistant", "content": text})
         messages.append(
@@ -109,6 +128,8 @@ def fix_draft_with_guardrails(
     except Exception:
         pass
     text, violations = check_letter(draft_text, state, context)
+    if violations:
+        log_policy_violations_prevented(len(violations))
     if original_fields:
         idx = text.rfind("}")
         if idx != -1:
@@ -120,6 +141,7 @@ def fix_draft_with_guardrails(
         {"role": "assistant", "content": text},
     ]
     while critical and iterations < 2:
+        log_guardrail_fix()
         rule_list = ", ".join(v["rule_id"] for v in critical)
         messages.append(
             {
@@ -127,14 +149,23 @@ def fix_draft_with_guardrails(
                 "content": f"The draft contains violations of {rule_list}. Please fix them and return a compliant version.",
             }
         )
+        start = time.perf_counter()
         response = ai_client.chat_completion(
             messages=messages,
             temperature=0,
         )
+        latency_ms = (time.perf_counter() - start) * 1000
+        usage = getattr(response, "usage", None)
+        tokens_in = getattr(usage, "prompt_tokens", 0)
+        tokens_out = getattr(usage, "completion_tokens", 0)
+        cost = tokens_in * _INPUT_COST_PER_TOKEN + tokens_out * _OUTPUT_COST_PER_TOKEN
+        log_ai_request(tokens_in, tokens_out, cost, latency_ms)
         text = response.choices[0].message.content.strip()
         if text.startswith("```"):
             text = text.replace("```", "").strip()
         text, violations = check_letter(text, state, context)
+        if violations:
+            log_policy_violations_prevented(len(violations))
         if original_fields:
             idx = text.rfind("}")
             if idx != -1:

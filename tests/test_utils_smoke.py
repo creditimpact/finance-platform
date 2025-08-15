@@ -34,3 +34,6 @@ def test_utils_smoke(tmp_path: Path):
     assert red.count("[REDACTED]") == 2
     assert "***-**-6789" in red
     assert "****9999" in red
+    red2 = redact_pii("ssn 123 45 6789 account 1234-5678-9012-3456")
+    assert "***-**-6789" in red2
+    assert "****3456" in red2

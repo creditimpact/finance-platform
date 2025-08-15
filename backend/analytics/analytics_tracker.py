@@ -88,6 +88,7 @@ def log_cache_hit() -> None:
     """Record a classification cache hit."""
 
     _log_cache_event("hits")
+    emit_counter("cache_hit")
 
 
 def log_cache_miss() -> None:
@@ -117,9 +118,24 @@ def reset_cache_counters() -> None:
     _OPS = 0
 
 
+def log_policy_violations_prevented(count: int) -> None:
+    """Record number of policy violations caught by guardrails."""
+
+    emit_counter("policy_violations_prevented_count", count)
+
+
+def log_guardrail_fix() -> None:
+    """Record that guardrails triggered a follow-up fix."""
+
+    emit_counter("guardrail_fix_count")
+
+
 # AI usage helpers -----------------------------------------------------------
 
-def log_ai_request(tokens_in: int, tokens_out: int, cost: float, latency_ms: float) -> None:
+
+def log_ai_request(
+    tokens_in: int, tokens_out: int, cost: float, latency_ms: float
+) -> None:
     """Record tokens, estimated cost, and latency for an AI call."""
 
     _AI_METRICS["tokens_in"] += tokens_in

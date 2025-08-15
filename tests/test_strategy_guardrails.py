@@ -1,4 +1,6 @@
 import json
+
+from backend.core.cache import strategy_cache
 from backend.core.logic.strategy.generate_strategy_report import StrategyGenerator
 from tests.helpers.fake_ai_client import FakeAIClient
 
@@ -7,6 +9,7 @@ def test_harsh_recommendation_softened_and_action_tag_preserved(tmp_path, monkey
     monkeypatch.setattr(
         "backend.api.session_manager.SESSION_FILE", tmp_path / "sessions.json"
     )
+    strategy_cache.reset_cache()
     fake = FakeAIClient()
     initial = {
         "overview": "",

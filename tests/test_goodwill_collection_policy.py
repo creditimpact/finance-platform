@@ -1,6 +1,7 @@
 from backend.core.logic.letters.generate_goodwill_letters import (
     generate_goodwill_letter_with_ai,
 )
+from backend.analytics.analytics_tracker import get_counters, reset_counters
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
@@ -42,6 +43,8 @@ def test_block_goodwill_for_collection(monkeypatch, tmp_path):
     strategy = {"accounts": accounts}
     client = {"name": "Tester", "session_id": "s1"}
 
+    reset_counters()
+
     generate_goodwill_letter_with_ai(
         "Collector",
         accounts,
@@ -53,3 +56,5 @@ def test_block_goodwill_for_collection(monkeypatch, tmp_path):
 
     assert events[-1][1]["policy_override_reason"] == "collection_no_goodwill"
     assert not any(tmp_path.iterdir())
+    counters = get_counters()
+    assert counters["policy_override_reason.collection_no_goodwill"] == 1

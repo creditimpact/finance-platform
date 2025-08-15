@@ -101,6 +101,18 @@ def test_policy_based_overrides(monkeypatch):
     counters = get_counters()
     assert counters["strategy.rule_hit_total"] == 2
     assert counters["strategy.policy_override_total"] == 2
+    assert (
+        counters[
+            f"policy_override_reason.{acc1['policy_override_reason'].replace(' ', '_')}"
+        ]
+        == 1
+    )
+    assert (
+        counters[
+            f"policy_override_reason.{acc2['policy_override_reason'].replace(' ', '_')}"
+        ]
+        == 1
+    )
 
     acc_logs = audit.data["accounts"]
     assert acc_logs["1"][0]["rule_hits"] == ["no_goodwill_on_collections"]

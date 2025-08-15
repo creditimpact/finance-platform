@@ -5,6 +5,7 @@ from typing import Any, List, Tuple
 from backend.analytics.analytics_tracker import (
     log_ai_request,
     log_guardrail_fix,
+    log_letter_without_strategy,
     log_policy_violations_prevented,
 )
 from backend.api.session_manager import get_session, update_session
@@ -76,6 +77,7 @@ def generate_letter_with_guardrails(
             _get_val(context, "debt_type") and _get_val(context, "dispute_reason")
         )
     ):
+        log_letter_without_strategy()
         if not api_config.ALLOW_CUSTOM_LETTERS_WITHOUT_STRATEGY:
             return "strategy_context_required", [], 0
         emit_event("strategy_applied", {"strategy_applied": False})
@@ -109,7 +111,7 @@ def generate_letter_with_guardrails(
         critical = [v for v in violations if v["severity"] == "critical"]
         if not critical or iterations >= 2:
             break
-        log_guardrail_fix()
+        log_guardrail_fix(letter_type)
         rule_list = ", ".join(v["rule_id"] for v in critical)
         messages.append({"role": "assistant", "content": text})
         messages.append(
@@ -158,7 +160,7 @@ def fix_draft_with_guardrails(
         {"role": "assistant", "content": text},
     ]
     while critical and iterations < 2:
-        log_guardrail_fix()
+        log_guardrail_fix(letter_type)
         rule_list = ", ".join(v["rule_id"] for v in critical)
         messages.append(
             {

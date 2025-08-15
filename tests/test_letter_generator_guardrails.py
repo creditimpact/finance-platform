@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from backend.analytics.analytics_tracker import get_counters, reset_counters
 from backend.api.session_manager import get_session, update_session
 from backend.core.logic.guardrails import (
     fix_draft_with_guardrails,
@@ -13,6 +14,7 @@ from tests.helpers.fake_ai_client import FakeAIClient
 
 
 def test_autofix_and_no_raw_explanation(monkeypatch, tmp_path):
+    reset_counters()
     session_id = "sess-test"
     structured = {
         "account_id": "1",
@@ -38,6 +40,9 @@ def test_autofix_and_no_raw_explanation(monkeypatch, tmp_path):
     stored = session["letters_generated"][0]["text"]
     assert "I admit" not in stored
     assert "123-45-6789" not in stored
+    counters = get_counters()
+    assert counters["policy_violations_prevented_count"] >= 1
+    assert counters["guardrail_fix_count"] == 1
 
 
 def test_state_clause_added(monkeypatch):

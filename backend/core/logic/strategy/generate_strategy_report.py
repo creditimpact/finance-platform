@@ -5,22 +5,18 @@ from typing import Any, Dict
 
 from jsonschema import Draft7Validator, ValidationError
 
-from backend.audit.audit import AuditLogger, emit_event
 from backend.analytics.analytics_tracker import emit_counter
+from backend.audit.audit import AuditLogger, emit_event
+from backend.core.cache.strategy_cache import get_cached_strategy, store_cached_strategy
 from backend.core.logic.compliance.constants import (
     StrategistFailureReason,
     normalize_action_tag,
 )
 from backend.core.logic.guardrails import fix_draft_with_guardrails
+from backend.core.logic.policy import get_precedence, precedence_version
 from backend.core.logic.utils.json_utils import parse_json
 from backend.core.services.ai_client import AIClient
-from backend.core.logic.policy import get_precedence, precedence_version
 from backend.policy.policy_loader import load_rulebook
-
-from backend.core.cache.strategy_cache import (
-    get_cached_strategy,
-    store_cached_strategy,
-)
 
 STRATEGY_MODEL_VERSION = "gpt-4"
 STRATEGY_PROMPT_VERSION = 1
@@ -71,7 +67,10 @@ class StrategyGenerator:
             else ""
         )
 
-        cls_serializable = {acc_id: getattr(cls, "classification", cls) for acc_id, cls in (classification_map or {}).items()}
+        cls_serializable = {
+            acc_id: getattr(cls, "classification", cls)
+            for acc_id, cls in (classification_map or {}).items()
+        }
         cache_entry = get_cached_strategy(
             bureau_data,
             stage_2_5_data or {},
@@ -82,7 +81,6 @@ class StrategyGenerator:
         )
         if cache_entry is not None:
             return cache_entry
-
 
         policy_context: Dict[str, Dict[str, Any]] = {}
         rule_policies: Dict[str, Dict[str, Dict[str, list[str]]]] = {}
@@ -123,7 +121,9 @@ class StrategyGenerator:
                 policy_context.setdefault(acc_id, {}).update(
                     {
                         "legal_safe_summary": data.get("legal_safe_summary"),
-                        "suggested_dispute_frame": data.get("suggested_dispute_frame", ""),
+                        "suggested_dispute_frame": data.get(
+                            "suggested_dispute_frame", ""
+                        ),
                         "rule_hits": data.get("rule_hits", []),
                         "needs_evidence": data.get("needs_evidence", []),
                         "red_flags": data.get("red_flags", []),
@@ -197,11 +197,7 @@ Ensure the response is strictly valid JSON: all property names and strings in do
             parsed, error_reason = parse_json(content)
             if not raw_content:
                 current_reason = StrategistFailureReason.EMPTY_OUTPUT
-            elif (
-                error_reason is not None
-                or not isinstance(parsed, dict)
-                or not parsed
-            ):
+            elif error_reason is not None or not isinstance(parsed, dict) or not parsed:
                 current_reason = StrategistFailureReason.UNRECOGNIZED_FORMAT
             elif not expected_keys.issubset(parsed):
                 current_reason = StrategistFailureReason.SCHEMA_ERROR
@@ -252,11 +248,10 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                     "prohibited_admission_detected",
                     data.get("prohibited_admission_detected", False),
                 )
+                acc.setdefault("rulebook_version", data.get("rulebook_version", ""))
                 acc.setdefault(
-                    "rulebook_version", data.get("rulebook_version", "")
-                )
-                acc.setdefault(
-                    "precedence_version", data.get("precedence_version", precedence_version)
+                    "precedence_version",
+                    data.get("precedence_version", precedence_version),
                 )
 
                 policy = rule_policies.get(acc_id, {})
@@ -272,7 +267,9 @@ Ensure the response is strictly valid JSON: all property names and strings in do
                 if forbidden_actions:
                     acc.setdefault("forbidden_actions", forbidden_actions)
                 if rule_flags:
-                    acc["flags"] = list(dict.fromkeys(acc.get("flags", []) + rule_flags))
+                    acc["flags"] = list(
+                        dict.fromkeys(acc.get("flags", []) + rule_flags)
+                    )
 
                 recommendation = acc.get("recommendation", "")
                 rec_lower = recommendation.lower()
@@ -495,15 +492,22 @@ Ensure the response is strictly valid JSON: all property names and strings in do
             acc.setdefault("priority", "")
             acc.setdefault("legal_notes", [])
             acc.setdefault("enforced_rules", acc.get("enforced_rules", []))
-            acc.setdefault("policy_override_reason", acc.get("policy_override_reason", ""))
+            acc.setdefault(
+                "policy_override_reason", acc.get("policy_override_reason", "")
+            )
 
             # Ensure optional enforcement flag exists
             acc.setdefault("policy_override", acc.get("policy_override", False))
 
         try:
-            _VALIDATOR.validate(report)
+            report_clean = dict(report)
+            report_clean.pop("prompt_version", None)
+            report_clean.pop("schema_version", None)
+            _VALIDATOR.validate(report_clean)
         except ValidationError as exc:
-            raise ValueError(f"strategy schema validation failed: {exc.message}") from exc
+            raise ValueError(
+                f"strategy schema validation failed: {exc.message}"
+            ) from exc
         path = folder / "strategy.json"
         with open(path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2, ensure_ascii=False)

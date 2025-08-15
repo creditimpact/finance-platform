@@ -11,8 +11,8 @@ import re
 
 _EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _PHONE_RE = re.compile(r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b")
-_SSN_RE = re.compile(r"\b(?:\d{3}-\d{2}-\d{4}|\d{9})\b")
-_ACCOUNT_RE = re.compile(r"\b\d{12,16}\b")
+_SSN_RE = re.compile(r"\b(?:\d{3}[- ]\d{2}[- ]\d{4}|\d{9})\b")
+_ACCOUNT_RE = re.compile(r"\b(?:\d[ -]?){11,15}\d\b")
 
 
 def redact_pii(text: str) -> str:
@@ -24,5 +24,7 @@ def redact_pii(text: str) -> str:
     redacted = _SSN_RE.sub(
         lambda m: "***-**-" + re.sub(r"\D", "", m.group())[-4:], redacted
     )
-    redacted = _ACCOUNT_RE.sub(lambda m: "****" + m.group()[-4:], redacted)
+    redacted = _ACCOUNT_RE.sub(
+        lambda m: "****" + re.sub(r"\D", "", m.group())[-4:], redacted
+    )
     return redacted

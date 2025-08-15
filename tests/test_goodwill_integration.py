@@ -8,7 +8,7 @@ def test_orchestrator_invokes_compliance(monkeypatch, tmp_path):
     monkeypatch.setattr(
         generate_goodwill_letters.goodwill_preparation,
         "select_goodwill_candidates",
-        lambda client_info, bureau_data: {
+        lambda client_info, bureau_data, **_: {
             "Bank": [{"name": "Bank", "account_number": "1", "status": "Open"}]
         },
     )

@@ -47,6 +47,17 @@ ANALYSIS_PROMPT_VERSION = 2
 ANALYSIS_SCHEMA_VERSION = 1
 
 
+# Allow for odd spacing, lowercase headers, and page-break markers when
+# locating bureau sections in raw report text.
+_BUREAU_REGEXES = {
+    bureau: re.compile(
+        r"(?:^|\n|\f)\s*" + r"[\s-]*".join(re.escape(ch) for ch in bureau) + r"\b",
+        re.IGNORECASE,
+    )
+    for bureau in BUREAUS
+}
+
+
 def _apply_defaults(data: dict, schema: dict) -> None:
     """Recursively populate defaults based on ``schema``."""
     for key, subschema in schema.get("properties", {}).items():
@@ -84,8 +95,8 @@ def _validate_analysis_schema(data: dict) -> dict:
 def _split_text_by_bureau(text: str) -> Dict[str, str]:
     """Return mapping of bureau name to its text segment."""
     positions: Dict[str, int] = {}
-    for bureau in BUREAUS:
-        match = re.search(bureau, text, re.I)
+    for bureau, pattern in _BUREAU_REGEXES.items():
+        match = pattern.search(text)
         if match:
             positions[bureau] = match.start()
     if not positions:

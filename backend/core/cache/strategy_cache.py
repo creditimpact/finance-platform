@@ -4,6 +4,8 @@ import random
 import time
 from typing import Any, Dict
 
+from backend.analytics.analytics_tracker import emit_counter
+
 _MIN_TTL_SEC = 14 * 24 * 60 * 60
 _MAX_TTL_SEC = 30 * 24 * 60 * 60
 
@@ -39,14 +41,19 @@ def get_cached_strategy(
     prompt_version: int,
     schema_version: int,
 ) -> Dict[str, Any] | None:
-    key = _hash_payload(stage2, stage2_5, stage3, model_version, prompt_version, schema_version)
+    key = _hash_payload(
+        stage2, stage2_5, stage3, model_version, prompt_version, schema_version
+    )
     item = _CACHE.get(key)
     if not item:
+        emit_counter("strategy.cache_miss")
         return None
     data, expires = item
     if _now() > expires:
         _CACHE.pop(key, None)
+        emit_counter("strategy.cache_miss")
         return None
+    emit_counter("strategy.cache_hit")
     return data
 
 
@@ -62,8 +69,11 @@ def store_cached_strategy(
 ) -> None:
     ttl = random.randint(_MIN_TTL_SEC, _MAX_TTL_SEC)
     expires = _now() + ttl
-    key = _hash_payload(stage2, stage2_5, stage3, model_version, prompt_version, schema_version)
+    key = _hash_payload(
+        stage2, stage2_5, stage3, model_version, prompt_version, schema_version
+    )
     _CACHE[key] = (result, expires)
+    emit_counter("strategy.cache_store")
 
 
 def reset_cache() -> None:

@@ -34,3 +34,9 @@ Stage 4 executes the final LLM strategy with policy enforcement and caching.
 - `stage4_cache_hits_total`
 - `stage4_guardrail_violations_total`
 - `stage4_latency_ms`
+- `strategy.cache_hit`
+- `strategy.cache_miss`
+
+## Monitoring
+- Dashboards should track `tokens_in`, `tokens_out`, `cost`, and `latency_ms` from
+  `log_ai_request` to alert on unusual latency or cost spikes.

@@ -1,0 +1,24 @@
+fraud_dispute:
+  neutral_client_sentence: ""
+bureau_dispute:
+  neutral_client_sentence: ""
+inquiry_dispute:
+  neutral_client_sentence: ""
+debt_validation:
+  neutral_client_sentence: ""
+obsolescence:
+  neutral_client_sentence: ""
+mov:
+  neutral_client_sentence: ""
+medical_dispute:
+  neutral_client_sentence: ""
+direct_dispute:
+  neutral_client_sentence: ""
+goodwill:
+  neutral_client_sentence: ""
+pay_for_delete:
+  neutral_client_sentence: ""
+cease_and_desist:
+  neutral_client_sentence: ""
+custom_letter:
+  neutral_client_sentence: ""

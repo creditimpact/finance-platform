@@ -4,6 +4,5 @@
 {% include "partials/account_ref.html" %}
 {% if safe_client_sentence %}<p>{{ safe_client_sentence }}</p>{% endif %}
 <p>{{ legal_safe_summary }}</p>
-<p>{{ months_since_last_late }}</p>
-<p>{{ account_history_good }}</p>
+<p>{{ is_identity_theft }}</p>
 {% endblock %}

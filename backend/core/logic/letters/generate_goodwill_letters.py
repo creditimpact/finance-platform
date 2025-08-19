@@ -8,6 +8,7 @@ from typing import Any, Mapping
 import backend.core.logic.letters.goodwill_preparation as goodwill_preparation
 import backend.core.logic.letters.goodwill_prompting as goodwill_prompting
 import backend.core.logic.letters.goodwill_rendering as goodwill_rendering
+from backend.core.letters.router import select_template
 from backend.api import config as api_config
 from backend.api.session_manager import get_session
 from backend.audit.audit import AuditLogger, emit_event
@@ -160,6 +161,7 @@ def generate_goodwill_letter_with_ai(
 
     _, doc_names, _ = gather_supporting_docs(session_id or "")
 
+    decision = select_template("goodwill", {"creditor": creditor})
     goodwill_rendering.render_goodwill_letter(
         creditor,
         gpt_data,
@@ -171,6 +173,7 @@ def generate_goodwill_letter_with_ai(
         audit=audit,
         compliance_fn=run_compliance_pipeline,
         pdf_fn=pdf_renderer.render_html_to_pdf,
+        template_path=decision.template_path or "goodwill_letter_template.html",
     )
 
 

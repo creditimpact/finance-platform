@@ -8,6 +8,7 @@ from backend.core.logic.strategy.fallback_manager import determine_fallback_acti
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.models.bureau import BureauPayload
 from backend.core.models.client import ClientInfo
+from backend.core.letters.router import select_template
 
 
 def dedupe_disputes(
@@ -50,6 +51,10 @@ def prepare_disputes_and_inquiries(
     account identifiers to account metadata.
     """
 
+    decision = select_template("dispute", {"bureau": bureau_name})
+    log_messages.append(
+        f"[{bureau_name}] Router selected template '{decision.template_path}'"
+    )
     disputes: List[dict] = []
     for d in payload.get("disputes", []):
         action = str(d.get("action_tag") or d.get("recommended_action") or "").lower()

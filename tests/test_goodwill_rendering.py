@@ -31,6 +31,7 @@ def test_rendering_calls_compliance_and_pdf(tmp_path):
         ai_client=FakeAIClient(),
         compliance_fn=fake_compliance,
         pdf_fn=fake_pdf,
+        template_path="goodwill_letter_template.html",
     )
     assert "compliance" in html_called
     assert "Doc1.pdf" in html_called["compliance"]
@@ -54,6 +55,7 @@ def test_rendering_calls_compliance_and_pdf(tmp_path):
         tmp_path,
         doc_names=["Doc1.pdf"],
         ai_client=FakeAIClient(),
+        template_path="goodwill_letter_template.html",
     )
     assert "compliance" in html_called
     assert "Doc1.pdf" in html_called["compliance"]

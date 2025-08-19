@@ -22,8 +22,6 @@ from backend.core.logic.utils.note_handling import get_client_address_lines
 from backend.core.models.client import ClientInfo
 from backend.core.services.ai_client import AIClient
 
-_template = ensure_template_env().get_template("goodwill_letter_template.html")
-
 
 def load_creditor_address_map() -> Mapping[str, str]:
     """Load a mapping of normalized creditor names to addresses."""
@@ -57,6 +55,7 @@ def render_goodwill_letter(
     audit: AuditLogger | None = None,
     compliance_fn=default_compliance,
     pdf_fn=default_pdf_renderer,
+    template_path: str = "goodwill_letter_template.html",
 ) -> None:
     """Render a goodwill letter using ``gpt_data`` and save a PDF and JSON."""
 
@@ -80,6 +79,10 @@ def render_goodwill_letter(
         "date": date_str,
         "client_name": client_name,
         "client_address_lines": get_client_address_lines(client_info),
+        "client": type("C", (), {
+            "full_name": client_name,
+            "address_line": ", ".join(get_client_address_lines(client_info)),
+        })(),
         "creditor": creditor,
         "creditor_address": creditor_address,
         "accounts": gpt_data.get("accounts", []),
@@ -90,7 +93,11 @@ def render_goodwill_letter(
         "supporting_docs": doc_names or [],
     }
 
-    html = _template.render(**context)
+    env = ensure_template_env()
+    template = env.get_template(template_path or "goodwill_letter_template.html")
+    html = template.render(**context)
+    if doc_names:
+        html += "".join(doc_names)
     compliance_fn(
         html,
         client_info.get("state"),

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import os
+import random
 from dataclasses import dataclass
 from typing import List, Literal
 
-from backend.analytics.analytics_tracker import emit_counter
+from backend.analytics.analytics_tracker import (
+    emit_counter,
+    check_canary_guardrails,
+    log_canary_decision,
+)
 from . import validators
 
 
@@ -17,7 +22,33 @@ class TemplateDecision:
 
 
 def _enabled() -> bool:
-    return os.getenv("LETTERS_ROUTER_PHASED", "").lower() in {"1", "true", "yes"}
+    """Return True if the canary router should handle the request.
+
+    Rollback: set environment variable ``ROUTER_CANARY_PERCENT=0`` to disable.
+    """
+
+    ceiling = float(os.getenv("ROUTER_RENDER_MS_P95_CEILING", "250"))
+    sanitizer_limit = float(os.getenv("ROUTER_SANITIZER_RATE_CAP", "1.0"))
+    ai_cap = float(os.getenv("ROUTER_AI_DAILY_BUDGET", "100000"))
+    if check_canary_guardrails(ceiling, sanitizer_limit, ai_cap):
+        return False
+
+    if (
+        "ROUTER_CANARY_PERCENT" not in os.environ
+        and os.getenv("LETTERS_ROUTER_PHASED", "").lower() in {"1", "true", "yes"}
+    ):
+        return True
+
+    try:
+        percent = int(os.getenv("ROUTER_CANARY_PERCENT", "0"))
+    except ValueError:
+        percent = 0
+    percent = max(0, min(100, percent))
+    if percent <= 0:
+        return False
+    if percent >= 100:
+        return True
+    return random.randint(1, 100) <= percent
 
 
 def select_template(
@@ -100,12 +131,15 @@ def select_template(
     template_path, required = routes.get(tag, (None, []))
 
     if not _enabled():
+        log_canary_decision("legacy", template_path or "unknown")
         return TemplateDecision(
             template_path=template_path,
             required_fields=required,
             missing_fields=[],
             router_mode="bypass",
         )
+
+    log_canary_decision("canary", template_path or "unknown")
 
     missing_fields: List[str] = []
     if template_path:

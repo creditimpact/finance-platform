@@ -48,6 +48,7 @@ def populate_required_fields(
     """
 
     tag = str(account.get("action_tag") or "").lower()
+    strat = strat or {}
 
     # Basic collectors/furnishers -------------------------------------------------
     if tag in {"debt_validation", "pay_for_delete", "cease_and_desist"}:
@@ -55,9 +56,32 @@ def populate_required_fields(
 
     if tag == "direct_dispute":
         account.setdefault("furnisher_address", account.get("address"))
+        account.setdefault("creditor_name", account.get("name"))
+
+    if tag == "fraud_dispute":
+        account.setdefault("creditor_name", account.get("name"))
+        account.setdefault("is_identity_theft", True)
+        if strat.get("ftc_report_id") is not None and not account.get("ftc_report_id"):
+            account["ftc_report_id"] = strat["ftc_report_id"]
+
+    if tag in {"bureau_dispute", "inquiry_dispute", "medical_dispute"}:
+        account.setdefault("creditor_name", account.get("name"))
+        for field in ["account_number_masked", "bureau", "legal_safe_summary"]:
+            if strat.get(field) is not None and not account.get(field):
+                account[field] = strat[field]
+        if tag == "inquiry_dispute":
+            account.setdefault(
+                "inquiry_creditor_name",
+                account.get("creditor_name") or account.get("name"),
+            )
+            if account.get("date") and not account.get("inquiry_date"):
+                account["inquiry_date"] = account["date"]
+        if tag == "medical_dispute":
+            if strat.get("amount") is not None and not account.get("amount"):
+                account["amount"] = strat["amount"]
+            account.setdefault("medical_status", account.get("status"))
 
     # Strategy‑provided fields -----------------------------------------------------
-    strat = strat or {}
     if tag == "pay_for_delete" and strat.get("offer_terms") is not None:
         account.setdefault("offer_terms", strat.get("offer_terms"))
 

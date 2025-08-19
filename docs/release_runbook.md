@@ -1,0 +1,39 @@
+# Author Letters Pipeline Release Runbook
+
+This runbook describes how to ship a safe change to the author letters pipeline.
+
+## Overview
+
+```mermaid
+flowchart LR
+    C[Commit] --> S[Staging batch]
+    S --> K[Canary]
+    K --> P[Full production]
+    P --> R{SLO met?}
+    R -- no --> B[Rollback]
+```
+
+## Staging Batch
+
+1. Merge the change to `main`.
+2. Build and push the container.
+3. Run a batch on staging data.
+4. Verify logs and sample outputs.
+
+## Canary Steps
+
+1. Deploy to 5% of traffic.
+2. Monitor error rates and latency for 30 minutes.
+3. If healthy, expand to 50%, then 100%.
+
+## SLO Thresholds
+
+- Success rate ≥ 99%.
+- P95 latency ≤ 2s for routing.
+- No more than 0.1% invalid letters.
+
+## Rollback
+
+1. Revert to the previous container tag.
+2. Disable new features behind flags if available.
+3. Post-mortem within 24 hours.

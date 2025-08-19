@@ -71,6 +71,7 @@
 <div class="section">
     <p>To whom it may concern,</p>
     <p>{{ opening_paragraph }}</p>
+    {% if client_context_sentence %}<p>{{ client_context_sentence }}</p>{% endif %}
 </div>
 
 {% if accounts %}

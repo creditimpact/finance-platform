@@ -41,6 +41,8 @@ from .dispute_preparation import prepare_disputes_and_inquiries
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
 from .utils import StrategyContextMissing, ensure_strategy_context
 from backend.core.letters.router import select_template
+from backend.api.config import env_bool
+from backend.core.letters.client_context import format_safe_client_context
 
 logger = logging.getLogger(__name__)
 
@@ -285,6 +287,10 @@ def generate_all_dispute_letters_with_ai(
             closing_paragraph=gpt_data.get("closing_paragraph", ""),
             is_identity_theft=is_identity_theft,
         )
+        if env_bool("SAFE_CLIENT_SENTENCE_ENABLED", False):
+            sentence = format_safe_client_context("bureau_dispute", "", {}, [])
+            if sentence:
+                context.client_context_sentence = sentence
         decision = select_template(
             "dispute", {"bureau": bureau_name}, phase="finalize"
         )

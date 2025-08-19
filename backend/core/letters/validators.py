@@ -29,6 +29,15 @@ def validate_required_fields(
     expected = required or checklist.get(template_path or "", [])
     missing = [field for field in expected if not ctx.get(field)]
 
+    sentence = ctx.get("client_context_sentence")
+    if sentence:
+        if len(sentence) > 150:
+            missing.append("client_context_sentence.length")
+        if sentence != redact_pii(sentence):
+            missing.append("client_context_sentence.pii")
+        if re.search(r"promise to pay", sentence, re.IGNORECASE):
+            missing.append("client_context_sentence.banned")
+
     if template_path == "instruction_template.html":
         actions = ctx.get("per_account_actions") or []
         if not actions:
@@ -50,12 +59,6 @@ def validate_required_fields(
                     missing.append("per_account_actions.action_verb")
                     break
 
-        sentence = ctx.get("client_context_sentence")
-        if sentence:
-            if len(sentence) > 150:
-                missing.append("client_context_sentence.length")
-            if sentence != redact_pii(sentence):
-                missing.append("client_context_sentence.pii")
 
     return missing
 

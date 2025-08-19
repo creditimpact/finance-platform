@@ -38,6 +38,18 @@ SUBSTANCE_CHECKLIST: Dict[str, Dict[str, str | None]] = {
         "cra_last_result": None,
         "days_since_cra_result": None,
     },
+    "dispute_letter_template.html": {
+        "fcra_611": r"611",
+        "investigation_request": r"investigat",
+        "account_number_masked": None,
+        "response_window": r"30\s*day",
+    },
+    "goodwill_letter_template.html": {
+        "non_promissory_tone": r"goodwill",
+        "positive_history_reference": r"positive|good",
+        "discretionary_request": r"request",
+        "no_admission": r"without\s+admit",
+    },
     "cease_and_desist_letter_template.html": {
         "stop_contact": r"stop\s*contact|cease|desist",
         "collector_name": None,

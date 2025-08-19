@@ -123,3 +123,68 @@ def test_debt_validation_missing_triggers_failure():
     assert counters.get(
         "validation.failed.debt_validation_letter_template.html.fdcpa_1692g"
     ) == 1
+
+
+def test_dispute_missing_triggers_failure():
+    ctx = {
+        "client_name": "Jane Doe",
+        "client_address_lines": ["123 Main St"],
+        "bureau_name": "Experian",
+        "bureau_address": "Address",
+        "date": "Jan 1, 2024",
+        "account_number_masked": "1234",
+        "opening_paragraph": "Please investigate this account and respond within 30 days.",
+        "accounts": [
+            {
+                "name": "Bank",
+                "account_number": "1234",
+                "status": "Late",
+            }
+        ],
+        "closing_paragraph": "Thank you",
+    }
+    reset_counters()
+    with pytest.raises(ValueError):
+        render_dispute_letter_html(Ctx(ctx), "dispute_letter_template.html")
+    counters = get_counters()
+    assert counters.get(
+        "validation.failed.dispute_letter_template.html.fcra_611"
+    ) == 1
+
+
+def test_goodwill_substance():
+    ctx = _base_context()
+    ctx.update(
+        {
+            "creditor_name": "Good Bank",
+            "account_number_masked": "5555",
+            "bureau": "experian",
+            "legal_safe_summary": "I respectfully request a goodwill adjustment based on my positive payment history without admitting responsibility.",
+            "months_since_last_late": "12",
+            "account_history_good": "I have a positive history with your bank.",
+        }
+    )
+    html, _ = _render("goodwill_letter_template.html", ctx)
+    low = html.lower()
+    assert "goodwill" in low and "positive" in low and "request" in low
+
+
+def test_goodwill_missing_triggers_failure():
+    ctx = _base_context()
+    ctx.update(
+        {
+            "creditor_name": "Good Bank",
+            "account_number_masked": "5555",
+            "bureau": "experian",
+            "legal_safe_summary": "Please remove this account.",
+            "months_since_last_late": "12",
+            "account_history_good": "",
+        }
+    )
+    reset_counters()
+    with pytest.raises(ValueError):
+        render_dispute_letter_html(Ctx(ctx), "goodwill_letter_template.html")
+    counters = get_counters()
+    assert counters.get(
+        "validation.failed.goodwill_letter_template.html.non_promissory_tone"
+    ) == 1

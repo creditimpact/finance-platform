@@ -9,16 +9,19 @@ from typing import Any, Mapping
 import pdfkit
 from jinja2 import Environment, FileSystemLoader
 
+from backend.analytics.analytics_tracker import (
+    emit_counter,
+    log_letter_without_strategy,
+    log_policy_override_reason,
+)
 from backend.api import config as api_config
 from backend.api.config import get_app_config
 from backend.api.session_manager import get_session
 from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLevel, AuditLogger, emit_event
-from backend.analytics.analytics_tracker import (
-    log_letter_without_strategy,
-    log_policy_override_reason,
-    emit_counter,
-)
+from backend.core.letters import validators
+from backend.core.letters.router import select_template
+from backend.core.letters.sanitizer import sanitize_rendered_html
 from backend.core.logic.compliance.rules_loader import get_neutral_phrase
 from backend.core.logic.guardrails import generate_letter_with_guardrails
 from backend.core.logic.guardrails.summary_validator import (
@@ -30,9 +33,6 @@ from backend.core.models.account import Account
 from backend.core.models.bureau import BureauPayload
 from backend.core.models.client import ClientInfo
 from backend.core.services.ai_client import AIClient
-from backend.core.letters.router import select_template
-from backend.core.letters import validators
-from backend.core.letters.sanitizer import sanitize_rendered_html
 
 from .utils import StrategyContextMissing, ensure_strategy_context
 
@@ -151,6 +151,7 @@ def generate_custom_letter(
     client_name = client_info.get("legal_name") or client_info.get("name", "Client")
     date_str = run_date or datetime.now().strftime("%B %d, %Y")
     recipient = account.get("name", "")
+    select_template("custom_letter", {"recipient": recipient}, phase="candidate")
     acc_name = account.get("name", "")
     acc_number = account.get("account_number", "")
     session_id = client_info.get("session_id", "")
@@ -224,9 +225,7 @@ def generate_custom_letter(
         ai_client,
     )
 
-    forbidden_actions = [
-        str(a).lower() for a in account.get("forbidden_actions", [])
-    ]
+    forbidden_actions = [str(a).lower() for a in account.get("forbidden_actions", [])]
     if "goodwill" in forbidden_actions and "goodwill" in body_paragraph.lower():
         body_paragraph = re.sub(r"(?i)good\s*-?will", "", body_paragraph)
         account["policy_override_reason"] = "custom_prompt_policy_conflict"

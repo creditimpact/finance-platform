@@ -47,6 +47,7 @@ from .utils import (
 from backend.core.letters.router import select_template
 from backend.api.config import env_bool
 from backend.core.letters.client_context import format_safe_client_context
+from backend.core.letters.sanitizer import sanitize_rendered_html
 
 logger = logging.getLogger(__name__)
 
@@ -315,6 +316,11 @@ def generate_all_dispute_letters_with_ai(
             "dispute",
             ai_client=ai_client,
         )
+        html, _ = sanitize_rendered_html(
+            html, decision.template_path, context.to_dict()
+        )
+        if isinstance(artifact, LetterArtifact):
+            artifact.html = html
         filename = f"Dispute Letter - {bureau_name}.pdf"
         filepath = output_path / filename
         if wkhtmltopdf_path:

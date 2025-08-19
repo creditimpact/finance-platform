@@ -32,6 +32,7 @@ from backend.core.models.client import ClientInfo
 from backend.core.services.ai_client import AIClient
 from backend.core.letters.router import select_template
 from backend.core.letters import validators
+from backend.core.letters.sanitizer import sanitize_rendered_html
 
 from .utils import StrategyContextMissing, ensure_strategy_context
 
@@ -279,6 +280,7 @@ def generate_custom_letter(
     tmpl = env.get_template(decision.template_path)
     html = tmpl.render(**context)
     emit_counter(f"letter_template_selected.{decision.template_path}")
+    html, _ = sanitize_rendered_html(html, decision.template_path, context)
     safe_recipient = (recipient or "Recipient").replace("/", "_").replace("\\", "_")
     filename = f"Custom Letter - {safe_recipient}.pdf"
     full_path = output_path / filename

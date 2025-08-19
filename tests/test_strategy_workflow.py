@@ -118,7 +118,7 @@ def test_full_letter_workflow():
         ),
         mock.patch(
             "backend.core.logic.rendering.instruction_data_preparation.generate_account_action",
-            return_value="Action",
+            return_value="Pay the balance",
         ),
         mock.patch(
             "backend.core.logic.rendering.instructions_generator.run_compliance_pipeline",

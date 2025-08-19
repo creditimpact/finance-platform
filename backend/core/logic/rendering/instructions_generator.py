@@ -54,18 +54,18 @@ def generate_instruction_file(
     if isinstance(client, dict):  # pragma: no cover - backward compat
         client = ClientInfo.from_dict(client)
     client_info = client.to_dict()
-    bureau_data = {
-        k: (
-            (
-                BureauPayload.from_dict(v).to_dict()
-                if isinstance(v, dict)
-                else v.to_dict()
-            )
-            if isinstance(v, (BureauPayload, dict))
-            else v
-        )
-        for k, v in bureau_map.items()
-    }
+    bureau_data = {}
+    for k, v in bureau_map.items():
+        if isinstance(v, BureauPayload):
+            bureau_data[k] = v.to_dict()
+        elif isinstance(v, dict):
+            data = v.copy()
+            payload = BureauPayload.from_dict(data).to_dict()
+            if "all_accounts" in data:
+                payload["all_accounts"] = data["all_accounts"]
+            bureau_data[k] = payload
+        else:
+            bureau_data[k] = v
 
     context, all_accounts = prepare_instruction_data(
         client_info,
@@ -76,10 +76,17 @@ def generate_instruction_file(
         ai_client=ai_client,
         strategy=strategy,
     )
+
+    # First pass to record candidate router metrics
+    select_template("instruction", context, phase="candidate")
+
+    # Finalize template selection and enforce required fields
     decision = select_template("instruction", context, phase="finalize")
     if not decision.template_path:
         raise ValueError("router did not supply template_path")
     if decision.missing_fields:
+        emit_counter("validation.failed")
+        emit_counter(f"validation.failed.{decision.template_path}")
         for field in decision.missing_fields:
             emit_counter(
                 f"validation.failed.{decision.template_path}.{field}"

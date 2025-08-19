@@ -114,10 +114,15 @@ def select_template(
         )
 
     if template_path:
+        # Emit both legacy and tag-specific router metrics for transition
         if phase == "candidate":
-            emit_counter("router.candidate_selected")
+            emit_counter("router.candidate_selected")  # deprecated
+            if tag:
+                emit_counter(f"router.candidate_selected.{tag}")
         elif phase in {"final", "finalize"}:
-            emit_counter("router.finalized")
+            emit_counter("router.finalized")  # deprecated
+            if tag:
+                emit_counter(f"router.finalized.{tag}")
 
     if missing_fields:
         for field in missing_fields:

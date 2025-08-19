@@ -12,8 +12,10 @@ def test_instruction_metrics_emitted(monkeypatch, tmp_path):
             {
                 "client_name": "A",
                 "date": "B",
-                "accounts_summary": {},
-                "per_account_actions": [{"account_ref": "x", "action_sentence": "do"}],
+                "accounts_summary": {"problematic": []},
+                "per_account_actions": [
+                    {"account_ref": "x", "action_sentence": "Pay the balance"}
+                ],
             },
             [],
         )
@@ -22,6 +24,7 @@ def test_instruction_metrics_emitted(monkeypatch, tmp_path):
     monkeypatch.setattr(generator, "render_pdf_from_html", lambda *a, **k: None)
     monkeypatch.setattr(generator, "save_json_output", lambda *a, **k: None)
     monkeypatch.setattr(generator, "run_compliance_pipeline", lambda *a, **k: None)
+    monkeypatch.setenv("LETTERS_ROUTER_PHASED", "1")
 
     generator.generate_instruction_file(
         ClientInfo.from_dict({"name": "A"}),
@@ -31,5 +34,9 @@ def test_instruction_metrics_emitted(monkeypatch, tmp_path):
         ai_client=FakeAIClient(),
     )
     counters = get_counters()
+    assert counters.get("router.candidate_selected")
+    assert counters.get("router.candidate_selected.instruction")
+    assert counters.get("router.finalized")
+    assert counters.get("router.finalized.instruction")
     assert counters.get("letter_template_selected.instruction_template.html")
     assert counters.get("letter.render_ms.instruction_template.html") is not None

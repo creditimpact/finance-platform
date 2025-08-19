@@ -17,6 +17,9 @@ Takes bureau payloads and strategy recommendations to produce letter drafts, app
 - `generate_custom_letters.py`: create custom dispute letters and save PDFs.
   - Key functions: `_pdf_config()`, `call_gpt_for_custom_letter()`, `generate_custom_letter()`, `generate_custom_letters()`.
   - Internal deps: `backend.core.logic.guardrails`, `backend.core.logic.utils.pdf_ops`, `backend.api.session_manager`, `backend.core.logic.strategy.summary_classifier`, `backend.core.logic.compliance.rules_loader`, `backend.audit.audit`.
+- `generate_debt_validation_letters.py`: craft debt validation letters for collectors.
+  - Key functions: `generate_debt_validation_letter()`, `generate_debt_validation_letters()`.
+  - Internal deps: `backend.core.letters.router`, `backend.core.letters.sanitizer`, `backend.core.letters.validators`.
 - `generate_goodwill_letters.py`: orchestrate goodwill letter generation.
   - Key functions: `generate_goodwill_letter_with_ai()`, `generate_goodwill_letters()`.
   - Internal deps: `backend.core.logic.letters.goodwill_preparation`, `backend.core.logic.letters.goodwill_prompting`, `backend.core.logic.letters.goodwill_rendering`, `backend.core.logic.rendering.pdf_renderer`, `backend.core.logic.utils.pdf_ops`, `backend.core.logic.compliance.compliance_pipeline`.
@@ -42,6 +45,7 @@ Takes bureau payloads and strategy recommendations to produce letter drafts, app
 ## Entry points
 - `generate_custom_letters.generate_custom_letters`
 - `generate_goodwill_letters.generate_goodwill_letters`
+- `generate_debt_validation_letters.generate_debt_validation_letters`
 - `letter_generator.generate_all_dispute_letters_with_ai`
 - `dispute_preparation.prepare_disputes_and_inquiries`
 

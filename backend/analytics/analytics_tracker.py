@@ -53,6 +53,25 @@ def reset_counters() -> None:
     _COUNTERS.clear()
 
 
+def get_missing_fields_heatmap() -> Dict[str, Dict[str, int]]:
+    """Return aggregated missing-field counts grouped by tag and field."""
+
+    heatmap: Dict[str, Dict[str, int]] = {}
+    prefix = "router.missing_fields."
+    for key, count in _COUNTERS.items():
+        if not key.startswith(prefix):
+            continue
+        rest = key[len(prefix) :]
+        try:
+            tag, remainder = rest.split(".", 1)
+            _template, field = remainder.rsplit(".", 1)
+        except ValueError:
+            continue
+        bucket = heatmap.setdefault(tag, {})
+        bucket[field] = bucket.get(field, 0) + int(count)
+    return heatmap
+
+
 def _write_cache_snapshot() -> None:
     """Persist current cache metrics to ``analytics_data`` and reset counters."""
 

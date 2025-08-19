@@ -35,3 +35,45 @@ def ensure_strategy_context(
         if action_tag:
             continue
         raise StrategyContextMissing(account_id)
+
+
+def populate_required_fields(
+    account: dict[str, Any], strat: Mapping[str, Any] | None = None
+) -> None:
+    """Fill per-action required fields using account and strategy data.
+
+    The router validates that certain fields are present before rendering the
+    final letter.  This helper ensures those fields are populated after strategy
+    data has been merged into the account context.
+    """
+
+    tag = str(account.get("action_tag") or "").lower()
+
+    # Basic collectors/furnishers -------------------------------------------------
+    if tag in {"debt_validation", "pay_for_delete", "cease_and_desist"}:
+        account.setdefault("collector_name", account.get("name"))
+
+    if tag == "direct_dispute":
+        account.setdefault("furnisher_address", account.get("address"))
+
+    # Strategy‑provided fields -----------------------------------------------------
+    strat = strat or {}
+    if tag == "pay_for_delete" and strat.get("offer_terms") is not None:
+        account.setdefault("offer_terms", strat.get("offer_terms"))
+
+    if tag == "goodwill":
+        for field in ["months_since_last_late", "account_history_good"]:
+            if strat.get(field) is not None and not account.get(field):
+                account[field] = strat[field]
+
+    if tag == "mov":
+        for field in ["cra_last_result", "days_since_cra_result"]:
+            if strat.get(field) is not None and not account.get(field):
+                account[field] = strat[field]
+
+
+__all__ = [
+    "StrategyContextMissing",
+    "ensure_strategy_context",
+    "populate_required_fields",
+]

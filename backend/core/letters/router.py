@@ -40,6 +40,43 @@ def select_template(
             "instruction_template.html",
             ["client_name", "date", "accounts_summary", "per_account_actions"],
         ),
+        "debt_validation": (
+            "debt_validation_letter_template.html",
+            [
+                "collector_name",
+                "account_number_masked",
+                "bureau",
+                "legal_safe_summary",
+                "days_since_first_contact",
+            ],
+        ),
+        "pay_for_delete": (
+            "pay_for_delete_letter_template.html",
+            ["collector_name", "account_number_masked", "legal_safe_summary", "offer_terms"],
+        ),
+        "mov": (
+            "mov_letter_template.html",
+            [
+                "creditor_name",
+                "account_number_masked",
+                "legal_safe_summary",
+                "cra_last_result",
+                "days_since_cra_result",
+            ],
+        ),
+        "cease_and_desist": (
+            "cease_and_desist_letter_template.html",
+            ["collector_name", "account_number_masked", "legal_safe_summary"],
+        ),
+        "direct_dispute": (
+            "direct_dispute_letter_template.html",
+            [
+                "creditor_name",
+                "account_number_masked",
+                "legal_safe_summary",
+                "furnisher_address",
+            ],
+        ),
     }
 
     if tag == "ignore":
@@ -74,7 +111,7 @@ def select_template(
 
     if missing_fields:
         for field in missing_fields:
-            emit_counter(f"router.missing_fields.{template_path}.{field}")
+            emit_counter(f"router.missing_fields.{tag}.{template_path}.{field}")
 
     return TemplateDecision(
         template_path=template_path,

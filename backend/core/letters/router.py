@@ -23,7 +23,7 @@ def _enabled() -> bool:
 def select_template(
     action_tag: str,
     ctx: dict,
-    phase: Literal["candidate", "final"],
+    phase: Literal["candidate", "final", "finalize"],
 ) -> TemplateDecision:
     """Return the template selection for ``action_tag``.
 
@@ -65,7 +65,7 @@ def select_template(
     if template_path:
         if phase == "candidate":
             emit_counter("router.candidate_selected")
-        elif phase == "final":
+        elif phase in {"final", "finalize"}:
             emit_counter("router.finalized")
 
     if missing_fields:

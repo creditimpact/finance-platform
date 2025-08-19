@@ -21,6 +21,7 @@ from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.logic.utils.note_handling import get_client_address_lines
 from backend.core.models.client import ClientInfo
 from backend.core.services.ai_client import AIClient
+from backend.analytics.analytics_tracker import emit_counter
 
 
 def load_creditor_address_map() -> Mapping[str, str]:
@@ -55,9 +56,13 @@ def render_goodwill_letter(
     audit: AuditLogger | None = None,
     compliance_fn=default_compliance,
     pdf_fn=default_pdf_renderer,
-    template_path: str = "goodwill_letter_template.html",
+    template_path: str,
 ) -> None:
     """Render a goodwill letter using ``gpt_data`` and save a PDF and JSON."""
+
+    if not template_path:
+        emit_counter("rendering.missing_template_path")
+        raise ValueError("template_path is required")
 
     client_name = client_info.get("legal_name") or client_info.get("name", "Your Name")
     if not client_info.get("legal_name"):
@@ -94,7 +99,7 @@ def render_goodwill_letter(
     }
 
     env = ensure_template_env()
-    template = env.get_template(template_path or "goodwill_letter_template.html")
+    template = env.get_template(template_path)
     html = template.render(**context)
     if doc_names:
         html += "".join(doc_names)

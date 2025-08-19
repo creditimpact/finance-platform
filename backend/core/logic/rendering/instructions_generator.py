@@ -73,7 +73,7 @@ def generate_instruction_file(
         ai_client=ai_client,
         strategy=strategy,
     )
-    html = build_instruction_html(context)
+    html = build_instruction_html(context, "instruction_template.html")
     run_compliance_pipeline(
         html,
         client_info.get("state"),

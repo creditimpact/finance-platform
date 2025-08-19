@@ -264,8 +264,12 @@ def generate_custom_letter(
         "body_paragraph": body_paragraph,
         "supporting_docs": doc_names,
     }
-    decision = select_template("custom_letter", {"recipient": recipient}, "final")
-    tmpl = env.get_template(decision.template_path or "general_letter_template.html")
+    decision = select_template(
+        "custom_letter", {"recipient": recipient}, phase="finalize"
+    )
+    if not decision.template_path:
+        raise ValueError("router did not supply template_path")
+    tmpl = env.get_template(decision.template_path)
     html = tmpl.render(**context)
     safe_recipient = (recipient or "Recipient").replace("/", "_").replace("\\", "_")
     filename = f"Custom Letter - {safe_recipient}.pdf"

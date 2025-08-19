@@ -401,6 +401,27 @@ def test_normalize_action_tag_aliases():
     print("alias map ok")
 
 
+def test_normalize_action_tag_new_aliases():
+    from backend.core.logic.compliance.constants import normalize_action_tag
+
+    cases = {
+        "instruction letter": ("instruction", "Instruction"),
+        "fraud": ("fraud_dispute", "Fraud Dispute"),
+        "identity theft": ("fraud_dispute", "Fraud Dispute"),
+        "debt verification": ("debt_validation", "Debt Validation"),
+        "pay for delete": ("pay_for_delete", "Pay for Delete"),
+        "p4d": ("pay_for_delete", "Pay for Delete"),
+        "method of verification": ("mov", "Method of Verification"),
+        "cease and desist": ("cease_and_desist", "Cease and Desist"),
+        "stop contact": ("cease_and_desist", "Cease and Desist"),
+        "direct dispute": ("direct_dispute", "Direct Dispute"),
+    }
+    for phrase, expected in cases.items():
+        tag, action = normalize_action_tag(phrase)
+        assert (tag, action) == expected
+    print("new alias map ok")
+
+
 def test_letter_duplicate_accounts_removed():
     bureau_data = {
         "Experian": {

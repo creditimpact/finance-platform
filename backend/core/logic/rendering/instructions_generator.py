@@ -12,7 +12,6 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
-import time
 
 from backend.assets.paths import templates_path
 from backend.core.logic.compliance.compliance_pipeline import run_compliance_pipeline
@@ -24,7 +23,7 @@ from backend.core.logic.rendering.instruction_renderer import build_instruction_
 from backend.core.models import BureauPayload, ClientInfo
 from backend.core.services.ai_client import AIClient
 from backend.core.letters.router import select_template
-from backend.analytics.analytics_tracker import emit_counter, set_metric
+from backend.analytics.analytics_tracker import emit_counter
 
 
 def get_logo_base64() -> str:
@@ -92,11 +91,8 @@ def generate_instruction_file(
                 f"validation.failed.{decision.template_path}.{field}"
             )
         return
-    start = time.time()
     html = build_instruction_html(context, decision.template_path)
-    elapsed = (time.time() - start) * 1000
     emit_counter(f"letter_template_selected.{decision.template_path}")
-    set_metric(f"letter.render_ms.{decision.template_path}", elapsed)
     run_compliance_pipeline(
         html,
         client_info.get("state"),
@@ -106,26 +102,39 @@ def generate_instruction_file(
     )
 
     if wkhtmltopdf_path:
-        render_pdf_from_html(html, output_path, wkhtmltopdf_path=wkhtmltopdf_path)
+        render_pdf_from_html(
+            html,
+            output_path,
+            decision.template_path,
+            wkhtmltopdf_path=wkhtmltopdf_path,
+        )
     else:
-        render_pdf_from_html(html, output_path)
+        render_pdf_from_html(html, output_path, decision.template_path)
     save_json_output(all_accounts, output_path)
 
     print("[✅] Instructions file generated successfully.")
 
 
 def render_pdf_from_html(
-    html: str, output_path: Path, wkhtmltopdf_path: str | None = None
+    html: str,
+    output_path: Path,
+    template_path: str,
+    wkhtmltopdf_path: str | None = None,
 ) -> Path:
     """Persist the rendered PDF to disk."""
     output_path.mkdir(parents=True, exist_ok=True)
     filepath = output_path / "Start_Here - Instructions.pdf"
     if wkhtmltopdf_path:
         pdf_renderer.render_html_to_pdf(
-            html, str(filepath), wkhtmltopdf_path=wkhtmltopdf_path
+            html,
+            str(filepath),
+            wkhtmltopdf_path=wkhtmltopdf_path,
+            template_name=template_path,
         )
     else:
-        pdf_renderer.render_html_to_pdf(html, str(filepath))
+        pdf_renderer.render_html_to_pdf(
+            html, str(filepath), template_name=template_path
+        )
     return filepath
 
 

@@ -181,6 +181,13 @@ def log_ai_request(
     _AI_METRICS["latency_ms"] += latency_ms
 
 
+def log_ai_stage(stage: str, tokens: int, cost: float) -> None:
+    """Record token and cost usage for a specific pipeline stage."""
+
+    emit_counter(f"ai.tokens.{stage}", tokens)
+    emit_counter(f"ai.cost.{stage}", cost)
+
+
 def get_ai_stats() -> Dict[str, float]:
     """Return current AI usage metrics (for tests)."""
 
@@ -246,6 +253,11 @@ def save_analytics_snapshot(
 
     if strategist_failures:
         snapshot["strategist_failures"] = strategist_failures
+
+    snapshot["metrics"] = {
+        "counters": get_counters(),
+        "ai": get_ai_stats(),
+    }
 
     with open(filename, "w", encoding="utf-8") as f:
         f.write(redact_pii(json.dumps(snapshot, indent=2)))

@@ -325,10 +325,15 @@ def generate_all_dispute_letters_with_ai(
         filepath = output_path / filename
         if wkhtmltopdf_path:
             pdf_renderer.render_html_to_pdf(
-                html, str(filepath), wkhtmltopdf_path=wkhtmltopdf_path
+                html,
+                str(filepath),
+                wkhtmltopdf_path=wkhtmltopdf_path,
+                template_name=decision.template_path,
             )
         else:
-            pdf_renderer.render_html_to_pdf(html, str(filepath))
+            pdf_renderer.render_html_to_pdf(
+                html, str(filepath), template_name=decision.template_path
+            )
 
         with open(output_path / f"{bureau_name}_gpt_response.json", "w") as f:
             json.dump(gpt_data, f, indent=2)

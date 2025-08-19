@@ -69,7 +69,7 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
         )
         monkeypatch.setattr(
             "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
-            lambda html, path: None,
+            lambda html, path, **k: None,
         )
         from backend.core.logic.strategy.summary_classifier import ClassificationRecord
         from backend.core.models import BureauPayload, ClientInfo
@@ -119,7 +119,7 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
         )
         monkeypatch.setattr(
             "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
-            lambda html, path: None,
+            lambda html, path, **k: None,
         )
         from backend.core.models import ClientInfo
 
@@ -165,7 +165,7 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
         )
         monkeypatch.setattr(
             "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
-            lambda html, path: None,
+            lambda html, path, **k: None,
         )
         monkeypatch.setattr(
             "backend.core.logic.letters.generate_goodwill_letters.gather_supporting_docs",

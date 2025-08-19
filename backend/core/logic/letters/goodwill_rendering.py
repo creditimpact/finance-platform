@@ -129,7 +129,7 @@ def render_goodwill_letter(
 
     safe_name = safe_filename(creditor)
     pdf_path = output_path / f"Goodwill Request - {safe_name}.pdf"
-    pdf_fn(html, str(pdf_path))
+    pdf_fn(html, str(pdf_path), template_name=template_path)
 
     with open(output_path / f"{safe_name}_gpt_response.json", "w") as f:
         json.dump(gpt_data, f, indent=2)

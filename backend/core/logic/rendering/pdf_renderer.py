@@ -4,10 +4,12 @@ from pathlib import Path
 from typing import Optional
 
 import pdfkit
+import time
 from jinja2 import Environment, FileSystemLoader
 
 from backend.api.config import get_app_config
 from backend.assets.paths import templates_path
+from backend.analytics.analytics_tracker import log_ai_stage, set_metric
 
 _template_env: Environment | None = None
 
@@ -53,6 +55,7 @@ def render_html_to_pdf(
     output_path: str,
     *,
     wkhtmltopdf_path: Optional[str] = None,
+    template_name: Optional[str] = None,
 ) -> None:
     """Render ``html`` to a PDF at ``output_path``.
 
@@ -69,6 +72,7 @@ def render_html_to_pdf(
     """
     output_path = normalize_output_path(output_path)
     wkhtmltopdf = wkhtmltopdf_path or get_app_config().wkhtmltopdf_path
+    start = time.perf_counter()
     try:
         config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf)
         options = {"quiet": ""}
@@ -78,3 +82,8 @@ def render_html_to_pdf(
         print(f"[INFO] PDF rendered: {output_path}")
     except Exception as e:  # pragma: no cover - rendering failures are logged
         print(f"[ERROR] Failed to render PDF: {e}")
+    finally:
+        elapsed = (time.perf_counter() - start) * 1000
+        if template_name:
+            set_metric(f"letter.render_ms.{template_name}", elapsed)
+        log_ai_stage("render", 0, 0)

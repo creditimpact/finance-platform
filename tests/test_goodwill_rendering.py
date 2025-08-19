@@ -13,7 +13,7 @@ def test_rendering_calls_compliance_and_pdf(tmp_path):
         return html
 
     gpt_data = {
-        "intro_paragraph": "hi",
+        "intro_paragraph": "I respectfully request a goodwill adjustment based on my positive payment history without admitting responsibility.",
         "hardship_paragraph": "hard",
         "recovery_paragraph": "rec",
         "closing_paragraph": "bye",
@@ -39,7 +39,7 @@ def test_rendering_calls_compliance_and_pdf(tmp_path):
     assert json_path.exists()
 
     gpt_data = {
-        "intro_paragraph": "hi",
+        "intro_paragraph": "I respectfully request a goodwill adjustment based on my positive payment history without admitting responsibility.",
         "hardship_paragraph": "hard",
         "recovery_paragraph": "rec",
         "closing_paragraph": "bye",

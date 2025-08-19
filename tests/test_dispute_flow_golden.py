@@ -35,7 +35,9 @@ def test_dispute_flow_golden(monkeypatch):
     )
     from backend.core.logic.letters.gpt_prompting import call_gpt_dispute_letter
 
-    payload = """{\n  \"opening_paragraph\": \"I dispute the following accounts\",\n  \"accounts\": [{\n    \"name\": \"ABC Bank\",\n    \"account_number\": \"1234\",\n    \"status\": \"Late\",\n    \"paragraph\": \"Please delete\",\n    \"requested_action\": \"Delete\"\n  }],\n  \"inquiries\": [{\n    \"creditor_name\": \"XYZ Bank\",\n    \"date\": \"2020-01-01\"\n  }],\n  \"closing_paragraph\": \"Thank you\"\n}"""
+    payload = (
+        """{\n  \"opening_paragraph\": \"Under FCRA §611, I dispute the following accounts and request an investigation. Please respond within 30 days.\",\n  \"accounts\": [{\n    \"name\": \"ABC Bank\",\n    \"account_number\": \"1234\",\n    \"status\": \"Late\",\n    \"paragraph\": \"Please delete\",\n    \"requested_action\": \"Delete\"\n  }],\n  \"inquiries\": [{\n    \"creditor_name\": \"XYZ Bank\",\n    \"date\": \"2020-01-01\"\n  }],\n  \"closing_paragraph\": \"Thank you\"\n}"""
+    )
     fake_ai = FakeAI(payload)
     ctx = call_gpt_dispute_letter(
         {},
@@ -63,8 +65,10 @@ def test_dispute_flow_golden(monkeypatch):
     decision = select_template(
         "dispute", {"bureau": "Experian"}, phase="finalize"
     )
+    ctx_dict = ctx.to_dict()
+    ctx_dict["account_number_masked"] = "1234"
     artifact = render_dispute_letter_html(
-        ctx, decision.template_path
+        ctx_dict, decision.template_path
     )
     monkeypatch.setattr(
         "backend.core.logic.compliance.compliance_pipeline.fix_draft_with_guardrails",

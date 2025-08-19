@@ -126,6 +126,20 @@ SCENARIOS = [
         "golden": Path("tests/letters/goldens/duplicate_tradeline.html"),
     },
     {
+        "name": "goodwill",
+        "action_tag": "goodwill",
+        "initial_ctx": {
+            "creditor": "Good Bank",
+            "creditor_name": "Good Bank",
+            "legal_safe_summary": "I respectfully request a goodwill adjustment based on my positive payment history without admitting responsibility.",
+            "months_since_last_late": "12",
+            "account_history_good": "I have a positive history with your bank.",
+        },
+        "expect_html": True,
+        "template": "goodwill_letter_template.html",
+        "golden": Path("tests/letters/goldens/goodwill.html"),
+    },
+    {
         "name": "ignore",
         "action_tag": "ignore",
         "initial_ctx": {},

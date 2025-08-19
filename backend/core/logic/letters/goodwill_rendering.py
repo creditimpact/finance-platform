@@ -25,6 +25,7 @@ from backend.analytics.analytics_tracker import emit_counter
 from backend.api.config import env_bool
 from backend.core.letters.client_context import format_safe_client_context
 from backend.core.letters import validators
+from backend.core.letters.sanitizer import sanitize_rendered_html
 
 
 def load_creditor_address_map() -> Mapping[str, str]:
@@ -123,6 +124,8 @@ def render_goodwill_letter(
         "goodwill",
         ai_client=ai_client,
     )
+
+    html, _ = sanitize_rendered_html(html, template_path, context)
 
     safe_name = safe_filename(creditor)
     pdf_path = output_path / f"Goodwill Request - {safe_name}.pdf"

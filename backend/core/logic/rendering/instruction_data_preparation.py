@@ -320,15 +320,27 @@ def prepare_instruction_data(
 
         sections[group].append(entry)
 
+    per_account_actions = [
+        {"account_ref": acc["name"], "action_sentence": acc["action_sentence"]}
+        for group in sections.values()
+        for acc in group
+    ]
+    advisories = []
+    if has_dupes:
+        advisories.append("duplicates")
+    tips = []
+    if strategy:
+        tips = strategy.get("global_recommendations", [])
+
     context = {
         "date": run_date,
         "client_name": client_name,
-        "instructions": "",  # to be filled by renderer
+        "accounts_summary": sections,
+        "per_account_actions": per_account_actions,
         "is_identity_theft": is_identity_theft,
         "logo_base64": logo_base64,
-        "sections": sections,
-        "has_duplicates": has_dupes,
-        "strategy": strategy,
+        "advisories": advisories,
+        "tips": tips,
     }
 
     return context, all_accounts

@@ -36,6 +36,10 @@ def select_template(
         "dispute": ("dispute_letter_template.html", ["bureau"]),
         "goodwill": ("goodwill_letter_template.html", ["creditor"]),
         "custom_letter": ("general_letter_template.html", ["recipient"]),
+        "instruction": (
+            "instruction_template.html",
+            ["client_name", "date", "accounts_summary", "per_account_actions"],
+        ),
     }
 
     if tag == "ignore":

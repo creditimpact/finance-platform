@@ -14,6 +14,11 @@ VALID_ACTION_TAGS = {
     "cease_and_desist",
     "direct_dispute",
     "ignore",
+    "obsolescence",
+    "bureau_dispute",
+    "inquiry_dispute",
+    "medical_dispute",
+    "paydown_first",
 }
 
 # Map common strategist phrases to canonical action tags.
@@ -72,6 +77,19 @@ _ACTION_ALIAS_MAP = {
     "direct dispute": "direct_dispute",
     "direct_to_furnisher": "direct_dispute",
     "direct to furnisher": "direct_dispute",
+    "obsolescence": "obsolescence",
+    "obsolete": "obsolescence",
+    "bureau_dispute": "bureau_dispute",
+    "bureau dispute": "bureau_dispute",
+    "cra_dispute": "bureau_dispute",
+    "cra dispute": "bureau_dispute",
+    "inquiry_dispute": "inquiry_dispute",
+    "inquiry dispute": "inquiry_dispute",
+    "medical_dispute": "medical_dispute",
+    "medical dispute": "medical_dispute",
+    "paydown_first": "paydown_first",
+    "paydown first": "paydown_first",
+    "pay_down_first": "paydown_first",
 }
 
 _DISPLAY_NAME = {
@@ -86,6 +104,11 @@ _DISPLAY_NAME = {
     "cease_and_desist": "Cease and Desist",
     "direct_dispute": "Direct Dispute",
     "ignore": "Ignore",
+    "obsolescence": "Obsolescence",
+    "bureau_dispute": "Bureau Dispute",
+    "inquiry_dispute": "Inquiry Dispute",
+    "medical_dispute": "Medical Dispute",
+    "paydown_first": "Pay Down First",
 }
 
 

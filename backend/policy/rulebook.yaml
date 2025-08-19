@@ -67,6 +67,7 @@ rules:
       rule_hits: ["E_IDENTITY_NEEDS_AFFIDAVIT"]
       suggested_dispute_frame: "fraud"
       needs_evidence: ["identity_theft_affidavit"]
+      action_tag: fraud_dispute
       priority: High
 
   # --- 2) Collector 30-day validation window (FDCPA 1692g) ---

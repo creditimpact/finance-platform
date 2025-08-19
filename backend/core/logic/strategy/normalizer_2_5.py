@@ -291,6 +291,7 @@ def evaluate_rules(
     final_hits: list[str] = []
     needs_evidence: list[str] = []
     suggested_dispute_frame = ""
+    action_tags: list[str] = []
     suppressed: set[str] = set()
 
     for rule_id, effect in sorted_hits:
@@ -300,6 +301,9 @@ def evaluate_rules(
         needs_evidence.extend(effect.get("needs_evidence", []))
         if not suggested_dispute_frame and effect.get("suggested_dispute_frame"):
             suggested_dispute_frame = effect["suggested_dispute_frame"]
+        tag = effect.get("action_tag")
+        if tag:
+            action_tags.append(tag)
         for ex in (exclusions or {}).get(rule_id, []):
             suppressed.add(ex)
 
@@ -308,12 +312,15 @@ def evaluate_rules(
     final_hits = [x for x in final_hits if not (x in seen_hits or seen_hits.add(x))]
     seen_ev: set[str] = set()
     needs_evidence = [x for x in needs_evidence if not (x in seen_ev or seen_ev.add(x))]
+    seen_tags: set[str] = set()
+    action_tags = [x for x in action_tags if not (x in seen_tags or seen_tags.add(x))]
 
     return {
         "rule_hits": final_hits,
         "needs_evidence": needs_evidence,
         "red_flags": red_flags,
         "suggested_dispute_frame": suggested_dispute_frame,
+        "action_tag": action_tags[0] if action_tags else "",
     }
 
 

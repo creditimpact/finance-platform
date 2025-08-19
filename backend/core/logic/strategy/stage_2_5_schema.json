@@ -8,6 +8,7 @@
   "required": [
     "legal_safe_summary",
     "suggested_dispute_frame",
+    "action_tag",
     "rule_hits",
     "needs_evidence",
     "red_flags",
@@ -43,7 +44,27 @@
       ],
       "default": ""
     },
-    "rule_hits": {
+    "action_tag": {
+      "type": "string",
+      "description": "First surviving action tag after applying precedence/exclusions.",
+      "enum": [
+        "",
+        "fraud_dispute",
+        "debt_validation",
+        "mov",
+        "obsolescence",
+        "bureau_dispute",
+        "direct_dispute",
+        "inquiry_dispute",
+        "medical_dispute",
+        "paydown_first",
+        "goodwill",
+        "pay_for_delete",
+        "cease_and_desist"
+      ],
+        "default": ""
+      },
+      "rule_hits": {
       "type": "array",
       "description": "List of rule IDs that matched for this account.",
       "items": {

@@ -1,10 +1,14 @@
+from backend.analytics.analytics_tracker import get_counters, reset_counters
 from backend.core.letters.router import select_template
 
 
 def test_router_basic_mappings(monkeypatch):
     monkeypatch.setenv("LETTERS_ROUTER_PHASED", "1")
+    reset_counters()
     assert (
-        select_template("dispute", {"bureau": "Experian"}, phase="finalize").template_path
+        select_template(
+            "dispute", {"bureau": "Experian"}, phase="finalize"
+        ).template_path
         == "dispute_letter_template.html"
     )
     assert (
@@ -12,7 +16,9 @@ def test_router_basic_mappings(monkeypatch):
         == "goodwill_letter_template.html"
     )
     assert (
-        select_template("custom_letter", {"recipient": "Joe"}, phase="finalize").template_path
+        select_template(
+            "custom_letter", {"recipient": "Joe"}, phase="finalize"
+        ).template_path
         == "general_letter_template.html"
     )
     assert (
@@ -75,6 +81,10 @@ def test_router_basic_mappings(monkeypatch):
     decision = select_template("ignore", {}, phase="finalize")
     assert decision.template_path is None
     assert decision.router_mode == "skip"
+
+    counters = get_counters()
+    assert counters.get("router.skipped.paydown_first") == 1
+    assert counters.get("router.skipped.ignore") == 1
 
 
 def test_missing_fields(monkeypatch):

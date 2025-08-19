@@ -98,6 +98,19 @@ def get_missing_fields_heatmap() -> Dict[str, Dict[str, int]]:
     return heatmap
 
 
+def get_router_skipped_counts() -> Dict[str, int]:
+    """Return counts of skipped router tags."""
+
+    prefix = "router.skipped."
+    skipped: Dict[str, int] = {}
+    for key, count in _COUNTERS.items():
+        if not key.startswith(prefix):
+            continue
+        tag = key[len(prefix) :]
+        skipped[tag] = skipped.get(tag, 0) + int(count)
+    return skipped
+
+
 def _write_cache_snapshot() -> None:
     """Persist current cache metrics to ``analytics_data`` and reset counters."""
 
@@ -245,10 +258,11 @@ def check_canary_guardrails(
 
     templates = set()
     for key in counters:
-        if key.startswith("router.finalized.") or key.startswith(
-            "validation.failed."
-        ) or key.startswith("sanitizer.applied.") or key.startswith(
-            "letter.render_ms."
+        if (
+            key.startswith("router.finalized.")
+            or key.startswith("validation.failed.")
+            or key.startswith("sanitizer.applied.")
+            or key.startswith("letter.render_ms.")
         ):
             templates.add(key.split(".")[-1])
 
@@ -332,6 +346,7 @@ def save_analytics_snapshot(
     snapshot["metrics"] = {
         "counters": get_counters(),
         "ai": get_ai_stats(),
+        "router_skipped": get_router_skipped_counts(),
     }
 
     snapshot["canary"] = get_canary_decisions()

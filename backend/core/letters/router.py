@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from typing import List, Literal
 
 from backend.analytics.analytics_tracker import (
-    emit_counter,
     check_canary_guardrails,
+    emit_counter,
     log_canary_decision,
 )
+
 from . import validators
 
 
@@ -33,10 +34,9 @@ def _enabled() -> bool:
     if check_canary_guardrails(ceiling, sanitizer_limit, ai_cap):
         return False
 
-    if (
-        "ROUTER_CANARY_PERCENT" not in os.environ
-        and os.getenv("LETTERS_ROUTER_PHASED", "").lower() in {"1", "true", "yes"}
-    ):
+    if "ROUTER_CANARY_PERCENT" not in os.environ and os.getenv(
+        "LETTERS_ROUTER_PHASED", ""
+    ).lower() in {"1", "true", "yes"}:
         return True
 
     try:
@@ -93,7 +93,12 @@ def select_template(
         ),
         "pay_for_delete": (
             "pay_for_delete_letter_template.html",
-            ["collector_name", "account_number_masked", "legal_safe_summary", "offer_terms"],
+            [
+                "collector_name",
+                "account_number_masked",
+                "legal_safe_summary",
+                "offer_terms",
+            ],
         ),
         "mov": (
             "mov_letter_template.html",
@@ -154,6 +159,8 @@ def select_template(
         ),
     }
 
+    if tag in {"ignore", "paydown_first"}:
+        emit_counter(f"router.skipped.{tag}")
     if tag == "ignore":
         return TemplateDecision(
             template_path=None,
@@ -205,4 +212,3 @@ def select_template(
 
 
 __all__ = ["TemplateDecision", "select_template"]
-

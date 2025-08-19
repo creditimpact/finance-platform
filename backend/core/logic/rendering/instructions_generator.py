@@ -12,6 +12,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
+import time
 
 from backend.assets.paths import templates_path
 from backend.core.logic.compliance.compliance_pipeline import run_compliance_pipeline
@@ -22,6 +23,8 @@ from backend.core.logic.rendering.instruction_data_preparation import (
 from backend.core.logic.rendering.instruction_renderer import build_instruction_html
 from backend.core.models import BureauPayload, ClientInfo
 from backend.core.services.ai_client import AIClient
+from backend.core.letters.router import select_template
+from backend.analytics.analytics_tracker import emit_counter, set_metric
 
 
 def get_logo_base64() -> str:
@@ -73,7 +76,20 @@ def generate_instruction_file(
         ai_client=ai_client,
         strategy=strategy,
     )
-    html = build_instruction_html(context, "instruction_template.html")
+    decision = select_template("instruction", context, phase="finalize")
+    if not decision.template_path:
+        raise ValueError("router did not supply template_path")
+    if decision.missing_fields:
+        for field in decision.missing_fields:
+            emit_counter(
+                f"validation.failed.{decision.template_path}.{field}"
+            )
+        return
+    start = time.time()
+    html = build_instruction_html(context, decision.template_path)
+    elapsed = (time.time() - start) * 1000
+    emit_counter(f"letter_template_selected.{decision.template_path}")
+    set_metric(f"letter.render_ms.{decision.template_path}", elapsed)
     run_compliance_pipeline(
         html,
         client_info.get("state"),

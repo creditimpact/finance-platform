@@ -4,6 +4,7 @@ from typing import Any, List, Tuple
 
 from backend.analytics.analytics_tracker import (
     log_ai_request,
+    log_ai_stage,
     log_guardrail_fix,
     log_letter_without_strategy,
     log_policy_violations_prevented,
@@ -102,6 +103,7 @@ def generate_letter_with_guardrails(
         tokens_out = getattr(usage, "completion_tokens", 0)
         cost = tokens_in * _INPUT_COST_PER_TOKEN + tokens_out * _OUTPUT_COST_PER_TOKEN
         log_ai_request(tokens_in, tokens_out, cost, latency_ms)
+        log_ai_stage("candidate", tokens_in + tokens_out, cost)
         text = response.choices[0].message.content.strip()
         if text.startswith("```"):
             text = text.replace("```", "").strip()
@@ -179,6 +181,7 @@ def fix_draft_with_guardrails(
         tokens_out = getattr(usage, "completion_tokens", 0)
         cost = tokens_in * _INPUT_COST_PER_TOKEN + tokens_out * _OUTPUT_COST_PER_TOKEN
         log_ai_request(tokens_in, tokens_out, cost, latency_ms)
+        log_ai_stage("finalize", tokens_in + tokens_out, cost)
         text = response.choices[0].message.content.strip()
         if text.startswith("```"):
             text = text.replace("```", "").strip()

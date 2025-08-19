@@ -54,7 +54,7 @@ def test_orchestrator_invokes_compliance(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
-        lambda html, path: None,
+        lambda html, path, **k: None,
     )
     monkeypatch.setattr(
         generate_goodwill_letters.goodwill_rendering,

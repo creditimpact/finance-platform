@@ -5,7 +5,7 @@ from tests.helpers.fake_ai_client import FakeAIClient
 def test_rendering_calls_compliance_and_pdf(tmp_path):
     html_called = {}
 
-    def fake_pdf(html, path):
+    def fake_pdf(html, path, **kwargs):
         html_called["pdf"] = (html, path)
 
     def fake_compliance(html, state, session_id, doc_type, ai_client=None):

@@ -114,7 +114,7 @@ def test_full_letter_workflow():
         mock.patch("backend.core.logic.rendering.pdf_renderer.render_html_to_pdf"),
         mock.patch(
             "backend.core.logic.rendering.instructions_generator.render_pdf_from_html",
-            side_effect=lambda html, p: instructions_capture.setdefault("html", html),
+            side_effect=lambda html, p, template_path, **k: instructions_capture.setdefault("html", html),
         ),
         mock.patch(
             "backend.core.logic.rendering.instruction_data_preparation.generate_account_action",

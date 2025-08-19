@@ -60,7 +60,7 @@ def test_validator_replaces_flagged_paragraph(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
-        lambda html, path: None,
+        lambda html, path, **k: None,
     )
     monkeypatch.setattr(
         "backend.core.logic.compliance.compliance_pipeline.run_compliance_pipeline",

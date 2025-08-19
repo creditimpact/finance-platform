@@ -12,11 +12,17 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any, Dict, List, Tuple
 
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.models.account import Account
 from backend.core.services.ai_client import AIClient
+from backend.analytics.analytics_tracker import log_ai_request, log_ai_stage
+
+
+_INPUT_COST_PER_TOKEN = 0.01 / 1000
+_OUTPUT_COST_PER_TOKEN = 0.03 / 1000
 
 
 def extract_clean_name(full_name: str) -> str:
@@ -45,11 +51,19 @@ def generate_account_action(
             f"Account data:\n{json.dumps(acc_dict, indent=2)}\n\n"
             "Respond with only the sentence."
         )
+        start = time.perf_counter()
         response = ai_client.chat_completion(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
         )
+        latency_ms = (time.perf_counter() - start) * 1000
+        usage = getattr(response, "usage", None)
+        tokens_in = getattr(usage, "prompt_tokens", 0)
+        tokens_out = getattr(usage, "completion_tokens", 0)
+        cost = tokens_in * _INPUT_COST_PER_TOKEN + tokens_out * _OUTPUT_COST_PER_TOKEN
+        log_ai_request(tokens_in, tokens_out, cost, latency_ms)
+        log_ai_stage("candidate", tokens_in + tokens_out, cost)
         content = response.choices[0].message.content.strip()
         if content.startswith("```"):
             content = content.replace("```", "").strip()

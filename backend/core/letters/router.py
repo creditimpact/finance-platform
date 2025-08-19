@@ -118,6 +118,40 @@ def select_template(
                 "furnisher_address",
             ],
         ),
+        "bureau_dispute": (
+            "bureau_dispute_letter_template.html",
+            [
+                "creditor_name",
+                "account_number_masked",
+                "bureau",
+                "legal_safe_summary",
+            ],
+        ),
+        "inquiry_dispute": (
+            "inquiry_dispute_letter_template.html",
+            [
+                "inquiry_creditor_name",
+                "account_number_masked",
+                "bureau",
+                "legal_safe_summary",
+                "inquiry_date",
+            ],
+        ),
+        "medical_dispute": (
+            "medical_dispute_letter_template.html",
+            [
+                "creditor_name",
+                "account_number_masked",
+                "bureau",
+                "legal_safe_summary",
+                "amount",
+                "medical_status",
+            ],
+        ),
+        "paydown_first": (
+            "instruction_template.html",
+            ["client_name", "date", "accounts_summary", "per_account_actions"],
+        ),
     }
 
     if tag == "ignore":

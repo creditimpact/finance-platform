@@ -9,7 +9,9 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 import logging
+import time
 import uuid
+from collections import defaultdict
 
 from flask import Blueprint, Flask, jsonify, redirect, request, url_for
 from flask_cors import CORS
@@ -33,6 +35,9 @@ from backend.core.logic.letters.explanations_normalizer import (
 logger = logging.getLogger(__name__)
 
 api_bp = Blueprint("api", __name__)
+
+
+_request_counts: dict[str, list[float]] = defaultdict(list)
 
 
 @api_bp.route("/")
@@ -181,9 +186,29 @@ def create_app() -> Flask:
             return
         cfg = get_app_config()
         app.secret_key = cfg.secret_key
+        app.auth_tokens = cfg.auth_tokens
+        app.rate_limit_per_minute = cfg.rate_limit_per_minute
         logger.info("Flask app starting with OPENAI_BASE_URL=%s", cfg.ai.base_url)
         logger.info("Flask app OPENAI_API_KEY present=%s", bool(cfg.ai.api_key))
         app._config_loaded = True
+
+    @app.before_request
+    def _auth_and_throttle() -> tuple[dict, int] | None:
+        tokens: list[str] = getattr(app, "auth_tokens", [])
+        limit: int = getattr(app, "rate_limit_per_minute", 60)
+        identifier = request.remote_addr or "global"
+        if tokens:
+            auth_header = request.headers.get("Authorization", "")
+            token = auth_header[7:].strip() if auth_header.startswith("Bearer ") else None
+            if token not in tokens:
+                return jsonify({"status": "error", "message": "Unauthorized"}), 401
+            identifier = token
+        now = time.time()
+        recent = [t for t in _request_counts[identifier] if now - t < 60]
+        if len(recent) >= limit:
+            return jsonify({"status": "error", "message": "Too Many Requests"}), 429
+        recent.append(now)
+        _request_counts[identifier] = recent
 
     return app
 

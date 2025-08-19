@@ -38,3 +38,7 @@ Receives the PDF report and optional email, persists session data, and triggers 
 ## Guardrails / constraints
 - Session files store sanitized data; raw explanations remain in intake-only storage.
 - Secrets and API keys must come from environment variables.
+
+## Authentication & throttling
+- Set `API_AUTH_TOKENS` to a comma-separated list of bearer tokens. When provided, requests must include `Authorization: Bearer <token>`.
+- Configure `API_RATE_LIMIT_PER_MINUTE` to control how many requests a token or IP may make per minute. Exceeding the limit returns HTTP `429`.

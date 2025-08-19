@@ -1,6 +1,6 @@
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from backend.core.services.ai_client import AIConfig
 
@@ -52,6 +52,15 @@ ALLOW_CUSTOM_LETTERS_WITHOUT_STRATEGY = env_bool(
 )
 
 
+def env_list(name: str) -> list[str]:
+    """Read a comma-separated environment variable into a list."""
+
+    value = os.getenv(name)
+    if not value:
+        return []
+    return [v.strip() for v in value.split(",") if v.strip()]
+
+
 @dataclass
 class AppConfig:
     """Application configuration loaded from the environment."""
@@ -67,6 +76,8 @@ class AppConfig:
     celery_broker_url: str
     admin_password: str | None = None
     secret_key: str = "change-me"
+    auth_tokens: list[str] = field(default_factory=list)
+    rate_limit_per_minute: int = 60
 
 
 def get_app_config() -> AppConfig:
@@ -86,6 +97,8 @@ def get_app_config() -> AppConfig:
     celery_broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
     admin_password = os.getenv("ADMIN_PASSWORD")
     secret_key = os.getenv("SECRET_KEY", "change-me")
+    auth_tokens = env_list("API_AUTH_TOKENS")
+    rate_limit = env_int("API_RATE_LIMIT_PER_MINUTE", 60)
 
     _logger.info("OPENAI_BASE_URL=%s", base_url)
     _logger.info("OPENAI_API_KEY present=%s", bool(api_key))
@@ -116,6 +129,8 @@ def get_app_config() -> AppConfig:
         celery_broker_url=celery_broker_url,
         admin_password=admin_password,
         secret_key=secret_key,
+        auth_tokens=auth_tokens,
+        rate_limit_per_minute=rate_limit,
     )
 
 

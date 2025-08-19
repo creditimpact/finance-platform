@@ -22,6 +22,8 @@ from backend.core.logic.utils.note_handling import get_client_address_lines
 from backend.core.models.client import ClientInfo
 from backend.core.services.ai_client import AIClient
 from backend.analytics.analytics_tracker import emit_counter
+from backend.api.config import env_bool
+from backend.core.letters.client_context import format_safe_client_context
 
 
 def load_creditor_address_map() -> Mapping[str, str]:
@@ -97,6 +99,10 @@ def render_goodwill_letter(
         "closing_paragraph": gpt_data.get("closing_paragraph", ""),
         "supporting_docs": doc_names or [],
     }
+    if env_bool("SAFE_CLIENT_SENTENCE_ENABLED", False):
+        sentence = format_safe_client_context("goodwill", "", {}, [])
+        if sentence:
+            context["client_context_sentence"] = sentence
 
     env = ensure_template_env()
     template = env.get_template(template_path)

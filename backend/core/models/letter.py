@@ -42,6 +42,7 @@ class LetterContext:
     bureau_address: str = ""
     date: str = ""
     opening_paragraph: str = ""
+    client_context_sentence: str = ""
     accounts: List[LetterAccount] = field(default_factory=list)
     inquiries: List[Inquiry] = field(default_factory=list)
     closing_paragraph: str = ""
@@ -56,6 +57,7 @@ class LetterContext:
             bureau_address=data.get("bureau_address", ""),
             date=data.get("date", ""),
             opening_paragraph=data.get("opening_paragraph", ""),
+            client_context_sentence=data.get("client_context_sentence", ""),
             accounts=[LetterAccount.from_dict(a) for a in data.get("accounts", [])],
             inquiries=[Inquiry.from_dict(i) for i in data.get("inquiries", [])],
             closing_paragraph=data.get("closing_paragraph", ""),

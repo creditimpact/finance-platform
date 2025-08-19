@@ -264,7 +264,7 @@ def generate_custom_letter(
         "body_paragraph": body_paragraph,
         "supporting_docs": doc_names,
     }
-    decision = select_template("custom_letter", {"recipient": recipient})
+    decision = select_template("custom_letter", {"recipient": recipient}, "final")
     tmpl = env.get_template(decision.template_path or "general_letter_template.html")
     html = tmpl.render(**context)
     safe_recipient = (recipient or "Recipient").replace("/", "_").replace("\\", "_")

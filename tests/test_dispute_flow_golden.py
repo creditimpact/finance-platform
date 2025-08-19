@@ -60,7 +60,7 @@ def test_dispute_flow_golden(monkeypatch):
     ctx.bureau_name = "Experian"
     ctx.bureau_address = "Address"
     ctx.date = "January 1, 2024"
-    decision = select_template("dispute", {})
+    decision = select_template("dispute", {"bureau": "Experian"}, "final")
     artifact = render_dispute_letter_html(
         ctx, decision.template_path or "dispute_letter_template.html"
     )

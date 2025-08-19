@@ -13,6 +13,7 @@ def test_identity_theft_without_affidavit(rulebook):
     assert result['rule_hits'] == ['E_IDENTITY', 'E_IDENTITY_NEEDS_AFFIDAVIT']
     assert result['needs_evidence'] == ['identity_theft_affidavit']
     assert result['suggested_dispute_frame'] == 'fraud'
+    assert result['action_tag'] == 'fraud_dispute'
 
 def test_collection_with_admission(rulebook):
     account_cls = {'user_statement_raw': 'my fault'}
@@ -44,3 +45,26 @@ def test_duplicate_tradeline(rulebook):
     result = normalize_and_tag({}, facts, rulebook)
     assert result['rule_hits'] == ['L_DUPLICATE_TRADELINE']
     assert result['suggested_dispute_frame'] == 'bureau_dispute'
+
+
+def test_action_tag_precedence(rulebook):
+    facts = {
+        'type': 'late',
+        'account_history_good': True,
+        'months_since_last_late': 12,
+        'is_inaccurate_or_incomplete': True,
+    }
+    result = normalize_and_tag({}, facts, rulebook)
+    assert result['rule_hits'] == ['A_CRA_DISPUTE', 'F_GOODWILL']
+    assert result['action_tag'] == 'bureau_dispute'
+
+
+def test_action_tag_exclusion(rulebook):
+    facts = {
+        'type': 'collection',
+        'days_since_first_contact': 10,
+        'is_inaccurate_or_incomplete': True,
+    }
+    result = normalize_and_tag({}, facts, rulebook)
+    assert result['rule_hits'] == ['D_VALIDATION']
+    assert result['action_tag'] == 'debt_validation'

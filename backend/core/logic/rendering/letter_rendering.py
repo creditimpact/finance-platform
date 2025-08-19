@@ -7,6 +7,7 @@ from backend.core.logic.rendering import pdf_renderer
 from backend.core.models.letter import LetterArtifact, LetterContext
 from backend.analytics.analytics_tracker import emit_counter
 from backend.core.letters import validators
+from backend.core.letters.sanitizer import sanitize_rendered_html
 
 
 def render_dispute_letter_html(
@@ -29,6 +30,7 @@ def render_dispute_letter_html(
     template = env.get_template(template_path)
     html = template.render(**ctx)
     emit_counter(f"letter_template_selected.{template_path}")
+    html, _ = sanitize_rendered_html(html, template_path, ctx)
     return LetterArtifact(html=html)
 
 

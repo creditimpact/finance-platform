@@ -301,9 +301,12 @@ def generate_all_dispute_letters_with_ai(
         )
         if not decision.template_path:
             raise ValueError("router did not supply template_path")
-        artifact = render_dispute_letter_html(
-            context, decision.template_path
-        )
+        try:
+            artifact = render_dispute_letter_html(
+                context, decision.template_path
+            )
+        except ValueError:
+            continue
         html = artifact.html if isinstance(artifact, LetterArtifact) else artifact
         run_compliance_pipeline(
             artifact,

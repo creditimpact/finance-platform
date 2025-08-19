@@ -39,7 +39,11 @@ from backend.core.services.ai_client import AIClient
 
 from .dispute_preparation import prepare_disputes_and_inquiries
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
-from .utils import StrategyContextMissing, ensure_strategy_context
+from .utils import (
+    StrategyContextMissing,
+    ensure_strategy_context,
+    populate_required_fields,
+)
 from backend.core.letters.router import select_template
 from backend.api.config import env_bool
 from backend.core.letters.client_context import format_safe_client_context
@@ -95,6 +99,7 @@ def _apply_strategy_fields(
                         ]:
                             if strat.get(field) is not None and not acc.get(field):
                                 acc[field] = strat[field]
+                    populate_required_fields(acc, strat)
                     emit_event(
                         "strategy_applied",
                         {

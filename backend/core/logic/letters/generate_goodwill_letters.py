@@ -28,7 +28,11 @@ from backend.core.models import BureauPayload, ClientInfo
 from backend.core.models.account import Account
 from backend.core.services.ai_client import AIClient
 
-from .utils import StrategyContextMissing, ensure_strategy_context
+from .utils import (
+    StrategyContextMissing,
+    ensure_strategy_context,
+    populate_required_fields,
+)
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -76,6 +80,7 @@ def _apply_strategy_fields(
                         ]:
                             if strat.get(field) is not None and not acc.get(field):
                                 acc[field] = strat[field]
+                    populate_required_fields(acc, strat)
                     emit_event(
                         "strategy_applied",
                         {

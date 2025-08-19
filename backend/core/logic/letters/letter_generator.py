@@ -285,7 +285,7 @@ def generate_all_dispute_letters_with_ai(
             closing_paragraph=gpt_data.get("closing_paragraph", ""),
             is_identity_theft=is_identity_theft,
         )
-        decision = select_template("dispute", {"bureau": bureau_name})
+        decision = select_template("dispute", {"bureau": bureau_name}, "final")
         artifact = render_dispute_letter_html(
             context, decision.template_path or "dispute_letter_template.html"
         )

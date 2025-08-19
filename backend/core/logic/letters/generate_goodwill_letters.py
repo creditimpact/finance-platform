@@ -161,7 +161,7 @@ def generate_goodwill_letter_with_ai(
 
     _, doc_names, _ = gather_supporting_docs(session_id or "")
 
-    decision = select_template("goodwill", {"creditor": creditor})
+    decision = select_template("goodwill", {"creditor": creditor}, "final")
     goodwill_rendering.render_goodwill_letter(
         creditor,
         gpt_data,

@@ -51,7 +51,7 @@ def prepare_disputes_and_inquiries(
     account identifiers to account metadata.
     """
 
-    decision = select_template("dispute", {"bureau": bureau_name})
+    decision = select_template("dispute", {"bureau": bureau_name}, "candidate")
     log_messages.append(
         f"[{bureau_name}] Router selected template '{decision.template_path}'"
     )

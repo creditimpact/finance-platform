@@ -24,6 +24,7 @@ from backend.core.models import BureauPayload, ClientInfo
 from backend.core.services.ai_client import AIClient
 from backend.core.letters.router import select_template
 from backend.analytics.analytics_tracker import emit_counter
+from backend.core.letters.sanitizer import sanitize_rendered_html
 
 
 def get_logo_base64() -> str:
@@ -92,6 +93,7 @@ def generate_instruction_file(
             )
         return
     html = build_instruction_html(context, decision.template_path)
+    html, _ = sanitize_rendered_html(html, decision.template_path, context)
     emit_counter(f"letter_template_selected.{decision.template_path}")
     run_compliance_pipeline(
         html,

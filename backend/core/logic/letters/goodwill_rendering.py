@@ -24,6 +24,7 @@ from backend.core.services.ai_client import AIClient
 from backend.analytics.analytics_tracker import emit_counter
 from backend.api.config import env_bool
 from backend.core.letters.client_context import format_safe_client_context
+from backend.core.letters import validators
 
 
 def load_creditor_address_map() -> Mapping[str, str]:
@@ -103,10 +104,16 @@ def render_goodwill_letter(
         sentence = format_safe_client_context("goodwill", "", {}, [])
         if sentence:
             context["client_context_sentence"] = sentence
+    missing = validators.validate_substance(template_path, context)
+    if missing:
+        for field in missing:
+            emit_counter(f"validation.failed.{template_path}.{field}")
+        return
 
     env = ensure_template_env()
     template = env.get_template(template_path)
     html = template.render(**context)
+    emit_counter(f"letter_template_selected.{template_path}")
     if doc_names:
         html += "".join(doc_names)
     compliance_fn(

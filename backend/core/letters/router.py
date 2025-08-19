@@ -40,6 +40,16 @@ def select_template(
             "instruction_template.html",
             ["client_name", "date", "accounts_summary", "per_account_actions"],
         ),
+        "fraud_dispute": (
+            "fraud_dispute_letter_template.html",
+            [
+                "creditor_name",
+                "account_number_masked",
+                "bureau",
+                "legal_safe_summary",
+                "is_identity_theft",
+            ],
+        ),
         "debt_validation": (
             "debt_validation_letter_template.html",
             [

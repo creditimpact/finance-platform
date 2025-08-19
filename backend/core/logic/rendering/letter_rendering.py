@@ -6,10 +6,11 @@ from backend.assets.paths import templates_path
 from backend.core.logic.rendering import pdf_renderer
 from backend.core.models.letter import LetterArtifact, LetterContext
 from backend.analytics.analytics_tracker import emit_counter
+from backend.core.letters import validators
 
 
 def render_dispute_letter_html(
-    context: LetterContext, template_path: str
+    context: LetterContext | object, template_path: str
 ) -> LetterArtifact:
     """Render the dispute letter HTML using the Jinja template."""
 
@@ -17,9 +18,17 @@ def render_dispute_letter_html(
         emit_counter("rendering.missing_template_path")
         raise ValueError("template_path is required")
 
+    ctx = context.to_dict() if hasattr(context, "to_dict") else context
+    missing = validators.validate_substance(template_path, ctx)
+    if missing:
+        for field in missing:
+            emit_counter(f"validation.failed.{template_path}.{field}")
+        raise ValueError("substance checklist failed")
+
     env = pdf_renderer.ensure_template_env(templates_path(""))
     template = env.get_template(template_path)
-    html = template.render(**context.to_dict())
+    html = template.render(**ctx)
+    emit_counter(f"letter_template_selected.{template_path}")
     return LetterArtifact(html=html)
 
 

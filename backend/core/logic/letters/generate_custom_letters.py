@@ -17,6 +17,7 @@ from backend.audit.audit import AuditLevel, AuditLogger, emit_event
 from backend.analytics.analytics_tracker import (
     log_letter_without_strategy,
     log_policy_override_reason,
+    emit_counter,
 )
 from backend.core.logic.compliance.rules_loader import get_neutral_phrase
 from backend.core.logic.guardrails import generate_letter_with_guardrails
@@ -30,6 +31,7 @@ from backend.core.models.bureau import BureauPayload
 from backend.core.models.client import ClientInfo
 from backend.core.services.ai_client import AIClient
 from backend.core.letters.router import select_template
+from backend.core.letters import validators
 
 from .utils import StrategyContextMissing, ensure_strategy_context
 
@@ -269,8 +271,14 @@ def generate_custom_letter(
     )
     if not decision.template_path:
         raise ValueError("router did not supply template_path")
+    missing = validators.validate_substance(decision.template_path, context)
+    if missing:
+        for field in missing:
+            emit_counter(f"validation.failed.{decision.template_path}.{field}")
+        return
     tmpl = env.get_template(decision.template_path)
     html = tmpl.render(**context)
+    emit_counter(f"letter_template_selected.{decision.template_path}")
     safe_recipient = (recipient or "Recipient").replace("/", "_").replace("\\", "_")
     filename = f"Custom Letter - {safe_recipient}.pdf"
     full_path = output_path / filename

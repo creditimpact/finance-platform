@@ -285,9 +285,13 @@ def generate_all_dispute_letters_with_ai(
             closing_paragraph=gpt_data.get("closing_paragraph", ""),
             is_identity_theft=is_identity_theft,
         )
-        decision = select_template("dispute", {"bureau": bureau_name}, "final")
+        decision = select_template(
+            "dispute", {"bureau": bureau_name}, phase="finalize"
+        )
+        if not decision.template_path:
+            raise ValueError("router did not supply template_path")
         artifact = render_dispute_letter_html(
-            context, decision.template_path or "dispute_letter_template.html"
+            context, decision.template_path
         )
         html = artifact.html if isinstance(artifact, LetterArtifact) else artifact
         run_compliance_pipeline(
@@ -327,7 +331,7 @@ def generate_all_dispute_letters_with_ai(
                 f"[Alert] Issues detected generating letter for {bureau_name}",
                 stacklevel=2,
             )
-        tmpl = decision.template_path or "dispute_letter_template.html"
+        tmpl = decision.template_path
         print(
             f"[LetterSummary] letter_id={filename}, bureau={bureau_name}, action=dispute, "
             f"template={tmpl}, fallback_used={fallback_used}, "

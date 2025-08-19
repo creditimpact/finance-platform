@@ -60,9 +60,11 @@ def test_dispute_flow_golden(monkeypatch):
     ctx.bureau_name = "Experian"
     ctx.bureau_address = "Address"
     ctx.date = "January 1, 2024"
-    decision = select_template("dispute", {"bureau": "Experian"}, "final")
+    decision = select_template(
+        "dispute", {"bureau": "Experian"}, phase="finalize"
+    )
     artifact = render_dispute_letter_html(
-        ctx, decision.template_path or "dispute_letter_template.html"
+        ctx, decision.template_path
     )
     monkeypatch.setattr(
         "backend.core.logic.compliance.compliance_pipeline.fix_draft_with_guardrails",

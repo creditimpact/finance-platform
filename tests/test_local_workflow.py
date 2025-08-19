@@ -200,7 +200,9 @@ def test_minimal_workflow():
             ai_client=fake,
             strategy=None,
         )
-        html_content = instructions_generator.build_instruction_html(context)
+        html_content = instructions_generator.build_instruction_html(
+            context, "instruction_template.html"
+        )
         instructions_generator.run_compliance_pipeline(
             html_content,
             client_info.get("state"),

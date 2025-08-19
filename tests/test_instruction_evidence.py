@@ -34,6 +34,6 @@ def test_instruction_includes_evidence():
         ai_client=fake,
         strategy=strategy,
     )
-    html = build_instruction_html(context)
+    html = build_instruction_html(context, "instruction_template.html")
     assert "identity_theft_affidavit" in html
     assert accounts[0]["needs_evidence"] == ["identity_theft_affidavit"]

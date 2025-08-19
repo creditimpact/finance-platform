@@ -161,7 +161,11 @@ def generate_goodwill_letter_with_ai(
 
     _, doc_names, _ = gather_supporting_docs(session_id or "")
 
-    decision = select_template("goodwill", {"creditor": creditor}, "final")
+    decision = select_template(
+        "goodwill", {"creditor": creditor}, phase="finalize"
+    )
+    if not decision.template_path:
+        raise ValueError("router did not supply template_path")
     goodwill_rendering.render_goodwill_letter(
         creditor,
         gpt_data,
@@ -173,7 +177,7 @@ def generate_goodwill_letter_with_ai(
         audit=audit,
         compliance_fn=run_compliance_pipeline,
         pdf_fn=pdf_renderer.render_html_to_pdf,
-        template_path=decision.template_path or "goodwill_letter_template.html",
+        template_path=decision.template_path,
     )
 
 

@@ -92,7 +92,9 @@ def test_dedup_without_numbers():
             ai_client=fake,
             strategy=None,
         )
-        html = instructions_generator.build_instruction_html(context)
+        html = instructions_generator.build_instruction_html(
+            context, "instruction_template.html"
+        )
         instructions_generator.run_compliance_pipeline(
             html,
             None,

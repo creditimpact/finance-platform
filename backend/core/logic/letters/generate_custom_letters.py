@@ -29,11 +29,11 @@ from backend.core.models.account import Account
 from backend.core.models.bureau import BureauPayload
 from backend.core.models.client import ClientInfo
 from backend.core.services.ai_client import AIClient
+from backend.core.letters.router import select_template
 
 from .utils import StrategyContextMissing, ensure_strategy_context
 
 env = Environment(loader=FileSystemLoader(templates_path("")))
-template = env.get_template("general_letter_template.html")
 
 
 def _pdf_config(wkhtmltopdf_path: str | None):
@@ -264,8 +264,9 @@ def generate_custom_letter(
         "body_paragraph": body_paragraph,
         "supporting_docs": doc_names,
     }
-
-    html = template.render(**context)
+    decision = select_template("custom_letter", {"recipient": recipient})
+    tmpl = env.get_template(decision.template_path or "general_letter_template.html")
+    html = tmpl.render(**context)
     safe_recipient = (recipient or "Recipient").replace("/", "_").replace("\\", "_")
     filename = f"Custom Letter - {safe_recipient}.pdf"
     full_path = output_path / filename

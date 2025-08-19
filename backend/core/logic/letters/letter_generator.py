@@ -40,6 +40,7 @@ from backend.core.services.ai_client import AIClient
 from .dispute_preparation import prepare_disputes_and_inquiries
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
 from .utils import StrategyContextMissing, ensure_strategy_context
+from backend.core.letters.router import select_template
 
 logger = logging.getLogger(__name__)
 
@@ -284,8 +285,10 @@ def generate_all_dispute_letters_with_ai(
             closing_paragraph=gpt_data.get("closing_paragraph", ""),
             is_identity_theft=is_identity_theft,
         )
-
-        artifact = render_dispute_letter_html(context)
+        decision = select_template("dispute", {"bureau": bureau_name})
+        artifact = render_dispute_letter_html(
+            context, decision.template_path or "dispute_letter_template.html"
+        )
         html = artifact.html if isinstance(artifact, LetterArtifact) else artifact
         run_compliance_pipeline(
             artifact,
@@ -324,10 +327,10 @@ def generate_all_dispute_letters_with_ai(
                 f"[Alert] Issues detected generating letter for {bureau_name}",
                 stacklevel=2,
             )
-
+        tmpl = decision.template_path or "dispute_letter_template.html"
         print(
             f"[LetterSummary] letter_id={filename}, bureau={bureau_name}, action=dispute, "
-            f"template=dispute_letter_template.html, fallback_used={fallback_used}, "
+            f"template={tmpl}, fallback_used={fallback_used}, "
             f"raw_client_text_present={raw_client_text_present}, sanitization_issues={bureau_sanitization}"
         )
 

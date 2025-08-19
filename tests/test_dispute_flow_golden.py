@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from backend.core.logic.rendering.letter_rendering import render_dispute_letter_html
+from backend.core.letters.router import select_template
 from backend.core.models.account import Account, Inquiry
 
 
@@ -59,7 +60,10 @@ def test_dispute_flow_golden(monkeypatch):
     ctx.bureau_name = "Experian"
     ctx.bureau_address = "Address"
     ctx.date = "January 1, 2024"
-    artifact = render_dispute_letter_html(ctx)
+    decision = select_template("dispute", {})
+    artifact = render_dispute_letter_html(
+        ctx, decision.template_path or "dispute_letter_template.html"
+    )
     monkeypatch.setattr(
         "backend.core.logic.compliance.compliance_pipeline.fix_draft_with_guardrails",
         lambda *a, **k: None,

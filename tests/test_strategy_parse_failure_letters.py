@@ -111,7 +111,7 @@ def test_letters_generate_when_strategy_llm_returns_junk(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "backend.core.logic.letters.letter_generator.render_dispute_letter_html",
-        lambda context: "html",
+        lambda context, template_path: "html",
     )
 
     monkeypatch.setattr(pdfkit, "configuration", lambda *a, **k: None)

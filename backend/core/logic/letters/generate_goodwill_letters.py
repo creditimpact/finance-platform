@@ -8,14 +8,14 @@ from typing import Any, Mapping
 import backend.core.logic.letters.goodwill_preparation as goodwill_preparation
 import backend.core.logic.letters.goodwill_prompting as goodwill_prompting
 import backend.core.logic.letters.goodwill_rendering as goodwill_rendering
-from backend.core.letters.router import select_template
-from backend.api import config as api_config
-from backend.api.session_manager import get_session
-from backend.audit.audit import AuditLogger, emit_event
 from backend.analytics.analytics_tracker import (
     log_letter_without_strategy,
     log_policy_override_reason,
 )
+from backend.api import config as api_config
+from backend.api.session_manager import get_session
+from backend.audit.audit import AuditLogger, emit_event
+from backend.core.letters.router import select_template
 from backend.core.logic.compliance.compliance_pipeline import run_compliance_pipeline
 from backend.core.logic.guardrails.summary_validator import (
     validate_structured_summaries,
@@ -138,6 +138,7 @@ def generate_goodwill_letter_with_ai(
             )
             log_policy_override_reason("collection_no_goodwill")
             return
+    select_template("goodwill", {"creditor": creditor}, phase="candidate")
     client_info = client.to_dict()
     account_dicts = [a.to_dict() for a in account_objs]
     session_id = client_info.get("session_id")
@@ -166,9 +167,7 @@ def generate_goodwill_letter_with_ai(
 
     _, doc_names, _ = gather_supporting_docs(session_id or "")
 
-    decision = select_template(
-        "goodwill", {"creditor": creditor}, phase="finalize"
-    )
+    decision = select_template("goodwill", {"creditor": creditor}, phase="finalize")
     if not decision.template_path:
         raise ValueError("router did not supply template_path")
     goodwill_rendering.render_goodwill_letter(

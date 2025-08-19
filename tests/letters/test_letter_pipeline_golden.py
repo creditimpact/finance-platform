@@ -178,12 +178,17 @@ def test_letter_pipeline_golden(scenario):
             assert template is None
 
     counters = get_counters()
+    tag = scenario["action_tag"]
     if template:
         assert counters.get("router.candidate_selected") == 1
+        assert counters.get(f"router.candidate_selected.{tag}") == 1
         assert counters.get("router.finalized") == 1
+        assert counters.get(f"router.finalized.{tag}") == 1
     else:
         assert "router.candidate_selected" not in counters
+        assert f"router.candidate_selected.{tag}" not in counters
         assert "router.finalized" not in counters
+        assert f"router.finalized.{tag}" not in counters
 
     if scenario["expect_html"]:
         assert counters.get(f"letter_template_selected.{template}") == 1

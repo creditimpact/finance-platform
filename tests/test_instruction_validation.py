@@ -34,4 +34,20 @@ def test_instruction_validation_missing_actions(monkeypatch, tmp_path):
         ai_client=FakeAIClient(),
     )
     counters = get_counters()
-    assert counters.get("validation.failed.instruction_template.html.per_account_actions")
+    # Validation metrics
+    assert counters.get("validation.failed")
+    assert counters.get("validation.failed.instruction_template.html")
+    assert counters.get(
+        "validation.failed.instruction_template.html.per_account_actions"
+    )
+    # Router metrics still emitted
+    assert counters.get("router.candidate_selected")
+    assert counters.get("router.candidate_selected.instruction")
+    assert counters.get("router.finalized")
+    assert counters.get("router.finalized.instruction")
+    # No render should occur when validation fails
+    assert (
+        counters.get("letter_template_selected.instruction_template.html")
+        is None
+    )
+    assert counters.get("letter.render_ms.instruction_template.html") is None

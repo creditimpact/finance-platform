@@ -115,29 +115,27 @@ def test_pipeline_invoked_for_documents(monkeypatch, tmp_path, doc_type):
         )
         monkeypatch.setattr(
             "backend.core.logic.rendering.instruction_data_preparation.generate_account_action",
-            lambda acc, ai_client=None: "Do something",
+            lambda acc, ai_client=None: "Pay the balance",
         )
         monkeypatch.setattr(
             "backend.core.logic.rendering.pdf_renderer.render_html_to_pdf",
             lambda html, path: None,
         )
-        from backend.core.models import BureauPayload, ClientInfo
+        from backend.core.models import ClientInfo
 
         client = ClientInfo.from_dict({"name": "Client", "session_id": "s2"})
         bureau_data = {
-            "Experian": BureauPayload.from_dict(
-                {
-                    "all_accounts": [
-                        {
-                            "name": "Bank B",
-                            "status": "good",
-                            "action_tag": "positive",
-                        }
-                    ],
-                    "disputes": [],
-                    "inquiries": [],
-                }
-            )
+            "Experian": {
+                "all_accounts": [
+                    {
+                        "name": "Bank B",
+                        "status": "good",
+                        "action_tag": "positive",
+                    }
+                ],
+                "disputes": [],
+                "inquiries": [],
+            }
         }
         generate_instruction_file(
             client, bureau_data, False, tmp_path / "inst", ai_client=FakeAIClient()

@@ -1,9 +1,10 @@
 import atexit
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from backend.api import config
 from backend.core.logic.utils.pii import redact_pii
@@ -27,6 +28,31 @@ _AI_METRICS: Dict[str, float] = {
 
 # Metrics are stored as floats to support both counters and timers.
 _COUNTERS: Dict[str, float] = {}
+
+# Canary rollout decisions ---------------------------------------------------
+
+_CANARY_DECISIONS: List[Dict[str, str]] = []
+
+
+def log_canary_decision(decision: str, template: str | None = None) -> None:
+    """Record a canary routing decision for analytics snapshots."""
+
+    entry = {"timestamp": datetime.now().isoformat(), "decision": decision}
+    if template:
+        entry["template"] = template
+    _CANARY_DECISIONS.append(entry)
+
+
+def get_canary_decisions() -> List[Dict[str, str]]:
+    """Return recorded canary decisions (for tests)."""
+
+    return list(_CANARY_DECISIONS)
+
+
+def reset_canary_decisions() -> None:
+    """Clear stored canary decisions (for tests)."""
+
+    _CANARY_DECISIONS.clear()
 
 
 def emit_counter(name: str, increment: float = 1) -> None:
@@ -200,6 +226,55 @@ def reset_ai_stats() -> None:
     _AI_METRICS.update(tokens_in=0, tokens_out=0, cost=0.0, latency_ms=0.0)
 
 
+# Canary guardrails ----------------------------------------------------------
+
+
+def check_canary_guardrails(
+    render_ms_ceiling: float,
+    sanitizer_rate_limit: float,
+    ai_daily_cap: float,
+) -> bool:
+    """Check canary SLOs and halt rollout if breached.
+
+    Returns True if the canary was halted.
+    """
+
+    counters = get_counters()
+    ai_stats = get_ai_stats()
+    breached = False
+
+    templates = set()
+    for key in counters:
+        if key.startswith("router.finalized.") or key.startswith(
+            "validation.failed."
+        ) or key.startswith("sanitizer.applied.") or key.startswith(
+            "letter.render_ms."
+        ):
+            templates.add(key.split(".")[-1])
+
+    for tmpl in templates:
+        total = counters.get(f"router.finalized.{tmpl}", 0)
+        fails = counters.get(f"validation.failed.{tmpl}", 0)
+        renders = counters.get(f"letter.render_ms.{tmpl}", 0.0)
+        sanit = counters.get(f"sanitizer.applied.{tmpl}", 0)
+        if total:
+            if fails / total >= 0.01:
+                breached = True
+            if sanit / total > sanitizer_rate_limit:
+                breached = True
+        if renders and renders > render_ms_ceiling:
+            breached = True
+
+    if ai_stats.get("cost", 0.0) > ai_daily_cap:
+        breached = True
+
+    if breached:
+        emit_counter("canary.halt")
+        log_canary_decision("halt")
+        os.environ["ROUTER_CANARY_PERCENT"] = "0"
+    return breached
+
+
 def _flush_on_exit() -> None:
     if _OPS:
         _write_cache_snapshot()
@@ -258,6 +333,8 @@ def save_analytics_snapshot(
         "counters": get_counters(),
         "ai": get_ai_stats(),
     }
+
+    snapshot["canary"] = get_canary_decisions()
 
     with open(filename, "w", encoding="utf-8") as f:
         f.write(redact_pii(json.dumps(snapshot, indent=2)))

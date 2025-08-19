@@ -1,0 +1,22 @@
+[
+  {
+    "action_tag": "dispute",
+    "template": "dispute_letter_template.html",
+    "candidate_missing_fields": ["bureau", "creditor"],
+    "final_missing_fields": ["bureau"],
+    "validation_failed_fields": ["bureau"],
+    "sanitizer_overrides": ["promise to pay"],
+    "render_ms": 50,
+    "ai_cost": 0.01
+  },
+  {
+    "action_tag": "goodwill",
+    "template": "goodwill_letter_template.html",
+    "candidate_missing_fields": [],
+    "final_missing_fields": [],
+    "validation_failed_fields": [],
+    "sanitizer_overrides": [],
+    "render_ms": 70,
+    "ai_cost": 0.02
+  }
+]

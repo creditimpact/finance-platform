@@ -1,0 +1,4 @@
+{
+  "rule_hits": ["TM_PRESENCE", "TM_BALANCE"],
+  "action_tag": "bureau_dispute"
+}

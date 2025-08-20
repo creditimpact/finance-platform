@@ -28,11 +28,8 @@ from backend.core.models import BureauPayload, ClientInfo
 from backend.core.models.account import Account
 from backend.core.services.ai_client import AIClient
 
-from .utils import (
-    StrategyContextMissing,
-    ensure_strategy_context,
-    populate_required_fields,
-)
+from .exceptions import StrategyContextMissing
+from .utils import ensure_strategy_context, populate_required_fields
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -244,7 +241,10 @@ def generate_goodwill_letters(
     except StrategyContextMissing as exc:  # pragma: no cover - enforcement
         emit_event(
             "strategy_context_missing",
-            {"account_id": exc.account_id, "letter_type": "goodwill"},
+            {
+                "account_id": exc.args[0] if exc.args else None,
+                "letter_type": "goodwill",
+            },
         )
         raise
 

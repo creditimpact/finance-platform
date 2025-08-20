@@ -15,11 +15,8 @@ from backend.core.letters import validators
 from backend.core.letters.client_context import format_safe_client_context
 from backend.core.letters.router import select_template
 from backend.core.letters.sanitizer import sanitize_rendered_html
-from backend.core.logic.letters.utils import (
-    StrategyContextMissing,
-    ensure_strategy_context,
-    populate_required_fields,
-)
+from backend.core.logic.letters.exceptions import StrategyContextMissing
+from backend.core.logic.letters.utils import ensure_strategy_context, populate_required_fields
 from backend.core.logic.utils.note_handling import get_client_address_lines
 from backend.core.models.account import Account
 from backend.core.models.client import ClientInfo
@@ -47,7 +44,10 @@ def generate_debt_validation_letter(
     except StrategyContextMissing as exc:  # pragma: no cover - enforcement
         emit_event(
             "strategy_context_missing",
-            {"account_id": exc.account_id, "letter_type": "debt_validation"},
+            {
+                "account_id": exc.args[0] if exc.args else None,
+                "letter_type": "debt_validation",
+            },
         )
         raise
 

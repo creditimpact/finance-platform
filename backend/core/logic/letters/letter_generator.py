@@ -39,11 +39,8 @@ from backend.core.services.ai_client import AIClient
 
 from .dispute_preparation import prepare_disputes_and_inquiries
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
-from .utils import (
-    StrategyContextMissing,
-    ensure_strategy_context,
-    populate_required_fields,
-)
+from .exceptions import StrategyContextMissing
+from .utils import ensure_strategy_context, populate_required_fields
 from backend.core.letters.router import select_template
 from backend.api.config import env_bool
 from backend.core.letters.client_context import format_safe_client_context
@@ -181,7 +178,7 @@ def generate_all_dispute_letters_with_ai(
     except StrategyContextMissing as exc:  # pragma: no cover - enforcement
         emit_event(
             "strategy_context_missing",
-            {"account_id": exc.account_id, "letter_type": "dispute"},
+            {"account_id": exc.args[0] if exc.args else None, "letter_type": "dispute"},
         )
         raise
     strategy_summaries = validate_structured_summaries(

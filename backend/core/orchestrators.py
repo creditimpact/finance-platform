@@ -15,8 +15,8 @@ from shutil import copyfile
 from typing import Any, Mapping
 
 from backend.analytics.analytics.strategist_failures import tally_failure_reasons
-from backend.analytics.analytics_tracker import save_analytics_snapshot
-from backend.api.config import AppConfig, get_app_config
+from backend.analytics.analytics_tracker import emit_counter, save_analytics_snapshot
+from backend.api.config import AppConfig, get_app_config, env_bool
 from backend.api.session_manager import update_session
 from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLevel
@@ -604,7 +604,49 @@ def run_credit_repair_process(
         pdf_path, sections, bureau_data, today_folder = analyze_credit_report(
             proofs_files, session_id, client_info, audit, log_messages, ai_client
         )
+        tri_merge_map: dict[str, dict[str, Any]] = {}
+        if env_bool("ENABLE_TRI_MERGE", False):
+            from backend.core.logic.report_analysis.tri_merge import (
+                normalize_and_match,
+                compute_mismatches,
+            )
+            from backend.core.logic.report_analysis.tri_merge_models import Tradeline
+
+            tradelines: list[Tradeline] = []
+            for bureau, payload in bureau_data.items():
+                for section, items in payload.items():
+                    if section == "inquiries" or not isinstance(items, list):
+                        continue
+                    for acc in items:
+                        tradelines.append(
+                            Tradeline(
+                                creditor=str(acc.get("name") or ""),
+                                bureau=bureau,
+                                account_number=acc.get("account_number"),
+                                data=acc,
+                            )
+                        )
+            families = normalize_and_match(tradelines)
+            compute_mismatches(families)
+            emit_counter("tri_merge.families_total", len(families))
+            emit_counter(
+                "tri_merge.mismatches_total",
+                sum(len(getattr(f, "mismatches", [])) for f in families),
+            )
+            for fam in families:
+                family_id = getattr(fam, "family_id", None)
+                mismatch_types = [m.field for m in getattr(fam, "mismatches", [])]
+                evidence_id = family_id
+                for tl in fam.tradelines.values():
+                    acc_id = str(tl.data.get("account_id") or "")
+                    if acc_id and family_id:
+                        tri_merge_map[acc_id] = {
+                            "family_id": family_id,
+                            "mismatch_types": mismatch_types,
+                            "evidence_snapshot_id": evidence_id,
+                        }
         facts_map: dict[str, dict[str, Any]] = {}
+        seen_mismatched_accounts: set[str] = set()
         for key in (
             "negative_accounts",
             "open_accounts_with_issues",
@@ -615,6 +657,15 @@ def run_credit_repair_process(
             for acc in sections.get(key, []):
                 acc_id = str(acc.get("account_id") or "")
                 if acc_id:
+                    tri_info = tri_merge_map.get(acc_id)
+                    if tri_info:
+                        acc["tri_merge"] = tri_info
+                        if (
+                            tri_info.get("mismatch_types")
+                            and acc_id not in seen_mismatched_accounts
+                        ):
+                            emit_counter("tri_merge.accounts_with_mismatch")
+                            seen_mismatched_accounts.add(acc_id)
                     facts_map[acc_id] = acc
         stage_2_5: dict[str, Any] = {}
         for acc_id in set(facts_map) | set(classification_map):

@@ -1,0 +1,23 @@
+dispute:
+  - template: dispute_letter_template.html
+    required_fields:
+      - bureau
+goodwill:
+  - template: goodwill_letter_template.html
+    required_fields:
+      - creditor
+instruction:
+  - template: instruction_template.html
+    required_fields:
+      - client_name
+      - date
+      - accounts_summary
+      - per_account_actions
+fraud_dispute:
+  - template: fraud_dispute_letter_template.html
+    required_fields:
+      - creditor_name
+      - account_number_masked
+      - bureau
+      - legal_safe_summary
+      - is_identity_theft

@@ -46,3 +46,16 @@ def test_tri_merge_presence_rule() -> None:
     result = evaluate_rules("", {}, rb, tri)
     assert result["rule_hits"] == ["TM_PRESENCE"]
     assert result["tri_merge"]["evidence_snapshot_id"] == "snap1"
+
+
+def test_rule_evaluation_stable_action_tag() -> None:
+    rb = load_rulebook()
+    facts = {
+        "identity_theft": True,
+        "has_id_theft_affidavit": True,
+        "type": "collection",
+        "days_since_first_contact": 10,
+    }
+    res1 = evaluate_rules("", facts, rb)
+    res2 = evaluate_rules("", facts, rb)
+    assert res1["action_tag"] == res2["action_tag"]

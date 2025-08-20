@@ -311,6 +311,9 @@ def evaluate_rules(
     suggested_dispute_frame = ""
     action_tags: list[str] = []
     suppressed: set[str] = set()
+    priority_order = {"High": 3, "Medium": 2, "Low": 1}
+    best_tag = ""
+    best_pri = 0
 
     for rule_id, effect in sorted_hits:
         if rule_id in suppressed:
@@ -322,6 +325,12 @@ def evaluate_rules(
         tag = effect.get("action_tag")
         if tag:
             action_tags.append(tag)
+            pri = priority_order.get(str(effect.get("priority", "Low")), 0)
+            if pri > best_pri:
+                best_pri = pri
+                best_tag = tag
+        for ex in effect.get("excludes", []):
+            suppressed.add(ex)
         for ex in (exclusions or {}).get(rule_id, []):
             suppressed.add(ex)
 
@@ -338,7 +347,7 @@ def evaluate_rules(
         "needs_evidence": needs_evidence,
         "red_flags": red_flags,
         "suggested_dispute_frame": suggested_dispute_frame,
-        "action_tag": action_tags[0] if action_tags else "",
+        "action_tag": best_tag or (action_tags[0] if action_tags else ""),
     }
     if tri_merge:
         result["tri_merge"] = tri_merge

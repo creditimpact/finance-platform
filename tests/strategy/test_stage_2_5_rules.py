@@ -1,6 +1,6 @@
 import pytest
 from backend.policy.policy_loader import load_rulebook
-from backend.core.logic.strategy.normalizer_2_5 import normalize_and_tag
+from backend.core.logic.strategy.normalizer_2_5 import normalize_and_tag, evaluate_rules
 
 
 @pytest.fixture
@@ -68,3 +68,36 @@ def test_action_tag_exclusion(rulebook):
     result = normalize_and_tag({}, facts, rulebook)
     assert result['rule_hits'] == ['D_VALIDATION']
     assert result['action_tag'] == 'debt_validation'
+
+
+def test_effect_level_excludes(rulebook):
+    facts = {
+        'type': 'late',
+        'account_history_good': True,
+        'months_since_last_late': 12,
+        'is_open_revolving': True,
+        'utilization': 0.95,
+    }
+    result = normalize_and_tag({}, facts, rulebook)
+    assert result['rule_hits'] == ['K_UTILIZATION_PAYDOWN']
+    assert result['action_tag'] == 'paydown_first'
+
+
+def test_priority_overrides_precedence():
+    rulebook = {
+        'rules': [
+            {
+                'id': 'LOW_FIRST',
+                'when': {'all': [{'field': 'flag', 'eq': True}]},
+                'effect': {'action_tag': 'low', 'priority': 'Low'},
+            },
+            {
+                'id': 'HIGH_SECOND',
+                'when': {'all': [{'field': 'flag', 'eq': True}]},
+                'effect': {'action_tag': 'high', 'priority': 'High'},
+            },
+        ],
+        'precedence': ['LOW_FIRST', 'HIGH_SECOND'],
+    }
+    result = evaluate_rules('', {'flag': True}, rulebook)
+    assert result['action_tag'] == 'high'

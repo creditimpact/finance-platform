@@ -13,6 +13,10 @@ flags:
   REQUIRE_ID_THEFT_EVIDENCE: true      # אם יש זהות גנובה—נדרש תצהיר/דו"ח
   ENABLE_MEDICAL_POLICY: true          # להפעיל מדיניות רפואית (תחת/שולם)
 
+# Rule evaluation notes:
+# - Rules are processed according to `precedence` (highest first).
+# - A triggered rule may list rule IDs in `excludes` to suppress them.
+# - Among surviving rules, the highest `priority` determines the final `action_tag`.
 # סדר הפעלה (גבוה → נמוך)
 precedence:
   - E_IDENTITY
@@ -350,6 +354,7 @@ rules:
       flags: ["paydown_first"]
       action_tag: paydown_first
       priority: Medium
+      excludes: ["F_GOODWILL"]
 
   # --- 12) Goodwill (רק ל-late, היסטוריה טובה, לא collections כשflag פעיל) ---
   - id: F_GOODWILL

@@ -1,0 +1,96 @@
+from backend.core.logic.report_analysis.tri_merge import normalize_and_match, compute_mismatches
+from backend.core.logic.report_analysis.tri_merge_models import Tradeline
+
+
+def test_fuzzy_creditor_matching():
+    tls = [
+        Tradeline(
+            creditor="Citi",
+            bureau="Experian",
+            account_number="11114444",
+            data={"date_opened": "2020-01-01", "date_reported": "2020-02-01"},
+        ),
+        Tradeline(
+            creditor="CBNA",
+            bureau="Equifax",
+            account_number="22224444",
+            data={"date_opened": "2020-01-01", "date_reported": "2020-02-01"},
+        ),
+        Tradeline(
+            creditor="Citicard",
+            bureau="TransUnion",
+            account_number="33334444",
+            data={"date_opened": "2020-01-01", "date_reported": "2020-02-01"},
+        ),
+    ]
+
+    families = normalize_and_match(tls)
+    assert len(families) == 1
+    fam = families[0]
+    assert set(fam.tradelines.keys()) == {"Experian", "Equifax", "TransUnion"}
+    assert fam.match_confidence == 1.0
+
+
+def test_presence_and_field_mismatches():
+    tls = [
+        Tradeline(
+            creditor="Chase",
+            bureau="Experian",
+            account_number="12341234",
+            data={
+                "balance": 100,
+                "status": "open",
+                "date_opened": "2020-01-01",
+                "remarks": "OK",
+                "utilization": 0.1,
+                "personal_info": "PI1",
+                "date_reported": "2020-02-01",
+            },
+        ),
+        Tradeline(
+            creditor="Chase Bank",
+            bureau="Equifax",
+            account_number="00001234",
+            data={
+                "balance": 100,
+                "status": "open",
+                "date_opened": "2020-01-01",
+                "remarks": "OK",
+                "utilization": 0.1,
+                "personal_info": "PI1",
+                "date_reported": "2020-02-01",
+            },
+        ),
+    ]
+
+    families = normalize_and_match(tls)
+    fam = families[0]
+    fam.tradelines["Equifax"].data.update(
+        {
+            "balance": 200,
+            "status": "closed",
+            "date_opened": "2020-02-01",
+            "remarks": "Late",
+            "utilization": 0.5,
+            "personal_info": "PI2",
+        }
+    )
+
+    families = compute_mismatches(families)
+    fam = families[0]
+    mism = {m.field: m for m in fam.mismatches}
+
+    assert mism["presence"].values == {
+        "Experian": True,
+        "Equifax": True,
+        "TransUnion": False,
+    }
+    assert mism["balance"].values == {"Experian": 100, "Equifax": 200}
+    assert mism["status"].values == {"Experian": "open", "Equifax": "closed"}
+    assert mism["dates"].values == {
+        "Experian": "2020-01-01",
+        "Equifax": "2020-02-01",
+    }
+    assert mism["remarks"].values == {"Experian": "OK", "Equifax": "Late"}
+    assert mism["utilization"].values == {"Experian": 0.1, "Equifax": 0.5}
+    assert mism["personal_info"].values == {"Experian": "PI1", "Equifax": "PI2"}

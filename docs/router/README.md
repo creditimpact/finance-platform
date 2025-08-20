@@ -16,6 +16,11 @@ available candidates and bureau evidence.
 ## Metrics
 - `router.candidate_selected{tag}` – emitted for every selection, with `tag`
   set to the action tag or `default` on fallback.
+- `router.finalized.{tag}.{template}` – emitted when a template is finalized.
+- `router.missing_fields.finalize.{tag}.{field}` – required fields still missing
+  after finalization.
+- `router.sanitize_success.{template}` / `router.sanitize_failure.{template}` –
+  outcome of HTML sanitization.
 
 ## Action tags
 | action_tag | candidate templates | required fields |

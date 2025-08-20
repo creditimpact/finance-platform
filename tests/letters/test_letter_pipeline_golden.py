@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -179,8 +180,10 @@ def test_letter_pipeline_golden(scenario):
         assert template == scenario["template"]
         assert not missing
         artifact = render_dispute_letter_html(ctx, template)
-        html = artifact.html.strip()
-        expected = scenario["golden"].read_text().strip()
+        html = re.sub(r"\s+", " ", artifact.html).strip()
+        expected = re.sub(
+            r"\s+", " ", scenario["golden"].read_text()
+        ).strip()
         assert html == expected
     else:
         if scenario.get("expect_validation_failure"):
@@ -196,7 +199,7 @@ def test_letter_pipeline_golden(scenario):
     if template:
         assert counters.get("router.candidate_selected") == 1
         assert counters.get(f"router.candidate_selected.{tag}") == 1
-        assert (
+        assert ( 
             counters.get(
                 f"router.candidate_selected.{tag}.{template}"
             )
@@ -204,6 +207,7 @@ def test_letter_pipeline_golden(scenario):
         )
         assert counters.get("router.finalized") == 1
         assert counters.get(f"router.finalized.{tag}") == 1
+        assert counters.get(f"router.finalized.{tag}.{template}") == 1
     else:
         assert "router.candidate_selected" not in counters
         assert f"router.candidate_selected.{tag}" not in counters

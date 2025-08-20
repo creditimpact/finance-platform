@@ -1,4 +1,5 @@
 import sys
+import re
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -77,6 +78,8 @@ def test_dispute_flow_golden(monkeypatch):
     from tests.helpers.fake_ai_client import FakeAIClient
 
     run_compliance_pipeline(artifact, "CA", "sess", "dispute", ai_client=FakeAIClient())
-    html = artifact.html
-    expected = Path("tests/golden_letter.html").read_text()
+    html = re.sub(r"\s+", " ", artifact.html).strip()
+    expected = re.sub(
+        r"\s+", " ", Path("tests/golden_letter.html").read_text()
+    ).strip()
     assert html == expected

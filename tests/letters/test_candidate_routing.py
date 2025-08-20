@@ -77,9 +77,13 @@ def test_finalize_routing_missing_fields(monkeypatch, tag, template, fields):
     counters = get_counters()
     assert counters.get("router.finalized") == 1
     assert counters.get(f"router.finalized.{tag}") == 1
+    assert counters.get(f"router.finalized.{tag}.{template}") == 1
     for field in fields:
         key = f"router.missing_fields.{tag}.{template}.{field}"
         assert counters.get(key) == 1
+        assert (
+            counters.get(f"router.missing_fields.finalize.{tag}.{field}") == 1
+        )
 
 
 def test_instruction_skips_validation(monkeypatch):

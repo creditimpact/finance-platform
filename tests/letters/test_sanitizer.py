@@ -27,6 +27,10 @@ def test_sanitizer_redacts_and_normalizes_whitespace():
     assert counters["sanitizer.success.dispute_letter_template.html"] == 1
     assert counters["sanitizer.applied.dispute_letter_template.html"] == 1
     assert "sanitizer.failure.dispute_letter_template.html" not in counters
+    assert (
+        counters["router.sanitize_success.dispute_letter_template.html"] == 1
+    )
+    assert "router.sanitize_failure.dispute_letter_template.html" not in counters
 
 
 def test_sanitizer_reports_format_failure():
@@ -42,3 +46,7 @@ def test_sanitizer_reports_format_failure():
     assert counters["sanitizer.failure.dispute_letter_template.html"] == 1
     assert counters["sanitizer.applied.dispute_letter_template.html"] == 1
     assert "sanitizer.success.dispute_letter_template.html" not in counters
+    assert (
+        counters["router.sanitize_failure.dispute_letter_template.html"] == 1
+    )
+    assert "router.sanitize_success.dispute_letter_template.html" not in counters

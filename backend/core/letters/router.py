@@ -281,10 +281,15 @@ def select_template(
             emit_counter("router.finalized")  # deprecated
             if tag:
                 emit_counter(f"router.finalized.{tag}")
+                emit_counter(f"router.finalized.{tag}.{template_name}")
 
         if missing_fields:
             for field in missing_fields:
                 emit_counter(f"router.missing_fields.{tag}.{template_name}.{field}")
+                if phase == "finalize":
+                    emit_counter(
+                        f"router.missing_fields.finalize.{tag}.{field}"
+                    )
 
     return _cache_and_return(
         TemplateDecision(

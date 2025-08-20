@@ -48,5 +48,8 @@ def test_instruction_metrics_emitted(monkeypatch, tmp_path):
     )
     assert counters.get("router.finalized")
     assert counters.get("router.finalized.instruction")
+    assert counters.get(
+        "router.finalized.instruction.instruction_template.html"
+    )
     assert counters.get("letter_template_selected.instruction_template.html")
     assert counters.get("letter.render_ms.instruction_template.html") is not None

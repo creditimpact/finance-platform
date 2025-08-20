@@ -67,8 +67,15 @@ and mapping it in `services/letters/router.py`.
 
 - `router.candidate_selected.{action_tag}.{template_name}` – emitted for each
   candidate template selection.
+- `router.finalized.{action_tag}.{template_name}` – emitted when a template is
+  finalized.
 - `router.missing_fields.{action_tag}.{template_name}.{field}` – emitted for
   every required field absent from a candidate.
+- `router.missing_fields.finalize.{action_tag}.{field}` – emitted for missing
+  fields after finalization.
+- `router.sanitize_success.{template_name}` and
+  `router.sanitize_failure.{template_name}` – outcomes of the post-render
+  sanitizer.
 
 Cardinality is bounded by the finite sets of action tags, template names and
 required field identifiers.
@@ -77,5 +84,11 @@ required field identifiers.
 
 - **Candidate selection** – count of `router.candidate_selected.*` by tag and
   template. Alert if a tag registers zero selections for an hour.
-- **Missing field heatmap** – sum of `router.missing_fields.*` grouped by tag
-  and field to surface validation gaps.
+- **Final template selection** – count of `router.finalized.*` grouped by tag
+  and template to spot unexpected routing drops.
+- **Candidate missing fields** – heatmap of `router.missing_fields.*` grouped by
+  tag and field to surface validation gaps.
+- **Finalize missing fields** – sum of
+  `router.missing_fields.finalize.*` grouped by tag and field.
+- **Sanitizer outcomes** – success vs failure rates from
+  `router.sanitize_*.*`.

@@ -71,6 +71,10 @@ def test_finalize_routing_emits_missing_fields_after_stage_2_5(
     tag = ctx["action_tag"]
     assert counters.get("router.finalized") == 1
     assert counters.get(f"router.finalized.{tag}") == 1
+    assert counters.get(f"router.finalized.{tag}.{template}") == 1
     for field in decision.missing_fields:
         key = f"router.missing_fields.{tag}.{template}.{field}"
         assert counters.get(key) == 1
+        assert (
+            counters.get(f"router.missing_fields.finalize.{tag}.{field}") == 1
+        )

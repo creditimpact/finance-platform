@@ -106,6 +106,9 @@ def get_missing_fields_heatmap() -> Dict[str, Dict[str, int]]:
         if not key.startswith(prefix):
             continue
         rest = key[len(prefix) :]
+        if rest.startswith("finalize."):
+            # Finalize metrics are tracked separately and do not include the template
+            continue
         try:
             tag, remainder = rest.split(".", 1)
             _template, field = remainder.rsplit(".", 1)

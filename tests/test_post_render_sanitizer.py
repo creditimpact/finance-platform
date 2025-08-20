@@ -20,6 +20,7 @@ def test_sanitize_blocks_goodwill_for_collections():
         counters["policy_override_reason.dispute_letter_template.html.goodwill"]
         == 1
     )
+    assert counters["router.sanitize_success.dispute_letter_template.html"] == 1
 
 
 def test_sanitize_noop_for_clean_html():
@@ -34,6 +35,7 @@ def test_sanitize_noop_for_clean_html():
     assert (
         "sanitizer.applied.dispute_letter_template.html" not in counters
     )
+    assert counters["router.sanitize_success.dispute_letter_template.html"] == 1
 
 
 def _base_ctx(body: str) -> dict:
@@ -57,6 +59,7 @@ def test_render_dispute_letter_html_runs_sanitizer():
     assert "promise to pay" not in artifact.html.lower()
     counters = get_counters()
     assert counters["sanitizer.applied.general_letter_template.html"] == 1
+    assert counters["router.sanitize_success.general_letter_template.html"] == 1
 
 
 def test_render_dispute_letter_html_noop_for_clean_doc():
@@ -65,4 +68,4 @@ def test_render_dispute_letter_html_noop_for_clean_doc():
     artifact = render_dispute_letter_html(ctx, "general_letter_template.html")
     assert "friendly note" in artifact.html
     counters = get_counters()
-    assert "sanitizer.applied.general_letter_template.html" not in counters
+    assert counters["router.sanitize_success.general_letter_template.html"] == 1

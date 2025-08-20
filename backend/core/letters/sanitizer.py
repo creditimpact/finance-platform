@@ -109,8 +109,10 @@ def sanitize_rendered_html(
     ]
     if remaining_terms or not format_ok:
         emit_counter(f"sanitizer.failure.{template_path}")
+        emit_counter(f"router.sanitize_failure.{template_path}")
     else:
         emit_counter(f"sanitizer.success.{template_path}")
+        emit_counter(f"router.sanitize_success.{template_path}")
 
     return sanitized, overrides
 

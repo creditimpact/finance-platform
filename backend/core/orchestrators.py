@@ -7,6 +7,7 @@ steps of the credit repair workflow.  All core orchestration lives here;
 """
 
 import os
+import random
 import time
 import warnings
 from datetime import datetime
@@ -17,7 +18,13 @@ from typing import Any, Mapping
 import tactical
 from backend.analytics.analytics.strategist_failures import tally_failure_reasons
 from backend.analytics.analytics_tracker import emit_counter, save_analytics_snapshot
-from backend.api.config import AppConfig, env_bool, get_app_config
+from backend.api.config import (
+    ENABLE_PLANNER,
+    PLANNER_CANARY_PERCENT,
+    AppConfig,
+    env_bool,
+    get_app_config,
+)
 from backend.api.session_manager import update_session
 from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLevel
@@ -51,6 +58,31 @@ from backend.core.models import (
 from backend.core.services.ai_client import AIClient, get_ai_client
 from backend.policy.policy_loader import load_rulebook
 from planner import plan_next_step
+
+
+def plan_and_generate_letters(session: dict, action_tags: list[str]) -> list[str]:
+    """Optionally run the planner before generating letters.
+
+    The planner is executed when ``ENABLE_PLANNER`` is true and a random draw is
+    below ``PLANNER_CANARY_PERCENT``.  Otherwise the tactical pipeline runs with
+    the original ``action_tags`` to preserve legacy behavior.
+
+    Args:
+        session: Session context passed to the tactical layer.
+        action_tags: Proposed tags for this run.
+
+    Returns:
+        The tags passed to ``tactical.generate_letters``.
+    """
+
+    use_planner = ENABLE_PLANNER
+    if use_planner and PLANNER_CANARY_PERCENT < 100:
+        if random.random() >= PLANNER_CANARY_PERCENT / 100:
+            use_planner = False
+
+    tags = plan_next_step(session, action_tags) if use_planner else list(action_tags)
+    tactical.generate_letters(session, tags)
+    return tags
 
 
 def process_client_intake(client_info, audit):
@@ -713,8 +745,7 @@ def run_credit_repair_process(
         action_tags = [
             ctx.get("action_tag") for ctx in stage_2_5.values() if ctx.get("action_tag")
         ]
-        allowed_tags = plan_next_step(session_ctx, action_tags)
-        tactical.generate_letters(session_ctx, allowed_tags)
+        plan_and_generate_letters(session_ctx, action_tags)
         finalize_outputs(
             client_info, today_folder, sections, audit, log_messages, app_config
         )

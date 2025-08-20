@@ -8,6 +8,8 @@
 - Optional AI admission detection for Stage 2.5 when regex patterns find no admission.
 - Document Stage 3 hardening flow, versions, metrics, and troubleshooting guidance.
 - Map tri-merge mismatch types to canonical action tags with traceable metadata. (Epic B)
+- Gate planner usage behind `ENABLE_PLANNER` with `PLANNER_CANARY_PERCENT` to
+  gradually roll out or quickly revert to the pre-planner pipeline.
 ### Removed
 - Remove deprecated shims and aliases in audit, letter rendering, goodwill letters, instructions, and report analysis modules.
 - Remove unused `logic.copy_documents` module.

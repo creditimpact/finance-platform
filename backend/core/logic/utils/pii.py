@@ -38,6 +38,13 @@ def redact_pii(text: str) -> str:
     return redacted
 
 
+def mask_account(account_number: str) -> str:
+    """Return ``account_number`` masked except for the last four digits."""
+
+    digits = re.sub(r"\D", "", account_number)
+    return "****" + digits[-4:]
+
+
 def mask_account_fields(data: Dict[str, Any]) -> Dict[str, Any]:
     """Return a copy of ``data`` with account numbers and SSNs masked."""
 

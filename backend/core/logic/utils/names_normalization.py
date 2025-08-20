@@ -127,6 +127,12 @@ def normalize_creditor_name(raw_name: str) -> str:
     return name.strip()
 
 
+def canonicalize_creditor(name: str) -> str:
+    """Public helper wrapping :func:`normalize_creditor_name`."""
+
+    return normalize_creditor_name(name)
+
+
 def normalize_bureau_name(name: str | None) -> str:
     """Return canonical bureau name for various capitalizations/aliases."""
     if not name:

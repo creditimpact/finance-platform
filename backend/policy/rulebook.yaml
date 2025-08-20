@@ -140,6 +140,15 @@ rules:
       priority: High
 
   # --- 5) Tri-merge mismatches ---
+  # mismatch_type -> action_tag mapping for traceability:
+  #   presence       -> bureau_dispute
+  #   balance        -> mov
+  #   status         -> mov
+  #   dates          -> mov
+  #   remarks        -> bureau_dispute
+  #   utilization    -> mov
+  #   personal_info  -> personal_info_correction
+  #   duplicate      -> bureau_dispute
   - id: TM_PRESENCE
     description: Tradeline present on some bureaus but missing on others → dispute with bureau.
     when:
@@ -150,6 +159,7 @@ rules:
       suggested_dispute_frame: "bureau_dispute"
       action_tag: bureau_dispute
       needs_evidence: ["tri_merge_snapshot"]
+      source_mismatch: tri_merge.presence  # presence mismatch across bureaus
       priority: High
 
   - id: TM_BALANCE
@@ -162,6 +172,7 @@ rules:
       suggested_dispute_frame: "mov_request"
       action_tag: mov
       needs_evidence: ["tri_merge_snapshot"]
+      source_mismatch: tri_merge.balance  # balance mismatch across bureaus
       priority: High
 
   - id: TM_STATUS
@@ -174,6 +185,7 @@ rules:
       suggested_dispute_frame: "mov_request"
       action_tag: mov
       needs_evidence: ["tri_merge_snapshot"]
+      source_mismatch: tri_merge.status  # status mismatch across bureaus
       priority: High
 
   - id: TM_DATES
@@ -186,6 +198,7 @@ rules:
       suggested_dispute_frame: "mov_request"
       action_tag: mov
       needs_evidence: ["tri_merge_snapshot"]
+      source_mismatch: tri_merge.dates  # date mismatch across bureaus
       priority: High
 
   - id: TM_REMARKS
@@ -198,6 +211,7 @@ rules:
       suggested_dispute_frame: "bureau_dispute"
       action_tag: bureau_dispute
       needs_evidence: ["tri_merge_snapshot"]
+      source_mismatch: tri_merge.remarks  # remarks mismatch across bureaus
       priority: High
 
   - id: TM_UTILIZATION
@@ -210,6 +224,7 @@ rules:
       suggested_dispute_frame: "mov_request"
       action_tag: mov
       needs_evidence: ["tri_merge_snapshot"]
+      source_mismatch: tri_merge.utilization  # utilization mismatch across bureaus
       priority: High
 
   - id: TM_PERSONAL_INFO
@@ -222,6 +237,7 @@ rules:
       suggested_dispute_frame: "personal_info_correction"
       action_tag: personal_info_correction
       needs_evidence: ["tri_merge_snapshot"]
+      source_mismatch: tri_merge.personal_info  # personal info mismatch across bureaus
       priority: High
 
   - id: TM_DUPLICATE
@@ -235,6 +251,7 @@ rules:
       action_tag: bureau_dispute
       flags: ["duplicate_tradeline"]
       needs_evidence: ["tri_merge_snapshot"]
+      source_mismatch: tri_merge.duplicate  # duplicate tradeline mismatch across bureaus
       priority: High
 
   # --- 6) Bureau dispute (אי־דיוק/מידע חסר/אי־יכולת אימות) ---

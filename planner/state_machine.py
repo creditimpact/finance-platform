@@ -1,19 +1,19 @@
 from __future__ import annotations
 
-"""Simple finite-state machine for account planning.
-
-This module defines allowed transitions for ``AccountState`` records and
-imposes SLA gates between steps.  ``evaluate_state`` returns a tuple of
-``(allowed_tags, next_eligible_at)`` describing the actions that may be
-performed now and, if no action is currently permitted, the next time the
-account becomes eligible.
-"""
-
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import List, Tuple
 
-from backend.core.models import AccountState, AccountStatus
+from backend.core.models import AccountState, AccountStatus, StateTransition
+
+"""Simple finite-state machine for account planning.
+
+This module defines allowed transitions for ``AccountState`` records and
+imposes SLA gates between steps. ``evaluate_state`` returns a tuple of
+``(allowed_tags, next_eligible_at)`` describing the actions that may be
+performed now and, if no action is currently permitted, the next time the
+account becomes eligible.
+"""
 
 # Number of days that must elapse before the next action is allowed after
 # letters are sent to the bureaus.
@@ -28,7 +28,9 @@ def _deserialize_dt(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
 
 
-def evaluate_state(state: AccountState, now: datetime | None = None) -> Tuple[List[str], datetime | None]:
+def evaluate_state(
+    state: AccountState, now: datetime | None = None
+) -> Tuple[List[str], datetime | None]:
     """Evaluate the state machine for a single account.
 
     Args:
@@ -83,7 +85,14 @@ def load_state(data: dict) -> AccountState:
     for item in data.get("history", []):
         ts = item.get("timestamp")
         if isinstance(ts, str):
-            item["timestamp"] = _deserialize_dt(ts)
-        hist.append(item)
+            ts = _deserialize_dt(ts)
+        hist.append(
+            StateTransition(
+                from_status=AccountStatus(item["from_status"]),
+                to_status=AccountStatus(item["to_status"]),
+                actor=item.get("actor", "unknown"),
+                timestamp=ts if ts else datetime.utcnow(),
+            )
+        )
     data["history"] = hist
     return AccountState(**data)

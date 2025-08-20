@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Iterable, List
 
 from backend.api.session_manager import get_session, update_session
+from backend.audit.audit import emit_event
 from backend.core.models import AccountState, AccountStatus
 
 from .state_machine import dump_state, evaluate_state, load_state
@@ -104,8 +105,17 @@ def record_send(
         state = load_state(data)
         state.last_sent_at = now
         state.next_eligible_at = now + timedelta(days=sla_days)
-        state.status = AccountStatus.SENT
+        state.transition(AccountStatus.SENT, actor="planner")
         state.current_step += 1
+        emit_event(
+            "audit.planner_transition",
+            {
+                "account_id": str(acc_id),
+                "cycle": state.current_cycle,
+                "step": state.current_step,
+                "reason": "letters_sent",
+            },
+        )
         states_data[str(acc_id)] = dump_state(state)
 
     update_session(session_id, account_states=states_data)

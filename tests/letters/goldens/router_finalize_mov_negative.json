@@ -1,0 +1,10 @@
+{
+  "action_tag": "mov",
+  "initial_ctx": {
+    "creditor_name": "Bank",
+    "cra_last_result": "verified",
+    "days_since_cra_result": "45"
+  },
+  "template": "default_dispute.html",
+  "missing_fields": ["legal_safe_summary"]
+}

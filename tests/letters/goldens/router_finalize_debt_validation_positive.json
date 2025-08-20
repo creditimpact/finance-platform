@@ -1,0 +1,10 @@
+{
+  "action_tag": "debt_validation",
+  "initial_ctx": {
+    "collector_name": "Collector Inc",
+    "legal_safe_summary": "FDCPA 1692g requires validation; please respond within 30 days.",
+    "days_since_first_contact": "5"
+  },
+  "template": "debt_validation_letter_template.html",
+  "golden": "tests/letters/goldens/debt_validation.html"
+}

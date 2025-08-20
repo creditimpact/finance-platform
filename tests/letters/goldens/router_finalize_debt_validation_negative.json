@@ -1,0 +1,9 @@
+{
+  "action_tag": "debt_validation",
+  "initial_ctx": {
+    "legal_safe_summary": "FDCPA 1692g requires validation; please respond within 30 days.",
+    "days_since_first_contact": "5"
+  },
+  "template": "default_dispute.html",
+  "missing_fields": ["collector_name"]
+}

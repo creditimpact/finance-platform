@@ -1,0 +1,10 @@
+{
+  "action_tag": "pay_for_delete",
+  "initial_ctx": {
+    "collector_name": "Collector Inc",
+    "legal_safe_summary": "I will pay if you delete this account.",
+    "offer_terms": "Delete account and we pay 60%."
+  },
+  "template": "pay_for_delete_letter_template.html",
+  "golden": "tests/letters/goldens/pay_for_delete.html"
+}

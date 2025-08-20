@@ -1,0 +1,11 @@
+{
+  "action_tag": "mov",
+  "initial_ctx": {
+    "creditor_name": "Bank",
+    "legal_safe_summary": "Please reinvestigate this item.",
+    "cra_last_result": "verified",
+    "days_since_cra_result": "45"
+  },
+  "template": "mov_letter_template.html",
+  "golden": "tests/letters/goldens/mov.html"
+}

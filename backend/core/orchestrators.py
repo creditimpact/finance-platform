@@ -14,9 +14,10 @@ from pathlib import Path
 from shutil import copyfile
 from typing import Any, Mapping
 
+import tactical
 from backend.analytics.analytics.strategist_failures import tally_failure_reasons
 from backend.analytics.analytics_tracker import emit_counter, save_analytics_snapshot
-from backend.api.config import AppConfig, get_app_config, env_bool
+from backend.api.config import AppConfig, env_bool, get_app_config
 from backend.api.session_manager import update_session
 from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLevel
@@ -50,7 +51,6 @@ from backend.core.models import (
 from backend.core.services.ai_client import AIClient, get_ai_client
 from backend.policy.policy_loader import load_rulebook
 from planner import plan_next_step
-import tactical
 
 
 def process_client_intake(client_info, audit):
@@ -609,12 +609,12 @@ def run_credit_repair_process(
         )
         tri_merge_map: dict[str, dict[str, Any]] = {}
         if env_bool("ENABLE_TRI_MERGE", False):
+            from backend.api.session_manager import get_session
             from backend.core.logic.report_analysis.tri_merge import (
-                normalize_and_match,
                 compute_mismatches,
+                normalize_and_match,
             )
             from backend.core.logic.report_analysis.tri_merge_models import Tradeline
-            from backend.api.session_manager import get_session
 
             tradelines: list[Tradeline] = []
             for bureau, payload in bureau_data.items():
@@ -678,6 +678,7 @@ def run_credit_repair_process(
         if session_id:
             update_session(session_id, stage_2_5=stage_2_5)
         from backend.core.letters import router as letters_router
+
         for acc_id, acc_ctx in stage_2_5.items():
             tag = acc_ctx.get("action_tag")
             decision = letters_router.select_template(tag, acc_ctx, phase="candidate")
@@ -709,7 +710,10 @@ def run_credit_repair_process(
             "ai_client": ai_client,
             "app_config": app_config,
         }
-        allowed_tags = plan_next_step(session_ctx)
+        action_tags = [
+            ctx.get("action_tag") for ctx in stage_2_5.values() if ctx.get("action_tag")
+        ]
+        allowed_tags = plan_next_step(session_ctx, action_tags)
         tactical.generate_letters(session_ctx, allowed_tags)
         finalize_outputs(
             client_info, today_folder, sections, audit, log_messages, app_config

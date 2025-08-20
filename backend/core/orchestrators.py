@@ -597,6 +597,7 @@ def run_credit_repair_process(
         audit.log_step("process_started", {"is_identity_theft": is_identity_theft})
 
         session_id, structured_map, raw_map = process_client_intake(client_info, audit)
+        os.environ["SESSION_ID"] = session_id
         classification_map = classify_client_responses(
             structured_map, raw_map, client_info, audit, ai_client
         )
@@ -611,6 +612,7 @@ def run_credit_repair_process(
                 compute_mismatches,
             )
             from backend.core.logic.report_analysis.tri_merge_models import Tradeline
+            from backend.api.session_manager import get_session
 
             tradelines: list[Tradeline] = []
             for bureau, payload in bureau_data.items():
@@ -628,10 +630,17 @@ def run_credit_repair_process(
                         )
             families = normalize_and_match(tradelines)
             compute_mismatches(families)
+            tri_session = get_session(session_id) if session_id else None
+            tri_evidence = (
+                (tri_session.get("tri_merge") or {}).get("evidence", {})
+                if tri_session
+                else {}
+            )
             for fam in families:
                 family_id = getattr(fam, "family_id", None)
                 mismatch_types = [m.field for m in getattr(fam, "mismatches", [])]
                 evidence_id = family_id
+                evidence = tri_evidence.get(evidence_id)
                 for tl in fam.tradelines.values():
                     acc_id = str(tl.data.get("account_id") or "")
                     if acc_id and family_id:
@@ -640,6 +649,8 @@ def run_credit_repair_process(
                             "mismatch_types": mismatch_types,
                             "evidence_snapshot_id": evidence_id,
                         }
+                        if evidence:
+                            tri_merge_map[acc_id]["evidence"] = evidence
         facts_map: dict[str, dict[str, Any]] = {}
         for key in (
             "negative_accounts",

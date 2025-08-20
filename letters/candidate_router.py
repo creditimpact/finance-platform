@@ -1,14 +1,27 @@
 from __future__ import annotations
 
 import hashlib
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from backend.analytics.analytics_tracker import emit_counter
 from backend.audit.audit import AuditLogger
 
-
 TEMPLATES_DIR = Path(__file__).with_name("templates")
+
+
+@lru_cache(maxsize=128)
+def _list_templates(tag: str, templates_dir: str) -> list[Path]:
+    """Return available template paths for ``tag``.
+
+    The result is cached with an LRU policy so repeated routing decisions do
+    not hit the filesystem.  ``templates_dir`` is stringified to ensure the
+    cache key is hashable.
+    """
+
+    base = Path(templates_dir)
+    return sorted(base.glob(f"{tag}*.html"), key=lambda p: p.name)
 
 
 def _get_source(evidence: Any) -> str:
@@ -45,7 +58,7 @@ def select_template(
     tag = (action_tag or "").lower()
     bureau = (bureau or "").lower()
 
-    candidates = sorted(templates_dir.glob(f"{tag}*.html"), key=lambda p: p.name)
+    candidates = _list_templates(tag, str(templates_dir))
 
     selected: str | None = None
     evidence_source = _get_source(evidence)

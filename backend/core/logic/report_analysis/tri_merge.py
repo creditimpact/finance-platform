@@ -113,9 +113,20 @@ def compute_mismatches(families: Iterable[TradelineFamily]) -> List[TradelineFam
             if len(set(values.values())) > 1:
                 _record(fam, Mismatch(field=mtype, values=values))
 
+        def cmp_dates() -> None:
+            values = {
+                b: (
+                    tl.data.get("date_opened"),
+                    tl.data.get("date_reported"),
+                )
+                for b, tl in fam.tradelines.items()
+            }
+            if len(set(values.values())) > 1:
+                _record(fam, Mismatch(field="dates", values=values))
+
         cmp("balance", "balance")
         cmp("status", "status")
-        cmp("date_opened", "dates")
+        cmp_dates()
         cmp("remarks", "remarks")
         cmp("utilization", "utilization")
         cmp("personal_info", "personal_info")

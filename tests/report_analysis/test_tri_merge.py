@@ -69,7 +69,7 @@ def test_presence_and_field_mismatches():
         {
             "balance": 200,
             "status": "closed",
-            "date_opened": "2020-02-01",
+            "date_reported": "2020-03-01",
             "remarks": "Late",
             "utilization": 0.5,
             "personal_info": "PI2",
@@ -88,8 +88,8 @@ def test_presence_and_field_mismatches():
     assert mism["balance"].values == {"Experian": 100, "Equifax": 200}
     assert mism["status"].values == {"Experian": "open", "Equifax": "closed"}
     assert mism["dates"].values == {
-        "Experian": "2020-01-01",
-        "Equifax": "2020-02-01",
+        "Experian": ("2020-01-01", "2020-02-01"),
+        "Equifax": ("2020-01-01", "2020-03-01"),
     }
     assert mism["remarks"].values == {"Experian": "OK", "Equifax": "Late"}
     assert mism["utilization"].values == {"Experian": 0.1, "Equifax": 0.5}

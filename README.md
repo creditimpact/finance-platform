@@ -115,6 +115,11 @@ Provide these in a `.env` file:
 - `CLASSIFY_CACHE_ENABLED` – set to `0` to disable summary classification caching (default `1`).
 - `CLASSIFY_CACHE_MAXSIZE` – maximum entries for the summary classification cache (default `5000`).
 - `CLASSIFY_CACHE_TTL_SEC` – expiration in seconds for cached classifications; `0` disables TTL.
+- `ENABLE_PLANNER` – set to `0` to bypass the planner and execute the tactical
+  strategy directly (default `0`).
+- `PLANNER_CANARY_PERCENT` – percentage of sessions that invoke the planner
+  when enabled (default `100`). Lower this value or disable `ENABLE_PLANNER` to
+  roll back to the pre-planner pipeline.
 
 Secrets are never committed to the repository.
 

@@ -43,7 +43,7 @@ FRAUD_FIELDS = {
     [
         (
             "personal_info_correction",
-            "personal_info_correction_template.html",
+            "personal_info_correction_letter_template.html",
             PII_FIELDS,
         ),
         (

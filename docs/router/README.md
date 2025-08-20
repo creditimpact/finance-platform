@@ -23,7 +23,9 @@ available candidates and bureau evidence.
 | dispute | `dispute_letter_template.html` | `bureau` |
 | goodwill | `goodwill_letter_template.html` | `creditor` |
 | fraud_dispute | `fraud_dispute_letter_template.html` | `creditor_name`, `account_number_masked`, `bureau`, `legal_safe_summary`, `is_identity_theft` |
-| personal_info_correction | `personal_info_correction_template.html` | `client_name`, `client_address_lines`, `date_of_birth`, `ssn_last4`, `legal_safe_summary` |
+| personal_info_correction | `personal_info_correction_letter_template.html` | `client_name`, `client_address_lines`, `date_of_birth`, `ssn_last4`, `legal_safe_summary` |
+| bureau_dispute | `bureau_dispute_letter_template.html` | `creditor_name`, `account_number_masked`, `bureau`, `legal_safe_summary` |
+| mov | `mov_letter_template.html` | `creditor_name`, `account_number_masked`, `legal_safe_summary`, `cra_last_result`, `days_since_cra_result` |
 | inquiry_dispute | `inquiry_dispute_letter_template.html` | `inquiry_creditor_name`, `account_number_masked`, `bureau`, `legal_safe_summary`, `inquiry_date` |
 | medical_dispute | `medical_dispute_letter_template.html` | `creditor_name`, `account_number_masked`, `bureau`, `legal_safe_summary`, `amount`, `medical_status` |
 | custom_letter | `general_letter_template.html` | `recipient` |

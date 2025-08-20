@@ -38,6 +38,11 @@ SUBSTANCE_CHECKLIST: Dict[str, Dict[str, str | None]] = {
         "cra_last_result": None,
         "days_since_cra_result": None,
     },
+    "bureau_dispute_letter_template.html": {
+        "fcra_611": r"611",
+        "investigation_request": r"reinvestigat",
+        "account_number_masked": None,
+    },
     "dispute_letter_template.html": {
         "fcra_611": r"611",
         "investigation_request": r"investigat",
@@ -53,6 +58,11 @@ SUBSTANCE_CHECKLIST: Dict[str, Dict[str, str | None]] = {
     "cease_and_desist_letter_template.html": {
         "stop_contact": r"stop\s*contact|cease|desist",
         "collector_name": None,
+    },
+    "personal_info_correction_letter_template.html": {
+        "update_request": r"update|correct",
+        "ssn_last4": None,
+        "date_of_birth": None,
     },
 }
 

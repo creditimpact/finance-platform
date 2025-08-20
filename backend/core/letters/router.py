@@ -133,7 +133,7 @@ def select_template(
             ],
         ),
         "personal_info_correction": (
-            "personal_info_correction_template.html",
+            "personal_info_correction_letter_template.html",
             [
                 "client_name",
                 "client_address_lines",

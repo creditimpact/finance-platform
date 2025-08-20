@@ -641,7 +641,6 @@ def run_credit_repair_process(
                             "evidence_snapshot_id": evidence_id,
                         }
         facts_map: dict[str, dict[str, Any]] = {}
-        seen_mismatched_accounts: set[str] = set()
         for key in (
             "negative_accounts",
             "open_accounts_with_issues",
@@ -655,12 +654,6 @@ def run_credit_repair_process(
                     tri_info = tri_merge_map.get(acc_id)
                     if tri_info:
                         acc["tri_merge"] = tri_info
-                        if (
-                            tri_info.get("mismatch_types")
-                            and acc_id not in seen_mismatched_accounts
-                        ):
-                            emit_counter("tri_merge.accounts_with_mismatch")
-                            seen_mismatched_accounts.add(acc_id)
                     facts_map[acc_id] = acc
         stage_2_5: dict[str, Any] = {}
         for acc_id in set(facts_map) | set(classification_map):

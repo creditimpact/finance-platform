@@ -14,6 +14,7 @@ from backend.analytics.analytics_tracker import (
     emit_counter,
     log_canary_decision,
 )
+from jinja2 import Environment, FileSystemLoader
 
 from . import validators
 
@@ -263,11 +264,39 @@ def select_template(
 
     missing_fields: List[str] = []
     if template_path and phase == "finalize":
-        missing_fields = validators.validate_required_fields(
+        required_missing = validators.validate_required_fields(
             template_path, ctx, required, validators.CHECKLIST
         )
-        missing_fields += validators.validate_substance(template_path, ctx)
-        missing_fields = sorted(set(missing_fields))
+        if required_missing:
+            logger.error(
+                "missing required fields %s for template %s", required_missing, template_path
+            )
+            emit_counter("router.finalize_errors")
+            missing_fields = sorted(set(required_missing))
+            template_path = "default_dispute.html"
+            required = []
+        else:
+            missing_fields = validators.validate_substance(template_path, ctx)
+            missing_fields = sorted(set(missing_fields))
+
+        env = Environment(
+            loader=FileSystemLoader([str(p) for p in TEMPLATES_DIRS]),
+            trim_blocks=True,
+            lstrip_blocks=True,
+        )
+        try:
+            env.get_template(template_path).render(**ctx)
+        except Exception:  # pragma: no cover - render guard
+            logger.exception("template render failed for %s", template_path)
+            emit_counter("router.render_error")
+            return _cache_and_return(
+                TemplateDecision(
+                    template_path=None,
+                    required_fields=required,
+                    missing_fields=missing_fields,
+                    router_mode="error",
+                )
+            )
 
     if template_path:
         template_name = os.path.basename(template_path)

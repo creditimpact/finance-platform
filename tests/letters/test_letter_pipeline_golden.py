@@ -224,3 +224,62 @@ def test_letter_pipeline_golden(scenario):
         else:
             assert not any(k.startswith("validation.failed") for k in counters)
             assert all(not k.startswith("letter_template_selected.") for k in counters)
+
+
+def test_letter_pipeline_missing_fields():
+    os.environ["LETTERS_ROUTER_PHASED"] = "1"
+    reset_counters()
+    ctx = BASE_CTX.copy()
+    ctx.update(
+        {
+            "creditor_name": "Bank",
+            "cra_last_result": "verified",
+            "days_since_cra_result": "45",
+        }
+    )
+
+    select_template("mov", ctx, phase="candidate")
+    decision = select_template("mov", ctx, phase="finalize")
+
+    assert decision.template_path == "default_dispute.html"
+    assert "legal_safe_summary" in decision.missing_fields
+
+    counters = get_counters()
+    assert counters.get("router.finalize_errors") == 1
+
+
+def test_letter_pipeline_render_error(monkeypatch):
+    os.environ["LETTERS_ROUTER_PHASED"] = "1"
+    reset_counters()
+    ctx = BASE_CTX.copy()
+    ctx.update(
+        {
+            "creditor_name": "Bank",
+            "legal_safe_summary": "Please reinvestigate this item.",
+            "cra_last_result": "verified",
+            "days_since_cra_result": "45",
+        }
+    )
+
+    select_template("mov", ctx, phase="candidate")
+
+    class BrokenTemplate:
+        def render(self, **_ctx):
+            raise RuntimeError("boom")
+
+    class BrokenEnv:
+        def get_template(self, _name):
+            return BrokenTemplate()
+
+    import backend.core.letters.router as letters_router
+
+    monkeypatch.setattr(letters_router, "Environment", lambda *_, **__: BrokenEnv())
+
+    decision = select_template("mov", ctx, phase="finalize")
+
+    assert decision.router_mode == "error"
+    assert decision.template_path is None
+
+    counters = get_counters()
+    assert counters.get("router.render_error") == 1
+    assert counters.get("router.finalized") is None

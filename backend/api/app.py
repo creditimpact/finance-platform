@@ -169,6 +169,18 @@ def get_summaries(session_id: str):
     return jsonify({"status": "ok", "summaries": cleaned})
 
 
+@api_bp.route("/api/account-transitions/<session_id>/<account_id>", methods=["GET"])
+def account_transitions(session_id: str, account_id: str):
+    session = get_session(session_id)
+    if not session:
+        return jsonify({"status": "error", "message": "Session not found"}), 404
+    states = session.get("account_states", {}) or {}
+    data = states.get(str(account_id))
+    if not data:
+        return jsonify({"status": "error", "message": "Account not found"}), 404
+    return jsonify({"status": "ok", "history": data.get("history", [])})
+
+
 @api_bp.route("/api/submit-explanations", methods=["POST"])
 def submit_explanations():
     return redirect(url_for("api.explanations_endpoint"), code=307)
@@ -199,7 +211,9 @@ def create_app() -> Flask:
         identifier = request.remote_addr or "global"
         if tokens:
             auth_header = request.headers.get("Authorization", "")
-            token = auth_header[7:].strip() if auth_header.startswith("Bearer ") else None
+            token = (
+                auth_header[7:].strip() if auth_header.startswith("Bearer ") else None
+            )
             if token not in tokens:
                 return jsonify({"status": "error", "message": "Unauthorized"}), 401
             identifier = token

@@ -22,6 +22,7 @@ class StateTransition:
 
     from_status: AccountStatus
     to_status: AccountStatus
+    actor: str
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
 
@@ -36,3 +37,11 @@ class AccountState:
     last_sent_at: Optional[datetime] = None
     next_eligible_at: Optional[datetime] = None
     history: List[StateTransition] = field(default_factory=list)
+
+    def transition(self, to_status: AccountStatus, actor: str) -> None:
+        """Update status and append a transition record."""
+
+        self.history.append(
+            StateTransition(from_status=self.status, to_status=to_status, actor=actor)
+        )
+        self.status = to_status

@@ -4,7 +4,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from backend.api import config
 from backend.core.logic.utils.pii import redact_pii
@@ -55,10 +55,22 @@ def reset_canary_decisions() -> None:
     _CANARY_DECISIONS.clear()
 
 
-def emit_counter(name: str, increment: float = 1) -> None:
-    """Increment a named metric for analytics."""
+def emit_counter(name: str, increment: float | Mapping[str, Any] = 1) -> None:
+    """Increment a named metric for analytics.
 
-    _COUNTERS[name] = _COUNTERS.get(name, 0) + increment
+    ``increment`` may be a float value or a mapping of metadata which
+    generates dimensioned counters of the form ``"name.key.value"``.
+    """
+
+    if isinstance(increment, Mapping):
+        _COUNTERS[name] = _COUNTERS.get(name, 0) + 1
+        for key, value in increment.items():
+            if value is None:
+                continue
+            attr_name = f"{name}.{key}.{value}"
+            _COUNTERS[attr_name] = _COUNTERS.get(attr_name, 0) + 1
+    else:
+        _COUNTERS[name] = _COUNTERS.get(name, 0) + increment
 
 
 def set_metric(name: str, value: float) -> None:

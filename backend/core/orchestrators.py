@@ -676,6 +676,14 @@ def run_credit_repair_process(
             )
         if session_id:
             update_session(session_id, stage_2_5=stage_2_5)
+        from backend.core.letters import router as letters_router
+        for acc_id, acc_ctx in stage_2_5.items():
+            tag = acc_ctx.get("action_tag")
+            decision = letters_router.select_template(tag, acc_ctx, phase="candidate")
+            emit_counter(
+                "router.candidate_selected",
+                {"tag": tag, "template": decision.template_path},
+            )
         strategy = generate_strategy_plan(
             client_info,
             bureau_data,

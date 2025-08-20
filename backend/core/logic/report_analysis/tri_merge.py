@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Utilities for merging and comparing bureau tradeline data."""
 
+import collections
 import hashlib
 import os
 import re
@@ -119,9 +120,10 @@ def compute_mismatches(families: Iterable[TradelineFamily]) -> List[TradelineFam
         cmp("utilization", "utilization")
         cmp("personal_info", "personal_info")
 
-        if getattr(fam, "_duplicates", None):
-            counts = {tl.bureau: len(getattr(fam, "_duplicates")) + 1}
-            _record(fam, Mismatch(field="duplicate", values=counts))
+        dups = getattr(fam, "_duplicates", None)
+        if dups:
+            counts = collections.Counter(d.bureau for d in dups)
+            _record(fam, Mismatch(field="duplicate", values=dict(counts)))
 
         if tri_store is not None:
             tri_store[getattr(fam, "family_id", "")] = {

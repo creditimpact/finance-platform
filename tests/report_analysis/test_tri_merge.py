@@ -94,3 +94,27 @@ def test_presence_and_field_mismatches():
     assert mism["remarks"].values == {"Experian": "OK", "Equifax": "Late"}
     assert mism["utilization"].values == {"Experian": 0.1, "Equifax": 0.5}
     assert mism["personal_info"].values == {"Experian": "PI1", "Equifax": "PI2"}
+
+
+def test_duplicate_mismatch_counts():
+    tls = [
+        Tradeline(
+            creditor="Chase",
+            bureau="Experian",
+            account_number="12341234",
+            data={"date_opened": "2020-01-01", "date_reported": "2020-02-01"},
+        ),
+        Tradeline(
+            creditor="Chase",
+            bureau="Experian",
+            account_number="12341234",
+            data={"date_opened": "2020-01-01", "date_reported": "2020-02-01"},
+        ),
+    ]
+
+    families = normalize_and_match(tls)
+    families = compute_mismatches(families)
+    fam = families[0]
+    mism = {m.field: m for m in fam.mismatches}
+
+    assert mism["duplicate"].values == {"Experian": 1}

@@ -60,8 +60,9 @@ Python backend powering ingestion, analysis, strategy generation, letter creatio
 ### docs
 Reference materials such as data models, stage guides, and contributing
 instructions. Includes pipeline docs like [Stage 2.5](docs/STAGE_2_5.md)
-and [Stage 3 Hardening](docs/stage3_hardening.md). No dedicated README;
-browse files within [`docs`](docs) for deeper documentation.
+and [Stage 3 Hardening](docs/stage3_hardening.md). The mismatch-to-tag
+rulebook lives in [`docs/rulebook`](docs/rulebook/README.md). No dedicated
+README; browse files within [`docs`](docs) for deeper documentation.
 
 ### frontend
 React client that interacts with the API to upload reports and display results. See [frontend/README.md](frontend/README.md) for build and run instructions.

@@ -121,6 +121,36 @@ def test_duplicate_mismatch_counts():
     assert mism["duplicate"].values == {"Experian": 1}
 
 
+def test_duplicate_mismatch_multiple_same_bureau():
+    tls = [
+        Tradeline(
+            creditor="Chase",
+            bureau="Experian",
+            account_number="12341234",
+            data={"date_opened": "2020-01-01", "date_reported": "2020-02-01"},
+        ),
+        Tradeline(
+            creditor="Chase",
+            bureau="Experian",
+            account_number="12341234",
+            data={"date_opened": "2020-01-01", "date_reported": "2020-02-01"},
+        ),
+        Tradeline(
+            creditor="Chase",
+            bureau="Experian",
+            account_number="12341234",
+            data={"date_opened": "2020-01-01", "date_reported": "2020-02-01"},
+        ),
+    ]
+
+    families = normalize_and_match(tls)
+    families = compute_mismatches(families)
+    fam = families[0]
+    mism = {m.field: m for m in fam.mismatches}
+
+    assert mism["duplicate"].values == {"Experian": 2}
+
+
 def test_match_confidence_p95_metric():
     tls = [
         Tradeline(

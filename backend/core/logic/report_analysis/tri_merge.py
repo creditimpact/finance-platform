@@ -144,7 +144,7 @@ def compute_mismatches(families: Iterable[TradelineFamily]) -> List[TradelineFam
 
         dups = getattr(fam, "_duplicates", None)
         if dups:
-            counts = collections.Counter(d.bureau for d in dups)
+            counts = collections.Counter(d.bureau for d in fam._duplicates)
             _record(fam, Mismatch(field="duplicate", values=dict(counts)))
 
         if tri_store is not None:

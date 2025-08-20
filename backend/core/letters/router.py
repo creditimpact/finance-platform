@@ -262,10 +262,12 @@ def select_template(
     log_canary_decision("canary", template_path or "unknown")
 
     missing_fields: List[str] = []
-    if template_path and (tag != "instruction" or phase == "finalize"):
+    if template_path and phase == "finalize":
         missing_fields = validators.validate_required_fields(
             template_path, ctx, required, validators.CHECKLIST
         )
+        missing_fields += validators.validate_substance(template_path, ctx)
+        missing_fields = sorted(set(missing_fields))
 
     if template_path:
         template_name = os.path.basename(template_path)

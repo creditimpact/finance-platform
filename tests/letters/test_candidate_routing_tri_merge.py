@@ -11,6 +11,8 @@ MOV_FIELDS = {
     "legal_safe_summary",
     "cra_last_result",
     "days_since_cra_result",
+    "reinvestigation_request",
+    "method_of_verification",
 }
 
 BUREAU_FIELDS = {
@@ -18,6 +20,8 @@ BUREAU_FIELDS = {
     "account_number_masked",
     "bureau",
     "legal_safe_summary",
+    "fcra_611",
+    "reinvestigation_request",
 }
 
 PII_FIELDS = {
@@ -45,7 +49,7 @@ PII_FIELDS = {
         ("TM_DUPLICATE", "bureau_dispute_letter_template.html", BUREAU_FIELDS),
     ],
 )
-def test_candidate_routing_emits_missing_fields_after_stage_2_5(
+def test_finalize_routing_emits_missing_fields_after_stage_2_5(
     monkeypatch, mismatch_rule: str, template: str, fields: set[str]
 ):
     monkeypatch.setenv("LETTERS_ROUTER_PHASED", "1")
@@ -59,20 +63,14 @@ def test_candidate_routing_emits_missing_fields_after_stage_2_5(
     }
     ctx = evaluate_rules("", {}, load_rulebook(), tri_merge=tri_merge)
 
-    decision = select_template(ctx["action_tag"], ctx, phase="candidate")
+    decision = select_template(ctx["action_tag"], ctx, phase="finalize")
     assert decision.template_path == template
     assert set(decision.missing_fields) == fields
 
     counters = get_counters()
     tag = ctx["action_tag"]
-    assert counters.get("router.candidate_selected") == 1
-    assert counters.get(f"router.candidate_selected.{tag}") == 1
-    assert (
-        counters.get(
-            f"router.candidate_selected.{tag}.{template}"
-        )
-        == 1
-    )
+    assert counters.get("router.finalized") == 1
+    assert counters.get(f"router.finalized.{tag}") == 1
     for field in decision.missing_fields:
         key = f"router.missing_fields.{tag}.{template}.{field}"
         assert counters.get(key) == 1

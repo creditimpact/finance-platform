@@ -91,26 +91,41 @@ def test_router_basic_mappings(monkeypatch):
 
 def test_missing_fields(monkeypatch):
     monkeypatch.setenv("LETTERS_ROUTER_PHASED", "1")
-    decision = select_template("goodwill", {}, phase="candidate")
-    assert decision.missing_fields == ["creditor"]
-    decision = select_template("goodwill", {"creditor": "XYZ"}, phase="candidate")
+    decision = select_template("goodwill", {}, phase="finalize")
+    assert set(decision.missing_fields) == {
+        "creditor",
+        "non_promissory_tone",
+        "positive_history_reference",
+        "discretionary_request",
+        "no_admission",
+    }
+    decision = select_template(
+        "goodwill",
+        {
+            "creditor": "XYZ",
+            "legal_safe_summary": "goodwill positive request without admit",
+        },
+        phase="finalize",
+    )
     assert decision.missing_fields == []
-    decision = select_template("bureau_dispute", {}, phase="candidate")
-    assert decision.missing_fields == [
+    decision = select_template("bureau_dispute", {}, phase="finalize")
+    assert set(decision.missing_fields) == {
         "creditor_name",
         "account_number_masked",
         "bureau",
         "legal_safe_summary",
-    ]
+        "fcra_611",
+        "reinvestigation_request",
+    }
     decision = select_template(
         "bureau_dispute",
         {
             "creditor_name": "Creditor",
             "account_number_masked": "1234",
             "bureau": "Experian",
-            "legal_safe_summary": "summary",
+            "legal_safe_summary": "Please reinvestigate under section 611",
         },
-        phase="candidate",
+        phase="finalize",
     )
     assert decision.missing_fields == []
 

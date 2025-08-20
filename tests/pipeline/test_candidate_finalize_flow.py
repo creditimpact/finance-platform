@@ -16,24 +16,24 @@ def test_candidate_finalize_flow_golden(monkeypatch):
 
     ctx = {"account_number_masked": "****1234", "legal_safe_summary": "Summary"}
 
-    candidate_decision = select_template("pay_for_delete", ctx, phase="candidate")
-    candidate_heatmap = get_missing_fields_heatmap()
+    pre_decision = select_template("pay_for_delete", ctx, phase="finalize")
+    pre_heatmap = get_missing_fields_heatmap()
 
     acc = {"action_tag": "pay_for_delete", "name": "ABC Collections"}
-    strat = {"offer_terms": "50% settlement"}
+    strat = {"offer_terms": "Pay to delete"}
     populate_required_fields(acc, strat)
     ctx.update({"collector_name": acc["collector_name"], "offer_terms": acc["offer_terms"]})
 
     final_decision = select_template("pay_for_delete", ctx, phase="finalize")
 
-    assert len(final_decision.missing_fields) < len(candidate_decision.missing_fields)
+    assert len(final_decision.missing_fields) < len(pre_decision.missing_fields)
 
     result = {
-        "candidate_template": candidate_decision.template_path,
+        "initial_template": pre_decision.template_path,
         "final_template": final_decision.template_path,
-        "candidate_missing_fields": sorted(candidate_decision.missing_fields),
+        "initial_missing_fields": sorted(pre_decision.missing_fields),
         "final_missing_fields": final_decision.missing_fields,
-        "candidate_missing_heatmap": candidate_heatmap,
+        "initial_missing_heatmap": pre_heatmap,
         "counters": get_counters(),
     }
 

@@ -66,7 +66,7 @@ def test_mov_substance():
         {
             "creditor_name": "Bank",
             "account_number_masked": "2222",
-            "legal_safe_summary": "Please reinvestigate this account.",
+            "legal_safe_summary": "Please reinvestigate this account and provide the method of verification.",
             "cra_last_result": "verified",
             "days_since_cra_result": "45",
         }

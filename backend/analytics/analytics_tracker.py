@@ -4,6 +4,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any, Dict, List, Mapping, Optional
 
 from backend.api import config
@@ -28,6 +29,7 @@ _AI_METRICS: Dict[str, float] = {
 
 # Metrics are stored as floats to support both counters and timers.
 _COUNTERS: Dict[str, float] = {}
+_COUNTER_LOCK = Lock()
 
 # Canary rollout decisions ---------------------------------------------------
 
@@ -62,33 +64,37 @@ def emit_counter(name: str, increment: float | Mapping[str, Any] = 1) -> None:
     generates dimensioned counters of the form ``"name.key.value"``.
     """
 
-    if isinstance(increment, Mapping):
-        _COUNTERS[name] = _COUNTERS.get(name, 0) + 1
-        for key, value in increment.items():
-            if value is None:
-                continue
-            attr_name = f"{name}.{key}.{value}"
-            _COUNTERS[attr_name] = _COUNTERS.get(attr_name, 0) + 1
-    else:
-        _COUNTERS[name] = _COUNTERS.get(name, 0) + increment
+    with _COUNTER_LOCK:
+        if isinstance(increment, Mapping):
+            _COUNTERS[name] = _COUNTERS.get(name, 0) + 1
+            for key, value in increment.items():
+                if value is None:
+                    continue
+                attr_name = f"{name}.{key}.{value}"
+                _COUNTERS[attr_name] = _COUNTERS.get(attr_name, 0) + 1
+        else:
+            _COUNTERS[name] = _COUNTERS.get(name, 0) + increment
 
 
 def set_metric(name: str, value: float) -> None:
     """Set a named metric to an explicit value."""
 
-    _COUNTERS[name] = value
+    with _COUNTER_LOCK:
+        _COUNTERS[name] = value
 
 
 def get_counters() -> Dict[str, float]:
     """Return current generic metrics (for tests)."""
 
-    return _COUNTERS.copy()
+    with _COUNTER_LOCK:
+        return _COUNTERS.copy()
 
 
 def reset_counters() -> None:
     """Reset generic metrics (for tests)."""
 
-    _COUNTERS.clear()
+    with _COUNTER_LOCK:
+        _COUNTERS.clear()
 
 
 def get_missing_fields_heatmap() -> Dict[str, Dict[str, int]]:

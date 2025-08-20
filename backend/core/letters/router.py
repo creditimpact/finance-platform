@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 import os
 import random
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Literal, Tuple
+from threading import Lock
+from typing import Dict, Iterable, List, Literal, Tuple
 
 from backend.analytics.analytics_tracker import (
     check_canary_guardrails,
@@ -14,7 +16,6 @@ from backend.analytics.analytics_tracker import (
 )
 
 from . import validators
-
 
 logger = logging.getLogger(__name__)
 TEMPLATES_DIRS = [
@@ -32,6 +33,7 @@ class TemplateDecision:
 
 
 _ROUTER_CACHE: Dict[Tuple[str, str], TemplateDecision] = {}
+_ROUTER_CACHE_LOCK = Lock()
 
 
 def _enabled() -> bool:
@@ -78,8 +80,10 @@ def select_template(
     tag = (action_tag or "").lower()
     session_id = session_id or ctx.get("session_id") or ""
     cache_key = (session_id, tag)
-    if session_id and cache_key in _ROUTER_CACHE:
-        return _ROUTER_CACHE[cache_key]
+    if session_id:
+        with _ROUTER_CACHE_LOCK:
+            if cache_key in _ROUTER_CACHE:
+                return _ROUTER_CACHE[cache_key]
 
     routes = {
         "dispute": ("dispute_letter_template.html", ["bureau"]),
@@ -189,7 +193,8 @@ def select_template(
 
     def _cache_and_return(decision: TemplateDecision) -> TemplateDecision:
         if session_id:
-            _ROUTER_CACHE[cache_key] = decision
+            with _ROUTER_CACHE_LOCK:
+                _ROUTER_CACHE[cache_key] = decision
         return decision
 
     if tag in {"ignore", "paydown_first", "duplicate"}:
@@ -222,17 +227,13 @@ def select_template(
 
     template_path, required = routes.get(tag, (None, []))
     if template_path is None:
-        msg = (
-            f"Unknown action_tag '{action_tag}' for session '{session_id}'"
-        )
+        msg = f"Unknown action_tag '{action_tag}' for session '{session_id}'"
         emit_counter("router.candidate_errors")
         logger.error(msg)
         raise ValueError(msg)
 
     if not any((base / template_path).exists() for base in TEMPLATES_DIRS):
-        msg = (
-            f"Unknown template_name '{template_path}' for session '{session_id}'"
-        )
+        msg = f"Unknown template_name '{template_path}' for session '{session_id}'"
         emit_counter("router.candidate_errors")
         logger.error(msg)
         raise ValueError(msg)
@@ -263,9 +264,7 @@ def select_template(
             emit_counter("router.candidate_selected")  # deprecated
             if tag:
                 emit_counter(f"router.candidate_selected.{tag}")
-                emit_counter(
-                    f"router.candidate_selected.{tag}.{template_name}"
-                )
+                emit_counter(f"router.candidate_selected.{tag}.{template_name}")
         elif phase in {"final", "finalize"}:
             emit_counter("router.finalized")  # deprecated
             if tag:
@@ -273,9 +272,7 @@ def select_template(
 
         if missing_fields:
             for field in missing_fields:
-                emit_counter(
-                    f"router.missing_fields.{tag}.{template_name}.{field}"
-                )
+                emit_counter(f"router.missing_fields.{tag}.{template_name}.{field}")
 
     return _cache_and_return(
         TemplateDecision(
@@ -287,4 +284,35 @@ def select_template(
     )
 
 
-__all__ = ["TemplateDecision", "select_template"]
+def route_accounts(
+    items: Iterable[tuple[str, dict, str | None]],
+    *,
+    phase: Literal["candidate", "final", "finalize"] = "candidate",
+    max_workers: int | None = None,
+) -> list[TemplateDecision]:
+    """Route multiple accounts in parallel.
+
+    Parameters
+    ----------
+    items:
+        Iterable of ``(action_tag, ctx, session_id)`` tuples for each account.
+    phase:
+        Routing phase passed through to :func:`select_template`.
+    max_workers:
+        Optional limit for the thread pool size.
+
+    Returns
+    -------
+    list[TemplateDecision]
+        Decisions in the same order as ``items``.
+    """
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = [
+            ex.submit(select_template, tag, ctx, phase, session_id)
+            for tag, ctx, session_id in items
+        ]
+        return [f.result() for f in futures]
+
+
+__all__ = ["TemplateDecision", "select_template", "route_accounts"]

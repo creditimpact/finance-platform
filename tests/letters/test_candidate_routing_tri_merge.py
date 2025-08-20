@@ -30,26 +30,27 @@ PII_FIELDS = {
 
 
 @pytest.mark.parametrize(
-    "mismatch_type,template,fields",
+    "mismatch_rule,template,fields",
     [
-        ("balance", "mov_letter_template.html", MOV_FIELDS),
-        ("status", "mov_letter_template.html", MOV_FIELDS),
-        ("dates", "mov_letter_template.html", MOV_FIELDS),
-        ("remarks", "bureau_dispute_letter_template.html", BUREAU_FIELDS),
-        ("utilization", "mov_letter_template.html", MOV_FIELDS),
-        ("duplicate", "bureau_dispute_letter_template.html", BUREAU_FIELDS),
+        ("TM_BALANCE", "mov_letter_template.html", MOV_FIELDS),
+        ("TM_STATUS", "mov_letter_template.html", MOV_FIELDS),
+        ("TM_DATES", "mov_letter_template.html", MOV_FIELDS),
+        ("TM_REMARKS", "bureau_dispute_letter_template.html", BUREAU_FIELDS),
+        ("TM_UTILIZATION", "mov_letter_template.html", MOV_FIELDS),
         (
-            "personal_info",
+            "TM_PERSONAL_INFO",
             "personal_info_correction_template.html",
             PII_FIELDS,
         ),
+        ("TM_DUPLICATE", "bureau_dispute_letter_template.html", BUREAU_FIELDS),
     ],
 )
 def test_candidate_routing_emits_missing_fields_after_stage_2_5(
-    monkeypatch, mismatch_type: str, template: str, fields: set[str]
+    monkeypatch, mismatch_rule: str, template: str, fields: set[str]
 ):
     monkeypatch.setenv("LETTERS_ROUTER_PHASED", "1")
     reset_counters()
+    mismatch_type = mismatch_rule.removeprefix("TM_").lower()
 
     tri_merge = {
         "mismatch_types": [mismatch_type],

@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Tuple
 
 from backend.analytics.analytics_tracker import emit_counter
 from backend.core.letters import validators
-
+from backend.core.logic.utils.pii import redact_pii
 
 # Resolve template names indirectly to avoid hard-coded literals.
 _DISPUTE_TEMPLATE = next(
@@ -41,7 +41,7 @@ def _has_collection_account(ctx: Dict[str, Any]) -> bool:
 def sanitize_rendered_html(
     html: str, template_path: str, context: Dict[str, Any]
 ) -> Tuple[str, List[str]]:
-    """Remove forbidden phrases from rendered ``html``.
+    """Clean and validate rendered ``html``.
 
     Parameters
     ----------
@@ -55,8 +55,25 @@ def sanitize_rendered_html(
     Returns
     -------
     tuple
-        ``(sanitized_html, overrides)`` where ``overrides`` is a list of removed terms.
+        ``(sanitized_html, overrides)`` where ``overrides`` is a list of removed terms
+        or other remediation markers such as ``pii`` or ``format``.
     """
+
+    # Track original input for diffing and audit purposes
+    sanitized = html
+    overrides: List[str] = []
+
+    # Normalize excessive whitespace
+    normalized = re.sub(r"\s+", " ", sanitized).strip()
+    if normalized != sanitized:
+        overrides.append("whitespace")
+    sanitized = normalized
+
+    # Redact PII
+    redacted = redact_pii(sanitized)
+    if redacted != sanitized:
+        overrides.append("pii")
+    sanitized = redacted
 
     deny_terms = list(_DENYLISTS.get(template_path, []))
     if _has_collection_account(context):
@@ -64,8 +81,6 @@ def sanitize_rendered_html(
 
     allow_terms = _ALLOWLISTS.get(template_path, [])
 
-    overrides: List[str] = []
-    sanitized = html
     for term in deny_terms:
         if term in allow_terms:
             continue
@@ -74,13 +89,28 @@ def sanitize_rendered_html(
         if count:
             overrides.append(term)
 
+    # Basic format check: require at least one paragraph tag
+    format_ok = "<p" in sanitized.lower()
+    if not format_ok:
+        overrides.append("format")
+
+    # Emit counters ---------------------------------------------------------
     if overrides:
         emit_counter(f"sanitizer.applied.{template_path}")
         for term in overrides:
             sanitized_term = term.replace(" ", "_")
-            emit_counter(
-                f"policy_override_reason.{template_path}.{sanitized_term}"
-            )
+            emit_counter(f"policy_override_reason.{template_path}.{sanitized_term}")
+
+    # Success/failure bookkeeping
+    remaining_terms = [
+        term
+        for term in deny_terms
+        if re.search(re.escape(term), sanitized, re.IGNORECASE)
+    ]
+    if remaining_terms or not format_ok:
+        emit_counter(f"sanitizer.failure.{template_path}")
+    else:
+        emit_counter(f"sanitizer.success.{template_path}")
 
     return sanitized, overrides
 

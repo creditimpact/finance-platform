@@ -628,11 +628,6 @@ def run_credit_repair_process(
                         )
             families = normalize_and_match(tradelines)
             compute_mismatches(families)
-            emit_counter("tri_merge.families_total", len(families))
-            emit_counter(
-                "tri_merge.mismatches_total",
-                sum(len(getattr(f, "mismatches", [])) for f in families),
-            )
             for fam in families:
                 family_id = getattr(fam, "family_id", None)
                 mismatch_types = [m.field for m in getattr(fam, "mismatches", [])]

@@ -15,13 +15,28 @@ fraud_dispute:
       - legal_safe_summary
       - is_identity_theft
 personal_info_correction:
-  - template: personal_info_correction_template.html
+  - template: personal_info_correction_letter_template.html
     required_fields:
       - client_name
       - client_address_lines
       - date_of_birth
       - ssn_last4
       - legal_safe_summary
+bureau_dispute:
+  - template: bureau_dispute_letter_template.html
+    required_fields:
+      - creditor_name
+      - account_number_masked
+      - bureau
+      - legal_safe_summary
+mov:
+  - template: mov_letter_template.html
+    required_fields:
+      - creditor_name
+      - account_number_masked
+      - legal_safe_summary
+      - cra_last_result
+      - days_since_cra_result
 inquiry_dispute:
   - template: inquiry_dispute_letter_template.html
     required_fields:

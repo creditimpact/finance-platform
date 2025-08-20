@@ -39,7 +39,7 @@ PII_FIELDS = {
         ("TM_UTILIZATION", "mov_letter_template.html", MOV_FIELDS),
         (
             "TM_PERSONAL_INFO",
-            "personal_info_correction_template.html",
+            "personal_info_correction_letter_template.html",
             PII_FIELDS,
         ),
         ("TM_DUPLICATE", "bureau_dispute_letter_template.html", BUREAU_FIELDS),

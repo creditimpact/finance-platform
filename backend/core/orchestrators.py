@@ -49,6 +49,8 @@ from backend.core.models import (
 )
 from backend.core.services.ai_client import AIClient, get_ai_client
 from backend.policy.policy_loader import load_rulebook
+from planner import plan_next_step
+import tactical
 
 
 def process_client_intake(client_info, audit):
@@ -693,19 +695,22 @@ def run_credit_repair_process(
             log_messages,
             ai_client,
         )
-        generate_letters(
-            client_info,
-            bureau_data,
-            sections,
-            today_folder,
-            is_identity_theft,
-            strategy,
-            audit,
-            log_messages,
-            classification_map,
-            ai_client,
-            app_config,
-        )
+        session_ctx = {
+            "session_id": session_id,
+            "client_info": client_info,
+            "bureau_data": bureau_data,
+            "sections": sections,
+            "today_folder": today_folder,
+            "is_identity_theft": is_identity_theft,
+            "strategy": strategy,
+            "audit": audit,
+            "log_messages": log_messages,
+            "classification_map": classification_map,
+            "ai_client": ai_client,
+            "app_config": app_config,
+        }
+        allowed_tags = plan_next_step(session_ctx)
+        tactical.generate_letters(session_ctx, allowed_tags)
         finalize_outputs(
             client_info, today_folder, sections, audit, log_messages, app_config
         )

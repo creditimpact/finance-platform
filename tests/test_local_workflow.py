@@ -324,8 +324,8 @@ def test_stage_2_5_data_propagates_to_strategy():
         captured = {}
         stage_2_5 = {}
 
-        def fake_generate_letters(*args, **kwargs):
-            captured["strategy"] = args[5]
+        def fake_generate_letters(session, allowed_tags):
+            captured["strategy"] = session.get("strategy")
 
         def fake_save_report(
             self, report, client_info, run_date, base_dir="Clients", stage_2_5_data=None
@@ -363,7 +363,7 @@ def test_stage_2_5_data_propagates_to_strategy():
                 "services.ai_client.build_ai_client", return_value=FakeAIClient()
             ),
             mock.patch(
-                "orchestrators.generate_letters", side_effect=fake_generate_letters
+                "tactical.generate_letters", side_effect=fake_generate_letters
             ),
             mock.patch("orchestrators.finalize_outputs"),
             mock.patch(

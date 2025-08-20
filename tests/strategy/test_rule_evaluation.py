@@ -29,3 +29,20 @@ def test_validation_excludes_pay_for_delete() -> None:
     result = evaluate_rules("", facts, rb)
     assert result["rule_hits"] == ["D_VALIDATION"]
     assert result["suggested_dispute_frame"] == "debt_validation"
+
+
+def test_tri_merge_presence_rule() -> None:
+    rb = {
+        "rules": [
+            {
+                "id": "TM_PRESENCE",
+                "when": {"field": "tri_merge.presence", "eq": True},
+                "effect": {"rule_hits": ["TM_PRESENCE"]},
+            }
+        ],
+        "precedence": ["TM_PRESENCE"],
+    }
+    tri = {"mismatch_types": ["presence"], "evidence_snapshot_id": "snap1"}
+    result = evaluate_rules("", {}, rb, tri)
+    assert result["rule_hits"] == ["TM_PRESENCE"]
+    assert result["tri_merge"]["evidence_snapshot_id"] == "snap1"

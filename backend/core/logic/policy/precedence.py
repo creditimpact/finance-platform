@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 # Increment whenever the precedence resolution algorithm changes.
-precedence_version = "1"
+precedence_version = "2"
 
 
 def get_precedence(rulebook: Mapping[str, Any] | Any) -> list[str]:

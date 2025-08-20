@@ -1,19 +1,19 @@
-from __future__ import annotations
-
 """Utilities for merging and comparing bureau tradeline data."""
+
+from __future__ import annotations
 
 import collections
 import hashlib
+import math
 import os
 import re
-import math
 from typing import Dict, Iterable, List, Tuple
 
 from backend.analytics.analytics_tracker import emit_counter
+from backend.api.session_manager import get_session, update_session
 from backend.audit.audit import emit_event
 from backend.core.logic.utils.names_normalization import canonicalize_creditor
 from backend.core.logic.utils.pii import mask_account
-from backend.api.session_manager import get_session, update_session
 
 from .tri_merge_models import Mismatch, Tradeline, TradelineFamily
 
@@ -41,16 +41,14 @@ def normalize_and_match(bureau_data: Iterable[Tradeline]) -> List[TradelineFamil
         creditor = canonicalize_creditor(tl.creditor)
         last4 = _last4(tl.account_number)
         opened = str(tl.data.get("date_opened") or tl.data.get("open_date") or "")
-        reported = str(
-            tl.data.get("date_reported")
-            or tl.data.get("report_date")
-            or ""
-        )
+        reported = str(tl.data.get("date_reported") or tl.data.get("report_date") or "")
         key = (creditor, last4, opened, reported)
 
         family = groups.get(key)
         if not family:
-            family = TradelineFamily(account_number=mask_account(tl.account_number or ""))
+            family = TradelineFamily(
+                account_number=mask_account(tl.account_number or "")
+            )
             groups[key] = family
         if tl.bureau in family.tradelines:
             # Track duplicates for mismatch analysis
@@ -77,7 +75,11 @@ def normalize_and_match(bureau_data: Iterable[Tradeline]) -> List[TradelineFamil
         if match_confidence < 0.5:
             emit_event(
                 "tri_merge.low_match_confidence",
-                {"family_id": family_id, "creditor": key[0], "confidence": match_confidence},
+                {
+                    "family_id": family_id,
+                    "creditor": key[0],
+                    "confidence": match_confidence,
+                },
             )
 
     if confidences:
@@ -102,7 +104,11 @@ def compute_mismatches(families: Iterable[TradelineFamily]) -> List[TradelineFam
 
     session_id = os.getenv("SESSION_ID", "")
     session = get_session(session_id) if session_id else None
-    tri_store = session.setdefault("tri_merge", {}).setdefault("evidence", {}) if session else {}
+    tri_store = (
+        session.setdefault("tri_merge", {}).setdefault("evidence", {})
+        if session
+        else {}
+    )
 
     total_mismatches = 0
 
@@ -125,14 +131,20 @@ def compute_mismatches(families: Iterable[TradelineFamily]) -> List[TradelineFam
                 _record(fam, Mismatch(field=mtype, values=values))
 
         def cmp_dates() -> None:
-            values = {
-                b: (
-                    tl.data.get("date_opened"),
-                    tl.data.get("date_reported"),
-                )
-                for b, tl in fam.tradelines.items()
+            opened_vals = {
+                b: tl.data.get("date_opened") for b, tl in fam.tradelines.items()
             }
-            if len(set(values.values())) > 1:
+            reported_vals = {
+                b: tl.data.get("date_reported") for b, tl in fam.tradelines.items()
+            }
+            if (
+                len(set(opened_vals.values())) > 1
+                or len(set(reported_vals.values())) > 1
+            ):
+                values = {
+                    b: (opened_vals.get(b), reported_vals.get(b))
+                    for b in fam.tradelines.keys()
+                }
                 _record(fam, Mismatch(field="dates", values=values))
 
         cmp("balance", "balance")

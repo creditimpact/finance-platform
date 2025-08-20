@@ -25,6 +25,14 @@ _DENYLISTS: Dict[str, List[str]] = {
 # Per-template allow lists for exceptional terms
 _ALLOWLISTS: Dict[str, List[str]] = {}
 
+# Precompiled regex patterns for efficiency and thread safety.
+_WHITESPACE_RE = re.compile(r"\s+")
+_DENYLIST_PATTERNS: Dict[str, Dict[str, re.Pattern]] = {
+    tpl: {term: re.compile(re.escape(term), re.IGNORECASE) for term in terms}
+    for tpl, terms in _DENYLISTS.items()
+}
+_GOODWILL_PATTERN = re.compile(re.escape("goodwill"), re.IGNORECASE)
+
 
 def _has_collection_account(ctx: Dict[str, Any]) -> bool:
     """Return True if any account in context is tagged as a collection."""
@@ -63,8 +71,8 @@ def sanitize_rendered_html(
     sanitized = html
     overrides: List[str] = []
 
-    # Normalize excessive whitespace
-    normalized = re.sub(r"\s+", " ", sanitized).strip()
+    # Normalize excessive whitespace using precompiled regex
+    normalized = _WHITESPACE_RE.sub(" ", sanitized).strip()
     if normalized != sanitized:
         overrides.append("whitespace")
     sanitized = normalized
@@ -75,16 +83,15 @@ def sanitize_rendered_html(
         overrides.append("pii")
     sanitized = redacted
 
-    deny_terms = list(_DENYLISTS.get(template_path, []))
+    patterns = dict(_DENYLIST_PATTERNS.get(template_path, {}))
     if _has_collection_account(context):
-        deny_terms.append("goodwill")
+        patterns["goodwill"] = _GOODWILL_PATTERN
 
-    allow_terms = _ALLOWLISTS.get(template_path, [])
+    allow_terms = set(_ALLOWLISTS.get(template_path, []))
 
-    for term in deny_terms:
+    for term, pattern in patterns.items():
         if term in allow_terms:
             continue
-        pattern = re.compile(re.escape(term), re.IGNORECASE)
         sanitized, count = pattern.subn("", sanitized)
         if count:
             overrides.append(term)
@@ -104,8 +111,8 @@ def sanitize_rendered_html(
     # Success/failure bookkeeping
     remaining_terms = [
         term
-        for term in deny_terms
-        if re.search(re.escape(term), sanitized, re.IGNORECASE)
+        for term, pattern in patterns.items()
+        if pattern.search(sanitized)
     ]
     if remaining_terms or not format_ok:
         emit_counter(f"sanitizer.failure.{template_path}")

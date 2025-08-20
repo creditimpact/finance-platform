@@ -43,6 +43,9 @@ def test_instruction_metrics_emitted(monkeypatch, tmp_path):
     counters = get_counters()
     assert counters.get("router.candidate_selected")
     assert counters.get("router.candidate_selected.instruction")
+    assert counters.get(
+        "router.candidate_selected.instruction.instruction_template.html"
+    )
     assert counters.get("router.finalized")
     assert counters.get("router.finalized.instruction")
     assert counters.get("letter_template_selected.instruction_template.html")

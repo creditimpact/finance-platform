@@ -196,6 +196,12 @@ def test_letter_pipeline_golden(scenario):
     if template:
         assert counters.get("router.candidate_selected") == 1
         assert counters.get(f"router.candidate_selected.{tag}") == 1
+        assert (
+            counters.get(
+                f"router.candidate_selected.{tag}.{template}"
+            )
+            == 1
+        )
         assert counters.get("router.finalized") == 1
         assert counters.get(f"router.finalized.{tag}") == 1
     else:

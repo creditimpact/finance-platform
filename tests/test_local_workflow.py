@@ -116,7 +116,7 @@ def test_minimal_workflow():
         mock.patch("backend.core.logic.rendering.pdf_renderer.render_html_to_pdf"),
         mock.patch(
             "backend.core.logic.rendering.instructions_generator.render_pdf_from_html",
-            side_effect=lambda html, p: instructions_capture.setdefault("html", html),
+            side_effect=lambda html, p, t=None: instructions_capture.setdefault("html", html),
         ),
         mock.patch(
             "backend.core.logic.rendering.instruction_data_preparation.generate_account_action",
@@ -231,13 +231,14 @@ def test_skip_goodwill_when_identity_theft():
             "session_id": "test",
         }
     )
+    os.environ.pop("LETTERS_ROUTER_PHASED", None)
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         proofs = ProofDocuments.from_dict({"smartcredit_report": tmp.name})
-        stage_2_5 = {}
-        with (
-            mock.patch.dict(
-                os.environ,
-                {
+    stage_2_5 = {}
+    with (
+        mock.patch.dict(
+            os.environ,
+            {
                     "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", "test"),
                     "SMTP_SERVER": "x",
                     "SMTP_PORT": "587",
@@ -298,8 +299,8 @@ def test_skip_goodwill_when_identity_theft():
             ),
         ):
             run_credit_repair_process(client_info, proofs, True)
-        assert not mock_goodwill.called
-        assert stage_2_5["1"]["legal_safe_summary"] == "No statement provided"
+    assert not mock_goodwill.called
+    assert stage_2_5["1"]["legal_safe_summary"] == "No statement provided"
     if os.path.exists(tmp.name):
         os.remove(tmp.name)
 

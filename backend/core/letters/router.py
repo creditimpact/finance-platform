@@ -32,7 +32,7 @@ class TemplateDecision:
     router_mode: str
 
 
-_ROUTER_CACHE: Dict[Tuple[str, str], TemplateDecision] = {}
+_ROUTER_CACHE: Dict[Tuple[str, str, str], TemplateDecision] = {}
 _ROUTER_CACHE_LOCK = Lock()
 
 
@@ -79,7 +79,7 @@ def select_template(
 
     tag = (action_tag or "").lower()
     session_id = session_id or ctx.get("session_id") or ""
-    cache_key = (session_id, tag)
+    cache_key = (session_id, tag, phase)
     if session_id:
         with _ROUTER_CACHE_LOCK:
             if cache_key in _ROUTER_CACHE:
@@ -226,17 +226,6 @@ def select_template(
         )
 
     template_path, required = routes.get(tag, (None, []))
-    if template_path is None:
-        msg = f"Unknown action_tag '{action_tag}' for session '{session_id}'"
-        emit_counter("router.candidate_errors")
-        logger.error(msg)
-        raise ValueError(msg)
-
-    if not any((base / template_path).exists() for base in TEMPLATES_DIRS):
-        msg = f"Unknown template_name '{template_path}' for session '{session_id}'"
-        emit_counter("router.candidate_errors")
-        logger.error(msg)
-        raise ValueError(msg)
 
     if not _enabled():
         log_canary_decision("legacy", template_path or "unknown")
@@ -249,10 +238,31 @@ def select_template(
             )
         )
 
+    if template_path is None:
+        msg = f"Unknown action_tag '{action_tag}' for session '{session_id}'"
+        emit_counter("router.candidate_errors")
+        logger.error(msg)
+        raise ValueError(msg)
+
+    if tag == "bureau_dispute" and phase == "finalize":
+        bureau = (ctx.get("bureau") or "").replace(" ", "").lower()
+        if bureau:
+            specific = f"{bureau}_bureau_dispute_letter_template.html"
+            if any((base / specific).exists() for base in TEMPLATES_DIRS):
+                template_path = specific
+            else:
+                template_path = "bureau_dispute_letter_template.html"
+
+    if not any((base / template_path).exists() for base in TEMPLATES_DIRS):
+        msg = f"Unknown template_name '{template_path}' for session '{session_id}'"
+        emit_counter("router.candidate_errors")
+        logger.error(msg)
+        raise ValueError(msg)
+
     log_canary_decision("canary", template_path or "unknown")
 
     missing_fields: List[str] = []
-    if template_path and tag != "instruction":
+    if template_path and (tag != "instruction" or phase == "finalize"):
         missing_fields = validators.validate_required_fields(
             template_path, ctx, required, validators.CHECKLIST
         )

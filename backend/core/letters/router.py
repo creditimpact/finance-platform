@@ -53,10 +53,12 @@ _ROUTER_CACHE: Dict[Tuple[str, str, str], TemplateDecision] = {}
 _ROUTER_CACHE_LOCK = Lock()
 
 
-def _enabled() -> bool:
+def _enabled(phase: Literal["candidate", "final", "finalize"] = "candidate") -> bool:
     """Return True if the canary router should handle the request.
 
     Rollback: set environment variable ``ROUTER_CANARY_PERCENT=0`` to disable.
+    Set ``FINALIZE_ROUTER_PHASED=0`` to bypass finalize routing, validators, and
+    sanitizers.
     """
 
     ceiling = float(os.getenv("ROUTER_RENDER_MS_P95_CEILING", "250"))
@@ -66,20 +68,32 @@ def _enabled() -> bool:
         return False
 
     if "ROUTER_CANARY_PERCENT" not in os.environ and os.getenv(
-        "LETTERS_ROUTER_PHASED", ""
+        "LETTERS_ROUTER_PHASED", "",
     ).lower() in {"1", "true", "yes"}:
-        return True
-
-    try:
-        percent = int(os.getenv("ROUTER_CANARY_PERCENT", "0"))
-    except ValueError:
-        percent = 0
-    percent = max(0, min(100, percent))
-    if percent <= 0:
+        base_percent = 100
+    else:
+        try:
+            base_percent = int(os.getenv("ROUTER_CANARY_PERCENT", "0"))
+        except ValueError:
+            base_percent = 0
+    base_percent = max(0, min(100, base_percent))
+    if base_percent <= 0:
         return False
-    if percent >= 100:
-        return True
-    return random.randint(1, 100) <= percent
+    if base_percent < 100 and random.randint(1, 100) > base_percent:
+        return False
+
+    if phase == "finalize":
+        try:
+            percent = int(os.getenv("FINALIZE_ROUTER_PHASED", "100"))
+        except ValueError:
+            percent = 100
+        percent = max(0, min(100, percent))
+        if percent <= 0:
+            return False
+        if percent < 100:
+            return random.randint(1, 100) <= percent
+
+    return True
 
 
 def select_template(
@@ -244,7 +258,7 @@ def select_template(
 
     template_path, required = routes.get(tag, (None, []))
 
-    if not _enabled():
+    if not _enabled(phase):
         log_canary_decision("legacy", template_path or "unknown")
         return _cache_and_return(
             TemplateDecision(

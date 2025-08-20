@@ -34,6 +34,26 @@ def test_canary_toggle(monkeypatch):
     assert _enabled() is False
 
 
+def test_finalize_toggle(monkeypatch):
+    """Ensure FINALIZE_ROUTER_PHASED controls finalize routing proportion."""
+    monkeypatch.setenv("ROUTER_RENDER_MS_P95_CEILING", "1000")
+    monkeypatch.setenv("ROUTER_SANITIZER_RATE_CAP", "1")
+    monkeypatch.setenv("ROUTER_AI_DAILY_BUDGET", "100000")
+    monkeypatch.setenv("LETTERS_ROUTER_PHASED", "1")
+
+    monkeypatch.setenv("FINALIZE_ROUTER_PHASED", "0")
+    assert _enabled("finalize") is False
+
+    monkeypatch.setenv("FINALIZE_ROUTER_PHASED", "100")
+    assert _enabled("finalize") is True
+
+    monkeypatch.setenv("FINALIZE_ROUTER_PHASED", "50")
+    monkeypatch.setattr(random, "randint", lambda a, b: 25)
+    assert _enabled("finalize") is True
+    monkeypatch.setattr(random, "randint", lambda a, b: 75)
+    assert _enabled("finalize") is False
+
+
 def test_canary_halts_on_slo_breach(monkeypatch):
     reset_counters()
     reset_ai_stats()

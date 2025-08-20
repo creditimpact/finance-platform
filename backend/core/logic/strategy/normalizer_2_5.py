@@ -202,9 +202,18 @@ def neutralize_admissions(statement: str, account_id: str | None = None) -> Tupl
 
 
 def evaluate_rules(
-    normalized_statement: str, account_facts: Dict[str, Any], rulebook: Rulebook
-) -> Dict[str, list]:
-    """Evaluate ``normalized_statement`` and ``account_facts`` against rules."""
+    normalized_statement: str,
+    account_facts: Dict[str, Any],
+    rulebook: Rulebook,
+    tri_merge: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Evaluate ``normalized_statement`` and ``account_facts`` against rules.
+
+    ``tri_merge`` carries mismatch details that may trigger additional rules
+    (e.g. presence, balance, personal info). When provided, its data is surfaced
+    in the returned result and exposed to rule conditions under the
+    ``tri_merge`` namespace (``tri_merge.balance``, ``tri_merge.presence``, …).
+    """
 
     # Build accessors for rulebook data
     rules = getattr(rulebook, "rules", None)
@@ -221,6 +230,10 @@ def evaluate_rules(
     if exclusions is None and isinstance(rulebook, Mapping):
         exclusions = rulebook.get("exclusions", {})
 
+    tri_flags: Mapping[str, bool] = {
+        k: True for k in (tri_merge or {}).get("mismatch_types", [])
+    }
+
     red_flags: list[str] = []
     if "late" in normalized_statement.lower():
         red_flags.append("late_payment")
@@ -236,6 +249,11 @@ def evaluate_rules(
                 else:
                     return None
             return target
+        if path.startswith("tri_merge."):
+            key = path.split(".", 1)[1]
+            if key in tri_flags:
+                return tri_flags.get(key)
+            return (tri_merge or {}).get(key)
         target: Any = account_facts
         for part in path.split("."):
             if isinstance(target, Mapping):
@@ -315,13 +333,16 @@ def evaluate_rules(
     seen_tags: set[str] = set()
     action_tags = [x for x in action_tags if not (x in seen_tags or seen_tags.add(x))]
 
-    return {
+    result: Dict[str, Any] = {
         "rule_hits": final_hits,
         "needs_evidence": needs_evidence,
         "red_flags": red_flags,
         "suggested_dispute_frame": suggested_dispute_frame,
         "action_tag": action_tags[0] if action_tags else "",
     }
+    if tri_merge:
+        result["tri_merge"] = tri_merge
+    return result
 
 
 def normalize_and_tag(
@@ -368,7 +389,12 @@ def normalize_and_tag(
             if summary:
                 legal_safe_summary = summary
 
-    evaluation = evaluate_rules(legal_safe_summary, account_facts, rulebook)
+    evaluation = evaluate_rules(
+        legal_safe_summary,
+        account_facts,
+        rulebook,
+        account_facts.get("tri_merge"),
+    )
     rulebook_version = getattr(rulebook, "version", "")
     if not rulebook_version and isinstance(rulebook, Mapping):
         rulebook_version = str(rulebook.get("version", ""))

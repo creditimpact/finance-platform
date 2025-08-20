@@ -24,6 +24,22 @@ TEMPLATES_DIRS = [
     Path(__file__).resolve().parents[3] / "letters" / "templates",
 ]
 
+# Build a single Jinja environment and eagerly load templates so that each
+# routing request avoids hitting the filesystem. Jinja's environment and cache
+# are thread-safe as long as templates aren't mutated after load.
+ENV = Environment(
+    loader=FileSystemLoader([str(p) for p in TEMPLATES_DIRS]),
+    trim_blocks=True,
+    lstrip_blocks=True,
+)
+for base in TEMPLATES_DIRS:
+    if base.exists():
+        for tpl in base.glob("*.html"):
+            try:  # pragma: no cover - preload best effort
+                ENV.get_template(tpl.name)
+            except Exception:  # pragma: no cover - preload best effort
+                logger.exception("template preload failed for %s", tpl)
+
 
 @dataclass
 class TemplateDecision:
@@ -279,13 +295,11 @@ def select_template(
             missing_fields = validators.validate_substance(template_path, ctx)
             missing_fields = sorted(set(missing_fields))
 
-        env = Environment(
-            loader=FileSystemLoader([str(p) for p in TEMPLATES_DIRS]),
-            trim_blocks=True,
-            lstrip_blocks=True,
-        )
         try:
-            env.get_template(template_path).render(**ctx)
+            # Rendering is performed to ensure template syntax errors are surfaced
+            # early. The environment is shared across threads and caches compiled
+            # templates, minimizing per-letter I/O.
+            ENV.get_template(template_path).render(**ctx)
         except Exception:  # pragma: no cover - render guard
             logger.exception("template render failed for %s", template_path)
             emit_counter("router.render_error")

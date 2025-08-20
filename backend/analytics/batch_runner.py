@@ -7,15 +7,47 @@ import csv
 import json
 import math
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping
+
+from backend.core.letters.router import route_accounts
 
 FLAGS = [
     "LETTERS_ROUTER_PHASED",
     "ENFORCE_TEMPLATE_VALIDATION",
     "SAFE_CLIENT_SENTENCE_ENABLED",
 ]
+
+
+def benchmark_finalize(num: int = 1000, *, max_workers: int | None = None) -> float:
+    """Return letters-per-second throughput for finalize routing.
+
+    Synthetic accounts are routed through the ``finalize`` phase using the
+    :func:`route_accounts` thread pool. The returned value is the average number
+    of letters processed per second. Results are printed to stdout for
+    convenience.
+    """
+
+    os.environ.setdefault("LETTERS_ROUTER_PHASED", "1")
+
+    base_ctx = {
+        "bureau": "experian",
+        "creditor_name": "Acme",
+        "account_number_masked": "1234",
+        "legal_safe_summary": "ok",
+        "is_identity_theft": True,
+        "client": {"full_name": "John Doe"},
+    }
+    items = [("fraud_dispute", dict(base_ctx), f"sess-{i}") for i in range(num)]
+
+    start = time.perf_counter()
+    route_accounts(items, phase="finalize", max_workers=max_workers)
+    elapsed = time.perf_counter() - start
+    throughput = num / elapsed if elapsed else 0.0
+    print(f"throughput_lps={throughput:.2f}")
+    return throughput
 
 
 def _percentile(values: List[float], pct: float) -> float:
@@ -195,4 +227,4 @@ if __name__ == "__main__":  # pragma: no cover - CLI only
     main()
 
 
-__all__ = ["run_staging_batch", "process_samples"]
+__all__ = ["run_staging_batch", "process_samples", "benchmark_finalize"]

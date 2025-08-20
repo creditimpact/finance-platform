@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List
 from backend.api.session_manager import get_session, update_session
 from backend.audit.audit import emit_event
 from backend.core.models import AccountState, AccountStatus
+from backend.analytics.analytics_tracker import emit_counter, set_metric
 
 from .state_machine import dump_state, evaluate_state, load_state
 
@@ -52,32 +53,60 @@ def plan_next_step(
         A sorted list of planner-approved tags for the current step.
     """
 
-    session_id = session.get("session_id")
-    if not session_id:
-        return []
+    try:
+        session_id = session.get("session_id")
+        if not session_id:
+            return []
 
-    stored = get_session(session_id) or {}
-    states_data: Dict[str, dict] = stored.get("account_states", {}) or {}
-    states_data = _ensure_account_states(session, states_data)
+        stored = get_session(session_id) or {}
+        states_data: Dict[str, dict] = stored.get("account_states", {}) or {}
+        states_data = _ensure_account_states(session, states_data)
 
-    allowed: List[str] = []
-    now = now or datetime.utcnow()
-    for acc_id, data in states_data.items():
-        state = load_state(data)
-        if state.next_eligible_at and now < state.next_eligible_at:
+        allowed: List[str] = []
+        now = now or datetime.utcnow()
+        total_accounts = len(states_data)
+        resolved_accounts = 0
+        resolved_cycles = 0
+        for acc_id, data in states_data.items():
+            state = load_state(data)
+            if state.status == AccountStatus.COMPLETED:
+                resolved_accounts += 1
+                resolved_cycles += state.current_cycle
+
+            if state.next_eligible_at and now < state.next_eligible_at:
+                delta_ms = (state.next_eligible_at - now).total_seconds() * 1000
+                emit_counter("planner.time_to_next_step_ms", delta_ms)
+                states_data[acc_id] = dump_state(state)
+                continue
+
+            tags, next_eligible_at = evaluate_state(state, now=now)
+            state.next_eligible_at = next_eligible_at
+            if next_eligible_at and now < next_eligible_at:
+                delta_ms = (next_eligible_at - now).total_seconds() * 1000
+                emit_counter("planner.time_to_next_step_ms", delta_ms)
             states_data[acc_id] = dump_state(state)
-            continue
-        tags, next_eligible_at = evaluate_state(state, now=now)
-        state.next_eligible_at = next_eligible_at
-        states_data[acc_id] = dump_state(state)
-        allowed.extend(tags)
+            allowed.extend(tags)
 
-    action_set = {t for t in action_tags if t}
-    if action_set:
-        allowed = [t for t in allowed if t in action_set]
+        if total_accounts:
+            set_metric(
+                "planner.resolution_rate",
+                resolved_accounts / total_accounts,
+            )
+        if resolved_accounts:
+            set_metric(
+                "planner.avg_cycles_per_resolution",
+                resolved_cycles / resolved_accounts,
+            )
 
-    update_session(session_id, account_states=states_data)
-    return sorted(set(allowed))
+        action_set = {t for t in action_tags if t}
+        if action_set:
+            allowed = [t for t in allowed if t in action_set]
+
+        update_session(session_id, account_states=states_data)
+        return sorted(set(allowed))
+    except Exception:
+        emit_counter("planner.error_count")
+        raise
 
 
 def record_send(
@@ -88,34 +117,48 @@ def record_send(
 ) -> None:
     """Record that letters were sent for the given accounts."""
 
-    session_id = session.get("session_id")
-    if not session_id:
-        return
+    try:
+        session_id = session.get("session_id")
+        if not session_id:
+            return
 
-    stored = get_session(session_id) or {}
-    states_data: Dict[str, dict] = stored.get("account_states", {}) or {}
-    if not states_data:
-        return
+        stored = get_session(session_id) or {}
+        states_data: Dict[str, dict] = stored.get("account_states", {}) or {}
+        if not states_data:
+            return
 
-    now = now or datetime.utcnow()
-    for acc_id in account_ids:
-        data = states_data.get(str(acc_id))
-        if not data:
-            continue
-        state = load_state(data)
-        state.last_sent_at = now
-        state.next_eligible_at = now + timedelta(days=sla_days)
-        state.transition(AccountStatus.SENT, actor="planner")
-        state.current_step += 1
-        emit_event(
-            "audit.planner_transition",
-            {
-                "account_id": str(acc_id),
-                "cycle": state.current_cycle,
-                "step": state.current_step,
-                "reason": "letters_sent",
-            },
-        )
-        states_data[str(acc_id)] = dump_state(state)
+        now = now or datetime.utcnow()
+        for acc_id in account_ids:
+            data = states_data.get(str(acc_id))
+            if not data:
+                continue
+            state = load_state(data)
+            if state.last_sent_at and now > state.last_sent_at + timedelta(days=sla_days):
+                emit_counter("planner.sla_violations_total")
+            state.last_sent_at = now
+            state.next_eligible_at = now + timedelta(days=sla_days)
+            state.transition(AccountStatus.SENT, actor="planner")
+            state.current_step += 1
+            emit_counter(
+                "planner.cycle_progress",
+                {"cycle": state.current_cycle, "step": state.current_step},
+            )
+            emit_counter(
+                "planner.time_to_next_step_ms",
+                (state.next_eligible_at - now).total_seconds() * 1000,
+            )
+            emit_event(
+                "audit.planner_transition",
+                {
+                    "account_id": str(acc_id),
+                    "cycle": state.current_cycle,
+                    "step": state.current_step,
+                    "reason": "letters_sent",
+                },
+            )
+            states_data[str(acc_id)] = dump_state(state)
 
-    update_session(session_id, account_states=states_data)
+        update_session(session_id, account_states=states_data)
+    except Exception:
+        emit_counter("planner.error_count")
+        raise

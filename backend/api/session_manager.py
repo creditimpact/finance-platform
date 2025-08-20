@@ -52,6 +52,17 @@ def update_session(session_id: str, **kwargs: Any) -> Dict[str, Any]:
         session = sessions.get(session_id, {})
         if "structured_summaries" in kwargs:
             invalidate_summary_cache(session_id)
+        tri_merge_update = kwargs.pop("tri_merge", None)
+        if tri_merge_update:
+            tri_merge_session = session.get("tri_merge", {})
+            evidence_update = tri_merge_update.get("evidence")
+            if evidence_update:
+                evidence_session = tri_merge_session.get("evidence", {})
+                evidence_session.update(evidence_update)
+                tri_merge_session["evidence"] = evidence_session
+                tri_merge_update.pop("evidence", None)
+            tri_merge_session.update(tri_merge_update)
+            session["tri_merge"] = tri_merge_session
         session.update(kwargs)
         sessions[session_id] = session
         _save_sessions(sessions)

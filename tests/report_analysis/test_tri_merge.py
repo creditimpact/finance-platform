@@ -1,6 +1,9 @@
-from backend.core.logic.report_analysis.tri_merge import normalize_and_match, compute_mismatches
+from backend.analytics.analytics_tracker import get_counters, reset_counters
+from backend.core.logic.report_analysis.tri_merge import (
+    compute_mismatches,
+    normalize_and_match,
+)
 from backend.core.logic.report_analysis.tri_merge_models import Tradeline
-from backend.analytics.analytics_tracker import reset_counters, get_counters
 
 
 def test_fuzzy_creditor_matching():
@@ -95,6 +98,35 @@ def test_presence_and_field_mismatches():
     assert mism["remarks"].values == {"Experian": "OK", "Equifax": "Late"}
     assert mism["utilization"].values == {"Experian": 0.1, "Equifax": 0.5}
     assert mism["personal_info"].values == {"Experian": "PI1", "Equifax": "PI2"}
+
+
+def test_date_reported_mismatch_only():
+    tls = [
+        Tradeline(
+            creditor="Chase",
+            bureau="Experian",
+            account_number="12341234",
+            data={"date_opened": "2020-01-01", "date_reported": "2020-02-01"},
+        ),
+        Tradeline(
+            creditor="Chase",
+            bureau="Equifax",
+            account_number="12341234",
+            data={"date_opened": "2020-01-01", "date_reported": "2020-02-01"},
+        ),
+    ]
+
+    families = normalize_and_match(tls)
+    fam = families[0]
+    fam.tradelines["Equifax"].data["date_reported"] = "2020-03-01"
+    families = compute_mismatches(families)
+    fam = families[0]
+    mism = {m.field: m for m in fam.mismatches}
+
+    assert mism["dates"].values == {
+        "Experian": ("2020-01-01", "2020-02-01"),
+        "Equifax": ("2020-01-01", "2020-03-01"),
+    }
 
 
 def test_duplicate_mismatch_counts():

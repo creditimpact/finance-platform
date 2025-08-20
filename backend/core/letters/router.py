@@ -169,7 +169,7 @@ def select_template(
         ),
     }
 
-    if tag in {"ignore", "paydown_first"}:
+    if tag in {"ignore", "paydown_first", "duplicate"}:
         emit_counter(f"router.skipped.{tag}")
     if tag == "ignore":
         return TemplateDecision(
@@ -177,6 +177,20 @@ def select_template(
             required_fields=[],
             missing_fields=[],
             router_mode="skip",
+        )
+
+    if tag == "duplicate":
+        if phase == "candidate":
+            emit_counter("router.candidate_selected")
+            emit_counter("router.candidate_selected.duplicate")
+        elif phase in {"final", "finalize"}:
+            emit_counter("router.finalized")
+            emit_counter("router.finalized.duplicate")
+        return TemplateDecision(
+            template_path=None,
+            required_fields=[],
+            missing_fields=[],
+            router_mode="memo",
         )
 
     template_path, required = routes.get(tag, (None, []))
@@ -193,7 +207,7 @@ def select_template(
     log_canary_decision("canary", template_path or "unknown")
 
     missing_fields: List[str] = []
-    if template_path:
+    if template_path and tag != "instruction":
         missing_fields = validators.validate_required_fields(
             template_path, ctx, required, validators.CHECKLIST
         )

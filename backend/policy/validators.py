@@ -21,19 +21,6 @@ TRI_MERGE_MISMATCH_TYPES: Set[str] = {
 }
 
 
-def _collect_tri_merge_fields(obj: Any, found: Set[str]) -> None:
-    """Recursively collect tri-merge mismatch fields from condition trees."""
-    if isinstance(obj, dict):
-        field = obj.get("field")
-        if isinstance(field, str) and field.startswith("tri_merge."):
-            found.add(field.split(".", 1)[1])
-        for value in obj.values():
-            _collect_tri_merge_fields(value, found)
-    elif isinstance(obj, list):
-        for item in obj:
-            _collect_tri_merge_fields(item, found)
-
-
 def validate_tri_merge_mismatch_rules(
     rulebook: Mapping[str, Any] | None = None,
     mismatch_types: Set[str] | None = None,
@@ -54,9 +41,10 @@ def validate_tri_merge_mismatch_rules(
 
     found: Set[str] = set()
     for rule in rulebook.get("rules", []):
-        when = rule.get("when") or rule.get("conditions")
-        if when is not None:
-            _collect_tri_merge_fields(when, found)
+        effect = rule.get("effect") or {}
+        mismatch = effect.get("source_mismatch")
+        if isinstance(mismatch, str) and mismatch.startswith("tri_merge."):
+            found.add(mismatch.split(".", 1)[1])
 
     missing = mismatch_types - found
     if missing:

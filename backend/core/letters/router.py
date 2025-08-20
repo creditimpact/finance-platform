@@ -199,19 +199,25 @@ def select_template(
         )
 
     if template_path:
+        template_name = os.path.basename(template_path)
         # Emit both legacy and tag-specific router metrics for transition
         if phase == "candidate":
             emit_counter("router.candidate_selected")  # deprecated
             if tag:
                 emit_counter(f"router.candidate_selected.{tag}")
+                emit_counter(
+                    f"router.candidate_selected.{tag}.{template_name}"
+                )
         elif phase in {"final", "finalize"}:
             emit_counter("router.finalized")  # deprecated
             if tag:
                 emit_counter(f"router.finalized.{tag}")
 
-    if missing_fields:
-        for field in missing_fields:
-            emit_counter(f"router.missing_fields.{tag}.{template_path}.{field}")
+        if missing_fields:
+            for field in missing_fields:
+                emit_counter(
+                    f"router.missing_fields.{tag}.{template_name}.{field}"
+                )
 
     return TemplateDecision(
         template_path=template_path,

@@ -43,6 +43,9 @@ def test_instruction_validation_missing_actions(monkeypatch, tmp_path):
     # Router metrics still emitted
     assert counters.get("router.candidate_selected")
     assert counters.get("router.candidate_selected.instruction")
+    assert counters.get(
+        "router.candidate_selected.instruction.instruction_template.html"
+    )
     assert counters.get("router.finalized")
     assert counters.get("router.finalized.instruction")
     # No render should occur when validation fails

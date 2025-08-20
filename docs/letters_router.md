@@ -62,3 +62,20 @@ These fields enrich the payload but are not mandatory:
 
 Extending the router generally involves adding a new strategy module
 and mapping it in `services/letters/router.py`.
+
+## Metrics
+
+- `router.candidate_selected.{action_tag}.{template_name}` – emitted for each
+  candidate template selection.
+- `router.missing_fields.{action_tag}.{template_name}.{field}` – emitted for
+  every required field absent from a candidate.
+
+Cardinality is bounded by the finite sets of action tags, template names and
+required field identifiers.
+
+### Grafana / Kibana panels
+
+- **Candidate selection** – count of `router.candidate_selected.*` by tag and
+  template. Alert if a tag registers zero selections for an hour.
+- **Missing field heatmap** – sum of `router.missing_fields.*` grouped by tag
+  and field to surface validation gaps.

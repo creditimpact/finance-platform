@@ -32,6 +32,13 @@ flowchart LR
 - P95 latency ≤ 2s for routing.
 - No more than 0.1% invalid letters.
 
+## Monitoring
+
+Dashboards should surface the following counters:
+
+- `rulebook.tag_selected.{tag}` – frequency of chosen action tags.
+- `rulebook.suppressed_rules.{rule_name}` – rules skipped due to precedence or exclusion.
+
 ## Rollback
 
 1. Revert to the previous container tag.

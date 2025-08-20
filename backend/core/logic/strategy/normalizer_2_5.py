@@ -317,6 +317,7 @@ def evaluate_rules(
 
     for rule_id, effect in sorted_hits:
         if rule_id in suppressed:
+            emit_counter(f"rulebook.suppressed_rules.{rule_id}")
             continue
         final_hits.extend(effect.get("rule_hits", [rule_id]))
         needs_evidence.extend(effect.get("needs_evidence", []))
@@ -420,6 +421,9 @@ def normalize_and_tag(
     result["red_flags"] = list(
         dict.fromkeys(result.get("red_flags", []) + admission_flags)
     )
+
+    if result.get("action_tag"):
+        emit_counter(f"rulebook.tag_selected.{result['action_tag']}")
 
     _fill_defaults(result)
     _VALIDATOR.validate(result)

@@ -22,6 +22,8 @@ Common counters emitted for dashboards:
 - `letters_without_strategy_context` – attempts to generate letters without required strategy data.
 - `guardrail_fix_count.{letter_type}` – number of guardrail remediation passes by letter type.
 - `policy_override_reason.{reason}` – policy-based overrides grouped by reason.
+- `rulebook.tag_selected.{tag}` – counts how often a rulebook action tag is chosen.
+- `rulebook.suppressed_rules.{rule_name}` – rules skipped due to precedence or exclusion.
 
 ## Entry points
 - `analytics_tracker.save_analytics_snapshot`

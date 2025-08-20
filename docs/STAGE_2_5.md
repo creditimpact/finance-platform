@@ -38,6 +38,8 @@ Stage 2.5 emits counters via `analytics_tracker`:
 - `s2_5_latency_ms`
 - `s2_5_rule_hits_per_account`
 - `s2_5_admissions_detected_total`
+- `rulebook.tag_selected.{tag}`
+- `rulebook.suppressed_rules.{rule_name}`
 
 ## Rulebook Update Workflow
 1. Edit `backend/policy/rulebook.yaml` and bump its `version`.

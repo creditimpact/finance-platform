@@ -110,6 +110,16 @@ def select_template(
                 "days_since_cra_result",
             ],
         ),
+        "personal_info_correction": (
+            "personal_info_correction_template.html",
+            [
+                "client_name",
+                "client_address_lines",
+                "date_of_birth",
+                "ssn_last4",
+                "legal_safe_summary",
+            ],
+        ),
         "cease_and_desist": (
             "cease_and_desist_letter_template.html",
             ["collector_name", "account_number_masked", "legal_safe_summary"],

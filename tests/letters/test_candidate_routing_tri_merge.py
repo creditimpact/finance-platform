@@ -20,6 +20,14 @@ BUREAU_FIELDS = {
     "legal_safe_summary",
 }
 
+PII_FIELDS = {
+    "client_name",
+    "client_address_lines",
+    "date_of_birth",
+    "ssn_last4",
+    "legal_safe_summary",
+}
+
 
 @pytest.mark.parametrize(
     "mismatch_type,template,fields",
@@ -30,6 +38,11 @@ BUREAU_FIELDS = {
         ("remarks", "bureau_dispute_letter_template.html", BUREAU_FIELDS),
         ("utilization", "mov_letter_template.html", MOV_FIELDS),
         ("duplicate", "bureau_dispute_letter_template.html", BUREAU_FIELDS),
+        (
+            "personal_info",
+            "personal_info_correction_template.html",
+            PII_FIELDS,
+        ),
     ],
 )
 def test_candidate_routing_emits_missing_fields_after_stage_2_5(

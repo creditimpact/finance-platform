@@ -34,7 +34,8 @@ from backend.core.models.bureau import BureauPayload
 from backend.core.models.client import ClientInfo
 from backend.core.services.ai_client import AIClient
 
-from .utils import StrategyContextMissing, ensure_strategy_context
+from .exceptions import StrategyContextMissing
+from .utils import ensure_strategy_context
 
 env = Environment(loader=FileSystemLoader(templates_path("")))
 
@@ -144,7 +145,10 @@ def generate_custom_letter(
     except StrategyContextMissing as exc:  # pragma: no cover - enforcement
         emit_event(
             "strategy_context_missing",
-            {"account_id": exc.account_id, "letter_type": "custom"},
+            {
+                "account_id": exc.args[0] if exc.args else None,
+                "letter_type": "custom",
+            },
         )
         raise
 

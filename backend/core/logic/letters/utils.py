@@ -4,13 +4,7 @@ from typing import Any, Iterable, Mapping
 
 from backend.core.models.account import Account
 
-
-class StrategyContextMissing(RuntimeError):
-    """Raised when an account lacks required strategy context."""
-
-    def __init__(self, account_id: str | None):
-        self.account_id = account_id
-        super().__init__(f"Strategy context missing for account {account_id}")
+from .exceptions import StrategyContextMissing
 
 
 def _get_fields(acc: Account | Mapping[str, Any]) -> tuple[str | None, str | None]:
@@ -97,7 +91,6 @@ def populate_required_fields(
 
 
 __all__ = [
-    "StrategyContextMissing",
     "ensure_strategy_context",
     "populate_required_fields",
 ]

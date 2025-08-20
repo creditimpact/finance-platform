@@ -7,7 +7,7 @@ from backend.core.logic.letters.generate_goodwill_letters import (
 from backend.core.logic.letters.letter_generator import (
     generate_all_dispute_letters_with_ai,
 )
-from backend.core.logic.letters.utils import StrategyContextMissing
+from backend.core.logic.letters.exceptions import StrategyContextMissing
 from tests.helpers.fake_ai_client import FakeAIClient
 
 

@@ -15,6 +15,26 @@ CHECKLIST: Dict[str, List[str]] = {
         "accounts_summary",
         "per_account_actions",
     ],
+    "bureau_dispute_letter_template.html": [
+        "creditor_name",
+        "account_number_masked",
+        "bureau",
+        "legal_safe_summary",
+    ],
+    "mov_letter_template.html": [
+        "creditor_name",
+        "account_number_masked",
+        "legal_safe_summary",
+        "cra_last_result",
+        "days_since_cra_result",
+    ],
+    "personal_info_correction_letter_template.html": [
+        "client_name",
+        "client_address_lines",
+        "date_of_birth",
+        "ssn_last4",
+        "legal_safe_summary",
+    ],
 }
 
 
@@ -35,12 +55,13 @@ SUBSTANCE_CHECKLIST: Dict[str, Dict[str, str | None]] = {
     },
     "mov_letter_template.html": {
         "reinvestigation_request": r"reinvestigat",
+        "method_of_verification": r"method\s+of\s+verif",
         "cra_last_result": None,
         "days_since_cra_result": None,
     },
     "bureau_dispute_letter_template.html": {
         "fcra_611": r"611",
-        "investigation_request": r"reinvestigat",
+        "reinvestigation_request": r"reinvestigat",
         "account_number_masked": None,
     },
     "dispute_letter_template.html": {

@@ -17,12 +17,17 @@ def test_strategy_merge_resolves_missing_fields(monkeypatch):
         "account_number_masked": "****1234",
         "legal_safe_summary": "Summary",
     }
-    decision = select_template("pay_for_delete", ctx, phase="candidate")
-    assert set(decision.missing_fields) == {"collector_name", "offer_terms"}
+    decision = select_template("pay_for_delete", ctx, phase="finalize")
+    assert set(decision.missing_fields) == {
+        "collector_name",
+        "offer_terms",
+        "deletion_clause",
+        "payment_clause",
+    }
 
     # Strategy merge fills in required fields
     acc = {"action_tag": "pay_for_delete", "name": "ABC Collections"}
-    strat = {"offer_terms": "50% settlement"}
+    strat = {"offer_terms": "Pay to delete"}
     populate_required_fields(acc, strat)
     ctx.update({
         "collector_name": acc["collector_name"],

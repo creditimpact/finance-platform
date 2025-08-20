@@ -10,6 +10,7 @@ PII_FIELDS = {
     "date_of_birth",
     "ssn_last4",
     "legal_safe_summary",
+    "update_request",
 }
 
 INQUIRY_FIELDS = {
@@ -35,6 +36,10 @@ FRAUD_FIELDS = {
     "bureau",
     "legal_safe_summary",
     "is_identity_theft",
+    "fcra_605b",
+    "ftc_report",
+    "block_or_remove_request",
+    "response_window",
 }
 
 
@@ -60,19 +65,18 @@ FRAUD_FIELDS = {
         ("custom_letter", "general_letter_template.html", {"recipient"}),
     ],
 )
-def test_candidate_routing_missing_fields(monkeypatch, tag, template, fields):
+def test_finalize_routing_missing_fields(monkeypatch, tag, template, fields):
     monkeypatch.setenv("LETTERS_ROUTER_PHASED", "1")
     reset_counters()
 
-    decision = select_template(tag, {}, phase="candidate")
+    decision = select_template(tag, {}, phase="finalize")
 
     assert decision.template_path == template
     assert set(decision.missing_fields) == fields
 
     counters = get_counters()
-    assert counters.get("router.candidate_selected") == 1
-    assert counters.get(f"router.candidate_selected.{tag}") == 1
-    assert counters.get(f"router.candidate_selected.{tag}.{template}") == 1
+    assert counters.get("router.finalized") == 1
+    assert counters.get(f"router.finalized.{tag}") == 1
     for field in fields:
         key = f"router.missing_fields.{tag}.{template}.{field}"
         assert counters.get(key) == 1

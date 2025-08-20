@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 import os
 import random
 from dataclasses import dataclass
-from typing import List, Literal
+from pathlib import Path
+from typing import Dict, List, Literal, Tuple
 
 from backend.analytics.analytics_tracker import (
     check_canary_guardrails,
@@ -14,12 +16,22 @@ from backend.analytics.analytics_tracker import (
 from . import validators
 
 
+logger = logging.getLogger(__name__)
+TEMPLATES_DIRS = [
+    Path(__file__).resolve().parents[2] / "assets" / "templates",
+    Path(__file__).resolve().parents[3] / "letters" / "templates",
+]
+
+
 @dataclass
 class TemplateDecision:
     template_path: str | None
     required_fields: List[str]
     missing_fields: List[str]
     router_mode: str
+
+
+_ROUTER_CACHE: Dict[Tuple[str, str], TemplateDecision] = {}
 
 
 def _enabled() -> bool:
@@ -55,6 +67,7 @@ def select_template(
     action_tag: str,
     ctx: dict,
     phase: Literal["candidate", "final", "finalize"],
+    session_id: str | None = None,
 ) -> TemplateDecision:
     """Return the template selection for ``action_tag``.
 
@@ -63,6 +76,11 @@ def select_template(
     """
 
     tag = (action_tag or "").lower()
+    session_id = session_id or ctx.get("session_id") or ""
+    cache_key = (session_id, tag)
+    if session_id and cache_key in _ROUTER_CACHE:
+        return _ROUTER_CACHE[cache_key]
+
     routes = {
         "dispute": ("dispute_letter_template.html", ["bureau"]),
         "goodwill": ("goodwill_letter_template.html", ["creditor"]),
@@ -169,14 +187,21 @@ def select_template(
         ),
     }
 
+    def _cache_and_return(decision: TemplateDecision) -> TemplateDecision:
+        if session_id:
+            _ROUTER_CACHE[cache_key] = decision
+        return decision
+
     if tag in {"ignore", "paydown_first", "duplicate"}:
         emit_counter(f"router.skipped.{tag}")
     if tag == "ignore":
-        return TemplateDecision(
-            template_path=None,
-            required_fields=[],
-            missing_fields=[],
-            router_mode="skip",
+        return _cache_and_return(
+            TemplateDecision(
+                template_path=None,
+                required_fields=[],
+                missing_fields=[],
+                router_mode="skip",
+            )
         )
 
     if tag == "duplicate":
@@ -186,22 +211,41 @@ def select_template(
         elif phase in {"final", "finalize"}:
             emit_counter("router.finalized")
             emit_counter("router.finalized.duplicate")
-        return TemplateDecision(
-            template_path=None,
-            required_fields=[],
-            missing_fields=[],
-            router_mode="memo",
+        return _cache_and_return(
+            TemplateDecision(
+                template_path=None,
+                required_fields=[],
+                missing_fields=[],
+                router_mode="memo",
+            )
         )
 
     template_path, required = routes.get(tag, (None, []))
+    if template_path is None:
+        msg = (
+            f"Unknown action_tag '{action_tag}' for session '{session_id}'"
+        )
+        emit_counter("router.candidate_errors")
+        logger.error(msg)
+        raise ValueError(msg)
+
+    if not any((base / template_path).exists() for base in TEMPLATES_DIRS):
+        msg = (
+            f"Unknown template_name '{template_path}' for session '{session_id}'"
+        )
+        emit_counter("router.candidate_errors")
+        logger.error(msg)
+        raise ValueError(msg)
 
     if not _enabled():
         log_canary_decision("legacy", template_path or "unknown")
-        return TemplateDecision(
-            template_path=template_path,
-            required_fields=required,
-            missing_fields=[],
-            router_mode="bypass",
+        return _cache_and_return(
+            TemplateDecision(
+                template_path=template_path,
+                required_fields=required,
+                missing_fields=[],
+                router_mode="bypass",
+            )
         )
 
     log_canary_decision("canary", template_path or "unknown")
@@ -233,11 +277,13 @@ def select_template(
                     f"router.missing_fields.{tag}.{template_name}.{field}"
                 )
 
-    return TemplateDecision(
-        template_path=template_path,
-        required_fields=required,
-        missing_fields=missing_fields,
-        router_mode="auto_route",
+    return _cache_and_return(
+        TemplateDecision(
+            template_path=template_path,
+            required_fields=required,
+            missing_fields=missing_fields,
+            router_mode="auto_route",
+        )
     )
 
 

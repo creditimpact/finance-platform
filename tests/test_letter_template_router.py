@@ -1,3 +1,5 @@
+import pytest
+
 from backend.analytics.analytics_tracker import get_counters, reset_counters
 from backend.core.letters.router import select_template
 
@@ -111,3 +113,53 @@ def test_missing_fields(monkeypatch):
         phase="candidate",
     )
     assert decision.missing_fields == []
+
+
+def test_unknown_action_tag_raises(monkeypatch, caplog):
+    monkeypatch.setenv("LETTERS_ROUTER_PHASED", "1")
+    reset_counters()
+    with caplog.at_level("ERROR"):
+        with pytest.raises(ValueError) as exc:
+            select_template("bogus", {}, phase="candidate", session_id="sess1")
+    assert "bogus" in str(exc.value)
+    assert "sess1" in str(exc.value)
+    counters = get_counters()
+    assert counters.get("router.candidate_errors") == 1
+    assert any("bogus" in r.message for r in caplog.records)
+
+
+def test_unknown_template_name_raises(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("LETTERS_ROUTER_PHASED", "1")
+    reset_counters()
+    from backend.core.letters import router as router_mod
+
+    monkeypatch.setattr(router_mod, "TEMPLATES_DIRS", [tmp_path])
+    with caplog.at_level("ERROR"):
+        with pytest.raises(ValueError) as exc:
+            select_template(
+                "dispute",
+                {"bureau": "Experian"},
+                phase="candidate",
+                session_id="sess2",
+            )
+    assert "dispute_letter_template.html" in str(exc.value)
+    assert "sess2" in str(exc.value)
+    counters = get_counters()
+    assert counters.get("router.candidate_errors") == 1
+    assert any("dispute_letter_template.html" in r.message for r in caplog.records)
+
+
+def test_routing_cache(monkeypatch):
+    monkeypatch.setenv("LETTERS_ROUTER_PHASED", "1")
+    from backend.core.letters import router as router_mod
+
+    router_mod._ROUTER_CACHE.clear()
+    decision1 = select_template(
+        "goodwill", {"creditor": "ABC"}, phase="candidate", session_id="sess3"
+    )
+    decision2 = select_template(
+        "goodwill", {}, phase="candidate", session_id="sess3"
+    )
+    assert decision1.missing_fields == []
+    assert decision2.missing_fields == []
+    assert decision1 is decision2

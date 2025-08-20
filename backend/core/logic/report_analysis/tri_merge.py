@@ -6,6 +6,7 @@ import collections
 import hashlib
 import os
 import re
+import math
 from typing import Dict, Iterable, List, Tuple
 
 from backend.analytics.analytics_tracker import emit_counter
@@ -60,6 +61,7 @@ def normalize_and_match(bureau_data: Iterable[Tradeline]) -> List[TradelineFamil
             family.tradelines[tl.bureau] = tl
 
     families: List[TradelineFamily] = []
+    confidences: List[float] = []
     for key, family in groups.items():
         features = "|".join(key)
         family_id = hashlib.sha1(features.encode("utf-8")).hexdigest()[:10]
@@ -68,6 +70,7 @@ def normalize_and_match(bureau_data: Iterable[Tradeline]) -> List[TradelineFamil
         family.family_id = family_id  # type: ignore[attr-defined]
         family.match_confidence = match_confidence  # type: ignore[attr-defined]
         families.append(family)
+        confidences.append(match_confidence)
 
         bucket = int(match_confidence * 10) * 10
         emit_counter(f"tri_merge.match_confidence_hist.{bucket}")
@@ -76,6 +79,14 @@ def normalize_and_match(bureau_data: Iterable[Tradeline]) -> List[TradelineFamil
                 "tri_merge.low_match_confidence",
                 {"family_id": family_id, "creditor": key[0], "confidence": match_confidence},
             )
+
+    if confidences:
+        sorted_conf = sorted(confidences)
+        index = int(math.ceil(0.95 * len(sorted_conf))) - 1
+        p95_value = sorted_conf[index]
+    else:
+        p95_value = 0
+    emit_counter("tri_merge.match_confidence_p95", p95_value)
 
     emit_counter("tri_merge.families_total", len(families))
     return families

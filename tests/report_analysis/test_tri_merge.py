@@ -1,5 +1,6 @@
 from backend.core.logic.report_analysis.tri_merge import normalize_and_match, compute_mismatches
 from backend.core.logic.report_analysis.tri_merge_models import Tradeline
+from backend.analytics.analytics_tracker import reset_counters, get_counters
 
 
 def test_fuzzy_creditor_matching():
@@ -118,3 +119,28 @@ def test_duplicate_mismatch_counts():
     mism = {m.field: m for m in fam.mismatches}
 
     assert mism["duplicate"].values == {"Experian": 1}
+
+
+def test_match_confidence_p95_metric():
+    tls = [
+        Tradeline(
+            creditor="Cred",
+            bureau="Experian",
+            account_number=f"{i:04d}",
+            data={},
+        )
+        for i in range(19)
+    ]
+    tls.append(
+        Tradeline(
+            creditor="Cred",
+            bureau="Experian",
+            account_number="9999",
+            data={"date_opened": "2020-01-01", "date_reported": "2020-02-01"},
+        )
+    )
+
+    reset_counters()
+    normalize_and_match(tls)
+    counters = get_counters()
+    assert counters["tri_merge.match_confidence_p95"] == 0.5

@@ -10,6 +10,8 @@ from typing import Any, Mapping
 import yaml
 from jsonschema import Draft7Validator, ValidationError
 
+from .validators import validate_tri_merge_mismatch_rules
+
 _RULEBOOK_PATH = Path(__file__).with_name("rulebook.yaml")
 _SCHEMA_PATH = Path(__file__).with_name("rulebook_schema.yaml")
 
@@ -65,6 +67,9 @@ def load_rulebook() -> Mapping[str, Any]:
         return value
 
     resolved = resolve(data)
+
+    # Ensure all known tri-merge mismatch types have corresponding rules.
+    validate_tri_merge_mismatch_rules(resolved)
 
     class RulebookDict(dict):
         def __init__(self, *args, **kwargs) -> None:

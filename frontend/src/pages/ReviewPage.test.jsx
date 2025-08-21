@@ -11,21 +11,25 @@ jest.mock('../api', () => ({
   })
 }));
 
-const uploadData = {
+const baseUploadData = {
   session_id: 'sess1',
   filename: 'file.pdf',
-  email: 'test@example.com',
-  accounts: {
-    negative_accounts: [
-      { account_id: 'acc1', name: 'Account 1', account_number: '1234' }
-    ]
-  }
+  email: 'test@example.com'
 };
 
-describe('ReviewPage', () => {
+const account = { account_id: 'acc1', name: 'Account 1', account_number: '1234' };
+
+describe.each([
+  'negative_accounts',
+  'disputes',
+  'open_accounts_with_issues',
+  'goodwill'
+])('ReviewPage with %s', (key) => {
+  const uploadData = { ...baseUploadData, accounts: { [key]: [account] } };
+
   test('renders helper text', async () => {
     render(
-      <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
+      <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
         <ReviewPage />
       </MemoryRouter>
     );
@@ -36,7 +40,7 @@ describe('ReviewPage', () => {
 
   test('shows summary box when toggle active', async () => {
     render(
-      <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
+      <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
         <ReviewPage />
       </MemoryRouter>
     );

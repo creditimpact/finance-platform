@@ -47,3 +47,9 @@ graph TD
 1. Monitor outcome throughput and SLA adherence dashboards.
 2. Investigate drops in processed reports or rising SLA breaches.
 3. Use the metrics to fine-tune planner rules and capacity planning.
+
+### Rollback
+
+1. Disable outcome ingestion by setting `ENABLE_OUTCOME_INGESTION` to `false`.
+2. Alternatively, set `OUTCOME_INGESTION_CANARY_PERCENT` to `0` to bypass planner updates.
+3. Re-enable by restoring the flag or increasing the canary percentage when ready.

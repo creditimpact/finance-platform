@@ -666,6 +666,12 @@ def run_credit_repair_process(
         pdf_path, sections, bureau_data, today_folder = analyze_credit_report(
             proofs_files, session_id, client_info, audit, log_messages, ai_client
         )
+        try:
+            from services.outcome_ingestion.ingest_report import ingest_report as ingest_outcome_report
+
+            ingest_outcome_report(None, bureau_data)
+        except Exception:
+            pass
         tri_merge_map: dict[str, dict[str, Any]] = {}
         if env_bool("ENABLE_TRI_MERGE", False):
             from backend.api.session_manager import get_session

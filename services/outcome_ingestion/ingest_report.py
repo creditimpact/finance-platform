@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Iterable, List, Mapping
@@ -72,6 +73,8 @@ def ingest_report(account_id: str | None, new_report: Mapping[str, Any]) -> List
     if not session_id:
         return []
 
+    start_time = time.perf_counter()
+
     tradelines = _extract_tradelines(new_report)
 
     # Use a stable hash of the report payload as the cache key.
@@ -126,7 +129,19 @@ def ingest_report(account_id: str | None, new_report: Mapping[str, Any]) -> List
         else:
             outcome = Outcome.VERIFIED
             diff = None
-        emit_counter(f"outcome.{outcome.name.lower()}")
+
+        bureaus = set()
+        if fid in prev_snap:
+            bureaus.update(prev_snap[fid].keys())
+        if fid in new_snap:
+            bureaus.update(new_snap[fid].keys())
+
+        if not bureaus:
+            bureaus.add("unknown")
+
+        for bureau in bureaus:
+            emit_counter(f"outcome.{outcome.name.lower()}", {"bureau": bureau})
+
         event = OutcomeEvent(
             outcome_id=str(uuid.uuid4()),
             account_id=acc_id,
@@ -135,7 +150,19 @@ def ingest_report(account_id: str | None, new_report: Mapping[str, Any]) -> List
             outcome=outcome,
             diff_snapshot=diff,
         )
-        ingest({"session_id": session_id}, event)
+
+        try:
+            ingest({"session_id": session_id}, event)
+        except Exception:  # pragma: no cover - error path
+            for bureau in bureaus:
+                emit_counter("outcome.ingest_errors", {"bureau": bureau})
+            raise
+
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        emit_counter("outcome.ingest_latency_ms", latency_ms)
+        for bureau in bureaus:
+            emit_counter("outcome.ingest_latency_ms", {"bureau": bureau})
+
         return event
 
     futures = []

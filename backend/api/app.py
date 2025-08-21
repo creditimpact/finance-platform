@@ -215,6 +215,7 @@ def get_summaries(session_id: str):
     elif isinstance(raw, dict):
         for key, item in raw.items():
             cleaned[key] = {k: item.get(k) for k in allowed if k in item}
+    logger.debug("summaries payload for %s: %s", session_id, cleaned)
     return jsonify({"status": "ok", "summaries": cleaned})
 
 

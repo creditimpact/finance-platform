@@ -23,8 +23,8 @@ export default function ReviewPage() {
   }
 
   const accounts = [
-    ...(uploadData.accounts?.negative_accounts || []),
-    ...(uploadData.accounts?.open_accounts_with_issues || []),
+    ...(uploadData.accounts?.negative_accounts ?? uploadData.accounts?.disputes ?? []),
+    ...(uploadData.accounts?.open_accounts_with_issues ?? uploadData.accounts?.goodwill ?? []),
   ];
 
   const getProblems = (acc) => {

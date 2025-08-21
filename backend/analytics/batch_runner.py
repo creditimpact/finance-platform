@@ -13,6 +13,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Dict, Iterable, List, Literal, Mapping, Optional, Tuple
 
+from croniter import croniter
+
 from backend.core.letters.router import route_accounts
 
 FLAGS = [
@@ -42,7 +44,9 @@ class BatchFilters:
 class BatchRunner:
     """Run analytics batches and persist job metadata."""
 
-    def __init__(self, *, job_store: Path | None = None, output_dir: Path | None = None) -> None:
+    def __init__(
+        self, *, job_store: Path | None = None, output_dir: Path | None = None
+    ) -> None:
         self.job_store = Path(job_store or Path("backend/analytics/batch_jobs.sqlite"))
         self.output_dir = Path(output_dir or Path("backend/analytics/batch_reports"))
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -96,17 +100,23 @@ class BatchRunner:
         return job_id
 
     def schedule(self, cron_expr: str) -> str:
-        """Register a scheduled job and return its identifier."""
+        """Register a scheduled job and return its identifier.
 
+        The next run time is computed using ``croniter`` and persisted with the
+        job record so that external schedulers can introspect upcoming runs.
+        """
+
+        now = datetime.utcnow()
+        next_run = croniter(cron_expr, now).get_next(datetime)
         job_id = sha256(cron_expr.encode("utf-8")).hexdigest()
         with sqlite3.connect(self.job_store) as conn:
             conn.execute(
                 """
-                INSERT OR IGNORE INTO batch_jobs
-                (job_id, filters, format, output_path, status, created_at, cron_expr)
-                VALUES (?, ?, '', '', 'scheduled', ?, ?)
+                INSERT OR REPLACE INTO batch_jobs
+                (job_id, filters, format, output_path, status, created_at, cron_expr, next_run)
+                VALUES (?, ?, '', '', 'scheduled', ?, ?, ?)
                 """,
-                (job_id, "{}", datetime.utcnow().isoformat(), cron_expr),
+                (job_id, "{}", now.isoformat(), cron_expr, next_run.isoformat()),
             )
             conn.commit()
         return job_id
@@ -141,7 +151,8 @@ class BatchRunner:
                     output_path TEXT NOT NULL,
                     status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    cron_expr TEXT
+                    cron_expr TEXT,
+                    next_run TEXT
                 )
                 """
             )
@@ -152,7 +163,9 @@ class BatchRunner:
         return sha256(raw.encode("utf-8")).hexdigest()
 
     # The data fetcher is intentionally simple so tests can monkeypatch it.
-    def _fetch_samples(self, filters: BatchFilters) -> List[Mapping[str, object]]:  # pragma: no cover - placeholder
+    def _fetch_samples(
+        self, filters: BatchFilters
+    ) -> List[Mapping[str, object]]:  # pragma: no cover - placeholder
         return []
 
 
@@ -320,4 +333,3 @@ def _write_csv(report: Mapping[str, object], path: Path) -> None:
 
 
 __all__ = ["BatchRunner", "BatchFilters", "process_samples", "benchmark_finalize"]
-

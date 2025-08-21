@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Mapping, Optional
 
 
 @dataclass
@@ -19,7 +19,7 @@ class Mismatch:
     """Mismatch for a particular field across bureaus."""
 
     field: str
-    values: Dict[str, object]
+    values: Mapping[str, object]
 
 
 @dataclass
@@ -29,3 +29,4 @@ class TradelineFamily:
     account_number: str
     tradelines: Dict[str, Tradeline] = field(default_factory=dict)
     mismatches: List[Mismatch] = field(default_factory=list)
+    _duplicates: List[Tradeline] = field(default_factory=list)

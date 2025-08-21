@@ -26,7 +26,9 @@ def _setup_store(monkeypatch):
 def test_record_send_records_history_and_audit(monkeypatch):
     store = _setup_store(monkeypatch)
     events = []
-    monkeypatch.setattr(planner, "emit_event", lambda e, p: events.append((e, p)))
+    monkeypatch.setattr(
+        planner, "emit_event", lambda e, p, **k: events.append((e, p))
+    )
 
     session = {
         "session_id": "s1",

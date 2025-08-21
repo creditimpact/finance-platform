@@ -7,6 +7,7 @@ import hashlib
 import math
 import os
 import re
+from random import random
 from typing import Dict, Iterable, List, Tuple
 
 from backend.analytics.analytics_tracker import emit_counter, set_metric
@@ -52,9 +53,7 @@ def normalize_and_match(bureau_data: Iterable[Tradeline]) -> List[TradelineFamil
             groups[key] = family
         if tl.bureau in family.tradelines:
             # Track duplicates for mismatch analysis
-            dups = getattr(family, "_duplicates", [])
-            dups.append(tl)
-            family._duplicates = dups
+            family._duplicates.append(tl)
         else:
             family.tradelines[tl.bureau] = tl
 
@@ -72,7 +71,8 @@ def normalize_and_match(bureau_data: Iterable[Tradeline]) -> List[TradelineFamil
 
         bucket = int(match_confidence * 10) * 10
         emit_counter(f"tri_merge.match_confidence_hist.{bucket}")
-        if match_confidence < 0.5:
+        # Sample per-family logs to reduce volume
+        if match_confidence < 0.5 and random() < 0.1:
             emit_event(
                 "tri_merge.low_match_confidence",
                 {
@@ -155,9 +155,9 @@ def compute_mismatches(families: Iterable[TradelineFamily]) -> List[TradelineFam
         cmp("utilization", "utilization")
         cmp("personal_info", "personal_info")
 
-        dups = getattr(fam, "_duplicates", None)
+        dups = fam._duplicates
         if dups:
-            counts = collections.Counter(d.bureau for d in fam._duplicates)
+            counts = collections.Counter(d.bureau for d in dups)
             _record(fam, Mismatch(field="duplicate", values=dict(counts)))
 
         if tri_store is not None:

@@ -3,7 +3,7 @@ from datetime import datetime
 import planner
 from backend.api import session_manager
 from backend.core.models import AccountStatus
-from backend.outcomes import OutcomeEvent
+from backend.outcomes import OutcomeEvent, load_outcome_history
 from services import outcome_ingestion
 
 
@@ -31,13 +31,22 @@ def test_ingested_outcome_updates_planner(monkeypatch):
     planner.plan_next_step(session, ["dispute"], now=datetime(2024, 1, 1))
     planner.record_send(session, ["1"], now=datetime(2024, 1, 2))
 
-    outcome_ingestion._events.clear()
-    event = OutcomeEvent(outcome_id="o1", account_id="1", cycle=0, result="verified")
+    event = OutcomeEvent(
+        outcome_id="o1",
+        account_id="1",
+        cycle_id=0,
+        family_id="f1",
+        outcome="Verified",
+    )
     outcome_ingestion.ingest(session, event)
 
-    assert outcome_ingestion.get_events() == [event]
+    history = load_outcome_history("s1", "1")
+    assert history == [event]
 
     allowed = planner.plan_next_step(session, ["followup"], now=datetime(2024, 3, 5))
     assert allowed == []
     final_state = planner.load_state(store["s1"]["account_states"]["1"])
     assert final_state.status == AccountStatus.COMPLETED
+    assert final_state.last_outcome == "Verified"
+    assert final_state.resolution_cycle_count == 1
+    assert len(final_state.outcome_history) == 1

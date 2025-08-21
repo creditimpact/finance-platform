@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import List, Tuple
 
 from backend.core.models import AccountState, AccountStatus, StateTransition
+from backend.outcomes.models import OutcomeEvent
 
 """Simple finite-state machine for account planning.
 
@@ -70,6 +71,9 @@ def dump_state(state: AccountState) -> dict:
     data["next_eligible_at"] = _serialize_dt(state.next_eligible_at)
     for hist in data.get("history", []):
         hist["timestamp"] = _serialize_dt(hist.get("timestamp"))
+    for ev in data.get("outcome_history", []):
+        if hasattr(ev.get("outcome"), "value"):
+            ev["outcome"] = ev["outcome"].value
     return data
 
 
@@ -95,4 +99,8 @@ def load_state(data: dict) -> AccountState:
             )
         )
     data["history"] = hist
+    events = []
+    for item in data.get("outcome_history", []):
+        events.append(OutcomeEvent(**item))
+    data["outcome_history"] = tuple(events)
     return AccountState(**data)

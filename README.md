@@ -120,6 +120,10 @@ Provide these in a `.env` file:
 - `PLANNER_CANARY_PERCENT` – percentage of sessions that invoke the planner
   when enabled (default `100`). Lower this value or disable `ENABLE_PLANNER` to
   roll back to the pre-planner pipeline.
+- `ENABLE_PLANNER_PIPELINE` – gate the planner between router candidate and
+  finalize stages (default `0`). Set to `0` to keep the legacy router order.
+- `PLANNER_PIPELINE_CANARY_PERCENT` – percentage of accounts that follow the
+  planner pipeline when enabled (default `100`).
 
 Secrets are never committed to the repository.
 

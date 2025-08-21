@@ -7,19 +7,22 @@ from backend.core.letters.router import select_template
 def test_router_basic_mappings(monkeypatch):
     monkeypatch.setenv("LETTERS_ROUTER_PHASED", "1")
     reset_counters()
+    base = {"client": {"full_name": "Jane", "address_line": "1 St"}, "today": "2024-01-01"}
     assert (
         select_template(
-            "dispute", {"bureau": "Experian"}, phase="finalize"
+            "dispute", {**base, "bureau": "Experian"}, phase="finalize"
         ).template_path
         == "dispute_letter_template.html"
     )
     assert (
-        select_template("goodwill", {"creditor": "ABC"}, phase="finalize").template_path
+        select_template(
+            "goodwill", {**base, "creditor": "ABC"}, phase="finalize"
+        ).template_path
         == "goodwill_letter_template.html"
     )
     assert (
         select_template(
-            "custom_letter", {"recipient": "Joe"}, phase="finalize"
+            "custom_letter", {**base, "recipient": "Joe"}, phase="finalize"
         ).template_path
         == "general_letter_template.html"
     )
@@ -27,6 +30,7 @@ def test_router_basic_mappings(monkeypatch):
         select_template(
             "bureau_dispute",
             {
+                **base,
                 "creditor_name": "Creditor",
                 "account_number_masked": "1234",
                 "bureau": "Experian",
@@ -40,6 +44,7 @@ def test_router_basic_mappings(monkeypatch):
         select_template(
             "inquiry_dispute",
             {
+                **base,
                 "inquiry_creditor_name": "Creditor",
                 "account_number_masked": "1234",
                 "bureau": "Experian",
@@ -54,6 +59,7 @@ def test_router_basic_mappings(monkeypatch):
         select_template(
             "medical_dispute",
             {
+                **base,
                 "creditor_name": "Creditor",
                 "account_number_masked": "1234",
                 "bureau": "Experian",
@@ -69,9 +75,10 @@ def test_router_basic_mappings(monkeypatch):
         select_template(
             "paydown_first",
             {
+                **base,
                 "client_name": "Jane",
                 "date": "2024-01-01",
-                "accounts_summary": "summary",
+                "accounts_summary": {"loans": []},
                 "per_account_actions": [
                     {"account_ref": "1", "action_sentence": "Pay down balance"}
                 ],
@@ -80,7 +87,7 @@ def test_router_basic_mappings(monkeypatch):
         ).template_path
         == "instruction_template.html"
     )
-    decision = select_template("ignore", {}, phase="finalize")
+    decision = select_template("ignore", base, phase="finalize")
     assert decision.template_path is None
     assert decision.router_mode == "skip"
 

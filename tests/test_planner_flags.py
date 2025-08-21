@@ -13,6 +13,7 @@ def reload_orchestrators():
 
 
 def test_planner_disabled(monkeypatch):
+    monkeypatch.setenv("ENABLE_PLANNER_PIPELINE", "1")
     monkeypatch.setenv("ENABLE_PLANNER", "0")
     monkeypatch.setenv("PLANNER_CANARY_PERCENT", "100")
     orch = reload_orchestrators()
@@ -33,11 +34,75 @@ def test_planner_disabled(monkeypatch):
     assert calls == [("tactical", ["dispute"])]
 
     monkeypatch.delenv("ENABLE_PLANNER", raising=False)
+    monkeypatch.delenv("ENABLE_PLANNER_PIPELINE", raising=False)
+    monkeypatch.delenv("PLANNER_CANARY_PERCENT", raising=False)
+    reload_orchestrators()
+
+
+def test_planner_pipeline_disabled(monkeypatch):
+    monkeypatch.setenv("ENABLE_PLANNER_PIPELINE", "0")
+    monkeypatch.setenv("ENABLE_PLANNER", "1")
+    monkeypatch.setenv("PLANNER_CANARY_PERCENT", "100")
+    orch = reload_orchestrators()
+    calls = []
+
+    def fake_plan(session, tags):
+        calls.append(("planner", tags))
+        return tags
+
+    def fake_generate(session, tags):
+        calls.append(("tactical", tags))
+
+    monkeypatch.setattr(orch, "plan_next_step", fake_plan)
+    monkeypatch.setattr(tactical, "generate_letters", fake_generate)
+
+    orch.plan_and_generate_letters({"strategy": {}}, ["dispute", "goodwill"])
+
+    assert calls == [("tactical", ["dispute", "goodwill"])]
+
+    monkeypatch.delenv("ENABLE_PLANNER_PIPELINE", raising=False)
+    monkeypatch.delenv("ENABLE_PLANNER", raising=False)
+    monkeypatch.delenv("PLANNER_CANARY_PERCENT", raising=False)
+    reload_orchestrators()
+
+
+def test_planner_pipeline_canary(monkeypatch):
+    monkeypatch.setenv("ENABLE_PLANNER_PIPELINE", "1")
+    monkeypatch.setenv("PLANNER_PIPELINE_CANARY_PERCENT", "50")
+    monkeypatch.setenv("ENABLE_PLANNER", "1")
+    monkeypatch.setenv("PLANNER_CANARY_PERCENT", "100")
+    orch = reload_orchestrators()
+    calls = []
+
+    def fake_plan(session, tags):
+        calls.append(("planner", tags))
+        return [t + "_p" for t in tags]
+
+    def fake_generate(session, tags):
+        calls.append(("tactical", tags))
+
+    monkeypatch.setattr(orch, "plan_next_step", fake_plan)
+    monkeypatch.setattr(tactical, "generate_letters", fake_generate)
+
+    seq = iter([0.2, 0.8])
+    monkeypatch.setattr(orch.random, "random", lambda: next(seq))
+
+    orch.plan_and_generate_letters({"strategy": {}}, ["dispute", "goodwill"])
+
+    assert calls == [
+        ("planner", ["dispute"]),
+        ("tactical", ["dispute_p", "goodwill"]),
+    ]
+
+    monkeypatch.delenv("ENABLE_PLANNER_PIPELINE", raising=False)
+    monkeypatch.delenv("PLANNER_PIPELINE_CANARY_PERCENT", raising=False)
+    monkeypatch.delenv("ENABLE_PLANNER", raising=False)
     monkeypatch.delenv("PLANNER_CANARY_PERCENT", raising=False)
     reload_orchestrators()
 
 
 def test_planner_canary(monkeypatch):
+    monkeypatch.setenv("ENABLE_PLANNER_PIPELINE", "1")
     monkeypatch.setenv("ENABLE_PLANNER", "1")
     monkeypatch.setenv("PLANNER_CANARY_PERCENT", "50")
     orch = reload_orchestrators()
@@ -63,5 +128,6 @@ def test_planner_canary(monkeypatch):
     assert calls == [("tactical", ["dispute"])]
 
     monkeypatch.delenv("ENABLE_PLANNER", raising=False)
+    monkeypatch.delenv("ENABLE_PLANNER_PIPELINE", raising=False)
     monkeypatch.delenv("PLANNER_CANARY_PERCENT", raising=False)
     reload_orchestrators()

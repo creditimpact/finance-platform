@@ -38,9 +38,12 @@ Dashboards should surface the following counters:
 
 - `rulebook.tag_selected.{tag}` – frequency of chosen action tags.
 - `rulebook.suppressed_rules.{rule_name}` – rules skipped due to precedence or exclusion.
+- `planner.*` – cycle progress, SLA waits and error counts.
+- `router.*` – candidate and finalize template selections and validation errors.
 
 ## Rollback
 
 1. Revert to the previous container tag.
-2. Disable new features behind flags if available.
+2. Disable new features behind flags if available, e.g. set
+   `ENABLE_PLANNER_PIPELINE=0` to bypass the planner pipeline.
 3. Post-mortem within 24 hours.

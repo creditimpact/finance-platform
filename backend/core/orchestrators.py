@@ -61,7 +61,7 @@ from backend.core.models import (
     Inquiry,
     ProofDocuments,
 )
-from backend.core.services.ai_client import AIClient, get_ai_client
+from backend.core.services.ai_client import AIClient, get_ai_client, _StubAIClient
 from backend.policy.policy_loader import load_rulebook
 from planner import plan_next_step
 
@@ -872,12 +872,13 @@ def extract_problematic_accounts_from_report(
     analyzed_json_path = Path("output/analyzed_report.json")
 
     ai_client = get_ai_client()
+    run_ai = not isinstance(ai_client, _StubAIClient)
     sections = analyze_report_logic(
         pdf_path,
         analyzed_json_path,
         {},
-        ai_client=ai_client,
-        run_ai=True,
+        ai_client=ai_client if run_ai else None,
+        run_ai=run_ai,
         request_id=session_id,
     )
     sections.setdefault("negative_accounts", [])

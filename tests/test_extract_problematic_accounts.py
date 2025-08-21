@@ -92,3 +92,35 @@ def test_parser_only_late_accounts_included(monkeypatch):
 
     payload = extract_problematic_accounts_from_report("dummy.pdf")
     assert payload.disputes or payload.goodwill
+
+
+def test_extract_problematic_accounts_without_openai(monkeypatch):
+    from pathlib import Path
+    from backend.core.logic.report_analysis.report_postprocessing import (
+        _inject_missing_late_accounts,
+    )
+
+    def fake_analyze_report(pdf_path, analyzed_json_path, client_info, ai_client=None, run_ai=True, request_id=None):
+        assert not run_ai
+        result = {"all_accounts": [], "negative_accounts": [], "open_accounts_with_issues": []}
+        history = {"parser bank": {"Experian": {"30": 1}}}
+        raw_map = {"parser bank": "Parser Bank"}
+        _inject_missing_late_accounts(result, history, raw_map)
+        return result
+
+    monkeypatch.setattr(
+        "backend.core.logic.compliance.upload_validator.move_uploaded_file",
+        lambda path, session_id: Path(path),
+    )
+    monkeypatch.setattr(
+        "backend.core.logic.compliance.upload_validator.is_safe_pdf", lambda path: True
+    )
+    monkeypatch.setattr("backend.core.orchestrators.update_session", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "backend.core.logic.report_analysis.analyze_report.analyze_credit_report",
+        fake_analyze_report,
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    payload = extract_problematic_accounts_from_report("dummy.pdf")
+    assert payload.goodwill and payload.goodwill[0].name == "Parser Bank"

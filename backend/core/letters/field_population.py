@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from backend.audit.audit import emit_event
+from backend.analytics.analytics_tracker import emit_counter
 from backend.core.logic.letters.utils import populate_required_fields
 from fields.populate_account_number_masked import populate_account_number_masked
 from fields.populate_address import populate_address
@@ -43,10 +44,13 @@ OPTIONAL_FIELDS = {
 }
 
 
-def _mark_missing(ctx: dict, tag: str, field: str) -> None:
+def _mark_missing(ctx: dict, tag: str, field: str, reason: str = "missing") -> None:
     emit_event(
         "fields.populate_errors",
-        {"tag": tag, "field": field, "reason": "missing"},
+        {"tag": tag, "field": field, "reason": reason},
+    )
+    emit_counter(
+        "fields.populate_errors", {"tag": tag, "field": field, "reason": reason}
     )
     missing = ctx.setdefault("missing_fields", [])
     if field not in missing:
@@ -87,6 +91,10 @@ def apply_field_fillers(
     corrections = corrections or ctx.get("corrections") or {}
     tag = str(ctx.get("action_tag") or "").lower()
     account_id = ctx.get("account_id")
+
+    initial_missing = {
+        f for f in CRITICAL_FIELDS | OPTIONAL_FIELDS if not ctx.get(f)
+    }
     if account_id is not None:
         key = str(account_id)
         for field in CRITICAL_FIELDS | OPTIONAL_FIELDS:
@@ -134,6 +142,8 @@ def apply_field_fillers(
 
     # Missing field handling -----------------------------------------------------
     for field in CRITICAL_FIELDS | OPTIONAL_FIELDS:
+        if field in initial_missing and ctx.get(field):
+            emit_counter("fields.populated_total", {"tag": tag, "field": field})
         if not ctx.get(field):
             _mark_missing(ctx, tag, field)
 

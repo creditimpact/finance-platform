@@ -791,6 +791,11 @@ def run_credit_repair_process(
             tag = acc_ctx.get("action_tag")
             acc_strat = strategy_accounts.get(acc_id, {})
             apply_field_fillers(acc_ctx, strategy=acc_strat, profile=client_info)
+            if tag:
+                for _ in acc_ctx.get("missing_fields", []):
+                    emit_counter(
+                        "finalize.missing_fields_after_population", {"tag": tag}
+                    )
             letters_router.select_template(tag, acc_ctx, phase="finalize")
         if session_id:
             update_session(session_id, stage_2_5=stage_2_5)

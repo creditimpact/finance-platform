@@ -55,3 +55,7 @@ One short paragraph describing: PDF+email → analysis → explanations → stra
 
 ## Follow-ups (nice-to-have)
 - CRA alignment enhancements, soft-rule telemetry, clean demo assets, optional Celery path.
+
+## Pre-Outcome Ingestion sign-off
+- Staging canary observed for one cycle; no elevated `router.error`, `planner.error_count`, or `planner.sla_violations_total` metrics.
+- Audit logs for planner transitions reviewed; events are deterministic and replay-safe.

@@ -80,6 +80,7 @@ def normalize_and_match(bureau_data: Iterable[Tradeline]) -> List[TradelineFamil
                     "creditor": key[0],
                     "confidence": match_confidence,
                 },
+                extra={"family_id": family_id, "cycle_id": 0},
             )
 
     if confidences:

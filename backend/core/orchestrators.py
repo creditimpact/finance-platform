@@ -20,7 +20,9 @@ from backend.analytics.analytics.strategist_failures import tally_failure_reason
 from backend.analytics.analytics_tracker import emit_counter, save_analytics_snapshot
 from backend.api.config import (
     ENABLE_PLANNER,
+    ENABLE_PLANNER_PIPELINE,
     PLANNER_CANARY_PERCENT,
+    PLANNER_PIPELINE_CANARY_PERCENT,
     AppConfig,
     env_bool,
     get_app_config,
@@ -63,8 +65,12 @@ from planner import plan_next_step
 def plan_and_generate_letters(session: dict, action_tags: list[str]) -> list[str]:
     """Optionally run the planner before generating letters.
 
-    The planner is executed when ``ENABLE_PLANNER`` is true and a random draw is
-    below ``PLANNER_CANARY_PERCENT``.  Otherwise the tactical pipeline runs with
+    The planner pipeline is enabled when ``ENABLE_PLANNER_PIPELINE`` is true and
+    a random draw for each account is below ``PLANNER_PIPELINE_CANARY_PERCENT``.
+    For accounts outside this canary slice the planner is bypassed and the
+    legacy router order is used.  When the pipeline is enabled, the planner
+    executes only if ``ENABLE_PLANNER`` is true and the session passes the
+    ``PLANNER_CANARY_PERCENT`` gate.  Otherwise the tactical pipeline runs with
     the original ``action_tags`` to preserve legacy behavior.
 
     Args:
@@ -75,14 +81,35 @@ def plan_and_generate_letters(session: dict, action_tags: list[str]) -> list[str
         The tags passed to ``tactical.generate_letters``.
     """
 
+    use_pipeline = ENABLE_PLANNER_PIPELINE
+    pipeline_tags: list[str] = []
+    legacy_tags: list[str] = []
+    if use_pipeline:
+        for tag in action_tags:
+            if (
+                PLANNER_PIPELINE_CANARY_PERCENT >= 100
+                or random.random() < PLANNER_PIPELINE_CANARY_PERCENT / 100
+            ):
+                pipeline_tags.append(tag)
+            else:
+                legacy_tags.append(tag)
+    else:
+        legacy_tags = list(action_tags)
+
     use_planner = ENABLE_PLANNER
     if use_planner and PLANNER_CANARY_PERCENT < 100:
         if random.random() >= PLANNER_CANARY_PERCENT / 100:
             use_planner = False
 
-    tags = plan_next_step(session, action_tags) if use_planner else list(action_tags)
-    tactical.generate_letters(session, tags)
-    return tags
+    allowed: list[str] = []
+    if pipeline_tags:
+        planned = plan_next_step(session, pipeline_tags) if use_planner else pipeline_tags
+        allowed.extend(planned)
+    if legacy_tags:
+        allowed.extend(legacy_tags)
+
+    tactical.generate_letters(session, allowed)
+    return allowed
 
 
 def process_client_intake(client_info, audit):
@@ -745,8 +772,7 @@ def run_credit_repair_process(
         action_tags = [
             ctx.get("action_tag") for ctx in stage_2_5.values() if ctx.get("action_tag")
         ]
-        allowed_tags = plan_next_step(session_ctx, action_tags)
-        tactical.generate_letters(session_ctx, allowed_tags)
+        plan_and_generate_letters(session_ctx, action_tags)
         for acc_id, acc_ctx in stage_2_5.items():
             tag = acc_ctx.get("action_tag")
             letters_router.select_template(tag, acc_ctx, phase="finalize")

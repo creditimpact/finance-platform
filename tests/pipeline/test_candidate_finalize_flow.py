@@ -14,7 +14,12 @@ def test_candidate_finalize_flow_golden(monkeypatch):
     monkeypatch.setenv("LETTERS_ROUTER_PHASED", "1")
     reset_counters()
 
-    ctx = {"account_number_masked": "****1234", "legal_safe_summary": "Summary"}
+    ctx = {
+        "account_number_masked": "****1234",
+        "legal_safe_summary": "Summary",
+        "client": {"full_name": "Jane", "address_line": "1 St"},
+        "today": "2024-01-01",
+    }
 
     pre_decision = select_template("pay_for_delete", ctx, phase="finalize")
     pre_heatmap = get_missing_fields_heatmap()

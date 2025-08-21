@@ -8,6 +8,8 @@ def _ctx(bureau: str) -> dict:
         "account_number_masked": "1234",
         "bureau": bureau,
         "legal_safe_summary": "summary",
+        "client": {"full_name": "Jane", "address_line": "1 St"},
+        "today": "2024-01-01",
     }
 
 
@@ -17,6 +19,7 @@ def test_finalize_prefers_cra_specific_template(monkeypatch, tmp_path):
     router_mod._ROUTER_CACHE.clear()
     (tmp_path / "experian_bureau_dispute_letter_template.html").write_text("dummy")
     monkeypatch.setattr(router_mod, "TEMPLATES_DIRS", [tmp_path])
+    monkeypatch.setattr(router_mod.ENV.loader, "searchpath", [str(tmp_path)])
 
     decision = select_template("bureau_dispute", _ctx("Experian"), phase="finalize")
 
@@ -29,6 +32,7 @@ def test_finalize_falls_back_to_generic(monkeypatch, tmp_path):
     router_mod._ROUTER_CACHE.clear()
     (tmp_path / "bureau_dispute_letter_template.html").write_text("dummy")
     monkeypatch.setattr(router_mod, "TEMPLATES_DIRS", [tmp_path])
+    monkeypatch.setattr(router_mod.ENV.loader, "searchpath", [str(tmp_path)])
 
     decision = select_template("bureau_dispute", _ctx("Equifax"), phase="finalize")
 

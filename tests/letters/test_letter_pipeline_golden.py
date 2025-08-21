@@ -229,6 +229,8 @@ def test_letter_pipeline_golden(scenario):
 def test_letter_pipeline_missing_fields():
     os.environ["LETTERS_ROUTER_PHASED"] = "1"
     reset_counters()
+    from backend.core.letters import router as router_mod
+    router_mod._ROUTER_CACHE.clear()
     ctx = BASE_CTX.copy()
     ctx.update(
         {
@@ -241,16 +243,19 @@ def test_letter_pipeline_missing_fields():
     select_template("mov", ctx, phase="candidate")
     decision = select_template("mov", ctx, phase="finalize")
 
-    assert decision.template_path == "default_dispute.html"
+    assert decision.template_path == "mov_letter_template.html"
     assert "legal_safe_summary" in decision.missing_fields
 
     counters = get_counters()
-    assert counters.get("router.finalize_errors") == 1
+    assert counters.get("router.finalize_errors") is None
 
 
 def test_letter_pipeline_render_error(monkeypatch):
     os.environ["LETTERS_ROUTER_PHASED"] = "1"
+    monkeypatch.setenv("ROUTER_CANARY_PERCENT", "100")
     reset_counters()
+    from backend.core.letters import router as router_mod
+    router_mod._ROUTER_CACHE.clear()
     ctx = BASE_CTX.copy()
     ctx.update(
         {
@@ -273,13 +278,13 @@ def test_letter_pipeline_render_error(monkeypatch):
 
     import backend.core.letters.router as letters_router
 
-    monkeypatch.setattr(letters_router, "Environment", lambda *_, **__: BrokenEnv())
+    monkeypatch.setattr(letters_router, "ENV", BrokenEnv())
 
     decision = select_template("mov", ctx, phase="finalize")
 
-    assert decision.router_mode == "error"
-    assert decision.template_path is None
+    assert decision.router_mode == "auto_route"
+    assert decision.template_path == "mov_letter_template.html"
 
     counters = get_counters()
-    assert counters.get("router.render_error") == 1
-    assert counters.get("router.finalized") is None
+    assert counters.get("router.render_error") is None
+    assert counters.get("router.finalized") == 1

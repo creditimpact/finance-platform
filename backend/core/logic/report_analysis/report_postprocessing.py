@@ -161,34 +161,37 @@ def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) ->
     for norm_name, bureaus in history.items():
         if norm_name in existing:
             continue
-        entry = {
-            "name": raw_map.get(norm_name, norm_name),
-            "bureaus": list(bureaus.keys()),
-            "status": "Unknown",
-            "advisor_comment": "Detected by parser; missing from AI output",
-            "late_payments": bureaus,
-            "flags": ["Late Payments"],
-        }
-        result.setdefault("all_accounts", []).append(entry)
+        for bureau, late_counts in bureaus.items():
+            entry = {
+                "name": raw_map.get(norm_name, norm_name),
+                "bureau": bureau,
+                "status": "Unknown",
+                "advisor_comment": "Detected by parser; missing from AI output",
+                "late_payments": late_counts,
+                "flags": ["Late Payments"],
+            }
+            result.setdefault("all_accounts", []).append(entry)
 
-        status_lower = entry.get("status", "").lower()
-        flags_lower = [f.lower() for f in entry.get("flags", [])]
-        negative_terms = (
-            "collection",
-            "collections",
-            "chargeoff",
-            "charge-off",
-            "charge off",
-        )
-        is_negative = any(t in status_lower for t in negative_terms) or any(
-            any(t in flag for t in negative_terms) for flag in flags_lower
-        )
-        if is_negative:
-            result.setdefault("negative_accounts", []).append(entry.copy())
-        else:
-            result.setdefault("open_accounts_with_issues", []).append(entry.copy())
+            status_lower = entry.get("status", "").lower()
+            flags_lower = [f.lower() for f in entry.get("flags", [])]
+            negative_terms = (
+                "collection",
+                "collections",
+                "chargeoff",
+                "charge-off",
+                "charge off",
+            )
+            is_negative = any(t in status_lower for t in negative_terms) or any(
+                any(t in flag for t in negative_terms) for flag in flags_lower
+            )
+            if is_negative:
+                result.setdefault("negative_accounts", []).append(entry.copy())
+            else:
+                result.setdefault("open_accounts_with_issues", []).append(entry.copy())
 
-        print(f"[WARN] Added missing account from parser: {entry['name']}")
+            print(
+                f"[WARN] Added missing account from parser: {entry['name']} ({bureau})"
+            )
 
 
 # ---------------------------------------------------------------------------

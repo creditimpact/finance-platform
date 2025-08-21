@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Type
 
 from .account import Account, Inquiry
@@ -57,9 +57,12 @@ class BureauAccount(Account):
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BureauAccount":
-        base = Account.from_dict(data)
+        data = {k: v for k, v in data.items() if k not in {"bureaus"}}
+        base = Account.from_dict(
+            {k: v for k, v in data.items() if k not in {"bureau", "section"}}
+        )
         return cls(
-            **base.to_dict(),
+            **asdict(base),
             bureau=data.get("bureau"),
             section=data.get("section"),
         )

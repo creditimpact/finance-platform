@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Dict, Iterable, List
 
+from backend.analytics.analytics_tracker import emit_counter, set_metric
 from backend.api.session_manager import get_session, update_session
 from backend.audit.audit import emit_event
 from backend.core.models import AccountState, AccountStatus
-from backend.analytics.analytics_tracker import emit_counter, set_metric
 from backend.outcomes import OutcomeEvent
 
 from .state_machine import dump_state, evaluate_state, load_state
@@ -73,14 +73,35 @@ def plan_next_step(
             if state.status == AccountStatus.COMPLETED:
                 resolved_accounts += 1
                 resolved_cycles += state.current_cycle
+                states_data[acc_id] = dump_state(state)
+                continue
 
-            if state.next_eligible_at and now < state.next_eligible_at:
+            tags: List[str] = []
+            next_eligible_at = state.next_eligible_at
+
+            outcome = (state.last_outcome or "").lower()
+            if outcome == "verified":
+                tags = ["mov", "direct_dispute"]
+                next_eligible_at = None
+            elif outcome == "updated":
+                tags = ["bureau_dispute"]
+                next_eligible_at = None
+            elif outcome == "nochange":
+                if next_eligible_at and now < next_eligible_at:
+                    delta_ms = (next_eligible_at - now).total_seconds() * 1000
+                    emit_counter("planner.time_to_next_step_ms", delta_ms)
+                    states_data[acc_id] = dump_state(state)
+                    continue
+                tags = ["mov"]
+                next_eligible_at = None
+            elif state.next_eligible_at and now < state.next_eligible_at:
                 delta_ms = (state.next_eligible_at - now).total_seconds() * 1000
                 emit_counter("planner.time_to_next_step_ms", delta_ms)
                 states_data[acc_id] = dump_state(state)
                 continue
+            else:
+                tags, next_eligible_at = evaluate_state(state, now=now)
 
-            tags, next_eligible_at = evaluate_state(state, now=now)
             state.next_eligible_at = next_eligible_at
             if next_eligible_at and now < next_eligible_at:
                 delta_ms = (next_eligible_at - now).total_seconds() * 1000
@@ -134,7 +155,9 @@ def record_send(
             if not data:
                 continue
             state = load_state(data)
-            if state.last_sent_at and now > state.last_sent_at + timedelta(days=sla_days):
+            if state.last_sent_at and now > state.last_sent_at + timedelta(
+                days=sla_days
+            ):
                 emit_counter("planner.sla_violations_total")
             state.last_sent_at = now
             state.next_eligible_at = now + timedelta(days=sla_days)
@@ -165,38 +188,63 @@ def record_send(
         raise
 
 
+def handle_outcome(
+    session: dict, event: OutcomeEvent, now: datetime | None = None, sla_days: int = 30
+) -> List[str]:
+    """Update account state based on a bureau outcome and suggest next steps.
 
-def handle_outcome(session: dict, event: OutcomeEvent) -> None:
-    """Update account state based on an outcome event."""
+    Returns a list of planner tags that are immediately allowed as a result of
+    the outcome. If no immediate action is permitted, an empty list is
+    returned and ``next_eligible_at`` is set on the account state.
+    """
+
     try:
         session_id = session.get("session_id")
         if not session_id:
-            return
+            return []
+
         stored = get_session(session_id) or {}
         states_data: Dict[str, dict] = stored.get("account_states", {}) or {}
         data = states_data.get(str(event.account_id))
         if not data:
-            return
+            return []
+
         state = load_state(data)
-        result_map = {
-            "verified": AccountStatus.CRA_RESPONDED_VERIFIED,
-            "deleted": AccountStatus.CRA_RESPONDED_DELETED,
-            "updated": AccountStatus.CRA_RESPONDED_UPDATED,
-            "nochange": AccountStatus.CRA_RESPONDED_NOCHANGE,
-        }
         outcome_val = (
             event.outcome.value.lower()
             if hasattr(event.outcome, "value")
             else str(event.outcome).lower()
         )
-        status = result_map.get(outcome_val)
-        if not status:
-            return
+
+        allowed_tags: List[str] = []
+        now = now or datetime.utcnow()
+
+        if outcome_val == "verified":
+            state.transition(AccountStatus.CRA_RESPONDED_VERIFIED, actor="cra")
+            allowed_tags = ["mov", "direct_dispute"]
+            state.next_eligible_at = None
+        elif outcome_val == "updated":
+            state.transition(AccountStatus.CRA_RESPONDED_UPDATED, actor="cra")
+            allowed_tags = ["bureau_dispute"]
+            state.next_eligible_at = None
+        elif outcome_val == "deleted":
+            state.transition(AccountStatus.CRA_RESPONDED_DELETED, actor="cra")
+            state.transition(AccountStatus.COMPLETED, actor="system")
+            state.current_cycle += 1
+            state.current_step = 0
+            state.next_eligible_at = None
+        elif outcome_val == "nochange":
+            state.transition(AccountStatus.CRA_RESPONDED_NOCHANGE, actor="cra")
+            state.next_eligible_at = (state.last_sent_at or now) + timedelta(
+                days=sla_days
+            )
+        else:
+            return []
+
         state.record_outcome(event)
-        state.transition(status, actor="cra")
-        state.transition(AccountStatus.COMPLETED, actor="system")
         states_data[str(event.account_id)] = dump_state(state)
         update_session(session_id, account_states=states_data)
+        return allowed_tags
     except Exception:
         emit_counter("planner.error_count")
         raise

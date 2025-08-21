@@ -3,9 +3,11 @@ from datetime import datetime
 import planner
 from backend.api import session_manager
 from backend.core.models import AccountStatus
+from backend.outcomes import OutcomeEvent
+from services import outcome_ingestion
 
 
-def test_outcome_ingestion_marks_account_completed(monkeypatch):
+def test_outcome_ingestion_sla_gate(monkeypatch):
     store = {}
 
     def fake_get_session(sid):
@@ -29,13 +31,18 @@ def test_outcome_ingestion_marks_account_completed(monkeypatch):
     planner.plan_next_step(session, ["dispute"], now=datetime(2024, 1, 1))
     planner.record_send(session, ["1"], now=datetime(2024, 1, 2))
 
-    # simulate CRA response ingestion
-    state = planner.load_state(store["s1"]["account_states"]["1"])
-    state.transition(AccountStatus.CRA_RESPONDED_VERIFIED, actor="cra")
-    state.transition(AccountStatus.COMPLETED, actor="system")
-    store["s1"]["account_states"]["1"] = planner.dump_state(state)
+    event = OutcomeEvent(
+        outcome_id="o1",
+        account_id="1",
+        cycle_id=0,
+        family_id="f1",
+        outcome="NoChange",
+    )
+    outcome_ingestion.ingest(session, event)
 
-    allowed = planner.plan_next_step(session, ["followup"], now=datetime(2024, 3, 5))
+    allowed = planner.plan_next_step(session, ["mov"], now=datetime(2024, 1, 15))
     assert allowed == []
+    allowed2 = planner.plan_next_step(session, ["mov"], now=datetime(2024, 2, 5))
+    assert allowed2 == ["mov"]
     final_state = planner.load_state(store["s1"]["account_states"]["1"])
-    assert final_state.status == AccountStatus.COMPLETED
+    assert final_state.status == AccountStatus.CRA_RESPONDED_NOCHANGE

@@ -141,15 +141,24 @@ def start_process():
             timeout=300
         )
 
-        return jsonify(
-            {
-                "status": "awaiting_user_explanations",
-                "session_id": session_id,
-                "filename": unique_name,
-                "original_filename": original_name,
-                "accounts": accounts,
-            }
-        )
+        legacy = {
+            "negative_accounts": accounts.get("disputes", []),
+            "open_accounts_with_issues": accounts.get("goodwill", []),
+            "unauthorized_inquiries": accounts.get("inquiries", []),
+            "high_utilization_accounts": accounts.get("high_utilization", []),
+        }
+
+        payload = {
+            "status": "awaiting_user_explanations",
+            "session_id": session_id,
+            "filename": unique_name,
+            "original_filename": original_name,
+            "accounts": legacy,
+        }
+
+        logger.info("start_process payload: %s", payload)
+
+        return jsonify(payload)
 
     except Exception as e:
         print("Exception occurred:", str(e))

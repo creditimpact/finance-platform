@@ -1,7 +1,7 @@
 """Compute days_since_cra_result from an outcome timestamp."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Mapping
 
 
@@ -9,7 +9,7 @@ def populate_days_since_cra_result(
     ctx: dict,
     outcome: Mapping[str, object] | None = None,
     *,
-    now: datetime | None = None,
+    now: datetime | str | None = None,
 ) -> None:
     """Populate ``days_since_cra_result`` on ``ctx`` if missing.
 
@@ -31,5 +31,12 @@ def populate_days_since_cra_result(
         result_time = datetime.fromisoformat(ts)
     else:
         result_time = ts
-    now = now or datetime.now(result_time.tzinfo or timezone.utc)
-    ctx["days_since_cra_result"] = (now - result_time).days
+
+    if isinstance(now, str):
+        now_dt = datetime.fromisoformat(now)
+    else:
+        now_dt = now
+    if now_dt is None:
+        return
+
+    ctx["days_since_cra_result"] = (now_dt - result_time).days

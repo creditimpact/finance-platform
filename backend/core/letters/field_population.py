@@ -18,6 +18,13 @@ from fields.populate_medical_status import populate_medical_status
 from fields.populate_name import populate_name
 from fields.populate_ssn_masked import populate_ssn_masked
 
+_FILLER_CACHE: dict[tuple[str, str], Any] = {}
+
+
+def clear_filler_cache() -> None:
+    """Clear cached filler outputs."""
+    _FILLER_CACHE.clear()
+
 CRITICAL_FIELDS = {
     "name",
     "address",
@@ -79,26 +86,51 @@ def apply_field_fillers(
     profile = profile or ctx.get("profile") or ctx.get("client") or {}
     corrections = corrections or ctx.get("corrections") or {}
     tag = str(ctx.get("action_tag") or "").lower()
+    account_id = ctx.get("account_id")
+    if account_id is not None:
+        key = str(account_id)
+        for field in CRITICAL_FIELDS | OPTIONAL_FIELDS:
+            if field not in ctx:
+                cached = _FILLER_CACHE.get((key, field))
+                if cached is not None:
+                    ctx[field] = cached
 
     # Client/profile fields -----------------------------------------------------
-    populate_name(ctx, profile, corrections)
-    populate_address(ctx, profile, corrections)
-    populate_dob(ctx, profile, corrections)
-    populate_ssn_masked(ctx, profile, corrections)
+    if ctx.get("name") is None:
+        populate_name(ctx, profile, corrections)
+    if ctx.get("address") is None:
+        populate_address(ctx, profile, corrections)
+    if ctx.get("date_of_birth") is None:
+        populate_dob(ctx, profile, corrections)
+    if ctx.get("ssn_masked") is None:
+        populate_ssn_masked(ctx, profile, corrections)
 
     # Evidence-driven account fields -------------------------------------------
-    if tri_merge.get("name") and not ctx.get("name"):
+    if tri_merge.get("name") and ctx.get("name") is None:
         ctx["name"] = tri_merge["name"]
-    populate_creditor_name(ctx, tri_merge)
-    populate_account_number_masked(ctx, tri_merge)
-    populate_days_since_cra_result(ctx, outcome)
-    populate_inquiry_creditor_name(ctx, inquiry)
-    populate_inquiry_date(ctx, inquiry)
-    populate_amount(ctx, medical)
-    populate_medical_status(ctx, medical)
+    if ctx.get("creditor_name") is None:
+        populate_creditor_name(ctx, tri_merge)
+    if ctx.get("account_number_masked") is None:
+        populate_account_number_masked(ctx, tri_merge)
+    if ctx.get("days_since_cra_result") is None:
+        populate_days_since_cra_result(ctx, outcome, now=ctx.get("now"))
+    if ctx.get("inquiry_creditor_name") is None:
+        populate_inquiry_creditor_name(ctx, inquiry)
+    if ctx.get("inquiry_date") is None:
+        populate_inquiry_date(ctx, inquiry)
+    if ctx.get("amount") is None:
+        populate_amount(ctx, medical)
+    if ctx.get("medical_status") is None:
+        populate_medical_status(ctx, medical)
 
     # Strategy provided fields -------------------------------------------------
     populate_required_fields(ctx, strategy)
+
+    if account_id is not None:
+        key = str(account_id)
+        for field in CRITICAL_FIELDS | OPTIONAL_FIELDS:
+            if ctx.get(field) is not None:
+                _FILLER_CACHE[(key, field)] = ctx[field]
 
     # Missing field handling -----------------------------------------------------
     for field in CRITICAL_FIELDS | OPTIONAL_FIELDS:
@@ -106,4 +138,4 @@ def apply_field_fillers(
             _mark_missing(ctx, tag, field)
 
 
-__all__ = ["apply_field_fillers"]
+__all__ = ["apply_field_fillers", "clear_filler_cache"]

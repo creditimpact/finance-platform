@@ -5,6 +5,8 @@ import sys
 import uuid
 import warnings
 
+from dotenv import load_dotenv
+
 # Ensure the project root is always on sys.path so local modules can be
 # imported even when the worker is launched from outside the repository
 # directory.
@@ -12,7 +14,9 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from celery import Celery
+load_dotenv()
+
+from celery import Celery, signals
 
 from backend.api.config import get_app_config
 from backend.core.models import ClientInfo, ProofDocuments
@@ -21,14 +25,22 @@ from backend.core.orchestrators import (
     run_credit_repair_process,
 )
 
-cfg = get_app_config()
-os.environ.setdefault("OPENAI_API_KEY", cfg.ai.api_key)
+app = Celery("tasks")
 
-app = Celery("tasks", loader="default", fixups=[])
-app.conf.update(
-    broker_url=cfg.celery_broker_url,
-    result_backend=os.getenv("CELERY_RESULT_BACKEND", cfg.celery_broker_url),
-)
+
+@signals.worker_process_init.connect
+def configure_worker(**_):
+    try:
+        cfg = get_app_config()
+        os.environ.setdefault("OPENAI_API_KEY", cfg.ai.api_key)
+        app.conf.update(
+            broker_url=os.getenv("CELERY_BROKER_URL", cfg.celery_broker_url),
+            result_backend=os.getenv(
+                "CELERY_RESULT_BACKEND", cfg.celery_broker_url
+            ),
+        )
+    except EnvironmentError as exc:
+        logger.warning("Starting in parser-only mode: %s", exc)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

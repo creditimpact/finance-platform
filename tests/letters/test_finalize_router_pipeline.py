@@ -9,6 +9,8 @@ from backend.analytics.analytics_tracker import get_counters, reset_counters
 from backend.core.letters.client_context import format_safe_client_context
 from backend.core.letters.router import select_template
 from backend.core.logic.rendering.letter_rendering import render_dispute_letter_html
+import planner
+import tactical
 
 BASE_CTX = {
     "client": {"full_name": "Jane Doe", "address_line": "123 Main St"},
@@ -44,6 +46,26 @@ def test_finalize_router_positive(path: Path):
     ctx.update(case["initial_ctx"])
     ctx["client_context_sentence"] = format_safe_client_context(case["action_tag"], "", {}, [])
 
+    # Candidate phase
+    select_template(case["action_tag"], ctx, phase="candidate")
+    pre_counters = get_counters()
+    assert pre_counters.get("router.candidate_selected") == 1
+    assert pre_counters.get(f"router.candidate_selected.{case['action_tag']}") == 1
+
+    def fake_plan(session, tags):
+        assert get_counters().get("router.candidate_selected") == 1
+        return tags
+
+    def fake_generate(session, tags):
+        assert get_counters().get("router.candidate_selected") == 1
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(planner, "plan_next_step", fake_plan)
+    monkeypatch.setattr(tactical, "generate_letters", fake_generate)
+    planner.plan_next_step({}, [case["action_tag"]])
+    tactical.generate_letters({}, [case["action_tag"]])
+    monkeypatch.undo()
+
     decision = select_template(case["action_tag"], ctx, phase="finalize")
     assert decision.template_path == case["template"]
     assert decision.missing_fields == []
@@ -72,13 +94,35 @@ def test_finalize_router_negative(path: Path):
     ctx.update(case["initial_ctx"])
     ctx["client_context_sentence"] = format_safe_client_context(case["action_tag"], "", {}, [])
 
+    # Candidate phase
+    select_template(case["action_tag"], ctx, phase="candidate")
+    pre = get_counters()
+    assert pre.get("router.candidate_selected") == 1
+    assert pre.get(f"router.candidate_selected.{case['action_tag']}") == 1
+    assert any(
+        k.startswith(f"router.missing_fields.{case['action_tag']}") for k in pre
+    )
+
+    def fake_plan(session, tags):
+        assert get_counters().get("router.candidate_selected") == 1
+        return tags
+
+    def fake_generate(session, tags):
+        assert get_counters().get("router.candidate_selected") == 1
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(planner, "plan_next_step", fake_plan)
+    monkeypatch.setattr(tactical, "generate_letters", fake_generate)
+    planner.plan_next_step({}, [case["action_tag"]])
+    tactical.generate_letters({}, [case["action_tag"]])
+    monkeypatch.undo()
+
     decision = select_template(case["action_tag"], ctx, phase="finalize")
     assert decision.template_path == case["template"]
     assert decision.missing_fields == case["missing_fields"]
 
     counters = get_counters()
     tag = case["action_tag"]
-    assert counters.get("router.finalize_errors") == 1
     assert counters.get("router.finalized") == 1
     assert counters.get(f"router.finalized.{tag}") == 1
     assert counters.get(f"router.finalized.{tag}.{case['template']}") == 1

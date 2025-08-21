@@ -745,7 +745,11 @@ def run_credit_repair_process(
         action_tags = [
             ctx.get("action_tag") for ctx in stage_2_5.values() if ctx.get("action_tag")
         ]
-        plan_and_generate_letters(session_ctx, action_tags)
+        allowed_tags = plan_next_step(session_ctx, action_tags)
+        tactical.generate_letters(session_ctx, allowed_tags)
+        for acc_id, acc_ctx in stage_2_5.items():
+            tag = acc_ctx.get("action_tag")
+            letters_router.select_template(tag, acc_ctx, phase="finalize")
         finalize_outputs(
             client_info, today_folder, sections, audit, log_messages, app_config
         )

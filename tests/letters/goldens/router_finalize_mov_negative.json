@@ -5,6 +5,6 @@
     "cra_last_result": "verified",
     "days_since_cra_result": "45"
   },
-  "template": "default_dispute.html",
-  "missing_fields": ["legal_safe_summary"]
+  "template": "mov_letter_template.html",
+  "missing_fields": ["legal_safe_summary", "reinvestigation_request"]
 }

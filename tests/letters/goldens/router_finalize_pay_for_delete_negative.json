@@ -4,6 +4,6 @@
     "legal_safe_summary": "I will pay if you delete this account.",
     "offer_terms": "Delete account and we pay 60%."
   },
-  "template": "default_dispute.html",
+  "template": "pay_for_delete_letter_template.html",
   "missing_fields": ["collector_name"]
 }

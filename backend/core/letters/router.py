@@ -294,37 +294,38 @@ def select_template(
 
     missing_fields: List[str] = []
     if template_path and phase == "finalize":
-        required_missing = validators.validate_required_fields(
-            template_path, ctx, required, validators.CHECKLIST
+        missing_fields = set(
+            validators.validate_required_fields(
+                template_path, ctx, required, validators.CHECKLIST
+            )
         )
-        if required_missing:
-            logger.error(
-                "missing required fields %s for template %s", required_missing, template_path
-            )
-            emit_counter("router.finalize_errors")
-            missing_fields = sorted(set(required_missing))
-            template_path = "default_dispute.html"
-            required = []
-        else:
-            missing_fields = validators.validate_substance(template_path, ctx)
-            missing_fields = sorted(set(missing_fields))
-
-        try:
-            # Rendering is performed to ensure template syntax errors are surfaced
-            # early. The environment is shared across threads and caches compiled
-            # templates, minimizing per-letter I/O.
-            ENV.get_template(template_path).render(**ctx)
-        except Exception:  # pragma: no cover - render guard
-            logger.exception("template render failed for %s", template_path)
-            emit_counter("router.render_error")
-            return _cache_and_return(
-                TemplateDecision(
-                    template_path=None,
-                    required_fields=required,
-                    missing_fields=missing_fields,
-                    router_mode="error",
+        missing_fields.update(validators.validate_substance(template_path, ctx))
+        missing_fields = sorted(missing_fields)
+        if not missing_fields:
+            try:
+                # Rendering is performed to ensure template syntax errors are surfaced
+                # early. The environment is shared across threads and caches compiled
+                # templates, minimizing per-letter I/O.
+                ENV.get_template(template_path).render(**ctx)
+            except Exception:  # pragma: no cover - render guard
+                logger.exception("template render failed for %s", template_path)
+                emit_counter("router.render_error")
+                return _cache_and_return(
+                    TemplateDecision(
+                        template_path=None,
+                        required_fields=required,
+                        missing_fields=missing_fields,
+                        router_mode="error",
+                    )
                 )
+    elif template_path and phase == "candidate":
+        if tag == "instruction":
+            missing_fields = []
+        else:
+            missing_fields = validators.validate_required_fields(
+                template_path, ctx, required, validators.CHECKLIST
             )
+            missing_fields = sorted(set(missing_fields))
 
     if template_path:
         template_name = os.path.basename(template_path)

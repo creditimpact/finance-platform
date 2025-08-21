@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import Dict, List
 
 import services.outcome_ingestion.ingest_report as ingest_mod
@@ -56,8 +57,8 @@ def test_ingest_report_emits_all_outcomes(monkeypatch):
 
     monkeypatch.setattr(ingest_mod, "normalize_and_match", fake_normalize)
 
-    ingest_report(None, {})
-    events = ingest_report(None, {})
+    ingest_report(None, {"v": 1})
+    events = ingest_report(None, {"v": 2})
 
     assert {e.outcome for e in events} == {
         Outcome.VERIFIED,
@@ -83,3 +84,60 @@ def test_ingest_report_emits_all_outcomes(monkeypatch):
     tri_merge = store["s1"]["tri_merge"]["snapshots"]["1"]
     assert set(tri_merge.keys()) == {"f1", "f2", "f4"}
     assert tri_merge["f2"]["Experian"]["balance"] == 250
+
+
+def test_normalization_cache(monkeypatch):
+    ingest_mod._FAMILY_CACHE.clear()
+    calls = {"n": 0}
+
+    def fake_normalize(tls: List[Tradeline]):
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr(ingest_mod, "normalize_and_match", fake_normalize)
+    monkeypatch.setenv("SESSION_ID", "s1")
+
+    ingest_report(None, {"r": 1})
+    ingest_report(None, {"r": 1})
+
+    assert calls["n"] == 1, "expected normalize_and_match to be cached"
+
+
+def test_ingest_parallel_uses_threads(monkeypatch):
+    ingest_mod._FAMILY_CACHE.clear()
+    store: Dict[str, Dict] = {}
+
+    def fake_get_session(sid):
+        return store.get(sid)
+
+    def fake_update_session(sid, **kwargs):
+        session = store.setdefault(sid, {})
+        session.update(kwargs)
+        return session
+
+    monkeypatch.setattr(session_manager, "get_session", fake_get_session)
+    monkeypatch.setattr(session_manager, "update_session", fake_update_session)
+    monkeypatch.setenv("SESSION_ID", "s1")
+
+    baseline = [_family("f1", 100), _family("f2", 200)]
+    updated = [_family("f1", 150), _family("f2", 250)]
+    calls = {"n": 0}
+
+    def fake_normalize(tls: List[Tradeline]):
+        calls["n"] += 1
+        return baseline if calls["n"] == 1 else updated
+
+    monkeypatch.setattr(ingest_mod, "normalize_and_match", fake_normalize)
+
+    thread_names: set[str] = set()
+
+    def fake_ingest(sess, event: OutcomeEvent) -> None:
+        thread_names.add(threading.current_thread().name)
+        save_outcome_event(sess["session_id"], event)
+
+    monkeypatch.setattr(ingest_mod, "ingest", fake_ingest)
+
+    ingest_report(None, {"v": 1})
+    ingest_report(None, {"v": 2})
+
+    assert any(name != "MainThread" for name in thread_names)

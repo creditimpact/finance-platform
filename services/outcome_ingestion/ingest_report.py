@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import uuid
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Iterable, List, Mapping
 
 from backend.api import session_manager
@@ -12,6 +15,13 @@ from backend.core.logic.report_analysis.tri_merge import normalize_and_match
 from backend.core.logic.report_analysis.tri_merge_models import Tradeline, TradelineFamily
 
 from . import ingest
+
+
+# Cache of normalized tradeline families keyed by a hash of the raw report. This
+# avoids re-running canonicalization when the same report is ingested multiple
+# times (e.g. retries).
+_FAMILY_CACHE: "OrderedDict[str, List[TradelineFamily]]" = OrderedDict()
+_CACHE_MAX = 32
 
 
 def _extract_tradelines(report: Mapping[str, Any]) -> List[Tradeline]:
@@ -63,7 +73,17 @@ def ingest_report(account_id: str | None, new_report: Mapping[str, Any]) -> List
         return []
 
     tradelines = _extract_tradelines(new_report)
-    families = normalize_and_match(tradelines)
+
+    # Use a stable hash of the report payload as the cache key.
+    report_key = json.dumps(new_report, sort_keys=True, default=str)
+    cache_key = str(uuid.uuid5(uuid.NAMESPACE_OID, report_key))
+    families = _FAMILY_CACHE.get(cache_key)
+    if families is None:
+        families = normalize_and_match(tradelines)
+        _FAMILY_CACHE[cache_key] = families
+        # simple LRU eviction
+        if len(_FAMILY_CACHE) > _CACHE_MAX:
+            _FAMILY_CACHE.popitem(last=False)
 
     # Group family snapshots by account id
     per_account: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -88,40 +108,52 @@ def ingest_report(account_id: str | None, new_report: Mapping[str, Any]) -> List
 
     events: List[OutcomeEvent] = []
 
-    for acc_id, new_snap in per_account.items():
-        prev_snap = prev_snapshots.get(acc_id, {})
-        if not prev_snap:
-            # No prior snapshot; store baseline and continue
-            prev_snapshots[acc_id] = new_snap
-            continue
+    def _compute_event(
+        acc_id: str,
+        fid: str,
+        prev_snap: Dict[str, Dict[str, Any]],
+        new_snap: Dict[str, Dict[str, Any]],
+    ) -> OutcomeEvent | None:
+        if fid not in new_snap:
+            outcome = Outcome.DELETED
+            diff = {"previous": prev_snap[fid], "current": None}
+        elif fid not in prev_snap:
+            outcome = Outcome.NOCHANGE
+            diff = None
+        elif prev_snap[fid] != new_snap[fid]:
+            outcome = Outcome.UPDATED
+            diff = {"previous": prev_snap[fid], "current": new_snap[fid]}
+        else:
+            outcome = Outcome.VERIFIED
+            diff = None
+        emit_counter(f"outcome.{outcome.name.lower()}")
+        event = OutcomeEvent(
+            outcome_id=str(uuid.uuid4()),
+            account_id=acc_id,
+            cycle_id=0,
+            family_id=fid,
+            outcome=outcome,
+            diff_snapshot=diff,
+        )
+        ingest({"session_id": session_id}, event)
+        return event
 
-        # Union of family ids
-        all_fids = set(prev_snap) | set(new_snap)
-        for fid in all_fids:
-            if fid not in new_snap:
-                outcome = Outcome.DELETED
-                diff = {"previous": prev_snap[fid], "current": None}
-            elif fid not in prev_snap:
-                outcome = Outcome.NOCHANGE
-                diff = None
-            elif prev_snap[fid] != new_snap[fid]:
-                outcome = Outcome.UPDATED
-                diff = {"previous": prev_snap[fid], "current": new_snap[fid]}
-            else:
-                outcome = Outcome.VERIFIED
-                diff = None
-            emit_counter(f"outcome.{outcome.name.lower()}")
-            event = OutcomeEvent(
-                outcome_id=str(uuid.uuid4()),
-                account_id=acc_id,
-                cycle_id=0,
-                family_id=fid,
-                outcome=outcome,
-                diff_snapshot=diff,
-            )
-            ingest({"session_id": session_id}, event)
-            events.append(event)
-        prev_snapshots[acc_id] = new_snap
+    futures = []
+    with ThreadPoolExecutor() as ex:
+        for acc_id, new_snap in per_account.items():
+            prev_snap = prev_snapshots.get(acc_id, {})
+            if not prev_snap:
+                prev_snapshots[acc_id] = new_snap
+                continue
+            all_fids = set(prev_snap) | set(new_snap)
+            for fid in all_fids:
+                futures.append(ex.submit(_compute_event, acc_id, fid, prev_snap, new_snap))
+            prev_snapshots[acc_id] = new_snap
+
+        for fut in futures:
+            evt = fut.result()
+            if evt:
+                events.append(evt)
 
     # Persist updated snapshots
     tri_merge["snapshots"] = prev_snapshots

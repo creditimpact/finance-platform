@@ -68,7 +68,7 @@ def emit_counter(name: str, increment: float | Mapping[str, Any] = 1) -> None:
         if isinstance(increment, Mapping):
             _COUNTERS[name] = _COUNTERS.get(name, 0) + 1
             for key, value in increment.items():
-                if value is None or key not in {"tag", "outcome", "cycle"}:
+                if value is None or key not in {"tag", "outcome", "cycle", "field", "reason"}:
                     continue
                 attr_name = f"{name}.{key}.{value}"
                 _COUNTERS[attr_name] = _COUNTERS.get(attr_name, 0) + 1

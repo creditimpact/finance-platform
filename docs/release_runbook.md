@@ -46,5 +46,7 @@ Dashboards should surface the following counters:
 
 1. Revert to the previous container tag.
 2. Disable new features behind flags if available, e.g. set
-   `ENABLE_PLANNER_PIPELINE=0` to bypass the planner pipeline.
+   `ENABLE_PLANNER_PIPELINE=0` to bypass the planner pipeline or
+   `ENABLE_FIELD_POPULATION=0` (or lower `FIELD_POPULATION_CANARY_PERCENT`)
+   to skip field population.
 3. Post-mortem within 24 hours.

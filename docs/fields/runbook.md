@@ -27,3 +27,8 @@ for failure. The field is recorded on the account context under
 
 The planner or letter router can reference `critical_missing_fields` on the
 context to determine which pathway was taken.
+
+## Rollback
+
+Set `ENABLE_FIELD_POPULATION=0` to bypass fillers. Alternatively, lower
+`FIELD_POPULATION_CANARY_PERCENT` to limit rollout.

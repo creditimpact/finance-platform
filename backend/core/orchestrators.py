@@ -19,8 +19,10 @@ import tactical
 from backend.analytics.analytics.strategist_failures import tally_failure_reasons
 from backend.analytics.analytics_tracker import emit_counter, save_analytics_snapshot
 from backend.api.config import (
+    ENABLE_FIELD_POPULATION,
     ENABLE_PLANNER,
     ENABLE_PLANNER_PIPELINE,
+    FIELD_POPULATION_CANARY_PERCENT,
     PLANNER_CANARY_PERCENT,
     PLANNER_PIPELINE_CANARY_PERCENT,
     AppConfig,
@@ -790,12 +792,16 @@ def run_credit_repair_process(
         for acc_id, acc_ctx in stage_2_5.items():
             tag = acc_ctx.get("action_tag")
             acc_strat = strategy_accounts.get(acc_id, {})
-            apply_field_fillers(acc_ctx, strategy=acc_strat, profile=client_info)
-            if tag:
-                for _ in acc_ctx.get("missing_fields", []):
-                    emit_counter(
-                        "finalize.missing_fields_after_population", {"tag": tag}
-                    )
+            do_population = ENABLE_FIELD_POPULATION
+            if do_population and FIELD_POPULATION_CANARY_PERCENT < 100:
+                do_population = random.random() < FIELD_POPULATION_CANARY_PERCENT / 100
+            if do_population:
+                apply_field_fillers(acc_ctx, strategy=acc_strat, profile=client_info)
+                if tag:
+                    for _ in acc_ctx.get("missing_fields", []):
+                        emit_counter(
+                            "finalize.missing_fields_after_population", {"tag": tag}
+                        )
             letters_router.select_template(tag, acc_ctx, phase="finalize")
         if session_id:
             update_session(session_id, stage_2_5=stage_2_5)

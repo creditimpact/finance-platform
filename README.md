@@ -124,6 +124,11 @@ Provide these in a `.env` file:
   finalize stages (default `0`). Set to `0` to keep the legacy router order.
 - `PLANNER_PIPELINE_CANARY_PERCENT` – percentage of accounts that follow the
   planner pipeline when enabled (default `100`).
+- `ENABLE_FIELD_POPULATION` – controls automatic field filling during
+  finalization (default `1`). Set to `0` to bypass population.
+- `FIELD_POPULATION_CANARY_PERCENT` – percentage of accounts that run field
+  fillers when enabled (default `100`). Lower this or disable
+  `ENABLE_FIELD_POPULATION` to roll back.
 
 Secrets are never committed to the repository.
 

@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import argparse
 import csv
 import json
-import math
 import os
+import sqlite3
 import time
+from dataclasses import asdict, dataclass
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping
+from typing import Dict, Iterable, List, Literal, Mapping, Optional, Tuple
 
 from backend.core.letters.router import route_accounts
 
@@ -21,14 +22,142 @@ FLAGS = [
 ]
 
 
-def benchmark_finalize(num: int = 1000, *, max_workers: int | None = None) -> float:
-    """Return letters-per-second throughput for finalize routing.
+# ---------------------------------------------------------------------------
+# Data models
 
-    Synthetic accounts are routed through the ``finalize`` phase using the
-    :func:`route_accounts` thread pool. The returned value is the average number
-    of letters processed per second. Results are printed to stdout for
-    convenience.
-    """
+
+@dataclass(frozen=True)
+class BatchFilters:
+    """Filter options for a batch analytics run."""
+
+    action_tags: List[str]
+    family_ids: Optional[List[str]] = None
+    cycle_range: Optional[Tuple[int, int]] = None
+    start_ts: Optional[int] = None
+    end_ts: Optional[int] = None
+    page_size: Optional[int] = None
+    page_token: Optional[str] = None
+
+
+class BatchRunner:
+    """Run analytics batches and persist job metadata."""
+
+    def __init__(self, *, job_store: Path | None = None, output_dir: Path | None = None) -> None:
+        self.job_store = Path(job_store or Path("backend/analytics/batch_jobs.sqlite"))
+        self.output_dir = Path(output_dir or Path("backend/analytics/batch_reports"))
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+
+    # -- public API -----------------------------------------------------
+    def run(self, filters: BatchFilters, format: Literal["csv", "json"]) -> str:
+        """Run a batch job and return the job id.
+
+        The job is idempotent; subsequent invocations with the same filters and
+        format will return the existing job record without reprocessing.
+        """
+
+        job_id = self._job_id(filters, format)
+        with sqlite3.connect(self.job_store) as conn:
+            cur = conn.execute(
+                "SELECT output_path FROM batch_jobs WHERE job_id=?",
+                (job_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                return job_id
+
+        samples = self._fetch_samples(filters)
+        report = process_samples(samples)
+
+        output_path = self.output_dir / f"{job_id}.{format}"
+        if format == "json":
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2)
+        else:
+            _write_csv(report, output_path)
+
+        with sqlite3.connect(self.job_store) as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO batch_jobs
+                (job_id, filters, format, output_path, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    json.dumps(asdict(filters), sort_keys=True),
+                    format,
+                    str(output_path),
+                    "completed",
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+            conn.commit()
+        return job_id
+
+    def schedule(self, cron_expr: str) -> str:
+        """Register a scheduled job and return its identifier."""
+
+        job_id = sha256(cron_expr.encode("utf-8")).hexdigest()
+        with sqlite3.connect(self.job_store) as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO batch_jobs
+                (job_id, filters, format, output_path, status, created_at, cron_expr)
+                VALUES (?, ?, '', '', 'scheduled', ?, ?)
+                """,
+                (job_id, "{}", datetime.utcnow().isoformat(), cron_expr),
+            )
+            conn.commit()
+        return job_id
+
+    def retry(self, job_id: str) -> str:
+        """Re-run a previously executed job."""
+
+        with sqlite3.connect(self.job_store) as conn:
+            cur = conn.execute(
+                "SELECT filters, format FROM batch_jobs WHERE job_id=?",
+                (job_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError(f"job_id {job_id} not found")
+            filters = BatchFilters(**json.loads(row[0]))
+            format = row[1]
+            conn.execute("DELETE FROM batch_jobs WHERE job_id=?", (job_id,))
+            conn.commit()
+
+        return self.run(filters, format)  # type: ignore[arg-type]
+
+    # -- helpers --------------------------------------------------------
+    def _init_db(self) -> None:
+        with sqlite3.connect(self.job_store) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS batch_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    filters TEXT NOT NULL,
+                    format TEXT NOT NULL,
+                    output_path TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    cron_expr TEXT
+                )
+                """
+            )
+            conn.commit()
+
+    def _job_id(self, filters: BatchFilters, format: str) -> str:
+        raw = json.dumps({"filters": asdict(filters), "format": format}, sort_keys=True)
+        return sha256(raw.encode("utf-8")).hexdigest()
+
+    # The data fetcher is intentionally simple so tests can monkeypatch it.
+    def _fetch_samples(self, filters: BatchFilters) -> List[Mapping[str, object]]:  # pragma: no cover - placeholder
+        return []
+
+
+def benchmark_finalize(num: int = 1000, *, max_workers: int | None = None) -> float:
+    """Return letters-per-second throughput for finalize routing."""
 
     os.environ.setdefault("LETTERS_ROUTER_PHASED", "1")
 
@@ -50,13 +179,17 @@ def benchmark_finalize(num: int = 1000, *, max_workers: int | None = None) -> fl
     return throughput
 
 
+# ---------------------------------------------------------------------------
+# Existing analytics helpers
+
+
 def _percentile(values: List[float], pct: float) -> float:
     """Return the ``pct`` percentile of ``values``."""
 
     if not values:
         return 0.0
     vals = sorted(values)
-    k = max(0, int(math.ceil(pct / 100 * len(vals))) - 1)
+    k = max(0, int(len(vals) * pct / 100) - 1)
     return vals[k]
 
 
@@ -186,45 +319,5 @@ def _write_csv(report: Mapping[str, object], path: Path) -> None:
         writer.writerows(rows)
 
 
-def run_staging_batch(
-    samples_path: str | Path,
-    limit: int | None = None,
-    output_dir: str | Path | None = None,
-) -> Dict[str, object]:
-    """Process sample inputs and write a batch report."""
+__all__ = ["BatchRunner", "BatchFilters", "process_samples", "benchmark_finalize"]
 
-    for flag in FLAGS:
-        os.environ[flag] = "true"
-
-    with open(samples_path, "r", encoding="utf-8") as f:
-        samples: List[Mapping[str, object]] = json.load(f)
-
-    if limit is not None:
-        samples = samples[:limit]
-
-    report = process_samples(samples)
-
-    out_dir = Path(output_dir or Path("backend/analytics/batch_reports"))
-    out_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    json_path = out_dir / f"{timestamp}.json"
-    csv_path = out_dir / f"{timestamp}.csv"
-    with open(json_path, "w", encoding="utf-8") as jf:
-        json.dump(report, jf, indent=2)
-    _write_csv(report, csv_path)
-    return report
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Run staging batch and emit report")
-    parser.add_argument("samples", help="Path to sample JSON file")
-    parser.add_argument("-n", "--num", type=int, help="Number of samples to process")
-    args = parser.parse_args()
-    run_staging_batch(args.samples, limit=args.num)
-
-
-if __name__ == "__main__":  # pragma: no cover - CLI only
-    main()
-
-
-__all__ = ["run_staging_batch", "process_samples", "benchmark_finalize"]

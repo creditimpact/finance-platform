@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from backend.audit.audit import emit_event
 from backend.core.logic.letters.utils import populate_required_fields
 from fields.populate_account_number_masked import populate_account_number_masked
 from fields.populate_address import populate_address
@@ -16,6 +17,38 @@ from fields.populate_inquiry_date import populate_inquiry_date
 from fields.populate_medical_status import populate_medical_status
 from fields.populate_name import populate_name
 from fields.populate_ssn_masked import populate_ssn_masked
+
+CRITICAL_FIELDS = {
+    "name",
+    "address",
+    "date_of_birth",
+    "ssn_masked",
+    "creditor_name",
+    "account_number_masked",
+    "inquiry_creditor_name",
+    "inquiry_date",
+}
+
+OPTIONAL_FIELDS = {
+    "days_since_cra_result",
+    "amount",
+    "medical_status",
+}
+
+
+def _mark_missing(ctx: dict, tag: str, field: str) -> None:
+    emit_event(
+        "fields.populate_errors",
+        {"tag": tag, "field": field, "reason": "missing"},
+    )
+    missing = ctx.setdefault("missing_fields", [])
+    if field not in missing:
+        missing.append(field)
+    if field in CRITICAL_FIELDS:
+        critical = ctx.setdefault("critical_missing_fields", [])
+        if field not in critical:
+            critical.append(field)
+        ctx["defer_action_tag"] = True
 
 
 def apply_field_fillers(
@@ -45,6 +78,7 @@ def apply_field_fillers(
     outcome = ctx.get("cra_outcome") or ctx.get("outcome") or {}
     profile = profile or ctx.get("profile") or ctx.get("client") or {}
     corrections = corrections or ctx.get("corrections") or {}
+    tag = str(ctx.get("action_tag") or "").lower()
 
     # Client/profile fields -----------------------------------------------------
     populate_name(ctx, profile, corrections)
@@ -65,6 +99,11 @@ def apply_field_fillers(
 
     # Strategy provided fields -------------------------------------------------
     populate_required_fields(ctx, strategy)
+
+    # Missing field handling -----------------------------------------------------
+    for field in CRITICAL_FIELDS | OPTIONAL_FIELDS:
+        if not ctx.get(field):
+            _mark_missing(ctx, tag, field)
 
 
 __all__ = ["apply_field_fillers"]

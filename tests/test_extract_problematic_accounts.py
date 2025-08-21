@@ -123,4 +123,4 @@ def test_extract_problematic_accounts_without_openai(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     payload = extract_problematic_accounts_from_report("dummy.pdf")
-    assert payload.goodwill and payload.goodwill[0].name == "Parser Bank"
+    assert payload.disputes and payload.disputes[0].name == "Parser Bank"

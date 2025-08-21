@@ -2,7 +2,7 @@ import backend.core.logic.report_analysis.report_postprocessing as rp
 from backend.core.models.bureau import BureauAccount
 
 
-def test_inject_missing_late_accounts_per_bureau():
+def test_inject_missing_late_accounts_aggregated():
     result = {}
     history = {
         "cap_one": {
@@ -17,6 +17,7 @@ def test_inject_missing_late_accounts_per_bureau():
 
     accounts = [BureauAccount.from_dict(a) for a in result["all_accounts"]]
 
-    assert len(accounts) == 3
-    assert {a.bureau for a in accounts} == {"Experian", "Equifax", "TransUnion"}
-    assert all("bureaus" not in a for a in result["all_accounts"])
+    assert len(accounts) == 1
+    acc = accounts[0]
+    assert acc.extras["late_payments"] == history["cap_one"]
+    assert acc.extras.get("source_stage") == "parser_aggregated"

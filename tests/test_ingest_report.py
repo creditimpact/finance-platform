@@ -4,6 +4,7 @@ from backend.api import session_manager
 from backend.outcomes import load_outcome_history
 from services.outcome_ingestion.ingest_report import ingest_report
 from backend.outcomes.models import Outcome
+from backend.analytics.analytics_tracker import reset_counters, get_counters
 
 
 def _make_report(accounts):
@@ -41,6 +42,7 @@ def test_ingest_report_classifies_and_persists(monkeypatch, tmp_path):
             "date_reported": "2024",
         },
     ]
+    reset_counters()
     ingest_report(None, _make_report(baseline_accounts))
 
     new_accounts = [
@@ -74,6 +76,12 @@ def test_ingest_report_classifies_and_persists(monkeypatch, tmp_path):
     history = load_outcome_history("sess1", "acct1")
     outcomes = {e.outcome for e in history}
     assert outcomes == {Outcome.VERIFIED, Outcome.UPDATED, Outcome.DELETED, Outcome.NOCHANGE}
+
+    counters = get_counters()
+    assert counters["outcome.verified"] == 1
+    assert counters["outcome.updated"] == 1
+    assert counters["outcome.deleted"] == 1
+    assert counters["outcome.nochange"] == 1
 
     session = session_manager.get_session("sess1")
     assert "tri_merge" in session and "snapshots" in session["tri_merge"]

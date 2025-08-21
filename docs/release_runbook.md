@@ -39,6 +39,7 @@ Dashboards should surface the following counters:
 - `rulebook.tag_selected.{tag}` – frequency of chosen action tags.
 - `rulebook.suppressed_rules.{rule_name}` – rules skipped due to precedence or exclusion.
 - `planner.*` – cycle progress, SLA waits and error counts.
+- `outcome.verified`, `outcome.updated`, `outcome.deleted`, `outcome.nochange` – bureau classification distribution (each counter ≤cardinality 1; alert if `outcome.deleted` spikes above baseline).
 - `router.*` – candidate and finalize template selections and validation errors.
 
 ## Rollback

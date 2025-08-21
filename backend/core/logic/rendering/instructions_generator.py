@@ -13,7 +13,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+from backend.analytics.analytics_tracker import emit_counter
 from backend.assets.paths import templates_path
+from backend.core.letters.field_population import apply_field_fillers
+from backend.core.letters.router import select_template
+from backend.core.letters.sanitizer import sanitize_rendered_html
 from backend.core.logic.compliance.compliance_pipeline import run_compliance_pipeline
 from backend.core.logic.rendering import pdf_renderer
 from backend.core.logic.rendering.instruction_data_preparation import (
@@ -22,9 +26,6 @@ from backend.core.logic.rendering.instruction_data_preparation import (
 from backend.core.logic.rendering.instruction_renderer import build_instruction_html
 from backend.core.models import BureauPayload, ClientInfo
 from backend.core.services.ai_client import AIClient
-from backend.core.letters.router import select_template
-from backend.analytics.analytics_tracker import emit_counter
-from backend.core.letters.sanitizer import sanitize_rendered_html
 
 
 def get_logo_base64() -> str:
@@ -81,6 +82,7 @@ def generate_instruction_file(
     select_template("instruction", context, phase="candidate")
 
     # Finalize template selection and enforce required fields
+    apply_field_fillers(context, strategy=strategy, profile=client_info)
     decision = select_template("instruction", context, phase="finalize")
     if not decision.template_path:
         raise ValueError("router did not supply template_path")
@@ -88,9 +90,7 @@ def generate_instruction_file(
         emit_counter("validation.failed")
         emit_counter(f"validation.failed.{decision.template_path}")
         for field in decision.missing_fields:
-            emit_counter(
-                f"validation.failed.{decision.template_path}.{field}"
-            )
+            emit_counter(f"validation.failed.{decision.template_path}.{field}")
         return
     html = build_instruction_html(context, decision.template_path)
     html, _ = sanitize_rendered_html(html, decision.template_path, context)

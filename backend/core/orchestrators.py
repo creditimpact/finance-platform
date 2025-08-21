@@ -31,6 +31,7 @@ from backend.api.session_manager import update_session
 from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLevel
 from backend.core.email_sender import send_email_with_attachment
+from backend.core.letters.field_population import apply_field_fillers
 from backend.core.logic.compliance.constants import StrategistFailureReason
 from backend.core.logic.report_analysis.extract_info import (
     extract_bureau_info_column_refined,
@@ -103,7 +104,9 @@ def plan_and_generate_letters(session: dict, action_tags: list[str]) -> list[str
 
     allowed: list[str] = []
     if pipeline_tags:
-        planned = plan_next_step(session, pipeline_tags) if use_planner else pipeline_tags
+        planned = (
+            plan_next_step(session, pipeline_tags) if use_planner else pipeline_tags
+        )
         allowed.extend(planned)
     if legacy_tags:
         allowed.extend(legacy_tags)
@@ -667,7 +670,9 @@ def run_credit_repair_process(
             proofs_files, session_id, client_info, audit, log_messages, ai_client
         )
         try:
-            from services.outcome_ingestion.ingest_report import ingest_report as ingest_outcome_report
+            from services.outcome_ingestion.ingest_report import (
+                ingest_report as ingest_outcome_report,
+            )
 
             ingest_outcome_report(None, bureau_data)
         except Exception:
@@ -779,9 +784,16 @@ def run_credit_repair_process(
             ctx.get("action_tag") for ctx in stage_2_5.values() if ctx.get("action_tag")
         ]
         plan_and_generate_letters(session_ctx, action_tags)
+        strategy_accounts = {
+            str(acc.get("account_id")): acc for acc in strategy.get("accounts", [])
+        }
         for acc_id, acc_ctx in stage_2_5.items():
             tag = acc_ctx.get("action_tag")
+            acc_strat = strategy_accounts.get(acc_id, {})
+            apply_field_fillers(acc_ctx, strategy=acc_strat, profile=client_info)
             letters_router.select_template(tag, acc_ctx, phase="finalize")
+        if session_id:
+            update_session(session_id, stage_2_5=stage_2_5)
         finalize_outputs(
             client_info, today_folder, sections, audit, log_messages, app_config
         )

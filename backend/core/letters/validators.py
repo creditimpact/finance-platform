@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Dict, List
 import re
-from backend.core.logic.utils.pii import redact_pii
+from typing import Dict, List
 
+from backend.core.logic.utils.pii import redact_pii
 
 CHECKLIST: Dict[str, List[str]] = {
     "dispute_letter_template.html": ["bureau"],
@@ -97,7 +97,7 @@ def validate_required_fields(
     """Return missing required fields for ``template_path``."""
 
     expected = required or checklist.get(template_path or "", [])
-    missing = [field for field in expected if not ctx.get(field)]
+    missing = [field for field in expected if ctx.get(field) is None]
 
     sentence = ctx.get("client_context_sentence")
     if sentence:
@@ -129,7 +129,6 @@ def validate_required_fields(
                     missing.append("per_account_actions.action_verb")
                     break
 
-
     return missing
 
 
@@ -137,9 +136,7 @@ def validate_substance(template_path: str, ctx: dict) -> List[str]:
     """Return missing substantive markers for ``template_path``."""
 
     requirements = SUBSTANCE_CHECKLIST.get(template_path, {})
-    text = " ".join(
-        str(v).lower() for v in ctx.values() if isinstance(v, str)
-    )
+    text = " ".join(str(v).lower() for v in ctx.values() if isinstance(v, str))
     missing: List[str] = []
     for key, pattern in requirements.items():
         if pattern is None:
@@ -157,4 +154,3 @@ __all__ = [
     "CHECKLIST",
     "SUBSTANCE_CHECKLIST",
 ]
-

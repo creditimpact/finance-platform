@@ -151,6 +151,7 @@ def _cleanup_unverified_late_text(result: dict, verified: Set[str]):
             clean(a)
 
 
+
 def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) -> None:
     """Add accounts detected by the parser but missing from the AI output."""
     existing = {
@@ -161,38 +162,21 @@ def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) ->
     for norm_name, bureaus in history.items():
         if norm_name in existing:
             continue
-        for bureau, late_counts in bureaus.items():
-            entry = {
-                "name": raw_map.get(norm_name, norm_name),
-                "bureau": bureau,
-                "status": "Unknown",
-                "advisor_comment": "Detected by parser; missing from AI output",
-                "late_payments": late_counts,
-                "flags": ["Late Payments"],
-            }
-            result.setdefault("all_accounts", []).append(entry)
 
-            status_lower = entry.get("status", "").lower()
-            flags_lower = [f.lower() for f in entry.get("flags", [])]
-            negative_terms = (
-                "collection",
-                "collections",
-                "chargeoff",
-                "charge-off",
-                "charge off",
-            )
-            is_negative = any(t in status_lower for t in negative_terms) or any(
-                any(t in flag for t in negative_terms) for flag in flags_lower
-            )
-            if is_negative:
-                result.setdefault("negative_accounts", []).append(entry.copy())
-            else:
-                result.setdefault("open_accounts_with_issues", []).append(entry.copy())
-
-            print(
-                f"[WARN] Added missing account from parser: {entry['name']} ({bureau})"
-            )
-
+        entry = {
+            "name": raw_map.get(norm_name, norm_name),
+            "late_payments": bureaus,
+            "status": "Delinquent",
+            "advisor_comment": "Late payments detected by parser; AI unavailable",
+            "flags": ["Late Payments"],
+            "source_stage": "parser_aggregated",
+        }
+        result.setdefault("all_accounts", []).append(entry)
+        result.setdefault("negative_accounts", []).append(entry.copy())
+        print(
+            f"[WARN] Aggregated missing account from parser: {entry['name']} "
+            f"bureaus={list(bureaus.keys())}"
+        )
 
 # ---------------------------------------------------------------------------
 # Analysis sanity checks

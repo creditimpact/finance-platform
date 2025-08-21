@@ -67,8 +67,9 @@ def emit_counter(name: str, increment: float | Mapping[str, Any] = 1) -> None:
     with _COUNTER_LOCK:
         if isinstance(increment, Mapping):
             _COUNTERS[name] = _COUNTERS.get(name, 0) + 1
+            allowed = {"bureau", "mismatch_type", "cycle", "step"}
             for key, value in increment.items():
-                if value is None or key not in {"bureau", "mismatch_type"}:
+                if value is None or key not in allowed:
                     continue
                 attr_name = f"{name}.{key}.{value}"
                 _COUNTERS[attr_name] = _COUNTERS.get(attr_name, 0) + 1

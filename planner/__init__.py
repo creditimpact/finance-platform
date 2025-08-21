@@ -14,7 +14,7 @@ from backend.core.locks import account_lock
 from backend.core.models import AccountState, AccountStatus
 from backend.outcomes import Outcome, OutcomeEvent
 
-from .state_machine import dump_state, evaluate_state, load_state
+from .state_machine import dump_state, evaluate_state, load_state, record_wait_time
 
 
 def _ensure_account_states(
@@ -92,15 +92,13 @@ def plan_next_step(
                     next_eligible_at = None
                 elif outcome == "nochange":
                     if next_eligible_at and now < next_eligible_at:
-                        delta_ms = (next_eligible_at - now).total_seconds() * 1000
-                        emit_counter("planner.time_to_next_step_ms", delta_ms)
+                        record_wait_time(state, now, next_eligible_at)
                         states_data[acc_id] = dump_state(state)
                         continue
                     tags = ["mov"]
                     next_eligible_at = None
                 elif state.next_eligible_at and now < state.next_eligible_at:
-                    delta_ms = (state.next_eligible_at - now).total_seconds() * 1000
-                    emit_counter("planner.time_to_next_step_ms", delta_ms)
+                    record_wait_time(state, now, state.next_eligible_at)
                     states_data[acc_id] = dump_state(state)
                     continue
                 else:
@@ -108,14 +106,13 @@ def plan_next_step(
 
                 state.next_eligible_at = next_eligible_at
                 if next_eligible_at and now < next_eligible_at:
-                    delta_ms = (next_eligible_at - now).total_seconds() * 1000
-                    emit_counter("planner.time_to_next_step_ms", delta_ms)
+                    record_wait_time(state, now, next_eligible_at)
                 states_data[acc_id] = dump_state(state)
                 allowed.extend(tags)
 
         if total_accounts:
             set_metric(
-                "planner.cycle_success_rate",
+                "planner.resolution_rate",
                 resolved_accounts / total_accounts,
             )
         if resolved_accounts:
@@ -171,10 +168,7 @@ def record_send(
                 "planner.cycle_progress",
                 {"cycle": state.current_cycle, "step": state.current_step},
             )
-            emit_counter(
-                "planner.time_to_next_step_ms",
-                (state.next_eligible_at - now).total_seconds() * 1000,
-            )
+            record_wait_time(state, now, state.next_eligible_at)
             emit_event(
                 "audit.planner_transition",
                 {

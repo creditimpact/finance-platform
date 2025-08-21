@@ -26,7 +26,7 @@ Common counters emitted for dashboards:
 - `rulebook.suppressed_rules.{rule_name}` – rules skipped due to precedence or exclusion.
 - `planner.cycle_progress{cycle,step}` – tracker for step advancement per cycle (cycle/step labels each <10).
 - `planner.time_to_next_step_ms` – milliseconds until next eligible planner action (single gauge; alert on sustained spikes).
-- `planner.cycle_success_rate` – fraction of accounts completed in a run (single gauge; alert if <0.8).
+- `planner.resolution_rate` – fraction of accounts completed in a run (single gauge; alert if <0.8).
 - `planner.avg_cycles_per_resolution` – average cycles required for completed accounts (single gauge; watch >p95).
 - `planner.sla_violations_total` – cumulative SLA violations when sends lag (single counter).
 - `planner.error_count` – planner exceptions caught (single counter).

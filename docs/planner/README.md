@@ -51,14 +51,14 @@ The planner sits after candidate routing. It consumes Stage 2.5 tag output and d
 
 - `planner.cycle_progress{cycle,step}` – counts step transitions per cycle.
 - `planner.time_to_next_step_ms` – milliseconds until the next eligible action (gauge; alert on sustained spikes).
-- `planner.cycle_success_rate` – fraction of accounts resolved in a run (target ≥0.8, single gauge).
+- `planner.resolution_rate` – fraction of accounts resolved in a run (target ≥0.8, single gauge).
 - `planner.avg_cycles_per_resolution` – average cycles per resolved account (gauge; alert if above historical p95).
 - `planner.sla_violations_total` – total number of SLA breaches.
 - `planner.error_count` – total planner exceptions.
 - `router.candidate_selected.*` and `router.finalized.*` – verify routing
   throughput when the planner pipeline is enabled.
 
-Dashboard alerts should watch for sustained drops in cycle success rate, increases in cycle count, or spikes in SLA violations and errors.
+Dashboard alerts should watch for sustained drops in resolution rate, increases in cycle count, or spikes in SLA violations and errors.
 
 To roll back, deploy with `ENABLE_PLANNER_PIPELINE=0` to restore the legacy router ordering without planner intervention.
 

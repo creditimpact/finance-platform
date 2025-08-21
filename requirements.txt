@@ -19,3 +19,4 @@ json-repair
 pyyaml
 pytest-env
 jsonschema
+croniter

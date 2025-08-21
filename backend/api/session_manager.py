@@ -68,6 +68,38 @@ def update_session(session_id: str, **kwargs: Any) -> Dict[str, Any]:
         return session
 
 
+def populate_from_history(session: Dict[str, Any]) -> Dict[str, Any]:
+    """Backfill select fields on ``session`` from stored history.
+
+    If ``session`` lacks tri-merge evidence or planner outcome data that exists
+    in the persisted session store, copy those fields forward and record that
+    they originated from history. Provenance information is stored under the
+    ``"_provenance"`` key on the session mapping.
+    """
+
+    session_id = session.get("session_id")
+    if not session_id:
+        return session
+
+    stored = get_session(session_id) or {}
+    provenance = session.setdefault("_provenance", {})
+
+    tri_merge_session = session.get("tri_merge") or {}
+    tri_merge_history = stored.get("tri_merge", {})
+    evidence_history = tri_merge_history.get("evidence")
+    if evidence_history and "evidence" not in tri_merge_session:
+        tri_merge_session["evidence"] = evidence_history
+        session["tri_merge"] = tri_merge_session
+        provenance["tri_merge.evidence"] = "history"
+
+    for field in ("outcome_history", "account_states"):
+        if field not in session and field in stored:
+            session[field] = stored[field]
+            provenance[field] = "history"
+
+    return session
+
+
 # ---------------------------------------------------------------------------
 # Intake-only storage helpers
 # ---------------------------------------------------------------------------

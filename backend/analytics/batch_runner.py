@@ -11,11 +11,14 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Dict, Iterable, List, Literal, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Tuple
+from uuid import uuid4
 
 from croniter import croniter
 
 from backend.core.letters.router import route_accounts
+from backend.core.logic.utils.pii import redact_pii
+from backend.audit.audit import emit_event, set_log_context
 
 FLAGS = [
     "LETTERS_ROUTER_PHASED",
@@ -70,34 +73,59 @@ class BatchRunner:
             if row:
                 return job_id
 
-        samples = self._fetch_samples(filters)
-        report = process_samples(samples)
+        audit_id = str(uuid4())
+        set_log_context(audit_id=audit_id)
+        emit_event(
+            "batch_job_start",
+            {"job_id": job_id, "filters": asdict(filters)},
+        )
 
-        output_path = self.output_dir / f"{job_id}.{format}"
-        if format == "json":
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(report, f, indent=2)
-        else:
-            _write_csv(report, output_path)
+        try:
+            samples = self._fetch_samples(filters)
+            report = process_samples(samples)
+            report = _redact_output(report)
 
-        with sqlite3.connect(self.job_store) as conn:
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO batch_jobs
-                (job_id, filters, format, output_path, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    job_id,
-                    json.dumps(asdict(filters), sort_keys=True),
-                    format,
-                    str(output_path),
-                    "completed",
-                    datetime.utcnow().isoformat(),
-                ),
+            output_path = self.output_dir / f"{job_id}.{format}"
+            if format == "json":
+                with open(output_path, "w", encoding="utf-8") as f:
+                    json.dump(report, f, indent=2)
+            else:
+                _write_csv(report, output_path)
+
+            with sqlite3.connect(self.job_store) as conn:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO batch_jobs
+                    (job_id, filters, format, output_path, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        job_id,
+                        json.dumps(asdict(filters), sort_keys=True),
+                        format,
+                        str(output_path),
+                        "completed",
+                        datetime.utcnow().isoformat(),
+                    ),
+                )
+                conn.commit()
+
+            emit_event(
+                "batch_job_finish",
+                {"job_id": job_id, "status": "completed", "filters": asdict(filters)},
             )
-            conn.commit()
-        return job_id
+            return job_id
+        except Exception as exc:
+            emit_event(
+                "batch_job_finish",
+                {
+                    "job_id": job_id,
+                    "status": "failed",
+                    "filters": asdict(filters),
+                    "error": str(exc),
+                },
+            )
+            raise
 
     def schedule(self, cron_expr: str) -> str:
         """Register a scheduled job and return its identifier.
@@ -167,6 +195,27 @@ class BatchRunner:
         self, filters: BatchFilters
     ) -> List[Mapping[str, object]]:  # pragma: no cover - placeholder
         return []
+
+
+def _redact_output(data: Any) -> Any:
+    """Recursively sanitize ``data`` by masking PII fields."""
+
+    if isinstance(data, dict):
+        redacted: Dict[str, Any] = {}
+        for key, value in data.items():
+            lower = key.lower()
+            if lower == "full_name":
+                redacted[key] = "[REDACTED]"
+            elif lower == "ssn":
+                redacted[key] = redact_pii(str(value))
+            else:
+                redacted[key] = _redact_output(value)
+        return redacted
+    if isinstance(data, list):
+        return [_redact_output(v) for v in data]
+    if isinstance(data, str):
+        return redact_pii(data)
+    return data
 
 
 def benchmark_finalize(num: int = 1000, *, max_workers: int | None = None) -> float:

@@ -53,3 +53,10 @@ graph TD
 1. Disable outcome ingestion by setting `ENABLE_OUTCOME_INGESTION` to `false`.
 2. Alternatively, set `OUTCOME_INGESTION_CANARY_PERCENT` to `0` to bypass planner updates.
 3. Re-enable by restoring the flag or increasing the canary percentage when ready.
+
+## Performance
+
+Benchmarking with `scripts/benchmark_ingestion.py` shows the pipeline processes
+roughly 100 synthetic reports per second on a typical developer machine,
+translating to an average latency of ~10 ms per report. Results will vary based
+on hardware and the complexity of the input report.

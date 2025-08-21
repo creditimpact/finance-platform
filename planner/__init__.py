@@ -184,9 +184,15 @@ def handle_outcome(session: dict, event: OutcomeEvent) -> None:
             "updated": AccountStatus.CRA_RESPONDED_UPDATED,
             "nochange": AccountStatus.CRA_RESPONDED_NOCHANGE,
         }
-        status = result_map.get(event.result.lower())
+        outcome_val = (
+            event.outcome.value.lower()
+            if hasattr(event.outcome, "value")
+            else str(event.outcome).lower()
+        )
+        status = result_map.get(outcome_val)
         if not status:
             return
+        state.record_outcome(event)
         state.transition(status, actor="cra")
         state.transition(AccountStatus.COMPLETED, actor="system")
         states_data[str(event.account_id)] = dump_state(state)

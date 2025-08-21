@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Tuple
+
+from backend.outcomes.models import OutcomeEvent
 
 
 class AccountStatus(str, Enum):
@@ -37,6 +39,9 @@ class AccountState:
     last_sent_at: Optional[datetime] = None
     next_eligible_at: Optional[datetime] = None
     history: List[StateTransition] = field(default_factory=list)
+    last_outcome: str | None = None
+    resolution_cycle_count: int = 0
+    outcome_history: Tuple[OutcomeEvent, ...] = field(default_factory=tuple)
 
     def transition(self, to_status: AccountStatus, actor: str) -> None:
         """Update status and append a transition record."""
@@ -45,3 +50,11 @@ class AccountState:
             StateTransition(from_status=self.status, to_status=to_status, actor=actor)
         )
         self.status = to_status
+
+    def record_outcome(self, event: OutcomeEvent) -> None:
+        """Record an outcome event in the account's history."""
+
+        outcome = event.outcome.value if hasattr(event.outcome, "value") else event.outcome
+        self.last_outcome = outcome
+        self.outcome_history = (*self.outcome_history, event)
+        self.resolution_cycle_count = len(self.outcome_history)

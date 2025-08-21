@@ -1,10 +1,51 @@
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from enum import Enum
+from typing import Any, Dict, List
 
-@dataclass
+from backend.api import session_manager
+
+
+class Outcome(str, Enum):
+    """Possible CRA responses."""
+
+    VERIFIED = "Verified"
+    UPDATED = "Updated"
+    DELETED = "Deleted"
+    NOCHANGE = "NoChange"
+
+
+@dataclass(frozen=True)
 class OutcomeEvent:
     """Record produced when a bureau responds to a dispute."""
 
     outcome_id: str
     account_id: str
-    cycle: int
-    result: str
+    cycle_id: int
+    family_id: str
+    outcome: Outcome | str
+    raw_report_ref: str | None = None
+    diff_snapshot: Dict[str, Any] | None = None
+
+
+def save_outcome_event(session_id: str, event: OutcomeEvent) -> None:
+    """Append an outcome event to persistent session storage."""
+
+    stored = session_manager.get_session(session_id) or {}
+    history: Dict[str, List[Dict[str, Any]]] = stored.get("outcome_history", {}) or {}
+    events = history.get(event.account_id, [])
+    record = asdict(event)
+    # Store enum value as plain string
+    if isinstance(record.get("outcome"), Outcome):
+        record["outcome"] = record["outcome"].value
+    events.append(record)
+    history[event.account_id] = events
+    session_manager.update_session(session_id, outcome_history=history)
+
+
+def load_outcome_history(session_id: str, account_id: str) -> List[OutcomeEvent]:
+    """Load outcome events for an account from session storage."""
+
+    stored = session_manager.get_session(session_id) or {}
+    history: Dict[str, List[Dict[str, Any]]] = stored.get("outcome_history", {}) or {}
+    events = history.get(account_id, [])
+    return [OutcomeEvent(**e) for e in events]

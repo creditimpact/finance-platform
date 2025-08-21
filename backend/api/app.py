@@ -17,7 +17,9 @@ from flask import Blueprint, Flask, jsonify, redirect, request, url_for
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
+from backend.analytics.batch_runner import BatchFilters, BatchRunner
 from backend.api.admin import admin_bp
+from backend.api.auth import require_api_key_or_role
 from backend.api.config import ENABLE_BATCH_RUNNER, get_app_config
 from backend.api.session_manager import (
     get_session,
@@ -25,10 +27,12 @@ from backend.api.session_manager import (
     update_intake,
     update_session,
 )
-from backend.api.auth import require_api_key_or_role
-from backend.analytics.batch_runner import BatchFilters, BatchRunner
 from backend.api.tasks import run_credit_repair_process  # noqa: F401
-from backend.api.tasks import extract_problematic_accounts, smoke_task
+from backend.api.tasks import (
+    app as celery_app,
+    extract_problematic_accounts,
+    smoke_task,
+)
 from backend.core.logic.letters.explanations_normalizer import (
     extract_structured,
     sanitize,
@@ -233,6 +237,11 @@ def create_app() -> Flask:
         if getattr(app, "_config_loaded", False):
             return
         cfg = get_app_config()
+        celery_app.conf.update(
+            broker_url=cfg.celery_broker_url,
+            result_backend=cfg.celery_broker_url,
+        )
+        os.environ.setdefault("OPENAI_API_KEY", cfg.ai.api_key)
         app.secret_key = cfg.secret_key
         app.auth_tokens = cfg.auth_tokens
         app.rate_limit_per_minute = cfg.rate_limit_per_minute

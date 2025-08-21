@@ -54,6 +54,7 @@ from backend.core.logic.utils.report_sections import (
     filter_sections_by_bureau,
 )
 from backend.core.models import (
+    Account,
     BureauAccount,
     BureauPayload,
     ClientInfo,
@@ -876,9 +877,11 @@ def extract_problematic_accounts_from_report(
         analyzed_json_path,
         {},
         ai_client=ai_client,
-        run_ai=False,
+        run_ai=True,
         request_id=session_id,
     )
+    sections.setdefault("negative_accounts", [])
+    sections.setdefault("open_accounts_with_issues", [])
     update_session(session_id, status="awaiting_user_explanations")
 
     return BureauPayload(
@@ -894,6 +897,9 @@ def extract_problematic_accounts_from_report(
             for d in sections.get(
                 "unauthorized_inquiries", sections.get("inquiries", [])
             )
+        ],
+        high_utilization=[
+            Account.from_dict(d) for d in sections.get("high_utilization_accounts", [])
         ],
     )
 

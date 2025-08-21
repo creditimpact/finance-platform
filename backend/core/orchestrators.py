@@ -702,7 +702,11 @@ def run_credit_repair_process(
                                 data=acc,
                             )
                         )
+            _start = time.perf_counter()
             families = normalize_and_match(tradelines)
+            emit_counter(
+                "tri_merge.process_time_ms", (time.perf_counter() - _start) * 1000
+            )
             compute_mismatches(families)
             tri_session = get_session(session_id) if session_id else None
             tri_evidence = (

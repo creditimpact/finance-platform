@@ -9,7 +9,7 @@ import os
 import re
 from typing import Dict, Iterable, List, Tuple
 
-from backend.analytics.analytics_tracker import emit_counter
+from backend.analytics.analytics_tracker import emit_counter, set_metric
 from backend.api.session_manager import get_session, update_session
 from backend.audit.audit import emit_event
 from backend.core.logic.utils.names_normalization import canonicalize_creditor
@@ -88,9 +88,11 @@ def normalize_and_match(bureau_data: Iterable[Tradeline]) -> List[TradelineFamil
         p95_value = sorted_conf[index]
     else:
         p95_value = 0
-    emit_counter("tri_merge.match_confidence_p95", p95_value)
+    set_metric("tri_merge.match_confidence_p95", p95_value)
 
-    emit_counter("tri_merge.families_total", len(families))
+    for fam in families:
+        for bureau in fam.tradelines.keys():
+            emit_counter("tri_merge.families_total", {"bureau": bureau})
     return families
 
 
@@ -110,13 +112,11 @@ def compute_mismatches(families: Iterable[TradelineFamily]) -> List[TradelineFam
         else {}
     )
 
-    total_mismatches = 0
-
     def _record(fam: TradelineFamily, mismatch: Mismatch) -> None:
-        nonlocal total_mismatches
         fam.mismatches.append(mismatch)
-        total_mismatches += 1
-        emit_counter(f"tri_merge.mismatch.{mismatch.field}")
+        for bureau in mismatch.values:
+            emit_counter("tri_merge.mismatches_total", {"bureau": bureau})
+            emit_counter(f"tri_merge.mismatch.{mismatch.field}", {"bureau": bureau})
 
     for fam in families:
         present = set(fam.tradelines.keys())
@@ -168,5 +168,4 @@ def compute_mismatches(families: Iterable[TradelineFamily]) -> List[TradelineFam
     if session_id:
         update_session(session_id, tri_merge={"evidence": tri_store})
 
-    emit_counter("tri_merge.mismatches_total", total_mismatches)
     return list(families)

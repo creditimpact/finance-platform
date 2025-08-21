@@ -49,9 +49,10 @@ def _mark_missing(ctx: dict, tag: str, field: str, reason: str = "missing") -> N
         "fields.populate_errors",
         {"tag": tag, "field": field, "reason": reason},
     )
-    emit_counter(
-        "fields.populate_errors", {"tag": tag, "field": field, "reason": reason}
-    )
+    emit_counter("fields.populate_errors")
+    emit_counter(f"fields.populate_errors.tag.{tag}")
+    emit_counter(f"fields.populate_errors.field.{field}")
+    emit_counter(f"fields.populate_errors.reason.{reason}")
     missing = ctx.setdefault("missing_fields", [])
     if field not in missing:
         missing.append(field)
@@ -143,7 +144,9 @@ def apply_field_fillers(
     # Missing field handling -----------------------------------------------------
     for field in CRITICAL_FIELDS | OPTIONAL_FIELDS:
         if field in initial_missing and ctx.get(field):
-            emit_counter("fields.populated_total", {"tag": tag, "field": field})
+            emit_counter("fields.populated_total")
+            emit_counter(f"fields.populated_total.tag.{tag}")
+            emit_counter(f"fields.populated_total.field.{field}")
         if not ctx.get(field):
             _mark_missing(ctx, tag, field)
 

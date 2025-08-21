@@ -18,7 +18,7 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
 from backend.api.admin import admin_bp
-from backend.api.config import get_app_config
+from backend.api.config import ENABLE_BATCH_RUNNER, get_app_config
 from backend.api.session_manager import (
     get_session,
     set_session,
@@ -57,6 +57,8 @@ def smoke():
 @api_bp.route("/api/batch-runner", methods=["POST"])
 @require_api_key_or_role(roles={"batch_runner"})
 def run_batch_job():
+    if not ENABLE_BATCH_RUNNER:
+        return jsonify({"status": "error", "message": "batch runner disabled"}), 403
     data = request.get_json(force=True)
     filters_data = data.get("filters", {}) or {}
     action_tags = filters_data.get("action_tags")

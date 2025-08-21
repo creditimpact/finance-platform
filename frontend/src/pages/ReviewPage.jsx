@@ -27,6 +27,21 @@ export default function ReviewPage() {
     ...(uploadData.accounts?.open_accounts_with_issues ?? uploadData.accounts?.goodwill ?? []),
   ];
 
+  const dedupedAccounts = Array.from(
+    accounts
+      .reduce((map, acc) => {
+        const key = acc.account_id ?? acc.name?.toLowerCase();
+        const existing = map.get(key);
+        if (existing) {
+          existing.late_payments = { ...existing.late_payments, ...acc.late_payments };
+          return map;
+        }
+        map.set(key, acc);
+        return map;
+      }, new Map())
+      .values(),
+  );
+
   const getProblems = (acc) => {
     const issues = [];
     const late = acc.late_payments;
@@ -75,7 +90,7 @@ export default function ReviewPage() {
   return (
     <div className="container">
       <h2>Explain Your Situation</h2>
-      {accounts.map((acc, idx) => {
+      {dedupedAccounts.map((acc, idx) => {
         const problems = getProblems(acc);
         return (
           <div key={idx} className="account-block">

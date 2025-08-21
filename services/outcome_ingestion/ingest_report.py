@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, List, Mapping
 from backend.api import session_manager
 from backend.outcomes import OutcomeEvent
 from backend.outcomes.models import Outcome
+from backend.analytics.analytics_tracker import emit_counter
 from backend.core.logic.report_analysis.tri_merge import normalize_and_match
 from backend.core.logic.report_analysis.tri_merge_models import Tradeline, TradelineFamily
 
@@ -109,6 +110,7 @@ def ingest_report(account_id: str | None, new_report: Mapping[str, Any]) -> List
             else:
                 outcome = Outcome.VERIFIED
                 diff = None
+            emit_counter(f"outcome.{outcome.name.lower()}")
             event = OutcomeEvent(
                 outcome_id=str(uuid.uuid4()),
                 account_id=acc_id,

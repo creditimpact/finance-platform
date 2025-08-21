@@ -113,7 +113,7 @@ def plan_next_step(
 
         if total_accounts:
             set_metric(
-                "planner.resolution_rate",
+                "planner.cycle_success_rate",
                 resolved_accounts / total_accounts,
             )
         if resolved_accounts:

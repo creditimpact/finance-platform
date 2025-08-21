@@ -14,27 +14,25 @@ if PROJECT_ROOT not in sys.path:
 
 from celery import Celery
 
+from backend.api.config import get_app_config
 from backend.core.models import ClientInfo, ProofDocuments
 from backend.core.orchestrators import (
     extract_problematic_accounts_from_report,
     run_credit_repair_process,
 )
 
+cfg = get_app_config()
+os.environ.setdefault("OPENAI_API_KEY", cfg.ai.api_key)
 
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
-
-
-app = Celery(
-    "tasks",
-    broker=CELERY_BROKER_URL,
-    backend=CELERY_RESULT_BACKEND,
-    loader="default",
-    fixups=[],
+app = Celery("tasks", loader="default", fixups=[])
+app.conf.update(
+    broker_url=cfg.celery_broker_url,
+    result_backend=os.getenv("CELERY_RESULT_BACKEND", cfg.celery_broker_url),
 )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.info("OPENAI_API_KEY present=%s", bool(os.getenv("OPENAI_API_KEY")))
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message=".*FontBBox.*")
 

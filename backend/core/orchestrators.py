@@ -6,6 +6,7 @@ steps of the credit repair workflow.  All core orchestration lives here;
 ``main.py`` only provides thin CLI wrappers.
 """
 
+import logging
 import os
 import random
 import time
@@ -61,9 +62,11 @@ from backend.core.models import (
     Inquiry,
     ProofDocuments,
 )
-from backend.core.services.ai_client import AIClient, get_ai_client, _StubAIClient
+from backend.core.services.ai_client import AIClient, _StubAIClient, get_ai_client
 from backend.policy.policy_loader import load_rulebook
 from planner import plan_next_step
+
+logger = logging.getLogger(__name__)
 
 
 def plan_and_generate_letters(session: dict, action_tags: list[str]) -> list[str]:
@@ -883,7 +886,21 @@ def extract_problematic_accounts_from_report(
     )
     sections.setdefault("negative_accounts", [])
     sections.setdefault("open_accounts_with_issues", [])
+    for acc in sections["negative_accounts"]:
+        acc.setdefault("source_stage", "ai_final")
+    for acc in sections["open_accounts_with_issues"]:
+        acc.setdefault("source_stage", "ai_final")
     update_session(session_id, status="awaiting_user_explanations")
+
+    for cat in ("negative_accounts", "open_accounts_with_issues"):
+        for acc in sections.get(cat, []):
+            logger.info(
+                "emitted_account name=%s stage=%s categories=%s bureaus=%s",
+                acc.get("name"),
+                acc.get("source_stage"),
+                cat,
+                list(acc.get("late_payments", {}).keys()),
+            )
 
     return BureauPayload(
         disputes=[

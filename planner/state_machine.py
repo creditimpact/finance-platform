@@ -4,6 +4,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import List, Tuple
 
+from backend.analytics.analytics_tracker import emit_counter
 from backend.core.models import AccountState, AccountStatus, StateTransition
 from backend.outcomes.models import OutcomeEvent
 
@@ -27,6 +28,19 @@ def _serialize_dt(value: datetime | None) -> str | None:
 
 def _deserialize_dt(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
+
+
+def record_wait_time(state: AccountState, now: datetime, eligible_at: datetime) -> None:
+    """Record time until the next eligible action for ``state``."""
+
+    delta_ms = (eligible_at - now).total_seconds() * 1000
+    emit_counter("planner.time_to_next_step_ms", delta_ms)
+    emit_counter(
+        f"planner.time_to_next_step_ms.cycle.{state.current_cycle}", delta_ms
+    )
+    emit_counter(
+        f"planner.time_to_next_step_ms.step.{state.current_step}", delta_ms
+    )
 
 
 def evaluate_state(
@@ -56,6 +70,7 @@ def evaluate_state(
             eligible_at = state.last_sent_at + timedelta(days=_DEFAULT_SLA_DAYS)
             if now >= eligible_at:
                 return ["followup"], None
+            record_wait_time(state, now, eligible_at)
             return [], eligible_at
         return ["followup"], None
 

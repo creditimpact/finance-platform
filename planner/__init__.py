@@ -9,6 +9,7 @@ from backend.api.session_manager import get_session, update_session
 from backend.audit.audit import emit_event
 from backend.core.models import AccountState, AccountStatus
 from backend.analytics.analytics_tracker import emit_counter, set_metric
+from backend.outcomes import OutcomeEvent
 
 from .state_machine import dump_state, evaluate_state, load_state
 
@@ -158,6 +159,37 @@ def record_send(
             )
             states_data[str(acc_id)] = dump_state(state)
 
+        update_session(session_id, account_states=states_data)
+    except Exception:
+        emit_counter("planner.error_count")
+        raise
+
+
+
+def handle_outcome(session: dict, event: OutcomeEvent) -> None:
+    """Update account state based on an outcome event."""
+    try:
+        session_id = session.get("session_id")
+        if not session_id:
+            return
+        stored = get_session(session_id) or {}
+        states_data: Dict[str, dict] = stored.get("account_states", {}) or {}
+        data = states_data.get(str(event.account_id))
+        if not data:
+            return
+        state = load_state(data)
+        result_map = {
+            "verified": AccountStatus.CRA_RESPONDED_VERIFIED,
+            "deleted": AccountStatus.CRA_RESPONDED_DELETED,
+            "updated": AccountStatus.CRA_RESPONDED_UPDATED,
+            "nochange": AccountStatus.CRA_RESPONDED_NOCHANGE,
+        }
+        status = result_map.get(event.result.lower())
+        if not status:
+            return
+        state.transition(status, actor="cra")
+        state.transition(AccountStatus.COMPLETED, actor="system")
+        states_data[str(event.account_id)] = dump_state(state)
         update_session(session_id, account_states=states_data)
     except Exception:
         emit_counter("planner.error_count")

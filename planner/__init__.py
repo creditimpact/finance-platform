@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import logging
+from dataclasses import asdict
 from datetime import datetime, timedelta
-from typing import Dict, Iterable, List
+from typing import Any, Dict, Iterable, List
 
 from backend.analytics.analytics_tracker import emit_counter, set_metric
 from backend.api.session_manager import get_session, update_session
 from backend.audit.audit import emit_event
 from backend.core.locks import account_lock
 from backend.core.models import AccountState, AccountStatus
-from backend.outcomes import OutcomeEvent
+from backend.outcomes import Outcome, OutcomeEvent
 
 from .state_machine import dump_state, evaluate_state, load_state
 
@@ -208,8 +210,20 @@ def handle_outcome(
         with account_lock(str(event.account_id)):
             stored = get_session(session_id) or {}
             states_data: Dict[str, dict] = stored.get("account_states", {}) or {}
+            history: Dict[str, List[Dict[str, Any]]] = stored.get("outcome_history", {}) or {}
             data = states_data.get(str(event.account_id))
             if not data:
+                events = history.get(str(event.account_id), [])
+                record = asdict(event)
+                if isinstance(record.get("outcome"), Outcome):
+                    record["outcome"] = record["outcome"].value
+                events.append(record)
+                history[str(event.account_id)] = events
+                update_session(session_id, outcome_history=history)
+                logging.getLogger(__name__).info(
+                    "persisted_outcome_event",
+                    extra={"audit_id": event.audit_id, "diff": event.diff_snapshot},
+                )
                 return []
 
             state = load_state(data)
@@ -245,8 +259,21 @@ def handle_outcome(
                 return []
 
             state.record_outcome(event)
+
+            events = history.get(str(event.account_id), [])
+            record = asdict(event)
+            if isinstance(record.get("outcome"), Outcome):
+                record["outcome"] = record["outcome"].value
+            events.append(record)
+            history[str(event.account_id)] = events
             states_data[str(event.account_id)] = dump_state(state)
-            update_session(session_id, account_states=states_data)
+            update_session(
+                session_id, account_states=states_data, outcome_history=history
+            )
+            logging.getLogger(__name__).info(
+                "persisted_outcome_event",
+                extra={"audit_id": event.audit_id, "diff": event.diff_snapshot},
+            )
             return allowed_tags
     except Exception:
         emit_counter("planner.error_count")

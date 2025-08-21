@@ -13,7 +13,6 @@ def test_dead_letter_queue(monkeypatch):
         raise RuntimeError("fail")
 
     monkeypatch.setattr(ingestion, "planner", SimpleNamespace(handle_outcome=boom))
-    monkeypatch.setattr(ingestion, "save_outcome_event", lambda *a, **k: None)
 
     ing_event = OutcomeEvent(
         outcome_id="1",

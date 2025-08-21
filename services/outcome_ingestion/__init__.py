@@ -49,9 +49,10 @@ def ingest(session: dict, event: OutcomeEvent, max_retries: int = 3) -> None:
     acc_id = getattr(event, "account_id", "")
     for attempt in range(max_retries):
         try:
-            save_outcome_event(session_id, event)
             if _eligible_for_ingestion(str(acc_id)):
                 planner.handle_outcome(session, event)
+            else:
+                save_outcome_event(session_id, event)
             return
         except Exception as exc:  # pragma: no cover - error path
             if attempt + 1 == max_retries:

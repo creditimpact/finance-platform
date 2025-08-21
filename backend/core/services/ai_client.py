@@ -43,6 +43,17 @@ class AIClient:
         """Proxy to ``chat.completions.create``."""
 
         model = model or self.config.chat_model
+
+        extra_headers = kwargs.pop("extra_headers", None)
+        if extra_headers:
+            sanitized: Dict[str, str] = {}
+            for k, v in extra_headers.items():
+                cleaned = v.encode("ascii", "ignore").decode()
+                if cleaned:
+                    sanitized[k] = cleaned
+            if sanitized:
+                kwargs["extra_headers"] = sanitized
+
         return self._client.chat.completions.create(
             model=model, messages=messages, temperature=temperature, **kwargs
         )

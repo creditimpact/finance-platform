@@ -52,8 +52,8 @@ def test_planner_metric_emissions(monkeypatch):
 
     assert counters["planner.cycle_progress"] == 2
     assert counters["planner.cycle_progress.cycle.0"] == 2
-    assert counters["planner.cycle_progress.step.1"] == 1
-    assert counters["planner.cycle_progress.step.2"] == 1
+    assert "planner.cycle_progress.step.1" not in counters
+    assert "planner.cycle_progress.step.2" not in counters
     assert counters["planner.sla_violations_total"] == 1
     assert counters["planner.cycle_success_rate"] == 0.5
     assert counters["planner.avg_cycles_per_resolution"] == 2.0

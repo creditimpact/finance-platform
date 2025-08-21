@@ -1,6 +1,8 @@
-from dataclasses import asdict, dataclass
+import logging
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Dict, List
+from uuid import uuid4
 
 from backend.api import session_manager
 
@@ -25,6 +27,7 @@ class OutcomeEvent:
     outcome: Outcome | str
     raw_report_ref: str | None = None
     diff_snapshot: Dict[str, Any] | None = None
+    audit_id: str = field(default_factory=lambda: str(uuid4()))
 
 
 def save_outcome_event(session_id: str, event: OutcomeEvent) -> None:
@@ -40,6 +43,9 @@ def save_outcome_event(session_id: str, event: OutcomeEvent) -> None:
     events.append(record)
     history[event.account_id] = events
     session_manager.update_session(session_id, outcome_history=history)
+    logging.getLogger(__name__).info(
+        "persisted_outcome_event", extra={"audit_id": event.audit_id, "diff": event.diff_snapshot}
+    )
 
 
 def load_outcome_history(session_id: str, account_id: str) -> List[OutcomeEvent]:

@@ -11,7 +11,6 @@ from backend.core.logic.report_analysis.tri_merge_models import (
     TradelineFamily,
 )
 from backend.core.models import AccountStatus
-from backend.outcomes import save_outcome_event
 from backend.outcomes.models import Outcome
 from services.outcome_ingestion.ingest_report import ingest_report
 
@@ -89,7 +88,7 @@ def test_outcome_to_next_step(monkeypatch):
 
     # avoid auto planner updates during report ingest
     def fake_ingest(sess, event):
-        save_outcome_event(sess["session_id"], event)
+        return None
 
     monkeypatch.setattr(ingest_mod, "ingest", fake_ingest)
 
@@ -108,9 +107,9 @@ def test_outcome_to_next_step(monkeypatch):
             return baseline if calls["n"] == 1 else new_fams
 
         monkeypatch.setattr(ingest_mod, "normalize_and_match", fake_normalize)
-
-        ingest_report(None, {})
-        events = ingest_report(None, {})
+        ingest_mod._FAMILY_CACHE.clear()
+        ingest_report(None, {"r": 1})
+        events = ingest_report(None, {"r": 2})
         event = next(e for e in events if e.outcome == outcome)
 
         planner.plan_next_step(session, ["dispute"], now=datetime(2024, 1, 1))

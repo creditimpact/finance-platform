@@ -15,7 +15,9 @@ def _mock_dependencies(monkeypatch, sections):
     monkeypatch.setattr(
         "backend.core.logic.compliance.upload_validator.is_safe_pdf", lambda path: True
     )
-    monkeypatch.setattr("session_manager.update_session", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "backend.core.orchestrators.update_session", lambda *a, **k: None
+    )
     monkeypatch.setattr(
         "backend.core.logic.report_analysis.analyze_report.analyze_credit_report",
         lambda *a, **k: sections,
@@ -66,3 +68,27 @@ def test_payload_to_dict(monkeypatch):
     assert data["goodwill"][0]["name"] == "Acc2"
     assert data["inquiries"][0]["creditor_name"] == "Bank"
     assert data["high_utilization"][0]["name"] == "Acc3"
+
+
+def test_parser_only_late_accounts_included(monkeypatch):
+    from backend.core.logic.report_analysis.report_postprocessing import (
+        _inject_missing_late_accounts,
+    )
+
+    result = {
+        "all_accounts": [],
+        "negative_accounts": [],
+        "open_accounts_with_issues": [],
+    }
+    history = {"parser bank": {"Experian": {"30": 1}}}
+    raw_map = {"parser bank": "Parser Bank"}
+    _inject_missing_late_accounts(result, history, raw_map)
+    for sec in ["negative_accounts", "open_accounts_with_issues"]:
+        for acc in result.get(sec, []):
+            for key in list(acc.keys()):
+                if key != "name":
+                    acc.pop(key)
+    _mock_dependencies(monkeypatch, result)
+
+    payload = extract_problematic_accounts_from_report("dummy.pdf")
+    assert payload.disputes or payload.goodwill

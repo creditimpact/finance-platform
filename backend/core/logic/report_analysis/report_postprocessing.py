@@ -170,6 +170,24 @@ def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) ->
             "flags": ["Late Payments"],
         }
         result.setdefault("all_accounts", []).append(entry)
+
+        status_lower = entry.get("status", "").lower()
+        flags_lower = [f.lower() for f in entry.get("flags", [])]
+        negative_terms = (
+            "collection",
+            "collections",
+            "chargeoff",
+            "charge-off",
+            "charge off",
+        )
+        is_negative = any(t in status_lower for t in negative_terms) or any(
+            any(t in flag for t in negative_terms) for flag in flags_lower
+        )
+        if is_negative:
+            result.setdefault("negative_accounts", []).append(entry.copy())
+        else:
+            result.setdefault("open_accounts_with_issues", []).append(entry.copy())
+
         print(f"[WARN] Added missing account from parser: {entry['name']}")
 
 

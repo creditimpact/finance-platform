@@ -60,3 +60,19 @@ Benchmarking with `scripts/benchmark_ingestion.py` shows the pipeline processes
 roughly 100 synthetic reports per second on a typical developer machine,
 translating to an average latency of ~10 ms per report. Results will vary based
 on hardware and the complexity of the input report.
+
+## Correlation Query Example
+
+Logs now include `session_id`, `family_id`, `cycle_id`, and `audit_id` fields.
+To trace a single account across tri-merge, planner, and outcome stages, filter
+by these identifiers:
+
+```sql
+-- Example SQL-style query against the logging backend
+SELECT * FROM logs
+WHERE session_id = 'sess1' AND family_id = 'fam42' AND cycle_id = 0
+ORDER BY timestamp;
+```
+
+This returns all related events, enabling end-to-end correlation of a dispute
+through the pipeline.

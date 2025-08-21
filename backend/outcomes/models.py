@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 from uuid import uuid4
 
 from backend.api import session_manager
+from backend.audit.audit import set_log_context
 
 
 class Outcome(str, Enum):
@@ -43,8 +44,21 @@ def save_outcome_event(session_id: str, event: OutcomeEvent) -> None:
     events.append(record)
     history[event.account_id] = events
     session_manager.update_session(session_id, outcome_history=history)
+    set_log_context(
+        session_id=session_id,
+        family_id=event.family_id,
+        cycle_id=event.cycle_id,
+        audit_id=event.audit_id,
+    )
     logging.getLogger(__name__).info(
-        "persisted_outcome_event", extra={"audit_id": event.audit_id, "diff": event.diff_snapshot}
+        "persisted_outcome_event",
+        extra={
+            "audit_id": event.audit_id,
+            "diff": event.diff_snapshot,
+            "session_id": session_id,
+            "family_id": event.family_id,
+            "cycle_id": event.cycle_id,
+        },
     )
 
 

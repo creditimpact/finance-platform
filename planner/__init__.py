@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, List
 
 from backend.analytics.analytics_tracker import emit_counter, set_metric
 from backend.api.session_manager import get_session, update_session
-from backend.audit.audit import emit_event
+from backend.audit.audit import emit_event, set_log_context
 from backend.core.locks import account_lock
 from backend.core.models import AccountState, AccountStatus
 from backend.outcomes import Outcome, OutcomeEvent
@@ -177,6 +177,7 @@ def record_send(
                     "step": state.current_step,
                     "reason": "letters_sent",
                 },
+                extra={"cycle_id": state.current_cycle},
             )
             states_data[str(acc_id)] = dump_state(state)
 
@@ -214,9 +215,21 @@ def handle_outcome(
                 events.append(record)
                 history[str(event.account_id)] = events
                 update_session(session_id, outcome_history=history)
+                set_log_context(
+                    session_id=session_id,
+                    family_id=event.family_id,
+                    cycle_id=event.cycle_id,
+                    audit_id=event.audit_id,
+                )
                 logging.getLogger(__name__).info(
                     "persisted_outcome_event",
-                    extra={"audit_id": event.audit_id, "diff": event.diff_snapshot},
+                    extra={
+                        "audit_id": event.audit_id,
+                        "diff": event.diff_snapshot,
+                        "session_id": session_id,
+                        "family_id": event.family_id,
+                        "cycle_id": event.cycle_id,
+                    },
                 )
                 return []
 
@@ -264,9 +277,21 @@ def handle_outcome(
             update_session(
                 session_id, account_states=states_data, outcome_history=history
             )
+            set_log_context(
+                session_id=session_id,
+                family_id=event.family_id,
+                cycle_id=event.cycle_id,
+                audit_id=event.audit_id,
+            )
             logging.getLogger(__name__).info(
                 "persisted_outcome_event",
-                extra={"audit_id": event.audit_id, "diff": event.diff_snapshot},
+                extra={
+                    "audit_id": event.audit_id,
+                    "diff": event.diff_snapshot,
+                    "session_id": session_id,
+                    "family_id": event.family_id,
+                    "cycle_id": event.cycle_id,
+                },
             )
             return allowed_tags
     except Exception:

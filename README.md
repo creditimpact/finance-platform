@@ -129,6 +129,10 @@ Provide these in a `.env` file:
 - `FIELD_POPULATION_CANARY_PERCENT` – percentage of accounts that run field
   fillers when enabled (default `100`). Lower this or disable
   `ENABLE_FIELD_POPULATION` to roll back.
+- `ENABLE_OBSERVABILITY_H` – toggles analytics metrics and dashboards
+  (default `1`). Set to `0` to revert to baseline metrics.
+- `ENABLE_BATCH_RUNNER` – allows the batch analytics job runner to accept
+  jobs via the API (default `1`). Set to `0` to disable the endpoint.
 
 Secrets are never committed to the repository.
 

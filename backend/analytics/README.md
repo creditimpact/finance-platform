@@ -46,3 +46,14 @@ Common counters emitted for dashboards:
   "cache": {"hits": 10, "misses": 2, "evictions": 1}
 }
 ```
+
+## Batch runner rollout
+
+Enable the batch analytics job endpoint by setting `ENABLE_BATCH_RUNNER=1`.
+Start with a 5% account canary and ramp gradually while monitoring cost and
+result cardinality.
+
+### Rollback
+
+Set `ENABLE_BATCH_RUNNER=0` to stop accepting new batch jobs and revert to the
+baseline state.

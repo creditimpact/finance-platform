@@ -43,10 +43,10 @@ def test_ingested_outcome_updates_planner(monkeypatch):
     history = load_outcome_history("s1", "1")
     assert history == [event]
 
-    allowed = planner.plan_next_step(session, ["followup"], now=datetime(2024, 3, 5))
-    assert allowed == []
+    allowed = planner.plan_next_step(session, ["mov"], now=datetime(2024, 1, 3))
+    assert allowed == ["mov"]
     final_state = planner.load_state(store["s1"]["account_states"]["1"])
-    assert final_state.status == AccountStatus.COMPLETED
+    assert final_state.status == AccountStatus.CRA_RESPONDED_VERIFIED
     assert final_state.last_outcome == "Verified"
     assert final_state.resolution_cycle_count == 1
     assert len(final_state.outcome_history) == 1

@@ -83,7 +83,8 @@ def select_template(
         selected = "default_dispute.html"
         metric_tag = "default"
 
-    emit_counter("router.candidate_selected", {"tag": metric_tag})
+    emit_counter("router.candidate_selected")
+    emit_counter(f"router.candidate_selected.{metric_tag}")
 
     if audit is not None:
         payload = f"{tag}:{selected}".encode("utf-8")

@@ -25,6 +25,8 @@ from backend.api.session_manager import (
     update_intake,
     update_session,
 )
+from backend.api.auth import require_api_key_or_role
+from backend.analytics.batch_runner import BatchFilters, BatchRunner
 from backend.api.tasks import run_credit_repair_process  # noqa: F401
 from backend.api.tasks import extract_problematic_accounts, smoke_task
 from backend.core.logic.letters.explanations_normalizer import (
@@ -50,6 +52,38 @@ def smoke():
     """Lightweight health check verifying Celery round-trip."""
     result = smoke_task.delay().get(timeout=10)
     return jsonify({"ok": True, "celery": result})
+
+
+@api_bp.route("/api/batch-runner", methods=["POST"])
+@require_api_key_or_role(roles={"batch_runner"})
+def run_batch_job():
+    data = request.get_json(force=True)
+    filters_data = data.get("filters", {}) or {}
+    action_tags = filters_data.get("action_tags")
+    if not action_tags:
+        return (
+            jsonify({"status": "error", "message": "action_tags required"}),
+            400,
+        )
+
+    cycle_range = filters_data.get("cycle_range")
+    if isinstance(cycle_range, list):
+        cycle_range = tuple(cycle_range)  # type: ignore[assignment]
+
+    filters = BatchFilters(
+        action_tags=action_tags,
+        family_ids=filters_data.get("family_ids"),
+        cycle_range=cycle_range,
+        start_ts=filters_data.get("start_ts"),
+        end_ts=filters_data.get("end_ts"),
+        page_size=filters_data.get("page_size"),
+        page_token=filters_data.get("page_token"),
+    )
+
+    fmt = data.get("format", "json")
+    runner = BatchRunner()
+    job_id = runner.run(filters, fmt)
+    return jsonify({"status": "ok", "job_id": job_id})
 
 
 @api_bp.route("/api/start-process", methods=["POST"])

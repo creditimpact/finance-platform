@@ -45,3 +45,8 @@ yet consumed by downstream modules:
 
 These fields are optional and safely ignored by letter generation and
 instructions pipelines.
+
+## Local development
+
+Set the environment variable `ANALYSIS_DISABLE_CACHE=1` to bypass the
+in-memory analysis cache and force a fresh analysis on each run.

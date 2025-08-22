@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from copy import deepcopy
@@ -39,6 +40,7 @@ from .extractors import (
     extract_dofd,
     extract_inquiry_dates,
 )
+USE_ANALYSIS_CACHE = not bool(os.getenv("ANALYSIS_DISABLE_CACHE"))
 
 _INPUT_COST_PER_TOKEN = 0.01 / 1000
 _OUTPUT_COST_PER_TOKEN = 0.03 / 1000
@@ -803,12 +805,16 @@ def call_ai_analysis(
                         strategic_context=strategic_context,
                     )
                     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-                    cache_entry = get_cached_analysis(
-                        doc_fingerprint,
-                        bureau,
-                        prompt_hash,
-                        ANALYSIS_MODEL_VERSION,
-                        ANALYSIS_SCHEMA_VERSION,
+                    cache_entry = (
+                        get_cached_analysis(
+                            doc_fingerprint,
+                            bureau,
+                            prompt_hash,
+                            ANALYSIS_MODEL_VERSION,
+                            ANALYSIS_SCHEMA_VERSION,
+                        )
+                        if USE_ANALYSIS_CACHE
+                        else None
                     )
                     if cache_entry is not None:
                         data = cache_entry
@@ -872,7 +878,7 @@ def call_ai_analysis(
                                         },
                                     )
                                     error_code = "LOW_RECALL"
-                        if not error_code:
+                        if not error_code and USE_ANALYSIS_CACHE:
                             store_cached_analysis(
                                 doc_fingerprint,
                                 bureau,

@@ -148,15 +148,19 @@ def enrich_account_metadata(acc: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _merge_parser_inquiries(result: dict, parsed: List[dict]):
+def _merge_parser_inquiries(
+    result: dict, parsed: List[dict], raw_map: Mapping[str, str] | None = None
+):
     """Merge parser-detected inquiries, preferring them over GPT output.
 
     Any inquiries present in ``parsed`` but missing from the AI result are
     injected with an ``advisor_comment`` note so downstream code can track the
-    source.
+    source. ``raw_map`` allows restoration of the human-readable creditor label
+    when available.
     """
     cleaned: List[dict] = []
     seen = set()
+    raw_map = raw_map or {}
 
     gpt_set = {
         (
@@ -168,15 +172,16 @@ def _merge_parser_inquiries(result: dict, parsed: List[dict]):
     }
 
     for inq in parsed:
+        key_name = normalize_creditor_name(inq.get("creditor_name"))
         key = (
-            normalize_creditor_name(inq.get("creditor_name")),
+            key_name,
             inq.get("date"),
             normalize_bureau_name(inq.get("bureau")),
         )
         if key in seen:
             continue
         entry = {
-            "creditor_name": inq.get("creditor_name"),
+            "creditor_name": raw_map.get(key_name, inq.get("creditor_name")),
             "date": inq.get("date"),
             "bureau": normalize_bureau_name(inq.get("bureau")),
         }
@@ -186,12 +191,14 @@ def _merge_parser_inquiries(result: dict, parsed: List[dict]):
         seen.add(key)
 
     for inq in result.get("inquiries", []):
+        key_name = normalize_creditor_name(inq.get("creditor_name"))
         key = (
-            normalize_creditor_name(inq.get("creditor_name")),
+            key_name,
             inq.get("date"),
             normalize_bureau_name(inq.get("bureau")),
         )
         if key not in seen:
+            inq["creditor_name"] = raw_map.get(key_name, inq.get("creditor_name"))
             cleaned.append(inq)
             seen.add(key)
 

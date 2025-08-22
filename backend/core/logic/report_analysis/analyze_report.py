@@ -28,14 +28,14 @@ from backend.core.services.ai_client import AIClient, get_ai_client
 
 from .report_parsing import extract_text_from_pdf
 from .report_postprocessing import (
+    _assign_issue_types,
     _cleanup_unverified_late_text,
     _inject_missing_late_accounts,
     _merge_parser_inquiries,
-    _sanitize_late_counts,
     _reconcile_account_headings,
-    _assign_issue_types,
-    validate_analysis_sanity,
+    _sanitize_late_counts,
     enrich_account_metadata,
+    validate_analysis_sanity,
 )
 from .report_prompting import (
     ANALYSIS_PROMPT_VERSION,
@@ -113,6 +113,10 @@ def analyze_credit_report(
     _reconcile_account_headings(result, heading_map)
 
     parsed_inquiries = extract_inquiries(text)
+    inquiry_raw_map = {
+        normalize_creditor_name(i["creditor_name"]): i["creditor_name"]
+        for i in parsed_inquiries
+    }
     if parsed_inquiries:
         print(f"[INFO] Parser found {len(parsed_inquiries)} inquiries in text.")
     else:
@@ -226,7 +230,7 @@ def analyze_credit_report(
 
         _inject_missing_late_accounts(result, history_all, raw_map)
 
-        _merge_parser_inquiries(result, parsed_inquiries)
+        _merge_parser_inquiries(result, parsed_inquiries, inquiry_raw_map)
 
         for section in [
             "all_accounts",
@@ -296,7 +300,9 @@ def analyze_credit_report(
         "positive_accounts",
         "high_utilization_accounts",
     ]:
-        result[section] = [enrich_account_metadata(acc) for acc in result.get(section, [])]
+        result[section] = [
+            enrich_account_metadata(acc) for acc in result.get(section, [])
+        ]
 
     Path(output_json_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_json_path, "w", encoding="utf-8") as f:

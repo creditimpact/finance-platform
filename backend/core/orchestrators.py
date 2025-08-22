@@ -915,20 +915,24 @@ def extract_problematic_accounts_from_report(
     )
     sections.setdefault("negative_accounts", [])
     sections.setdefault("open_accounts_with_issues", [])
+    from backend.core.logic.report_analysis.report_postprocessing import (
+        enrich_account_metadata,
+    )
+
     for cat in ["negative_accounts", "open_accounts_with_issues"]:
         filtered: list[dict] = []
         for acc in sections.get(cat, []):
             if not acc.get("issue_types"):
                 continue
-            acc.setdefault("source_stage", "ai_final")
+            enriched = enrich_account_metadata(acc)
             logger.info(
                 "emitted_account name=%s stage=%s issues=%s included_in=%s",
-                acc.get("name"),
-                acc.get("source_stage"),
-                acc.get("issue_types"),
+                enriched.get("name"),
+                enriched.get("source_stage"),
+                enriched.get("issue_types"),
                 cat,
             )
-            filtered.append(acc)
+            filtered.append(enriched)
         sections[cat] = filtered
 
     _annotate_with_tri_merge(sections)

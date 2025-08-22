@@ -415,12 +415,18 @@ def _annotate_with_tri_merge(sections: Mapping[str, Any]) -> None:
                 continue
             acc["tri_merge"] = tri_info
 
-            evidence = tri_info.get("evidence") if isinstance(tri_info.get("evidence"), dict) else {}
+            evidence = (
+                tri_info.get("evidence")
+                if isinstance(tri_info.get("evidence"), dict)
+                else {}
+            )
             # Aggregate flags from mismatch types and any explicit evidence flags
             flags: list[str] = []
             if tri_info.get("mismatch_types"):
                 flags.append("tri_merge_mismatch")
-            flags.extend(evidence.get("flags", []) if isinstance(evidence, dict) else [])
+            flags.extend(
+                evidence.get("flags", []) if isinstance(evidence, dict) else []
+            )
             if flags:
                 existing = acc.setdefault("flags", [])
                 for flag in flags:
@@ -951,10 +957,13 @@ def extract_problematic_accounts_from_report(
                 continue
             enriched = enrich_account_metadata(acc)
             logger.info(
-                "emitted_account name=%s stage=%s issues=%s included_in=%s",
+                "emitted_account name=%s primary_issue=%s issue_types=%s "
+                "status=%s source_stage=%s included_in=%s",
                 enriched.get("name"),
-                enriched.get("source_stage"),
+                enriched.get("primary_issue"),
                 enriched.get("issue_types"),
+                enriched.get("status"),
+                enriched.get("source_stage"),
                 cat,
             )
             filtered.append(enriched)

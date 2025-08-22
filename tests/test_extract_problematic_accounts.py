@@ -1,4 +1,5 @@
 import copy
+import logging
 import pytest
 
 from backend.core.models import BureauPayload
@@ -329,3 +330,21 @@ def test_tri_merge_toggle_does_not_change_counts(monkeypatch):
 
     assert len(payload_tri.disputes) == neg_before
     assert len(payload_tri.goodwill) == open_before
+
+
+def test_extract_problematic_accounts_logs_enriched_metadata(monkeypatch, caplog):
+    sections = {
+        "negative_accounts": [{"name": "Acc1", "issue_types": ["late_payment"]}]
+    }
+    _mock_dependencies(monkeypatch, sections)
+    with caplog.at_level(logging.INFO, logger="backend.core.orchestrators"):
+        extract_problematic_accounts_from_report("dummy.pdf")
+    assert any(
+        r.message.startswith("emitted_account name=Acc1")
+        and "primary_issue=" in r.message
+        and "issue_types=" in r.message
+        and "status=" in r.message
+        and "source_stage=" in r.message
+        and "included_in=negative_accounts" in r.message
+        for r in caplog.records
+    )

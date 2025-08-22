@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from uuid import uuid4
 from typing import Any, Dict, List, Mapping, Set
 
 from backend.core.logic.utils.names_normalization import (
@@ -180,8 +181,9 @@ def _merge_parser_inquiries(
         )
         if key in seen:
             continue
+        creditor_name = raw_map.get(key_name) or inq.get("creditor_name") or str(uuid4())
         entry = {
-            "creditor_name": raw_map.get(key_name, inq.get("creditor_name")),
+            "creditor_name": creditor_name,
             "date": inq.get("date"),
             "bureau": normalize_bureau_name(inq.get("bureau")),
         }
@@ -198,7 +200,8 @@ def _merge_parser_inquiries(
             normalize_bureau_name(inq.get("bureau")),
         )
         if key not in seen:
-            inq["creditor_name"] = raw_map.get(key_name, inq.get("creditor_name"))
+            creditor_name = raw_map.get(key_name) or inq.get("creditor_name") or str(uuid4())
+            inq["creditor_name"] = creditor_name
             cleaned.append(inq)
             seen.add(key)
 

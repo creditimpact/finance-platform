@@ -30,6 +30,19 @@ ISSUE_TEXT: Mapping[str, tuple[str, str]] = {
 }
 
 
+def pick_primary_issue(issue_set: set[str]) -> str:
+    """Select the most severe issue present in ``issue_set``.
+
+    Severity is determined by the ordering in ``ISSUE_SEVERITY``. If no
+    recognized issue is found, ``"unknown"`` is returned.
+    """
+
+    for tag in ISSUE_SEVERITY:
+        if tag in issue_set:
+            return tag
+    return "unknown"
+
+
 def enrich_account_metadata(acc: dict[str, Any]) -> dict[str, Any]:
     """Populate standardized metadata for a problematic account.
 
@@ -65,7 +78,9 @@ def enrich_account_metadata(acc: dict[str, Any]) -> dict[str, Any]:
         bureau = info.get("bureau") or info.get("name")
         if not bureau:
             continue
-        status_text = str(info.get("status") or info.get("account_status") or "").lower()
+        status_text = str(
+            info.get("status") or info.get("account_status") or ""
+        ).lower()
         short = ""
         if "charge off" in status_text or "collection" in status_text:
             short = "Collection/Chargeoff"
@@ -98,7 +113,9 @@ def enrich_account_metadata(acc: dict[str, Any]) -> dict[str, Any]:
     tri_info = acc.get("tri_merge") or {}
     evidence_flags = list(tri_info.get("mismatch_types", []))
     evidence = tri_info.get("evidence", {})
-    evidence_flags.extend(evidence.get("flags", []) if isinstance(evidence, dict) else [])
+    evidence_flags.extend(
+        evidence.get("flags", []) if isinstance(evidence, dict) else []
+    )
     if evidence_flags:
         existing = acc.setdefault("flags", [])
         for flag in evidence_flags:
@@ -106,6 +123,7 @@ def enrich_account_metadata(acc: dict[str, Any]) -> dict[str, Any]:
                 existing.append(flag)
 
     return acc
+
 
 # ---------------------------------------------------------------------------
 # Inquiry merging
@@ -257,8 +275,19 @@ def _assign_issue_types(acc: dict) -> None:
     """
 
     issue_types: Set[str] = set(acc.get("issue_types", []))
-    status_text = str(acc.get("status") or acc.get("account_status") or "").lower()
+
+    # Aggregate any status-like text from the account and its bureau entries
+    status_parts = [
+        str(acc.get("status") or ""),
+        str(acc.get("account_status") or ""),
+    ]
+    for info in acc.get("bureaus", []) or []:
+        if isinstance(info, dict):
+            status_parts.append(str(info.get("status") or ""))
+            status_parts.append(str(info.get("account_status") or ""))
+    status_text = " ".join(status_parts).lower()
     status_clean = status_text.replace("-", " ")
+
     flags = [f.lower().replace("-", " ") for f in acc.get("flags", [])]
 
     late_map = acc.get("late_payments") or {}
@@ -284,13 +313,17 @@ def _assign_issue_types(acc: dict) -> None:
     if "foreclosure" in status_clean or any("foreclosure" in f for f in flags):
         issue_types.add("foreclosure")
 
+    primary = pick_primary_issue(issue_types)
+    acc["primary_issue"] = primary
+
     if issue_types:
         severity_index = {t: i for i, t in enumerate(ISSUE_SEVERITY)}
-        sorted_types = sorted(
+        sorted_all = sorted(
             issue_types, key=lambda t: severity_index.get(t, len(ISSUE_SEVERITY))
         )
+        sorted_types = [primary] + [t for t in sorted_all if t != primary]
         acc["issue_types"] = sorted_types
-        primary = sorted_types[0]
+
         status, comment = ISSUE_TEXT.get(primary, (None, None))
         if status:
             acc["status"] = status

@@ -23,6 +23,7 @@ const account = {
   normalized_name: 'account 1',
   account_number_last4: '1234',
   original_creditor: 'Creditor 1',
+  primary_issue: 'late_payment',
   issue_types: ['late_payment']
 };
 
@@ -36,7 +37,7 @@ describe.each([
 
   test('renders helper text', async () => {
     render(
-      <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+      <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
         <ReviewPage />
       </MemoryRouter>
     );
@@ -47,7 +48,7 @@ describe.each([
 
   test('shows summary box when toggle active', async () => {
     render(
-      <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+      <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
         <ReviewPage />
       </MemoryRouter>
     );
@@ -68,7 +69,7 @@ test('filters out accounts without issue_types', async () => {
     }
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
       <ReviewPage />
     </MemoryRouter>
   );
@@ -76,21 +77,22 @@ test('filters out accounts without issue_types', async () => {
   expect(screen.queryByText('Account 2')).not.toBeInTheDocument();
 });
 
-test('renders primary badge and secondary chips with identifiers', async () => {
+test('renders primary badge from primary_issue and secondary chips with identifiers', async () => {
   const acc = {
     account_id: 'acc3',
     name: 'Account 3',
     normalized_name: 'account 3',
     account_number_last4: '7890',
     original_creditor: 'Bank A',
-    issue_types: ['charge_off', 'collection', 'late_payment'],
+    primary_issue: 'charge_off',
+    issue_types: ['collection', 'charge_off', 'late_payment'],
   };
   const uploadData = {
     ...baseUploadData,
     accounts: { negative_accounts: [acc] },
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
       <ReviewPage />
     </MemoryRouter>
   );

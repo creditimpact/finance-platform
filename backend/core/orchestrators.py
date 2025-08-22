@@ -951,23 +951,22 @@ def extract_problematic_accounts_from_report(
     )
 
     for cat in ["negative_accounts", "open_accounts_with_issues"]:
-        filtered: list[dict] = []
+        filtered = []
         for acc in sections.get(cat, []):
             if not acc.get("issue_types"):
                 continue
             enriched = enrich_account_metadata(acc)
-            # Keep the full enriched mapping so `BureauAccount.from_dict`
-            # preserves metadata like ``primary_issue`` and
-            # ``account_number_last4``.
             logger.info(
-                "emitted_account name=%s primary_issue=%s issue_types=%s "
-                "status=%s source_stage=%s included_in=%s",
-                enriched.get("name"),
+                "emitted_account name=%s primary_issue=%s status=%s "
+                "last4=%s orig_cred=%s issues=%s bureaus=%s stage=%s",
+                enriched.get("normalized_name"),
                 enriched.get("primary_issue"),
-                enriched.get("issue_types"),
                 enriched.get("status"),
+                enriched.get("account_number_last4"),
+                enriched.get("original_creditor"),
+                enriched.get("issue_types"),
+                list((enriched.get("bureau_statuses") or {}).keys()),
                 enriched.get("source_stage"),
-                cat,
             )
             filtered.append(enriched)
         sections[cat] = filtered

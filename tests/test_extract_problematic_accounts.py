@@ -1,13 +1,14 @@
 import copy
 import logging
+
 import pytest
 
+from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.models import BureauPayload
 from backend.core.orchestrators import (
     extract_problematic_accounts_from_report,
     extract_problematic_accounts_from_report_dict,
 )
-from backend.core.logic.utils.names_normalization import normalize_creditor_name
 
 
 def _mock_dependencies(monkeypatch, sections):
@@ -340,11 +341,13 @@ def test_extract_problematic_accounts_logs_enriched_metadata(monkeypatch, caplog
     with caplog.at_level(logging.INFO, logger="backend.core.orchestrators"):
         extract_problematic_accounts_from_report("dummy.pdf")
     assert any(
-        r.message.startswith("emitted_account name=Acc1")
+        r.message.startswith("emitted_account name=acc1")
         and "primary_issue=" in r.message
-        and "issue_types=" in r.message
         and "status=" in r.message
-        and "source_stage=" in r.message
-        and "included_in=negative_accounts" in r.message
+        and "last4=" in r.message
+        and "orig_cred=" in r.message
+        and "issues=" in r.message
+        and "bureaus=" in r.message
+        and "stage=" in r.message
         for r in caplog.records
     )

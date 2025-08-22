@@ -411,10 +411,35 @@ def _annotate_with_tri_merge(sections: Mapping[str, Any]) -> None:
         for acc in sections.get(key, []):
             acc_id = str(acc.get("account_id") or "")
             tri_info = tri_merge_map.get(acc_id)
-            if tri_info:
-                acc["tri_merge"] = tri_info
-                if tri_info.get("mismatch_types"):
-                    acc.setdefault("flags", []).append("tri_merge_mismatch")
+            if not tri_info:
+                continue
+            acc["tri_merge"] = tri_info
+
+            evidence = tri_info.get("evidence") if isinstance(tri_info.get("evidence"), dict) else {}
+            # Aggregate flags from mismatch types and any explicit evidence flags
+            flags: list[str] = []
+            if tri_info.get("mismatch_types"):
+                flags.append("tri_merge_mismatch")
+            flags.extend(evidence.get("flags", []) if isinstance(evidence, dict) else [])
+            if flags:
+                existing = acc.setdefault("flags", [])
+                for flag in flags:
+                    if flag not in existing:
+                        existing.append(flag)
+
+            # Populate bureau-level statuses from tri-merge evidence when missing
+            if isinstance(evidence, dict) and not acc.get("bureau_statuses"):
+                tradelines = evidence.get("tradelines", {})
+                statuses: dict[str, str] = {}
+                if isinstance(tradelines, dict):
+                    for bureau, data in tradelines.items():
+                        if not isinstance(data, Mapping):
+                            continue
+                        status = data.get("status") or data.get("account_status")
+                        if status:
+                            statuses[bureau] = status
+                if statuses:
+                    acc["bureau_statuses"] = statuses
 
 
 def generate_strategy_plan(

@@ -1,3 +1,4 @@
+import copy
 import pytest
 
 from backend.core.models import BureauPayload
@@ -201,3 +202,41 @@ def test_enriched_metadata_present(monkeypatch):
         "TransUnion": "Open/Current",
     }
     assert acc["source_stage"] == "ai_final"
+
+
+def test_tri_merge_toggle_does_not_change_counts(monkeypatch):
+    base_sections = {
+        "negative_accounts": [
+            {
+                "account_id": "1",
+                "name": "Cap One",
+                "account_number": "1234",
+                "bureaus": ["Experian"],
+                "issue_types": ["late_payment"],
+            }
+        ],
+        "open_accounts_with_issues": [
+            {
+                "account_id": "2",
+                "name": "Cap One",
+                "account_number": "1234",
+                "bureaus": ["Equifax"],
+                "issue_types": ["late_payment"],
+            }
+        ],
+    }
+
+    # Tri-merge disabled baseline
+    monkeypatch.delenv("ENABLE_TRI_MERGE", raising=False)
+    _mock_dependencies(monkeypatch, copy.deepcopy(base_sections))
+    payload = extract_problematic_accounts_from_report("dummy.pdf")
+    neg_before = len(payload.disputes)
+    open_before = len(payload.goodwill)
+
+    # Tri-merge enabled
+    _mock_dependencies(monkeypatch, copy.deepcopy(base_sections))
+    monkeypatch.setenv("ENABLE_TRI_MERGE", "1")
+    payload_tri = extract_problematic_accounts_from_report("dummy.pdf")
+
+    assert len(payload_tri.disputes) == neg_before
+    assert len(payload_tri.goodwill) == open_before

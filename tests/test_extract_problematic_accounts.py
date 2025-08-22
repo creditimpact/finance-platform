@@ -26,8 +26,10 @@ def _mock_dependencies(monkeypatch, sections):
 
 def test_extract_problematic_accounts_returns_models(monkeypatch):
     sections = {
-        "negative_accounts": [{"name": "Acc1"}],
-        "open_accounts_with_issues": [{"name": "Acc2"}],
+        "negative_accounts": [{"name": "Acc1", "issue_types": ["late_payment"]}],
+        "open_accounts_with_issues": [
+            {"name": "Acc2", "issue_types": ["late_payment"]}
+        ],
         "unauthorized_inquiries": [{"creditor_name": "Bank", "date": "2024-01-01"}],
         "high_utilization_accounts": [{"name": "Acc3"}],
     }
@@ -42,8 +44,10 @@ def test_extract_problematic_accounts_returns_models(monkeypatch):
 
 def test_extract_problematic_accounts_dict_adapter(monkeypatch):
     sections = {
-        "negative_accounts": [{"name": "Acc1"}],
-        "open_accounts_with_issues": [{"name": "Acc2"}],
+        "negative_accounts": [{"name": "Acc1", "issue_types": ["late_payment"]}],
+        "open_accounts_with_issues": [
+            {"name": "Acc2", "issue_types": ["late_payment"]}
+        ],
         "unauthorized_inquiries": [{"creditor_name": "Bank", "date": "2024-01-01"}],
         "high_utilization_accounts": [{"name": "Acc3"}],
     }
@@ -56,8 +60,10 @@ def test_extract_problematic_accounts_dict_adapter(monkeypatch):
 
 def test_payload_to_dict(monkeypatch):
     sections = {
-        "negative_accounts": [{"name": "Acc1"}],
-        "open_accounts_with_issues": [{"name": "Acc2"}],
+        "negative_accounts": [{"name": "Acc1", "issue_types": ["late_payment"]}],
+        "open_accounts_with_issues": [
+            {"name": "Acc2", "issue_types": ["late_payment"]}
+        ],
         "unauthorized_inquiries": [{"creditor_name": "Bank", "date": "2024-01-01"}],
         "high_utilization_accounts": [{"name": "Acc3"}],
     }
@@ -86,7 +92,7 @@ def test_parser_only_late_accounts_included(monkeypatch):
     for sec in ["negative_accounts", "open_accounts_with_issues"]:
         for acc in result.get(sec, []):
             for key in list(acc.keys()):
-                if key != "name":
+                if key not in {"name", "issue_types"}:
                     acc.pop(key)
     _mock_dependencies(monkeypatch, result)
 
@@ -96,13 +102,25 @@ def test_parser_only_late_accounts_included(monkeypatch):
 
 def test_extract_problematic_accounts_without_openai(monkeypatch):
     from pathlib import Path
+
     from backend.core.logic.report_analysis.report_postprocessing import (
         _inject_missing_late_accounts,
     )
 
-    def fake_analyze_report(pdf_path, analyzed_json_path, client_info, ai_client=None, run_ai=True, request_id=None):
+    def fake_analyze_report(
+        pdf_path,
+        analyzed_json_path,
+        client_info,
+        ai_client=None,
+        run_ai=True,
+        request_id=None,
+    ):
         assert not run_ai
-        result = {"all_accounts": [], "negative_accounts": [], "open_accounts_with_issues": []}
+        result = {
+            "all_accounts": [],
+            "negative_accounts": [],
+            "open_accounts_with_issues": [],
+        }
         history = {"parser bank": {"Experian": {"30": 1}}}
         raw_map = {"parser bank": "Parser Bank"}
         _inject_missing_late_accounts(result, history, raw_map)
@@ -115,7 +133,9 @@ def test_extract_problematic_accounts_without_openai(monkeypatch):
     monkeypatch.setattr(
         "backend.core.logic.compliance.upload_validator.is_safe_pdf", lambda path: True
     )
-    monkeypatch.setattr("backend.core.orchestrators.update_session", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "backend.core.orchestrators.update_session", lambda *a, **k: None
+    )
     monkeypatch.setattr(
         "backend.core.logic.report_analysis.analyze_report.analyze_credit_report",
         fake_analyze_report,
@@ -124,3 +144,20 @@ def test_extract_problematic_accounts_without_openai(monkeypatch):
 
     payload = extract_problematic_accounts_from_report("dummy.pdf")
     assert payload.disputes and payload.disputes[0].name == "Parser Bank"
+
+
+def test_extract_problematic_accounts_filters_out_clean_accounts(monkeypatch):
+    sections = {
+        "negative_accounts": [
+            {"name": "Bad", "issue_types": ["late_payment"]},
+            {"name": "Clean"},
+        ],
+        "open_accounts_with_issues": [
+            {"name": "GoodwillBad", "issue_types": ["late_payment"]},
+            {"name": "GoodwillClean"},
+        ],
+    }
+    _mock_dependencies(monkeypatch, sections)
+    payload = extract_problematic_accounts_from_report("dummy.pdf")
+    assert [a.name for a in payload.disputes] == ["Bad"]
+    assert [a.name for a in payload.goodwill] == ["GoodwillBad"]

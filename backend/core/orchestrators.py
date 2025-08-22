@@ -886,21 +886,23 @@ def extract_problematic_accounts_from_report(
     )
     sections.setdefault("negative_accounts", [])
     sections.setdefault("open_accounts_with_issues", [])
-    for acc in sections["negative_accounts"]:
-        acc.setdefault("source_stage", "ai_final")
-    for acc in sections["open_accounts_with_issues"]:
-        acc.setdefault("source_stage", "ai_final")
-    update_session(session_id, status="awaiting_user_explanations")
-
-    for cat in ("negative_accounts", "open_accounts_with_issues"):
+    for cat in ["negative_accounts", "open_accounts_with_issues"]:
+        filtered: list[dict] = []
         for acc in sections.get(cat, []):
+            if not acc.get("issue_types"):
+                continue
+            acc.setdefault("source_stage", "ai_final")
             logger.info(
-                "emitted_account name=%s stage=%s categories=%s bureaus=%s",
+                "emitted_account name=%s stage=%s issues=%s included_in=%s",
                 acc.get("name"),
                 acc.get("source_stage"),
+                acc.get("issue_types"),
                 cat,
-                list(acc.get("late_payments", {}).keys()),
             )
+            filtered.append(acc)
+        sections[cat] = filtered
+
+    update_session(session_id, status="awaiting_user_explanations")
 
     return BureauPayload(
         disputes=[

@@ -54,6 +54,7 @@ _ANALYSIS_VALIDATOR = Draft7Validator(_ANALYSIS_SCHEMA)
 # 1: Initial version
 ANALYSIS_PROMPT_VERSION = 2
 ANALYSIS_SCHEMA_VERSION = 1
+PIPELINE_VERSION = 1  # Increment when enrichment or post-processing logic changes
 
 
 # Allow for odd spacing, lowercase headers, and page-break markers when

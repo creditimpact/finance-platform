@@ -29,6 +29,84 @@ ISSUE_TEXT: Mapping[str, tuple[str, str]] = {
     "late_payment": ("Delinquent", "Late payments detected"),
 }
 
+
+def enrich_account_metadata(acc: dict[str, Any]) -> dict[str, Any]:
+    """Populate standardized metadata for a problematic account.
+
+    The enrichment ensures downstream components such as ``BureauPayload``
+    receive a consistent set of fields regardless of whether the account
+    originated from the AI analysis or was synthesized from parser signals.
+    The function mutates ``acc`` in place and also returns it for convenience.
+    """
+
+    # Normalized creditor name for reliable matching
+    name = acc.get("name", "")
+    acc["normalized_name"] = normalize_creditor_name(name)
+
+    # Derive a last4 account number from any available account number field
+    acct_num = acc.get("account_number") or acc.get("account_number_masked")
+    if isinstance(acct_num, str):
+        digits = re.sub(r"\D", "", acct_num)
+        if digits:
+            acc["account_number_last4"] = digits[-4:]
+
+    # Preserve common creditor metadata when present
+    for key, val in list(acc.items()):
+        if key in {"original_creditor", "account_type"}:
+            acc[key] = val
+        elif re.search(r"balance|past.?due|date", key, re.I):
+            acc[key] = val
+
+    # Build a distilled status per bureau when bureau level info is available
+    statuses: dict[str, str] = {}
+    for info in acc.get("bureaus", []) or []:
+        if not isinstance(info, dict):
+            continue
+        bureau = info.get("bureau") or info.get("name")
+        if not bureau:
+            continue
+        status_text = str(info.get("status") or info.get("account_status") or "").lower()
+        short = ""
+        if "charge off" in status_text or "collection" in status_text:
+            short = "Collection/Chargeoff"
+        elif "120" in status_text:
+            short = "120d late"
+        elif "90" in status_text:
+            short = "90d late"
+        elif "60" in status_text:
+            short = "60d late"
+        elif "30" in status_text:
+            short = "30d late"
+        elif "open" in status_text or "current" in status_text:
+            short = "Open/Current"
+        else:
+            late_map = info.get("late_payments") or {}
+            for days in ["120", "90", "60", "30"]:
+                if int(late_map.get(days, 0)) > 0:
+                    short = f"{days}d late"
+                    break
+            if not short:
+                short = status_text.title() if status_text else ""
+        statuses[bureau] = short
+    if statuses:
+        acc["bureau_statuses"] = statuses
+
+    # Ensure a source stage marker exists
+    acc.setdefault("source_stage", "ai_final")
+
+    # Append any evidence flags (e.g., tri-merge mismatches)
+    tri_info = acc.get("tri_merge") or {}
+    evidence_flags = list(tri_info.get("mismatch_types", []))
+    evidence = tri_info.get("evidence", {})
+    evidence_flags.extend(evidence.get("flags", []) if isinstance(evidence, dict) else [])
+    if evidence_flags:
+        existing = acc.setdefault("flags", [])
+        for flag in evidence_flags:
+            if flag not in existing:
+                existing.append(flag)
+
+    return acc
+
 # ---------------------------------------------------------------------------
 # Inquiry merging
 # ---------------------------------------------------------------------------
@@ -242,9 +320,10 @@ def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) ->
         if any(v >= 1 for vals in bureaus.values() for v in vals.values()):
             entry["issue_types"] = ["late_payment"]
         _assign_issue_types(entry)
-        result.setdefault("all_accounts", []).append(entry)
-        if entry.get("issue_types"):
-            result.setdefault("negative_accounts", []).append(entry.copy())
+        enriched = enrich_account_metadata(entry)
+        result.setdefault("all_accounts", []).append(enriched)
+        if enriched.get("issue_types"):
+            result.setdefault("negative_accounts", []).append(enriched.copy())
         print(
             f"[WARN] Aggregated missing account from parser: {entry['name']} "
             f"bureaus={list(bureaus.keys())}"

@@ -5,6 +5,7 @@ from backend.core.orchestrators import (
     extract_problematic_accounts_from_report,
     extract_problematic_accounts_from_report_dict,
 )
+from backend.core.logic.utils.names_normalization import normalize_creditor_name
 
 
 def _mock_dependencies(monkeypatch, sections):
@@ -161,3 +162,42 @@ def test_extract_problematic_accounts_filters_out_clean_accounts(monkeypatch):
     payload = extract_problematic_accounts_from_report("dummy.pdf")
     assert [a.name for a in payload.disputes] == ["Bad"]
     assert [a.name for a in payload.goodwill] == ["GoodwillBad"]
+
+
+def test_enriched_metadata_present(monkeypatch):
+    sections = {
+        "negative_accounts": [
+            {
+                "name": "Acme Bank",
+                "account_number": "1234567890",
+                "original_creditor": "ACME",
+                "account_type": "Credit Card",
+                "balance": 1000,
+                "past_due": 100,
+                "date_opened": "2020-01-01",
+                "bureaus": [
+                    {"bureau": "Experian", "status": "Collection"},
+                    {"bureau": "TransUnion", "status": "Open"},
+                ],
+                "issue_types": ["collection"],
+            }
+        ],
+        "open_accounts_with_issues": [],
+        "unauthorized_inquiries": [],
+        "high_utilization_accounts": [],
+    }
+    _mock_dependencies(monkeypatch, sections)
+    payload = extract_problematic_accounts_from_report("dummy.pdf")
+    acc = payload.to_dict()["disputes"][0]
+    assert acc["normalized_name"] == normalize_creditor_name("Acme Bank")
+    assert acc["account_number_last4"] == "7890"
+    assert acc["original_creditor"] == "ACME"
+    assert acc["account_type"] == "Credit Card"
+    assert acc["balance"] == 1000
+    assert acc["past_due"] == 100
+    assert acc["date_opened"] == "2020-01-01"
+    assert acc["bureau_statuses"] == {
+        "Experian": "Collection/Chargeoff",
+        "TransUnion": "Open/Current",
+    }
+    assert acc["source_stage"] == "ai_final"

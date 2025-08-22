@@ -946,14 +946,54 @@ def extract_problematic_accounts_from_report(
     )
     sections.setdefault("negative_accounts", [])
     sections.setdefault("open_accounts_with_issues", [])
+    sections.setdefault("all_accounts", [])
     from backend.core.logic.report_analysis.report_postprocessing import (
         enrich_account_metadata,
+        _inject_missing_late_accounts,
     )
+
+    def _log_account_snapshot(label: str) -> None:
+        all_acc = sections.get("all_accounts") or []
+        neg = sections.get("negative_accounts") or []
+        open_acc = sections.get("open_accounts_with_issues") or []
+        sample_src = all_acc or (neg + open_acc)
+        sample = [
+            {
+                "normalized_name": a.get("normalized_name"),
+                "primary_issue": a.get("primary_issue"),
+                "issue_types": a.get("issue_types"),
+                "status": a.get("status"),
+                "source_stage": a.get("source_stage"),
+            }
+            for a in sample_src[:3]
+        ]
+        logger.info(
+            "%s all_accounts=%d negative_accounts=%d open_accounts_with_issues=%d sample=%s",
+            label,
+            len(all_acc),
+            len(neg),
+            len(open_acc),
+            sample,
+        )
+
+    _log_account_snapshot("post_analyze_report")
+    _inject_missing_late_accounts(sections, {}, {})
+    _log_account_snapshot("post_inject_missing_late_accounts")
+
+    from backend.core.logic.utils.names_normalization import normalize_creditor_name
+    parser_only = {
+        normalize_creditor_name(a.get("name", ""))
+        for a in sections.get("all_accounts", [])
+        if a.get("source_stage") == "parser_aggregated"
+    }
 
     for cat in ["negative_accounts", "open_accounts_with_issues"]:
         filtered = []
         for acc in sections.get(cat, []):
             if not acc.get("issue_types"):
+                continue
+            norm = normalize_creditor_name(acc.get("name", ""))
+            if norm in parser_only:
                 continue
             enriched = enrich_account_metadata(acc)
             logger.info(
@@ -973,6 +1013,8 @@ def extract_problematic_accounts_from_report(
 
     _annotate_with_tri_merge(sections)
     update_session(session_id, status="awaiting_user_explanations")
+
+    _log_account_snapshot("pre_return")
 
     return BureauPayload(
         disputes=[

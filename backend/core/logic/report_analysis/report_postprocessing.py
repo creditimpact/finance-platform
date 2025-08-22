@@ -57,18 +57,39 @@ def enrich_account_metadata(acc: dict[str, Any]) -> dict[str, Any]:
     acc["normalized_name"] = normalize_creditor_name(name)
 
     # Derive a last4 account number from any available account number field
-    acct_num = acc.get("account_number") or acc.get("account_number_masked")
+    acct_num = (
+        acc.get("account_number")
+        or acc.get("account_number_masked")
+    )
+    if not acct_num:
+        for info in acc.get("bureaus", []) or []:
+            if not isinstance(info, dict):
+                continue
+            acct_num = info.get("account_number") or info.get("account_number_masked")
+            if acct_num:
+                break
     if isinstance(acct_num, str):
         digits = re.sub(r"\D", "", acct_num)
         if digits:
             acc["account_number_last4"] = digits[-4:]
 
-    # Preserve common creditor metadata when present
-    for key, val in list(acc.items()):
-        if key in {"original_creditor", "account_type"}:
-            acc[key] = val
-        elif re.search(r"balance|past.?due|date", key, re.I):
-            acc[key] = val
+    # Pull common metadata from bureau entries if missing on the root object
+    meta_fields = [
+        "original_creditor",
+        "account_type",
+        "balance",
+        "past_due",
+        "date_opened",
+        "date_closed",
+        "last_activity",
+    ]
+    for field in meta_fields:
+        if acc.get(field) not in (None, ""):
+            continue
+        for info in acc.get("bureaus", []) or []:
+            if isinstance(info, dict) and info.get(field) not in (None, ""):
+                acc[field] = info[field]
+                break
 
     # Build a distilled status per bureau when bureau level info is available
     statuses: dict[str, str] = {}

@@ -165,7 +165,7 @@ def test_extract_problematic_accounts_filters_out_clean_accounts(monkeypatch):
     assert [a.name for a in payload.goodwill] == ["GoodwillBad"]
 
 
-def test_enriched_metadata_present(monkeypatch):
+def test_enriched_metadata_present_ai(monkeypatch):
     sections = {
         "negative_accounts": [
             {
@@ -173,11 +173,16 @@ def test_enriched_metadata_present(monkeypatch):
                 "account_number": "1234567890",
                 "original_creditor": "ACME",
                 "account_type": "Credit Card",
-                "balance": 1000,
-                "past_due": 100,
-                "date_opened": "2020-01-01",
                 "bureaus": [
-                    {"bureau": "Experian", "status": "Collection"},
+                    {
+                        "bureau": "Experian",
+                        "status": "Collection",
+                        "balance": 1000,
+                        "past_due": 100,
+                        "date_opened": "2020-01-01",
+                        "date_closed": "2022-01-01",
+                        "last_activity": "2023-12-01",
+                    },
                     {"bureau": "TransUnion", "status": "Open"},
                 ],
                 "issue_types": ["collection"],
@@ -188,6 +193,24 @@ def test_enriched_metadata_present(monkeypatch):
         "high_utilization_accounts": [],
     }
     _mock_dependencies(monkeypatch, sections)
+
+    def fake_analyze_report(
+        pdf_path,
+        analyzed_json_path,
+        client_info,
+        ai_client=None,
+        run_ai=True,
+        request_id=None,
+    ):
+        assert run_ai
+        return sections
+
+    monkeypatch.setattr(
+        "backend.core.logic.report_analysis.analyze_report.analyze_credit_report",
+        fake_analyze_report,
+    )
+    monkeypatch.setattr("backend.core.orchestrators.get_ai_client", lambda: object())
+
     payload = extract_problematic_accounts_from_report("dummy.pdf")
     acc = payload.to_dict()["disputes"][0]
     assert acc["normalized_name"] == normalize_creditor_name("Acme Bank")
@@ -197,6 +220,72 @@ def test_enriched_metadata_present(monkeypatch):
     assert acc["balance"] == 1000
     assert acc["past_due"] == 100
     assert acc["date_opened"] == "2020-01-01"
+    assert acc["date_closed"] == "2022-01-01"
+    assert acc["last_activity"] == "2023-12-01"
+    assert acc["bureau_statuses"] == {
+        "Experian": "Collection/Chargeoff",
+        "TransUnion": "Open/Current",
+    }
+    assert acc["source_stage"] == "ai_final"
+
+
+def test_enriched_metadata_present_parser_only(monkeypatch):
+    sections = {
+        "negative_accounts": [
+            {
+                "name": "Acme Bank",
+                "account_number": "1234567890",
+                "original_creditor": "ACME",
+                "account_type": "Credit Card",
+                "bureaus": [
+                    {
+                        "bureau": "Experian",
+                        "status": "Collection",
+                        "balance": 1000,
+                        "past_due": 100,
+                        "date_opened": "2020-01-01",
+                        "date_closed": "2022-01-01",
+                        "last_activity": "2023-12-01",
+                    },
+                    {"bureau": "TransUnion", "status": "Open"},
+                ],
+                "issue_types": ["collection"],
+            }
+        ],
+        "open_accounts_with_issues": [],
+        "unauthorized_inquiries": [],
+        "high_utilization_accounts": [],
+    }
+    _mock_dependencies(monkeypatch, sections)
+
+    def fake_analyze_report(
+        pdf_path,
+        analyzed_json_path,
+        client_info,
+        ai_client=None,
+        run_ai=True,
+        request_id=None,
+    ):
+        assert not run_ai
+        return sections
+
+    monkeypatch.setattr(
+        "backend.core.logic.report_analysis.analyze_report.analyze_credit_report",
+        fake_analyze_report,
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    payload = extract_problematic_accounts_from_report("dummy.pdf")
+    acc = payload.to_dict()["disputes"][0]
+    assert acc["normalized_name"] == normalize_creditor_name("Acme Bank")
+    assert acc["account_number_last4"] == "7890"
+    assert acc["original_creditor"] == "ACME"
+    assert acc["account_type"] == "Credit Card"
+    assert acc["balance"] == 1000
+    assert acc["past_due"] == 100
+    assert acc["date_opened"] == "2020-01-01"
+    assert acc["date_closed"] == "2022-01-01"
+    assert acc["last_activity"] == "2023-12-01"
     assert acc["bureau_statuses"] == {
         "Experian": "Collection/Chargeoff",
         "TransUnion": "Open/Current",

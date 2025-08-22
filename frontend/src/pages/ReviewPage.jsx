@@ -79,8 +79,8 @@ export default function ReviewPage() {
     <div className="container">
       <h2>Explain Your Situation</h2>
       {dedupedAccounts.map((acc, idx) => {
-        const primaryIssue = acc.issue_types[0];
-        const secondaryIssues = acc.issue_types.slice(1);
+        const primaryIssue = acc.primary_issue || acc.issue_types[0];
+        const secondaryIssues = acc.issue_types.filter((t) => t !== primaryIssue);
         return (
           <div key={idx} className="account-block">
             <p>

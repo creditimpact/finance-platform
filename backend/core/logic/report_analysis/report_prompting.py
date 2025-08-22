@@ -878,7 +878,9 @@ def call_ai_analysis(
                                             "validation_errors": ["LOW_RECALL"],
                                         },
                                     )
-                                    error_code = "LOW_RECALL"
+                                    # Attach warning but do not flag an error so other
+                                    # bureau results are still processed.
+                                    data.setdefault("warnings", []).append("LOW_RECALL")
                         if not error_code and USE_ANALYSIS_CACHE:
                             store_cached_analysis(
                                 doc_fingerprint,

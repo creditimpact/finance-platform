@@ -198,7 +198,7 @@ def test_call_ai_analysis_retries_and_succeeds(tmp_path, caplog):
     assert any(r.__dict__.get("attempt") == 2 for r in attempts)
 
 
-def test_call_ai_analysis_retries_on_low_recall(tmp_path, caplog, monkeypatch):
+def test_call_ai_analysis_logs_low_recall(tmp_path, caplog, monkeypatch):
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [
         str(
@@ -257,11 +257,12 @@ def test_call_ai_analysis_retries_on_low_recall(tmp_path, caplog, monkeypatch):
     assert len(data["all_accounts"]) == 2
     attempts = [r for r in caplog.records if r.__dict__.get("bureau")]
     assert any(r.__dict__.get("attempt") == 1 for r in attempts)
-    assert any(r.__dict__.get("attempt") == 2 for r in attempts)
+    assert not any(r.__dict__.get("attempt") == 2 for r in attempts)
     assert any(
         "LOW_RECALL" in (r.__dict__.get("validation_errors") or [])
         for r in caplog.records
     )
+    assert data["bureau_sections"][0].get("warnings") == ["LOW_RECALL"]
     assert any(
         "Chase" in (r.__dict__.get("unmatched_headings") or []) for r in caplog.records
     )

@@ -311,10 +311,6 @@ def _assign_issue_types(acc: dict) -> None:
 
     flags = [f.lower().replace("-", " ") for f in acc.get("flags", [])]
 
-    late_map = acc.get("late_payments") or {}
-    if any(v > 0 for bureau in late_map.values() for v in bureau.values()):
-        issue_types.add("late_payment")
-
     if "bankrupt" in status_clean or any("bankrupt" in f for f in flags):
         issue_types.add("bankruptcy")
 
@@ -371,8 +367,6 @@ def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) ->
             "flags": ["Late Payments"],
             "source_stage": "parser_aggregated",
         }
-        if any(v >= 1 for vals in bureaus.values() for v in vals.values()):
-            entry["issue_types"] = ["late_payment"]
         _assign_issue_types(entry)
         enriched = enrich_account_metadata(entry)
         result.setdefault("all_accounts", []).append(enriched)

@@ -80,7 +80,7 @@ def test_payload_to_dict(monkeypatch):
     assert data["high_utilization"][0]["name"] == "Acc3"
 
 
-def test_parser_only_late_accounts_included(monkeypatch):
+def test_parser_only_late_accounts_excluded(monkeypatch):
     from backend.core.logic.report_analysis.report_postprocessing import (
         _inject_missing_late_accounts,
     )
@@ -101,7 +101,7 @@ def test_parser_only_late_accounts_included(monkeypatch):
     _mock_dependencies(monkeypatch, result)
 
     payload = extract_problematic_accounts_from_report("dummy.pdf")
-    assert payload.disputes or payload.goodwill
+    assert not payload.disputes and not payload.goodwill
 
 
 def test_extract_problematic_accounts_without_openai(monkeypatch):
@@ -147,7 +147,7 @@ def test_extract_problematic_accounts_without_openai(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     payload = extract_problematic_accounts_from_report("dummy.pdf")
-    assert payload.disputes and payload.disputes[0].name == "Parser Bank"
+    assert not payload.disputes and not payload.goodwill
 
 
 def test_extract_problematic_accounts_filters_out_clean_accounts(monkeypatch):

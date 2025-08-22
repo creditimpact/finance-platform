@@ -27,6 +27,16 @@ export default function ReviewPage() {
     ...(uploadData.accounts?.open_accounts_with_issues ?? uploadData.accounts?.goodwill ?? []),
   ].filter((acc) => acc.issue_types && acc.issue_types.length);
 
+  // Debug: log first card's props
+  if (accounts[0]) {
+    console.debug('review-card-props', {
+      primary_issue: accounts[0].primary_issue,
+      issue_types: accounts[0].issue_types,
+      last4: accounts[0].account_number_last4,
+      original_creditor: accounts[0].original_creditor,
+    });
+  }
+
   const dedupedAccounts = Array.from(
     accounts
       .reduce((map, acc) => {

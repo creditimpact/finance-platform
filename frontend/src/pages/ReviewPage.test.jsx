@@ -20,7 +20,9 @@ const baseUploadData = {
 const account = {
   account_id: 'acc1',
   name: 'Account 1',
-  account_number: '1234',
+  normalized_name: 'account 1',
+  account_number_last4: '1234',
+  original_creditor: 'Creditor 1',
   issue_types: ['late_payment']
 };
 
@@ -61,7 +63,7 @@ test('filters out accounts without issue_types', async () => {
     accounts: {
       negative_accounts: [
         account,
-        { account_id: 'acc2', name: 'Account 2', account_number: '5678' }
+        { account_id: 'acc2', name: 'Account 2', account_number_last4: '5678' }
       ]
     }
   };
@@ -72,4 +74,29 @@ test('filters out accounts without issue_types', async () => {
   );
   expect(await screen.findByText('Account 1')).toBeInTheDocument();
   expect(screen.queryByText('Account 2')).not.toBeInTheDocument();
+});
+
+test('renders primary badge and secondary chips with identifiers', async () => {
+  const acc = {
+    account_id: 'acc3',
+    name: 'Account 3',
+    normalized_name: 'account 3',
+    account_number_last4: '7890',
+    original_creditor: 'Bank A',
+    issue_types: ['charge_off', 'collection', 'late_payment'],
+  };
+  const uploadData = {
+    ...baseUploadData,
+    accounts: { negative_accounts: [acc] },
+  };
+  render(
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+      <ReviewPage />
+    </MemoryRouter>
+  );
+  const header = await screen.findByText('Account 3');
+  expect(header.parentElement).toHaveTextContent('Account 3 ••••7890 - Bank A');
+  expect(screen.getByText('Charge-Off')).toHaveClass('badge');
+  expect(screen.getByText('Collection')).toHaveClass('chip');
+  expect(screen.getByText('Late Payment')).toHaveClass('chip');
 });

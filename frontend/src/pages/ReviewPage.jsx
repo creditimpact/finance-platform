@@ -30,7 +30,9 @@ export default function ReviewPage() {
   const dedupedAccounts = Array.from(
     accounts
       .reduce((map, acc) => {
-        const key = acc.account_id ?? acc.name?.toLowerCase();
+        const key = `${
+          acc.normalized_name ?? acc.name?.toLowerCase() ?? ''
+        }|${acc.account_number_last4 ?? ''}`;
         const existing = map.get(key);
         if (existing) {
           existing.late_payments = { ...existing.late_payments, ...acc.late_payments };
@@ -42,19 +44,17 @@ export default function ReviewPage() {
       .values(),
   );
 
-  const getProblems = (acc) => {
-    return acc.issue_types.map((type) => {
-      switch (type) {
-        case 'late_payment':
-          return { text: 'Late payments detected', severity: 'warning' };
-        case 'collection':
-          return { text: 'Account in collections', severity: 'critical' };
-        case 'charge_off':
-          return { text: 'Account charged off', severity: 'critical' };
-        default:
-          return { text: type, severity: 'normal' };
-      }
-    });
+  const formatIssueType = (type) => {
+    switch (type) {
+      case 'late_payment':
+        return 'Late Payment';
+      case 'collection':
+        return 'Collection';
+      case 'charge_off':
+        return 'Charge-Off';
+      default:
+        return type;
+    }
   };
 
   const handleChange = (key, value) => {
@@ -79,22 +79,23 @@ export default function ReviewPage() {
     <div className="container">
       <h2>Explain Your Situation</h2>
       {dedupedAccounts.map((acc, idx) => {
-        const problems = getProblems(acc);
+        const primaryIssue = acc.issue_types[0];
+        const secondaryIssues = acc.issue_types.slice(1);
         return (
           <div key={idx} className="account-block">
             <p>
-              <strong>{acc.name}</strong> ({acc.account_number})
+              <strong>{acc.name}</strong>
+              {acc.account_number_last4 && ` ••••${acc.account_number_last4}`}
+              {acc.original_creditor && ` - ${acc.original_creditor}`}
             </p>
-            {problems.length > 0 && (
-              <ul className="problem-list">
-                {problems.map((p, i) => (
-                  <li key={i} className={`problem-item ${p.severity}`}>
-                    {p.severity === 'critical' ? '❌' : p.severity === 'warning' ? '⚠️' : '•'}{' '}
-                    {p.text}
-                  </li>
-                ))}
-              </ul>
-            )}
+            <div className="issue-badges">
+              <span className="badge">{formatIssueType(primaryIssue)}</span>
+              {secondaryIssues.map((type, i) => (
+                <span key={i} className="chip">
+                  {formatIssueType(type)}
+                </span>
+              ))}
+            </div>
             <textarea
               value={explanations[acc.name] || ''}
               onChange={(e) => handleChange(acc.name, e.target.value)}

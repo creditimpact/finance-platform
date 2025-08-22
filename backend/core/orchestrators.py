@@ -956,6 +956,9 @@ def extract_problematic_accounts_from_report(
             if not acc.get("issue_types"):
                 continue
             enriched = enrich_account_metadata(acc)
+            # Keep the full enriched mapping so `BureauAccount.from_dict`
+            # preserves metadata like ``primary_issue`` and
+            # ``account_number_last4``.
             logger.info(
                 "emitted_account name=%s primary_issue=%s issue_types=%s "
                 "status=%s source_stage=%s included_in=%s",

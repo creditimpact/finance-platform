@@ -23,10 +23,10 @@ from backend.api.config import (
     ENABLE_FIELD_POPULATION,
     ENABLE_PLANNER,
     ENABLE_PLANNER_PIPELINE,
+    EXCLUDE_PARSER_AGGREGATED_ACCOUNTS,
     FIELD_POPULATION_CANARY_PERCENT,
     PLANNER_CANARY_PERCENT,
     PLANNER_PIPELINE_CANARY_PERCENT,
-    EXCLUDE_PARSER_AGGREGATED_ACCOUNTS,
     AppConfig,
     env_bool,
     get_app_config,
@@ -949,8 +949,8 @@ def extract_problematic_accounts_from_report(
     sections.setdefault("open_accounts_with_issues", [])
     sections.setdefault("all_accounts", [])
     from backend.core.logic.report_analysis.report_postprocessing import (
-        enrich_account_metadata,
         _inject_missing_late_accounts,
+        enrich_account_metadata,
     )
 
     def _log_account_snapshot(label: str) -> None:
@@ -982,6 +982,7 @@ def extract_problematic_accounts_from_report(
     _log_account_snapshot("post_inject_missing_late_accounts")
 
     from backend.core.logic.utils.names_normalization import normalize_creditor_name
+
     parser_only = {
         normalize_creditor_name(a.get("name", ""))
         for a in sections.get("all_accounts", [])
@@ -1014,10 +1015,8 @@ def extract_problematic_accounts_from_report(
 
     _annotate_with_tri_merge(sections)
     update_session(session_id, status="awaiting_user_explanations")
-
-    _log_account_snapshot("pre_return")
-
-    return BureauPayload(
+    _log_account_snapshot("pre_bureau_payload")
+    payload = BureauPayload(
         disputes=[
             BureauAccount.from_dict(d) for d in sections.get("negative_accounts", [])
         ],
@@ -1035,6 +1034,14 @@ def extract_problematic_accounts_from_report(
             Account.from_dict(d) for d in sections.get("high_utilization_accounts", [])
         ],
     )
+    logger.info(
+        "constructed_bureau_payload disputes=%d goodwill=%d inquiries=%d high_utilization=%d",
+        len(payload.disputes),
+        len(payload.goodwill),
+        len(payload.inquiries),
+        len(payload.high_utilization),
+    )
+    return payload
 
 
 def extract_problematic_accounts_from_report_dict(

@@ -57,10 +57,7 @@ def enrich_account_metadata(acc: dict[str, Any]) -> dict[str, Any]:
     acc["normalized_name"] = normalize_creditor_name(name)
 
     # Derive a last4 account number from any available account number field
-    acct_num = (
-        acc.get("account_number")
-        or acc.get("account_number_masked")
-    )
+    acct_num = acc.get("account_number") or acc.get("account_number_masked")
     if not acct_num:
         for info in acc.get("bureaus", []) or []:
             if not isinstance(info, dict):
@@ -310,6 +307,22 @@ def _assign_issue_types(acc: dict) -> None:
     status_clean = status_text.replace("-", " ")
 
     flags = [f.lower().replace("-", " ") for f in acc.get("flags", [])]
+
+    # Inspect explicit late payment counts from the parser or AI output
+    late_map = acc.get("late_payments") or {}
+    if isinstance(late_map, dict):
+        for bureau_vals in late_map.values():
+            if not isinstance(bureau_vals, dict):
+                continue
+            for count in bureau_vals.values():
+                try:
+                    if int(count) > 0:
+                        issue_types.add("late_payment")
+                        break
+                except (TypeError, ValueError):
+                    continue
+            if "late_payment" in issue_types:
+                break
 
     if "bankrupt" in status_clean or any("bankrupt" in f for f in flags):
         issue_types.add("bankruptcy")

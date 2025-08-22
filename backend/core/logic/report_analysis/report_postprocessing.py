@@ -152,6 +152,40 @@ def _cleanup_unverified_late_text(result: dict, verified: Set[str]):
 
 
 
+def _assign_issue_types(acc: dict) -> None:
+    """Derive ``issue_types`` and fallback metadata for an account.
+
+    Inspects ``late_payments``, ``status`` and ``flags`` to infer issue
+    categories.  Populates ``acc['issue_types']`` and provides default
+    ``status`` and ``advisor_comment`` values when missing.
+    """
+
+    issue_types: Set[str] = set(acc.get("issue_types", []))
+    status_text = str(acc.get("status") or acc.get("account_status") or "").lower()
+    status_clean = status_text.replace("-", " ")
+    flags = [f.lower().replace("-", " ") for f in acc.get("flags", [])]
+
+    late_map = acc.get("late_payments") or {}
+    has_late = any(v > 0 for bureau in late_map.values() for v in bureau.values())
+    if has_late:
+        issue_types.add("late_payment")
+        acc.setdefault("status", "Delinquent")
+        acc.setdefault("advisor_comment", "Late payments detected")
+
+    if "collection" in status_clean or any("collection" in f for f in flags):
+        issue_types.add("collection")
+        acc.setdefault("status", "Collection")
+        acc.setdefault("advisor_comment", "Account in collection")
+
+    if "charge off" in status_clean or any("charge off" in f for f in flags):
+        issue_types.add("charge_off")
+        acc.setdefault("status", "Charge Off")
+        acc.setdefault("advisor_comment", "Account charged off")
+
+    if issue_types:
+        acc["issue_types"] = sorted(issue_types)
+
+
 def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) -> None:
     """Add accounts detected by the parser but missing from the AI output."""
     existing = {
@@ -171,8 +205,12 @@ def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) ->
             "flags": ["Late Payments"],
             "source_stage": "parser_aggregated",
         }
+        if any(v >= 1 for vals in bureaus.values() for v in vals.values()):
+            entry["issue_types"] = ["late_payment"]
+        _assign_issue_types(entry)
         result.setdefault("all_accounts", []).append(entry)
-        result.setdefault("negative_accounts", []).append(entry.copy())
+        if entry.get("issue_types"):
+            result.setdefault("negative_accounts", []).append(entry.copy())
         print(
             f"[WARN] Aggregated missing account from parser: {entry['name']} "
             f"bureaus={list(bureaus.keys())}"

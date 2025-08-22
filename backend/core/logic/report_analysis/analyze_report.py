@@ -33,6 +33,7 @@ from .report_postprocessing import (
     _merge_parser_inquiries,
     _sanitize_late_counts,
     _reconcile_account_headings,
+    _assign_issue_types,
     validate_analysis_sanity,
 )
 from .report_prompting import (
@@ -234,6 +235,24 @@ def analyze_credit_report(
         ]:
             for acc in result.get(section, []):
                 enforce_collection_status(acc)
+
+        for acc in result.get("all_accounts", []):
+            _assign_issue_types(acc)
+
+        negatives = []
+        open_issues = []
+        for acc in result.get("all_accounts", []):
+            if acc.get("issue_types"):
+                status_text = str(
+                    acc.get("status") or acc.get("account_status") or ""
+                ).lower()
+                if "open" in status_text:
+                    open_issues.append(acc)
+                else:
+                    negatives.append(acc)
+
+        result["negative_accounts"] = negatives
+        result["open_accounts_with_issues"] = open_issues
 
         # Check that GPT returned all parser-detected inquiries
         from backend.core.logic.utils.names_normalization import normalize_bureau_name

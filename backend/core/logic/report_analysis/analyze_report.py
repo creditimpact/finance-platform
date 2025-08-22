@@ -35,6 +35,7 @@ from .report_postprocessing import (
     _reconcile_account_headings,
     _assign_issue_types,
     validate_analysis_sanity,
+    enrich_account_metadata,
 )
 from .report_prompting import (
     ANALYSIS_PROMPT_VERSION,
@@ -286,6 +287,15 @@ def analyze_credit_report(
         )
         issues.append(msg)
         print(msg)
+
+    for section in [
+        "all_accounts",
+        "negative_accounts",
+        "open_accounts_with_issues",
+        "positive_accounts",
+        "high_utilization_accounts",
+    ]:
+        result[section] = [enrich_account_metadata(acc) for acc in result.get(section, [])]
 
     Path(output_json_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_json_path, "w", encoding="utf-8") as f:

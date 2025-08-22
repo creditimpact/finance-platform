@@ -318,8 +318,18 @@ def _assign_issue_types(acc: dict) -> None:
     # Inspect explicit late payment counts from the parser or AI output
     late_map = acc.get("late_payments") or {}
     if isinstance(late_map, dict):
+        # ``late_payments`` may be either a mapping of bureau -> counts
+        # or a direct mapping of day buckets -> counts.  Any positive count
+        # should trigger a ``late_payment`` issue type.
         for bureau_vals in late_map.values():
+            # Handle direct maps of day -> count
             if not isinstance(bureau_vals, dict):
+                try:
+                    if int(bureau_vals) > 0:
+                        issue_types.add("late_payment")
+                        break
+                except (TypeError, ValueError):
+                    continue
                 continue
             for count in bureau_vals.values():
                 try:
@@ -334,10 +344,17 @@ def _assign_issue_types(acc: dict) -> None:
     if "bankrupt" in status_clean or any("bankrupt" in f for f in flags):
         issue_types.add("bankruptcy")
 
-    if "charge off" in status_clean or any("charge off" in f for f in flags):
+    # Look for charge-off and collection keywords in status text and flags
+    if (
+        re.search(r"charge\s*off|charged\s*off|chargeoff", status_clean)
+        or any("charge off" in f for f in flags)
+    ):
         issue_types.add("charge_off")
 
-    if "collection" in status_clean or any("collection" in f for f in flags):
+    if (
+        re.search(r"collection", status_clean)
+        or any("collection" in f for f in flags)
+    ):
         issue_types.add("collection")
 
     if (
@@ -353,19 +370,21 @@ def _assign_issue_types(acc: dict) -> None:
     primary = pick_primary_issue(issue_types)
     acc["primary_issue"] = primary
 
-    if issue_types:
-        severity_index = {t: i for i, t in enumerate(ISSUE_SEVERITY)}
-        sorted_all = sorted(
-            issue_types, key=lambda t: severity_index.get(t, len(ISSUE_SEVERITY))
-        )
+    severity_index = {t: i for i, t in enumerate(ISSUE_SEVERITY)}
+    sorted_all = sorted(
+        issue_types, key=lambda t: severity_index.get(t, len(ISSUE_SEVERITY))
+    )
+    if primary != "unknown" and primary in issue_types:
         sorted_types = [primary] + [t for t in sorted_all if t != primary]
-        acc["issue_types"] = sorted_types
+    else:
+        sorted_types = sorted_all
+    acc["issue_types"] = sorted_types
 
-        status, comment = ISSUE_TEXT.get(primary, (None, None))
-        if status:
-            acc["status"] = status
-        if comment:
-            acc["advisor_comment"] = comment
+    status, comment = ISSUE_TEXT.get(primary, (None, None))
+    if status:
+        acc["status"] = status
+    if comment:
+        acc["advisor_comment"] = comment
 
 
 def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) -> None:

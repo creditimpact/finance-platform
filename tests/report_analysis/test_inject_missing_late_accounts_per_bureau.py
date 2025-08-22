@@ -21,3 +21,5 @@ def test_inject_missing_late_accounts_aggregated():
     acc = accounts[0]
     assert acc.extras["late_payments"] == history["cap_one"]
     assert acc.extras.get("source_stage") == "parser_aggregated"
+    assert acc.extras.get("issue_types") == ["late_payment"]
+    assert acc.status == "Delinquent"

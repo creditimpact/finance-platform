@@ -10,6 +10,25 @@ from backend.core.logic.utils.names_normalization import (
     normalize_creditor_name,
 )
 
+# Ordered by descending severity
+ISSUE_SEVERITY = [
+    "bankruptcy",
+    "charge_off",
+    "collection",
+    "repossession",
+    "foreclosure",
+    "late_payment",
+]
+
+ISSUE_TEXT: Mapping[str, tuple[str, str]] = {
+    "bankruptcy": ("Bankruptcy", "Bankruptcy reported"),
+    "charge_off": ("Charge Off", "Account charged off"),
+    "collection": ("Collection", "Account in collection"),
+    "repossession": ("Repossession", "Account repossessed"),
+    "foreclosure": ("Foreclosure", "Account in foreclosure"),
+    "late_payment": ("Delinquent", "Late payments detected"),
+}
+
 # ---------------------------------------------------------------------------
 # Inquiry merging
 # ---------------------------------------------------------------------------
@@ -151,7 +170,6 @@ def _cleanup_unverified_late_text(result: dict, verified: Set[str]):
             clean(a)
 
 
-
 def _assign_issue_types(acc: dict) -> None:
     """Derive ``issue_types`` and fallback metadata for an account.
 
@@ -166,24 +184,40 @@ def _assign_issue_types(acc: dict) -> None:
     flags = [f.lower().replace("-", " ") for f in acc.get("flags", [])]
 
     late_map = acc.get("late_payments") or {}
-    has_late = any(v > 0 for bureau in late_map.values() for v in bureau.values())
-    if has_late:
+    if any(v > 0 for bureau in late_map.values() for v in bureau.values()):
         issue_types.add("late_payment")
-        acc.setdefault("status", "Delinquent")
-        acc.setdefault("advisor_comment", "Late payments detected")
 
-    if "collection" in status_clean or any("collection" in f for f in flags):
-        issue_types.add("collection")
-        acc.setdefault("status", "Collection")
-        acc.setdefault("advisor_comment", "Account in collection")
+    if "bankrupt" in status_clean or any("bankrupt" in f for f in flags):
+        issue_types.add("bankruptcy")
 
     if "charge off" in status_clean or any("charge off" in f for f in flags):
         issue_types.add("charge_off")
-        acc.setdefault("status", "Charge Off")
-        acc.setdefault("advisor_comment", "Account charged off")
+
+    if "collection" in status_clean or any("collection" in f for f in flags):
+        issue_types.add("collection")
+
+    if (
+        "repossession" in status_clean
+        or "repossess" in status_clean
+        or any("repossession" in f or "repossess" in f for f in flags)
+    ):
+        issue_types.add("repossession")
+
+    if "foreclosure" in status_clean or any("foreclosure" in f for f in flags):
+        issue_types.add("foreclosure")
 
     if issue_types:
-        acc["issue_types"] = sorted(issue_types)
+        severity_index = {t: i for i, t in enumerate(ISSUE_SEVERITY)}
+        sorted_types = sorted(
+            issue_types, key=lambda t: severity_index.get(t, len(ISSUE_SEVERITY))
+        )
+        acc["issue_types"] = sorted_types
+        primary = sorted_types[0]
+        status, comment = ISSUE_TEXT.get(primary, (None, None))
+        if status:
+            acc["status"] = status
+        if comment:
+            acc["advisor_comment"] = comment
 
 
 def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) -> None:
@@ -215,6 +249,7 @@ def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) ->
             f"[WARN] Aggregated missing account from parser: {entry['name']} "
             f"bureaus={list(bureaus.keys())}"
         )
+
 
 # ---------------------------------------------------------------------------
 # Analysis sanity checks

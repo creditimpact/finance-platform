@@ -26,6 +26,7 @@ from backend.api.config import (
     FIELD_POPULATION_CANARY_PERCENT,
     PLANNER_CANARY_PERCENT,
     PLANNER_PIPELINE_CANARY_PERCENT,
+    EXCLUDE_PARSER_AGGREGATED_ACCOUNTS,
     AppConfig,
     env_bool,
     get_app_config,
@@ -993,7 +994,7 @@ def extract_problematic_accounts_from_report(
             if not acc.get("issue_types"):
                 continue
             norm = normalize_creditor_name(acc.get("name", ""))
-            if norm in parser_only:
+            if EXCLUDE_PARSER_AGGREGATED_ACCOUNTS and norm in parser_only:
                 continue
             enriched = enrich_account_metadata(acc)
             logger.info(

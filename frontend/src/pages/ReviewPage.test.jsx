@@ -17,7 +17,12 @@ const baseUploadData = {
   email: 'test@example.com'
 };
 
-const account = { account_id: 'acc1', name: 'Account 1', account_number: '1234' };
+const account = {
+  account_id: 'acc1',
+  name: 'Account 1',
+  account_number: '1234',
+  issue_types: ['late_payment']
+};
 
 describe.each([
   'negative_accounts',
@@ -48,4 +53,23 @@ describe.each([
     fireEvent.click(toggle);
     expect(await screen.findByText(/bank error/i)).toBeInTheDocument();
   });
+});
+
+test('filters out accounts without issue_types', async () => {
+  const uploadData = {
+    ...baseUploadData,
+    accounts: {
+      negative_accounts: [
+        account,
+        { account_id: 'acc2', name: 'Account 2', account_number: '5678' }
+      ]
+    }
+  };
+  render(
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+      <ReviewPage />
+    </MemoryRouter>
+  );
+  expect(await screen.findByText('Account 1')).toBeInTheDocument();
+  expect(screen.queryByText('Account 2')).not.toBeInTheDocument();
 });

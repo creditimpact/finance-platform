@@ -25,7 +25,7 @@ export default function ReviewPage() {
   const accounts = [
     ...(uploadData.accounts?.negative_accounts ?? uploadData.accounts?.disputes ?? []),
     ...(uploadData.accounts?.open_accounts_with_issues ?? uploadData.accounts?.goodwill ?? []),
-  ];
+  ].filter((acc) => acc.issue_types && acc.issue_types.length);
 
   const dedupedAccounts = Array.from(
     accounts
@@ -43,30 +43,18 @@ export default function ReviewPage() {
   );
 
   const getProblems = (acc) => {
-    const issues = [];
-    const late = acc.late_payments;
-    if (late) {
-      Object.values(late).forEach((counts) => {
-        Object.entries(counts).forEach(([days, count]) => {
-          if (count > 0) {
-            issues.push({
-              text: `${count} ${days}-day late payment${count > 1 ? 's' : ''}`,
-              severity: 'warning',
-            });
-          }
-        });
-      });
-    }
-    if (acc.status) {
-      issues.push({
-        text: `Status: ${acc.status}`,
-        severity: /collection|chargeoff/i.test(acc.status) ? 'critical' : 'normal',
-      });
-    }
-    if (acc.balance) {
-      issues.push({ text: `Balance: ${acc.balance}`, severity: 'normal' });
-    }
-    return issues;
+    return acc.issue_types.map((type) => {
+      switch (type) {
+        case 'late_payment':
+          return { text: 'Late payments detected', severity: 'warning' };
+        case 'collection':
+          return { text: 'Account in collections', severity: 'critical' };
+        case 'charge_off':
+          return { text: 'Account charged off', severity: 'critical' };
+        default:
+          return { text: type, severity: 'normal' };
+      }
+    });
   };
 
   const handleChange = (key, value) => {

@@ -40,6 +40,7 @@ from .extractors import (
     extract_dofd,
     extract_inquiry_dates,
 )
+
 USE_ANALYSIS_CACHE = not bool(os.getenv("ANALYSIS_DISABLE_CACHE"))
 
 _INPUT_COST_PER_TOKEN = 0.01 / 1000
@@ -763,6 +764,7 @@ def call_ai_analysis(
         "personal_info_issues": [],
         "account_inquiry_matches": [],
         "strategic_recommendations": [],
+        "warnings": [],
     }
     summary_metrics: dict = {}
     needs_review = bool(missing_bureaus)
@@ -792,6 +794,14 @@ def call_ai_analysis(
                 strategic_context=strategic_context,
                 ai_client=ai_client,
             )
+            if error_code in {"LOW_RECALL", "MISSING_EXPECTED_ACCOUNT"}:
+                logging.warning(
+                    "analysis_warning",
+                    extra={"bureau": bureau, "error_code": error_code},
+                )
+                data.setdefault("warnings", []).append(error_code)
+                aggregate["warnings"].append(error_code)
+                error_code = None
         else:
             seg_text_attempt = seg_text
             attempt = 0
@@ -832,6 +842,14 @@ def call_ai_analysis(
                             late_summary_text=late_summary_text,
                             inquiry_summary=inquiry_summary,
                         )
+                        if error_code in {"LOW_RECALL", "MISSING_EXPECTED_ACCOUNT"}:
+                            logging.warning(
+                                "analysis_warning",
+                                extra={"bureau": bureau, "error_code": error_code},
+                            )
+                            data.setdefault("warnings", []).append(error_code)
+                            aggregate["warnings"].append(error_code)
+                            error_code = None
                         tokens_total_in += data.get("summary_metrics", {}).get(
                             "stage3_tokens_in", 0
                         )
@@ -881,6 +899,7 @@ def call_ai_analysis(
                                     # Attach warning but do not flag an error so other
                                     # bureau results are still processed.
                                     data.setdefault("warnings", []).append("LOW_RECALL")
+                                    aggregate["warnings"].append("LOW_RECALL")
                         if not error_code and USE_ANALYSIS_CACHE:
                             store_cached_analysis(
                                 doc_fingerprint,
@@ -995,16 +1014,25 @@ def call_ai_analysis(
                 passes += 1
 
             if issues and not error_code:
-                error_code = issues[0][0]
-                headings = extract_account_headings(seg_text)
-                log_bureau_failure(
-                    error_code=error_code,
-                    bureau=bureau,
-                    expected_headings=len(headings),
-                    found_accounts=len(data.get("all_accounts", [])),
-                    tokens=0,
-                    latency=(time.time() - start) * 1000,
-                )
+                issue_code = issues[0][0]
+                if issue_code in {"LOW_RECALL", "MISSING_EXPECTED_ACCOUNT"}:
+                    logging.warning(
+                        "analysis_warning",
+                        extra={"bureau": bureau, "error_code": issue_code},
+                    )
+                    data.setdefault("warnings", []).append(issue_code)
+                    aggregate["warnings"].append(issue_code)
+                else:
+                    error_code = issue_code
+                    headings = extract_account_headings(seg_text)
+                    log_bureau_failure(
+                        error_code=error_code,
+                        bureau=bureau,
+                        expected_headings=len(headings),
+                        found_accounts=len(data.get("all_accounts", [])),
+                        tokens=0,
+                        latency=(time.time() - start) * 1000,
+                    )
 
         logging.info(
             "analysis_final",
@@ -1110,6 +1138,7 @@ def call_ai_analysis(
                 "personal_info_issues": [],
                 "account_inquiry_matches": [],
                 "strategic_recommendations": [],
+                "warnings": [],
                 "confidence": 0.0,
                 "needs_human_review": True,
                 "error_code": "MISSING_BUREAU",

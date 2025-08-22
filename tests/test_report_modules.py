@@ -268,6 +268,61 @@ def test_call_ai_analysis_logs_low_recall(tmp_path, caplog, monkeypatch):
     )
 
 
+def test_low_recall_does_not_clear_other_bureaus(tmp_path, monkeypatch):
+    utils_pkg = types.ModuleType("backend.core.logic.utils")
+    utils_pkg.__path__ = [
+        str(
+            Path(__file__).resolve().parents[1] / "backend" / "core" / "logic" / "utils"
+        )
+    ]
+    sys.modules["backend.core.logic.utils"] = utils_pkg
+
+    fake_pdf_ops = types.ModuleType("backend.core.logic.utils.pdf_ops")
+    fake_pdf_ops.extract_pdf_text_safe = lambda *a, **k: ""
+    sys.modules.setdefault("backend.core.logic.utils.pdf_ops", fake_pdf_ops)
+    report_prompting = importlib.import_module(
+        "backend.core.logic.report_analysis.report_prompting"
+    )
+    from backend.core.logic.report_analysis import analysis_cache
+
+    analysis_cache.reset_cache()
+
+    client = FakeAIClient()
+    client.add_chat_response('{"all_accounts": [{"name": "Cap One"}]}')
+    client.add_chat_response('{"all_accounts": [{"name": "BofA"}]}')
+
+    def fake_headings(text):
+        if "Experian" in text:
+            return [("cap one", "Cap One"), ("chase", "Chase")]
+        return [("bofa", "BofA")]
+
+    monkeypatch.setattr(report_prompting, "extract_account_headings", fake_headings)
+    monkeypatch.setattr(
+        report_prompting,
+        "extract_late_history_blocks",
+        lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
+    )
+    monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
+    monkeypatch.setattr(
+        report_prompting, "normalize_creditor_name", lambda n: (n or "").lower()
+    )
+
+    out = tmp_path / "result.json"
+    text = "Experian section Equifax section"
+    data = report_prompting.call_ai_analysis(
+        text,
+        False,
+        out,
+        ai_client=client,
+        request_id="req",
+        doc_fingerprint="fp_multi_low",
+    )
+
+    names = {acc["name"] for acc in data["all_accounts"]}
+    assert names == {"Cap One", "BofA"}
+    assert "LOW_RECALL" in data["bureau_sections"][0].get("warnings")
+
+
 def test_call_ai_analysis_merges_segments(tmp_path):
     utils_pkg = types.ModuleType("backend.core.logic.utils")
     utils_pkg.__path__ = [

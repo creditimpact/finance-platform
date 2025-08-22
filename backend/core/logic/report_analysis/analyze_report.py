@@ -40,6 +40,7 @@ from .report_postprocessing import (
 from .report_prompting import (
     ANALYSIS_PROMPT_VERSION,
     ANALYSIS_SCHEMA_VERSION,
+    PIPELINE_VERSION,
     call_ai_analysis,
 )
 
@@ -80,7 +81,7 @@ def analyze_credit_report(
 
     is_identity_theft = client_info.get("is_identity_theft", False)
     doc_fingerprint = hashlib.sha256(
-        f"{text}|{ANALYSIS_PROMPT_VERSION}|{ANALYSIS_SCHEMA_VERSION}".encode(
+        f"{text}|{ANALYSIS_PROMPT_VERSION}|{ANALYSIS_SCHEMA_VERSION}|{PIPELINE_VERSION}".encode(
             "utf-8"
         )
     ).hexdigest()

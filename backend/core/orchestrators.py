@@ -336,6 +336,87 @@ def analyze_credit_report(
     return pdf_path, sections, bureau_data, today_folder
 
 
+def _annotate_with_tri_merge(sections: Mapping[str, Any]) -> None:
+    """Annotate accounts in ``sections`` with tri-merge mismatch details."""
+    if not env_bool("ENABLE_TRI_MERGE", False):
+        return
+
+    from backend.api.session_manager import get_session
+    from backend.core.logic.report_analysis.tri_merge import (
+        compute_mismatches,
+        normalize_and_match,
+    )
+    from backend.core.logic.report_analysis.tri_merge_models import Tradeline
+    from backend.core.logic.utils.report_sections import filter_sections_by_bureau
+
+    bureau_data = {
+        bureau: filter_sections_by_bureau(sections, bureau, [])
+        for bureau in ["Experian", "Equifax", "TransUnion"]
+    }
+
+    tradelines: list[Tradeline] = []
+    for bureau, payload in bureau_data.items():
+        for section, items in payload.items():
+            if section == "inquiries" or not isinstance(items, list):
+                continue
+            for acc in items:
+                tradelines.append(
+                    Tradeline(
+                        creditor=str(acc.get("name") or ""),
+                        bureau=bureau,
+                        account_number=acc.get("account_number"),
+                        data=acc,
+                    )
+                )
+
+    if not tradelines:
+        return
+
+    _start = time.perf_counter()
+    families = normalize_and_match(tradelines)
+    emit_counter("tri_merge.process_time_ms", (time.perf_counter() - _start) * 1000)
+    compute_mismatches(families)
+
+    session_id = os.getenv("SESSION_ID", "")
+    tri_session = get_session(session_id) if session_id else None
+    tri_evidence = (
+        (tri_session.get("tri_merge") or {}).get("evidence", {}) if tri_session else {}
+    )
+
+    tri_merge_map: dict[str, dict[str, Any]] = {}
+    for fam in families:
+        family_id = getattr(fam, "family_id", None)
+        mismatch_types = [m.field for m in getattr(fam, "mismatches", [])]
+        evidence_id = family_id
+        evidence = tri_evidence.get(evidence_id)
+        for tl in fam.tradelines.values():
+            acc_id = str(tl.data.get("account_id") or "")
+            if acc_id and family_id:
+                info = {
+                    "family_id": family_id,
+                    "mismatch_types": mismatch_types,
+                    "evidence_snapshot_id": evidence_id,
+                }
+                if evidence:
+                    info["evidence"] = evidence
+                tri_merge_map[acc_id] = info
+
+    for key in (
+        "negative_accounts",
+        "open_accounts_with_issues",
+        "high_utilization_accounts",
+        "positive_accounts",
+        "all_accounts",
+    ):
+        for acc in sections.get(key, []):
+            acc_id = str(acc.get("account_id") or "")
+            tri_info = tri_merge_map.get(acc_id)
+            if tri_info:
+                acc["tri_merge"] = tri_info
+                if tri_info.get("mismatch_types"):
+                    acc.setdefault("flags", []).append("tri_merge_mismatch")
+
+
 def generate_strategy_plan(
     client_info,
     bureau_data,
@@ -683,56 +764,7 @@ def run_credit_repair_process(
             ingest_outcome_report(None, bureau_data)
         except Exception:
             pass
-        tri_merge_map: dict[str, dict[str, Any]] = {}
-        if env_bool("ENABLE_TRI_MERGE", False):
-            from backend.api.session_manager import get_session
-            from backend.core.logic.report_analysis.tri_merge import (
-                compute_mismatches,
-                normalize_and_match,
-            )
-            from backend.core.logic.report_analysis.tri_merge_models import Tradeline
-
-            tradelines: list[Tradeline] = []
-            for bureau, payload in bureau_data.items():
-                for section, items in payload.items():
-                    if section == "inquiries" or not isinstance(items, list):
-                        continue
-                    for acc in items:
-                        tradelines.append(
-                            Tradeline(
-                                creditor=str(acc.get("name") or ""),
-                                bureau=bureau,
-                                account_number=acc.get("account_number"),
-                                data=acc,
-                            )
-                        )
-            _start = time.perf_counter()
-            families = normalize_and_match(tradelines)
-            emit_counter(
-                "tri_merge.process_time_ms", (time.perf_counter() - _start) * 1000
-            )
-            compute_mismatches(families)
-            tri_session = get_session(session_id) if session_id else None
-            tri_evidence = (
-                (tri_session.get("tri_merge") or {}).get("evidence", {})
-                if tri_session
-                else {}
-            )
-            for fam in families:
-                family_id = getattr(fam, "family_id", None)
-                mismatch_types = [m.field for m in getattr(fam, "mismatches", [])]
-                evidence_id = family_id
-                evidence = tri_evidence.get(evidence_id)
-                for tl in fam.tradelines.values():
-                    acc_id = str(tl.data.get("account_id") or "")
-                    if acc_id and family_id:
-                        tri_merge_map[acc_id] = {
-                            "family_id": family_id,
-                            "mismatch_types": mismatch_types,
-                            "evidence_snapshot_id": evidence_id,
-                        }
-                        if evidence:
-                            tri_merge_map[acc_id]["evidence"] = evidence
+        _annotate_with_tri_merge(sections)
         facts_map: dict[str, dict[str, Any]] = {}
         for key in (
             "negative_accounts",
@@ -744,9 +776,6 @@ def run_credit_repair_process(
             for acc in sections.get(key, []):
                 acc_id = str(acc.get("account_id") or "")
                 if acc_id:
-                    tri_info = tri_merge_map.get(acc_id)
-                    if tri_info:
-                        acc["tri_merge"] = tri_info
                     facts_map[acc_id] = acc
         stage_2_5: dict[str, Any] = {}
         for acc_id in set(facts_map) | set(classification_map):
@@ -902,6 +931,7 @@ def extract_problematic_accounts_from_report(
             filtered.append(acc)
         sections[cat] = filtered
 
+    _annotate_with_tri_merge(sections)
     update_session(session_id, status="awaiting_user_explanations")
 
     return BureauPayload(

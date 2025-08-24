@@ -42,3 +42,21 @@ def test_assign_issue_types_charge_off_overrides_late():
     assert acc["primary_issue"] == "charge_off"
     assert acc["status"] == "Charge Off"
     assert acc["advisor_comment"] == "Account charged off"
+
+
+def test_assign_issue_types_detects_charge_off_from_history_grid():
+    acc = {"history": "OK OK CO"}
+    rp._assign_issue_types(acc)
+    assert acc["has_co_marker"] is True
+    assert acc["issue_types"] == ["charge_off"]
+    assert acc["primary_issue"] == "charge_off"
+    assert acc["status"] == "Charge Off"
+
+
+def test_assign_issue_types_collection_from_remarks():
+    acc = {"remarks": "Account placed in collection"}
+    rp._assign_issue_types(acc)
+    assert acc["has_co_marker"] is True
+    assert acc["issue_types"] == ["collection"]
+    assert acc["primary_issue"] == "collection"
+    assert acc["status"] == "Collection"

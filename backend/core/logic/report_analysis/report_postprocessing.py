@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import re
-from uuid import uuid4
 from typing import Any, Dict, List, Mapping, Set
+from uuid import uuid4
 
 from backend.core.logic.utils.names_normalization import (
     normalize_bureau_name,
@@ -181,7 +181,9 @@ def _merge_parser_inquiries(
         )
         if key in seen:
             continue
-        creditor_name = raw_map.get(key_name) or inq.get("creditor_name") or str(uuid4())
+        creditor_name = (
+            raw_map.get(key_name) or inq.get("creditor_name") or str(uuid4())
+        )
         entry = {
             "creditor_name": creditor_name,
             "date": inq.get("date"),
@@ -200,7 +202,9 @@ def _merge_parser_inquiries(
             normalize_bureau_name(inq.get("bureau")),
         )
         if key not in seen:
-            creditor_name = raw_map.get(key_name) or inq.get("creditor_name") or str(uuid4())
+            creditor_name = (
+                raw_map.get(key_name) or inq.get("creditor_name") or str(uuid4())
+            )
             inq["creditor_name"] = creditor_name
             cleaned.append(inq)
             seen.add(key)
@@ -308,11 +312,21 @@ def _assign_issue_types(acc: dict) -> None:
     status_parts = [
         str(acc.get("status") or ""),
         str(acc.get("account_status") or ""),
+        str(acc.get("payment_status") or ""),
+        str(acc.get("remarks") or ""),
     ]
+    for key, val in acc.items():
+        if "history" in key:
+            status_parts.append(str(val or ""))
     for info in acc.get("bureaus", []) or []:
         if isinstance(info, dict):
             status_parts.append(str(info.get("status") or ""))
             status_parts.append(str(info.get("account_status") or ""))
+            status_parts.append(str(info.get("payment_status") or ""))
+            status_parts.append(str(info.get("remarks") or ""))
+            for key, val in info.items():
+                if "history" in key:
+                    status_parts.append(str(val or ""))
     status_text = " ".join(status_parts).lower()
     status_clean = status_text.replace("-", " ")
 
@@ -348,16 +362,20 @@ def _assign_issue_types(acc: dict) -> None:
         issue_types.add("bankruptcy")
 
     # Look for charge-off and collection keywords in status text and flags
-    if (
+    co_grid = bool(re.search(r"\bco\b", status_clean))
+    has_charge_off = bool(
         re.search(r"charge\s*off|charged\s*off|chargeoff", status_clean)
         or any("charge off" in f for f in flags)
-    ):
+        or co_grid
+    )
+    has_collection = bool(
+        re.search(r"collection", status_clean) or any("collection" in f for f in flags)
+    )
+    if has_charge_off or has_collection:
+        acc["has_co_marker"] = True
+    if has_charge_off:
         issue_types.add("charge_off")
-
-    if (
-        re.search(r"collection", status_clean)
-        or any("collection" in f for f in flags)
-    ):
+    if has_collection:
         issue_types.add("collection")
 
     if (

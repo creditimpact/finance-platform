@@ -32,6 +32,10 @@ from backend.core.logic.utils.text_parsing import (
     extract_late_history_blocks,
 )
 from backend.core.services.ai_client import AIClient
+import openai
+
+APIError = getattr(openai, "APIError", Exception)
+RateLimitError = getattr(openai, "RateLimitError", Exception)
 
 from .analysis_cache import get_cached_analysis, store_cached_analysis
 from .confidence import combine_confidence
@@ -409,6 +413,12 @@ def analyze_bureau(
             _tokens_out = getattr(usage, "completion_tokens", 0) or getattr(
                 usage, "output_tokens", 0
             )
+    except (RateLimitError, APIError) as exc:
+        data = _validate_analysis_schema({})
+        data["confidence"] = 0.0
+        data["needs_human_review"] = True
+        data["ai_failed"] = True
+        return data, type(exc).__name__
     except TimeoutError:
         data = _validate_analysis_schema({})  # ensure validation errors get logged
         data["confidence"] = 0.0
@@ -771,6 +781,7 @@ def call_ai_analysis(
     needs_review = bool(missing_bureaus)
     bureau_sections: List[dict] = []
 
+    ai_failed_overall = False
     for idx, (bureau, seg_text) in enumerate(segments.items()):
         seg_path = (
             output_json_path
@@ -795,6 +806,8 @@ def call_ai_analysis(
                 strategic_context=strategic_context,
                 ai_client=ai_client,
             )
+            if data.get("ai_failed") or error_code in {"RateLimitError", "APIError"}:
+                ai_failed_overall = True
             if error_code in {"LOW_RECALL", "MISSING_EXPECTED_ACCOUNT"}:
                 logging.warning(
                     "analysis_warning",
@@ -843,6 +856,8 @@ def call_ai_analysis(
                             late_summary_text=late_summary_text,
                             inquiry_summary=inquiry_summary,
                         )
+                        if data.get("ai_failed") or error_code in {"RateLimitError", "APIError"}:
+                            ai_failed_overall = True
                         if error_code in {"LOW_RECALL", "MISSING_EXPECTED_ACCOUNT"}:
                             logging.warning(
                                 "analysis_warning",
@@ -967,6 +982,8 @@ def call_ai_analysis(
                     inquiry_summary=inquiry_summary,
                     hints=hint_meta,
                 )
+                if new_data.get("ai_failed") or new_err in {"RateLimitError", "APIError"}:
+                    ai_failed_overall = True
                 tokens_total_in += new_data.get("summary_metrics", {}).get(
                     "stage3_tokens_in", 0
                 )
@@ -1148,5 +1165,7 @@ def call_ai_analysis(
         )
 
     aggregate["bureau_sections"] = bureau_sections
+    if ai_failed_overall:
+        aggregate["ai_failed"] = True
 
     return aggregate

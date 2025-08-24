@@ -946,6 +946,20 @@ def extract_problematic_accounts_from_report(
         run_ai=run_ai,
         request_id=session_id,
     )
+
+    force_parser = os.getenv("ANALYSIS_FORCE_PARSER_ONLY") == "1"
+    if force_parser or sections.get("ai_failed"):
+        logger.info("analysis_falling_back_to_parser_only force=%s", force_parser)
+        sections = analyze_report_logic(
+            pdf_path,
+            analyzed_json_path,
+            {},
+            ai_client=None,
+            run_ai=False,
+            request_id=session_id,
+        )
+        sections["needs_human_review"] = True
+        sections["ai_failed"] = True
     sections.setdefault("negative_accounts", [])
     sections.setdefault("open_accounts_with_issues", [])
     sections.setdefault("all_accounts", [])
@@ -1084,6 +1098,7 @@ def extract_problematic_accounts_from_report(
         len(payload.inquiries),
         len(payload.high_utilization),
     )
+    payload.needs_human_review = sections.get("needs_human_review", False)
     return payload
 
 

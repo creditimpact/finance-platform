@@ -998,10 +998,16 @@ def extract_problematic_accounts_from_report(
             if EXCLUDE_PARSER_AGGREGATED_ACCOUNTS and norm in parser_only:
                 continue
             enriched = enrich_account_metadata(acc)
+            remarks = acc.get("remarks")
+            remarks_lower = remarks.lower() if isinstance(remarks, str) else ""
+            remarks_contains_co = (
+                "charge" in remarks_lower and "off" in remarks_lower
+            ) or "collection" in remarks_lower
             logger.info(
                 "emitted_account name=%s primary_issue=%s status=%s "
                 "last4=%s orig_cred=%s issues=%s bureaus=%s stage=%s "
-                "payment_status=%s has_co_marker=%s has_remarks=%s",
+                "payment_status=%s has_co_marker=%s has_remarks=%s "
+                "remarks_contains_co=%s",
                 enriched.get("normalized_name"),
                 enriched.get("primary_issue"),
                 enriched.get("status"),
@@ -1012,7 +1018,8 @@ def extract_problematic_accounts_from_report(
                 enriched.get("source_stage"),
                 acc.get("payment_status"),
                 acc.get("has_co_marker"),
-                bool(acc.get("remarks")),
+                bool(remarks),
+                remarks_contains_co,
             )
             filtered.append(enriched)
         sections[cat] = filtered

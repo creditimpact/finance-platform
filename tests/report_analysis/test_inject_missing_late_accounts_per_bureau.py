@@ -24,3 +24,21 @@ def test_inject_missing_late_accounts_aggregated():
     assert acc.extras.get("issue_types") == ["late_payment"]
     assert acc.status == "Delinquent"
     assert len(result.get("negative_accounts", [])) == 1
+
+
+def test_inject_missing_late_accounts_detects_charge_off():
+    result = {}
+    history = {"cap_one": {"Experian": {"CO": 1}}}
+    raw_map = {"cap_one": "Cap One"}
+
+    rp._inject_missing_late_accounts(result, history, raw_map)
+
+    accounts = [BureauAccount.from_dict(a) for a in result["all_accounts"]]
+
+    assert len(accounts) == 1
+    acc = accounts[0]
+    assert acc.extras["late_payments"] == history["cap_one"]
+    assert acc.extras.get("source_stage") == "parser_aggregated"
+    assert acc.extras.get("issue_types") == ["charge_off", "late_payment"]
+    assert acc.extras.get("primary_issue") == "charge_off"
+    assert acc.status == "Charge Off"

@@ -1,6 +1,7 @@
 """Utilities for parsing credit report PDFs into text and sections."""
 
 from pathlib import Path
+import re
 from typing import Any, Mapping, cast
 
 
@@ -27,6 +28,8 @@ def extract_text_from_pdf(pdf_path: str | Path) -> str:
 
 
 from backend.core.models.bureau import BureauAccount  # noqa: E402
+from backend.core.logic.utils.text_parsing import extract_account_blocks
+from backend.core.logic.utils.names_normalization import normalize_creditor_name
 
 
 def bureau_data_from_dict(
@@ -49,3 +52,47 @@ def bureau_data_from_dict(
         if isinstance(items, list):
             result[section] = [BureauAccount.from_dict(it) for it in items]
     return result
+
+
+PAYMENT_STATUS_RE = re.compile(r"payment status:\s*(.+)", re.I)
+
+
+def extract_payment_statuses(text: str) -> dict[str, dict[str, str]]:
+    """Extract ``Payment Status`` lines for each bureau section.
+
+    Parameters
+    ----------
+    text:
+        Raw text from the SmartCredit report.
+
+    Returns
+    -------
+    dict[str, dict[str, str]]
+        Mapping of normalized account names to a mapping of
+        ``bureau -> payment status`` strings.
+    """
+
+    statuses: dict[str, dict[str, str]] = {}
+    for block in extract_account_blocks(text):
+        if not block:
+            continue
+        heading = block[0].strip()
+        acc_norm = normalize_creditor_name(heading)
+        current_bureau: str | None = None
+        for line in block[1:]:
+            clean = line.strip()
+            bureau_match = re.match(r"(TransUnion|Experian|Equifax)\b", clean, re.I)
+            if bureau_match:
+                current_bureau = bureau_match.group(1).title()
+                # If the bureau line itself contains a payment status
+                ps_inline = PAYMENT_STATUS_RE.search(clean)
+                if ps_inline:
+                    statuses.setdefault(acc_norm, {})[current_bureau] = ps_inline.group(1).strip()
+                continue
+
+            if current_bureau:
+                ps = PAYMENT_STATUS_RE.match(clean)
+                if ps:
+                    statuses.setdefault(acc_norm, {})[current_bureau] = ps.group(1).strip()
+
+    return statuses

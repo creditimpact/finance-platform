@@ -55,6 +55,7 @@ def bureau_data_from_dict(
 
 
 PAYMENT_STATUS_RE = re.compile(r"payment status:\s*(.+)", re.I)
+CREDITOR_REMARKS_RE = re.compile(r"creditor remarks:\s*(.+)", re.I)
 
 
 def extract_payment_statuses(text: str) -> dict[str, dict[str, str]]:
@@ -96,3 +97,44 @@ def extract_payment_statuses(text: str) -> dict[str, dict[str, str]]:
                     statuses.setdefault(acc_norm, {})[current_bureau] = ps.group(1).strip()
 
     return statuses
+
+
+def extract_creditor_remarks(text: str) -> dict[str, dict[str, str]]:
+    """Extract ``Creditor Remarks`` lines for each bureau section.
+
+    Parameters
+    ----------
+    text:
+        Raw text from the SmartCredit report.
+
+    Returns
+    -------
+    dict[str, dict[str, str]]
+        Mapping of normalized account names to a mapping of
+        ``bureau -> remarks`` strings.
+    """
+
+    remarks: dict[str, dict[str, str]] = {}
+    for block in extract_account_blocks(text):
+        if not block:
+            continue
+        heading = block[0].strip()
+        acc_norm = normalize_creditor_name(heading)
+        current_bureau: str | None = None
+        for line in block[1:]:
+            clean = line.strip()
+            bureau_match = re.match(r"(TransUnion|Experian|Equifax)\b", clean, re.I)
+            if bureau_match:
+                current_bureau = bureau_match.group(1).title()
+                # If the bureau line itself contains remarks
+                rem_inline = CREDITOR_REMARKS_RE.search(clean)
+                if rem_inline:
+                    remarks.setdefault(acc_norm, {})[current_bureau] = rem_inline.group(1).strip()
+                continue
+
+            if current_bureau:
+                rem = CREDITOR_REMARKS_RE.match(clean)
+                if rem:
+                    remarks.setdefault(acc_norm, {})[current_bureau] = rem.group(1).strip()
+
+    return remarks

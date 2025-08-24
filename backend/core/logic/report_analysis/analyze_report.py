@@ -26,7 +26,11 @@ from backend.core.logic.utils.text_parsing import (
 )
 from backend.core.services.ai_client import AIClient, get_ai_client
 
-from .report_parsing import extract_text_from_pdf, extract_payment_statuses
+from .report_parsing import (
+    extract_text_from_pdf,
+    extract_payment_statuses,
+    extract_creditor_remarks,
+)
 from .report_postprocessing import (
     _assign_issue_types,
     _cleanup_unverified_late_text,
@@ -138,6 +142,7 @@ def analyze_credit_report(
         history = extract_late_history_blocks(text, account_names)
         _sanitize_late_counts(history)
         payment_status_map = extract_payment_statuses(text)
+        remarks_map = extract_creditor_remarks(text)
 
         if history:
             print(f"[INFO] Found {len(history)} late payment block(s):")
@@ -233,16 +238,16 @@ def analyze_credit_report(
 
         _merge_parser_inquiries(result, parsed_inquiries, inquiry_raw_map)
 
-        def _merge_payment_status(acc_list):
+        def _merge_bureau_field(acc_list, field_map, field_name):
             for acc in acc_list or []:
                 norm = normalize_creditor_name(acc.get("name", ""))
-                ps_map = payment_status_map.get(norm)
-                if not ps_map:
+                values_map = field_map.get(norm)
+                if not values_map:
                     continue
-                if not acc.get("payment_status"):
-                    acc["payment_status"] = "; ".join(ps_map.values())
+                if not acc.get(field_name):
+                    acc[field_name] = "; ".join(values_map.values())
                 acc.setdefault("bureaus", [])
-                for bureau, status in ps_map.items():
+                for bureau, value in values_map.items():
                     info = None
                     for b in acc["bureaus"]:
                         if isinstance(b, dict) and b.get("bureau") == bureau:
@@ -251,8 +256,8 @@ def analyze_credit_report(
                     if info is None:
                         info = {"bureau": bureau}
                         acc["bureaus"].append(info)
-                    if not info.get("payment_status"):
-                        info["payment_status"] = status
+                    if not info.get(field_name):
+                        info[field_name] = value
 
         for sec in [
             "all_accounts",
@@ -261,7 +266,8 @@ def analyze_credit_report(
             "positive_accounts",
             "high_utilization_accounts",
         ]:
-            _merge_payment_status(result.get(sec, []))
+            _merge_bureau_field(result.get(sec, []), payment_status_map, "payment_status")
+            _merge_bureau_field(result.get(sec, []), remarks_map, "remarks")
 
         for section in [
             "all_accounts",

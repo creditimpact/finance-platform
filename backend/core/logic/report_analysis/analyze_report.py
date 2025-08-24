@@ -26,7 +26,7 @@ from backend.core.logic.utils.text_parsing import (
 )
 from backend.core.services.ai_client import AIClient, get_ai_client
 
-from .report_parsing import extract_text_from_pdf
+from .report_parsing import extract_text_from_pdf, extract_payment_statuses
 from .report_postprocessing import (
     _assign_issue_types,
     _cleanup_unverified_late_text,
@@ -137,6 +137,7 @@ def analyze_credit_report(
         _sanitize_late_counts(history_all)
         history = extract_late_history_blocks(text, account_names)
         _sanitize_late_counts(history)
+        payment_status_map = extract_payment_statuses(text)
 
         if history:
             print(f"[INFO] Found {len(history)} late payment block(s):")
@@ -231,6 +232,36 @@ def analyze_credit_report(
         _inject_missing_late_accounts(result, history_all, raw_map)
 
         _merge_parser_inquiries(result, parsed_inquiries, inquiry_raw_map)
+
+        def _merge_payment_status(acc_list):
+            for acc in acc_list or []:
+                norm = normalize_creditor_name(acc.get("name", ""))
+                ps_map = payment_status_map.get(norm)
+                if not ps_map:
+                    continue
+                if not acc.get("payment_status"):
+                    acc["payment_status"] = "; ".join(ps_map.values())
+                acc.setdefault("bureaus", [])
+                for bureau, status in ps_map.items():
+                    info = None
+                    for b in acc["bureaus"]:
+                        if isinstance(b, dict) and b.get("bureau") == bureau:
+                            info = b
+                            break
+                    if info is None:
+                        info = {"bureau": bureau}
+                        acc["bureaus"].append(info)
+                    if not info.get("payment_status"):
+                        info["payment_status"] = status
+
+        for sec in [
+            "all_accounts",
+            "negative_accounts",
+            "open_accounts_with_issues",
+            "positive_accounts",
+            "high_utilization_accounts",
+        ]:
+            _merge_payment_status(result.get(sec, []))
 
         for section in [
             "all_accounts",

@@ -364,11 +364,20 @@ def test_tri_merge_toggle_does_not_change_counts(monkeypatch):
 
 def test_extract_problematic_accounts_logs_enriched_metadata(monkeypatch, caplog):
     sections = {
-        "negative_accounts": [{"name": "Acc1", "issue_types": ["late_payment"]}]
+        "negative_accounts": [
+            {
+                "name": "Acc1",
+                "issue_types": ["late_payment"],
+                "payment_status": "current",
+                "has_co_marker": False,
+                "remarks": "note",
+            }
+        ]
     }
     _mock_dependencies(monkeypatch, sections)
     with caplog.at_level(logging.INFO, logger="backend.core.orchestrators"):
-        extract_problematic_accounts_from_report("dummy.pdf")
+        payload = extract_problematic_accounts_from_report("dummy.pdf")
+    assert isinstance(payload, BureauPayload)
     assert any(
         r.message.startswith("emitted_account name=acc1")
         and "primary_issue=" in r.message
@@ -378,5 +387,8 @@ def test_extract_problematic_accounts_logs_enriched_metadata(monkeypatch, caplog
         and "issues=" in r.message
         and "bureaus=" in r.message
         and "stage=" in r.message
+        and "payment_status=current" in r.message
+        and "has_co_marker=False" in r.message
+        and "has_remarks=True" in r.message
         for r in caplog.records
     )

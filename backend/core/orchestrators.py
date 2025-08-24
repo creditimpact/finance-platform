@@ -1000,7 +1000,8 @@ def extract_problematic_accounts_from_report(
             enriched = enrich_account_metadata(acc)
             logger.info(
                 "emitted_account name=%s primary_issue=%s status=%s "
-                "last4=%s orig_cred=%s issues=%s bureaus=%s stage=%s",
+                "last4=%s orig_cred=%s issues=%s bureaus=%s stage=%s "
+                "payment_status=%s has_co_marker=%s has_remarks=%s",
                 enriched.get("normalized_name"),
                 enriched.get("primary_issue"),
                 enriched.get("status"),
@@ -1009,6 +1010,9 @@ def extract_problematic_accounts_from_report(
                 enriched.get("issue_types"),
                 list((enriched.get("bureau_statuses") or {}).keys()),
                 enriched.get("source_stage"),
+                acc.get("payment_status"),
+                acc.get("has_co_marker"),
+                bool(acc.get("remarks")),
             )
             filtered.append(enriched)
         sections[cat] = filtered

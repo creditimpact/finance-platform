@@ -217,6 +217,7 @@ def test_enriched_metadata_present_ai(monkeypatch):
         fake_analyze_report,
     )
     monkeypatch.setattr("backend.core.orchestrators.get_ai_client", lambda: object())
+    monkeypatch.delenv("ANALYSIS_FORCE_PARSER_ONLY", raising=False)
 
     payload = extract_problematic_accounts_from_report("dummy.pdf")
     acc = payload.to_dict()["disputes"][0]
@@ -392,3 +393,47 @@ def test_extract_problematic_accounts_logs_enriched_metadata(monkeypatch, caplog
         and "has_remarks=True" in r.message
         for r in caplog.records
     )
+
+
+def test_ai_failure_falls_back_to_parser(monkeypatch):
+    from pathlib import Path
+
+    def fake_analyze_report(
+        pdf_path,
+        analyzed_json_path,
+        client_info,
+        ai_client=None,
+        run_ai=True,
+        request_id=None,
+    ):
+        if run_ai:
+            return {"ai_failed": True, "all_accounts": [], "negative_accounts": [], "open_accounts_with_issues": []}
+        history = {"parser bank": {"Experian": {"30": 1}}}
+        raw_map = {"parser bank": "Parser Bank"}
+        from backend.core.logic.report_analysis.report_postprocessing import _inject_missing_late_accounts
+
+        result = {"all_accounts": [], "negative_accounts": [], "open_accounts_with_issues": []}
+        _inject_missing_late_accounts(result, history, raw_map, {})
+        result["needs_human_review"] = True
+        return result
+
+    monkeypatch.setattr(
+        "backend.core.logic.compliance.upload_validator.move_uploaded_file",
+        lambda path, session_id: Path(path),
+    )
+    monkeypatch.setattr(
+        "backend.core.logic.compliance.upload_validator.is_safe_pdf", lambda path: True
+    )
+    monkeypatch.setattr(
+        "backend.core.orchestrators.update_session", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        "backend.core.logic.report_analysis.analyze_report.analyze_credit_report",
+        fake_analyze_report,
+    )
+    monkeypatch.setattr("backend.core.orchestrators.get_ai_client", lambda: object())
+    monkeypatch.delenv("ANALYSIS_FORCE_PARSER_ONLY", raising=False)
+
+    payload = extract_problematic_accounts_from_report("dummy.pdf")
+    assert [a.name for a in payload.disputes] == ["Parser Bank"]
+    assert getattr(payload, "needs_human_review", False)

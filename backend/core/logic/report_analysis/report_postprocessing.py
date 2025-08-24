@@ -419,12 +419,26 @@ def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) ->
         if norm_name in existing:
             continue
 
+        flags: List[str] = ["Late Payments"]
+        has_co = False
+        for counts in bureaus.values():
+            if not isinstance(counts, dict):
+                continue
+            try:
+                if int(counts.get("CO", 0)) > 0:
+                    has_co = True
+                    break
+            except (TypeError, ValueError):
+                continue
+        if has_co:
+            flags.append("Charge-Off")
+
         entry = {
             "name": raw_map.get(norm_name, norm_name),
             "late_payments": bureaus,
             "status": "Delinquent",
             "advisor_comment": "Late payments detected by parser; AI unavailable",
-            "flags": ["Late Payments"],
+            "flags": flags,
             "source_stage": "parser_aggregated",
         }
         _assign_issue_types(entry)

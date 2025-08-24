@@ -316,6 +316,37 @@ def _assign_issue_types(acc: dict) -> None:
 
     issue_types: Set[str] = set(acc.get("issue_types", []))
 
+    # Inspect explicit late payment counts from the parser or AI output and
+    # detect charge-off markers present in the late grids.
+    late_map = acc.get("late_payments") or {}
+    has_co_marker = acc.get("has_co_marker", False)
+    if isinstance(late_map, dict):
+        # ``late_payments`` may be either a mapping of bureau -> counts or a
+        # direct mapping of day buckets -> counts.  Any positive count should
+        # trigger a ``late_payment`` issue type.  ``CO`` tokens indicate a
+        # charge-off marker that should be preserved for downstream logic.
+        for bureau_vals in late_map.values():
+            if isinstance(bureau_vals, dict):
+                for bucket, count in bureau_vals.items():
+                    try:
+                        if int(count) > 0:
+                            issue_types.add("late_payment")
+                            if bucket.upper() == "CO":
+                                has_co_marker = True
+                    except (TypeError, ValueError):
+                        continue
+            else:
+                try:
+                    if int(bureau_vals) > 0:
+                        issue_types.add("late_payment")
+                except (TypeError, ValueError):
+                    continue
+    if has_co_marker:
+        acc["has_co_marker"] = True
+        flags_list = acc.setdefault("flags", [])
+        if "Charge-Off" not in flags_list:
+            flags_list.append("Charge-Off")
+
     # Aggregate any status-like text from the account and its bureau entries
     status_parts = [
         str(acc.get("status") or ""),
@@ -339,32 +370,6 @@ def _assign_issue_types(acc: dict) -> None:
     status_clean = status_text.replace("-", " ")
 
     flags = [f.lower().replace("-", " ") for f in acc.get("flags", [])]
-
-    # Inspect explicit late payment counts from the parser or AI output
-    late_map = acc.get("late_payments") or {}
-    if isinstance(late_map, dict):
-        # ``late_payments`` may be either a mapping of bureau -> counts
-        # or a direct mapping of day buckets -> counts.  Any positive count
-        # should trigger a ``late_payment`` issue type.
-        for bureau_vals in late_map.values():
-            # Handle direct maps of day -> count
-            if not isinstance(bureau_vals, dict):
-                try:
-                    if int(bureau_vals) > 0:
-                        issue_types.add("late_payment")
-                        break
-                except (TypeError, ValueError):
-                    continue
-                continue
-            for count in bureau_vals.values():
-                try:
-                    if int(count) > 0:
-                        issue_types.add("late_payment")
-                        break
-                except (TypeError, ValueError):
-                    continue
-            if "late_payment" in issue_types:
-                break
 
     if "bankrupt" in status_clean or any("bankrupt" in f for f in flags):
         issue_types.add("bankruptcy")

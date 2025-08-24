@@ -131,3 +131,13 @@ def test_assign_issue_types_from_payment_statuses_map():
     rp._assign_issue_types(acc)
     assert acc["primary_issue"] == "collection"
     assert acc["issue_types"] == ["collection", "charge_off", "late_payment"]
+
+
+def test_enrich_account_metadata_sets_last4_from_bureaus():
+    acc = {
+        "name": "Acme Bank",
+        "bureaus": [{"bureau": "Experian", "account_number": "123-456-7890"}],
+    }
+    rp.enrich_account_metadata(acc)
+    assert acc["account_number_last4"] == "7890"
+    assert "account_fingerprint" not in acc

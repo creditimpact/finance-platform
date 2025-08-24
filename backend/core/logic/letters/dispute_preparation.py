@@ -28,7 +28,9 @@ def dedupe_disputes(
     deduped: List[dict] = []
     for d in disputes:
         name_key = normalize_creditor_name(d.get("name", "")).lower()
-        num = _sanitize(d.get("account_number"))
+        num = d.get("account_number_last4") or _sanitize(d.get("account_number"))
+        if num is None:
+            num = d.get("account_fingerprint")
         key = (name_key, num)
         if key in seen:
             log.append(f"[{bureau_name}] Skipping duplicate account '{d.get('name')}'")
@@ -80,7 +82,9 @@ def prepare_disputes_and_inquiries(
     for d in disputes:
         key = (
             normalize_creditor_name(d.get("name", "")),
-            (d.get("account_number") or "").replace("*", "").strip(),
+            d.get("account_number_last4")
+            or (d.get("account_number") or "").replace("*", "").strip()
+            or d.get("account_fingerprint", ""),
         )
         acc_type_map[key] = {
             "account_type": str(d.get("account_type") or ""),

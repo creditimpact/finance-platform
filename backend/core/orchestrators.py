@@ -7,6 +7,7 @@ steps of the credit repair workflow.  All core orchestration lives here;
 """
 
 import logging
+import json
 import os
 import random
 import time
@@ -1028,6 +1029,32 @@ def extract_problematic_accounts_from_report(
     _annotate_with_tri_merge(sections)
     update_session(session_id, status="awaiting_user_explanations")
     _log_account_snapshot("pre_bureau_payload")
+    if os.getenv("ANALYSIS_TRACE"):
+        for acc in sections.get("negative_accounts", []) + sections.get(
+            "open_accounts_with_issues", []
+        ):
+            remarks = acc.get("remarks")
+            remarks_lower = remarks.lower() if isinstance(remarks, str) else ""
+            remarks_contains_co = (
+                "charge" in remarks_lower and "off" in remarks_lower
+            ) or "collection" in remarks_lower
+            trace = {
+                "name": acc.get("normalized_name"),
+                "source_stage": acc.get("source_stage"),
+                "primary_issue": acc.get("primary_issue"),
+                "issue_types": acc.get("issue_types"),
+                "status": acc.get("status") or acc.get("account_status"),
+                "payment_statuses": acc.get("payment_statuses")
+                or acc.get("payment_status"),
+                "has_co_marker": acc.get("has_co_marker"),
+                "co_bureaus": acc.get("co_bureaus"),
+                "remarks_contains_co": remarks_contains_co,
+                "late_payments": acc.get("late_payments"),
+                "bureau_statuses": acc.get("bureau_statuses"),
+                "account_number_last4": acc.get("account_number_last4"),
+                "account_fingerprint": acc.get("account_fingerprint"),
+            }
+            logger.info("account_trace %s", json.dumps(trace, sort_keys=True))
     payload = BureauPayload(
         disputes=[
             BureauAccount.from_dict(d) for d in sections.get("negative_accounts", [])

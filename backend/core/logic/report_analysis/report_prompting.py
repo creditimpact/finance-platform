@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import os
 import re
 import time
 from copy import deepcopy
@@ -55,7 +56,7 @@ _ANALYSIS_VALIDATOR = Draft7Validator(_ANALYSIS_SCHEMA)
 # 1: Initial version
 ANALYSIS_PROMPT_VERSION = 2
 ANALYSIS_SCHEMA_VERSION = 1
-PIPELINE_VERSION = 2  # Increment when enrichment or post-processing logic changes
+PIPELINE_VERSION = int(os.getenv("PIPELINE_VERSION", "2"))
 
 
 # Allow for odd spacing, lowercase headers, and page-break markers when

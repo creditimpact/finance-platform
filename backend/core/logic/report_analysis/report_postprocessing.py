@@ -358,6 +358,11 @@ def _assign_issue_types(acc: dict) -> None:
         if "Charge-Off" not in flags_list:
             flags_list.append("Charge-Off")
 
+    remarks = acc.get("remarks")
+    if isinstance(remarks, str):
+        rl = remarks.lower()
+        acc["remarks_contains_co"] = ("charge" in rl and "off" in rl) or "collection" in rl
+
     # Aggregate any status-like text from the account and its bureau entries
     status_parts = [
         str(acc.get("status") or ""),
@@ -390,7 +395,8 @@ def _assign_issue_types(acc: dict) -> None:
     # Look for charge-off and collection keywords in status text and flags
     co_grid = bool(re.search(r"\bco\b", status_clean))
     has_charge_off = bool(
-        re.search(r"charge\s*off|charged\s*off|chargeoff", status_clean)
+        has_co_marker
+        or re.search(r"charge\s*off|charged\s*off|chargeoff", status_clean)
         or any("charge off" in f for f in flags)
         or co_grid
     )

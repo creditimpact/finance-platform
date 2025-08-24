@@ -12,9 +12,11 @@ from tests.helpers.fake_ai_client import FakeAIClient
 def test_analysis_cache_hits_and_invalidates(tmp_path, monkeypatch):
     """Repeated calls hit cache; prompt or schema changes invalidate."""
 
+    monkeypatch.delenv("ANALYSIS_DISABLE_CACHE", raising=False)
     report_prompting = importlib.import_module(
         "backend.core.logic.report_analysis.report_prompting"
     )
+    report_prompting = importlib.reload(report_prompting)
     from backend.core.logic.report_analysis import analysis_cache
 
     analysis_cache.reset_cache()

@@ -999,11 +999,13 @@ def extract_problematic_accounts_from_report(
             if EXCLUDE_PARSER_AGGREGATED_ACCOUNTS and norm in parser_only:
                 continue
             enriched = enrich_account_metadata(acc)
-            remarks = acc.get("remarks")
-            remarks_lower = remarks.lower() if isinstance(remarks, str) else ""
-            remarks_contains_co = (
-                "charge" in remarks_lower and "off" in remarks_lower
-            ) or "collection" in remarks_lower
+            remarks_contains_co = acc.get("remarks_contains_co")
+            if remarks_contains_co is None:
+                remarks = acc.get("remarks")
+                remarks_lower = remarks.lower() if isinstance(remarks, str) else ""
+                remarks_contains_co = (
+                    "charge" in remarks_lower and "off" in remarks_lower
+                ) or "collection" in remarks_lower
             logger.info(
                 "emitted_account name=%s primary_issue=%s status=%s "
                 "last4=%s orig_cred=%s issues=%s bureaus=%s stage=%s "
@@ -1020,7 +1022,7 @@ def extract_problematic_accounts_from_report(
                 acc.get("payment_statuses") or acc.get("payment_status"),
                 acc.get("has_co_marker"),
                 acc.get("co_bureaus"),
-                bool(remarks),
+                bool(acc.get("remarks")),
                 remarks_contains_co,
             )
             filtered.append(enriched)
@@ -1033,19 +1035,21 @@ def extract_problematic_accounts_from_report(
         for acc in sections.get("negative_accounts", []) + sections.get(
             "open_accounts_with_issues", []
         ):
-            remarks = acc.get("remarks")
-            remarks_lower = remarks.lower() if isinstance(remarks, str) else ""
-            remarks_contains_co = (
-                "charge" in remarks_lower and "off" in remarks_lower
-            ) or "collection" in remarks_lower
+            remarks_contains_co = acc.get("remarks_contains_co")
+            if remarks_contains_co is None:
+                remarks = acc.get("remarks")
+                remarks_lower = remarks.lower() if isinstance(remarks, str) else ""
+                remarks_contains_co = (
+                    "charge" in remarks_lower and "off" in remarks_lower
+                ) or "collection" in remarks_lower
             trace = {
                 "name": acc.get("normalized_name"),
                 "source_stage": acc.get("source_stage"),
                 "primary_issue": acc.get("primary_issue"),
                 "issue_types": acc.get("issue_types"),
                 "status": acc.get("status") or acc.get("account_status"),
-                "payment_statuses": acc.get("payment_statuses")
-                or acc.get("payment_status"),
+                "payment_statuses": acc.get("payment_statuses"),
+                "payment_status": acc.get("payment_status"),
                 "has_co_marker": acc.get("has_co_marker"),
                 "co_bureaus": acc.get("co_bureaus"),
                 "remarks_contains_co": remarks_contains_co,

@@ -37,6 +37,14 @@ def test_assign_issue_types_collection_overrides_late():
     assert acc["advisor_comment"] == "Account in collection"
 
 
+def test_assign_issue_types_collection_from_payment_status_only():
+    acc = {"payment_status": "Account sent to collection agency"}
+    rp._assign_issue_types(acc)
+    assert acc["issue_types"] == ["collection"]
+    assert acc["primary_issue"] == "collection"
+    assert acc["status"] == "Collection"
+
+
 def test_assign_issue_types_charge_off_overrides_late():
     acc = {"flags": ["Charge-Off"], "late_payments": {"Experian": {"30": 1}}}
     rp._assign_issue_types(acc)
@@ -88,6 +96,7 @@ def test_assign_issue_types_collection_from_remarks(text):
     acc = {"remarks": text}
     rp._assign_issue_types(acc)
     assert acc["has_co_marker"] is True
+    assert acc["remarks_contains_co"] is True
     assert acc["issue_types"] == ["collection"]
     assert acc["primary_issue"] == "collection"
     assert acc["status"] == "Collection"

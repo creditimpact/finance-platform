@@ -42,7 +42,7 @@ export default function ReviewPage() {
       .reduce((map, acc) => {
         const key = `${
           acc.normalized_name ?? acc.name?.toLowerCase() ?? ''
-        }|${acc.account_number_last4 ?? ''}`;
+        }|${acc.account_number_last4 ?? acc.account_fingerprint ?? ''}`;
         const existing = map.get(key);
         if (existing) {
           existing.late_payments = { ...existing.late_payments, ...acc.late_payments };
@@ -95,7 +95,11 @@ export default function ReviewPage() {
           <div key={idx} className="account-block">
             <p>
               <strong>{acc.name}</strong>
-              {acc.account_number_last4 && ` ••••${acc.account_number_last4}`}
+              {acc.account_number_last4
+                ? ` ••••${acc.account_number_last4}`
+                : acc.account_fingerprint
+                ? ` (${acc.account_fingerprint})`
+                : ''}
               {acc.original_creditor && ` - ${acc.original_creditor}`}
             </p>
             <div className="issue-badges">

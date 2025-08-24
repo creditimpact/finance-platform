@@ -2,6 +2,7 @@ import copy
 import logging
 
 import pytest
+from hashlib import sha1
 
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.models import BureauPayload
@@ -233,6 +234,30 @@ def test_enriched_metadata_present_ai(monkeypatch):
         "TransUnion": "Open/Current",
     }
     assert acc["source_stage"] == "ai_final"
+
+
+def test_account_fingerprint_added_when_last4_missing(monkeypatch):
+    sections = {
+        "negative_accounts": [
+            {
+                "name": "Acme Bank",
+                "date_opened": "2020-01-01",
+                "late_payments": {"30": 1},
+                "issue_types": ["late_payment"],
+            }
+        ],
+        "open_accounts_with_issues": [],
+        "unauthorized_inquiries": [],
+        "high_utilization_accounts": [],
+    }
+    _mock_dependencies(monkeypatch, sections)
+    payload = extract_problematic_accounts_from_report("dummy.pdf")
+    acc = payload.to_dict()["disputes"][0]
+    assert "account_number_last4" not in acc
+    expected = sha1(
+        f"{normalize_creditor_name('Acme Bank')}|2020-01-01|30".encode()
+    ).hexdigest()[:8]
+    assert acc["account_fingerprint"] == expected
 
 
 def test_enriched_metadata_present_parser_only(monkeypatch):

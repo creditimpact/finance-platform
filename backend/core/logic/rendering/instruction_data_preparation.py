@@ -103,7 +103,9 @@ def prepare_instruction_data(
         for acc in strategy.get("accounts", []):
             key = (
                 normalize_creditor_name(acc.get("name", "")),
-                sanitize_number(acc.get("account_number"))[-4:],
+                acc.get("account_number_last4")
+                or sanitize_number(acc.get("account_number"))[-4:]
+                or acc.get("account_fingerprint", ""),
             )
             strategy_index[key] = acc
 
@@ -114,9 +116,17 @@ def prepare_instruction_data(
         if name1 != name2:
             return False
 
-        num1 = sanitize_number(existing.get("account_number"))
-        num2 = sanitize_number(new.get("account_number"))
-        if num1 and num2 and num1[-4:] != num2[-4:]:
+        num1 = (
+            existing.get("account_number_last4")
+            or sanitize_number(existing.get("account_number"))[-4:]
+            or existing.get("account_fingerprint")
+        )
+        num2 = (
+            new.get("account_number_last4")
+            or sanitize_number(new.get("account_number"))[-4:]
+            or new.get("account_fingerprint")
+        )
+        if num1 and num2 and num1 != num2:
             return False
         if not num1 and not num2:
             status1 = (existing.get("status") or "").lower()
@@ -132,7 +142,9 @@ def prepare_instruction_data(
             acc_copy.setdefault("categories", set(acc.get("categories", [])))
             strat_key = (
                 normalize_creditor_name(acc_copy.get("name", "")),
-                sanitize_number(acc_copy.get("account_number"))[-4:],
+                acc_copy.get("account_number_last4")
+                or sanitize_number(acc_copy.get("account_number"))[-4:]
+                or acc_copy.get("account_fingerprint", ""),
             )
             strat = strategy_index.get(strat_key)
             if strat:

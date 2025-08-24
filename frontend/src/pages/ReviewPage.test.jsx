@@ -118,10 +118,35 @@ test('renders account_fingerprint when last4 missing', async () => {
     accounts: { negative_accounts: [acc] },
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
       <ReviewPage />
     </MemoryRouter>
   );
   const header = await screen.findByText('Account 4');
   expect(header.parentElement).toHaveTextContent('Account 4 (deadbeef) - Creditor 4');
+});
+
+test('prefers last4 over fingerprint when both provided', async () => {
+  const acc = {
+    account_id: 'acc5',
+    name: 'Account 5',
+    normalized_name: 'account 5',
+    account_number_last4: '4321',
+    account_fingerprint: 'cafebabe',
+    original_creditor: 'Creditor 5',
+    primary_issue: 'late_payment',
+    issue_types: ['late_payment'],
+  };
+  const uploadData = {
+    ...baseUploadData,
+    accounts: { negative_accounts: [acc] },
+  };
+  render(
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
+      <ReviewPage />
+    </MemoryRouter>
+  );
+  const header = await screen.findByText('Account 5');
+  expect(header.parentElement).toHaveTextContent('Account 5 ••••4321 - Creditor 5');
+  expect(header.parentElement).not.toHaveTextContent('cafebabe');
 });

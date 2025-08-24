@@ -148,7 +148,12 @@ def process_analyzed_report(
         name_key = normalize_creditor_name(account.name)
         for bureau in account.bureaus:
             bureau_norm = normalize_bureau_name(bureau)
-            key = (name_key, clean_num(account.account_number), bureau_norm)
+            identifier = (
+                account.get("account_number_last4")
+                or clean_num(account.account_number)
+                or account.get("account_fingerprint")
+            )
+            key = (name_key, identifier, bureau_norm)
             if bureau_norm in output and key not in seen_entries:
                 if is_goodwill_closed:
                     enriched_account = Account.from_dict(account.to_dict())
@@ -176,7 +181,12 @@ def process_analyzed_report(
         name_key = normalize_creditor_name(account.name)
         for bureau in account.bureaus:
             bureau_norm = normalize_bureau_name(bureau)
-            key = (name_key, clean_num(account.account_number), bureau_norm)
+            identifier = (
+                account.get("account_number_last4")
+                or clean_num(account.account_number)
+                or account.get("account_fingerprint")
+            )
+            key = (name_key, identifier, bureau_norm)
             if bureau_norm in output and key not in seen_entries:
                 if is_goodwill:
                     enriched_account = Account.from_dict(account.to_dict())
@@ -201,7 +211,12 @@ def process_analyzed_report(
         name_key = normalize_creditor_name(account.name)
         for bureau in account.bureaus:
             bureau_norm = normalize_bureau_name(bureau)
-            key = (name_key, clean_num(account.account_number), bureau_norm)
+            identifier = (
+                account.get("account_number_last4")
+                or clean_num(account.account_number)
+                or account.get("account_fingerprint")
+            )
+            key = (name_key, identifier, bureau_norm)
             if bureau_norm in output and key not in seen_entries:
                 output[bureau_norm]["high_utilization"].append(account)
                 seen_entries.add(key)

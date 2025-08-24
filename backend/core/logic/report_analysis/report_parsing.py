@@ -65,6 +65,16 @@ PAYMENT_STATUS_ROW_RE = re.compile(
     re.I | re.S,
 )
 
+# Account number extraction
+ACCOUNT_NUMBER_ROW_RE = re.compile(
+    r"(?:Account\s*(?:#|Number|No\.?)|Acct\s*(?:#|No\.?))\s*:?\s*(?P<tu>.+?)\s{2,}(?P<ex>.+?)\s{2,}(?P<eq>.+?)(?:\n|$)",
+    re.I | re.S,
+)
+ACCOUNT_NUMBER_LINE_RE = re.compile(
+    r"(?:Account\s*(?:#|Number|No\.?)|Acct\s*(?:#|No\.?))\s*:?\s*(.+)",
+    re.I,
+)
+
 
 def extract_payment_statuses(text: str) -> dict[str, dict[str, str]]:
     """Extract ``Payment Status`` lines for each bureau section.
@@ -119,6 +129,70 @@ def extract_payment_statuses(text: str) -> dict[str, dict[str, str]]:
                     statuses.setdefault(acc_norm, {})[current_bureau] = ps.group(1).strip()
 
     return statuses
+
+
+def extract_account_numbers(text: str) -> dict[str, dict[str, str]]:
+    """Extract account numbers for each bureau section.
+
+    Parameters
+    ----------
+    text:
+        Raw text from the SmartCredit report.
+
+    Returns
+    -------
+    dict[str, dict[str, str]]
+        Mapping of normalized account names to ``bureau -> account_number``.
+    """
+
+    numbers: dict[str, dict[str, str]] = {}
+    for block in extract_account_blocks(text):
+        if not block:
+            continue
+        heading = block[0].strip()
+        acc_norm = normalize_creditor_name(heading)
+
+        block_text = "\n".join(block[1:])
+        row = ACCOUNT_NUMBER_ROW_RE.search(block_text)
+        if row:
+            tu = re.sub(r"\D", "", row.group("tu"))
+            ex = re.sub(r"\D", "", row.group("ex"))
+            eq = re.sub(r"\D", "", row.group("eq"))
+            if tu:
+                numbers.setdefault(acc_norm, {})[
+                    normalize_bureau_name("TransUnion")
+                ] = tu
+            if ex:
+                numbers.setdefault(acc_norm, {})[
+                    normalize_bureau_name("Experian")
+                ] = ex
+            if eq:
+                numbers.setdefault(acc_norm, {})[
+                    normalize_bureau_name("Equifax")
+                ] = eq
+
+        current_bureau: str | None = None
+        for line in block[1:]:
+            clean = line.strip()
+            bureau_match = re.match(r"(TransUnion|Experian|Equifax)\b", clean, re.I)
+            if bureau_match:
+                current_bureau = normalize_bureau_name(bureau_match.group(1))
+                # Bureau line itself might contain the account number
+                inline = ACCOUNT_NUMBER_LINE_RE.search(clean)
+                if inline:
+                    digits = re.sub(r"\D", "", inline.group(1))
+                    if digits:
+                        numbers.setdefault(acc_norm, {})[current_bureau] = digits
+                continue
+
+            if current_bureau:
+                m = ACCOUNT_NUMBER_LINE_RE.match(clean)
+                if m:
+                    digits = re.sub(r"\D", "", m.group(1))
+                    if digits:
+                        numbers.setdefault(acc_norm, {})[current_bureau] = digits
+
+    return numbers
 
 
 def extract_creditor_remarks(text: str) -> dict[str, dict[str, str]]:

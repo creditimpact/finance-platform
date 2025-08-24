@@ -30,6 +30,7 @@ from .report_parsing import (
     extract_text_from_pdf,
     extract_payment_statuses,
     extract_creditor_remarks,
+    extract_account_numbers,
 )
 from .report_postprocessing import (
     _assign_issue_types,
@@ -145,6 +146,7 @@ def analyze_credit_report(
         _sanitize_late_counts(history)
         payment_status_map = extract_payment_statuses(text)
         remarks_map = extract_creditor_remarks(text)
+        account_number_map = extract_account_numbers(text)
 
         if history:
             print(f"[INFO] Found {len(history)} late payment block(s):")
@@ -265,6 +267,27 @@ def analyze_credit_report(
                     if not info.get(field_name):
                         info[field_name] = value
 
+        def _merge_account_numbers(acc_list, field_map):
+            for acc in acc_list or []:
+                norm = normalize_creditor_name(acc.get("name", ""))
+                values_map = field_map.get(norm)
+                if not values_map:
+                    continue
+                acc.setdefault("bureaus", [])
+                for bureau, value in values_map.items():
+                    info = None
+                    for b in acc["bureaus"]:
+                        if isinstance(b, dict) and b.get("bureau") == bureau:
+                            info = b
+                            break
+                    if info is None:
+                        info = {"bureau": bureau}
+                        acc["bureaus"].append(info)
+                    if not info.get("account_number"):
+                        info["account_number"] = value
+                if not acc.get("account_number") and len(set(values_map.values())) == 1:
+                    acc["account_number"] = next(iter(values_map.values()))
+
         def _merge_payment_status(acc_list, field_map):
             for acc in acc_list or []:
                 norm = normalize_creditor_name(acc.get("name", ""))
@@ -299,6 +322,7 @@ def analyze_credit_report(
         ]:
             _merge_payment_status(result.get(sec, []), payment_status_map)
             _merge_bureau_field(result.get(sec, []), remarks_map, "remarks")
+            _merge_account_numbers(result.get(sec, []), account_number_map)
 
         for section in [
             "all_accounts",

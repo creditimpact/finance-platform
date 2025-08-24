@@ -231,7 +231,7 @@ def test_call_ai_analysis_logs_low_recall(tmp_path, caplog, monkeypatch):
     monkeypatch.setattr(
         report_prompting,
         "extract_late_history_blocks",
-        lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
+        lambda text, return_raw_map=False: ({}, {}, {}) if return_raw_map else {},
     )
     monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
     monkeypatch.setattr(
@@ -300,7 +300,7 @@ def test_low_recall_does_not_clear_other_bureaus(tmp_path, monkeypatch):
     monkeypatch.setattr(
         report_prompting,
         "extract_late_history_blocks",
-        lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
+        lambda text, return_raw_map=False: ({}, {}, {}) if return_raw_map else {},
     )
     monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
     monkeypatch.setattr(
@@ -398,7 +398,7 @@ def test_call_ai_analysis_adds_confidence_and_flags(tmp_path, monkeypatch):
     monkeypatch.setattr(
         report_prompting,
         "extract_late_history_blocks",
-        lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
+        lambda text, return_raw_map=False: ({}, {}, {}) if return_raw_map else {},
     )
     monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
     monkeypatch.setattr(
@@ -460,7 +460,7 @@ def test_call_ai_analysis_remediates_missing_account(tmp_path, monkeypatch):
     monkeypatch.setattr(
         report_prompting,
         "extract_late_history_blocks",
-        lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
+        lambda text, return_raw_map=False: ({}, {}, {}) if return_raw_map else {},
     )
     monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
     monkeypatch.setattr(
@@ -522,7 +522,7 @@ def test_call_ai_analysis_remediates_merged_account(tmp_path, monkeypatch):
     monkeypatch.setattr(
         report_prompting,
         "extract_late_history_blocks",
-        lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
+        lambda text, return_raw_map=False: ({}, {}, {}) if return_raw_map else {},
     )
     monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
     monkeypatch.setattr(
@@ -636,7 +636,7 @@ def test_analyze_report_wrapper(monkeypatch, tmp_path, identity_theft):
     monkeypatch.setattr(
         report_prompting,
         "extract_late_history_blocks",
-        lambda text, return_raw_map=False: ({}, {}) if return_raw_map else {},
+        lambda text, return_raw_map=False: ({}, {}, {}) if return_raw_map else {},
     )
     monkeypatch.setattr(report_prompting, "extract_inquiries", lambda text: [])
 

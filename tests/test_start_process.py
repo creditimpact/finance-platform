@@ -136,3 +136,27 @@ def test_emitted_account_logs_payment_statuses(monkeypatch, caplog):
         "emitted_account" in r.message and "payment_statuses={'TransUnion': 'Collection/Chargeoff'}" in r.message
         for r in caplog.records
     )
+
+
+def test_emitted_account_logs_co_marker(monkeypatch, caplog):
+    sections = {
+        "negative_accounts": [
+            {
+                "name": "Acc1",
+                "late_payments": {"Experian": {"30": 1}},
+                "late_payment_history": {"Experian": "OK CO"},
+            }
+        ]
+    }
+    for acc in sections["negative_accounts"]:
+        _assign_issue_types(acc)
+    _mock_dependencies(monkeypatch, sections)
+    with caplog.at_level("INFO", logger="backend.core.orchestrators"):
+        payload = extract_problematic_accounts_from_report("dummy.pdf")
+    assert any(
+        "emitted_account" in r.message
+        and "has_co_marker=True" in r.message
+        and "co_bureaus=['Experian']" in r.message
+        for r in caplog.records
+    )
+    assert payload.disputes[0].extras.get("primary_issue") == "charge_off"

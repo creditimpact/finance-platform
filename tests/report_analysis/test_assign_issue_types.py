@@ -64,6 +64,19 @@ def test_assign_issue_types_detects_charge_off_from_late_map():
     assert acc["status"] == "Charge Off"
 
 
+def test_assign_issue_types_co_grid_with_late_counts():
+    acc = {
+        "late_payments": {"Experian": {"30": 1}},
+        "late_payment_history": {"Experian": "OK OK CO"},
+    }
+    rp._assign_issue_types(acc)
+    assert acc["has_co_marker"] is True
+    assert acc["issue_types"] == ["charge_off", "late_payment"]
+    assert acc["primary_issue"] == "charge_off"
+    assert acc["status"] == "Charge Off"
+    assert acc.get("co_bureaus") == ["Experian"]
+
+
 @pytest.mark.parametrize(
     "text",
     [

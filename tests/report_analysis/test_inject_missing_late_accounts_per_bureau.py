@@ -13,7 +13,7 @@ def test_inject_missing_late_accounts_aggregated():
     }
     raw_map = {"cap_one": "Cap One"}
 
-    rp._inject_missing_late_accounts(result, history, raw_map)
+    rp._inject_missing_late_accounts(result, history, raw_map, {})
 
     accounts = [BureauAccount.from_dict(a) for a in result["all_accounts"]]
 
@@ -28,16 +28,18 @@ def test_inject_missing_late_accounts_aggregated():
 
 def test_inject_missing_late_accounts_detects_charge_off():
     result = {}
-    history = {"cap_one": {"Experian": {"CO": 1}}}
+    history = {"cap_one": {"Experian": {"30": 1}}}
     raw_map = {"cap_one": "Cap One"}
+    grid_map = {"cap_one": {"Experian": "OK CO"}}
 
-    rp._inject_missing_late_accounts(result, history, raw_map)
+    rp._inject_missing_late_accounts(result, history, raw_map, grid_map)
 
     accounts = [BureauAccount.from_dict(a) for a in result["all_accounts"]]
 
     assert len(accounts) == 1
     acc = accounts[0]
     assert acc.extras["late_payments"] == history["cap_one"]
+    assert acc.extras.get("late_payment_history") == grid_map["cap_one"]
     assert acc.extras.get("source_stage") == "parser_aggregated"
     assert acc.extras.get("issue_types") == ["charge_off", "late_payment"]
     assert acc.extras.get("primary_issue") == "charge_off"

@@ -1,4 +1,5 @@
 import backend.core.logic.report_analysis.report_postprocessing as rp
+import pytest
 
 
 def test_assign_issue_types_detects_late_payment():
@@ -62,8 +63,15 @@ def test_assign_issue_types_detects_charge_off_from_late_map():
     assert acc["status"] == "Charge Off"
 
 
-def test_assign_issue_types_collection_from_remarks():
-    acc = {"remarks": "Account placed in collection"}
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Account placed in collection",
+        "Account transferred to collection agency",
+    ],
+)
+def test_assign_issue_types_collection_from_remarks(text):
+    acc = {"remarks": text}
     rp._assign_issue_types(acc)
     assert acc["has_co_marker"] is True
     assert acc["issue_types"] == ["collection"]

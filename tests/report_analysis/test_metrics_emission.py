@@ -7,6 +7,7 @@ def test_metrics_emission(monkeypatch, tmp_path):
     # Single segment without chunking
     monkeypatch.setattr(rp.FLAGS, "chunk_by_bureau", False)
     monkeypatch.setattr(rp.FLAGS, "max_segment_tokens", 10_000)
+    monkeypatch.setattr(rp, "USE_ANALYSIS_CACHE", True)
 
     # Fake analysis response with token usage and confidence
     def fake_analyze_bureau(*args, **kwargs):

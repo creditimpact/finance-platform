@@ -102,3 +102,26 @@ test('renders primary badge from primary_issue and secondary chips with identifi
   expect(screen.getByText('Collection')).toHaveClass('chip');
   expect(screen.getByText('Late Payment')).toHaveClass('chip');
 });
+
+test('renders account_fingerprint when last4 missing', async () => {
+  const acc = {
+    account_id: 'acc4',
+    name: 'Account 4',
+    normalized_name: 'account 4',
+    account_fingerprint: 'deadbeef',
+    original_creditor: 'Creditor 4',
+    primary_issue: 'late_payment',
+    issue_types: ['late_payment'],
+  };
+  const uploadData = {
+    ...baseUploadData,
+    accounts: { negative_accounts: [acc] },
+  };
+  render(
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+      <ReviewPage />
+    </MemoryRouter>
+  );
+  const header = await screen.findByText('Account 4');
+  expect(header.parentElement).toHaveTextContent('Account 4 (deadbeef) - Creditor 4');
+});

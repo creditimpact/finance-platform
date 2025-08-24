@@ -387,7 +387,7 @@ def test_extract_problematic_accounts_logs_enriched_metadata(monkeypatch, caplog
         and "issues=" in r.message
         and "bureaus=" in r.message
         and "stage=" in r.message
-        and "payment_status=current" in r.message
+        and "payment_statuses=current" in r.message
         and "has_co_marker=False" in r.message
         and "has_remarks=True" in r.message
         for r in caplog.records

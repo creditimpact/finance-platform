@@ -29,7 +29,10 @@ def extract_text_from_pdf(pdf_path: str | Path) -> str:
 
 from backend.core.models.bureau import BureauAccount  # noqa: E402
 from backend.core.logic.utils.text_parsing import extract_account_blocks
-from backend.core.logic.utils.names_normalization import normalize_creditor_name
+from backend.core.logic.utils.names_normalization import (
+    normalize_bureau_name,
+    normalize_creditor_name,
+)
 
 
 def bureau_data_from_dict(
@@ -57,6 +60,11 @@ def bureau_data_from_dict(
 PAYMENT_STATUS_RE = re.compile(r"payment status:\s*(.+)", re.I)
 CREDITOR_REMARKS_RE = re.compile(r"creditor remarks:\s*(.+)", re.I)
 
+PAYMENT_STATUS_ROW_RE = re.compile(
+    r"Payment\s*Status\s*:?\s*(?P<tu>.+?)\s{2,}(?P<ex>.+?)\s{2,}(?P<eq>.+?)(?:\n|$)",
+    re.I | re.S,
+)
+
 
 def extract_payment_statuses(text: str) -> dict[str, dict[str, str]]:
     """Extract ``Payment Status`` lines for each bureau section.
@@ -79,12 +87,26 @@ def extract_payment_statuses(text: str) -> dict[str, dict[str, str]]:
             continue
         heading = block[0].strip()
         acc_norm = normalize_creditor_name(heading)
+
+        block_text = "\n".join(block[1:])
+        row = PAYMENT_STATUS_ROW_RE.search(block_text)
+        if row:
+            statuses.setdefault(acc_norm, {})[
+                normalize_bureau_name("TransUnion")
+            ] = row.group("tu").strip()
+            statuses.setdefault(acc_norm, {})[
+                normalize_bureau_name("Experian")
+            ] = row.group("ex").strip()
+            statuses.setdefault(acc_norm, {})[
+                normalize_bureau_name("Equifax")
+            ] = row.group("eq").strip()
+
         current_bureau: str | None = None
         for line in block[1:]:
             clean = line.strip()
             bureau_match = re.match(r"(TransUnion|Experian|Equifax)\b", clean, re.I)
             if bureau_match:
-                current_bureau = bureau_match.group(1).title()
+                current_bureau = normalize_bureau_name(bureau_match.group(1))
                 # If the bureau line itself contains a payment status
                 ps_inline = PAYMENT_STATUS_RE.search(clean)
                 if ps_inline:

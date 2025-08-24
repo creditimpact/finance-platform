@@ -99,3 +99,13 @@ def test_assign_issue_types_charge_off_from_remarks_overrides_late():
     assert acc["primary_issue"] == "charge_off"
     assert acc["status"] == "Charge Off"
     assert acc["advisor_comment"] == "Account charged off"
+
+
+def test_assign_issue_types_from_payment_statuses_map():
+    acc = {
+        "payment_statuses": {"TransUnion": "Collection/Chargeoff"},
+        "late_payments": {"TransUnion": {"30": 1}},
+    }
+    rp._assign_issue_types(acc)
+    assert acc["primary_issue"] == "collection"
+    assert acc["issue_types"] == ["collection", "charge_off", "late_payment"]

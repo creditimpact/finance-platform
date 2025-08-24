@@ -115,3 +115,24 @@ def test_start_process_emits_enriched_fields(monkeypatch, tmp_path):
     assert acc["date_opened"] == "2020-01-01"
     assert acc["date_closed"] == "2021-01-01"
     assert acc["last_activity"] == "2023-01-01"
+
+
+def test_emitted_account_logs_payment_statuses(monkeypatch, caplog):
+    sections = {
+        "negative_accounts": [
+            {
+                "name": "Acc1",
+                "payment_statuses": {"TransUnion": "Collection/Chargeoff"},
+                "late_payments": {"TransUnion": {"30": 1}},
+            }
+        ]
+    }
+    for acc in sections["negative_accounts"]:
+        _assign_issue_types(acc)
+    _mock_dependencies(monkeypatch, sections)
+    with caplog.at_level("INFO", logger="backend.core.orchestrators"):
+        extract_problematic_accounts_from_report("dummy.pdf")
+    assert any(
+        "emitted_account" in r.message and "payment_statuses={'TransUnion': 'Collection/Chargeoff'}" in r.message
+        for r in caplog.records
+    )

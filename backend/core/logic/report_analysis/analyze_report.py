@@ -259,6 +259,31 @@ def analyze_credit_report(
                     if not info.get(field_name):
                         info[field_name] = value
 
+        def _merge_payment_status(acc_list, field_map):
+            for acc in acc_list or []:
+                norm = normalize_creditor_name(acc.get("name", ""))
+                values_map = field_map.get(norm)
+                if not values_map:
+                    continue
+                acc.setdefault("payment_statuses", {})
+                for bureau, value in values_map.items():
+                    acc["payment_statuses"].setdefault(bureau, value)
+                acc["payment_status"] = "; ".join(
+                    sorted(set(acc["payment_statuses"].values()))
+                )
+                acc.setdefault("bureaus", [])
+                for bureau, value in values_map.items():
+                    info = None
+                    for b in acc["bureaus"]:
+                        if isinstance(b, dict) and b.get("bureau") == bureau:
+                            info = b
+                            break
+                    if info is None:
+                        info = {"bureau": bureau}
+                        acc["bureaus"].append(info)
+                    if not info.get("payment_status"):
+                        info["payment_status"] = value
+
         for sec in [
             "all_accounts",
             "negative_accounts",
@@ -266,7 +291,7 @@ def analyze_credit_report(
             "positive_accounts",
             "high_utilization_accounts",
         ]:
-            _merge_bureau_field(result.get(sec, []), payment_status_map, "payment_status")
+            _merge_payment_status(result.get(sec, []), payment_status_map)
             _merge_bureau_field(result.get(sec, []), remarks_map, "remarks")
 
         for section in [

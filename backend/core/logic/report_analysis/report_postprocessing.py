@@ -354,6 +354,8 @@ def _assign_issue_types(acc: dict) -> None:
         str(acc.get("payment_status") or ""),
         str(acc.get("remarks") or ""),
     ]
+    for val in (acc.get("payment_statuses") or {}).values():
+        status_parts.append(str(val or ""))
     for key, val in acc.items():
         if "history" in key:
             status_parts.append(str(val or ""))
@@ -401,7 +403,10 @@ def _assign_issue_types(acc: dict) -> None:
     if "foreclosure" in status_clean or any("foreclosure" in f for f in flags):
         issue_types.add("foreclosure")
 
-    primary = pick_primary_issue(issue_types)
+    if "collection" in issue_types and "charge_off" in issue_types:
+        primary = "collection"
+    else:
+        primary = pick_primary_issue(issue_types)
     acc["primary_issue"] = primary
 
     severity_index = {t: i for i, t in enumerate(ISSUE_SEVERITY)}

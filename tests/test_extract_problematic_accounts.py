@@ -93,7 +93,7 @@ def test_parser_only_late_accounts_excluded_when_flag_set(monkeypatch):
     }
     history = {"parser bank": {"Experian": {"30": 1}}}
     raw_map = {"parser bank": "Parser Bank"}
-    _inject_missing_late_accounts(result, history, raw_map)
+    _inject_missing_late_accounts(result, history, raw_map, {})
     for sec in ["negative_accounts", "open_accounts_with_issues"]:
         for acc in result.get(sec, []):
             for key in list(acc.keys()):
@@ -131,7 +131,7 @@ def test_extract_problematic_accounts_without_openai(monkeypatch):
         }
         history = {"parser bank": {"Experian": {"30": 1}}}
         raw_map = {"parser bank": "Parser Bank"}
-        _inject_missing_late_accounts(result, history, raw_map)
+        _inject_missing_late_accounts(result, history, raw_map, {})
         return result
 
     monkeypatch.setattr(

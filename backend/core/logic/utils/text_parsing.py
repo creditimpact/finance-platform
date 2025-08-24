@@ -240,10 +240,11 @@ def extract_account_headings(text: str) -> list[tuple[str, str]]:
 
 def parse_late_history_from_block(
     block: list[str], debug: bool = False
-) -> dict[str, dict[str, int]]:
-    """Parse bureau late-payment counts from a single account block."""
+) -> tuple[dict[str, dict[str, int]], dict[str, str]]:
+    """Parse bureau late-payment counts and raw history strings from a block."""
 
     details: dict[str, dict[str, int]] = {}
+    grids: dict[str, str] = {}
     pending_bureau: str | None = None
     found_bureau = False
 
@@ -254,6 +255,7 @@ def parse_late_history_from_block(
             bureau = bureau_match.group(1).title()
             rest = bureau_match.group(2)
             counts = _parse_late_counts(rest)
+            grids[bureau] = rest.strip()
             found_bureau = True
             if counts:
                 details[bureau] = counts
@@ -266,17 +268,20 @@ def parse_late_history_from_block(
             counts = _parse_late_counts(clean)
             if counts:
                 details[pending_bureau] = counts
+            if pending_bureau in grids:
+                grids[pending_bureau] = f"{grids[pending_bureau]} {clean}".strip()
             else:
-                if debug:
-                    print(
-                        f"[~] Missing counts for {pending_bureau} in block starting '{block[0]}'"
-                    )
+                grids[pending_bureau] = clean
+            if not counts and debug:
+                print(
+                    f"[~] Missing counts for {pending_bureau} in block starting '{block[0]}'"
+                )
             pending_bureau = None
 
     if not found_bureau and debug:
         print(f"[~] No bureau lines found in block starting '{block[0]}'")
 
-    return details
+    return details, grids
 
 
 def extract_late_history_blocks(
@@ -290,6 +295,7 @@ def extract_late_history_blocks(
 
     account_map: dict[str, dict[str, dict[str, int]]] = {}
     raw_map: dict[str, str] = {}
+    grid_map: dict[str, dict[str, str]] = {}
 
     def norm(name: str) -> str:
         from .names_normalization import normalize_creditor_name
@@ -318,7 +324,7 @@ def extract_late_history_blocks(
                 print(f"[~] Fuzzy matched '{acc_norm}' -> '{match[0]}'")
             acc_norm = match[0]
 
-        details = parse_late_history_from_block(block, debug=debug)
+        details, grids = parse_late_history_from_block(block, debug=debug)
         if not details:
             if debug:
                 print(f"[~] Dropped candidate '{acc_norm}' (no details)")
@@ -327,6 +333,8 @@ def extract_late_history_blocks(
         if not GENERIC_NAME_RE.search(acc_norm):
             account_map[acc_norm] = details
             raw_map.setdefault(acc_norm, heading_raw)
+            if grids:
+                grid_map[acc_norm] = grids
             if debug:
                 found = sorted(details.keys())
                 missing = [
@@ -342,7 +350,7 @@ def extract_late_history_blocks(
         print(f"[INFO] Parsed block '{raw_name}' -> {bureaus}")
 
     if return_raw_map:
-        return account_map, raw_map
+        return account_map, raw_map, grid_map
     return account_map
 
 

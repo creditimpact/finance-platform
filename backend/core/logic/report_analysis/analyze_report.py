@@ -137,9 +137,11 @@ def analyze_credit_report(
 
     try:
         account_names = {acc.get("name", "") for acc in result.get("all_accounts", [])}
-        history_all, raw_map = extract_late_history_blocks(text, return_raw_map=True)
+        history_all, raw_map, grid_all = extract_late_history_blocks(text, return_raw_map=True)
         _sanitize_late_counts(history_all)
-        history = extract_late_history_blocks(text, account_names)
+        history, _, grid_map = extract_late_history_blocks(
+            text, account_names, return_raw_map=True
+        )
         _sanitize_late_counts(history)
         payment_status_map = extract_payment_statuses(text)
         remarks_map = extract_creditor_remarks(text)
@@ -173,6 +175,8 @@ def analyze_credit_report(
                     )
                     if status_text == "closed":
                         acc["goodwill_on_closed"] = True
+            if norm in grid_map:
+                acc["late_payment_history"] = grid_map[norm]
 
         for section in [
             "negative_accounts",
@@ -203,6 +207,8 @@ def analyze_credit_report(
                         )
                         if status_text == "closed":
                             acc["goodwill_on_closed"] = True
+                if norm in grid_map:
+                    acc["late_payment_history"] = grid_map[norm]
 
         for raw_norm, bureaus in history_all.items():
             linked = raw_norm in history
@@ -234,7 +240,7 @@ def analyze_credit_report(
 
         _cleanup_unverified_late_text(result, verified_names)
 
-        _inject_missing_late_accounts(result, history_all, raw_map)
+        _inject_missing_late_accounts(result, history_all, raw_map, grid_all)
 
         _merge_parser_inquiries(result, parsed_inquiries, inquiry_raw_map)
 

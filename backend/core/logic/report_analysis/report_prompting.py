@@ -265,7 +265,7 @@ def _generate_prompt(
     else:
         heading_summary = ""
 
-    late_blocks, late_raw_map = extract_late_history_blocks(
+    late_blocks, late_raw_map, _ = extract_late_history_blocks(
         segment_text, return_raw_map=True
     )
     if late_blocks:

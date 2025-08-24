@@ -316,6 +316,8 @@ def _assign_issue_types(acc: dict) -> None:
 
     issue_types: Set[str] = set(acc.get("issue_types", []))
 
+    co_bureaus: Set[str] = set(acc.get("co_bureaus", []) or [])
+
     # Inspect explicit late payment counts from the parser or AI output and
     # detect charge-off markers present in the late grids.
     late_map = acc.get("late_payments") or {}
@@ -325,7 +327,7 @@ def _assign_issue_types(acc: dict) -> None:
         # direct mapping of day buckets -> counts.  Any positive count should
         # trigger a ``late_payment`` issue type.  ``CO`` tokens indicate a
         # charge-off marker that should be preserved for downstream logic.
-        for bureau_vals in late_map.values():
+        for bureau, bureau_vals in late_map.items():
             if isinstance(bureau_vals, dict):
                 for bucket, count in bureau_vals.items():
                     try:
@@ -333,6 +335,7 @@ def _assign_issue_types(acc: dict) -> None:
                             issue_types.add("late_payment")
                             if bucket.upper() == "CO":
                                 has_co_marker = True
+                                co_bureaus.add(bureau)
                     except (TypeError, ValueError):
                         continue
             else:
@@ -341,8 +344,16 @@ def _assign_issue_types(acc: dict) -> None:
                         issue_types.add("late_payment")
                 except (TypeError, ValueError):
                     continue
-    if has_co_marker:
+
+    for bureau, hist in (acc.get("late_payment_history") or {}).items():
+        if isinstance(hist, str) and "CO" in hist.upper():
+            has_co_marker = True
+            co_bureaus.add(bureau)
+
+    if has_co_marker or co_bureaus:
         acc["has_co_marker"] = True
+        if co_bureaus:
+            acc["co_bureaus"] = sorted(co_bureaus)
         flags_list = acc.setdefault("flags", [])
         if "Charge-Off" not in flags_list:
             flags_list.append("Charge-Off")
@@ -426,29 +437,27 @@ def _assign_issue_types(acc: dict) -> None:
         acc["advisor_comment"] = comment
 
 
-def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) -> None:
+def _inject_missing_late_accounts(
+    result: dict, history: dict, raw_map: dict, grid_map: dict | None = None
+) -> None:
     """Add accounts detected by the parser but missing from the AI output."""
     existing = {
         normalize_creditor_name(acc.get("name", ""))
         for acc in result.get("all_accounts", [])
     }
 
+    grid_map = grid_map or {}
+
     for norm_name, bureaus in history.items():
         if norm_name in existing:
             continue
 
         flags: List[str] = ["Late Payments"]
-        has_co = False
-        for counts in bureaus.values():
-            if not isinstance(counts, dict):
-                continue
-            try:
-                if int(counts.get("CO", 0)) > 0:
-                    has_co = True
-                    break
-            except (TypeError, ValueError):
-                continue
-        if has_co:
+        histories = grid_map.get(norm_name, {})
+        co_bureaus = [
+            b for b, txt in histories.items() if isinstance(txt, str) and "CO" in txt.upper()
+        ]
+        if co_bureaus:
             flags.append("Charge-Off")
 
         entry = {
@@ -459,6 +468,10 @@ def _inject_missing_late_accounts(result: dict, history: dict, raw_map: dict) ->
             "flags": flags,
             "source_stage": "parser_aggregated",
         }
+        if histories:
+            entry["late_payment_history"] = histories
+        if co_bureaus:
+            entry["co_bureaus"] = sorted(co_bureaus)
         _assign_issue_types(entry)
         enriched = enrich_account_metadata(entry)
         result.setdefault("all_accounts", []).append(enriched)

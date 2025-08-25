@@ -660,12 +660,22 @@ def analyze_credit_report(
             for acc in result.get(section, []):
                 enforce_collection_status(acc)
 
-        for acc in result.get("all_accounts", []):
-            _assign_issue_types(acc)
+        if os.getenv("DEFER_ASSIGN_ISSUE_TYPES"):
+            for acc in result.get("all_accounts", []):
+                acc.setdefault("primary_issue", "unknown")
+            result["negative_accounts"] = []
+            result["open_accounts_with_issues"] = []
+            result["positive_accounts"] = []
+            result["high_utilization_accounts"] = []
+        else:
+            for acc in result.get("all_accounts", []):
+                _assign_issue_types(acc)
 
-        negatives, open_issues = _split_account_buckets(result.get("all_accounts", []))
-        result["negative_accounts"] = negatives
-        result["open_accounts_with_issues"] = open_issues
+            negatives, open_issues = _split_account_buckets(
+                result.get("all_accounts", [])
+            )
+            result["negative_accounts"] = negatives
+            result["open_accounts_with_issues"] = open_issues
 
         # Check that GPT returned all parser-detected inquiries
         from backend.core.logic.utils.names_normalization import normalize_bureau_name

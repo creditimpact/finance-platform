@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 import re
 from pathlib import Path
 
@@ -30,7 +32,9 @@ from .report_parsing import (
     extract_account_numbers,
     extract_creditor_remarks,
     extract_payment_statuses,
+    extract_pdf_page_texts,
     extract_text_from_pdf,
+    scan_page_markers,
 )
 from .report_postprocessing import (
     _assign_issue_types,
@@ -48,6 +52,9 @@ from .report_prompting import (
     PIPELINE_VERSION,
     call_ai_analysis,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _split_account_buckets(accounts: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -143,6 +150,22 @@ def analyze_credit_report(
     """Analyze ``pdf_path`` and write structured analysis to ``output_json_path``."""
     ai_client = ai_client or get_ai_client()
     text = extract_text_from_pdf(pdf_path)
+    if os.getenv("EXPORT_RAW_PAGES", "0") != "0":
+        pages = extract_pdf_page_texts(pdf_path)
+        trace_dir = Path("trace") / request_id
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        for idx, page in enumerate(pages, start=1):
+            (trace_dir / f"page-{idx:02d}.txt").write_text(page, encoding="utf-8")
+        markers = scan_page_markers(pages)
+        logger.info("text_markers %s", json.dumps(markers, sort_keys=True))
+        if not any(
+            (
+                markers["has_payment_status"],
+                markers["has_creditor_remarks"],
+                markers["has_account_status"],
+            )
+        ):
+            logger.info('extraction_gap="no_marker_strings_found"')
     if not text.strip():
         raise ValueError("[ERROR] No text extracted from PDF")
 

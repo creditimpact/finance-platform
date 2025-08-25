@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import Any, Mapping, cast
+from typing import Any, Mapping, Sequence, cast
 
 
 def extract_text_from_pdf(pdf_path: str | Path) -> str:
@@ -25,6 +25,60 @@ def extract_text_from_pdf(pdf_path: str | Path) -> str:
     from backend.core.logic.utils.pdf_ops import extract_pdf_text_safe
 
     return cast(str, extract_pdf_text_safe(Path(pdf_path), max_chars=150000))
+
+
+def extract_pdf_page_texts(pdf_path: str | Path, max_chars: int = 20000) -> list[str]:
+    """Return a list of raw page texts from ``pdf_path``.
+
+    Each page is truncated to ``max_chars`` characters to avoid excessive
+    memory usage. Missing dependencies or extraction errors result in an empty
+    list.
+    """
+    try:
+        import fitz  # type: ignore
+    except Exception as exc:  # pragma: no cover - fitz missing
+        print(f"[WARN] PyMuPDF unavailable: {exc}")
+        return []
+
+    try:
+        with fitz.open(pdf_path) as doc:
+            pages = []
+            for page in doc:
+                txt = page.get_text()
+                if len(txt) > max_chars:
+                    txt = txt[:max_chars] + "\n[TRUNCATED]"
+                pages.append(txt)
+    except Exception as exc:  # pragma: no cover - runtime PDF issues
+        print(f"[WARN] Failed to extract text from {pdf_path}: {exc}")
+        return []
+    return pages
+
+
+_PAYMENT_MARK_RE = re.compile(r"payment\s*status", re.I)
+_CREDITOR_MARK_RE = re.compile(r"creditor\s*remarks?", re.I)
+_ACCOUNT_MARK_RE = re.compile(r"account\s*status|account\s*description", re.I)
+
+
+def scan_page_markers(page_texts: Sequence[str]) -> dict[str, Any]:
+    """Scan ``page_texts`` for marker strings and return a summary dict."""
+    pages_payment_status: list[int] = []
+    pages_creditor_remarks: list[int] = []
+    pages_account_status: list[int] = []
+    for idx, text in enumerate(page_texts, start=1):
+        if _PAYMENT_MARK_RE.search(text):
+            pages_payment_status.append(idx)
+        if _CREDITOR_MARK_RE.search(text):
+            pages_creditor_remarks.append(idx)
+        if _ACCOUNT_MARK_RE.search(text):
+            pages_account_status.append(idx)
+    return {
+        "has_payment_status": bool(pages_payment_status),
+        "has_creditor_remarks": bool(pages_creditor_remarks),
+        "has_account_status": bool(pages_account_status),
+        "pages_payment_status": pages_payment_status,
+        "pages_creditor_remarks": pages_creditor_remarks,
+        "pages_account_status": pages_account_status,
+    }
 
 
 from backend.core.logic.utils.names_normalization import (  # noqa: E402

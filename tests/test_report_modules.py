@@ -770,3 +770,29 @@ def test_merge_inquiries_over_merge():
     new = [{"creditor_name": "Acme Bank", "date": "02/20/2020", "bureau": "Experian"}]
     report_prompting._merge_inquiries(dest, new)
     assert len(dest) == 2
+
+
+def test_scan_page_markers_detects_pages():
+    from backend.core.logic.report_analysis import report_parsing
+
+    pages = [
+        "Payment Status: OK",
+        "Some text\nCreditor Remark",
+        "Account description goes here",
+    ]
+    markers = report_parsing.scan_page_markers(pages)
+    assert markers["has_payment_status"]
+    assert markers["pages_payment_status"] == [1]
+    assert markers["has_creditor_remarks"]
+    assert markers["pages_creditor_remarks"] == [2]
+    assert markers["has_account_status"]
+    assert markers["pages_account_status"] == [3]
+
+
+def test_scan_page_markers_none():
+    from backend.core.logic.report_analysis import report_parsing
+
+    markers = report_parsing.scan_page_markers(["foo", "bar"])
+    assert not markers["has_payment_status"]
+    assert not markers["has_creditor_remarks"]
+    assert not markers["has_account_status"]

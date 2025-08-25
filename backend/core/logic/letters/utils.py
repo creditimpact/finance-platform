@@ -9,7 +9,8 @@ from .exceptions import StrategyContextMissing
 
 def _get_fields(acc: Account | Mapping[str, Any]) -> tuple[str | None, str | None]:
     if isinstance(acc, Account):
-        return acc.action_tag, acc.account_id
+        data = acc.to_dict()
+        return data.get("action_tag"), data.get("account_id")
     if isinstance(acc, Mapping):
         return acc.get("action_tag"), acc.get("account_id")
     return getattr(acc, "action_tag", None), getattr(acc, "account_id", None)

@@ -19,7 +19,7 @@ from backend.core.services.ai_client import AIClient
 def call_gpt_dispute_letter(
     client_info: ClientInfo | Mapping[str, Any],
     bureau_name: str,
-    disputes: List[Account],
+    disputes: List[Account | Mapping[str, Any]],
     inquiries: List[Inquiry],
     is_identity_theft: bool,
     structured_summaries: Mapping[str, Mapping[str, Any]],

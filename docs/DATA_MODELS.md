@@ -19,10 +19,6 @@ This document summarizes dataclasses under `models/` and their relationships.
 - `account_number: Optional[str]`
 - `reported_status: Optional[str]`
 - `status: Optional[str]`
-- `dispute_type: Optional[str]`
-- `advisor_comment: Optional[str]`
-- `action_tag: Optional[str]`
-- `recommended_action: Optional[str]`
 - `flags: List[str]`
 - `extras: Dict[str, object]`
 

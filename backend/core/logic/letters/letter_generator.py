@@ -33,7 +33,7 @@ from backend.core.logic.strategy.summary_classifier import ClassificationRecord
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.logic.utils.note_handling import get_client_address_lines
 from backend.core.models import BureauPayload, ClientInfo
-from backend.core.models.account import Account, Inquiry
+from backend.core.models.account import Inquiry
 from backend.core.models.letter import LetterAccount, LetterArtifact, LetterContext
 from backend.core.services.ai_client import AIClient
 
@@ -229,7 +229,7 @@ def generate_all_dispute_letters_with_ai(
         bureau_address = CREDIT_BUREAU_ADDRESSES.get(bureau_name, "Unknown")
 
         dispute_objs = [
-            Account.from_dict(d) if isinstance(d, dict) else d for d in disputes
+            d.to_dict() if hasattr(d, "to_dict") else d for d in disputes
         ]
         inquiry_objs = [
             Inquiry.from_dict(i) if isinstance(i, dict) else i

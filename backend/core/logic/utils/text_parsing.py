@@ -209,7 +209,7 @@ def extract_account_headings(text: str) -> list[tuple[str, str]]:
 
     The function leverages :func:`extract_account_blocks` to locate candidate
     account sections and then normalizes their headings using
-    :func:`names_normalization.normalize_creditor_name`.  Only the first
+    :func:`norm.normalize_heading`.  Only the first
     occurrence of each normalized name is retained in the returned list.
 
     Parameters
@@ -223,7 +223,7 @@ def extract_account_headings(text: str) -> list[tuple[str, str]]:
         Tuples of ``(normalized_name, raw_heading)``.
     """
 
-    from .names_normalization import normalize_creditor_name
+    from .norm import normalize_heading
 
     headings: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -231,7 +231,7 @@ def extract_account_headings(text: str) -> list[tuple[str, str]]:
         if not block:
             continue
         raw = block[0].strip()
-        norm = normalize_creditor_name(raw)
+        norm = normalize_heading(raw)
         if norm and norm not in seen:
             headings.append((norm, raw))
             seen.add(norm)
@@ -298,9 +298,9 @@ def extract_late_history_blocks(
     grid_map: dict[str, dict[str, str]] = {}
 
     def norm(name: str) -> str:
-        from .names_normalization import normalize_creditor_name
+        from .norm import normalize_heading
 
-        return normalize_creditor_name(name)
+        return normalize_heading(name)
 
     normalized_accounts = {norm(n): n for n in known_accounts or []}
 

@@ -68,16 +68,16 @@ def merge_strategy_outputs(
                     )
                     acc.extras["fallback_unrecognized_action"] = True
                 if tag:
-                    acc.action_tag = tag
-                    acc.recommended_action = action
+                    acc.extras["action_tag"] = tag
+                    acc.extras["recommended_action"] = action
                 elif raw_action:
-                    acc.recommended_action = raw_action
+                    acc.extras["recommended_action"] = raw_action
 
                 acc.extras["strategist_raw_action"] = raw_action
                 if rec and rec.advisor_comment:
-                    acc.advisor_comment = rec.advisor_comment
+                    acc.extras["advisor_comment"] = rec.advisor_comment
                 if rec and rec.flags:
-                    acc.flags = rec.flags
+                    acc.extras["flags"] = rec.flags
 
 
 def handle_strategy_fallbacks(

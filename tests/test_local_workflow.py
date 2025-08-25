@@ -211,7 +211,7 @@ def test_minimal_workflow():
             ai_client=fake,
         )
 
-    assert [a.name for a in disputes_sent.get("Experian", [])] == ["Bank A"]
+        assert [a["name"] for a in disputes_sent.get("Experian", [])] == ["Bank A"]
     assert "Card B" in goodwill_sent
 
     assert len(accounts_list) == 2

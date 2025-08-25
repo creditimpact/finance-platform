@@ -76,14 +76,6 @@ class Account:
         Status reported by the bureau (e.g., 'Open', 'Closed').
     status: Optional[str]
         Additional status text if present.
-    dispute_type: Optional[str]
-        Type of dispute associated with the account.
-    advisor_comment: Optional[str]
-        Free form comment from strategist or advisor.
-    action_tag: Optional[str]
-        Normalized action tag from strategist (e.g., 'dispute').
-    recommended_action: Optional[str]
-        Human readable action recommendation.
     flags: Optional[List[str]]
         Miscellaneous flags passed through the pipeline.
     """
@@ -93,10 +85,6 @@ class Account:
     account_number: Optional[str] = None
     reported_status: Optional[str] = None
     status: Optional[str] = None
-    dispute_type: Optional[str] = None
-    advisor_comment: Optional[str] = None
-    action_tag: Optional[str] = None
-    recommended_action: Optional[str] = None
     flags: Optional[List[str]] = field(default_factory=list)
     extras: dict[str, object] = field(default_factory=dict)
 
@@ -108,10 +96,6 @@ class Account:
             account_number=data.get("account_number"),
             reported_status=data.get("reported_status") or data.get("status"),
             status=data.get("status"),
-            dispute_type=data.get("dispute_type"),
-            advisor_comment=data.get("advisor_comment"),
-            action_tag=data.get("action_tag"),
-            recommended_action=data.get("recommended_action"),
             flags=list(data.get("flags", []) or []),
             extras={
                 k: v

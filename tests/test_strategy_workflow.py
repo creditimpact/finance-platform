@@ -193,5 +193,5 @@ def test_full_letter_workflow():
         )
 
     # --- Assertions ---
-    assert [d.name for d in letters_created.get("Experian", [])] == ["Bank A"]
+        assert [d["name"] for d in letters_created.get("Experian", [])] == ["Bank A"]
     assert "html" in instructions_capture

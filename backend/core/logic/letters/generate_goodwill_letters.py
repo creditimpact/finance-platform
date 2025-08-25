@@ -25,7 +25,6 @@ from backend.core.logic.strategy.summary_classifier import ClassificationRecord
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.logic.utils.pdf_ops import gather_supporting_docs
 from backend.core.models import BureauPayload, ClientInfo
-from backend.core.models.account import Account
 from backend.core.services.ai_client import AIClient
 
 from .exceptions import StrategyContextMissing
@@ -120,24 +119,23 @@ def generate_goodwill_letter_with_ai(
 
     if isinstance(client, dict):  # pragma: no cover - backward compat
         client = ClientInfo.from_dict(client)
-    account_objs = [
-        Account.from_dict(a) if isinstance(a, dict) else a for a in accounts
+    account_dicts = [
+        a.to_dict() if hasattr(a, "to_dict") else dict(a) for a in accounts
     ]
 
-    for acc in account_objs:
-        if (acc.action_tag or acc.to_dict().get("action_tag")) == "collection":
+    for acc in account_dicts:
+        if acc.get("action_tag") == "collection":
             emit_event(
                 "goodwill_policy_override",
                 {
                     "policy_override_reason": "collection_no_goodwill",
-                    "account_id": acc.account_id,
+                    "account_id": acc.get("account_id"),
                 },
             )
             log_policy_override_reason("collection_no_goodwill")
             return
     select_template("goodwill", {"creditor": creditor}, phase="candidate")
     client_info = client.to_dict()
-    account_dicts = [a.to_dict() for a in account_objs]
     session_id = client_info.get("session_id")
     session = get_session(session_id or "") or {}
     structured_summaries = session.get("structured_summaries", {})
@@ -211,27 +209,19 @@ def generate_goodwill_letters(
         client = ClientInfo.from_dict(client)
     client_info = client.to_dict()
     bureau_data = {
-        k: (
-            (
-                BureauPayload.from_dict(v).to_dict()
-                if isinstance(v, dict)
-                else v.to_dict()
-            )
-            if isinstance(v, (BureauPayload, dict))
-            else v
-        )
+        k: (v.to_dict() if isinstance(v, BureauPayload) else dict(v))
         for k, v in bureau_map.items()
     }
 
     if strategy:
         _apply_strategy_fields(bureau_data, strategy.get("accounts", []))
 
-    all_accounts: list[Account] = []
+    all_accounts: list[dict] = []
     for payload in bureau_data.values():
         for section in payload.values():
             if isinstance(section, list):
                 all_accounts.extend(
-                    Account.from_dict(a) if isinstance(a, dict) else a for a in section
+                    a.to_dict() if hasattr(a, "to_dict") else dict(a) for a in section
                 )
     try:
         ensure_strategy_context(
@@ -252,12 +242,12 @@ def generate_goodwill_letters(
         client_info, bureau_data, strategy=strategy
     )
     for creditor, accounts in goodwill_accounts.items():
-        account_objs = [
-            Account.from_dict(a) if isinstance(a, dict) else a for a in accounts
+        account_dicts = [
+            a.to_dict() if hasattr(a, "to_dict") else dict(a) for a in accounts
         ]
         generate_goodwill_letter_with_ai(
             creditor,
-            account_objs,
+            account_dicts,
             client,
             output_path,
             run_date,

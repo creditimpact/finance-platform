@@ -964,7 +964,7 @@ def run_credit_repair_process(
 
 def extract_problematic_accounts_from_report(
     file_path: str, session_id: str | None = None
-) -> "BureauPayload":
+) -> BureauPayload | Mapping[str, Any]:
     """Return problematic accounts extracted from the report for user review."""
     from backend.api.session_manager import update_session
     from backend.core.logic.compliance.upload_validator import (
@@ -1224,6 +1224,11 @@ def extract_problematic_accounts_from_report(
             ):
                 logger.info("account_trace_bug %s", json.dumps(trace, sort_keys=True))
             logger.info("account_trace %s", json.dumps(trace, sort_keys=True))
+    if os.getenv("PROBLEM_DETECTION_ONLY"):
+        return {
+            "problem_accounts": sections.get("negative_accounts", [])
+            + sections.get("open_accounts_with_issues", [])
+        }
     payload = BureauPayload(
         disputes=[
             BureauAccount.from_dict(d) for d in sections.get("negative_accounts", [])

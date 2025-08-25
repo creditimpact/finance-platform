@@ -38,7 +38,7 @@ from backend.core.models.letter import LetterAccount, LetterArtifact, LetterCont
 from backend.core.services.ai_client import AIClient
 
 from .dispute_preparation import prepare_disputes_and_inquiries
-from backend.core.logic.problem_resolution import build_dispute_payload
+from backend.core.logic.post_confirmation import build_dispute_payload
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
 from .exceptions import StrategyContextMissing
 from .utils import ensure_strategy_context, populate_required_fields

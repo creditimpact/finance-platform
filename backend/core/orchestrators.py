@@ -293,6 +293,14 @@ def analyze_credit_report(
         ai_client=ai_client,
         request_id=session_id,
     )
+    if (
+        os.getenv("DEFER_ASSIGN_ISSUE_TYPES") == "1"
+        and not sections.get("negative_accounts")
+        and not sections.get("open_accounts_with_issues")
+    ):
+        all_accounts = sections.get("all_accounts", [])
+        sections["negative_accounts"] = list(all_accounts)
+        sections["open_accounts_with_issues"] = list(all_accounts)
     client_info.update(sections)
     log_messages.append("[INFO] Report analyzed.")
     audit.log_step(
@@ -1007,6 +1015,14 @@ def extract_problematic_accounts_from_report(
         )
         sections["needs_human_review"] = True
         sections["ai_failed"] = True
+    if (
+        os.getenv("DEFER_ASSIGN_ISSUE_TYPES") == "1"
+        and not sections.get("negative_accounts")
+        and not sections.get("open_accounts_with_issues")
+    ):
+        all_accounts = sections.get("all_accounts", [])
+        sections["negative_accounts"] = list(all_accounts)
+        sections["open_accounts_with_issues"] = list(all_accounts)
     sections.setdefault("negative_accounts", [])
     sections.setdefault("open_accounts_with_issues", [])
     sections.setdefault("all_accounts", [])

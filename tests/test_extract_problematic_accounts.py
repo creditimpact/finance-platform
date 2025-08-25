@@ -376,6 +376,33 @@ def test_account_fingerprint_added_when_last4_missing(monkeypatch):
     assert acc["account_fingerprint"] == expected
 
 
+def test_account_fingerprint_uses_original_creditor_and_balance(monkeypatch):
+    sections = {
+        "negative_accounts": [
+            {
+                "name": "Acme Bank",
+                "original_creditor": "Orig Lender",
+                "balance": 100,
+                "issue_types": ["late_payment"],
+            }
+        ],
+        "open_accounts_with_issues": [],
+        "unauthorized_inquiries": [],
+        "high_utilization_accounts": [],
+    }
+    _mock_dependencies(monkeypatch, sections)
+    payload = extract_problematic_accounts_from_report("dummy.pdf")
+    acc = payload.to_dict()["disputes"][0]
+    assert acc["account_number_last4"] is None
+    expected_seed = (
+        f"{normalize_creditor_name('Acme Bank')}|{acc.get('date_opened')}|"
+        f"{','.join(sorted((acc.get('late_payments') or {}).keys()))}"
+        f"|{acc.get('original_creditor')}|{acc.get('balance')}"
+    )
+    expected = sha1(expected_seed.encode()).hexdigest()[:8]
+    assert acc["account_fingerprint"] == expected
+
+
 def test_enriched_metadata_present_parser_only(monkeypatch):
     sections = {
         "negative_accounts": [

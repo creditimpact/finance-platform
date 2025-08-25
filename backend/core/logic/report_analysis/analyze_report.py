@@ -689,9 +689,10 @@ def analyze_credit_report(
             for acc in result.get(section, []):
                 enforce_collection_status(acc)
 
-        if os.getenv("DEFER_ASSIGN_ISSUE_TYPES"):
+        if os.getenv("DEFER_ASSIGN_ISSUE_TYPES") == "1":
             for acc in result.get("all_accounts", []):
-                acc.setdefault("primary_issue", "unknown")
+                acc["primary_issue"] = "unknown"
+                acc["issue_types"] = []
             result["negative_accounts"] = []
             result["open_accounts_with_issues"] = []
             result["positive_accounts"] = []

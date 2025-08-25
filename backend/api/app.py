@@ -141,15 +141,22 @@ def start_process():
             },
         )
 
-        accounts = extract_problematic_accounts.delay(local_filename, session_id).get(
+        result = extract_problematic_accounts.delay(local_filename, session_id).get(
             timeout=300
         )
 
         legacy = {
-            "negative_accounts": accounts.get("disputes", []),
-            "open_accounts_with_issues": accounts.get("goodwill", []),
-            "unauthorized_inquiries": accounts.get("inquiries", []),
-            "high_utilization_accounts": accounts.get("high_utilization", []),
+            # Backward compatibility fields
+            "negative_accounts": result.get(
+                "negative_accounts",
+                result.get("disputes", result.get("problem_accounts", [])),
+            ),
+            "open_accounts_with_issues": result.get(
+                "open_accounts_with_issues",
+                result.get("goodwill", result.get("problem_accounts", [])),
+            ),
+            "unauthorized_inquiries": result.get("inquiries", []),
+            "high_utilization_accounts": result.get("high_utilization", []),
         }
 
         payload = {
@@ -159,6 +166,8 @@ def start_process():
             "original_filename": original_name,
             "accounts": legacy,
         }
+
+        payload["accounts"]["problem_accounts"] = result.get("problem_accounts", [])
 
         logger.info("start_process payload: %s", payload)
 

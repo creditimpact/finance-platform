@@ -236,8 +236,23 @@ def _join_heading_map(
     combined string value.
     """
 
-    for norm, value in list(mapping.items()):
-        raw = heading_map.get(norm, norm)
+    for key, value in list(mapping.items()):
+        norm = normalize_creditor_name(key)
+        raw = heading_map.get(norm, key)
+        if norm != key:
+            mapping.pop(key)
+            if norm in mapping and field_name:
+                if (
+                    is_bureau_map
+                    and isinstance(mapping[norm], dict)
+                    and isinstance(value, dict)
+                ):
+                    mapping[norm].update(value)
+                else:
+                    mapping[norm] = value
+            else:
+                mapping[norm] = value
+            value = mapping[norm]
         targets = accounts.get(norm)
         method: str | None = None
         if targets is None:
@@ -258,19 +273,22 @@ def _join_heading_map(
                     mapping[match] = value
                 targets = accounts.get(match)
                 norm = match
+                value = mapping[match]
                 method = "fuzzy"
             else:
-                logger.info(
+                details = {
+                    "raw_key": raw,
+                    "normalized": norm,
+                    "target_present": False,
+                    "map": field_name or "",
+                }
+                logger.debug(
                     "heading_join_miss %s",
-                    json.dumps(
-                        {
-                            "raw_key": raw,
-                            "normalized": norm,
-                            "target_present": False,
-                            "map": field_name or "",
-                        },
-                        sort_keys=True,
-                    ),
+                    json.dumps(details, sort_keys=True),
+                )
+                logger.info(
+                    "heading_join_unresolved %s",
+                    json.dumps(details, sort_keys=True),
                 )
                 continue
         elif raw.upper() != norm.upper():
@@ -438,10 +456,15 @@ def analyze_credit_report(
             text, return_raw_map=True
         )
         _sanitize_late_counts(history_all)
+        history_all = _normalize_keys(history_all)
+        raw_map = _normalize_keys(raw_map)
+        grid_all = _normalize_keys(grid_all)
         history, _, grid_map = extract_late_history_blocks(
             text, account_names, return_raw_map=True
         )
         _sanitize_late_counts(history)
+        history = _normalize_keys(history)
+        grid_map = _normalize_keys(grid_map)
         (
             col_payment_map,
             col_remarks_map,
@@ -452,30 +475,28 @@ def analyze_credit_report(
             detail_map,
         ) = extract_three_column_fields(pdf_path)
         payment_status_map, _payment_status_raw_map = extract_payment_statuses(text)
+        payment_status_map = _normalize_keys(payment_status_map)
+        _payment_status_raw_map = _normalize_keys(_payment_status_raw_map)
         for name, vals in col_payment_map.items():
-            payment_status_map.setdefault(name, {}).update(vals)
+            norm = normalize_creditor_name(name)
+            payment_status_map.setdefault(norm, {}).update(vals)
         for name, raw in col_payment_raw.items():
-            _payment_status_raw_map.setdefault(name, raw)
+            norm = normalize_creditor_name(name)
+            _payment_status_raw_map.setdefault(norm, raw)
         remarks_map = extract_creditor_remarks(text)
+        remarks_map = _normalize_keys(remarks_map)
         for name, vals in col_remarks_map.items():
-            remarks_map.setdefault(name, {}).update(vals)
+            norm = normalize_creditor_name(name)
+            remarks_map.setdefault(norm, {}).update(vals)
         account_number_map = extract_account_numbers(text)
+        account_number_map = _normalize_keys(account_number_map)
         for acc_name, bureaus in detail_map.items():
+            acc_norm = normalize_creditor_name(acc_name)
             for bureau, fields in bureaus.items():
                 num = fields.get("account_number")
                 if num:
-                    account_number_map.setdefault(acc_name, {})[bureau] = str(num)
-
-        history_all = _normalize_keys(history_all)
-        raw_map = _normalize_keys(raw_map)
-        grid_all = _normalize_keys(grid_all)
-        history = _normalize_keys(history)
-        grid_map = _normalize_keys(grid_map)
-        payment_status_map = _normalize_keys(payment_status_map)
-        _payment_status_raw_map = _normalize_keys(_payment_status_raw_map)
-        remarks_map = _normalize_keys(remarks_map)
+                    account_number_map.setdefault(acc_norm, {})[bureau] = str(num)
         status_text_map = _normalize_keys(status_text_map)
-        account_number_map = _normalize_keys(account_number_map)
         detail_map = _normalize_keys(detail_map)
 
         if history:
@@ -631,7 +652,7 @@ def analyze_credit_report(
                 values_map = field_map.get(norm)
                 if not values_map:
                     logger.info(
-                        "heading_join_miss %s",
+                        "heading_join_unresolved %s",
                         json.dumps(
                             {
                                 "raw_key": raw_name,
@@ -690,7 +711,7 @@ def analyze_credit_report(
                 values_map = detail_map.get(norm)
                 if not values_map:
                     logger.info(
-                        "heading_join_miss %s",
+                        "heading_join_unresolved %s",
                         json.dumps(
                             {
                                 "raw_key": raw_name,

@@ -42,9 +42,9 @@ def test_start_process_success(monkeypatch, tmp_path):
     assert payload["status"] == "awaiting_user_explanations"
     assert not called.get("called")
     accounts = payload["accounts"]
-    assert accounts["problem_accounts"] == accounts["negative_accounts"] == accounts[
-        "open_accounts_with_issues"
-    ]
+    assert accounts["problem_accounts"] == []
+    assert "negative_accounts" not in accounts
+    assert "open_accounts_with_issues" not in accounts
 
 
 def test_start_process_missing_file():
@@ -102,7 +102,7 @@ def test_start_process_emits_enriched_fields(monkeypatch, tmp_path):
         "file": (io.BytesIO(b"%PDF-1.4"), "test.pdf"),
     }
     resp = client.post(
-        "/api/start-process", data=data, content_type="multipart/form-data"
+        "/api/start-process?legacy=1", data=data, content_type="multipart/form-data"
     )
     assert resp.status_code == 200
     payload_json = json.loads(resp.data)

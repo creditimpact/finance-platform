@@ -14,7 +14,7 @@ from backend.outcomes.models import Outcome
 from backend.analytics.analytics_tracker import emit_counter
 from backend.core.logic.report_analysis.tri_merge import normalize_and_match
 from backend.core.logic.report_analysis.tri_merge_models import Tradeline, TradelineFamily
-from backend.core.logic.problem_resolution import build_dispute_payload
+from backend.core.logic.post_confirmation import build_dispute_payload
 
 from . import ingest
 

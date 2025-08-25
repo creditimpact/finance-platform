@@ -282,7 +282,9 @@ def test_logs_suppressed_accounts(monkeypatch, caplog):
         payload = extract_problematic_accounts_from_report("dummy.pdf")
     assert [a.name for a in payload.disputes] == ["Bad"]
     assert any(
-        "suppressed_account" in r.message and "missing_issue_types" in r.message
+        "suppressed_account" in r.message
+        and "suppression_reason" in r.message
+        and "missing_issue_types" in r.message
         for r in caplog.records
     )
 

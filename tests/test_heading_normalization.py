@@ -30,6 +30,6 @@ def test_fuzzy_heading_join(caplog):
         )
     assert accounts[0]["payment_statuses"]["Experian"] == "OK"
     assert any(
-        "joined_heading" in r.message and '"method": "fuzzy"' in r.message
+        "heading_join_linked" in r.message and '"method": "fuzzy"' in r.message
         for r in caplog.records
     )

@@ -23,8 +23,8 @@ from typing import Any, Mapping
 from rapidfuzz import fuzz
 
 from backend.core.logic.utils.inquiries import extract_inquiries
-from backend.core.logic.utils.norm import normalize_heading
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
+from backend.core.logic.utils.norm import normalize_heading
 from backend.core.logic.utils.text_parsing import (
     enforce_collection_status,
     extract_account_headings,
@@ -279,7 +279,7 @@ def _join_heading_map(
         if field_name is None:
             if method:
                 logger.info(
-                    "joined_heading %s",
+                    "heading_join_linked %s",
                     json.dumps(
                         {"raw_key": raw, "normalized_target": norm, "method": method},
                         sort_keys=True,
@@ -316,7 +316,7 @@ def _join_heading_map(
 
         if method:
             logger.info(
-                "joined_heading %s",
+                "heading_join_linked %s",
                 json.dumps(
                     {"raw_key": raw, "normalized_target": norm, "method": method},
                     sort_keys=True,

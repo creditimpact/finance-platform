@@ -6,8 +6,8 @@ steps of the credit repair workflow.  All core orchestration lives here;
 ``main.py`` only provides thin CLI wrappers.
 """
 
-import logging
 import json
+import logging
 import os
 import random
 import time
@@ -343,13 +343,31 @@ def _annotate_with_tri_merge(sections: Mapping[str, Any]) -> None:
     if not env_bool("ENABLE_TRI_MERGE", False):
         return
 
+    import copy
+
     from backend.api.session_manager import get_session
+    from backend.audit.audit import emit_event
     from backend.core.logic.report_analysis.tri_merge import (
         compute_mismatches,
         normalize_and_match,
     )
     from backend.core.logic.report_analysis.tri_merge_models import Tradeline
     from backend.core.logic.utils.report_sections import filter_sections_by_bureau
+
+    tracked_keys = [
+        "negative_accounts",
+        "open_accounts_with_issues",
+        "high_utilization_accounts",
+        "positive_accounts",
+        "all_accounts",
+    ]
+    before = {k: copy.deepcopy(sections.get(k, [])) for k in tracked_keys}
+    counts_before = {k: len(v) for k, v in before.items()}
+    primary_before: dict[str, Any] = {}
+    for lst in before.values():
+        for acc in lst:
+            acc_id = str(acc.get("account_id") or id(acc))
+            primary_before.setdefault(acc_id, acc.get("primary_issue"))
 
     bureau_data = {
         bureau: filter_sections_by_bureau(sections, bureau, [])
@@ -448,6 +466,35 @@ def _annotate_with_tri_merge(sections: Mapping[str, Any]) -> None:
                             statuses[bureau] = status
                 if statuses:
                     acc["bureau_statuses"] = statuses
+
+    # Ensure tri-merge remains purely annotative.
+    violation_reason: str | None = None
+    for key in tracked_keys:
+        if len(sections.get(key, [])) != counts_before.get(key, 0):
+            violation_reason = "account_count_changed"
+            break
+
+    if violation_reason is None:
+        primary_after: dict[str, Any] = {}
+        for key in tracked_keys:
+            for acc in sections.get(key, []):
+                acc_id = str(acc.get("account_id") or id(acc))
+                if acc_id not in primary_after:
+                    primary_after[acc_id] = acc.get("primary_issue")
+        for acc_id, before_issue in primary_before.items():
+            if primary_after.get(acc_id) != before_issue:
+                violation_reason = "primary_issue_changed"
+                break
+        else:
+            for acc_id in primary_after:
+                if acc_id not in primary_before:
+                    violation_reason = "account_count_changed"
+                    break
+
+    if violation_reason:
+        emit_event("trimerge_violation", {"reason": violation_reason})
+        for key, val in before.items():
+            sections[key] = val
 
 
 def generate_strategy_plan(
@@ -1068,9 +1115,8 @@ def extract_problematic_accounts_from_report(
             if single_status:
                 status_texts.append(str(single_status))
             status_lower = " ".join(status_texts).lower()
-            status_contains_co = (
-                "collection" in status_lower
-                or ("charge" in status_lower and "off" in status_lower)
+            status_contains_co = "collection" in status_lower or (
+                "charge" in status_lower and "off" in status_lower
             )
             trace = {
                 "name": acc.get("normalized_name"),

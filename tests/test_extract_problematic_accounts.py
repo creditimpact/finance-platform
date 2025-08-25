@@ -1,8 +1,9 @@
 import copy
+import json
 import logging
+from hashlib import sha1
 
 import pytest
-from hashlib import sha1
 
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.models import BureauPayload
@@ -325,7 +326,7 @@ def test_enriched_metadata_present_parser_only(monkeypatch):
     assert acc["source_stage"] == "ai_final"
 
 
-def test_tri_merge_toggle_does_not_change_counts(monkeypatch):
+def test_tri_merge_toggle_does_not_change_counts_or_primary_issue(monkeypatch, caplog):
     base_sections = {
         "negative_accounts": [
             {
@@ -334,6 +335,7 @@ def test_tri_merge_toggle_does_not_change_counts(monkeypatch):
                 "account_number": "1234",
                 "bureaus": ["Experian"],
                 "issue_types": ["late_payment"],
+                "primary_issue": "late_payment",
             }
         ],
         "open_accounts_with_issues": [
@@ -343,6 +345,7 @@ def test_tri_merge_toggle_does_not_change_counts(monkeypatch):
                 "account_number": "1234",
                 "bureaus": ["Equifax"],
                 "issue_types": ["late_payment"],
+                "primary_issue": "late_payment",
             }
         ],
     }
@@ -350,17 +353,34 @@ def test_tri_merge_toggle_does_not_change_counts(monkeypatch):
     # Tri-merge disabled baseline
     monkeypatch.delenv("ENABLE_TRI_MERGE", raising=False)
     _mock_dependencies(monkeypatch, copy.deepcopy(base_sections))
-    payload = extract_problematic_accounts_from_report("dummy.pdf")
+    with caplog.at_level(logging.INFO, logger="backend.core.orchestrators"):
+        payload = extract_problematic_accounts_from_report("dummy.pdf")
     neg_before = len(payload.disputes)
     open_before = len(payload.goodwill)
+    baseline_trace = [
+        json.loads(r.getMessage().split("account_trace ")[1])
+        for r in caplog.records
+        if "account_trace" in r.getMessage()
+    ]
+    caplog.clear()
 
     # Tri-merge enabled
     _mock_dependencies(monkeypatch, copy.deepcopy(base_sections))
     monkeypatch.setenv("ENABLE_TRI_MERGE", "1")
-    payload_tri = extract_problematic_accounts_from_report("dummy.pdf")
+    with caplog.at_level(logging.INFO, logger="backend.core.orchestrators"):
+        payload_tri = extract_problematic_accounts_from_report("dummy.pdf")
 
     assert len(payload_tri.disputes) == neg_before
     assert len(payload_tri.goodwill) == open_before
+    tri_trace = [
+        json.loads(r.getMessage().split("account_trace ")[1])
+        for r in caplog.records
+        if "account_trace" in r.getMessage()
+    ]
+    assert [t["primary_issue"] for t in tri_trace] == [
+        t["primary_issue"] for t in baseline_trace
+    ]
+    assert len(tri_trace) == len(baseline_trace)
 
 
 def test_extract_problematic_accounts_logs_enriched_metadata(monkeypatch, caplog):
@@ -407,12 +427,23 @@ def test_ai_failure_falls_back_to_parser(monkeypatch):
         request_id=None,
     ):
         if run_ai:
-            return {"ai_failed": True, "all_accounts": [], "negative_accounts": [], "open_accounts_with_issues": []}
+            return {
+                "ai_failed": True,
+                "all_accounts": [],
+                "negative_accounts": [],
+                "open_accounts_with_issues": [],
+            }
         history = {"parser bank": {"Experian": {"30": 1}}}
         raw_map = {"parser bank": "Parser Bank"}
-        from backend.core.logic.report_analysis.report_postprocessing import _inject_missing_late_accounts
+        from backend.core.logic.report_analysis.report_postprocessing import (
+            _inject_missing_late_accounts,
+        )
 
-        result = {"all_accounts": [], "negative_accounts": [], "open_accounts_with_issues": []}
+        result = {
+            "all_accounts": [],
+            "negative_accounts": [],
+            "open_accounts_with_issues": [],
+        }
         _inject_missing_late_accounts(result, history, raw_map, {})
         result["needs_human_review"] = True
         return result

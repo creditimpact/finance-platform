@@ -267,6 +267,27 @@ def test_detection_mode_keeps_accounts_without_issue_types(monkeypatch):
     assert {a["name"] for a in result["problem_accounts"]} == {"Bad", "NoIssue"}
 
 
+def test_detection_mode_dict_adapter(monkeypatch):
+    sections = {
+        "negative_accounts": [
+            {"name": "Bad", "issue_types": ["late_payment"]},
+            {"name": "NoIssue"},
+        ],
+        "open_accounts_with_issues": [],
+        "unauthorized_inquiries": [],
+        "high_utilization_accounts": [],
+    }
+    _mock_dependencies(monkeypatch, sections)
+    monkeypatch.setenv("PROBLEM_DETECTION_ONLY", "1")
+    monkeypatch.setattr(
+        "backend.core.logic.report_analysis.report_postprocessing.enrich_account_metadata",
+        lambda acc: acc,
+    )
+    with pytest.deprecated_call():
+        result = extract_problematic_accounts_from_report_dict("dummy.pdf")
+    assert {a["name"] for a in result["problem_accounts"]} == {"Bad", "NoIssue"}
+
+
 def test_accounts_without_issue_types_can_be_suppressed_with_flag(monkeypatch, caplog):
     sections = {
         "negative_accounts": [

@@ -1244,7 +1244,7 @@ def extract_problematic_accounts_from_report(
             ):
                 logger.info("account_trace_bug %s", json.dumps(trace, sort_keys=True))
             logger.info("account_trace %s", json.dumps(trace, sort_keys=True))
-    if os.getenv("PROBLEM_DETECTION_ONLY"):
+    if os.getenv("PROBLEM_DETECTION_ONLY") == "1":
         return {
             "problem_accounts": sections.get("negative_accounts", [])
             + sections.get("open_accounts_with_issues", [])
@@ -1289,6 +1289,8 @@ def extract_problematic_accounts_from_report_dict(
         stacklevel=2,
     )
     payload = extract_problematic_accounts_from_report(file_path, session_id)
+    if isinstance(payload, Mapping):
+        return payload
     return {
         "negative_accounts": [a.to_dict() for a in payload.disputes],
         "open_accounts_with_issues": [a.to_dict() for a in payload.goodwill],

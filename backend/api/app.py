@@ -145,18 +145,24 @@ def start_process():
             timeout=300
         )
 
-        legacy = {
+        problem_accounts = result.get("problem_accounts")
+        if problem_accounts is None:
+            problem_accounts = []
+            problem_accounts.extend(result.get("disputes", []))
+            problem_accounts.extend(result.get("goodwill", []))
+
+        accounts = {
+            # Primary field
+            "problem_accounts": problem_accounts,
             # Backward compatibility fields
-            "negative_accounts": result.get(
-                "negative_accounts",
-                result.get("disputes", result.get("problem_accounts", [])),
+            "negative_accounts": problem_accounts,
+            "open_accounts_with_issues": problem_accounts,
+            "unauthorized_inquiries": result.get(
+                "unauthorized_inquiries", result.get("inquiries", [])
             ),
-            "open_accounts_with_issues": result.get(
-                "open_accounts_with_issues",
-                result.get("goodwill", result.get("problem_accounts", [])),
+            "high_utilization_accounts": result.get(
+                "high_utilization_accounts", result.get("high_utilization", [])
             ),
-            "unauthorized_inquiries": result.get("inquiries", []),
-            "high_utilization_accounts": result.get("high_utilization", []),
         }
 
         payload = {
@@ -164,10 +170,8 @@ def start_process():
             "session_id": session_id,
             "filename": unique_name,
             "original_filename": original_name,
-            "accounts": legacy,
+            "accounts": accounts,
         }
-
-        payload["accounts"]["problem_accounts"] = result.get("problem_accounts", [])
 
         logger.info("start_process payload: %s", payload)
 

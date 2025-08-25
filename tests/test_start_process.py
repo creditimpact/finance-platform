@@ -41,6 +41,10 @@ def test_start_process_success(monkeypatch, tmp_path):
     payload = json.loads(resp.data)
     assert payload["status"] == "awaiting_user_explanations"
     assert not called.get("called")
+    accounts = payload["accounts"]
+    assert accounts["problem_accounts"] == accounts["negative_accounts"] == accounts[
+        "open_accounts_with_issues"
+    ]
 
 
 def test_start_process_missing_file():
@@ -102,7 +106,11 @@ def test_start_process_emits_enriched_fields(monkeypatch, tmp_path):
     )
     assert resp.status_code == 200
     payload_json = json.loads(resp.data)
-    acc = payload_json["accounts"]["negative_accounts"][0]
+    accounts = payload_json["accounts"]
+    assert accounts["problem_accounts"] == accounts["negative_accounts"] == accounts[
+        "open_accounts_with_issues"
+    ]
+    acc = accounts["problem_accounts"][0]
     assert acc["primary_issue"] == "charge_off"
     assert acc["account_number_last4"] == "6789"
     assert acc["original_creditor"] == "OC"

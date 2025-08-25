@@ -1056,6 +1056,22 @@ def extract_problematic_accounts_from_report(
                 remarks_contains_co = (
                     "charge" in remarks_lower and "off" in remarks_lower
                 ) or "collection" in remarks_lower
+            statuses = acc.get("payment_statuses")
+            status_texts: list[str] = []
+            if isinstance(statuses, dict):
+                status_texts.extend(str(v or "") for v in statuses.values())
+            elif isinstance(statuses, (list, tuple, set)):
+                status_texts.extend(str(v or "") for v in statuses)
+            else:
+                status_texts.append(str(statuses or ""))
+            single_status = acc.get("payment_status")
+            if single_status:
+                status_texts.append(str(single_status))
+            status_lower = " ".join(status_texts).lower()
+            status_contains_co = (
+                "collection" in status_lower
+                or ("charge" in status_lower and "off" in status_lower)
+            )
             trace = {
                 "name": acc.get("normalized_name"),
                 "source_stage": acc.get("source_stage"),
@@ -1072,6 +1088,10 @@ def extract_problematic_accounts_from_report(
                 "account_number_last4": acc.get("account_number_last4"),
                 "account_fingerprint": acc.get("account_fingerprint"),
             }
+            if acc.get("primary_issue") in {"charge_off", "collection"} and not (
+                acc.get("has_co_marker") or status_contains_co or remarks_contains_co
+            ):
+                logger.info("account_trace_bug %s", json.dumps(trace, sort_keys=True))
             logger.info("account_trace %s", json.dumps(trace, sort_keys=True))
     payload = BureauPayload(
         disputes=[

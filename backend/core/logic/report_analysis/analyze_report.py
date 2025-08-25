@@ -626,10 +626,34 @@ def analyze_credit_report(
                 norm = acc.get("normalized_name") or normalize_creditor_name(
                     acc.get("name", "")
                 )
+                raw_name = acc.get("name", "")
                 acc["normalized_name"] = norm
                 values_map = field_map.get(norm)
                 if not values_map:
+                    logger.info(
+                        "heading_join_miss %s",
+                        json.dumps(
+                            {
+                                "raw_key": raw_name,
+                                "normalized": norm,
+                                "target_present": False,
+                                "map": "account_number",
+                            },
+                            sort_keys=True,
+                        ),
+                    )
                     continue
+                logger.info(
+                    "heading_join_linked %s",
+                    json.dumps(
+                        {
+                            "raw_key": raw_name,
+                            "normalized_target": norm,
+                            "method": "canonical",
+                        },
+                        sort_keys=True,
+                    ),
+                )
                 acc.setdefault("bureaus", [])
                 raw_unique: set[str] = set()
                 digit_unique: set[str] = set()
@@ -661,10 +685,34 @@ def analyze_credit_report(
                 norm = acc.get("normalized_name") or normalize_creditor_name(
                     acc.get("name", "")
                 )
+                raw_name = acc.get("name", "")
                 acc["normalized_name"] = norm
                 values_map = detail_map.get(norm)
                 if not values_map:
+                    logger.info(
+                        "heading_join_miss %s",
+                        json.dumps(
+                            {
+                                "raw_key": raw_name,
+                                "normalized": norm,
+                                "target_present": False,
+                                "map": "bureau_details",
+                            },
+                            sort_keys=True,
+                        ),
+                    )
                     continue
+                logger.info(
+                    "heading_join_linked %s",
+                    json.dumps(
+                        {
+                            "raw_key": raw_name,
+                            "normalized_target": norm,
+                            "method": "canonical",
+                        },
+                        sort_keys=True,
+                    ),
+                )
                 bd = acc.setdefault("bureau_details", {})
                 for bureau, fields in values_map.items():
                     bd.setdefault(bureau, {}).update(fields)

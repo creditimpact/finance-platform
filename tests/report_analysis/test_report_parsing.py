@@ -39,7 +39,22 @@ Balance: 0
     numbers = extract_account_numbers(text)
     key = normalize_creditor_name("PALISADES FU")
     assert numbers[key] == {
-        "TransUnion": "123456",
+        "TransUnion": "1234-56",
         "Experian": "7890",
         "Equifax": "1357",
+    }
+
+
+def test_extract_account_numbers_masked_forms():
+    text = """
+PALISADES FU
+Account #            ****1234            12 34 56            1234-5678-9012
+Balance: 0
+"""
+    numbers = extract_account_numbers(text)
+    key = normalize_creditor_name("PALISADES FU")
+    assert numbers[key] == {
+        "TransUnion": "****1234",
+        "Experian": "12 34 56",
+        "Equifax": "1234-5678-9012",
     }

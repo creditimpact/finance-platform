@@ -141,3 +141,13 @@ def test_enrich_account_metadata_sets_last4_from_bureaus():
     rp.enrich_account_metadata(acc)
     assert acc["account_number_last4"] == "7890"
     assert "account_fingerprint" not in acc
+
+
+def test_enrich_account_metadata_uses_account_number_raw():
+    acc = {
+        "name": "Acme Bank",
+        "bureaus": [{"bureau": "TransUnion", "account_number_raw": "****4321"}],
+    }
+    rp.enrich_account_metadata(acc)
+    assert acc["account_number_last4"] == "4321"
+    assert "account_fingerprint" not in acc

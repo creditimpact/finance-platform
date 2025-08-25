@@ -142,11 +142,40 @@ test('prefers last4 over fingerprint when both provided', async () => {
     accounts: { negative_accounts: [acc] },
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
       <ReviewPage />
     </MemoryRouter>
   );
   const header = await screen.findByText('Account 5');
   expect(header.parentElement).toHaveTextContent('Account 5 ••••4321 - Creditor 5');
   expect(header.parentElement).not.toHaveTextContent('cafebabe');
+});
+
+test('dedup uses last4 before fingerprint', async () => {
+  const acc1 = {
+    account_id: 'acc6',
+    name: 'Account 6',
+    normalized_name: 'account 6',
+    account_number_last4: '9999',
+    account_fingerprint: 'aaaa',
+    primary_issue: 'late_payment',
+    issue_types: ['late_payment'],
+  };
+  const acc2 = {
+    ...acc1,
+    account_id: 'acc7',
+    account_fingerprint: 'bbbb',
+  };
+  const uploadData = {
+    ...baseUploadData,
+    accounts: { negative_accounts: [acc1, acc2] },
+  };
+  render(
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+      <ReviewPage />
+    </MemoryRouter>
+  );
+  // Only one card should render despite differing fingerprints
+  const headers = await screen.findAllByText('Account 6');
+  expect(headers).toHaveLength(1);
 });

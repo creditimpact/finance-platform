@@ -1,7 +1,7 @@
 """Utilities for parsing credit report PDFs into text and sections."""
 
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import Any, Mapping, cast
 
 
@@ -27,12 +27,12 @@ def extract_text_from_pdf(pdf_path: str | Path) -> str:
     return cast(str, extract_pdf_text_safe(Path(pdf_path), max_chars=150000))
 
 
-from backend.core.models.bureau import BureauAccount  # noqa: E402
-from backend.core.logic.utils.text_parsing import extract_account_blocks
-from backend.core.logic.utils.names_normalization import (
+from backend.core.logic.utils.names_normalization import (  # noqa: E402
     normalize_bureau_name,
     normalize_creditor_name,
 )
+from backend.core.logic.utils.text_parsing import extract_account_blocks  # noqa: E402
+from backend.core.models.bureau import BureauAccount  # noqa: E402
 
 
 def bureau_data_from_dict(
@@ -76,6 +76,21 @@ ACCOUNT_NUMBER_LINE_RE = re.compile(
 )
 
 
+def _normalize_account_number(value: str) -> str | None:
+    """Return a cleaned ``value`` if it contains at least one digit.
+
+    The normalization removes whitespace and dashes while preserving any mask
+    characters such as ``*``. If no digits are present the function returns
+    ``None`` so callers can skip storing meaningless placeholders like
+    ``"t disputed"``.
+    """
+
+    value = value.strip()
+    if not re.search(r"\d", value):
+        return None
+    return re.sub(r"[\s-]", "", value)
+
+
 def extract_payment_statuses(text: str) -> dict[str, dict[str, str]]:
     """Extract ``Payment Status`` lines for each bureau section.
 
@@ -101,15 +116,15 @@ def extract_payment_statuses(text: str) -> dict[str, dict[str, str]]:
         block_text = "\n".join(block[1:])
         row = PAYMENT_STATUS_ROW_RE.search(block_text)
         if row:
-            statuses.setdefault(acc_norm, {})[
-                normalize_bureau_name("TransUnion")
-            ] = row.group("tu").strip()
-            statuses.setdefault(acc_norm, {})[
-                normalize_bureau_name("Experian")
-            ] = row.group("ex").strip()
-            statuses.setdefault(acc_norm, {})[
-                normalize_bureau_name("Equifax")
-            ] = row.group("eq").strip()
+            statuses.setdefault(acc_norm, {})[normalize_bureau_name("TransUnion")] = (
+                row.group("tu").strip()
+            )
+            statuses.setdefault(acc_norm, {})[normalize_bureau_name("Experian")] = (
+                row.group("ex").strip()
+            )
+            statuses.setdefault(acc_norm, {})[normalize_bureau_name("Equifax")] = (
+                row.group("eq").strip()
+            )
 
         current_bureau: str | None = None
         for line in block[1:]:
@@ -120,13 +135,17 @@ def extract_payment_statuses(text: str) -> dict[str, dict[str, str]]:
                 # If the bureau line itself contains a payment status
                 ps_inline = PAYMENT_STATUS_RE.search(clean)
                 if ps_inline:
-                    statuses.setdefault(acc_norm, {})[current_bureau] = ps_inline.group(1).strip()
+                    statuses.setdefault(acc_norm, {})[current_bureau] = ps_inline.group(
+                        1
+                    ).strip()
                 continue
 
             if current_bureau:
                 ps = PAYMENT_STATUS_RE.match(clean)
                 if ps:
-                    statuses.setdefault(acc_norm, {})[current_bureau] = ps.group(1).strip()
+                    statuses.setdefault(acc_norm, {})[current_bureau] = ps.group(
+                        1
+                    ).strip()
 
     return statuses
 
@@ -155,21 +174,17 @@ def extract_account_numbers(text: str) -> dict[str, dict[str, str]]:
         block_text = "\n".join(block[1:])
         row = ACCOUNT_NUMBER_ROW_RE.search(block_text)
         if row:
-            tu = row.group("tu").strip()
-            ex = row.group("ex").strip()
-            eq = row.group("eq").strip()
+            tu = _normalize_account_number(row.group("tu"))
+            ex = _normalize_account_number(row.group("ex"))
+            eq = _normalize_account_number(row.group("eq"))
             if tu:
                 numbers.setdefault(acc_norm, {})[
                     normalize_bureau_name("TransUnion")
                 ] = tu
             if ex:
-                numbers.setdefault(acc_norm, {})[
-                    normalize_bureau_name("Experian")
-                ] = ex
+                numbers.setdefault(acc_norm, {})[normalize_bureau_name("Experian")] = ex
             if eq:
-                numbers.setdefault(acc_norm, {})[
-                    normalize_bureau_name("Equifax")
-                ] = eq
+                numbers.setdefault(acc_norm, {})[normalize_bureau_name("Equifax")] = eq
 
         current_bureau: str | None = None
         for line in block[1:]:
@@ -180,7 +195,7 @@ def extract_account_numbers(text: str) -> dict[str, dict[str, str]]:
                 # Bureau line itself might contain the account number
                 inline = ACCOUNT_NUMBER_LINE_RE.search(clean)
                 if inline:
-                    value = inline.group(1).strip()
+                    value = _normalize_account_number(inline.group(1))
                     if value:
                         numbers.setdefault(acc_norm, {})[current_bureau] = value
                 continue
@@ -188,7 +203,7 @@ def extract_account_numbers(text: str) -> dict[str, dict[str, str]]:
             if current_bureau:
                 m = ACCOUNT_NUMBER_LINE_RE.match(clean)
                 if m:
-                    value = m.group(1).strip()
+                    value = _normalize_account_number(m.group(1))
                     if value:
                         numbers.setdefault(acc_norm, {})[current_bureau] = value
 
@@ -225,12 +240,16 @@ def extract_creditor_remarks(text: str) -> dict[str, dict[str, str]]:
                 # If the bureau line itself contains remarks
                 rem_inline = CREDITOR_REMARKS_RE.search(clean)
                 if rem_inline:
-                    remarks.setdefault(acc_norm, {})[current_bureau] = rem_inline.group(1).strip()
+                    remarks.setdefault(acc_norm, {})[current_bureau] = rem_inline.group(
+                        1
+                    ).strip()
                 continue
 
             if current_bureau:
                 rem = CREDITOR_REMARKS_RE.match(clean)
                 if rem:
-                    remarks.setdefault(acc_norm, {})[current_bureau] = rem.group(1).strip()
+                    remarks.setdefault(acc_norm, {})[current_bureau] = rem.group(
+                        1
+                    ).strip()
 
     return remarks

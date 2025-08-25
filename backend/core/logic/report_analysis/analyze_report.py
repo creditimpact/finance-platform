@@ -24,6 +24,7 @@ from rapidfuzz import fuzz
 
 from backend.core.logic.utils.inquiries import extract_inquiries
 from backend.core.logic.utils.norm import normalize_heading
+from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.logic.utils.text_parsing import (
     enforce_collection_status,
     extract_account_headings,
@@ -162,7 +163,9 @@ def _attach_parser_signals(
     for acc in accounts or []:
         if acc.get("source_stage") != "parser_aggregated":
             continue
-        norm = acc.get("normalized_name") or normalize_heading(acc.get("name", ""))
+        norm = acc.get("normalized_name") or normalize_creditor_name(
+            acc.get("name", "")
+        )
         acc["normalized_name"] = norm
         bureau_map = payment_statuses_by_heading.get(norm, {})
         acc["payment_statuses"] = bureau_map
@@ -197,6 +200,20 @@ def _fuzzy_match(name: str, choices: set[str]) -> str | None:
     if best_score >= 0.8:
         return best
     return None
+
+
+def _normalize_keys(mapping: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of *mapping* with creditor names normalized."""
+
+    normalized: dict[str, Any] = {}
+    for key, value in mapping.items():
+        norm = normalize_creditor_name(key)
+        existing = normalized.get(norm)
+        if existing and isinstance(existing, dict) and isinstance(value, dict):
+            existing.update(value)
+        else:
+            normalized[norm] = value
+    return normalized
 
 
 def _join_heading_map(
@@ -344,7 +361,7 @@ def analyze_credit_report(
         raise ValueError("[ERROR] No text extracted from PDF")
 
     headings = extract_account_headings(text)
-    heading_map = {norm: raw for norm, raw in headings}
+    heading_map = {normalize_creditor_name(norm): raw for norm, raw in headings}
 
     def detected_late_phrases(txt: str) -> bool:
         return bool(re.search(r"late|past due", txt, re.I))
@@ -449,6 +466,18 @@ def analyze_credit_report(
                 if num:
                     account_number_map.setdefault(acc_name, {})[bureau] = str(num)
 
+        history_all = _normalize_keys(history_all)
+        raw_map = _normalize_keys(raw_map)
+        grid_all = _normalize_keys(grid_all)
+        history = _normalize_keys(history)
+        grid_map = _normalize_keys(grid_map)
+        payment_status_map = _normalize_keys(payment_status_map)
+        _payment_status_raw_map = _normalize_keys(_payment_status_raw_map)
+        remarks_map = _normalize_keys(remarks_map)
+        status_text_map = _normalize_keys(status_text_map)
+        account_number_map = _normalize_keys(account_number_map)
+        detail_map = _normalize_keys(detail_map)
+
         if history:
             print(f"[INFO] Found {len(history)} late payment block(s):")
             for creditor, bureaus in history.items():
@@ -469,7 +498,7 @@ def analyze_credit_report(
         for section in sections:
             for acc in result.get(section, []):
                 raw_name = acc.get("name", "")
-                norm = normalize_heading(raw_name)
+                norm = normalize_creditor_name(raw_name)
                 if raw_name and norm != raw_name.lower().strip():
                     print(f"[~] Normalized account heading '{raw_name}' -> '{norm}'")
                 acc["normalized_name"] = norm
@@ -563,7 +592,7 @@ def analyze_credit_report(
 
         def strip_unverified(acc_list):
             for acc in acc_list:
-                norm = acc.get("normalized_name") or normalize_heading(
+                norm = acc.get("normalized_name") or normalize_creditor_name(
                     acc.get("name", "")
                 )
                 acc["normalized_name"] = norm
@@ -594,7 +623,7 @@ def analyze_credit_report(
 
         def _merge_account_numbers(acc_list, field_map):
             for acc in acc_list or []:
-                norm = acc.get("normalized_name") or normalize_heading(
+                norm = acc.get("normalized_name") or normalize_creditor_name(
                     acc.get("name", "")
                 )
                 acc["normalized_name"] = norm
@@ -629,7 +658,7 @@ def analyze_credit_report(
 
         def _merge_bureau_details(acc_list, detail_map):
             for acc in acc_list or []:
-                norm = acc.get("normalized_name") or normalize_heading(
+                norm = acc.get("normalized_name") or normalize_creditor_name(
                     acc.get("name", "")
                 )
                 acc["normalized_name"] = norm

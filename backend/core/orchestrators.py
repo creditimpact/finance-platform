@@ -1062,14 +1062,22 @@ def extract_problematic_accounts_from_report(
             if not skip_issue_check and not acc.get("issue_types"):
                 logger.info(
                     "suppressed_account %s",
-                    {"reason": "missing_issue_types", "name": acc.get("name"), "category": cat},
+                    {
+                        "suppression_reason": "missing_issue_types",
+                        "name": acc.get("name"),
+                        "category": cat,
+                    },
                 )
                 continue
             norm = normalize_creditor_name(acc.get("name", ""))
             if EXCLUDE_PARSER_AGGREGATED_ACCOUNTS and norm in parser_only:
                 logger.info(
                     "suppressed_account %s",
-                    {"reason": "parser_aggregated_only", "name": acc.get("name"), "category": cat},
+                    {
+                        "suppression_reason": "parser_aggregated_only",
+                        "name": acc.get("name"),
+                        "category": cat,
+                    },
                 )
                 continue
             enriched = enrich_account_metadata(acc)

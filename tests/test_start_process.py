@@ -3,10 +3,8 @@ import json
 
 from backend.api import app as app_module
 from backend.api.app import create_app
+from backend.core.logic.report_analysis.report_postprocessing import _assign_issue_types
 from backend.core.orchestrators import extract_problematic_accounts_from_report
-from backend.core.logic.report_analysis.report_postprocessing import (
-    _assign_issue_types,
-)
 from tests.test_extract_problematic_accounts import _mock_dependencies
 
 
@@ -107,9 +105,11 @@ def test_start_process_emits_enriched_fields(monkeypatch, tmp_path):
     assert resp.status_code == 200
     payload_json = json.loads(resp.data)
     accounts = payload_json["accounts"]
-    assert accounts["problem_accounts"] == accounts["negative_accounts"] == accounts[
-        "open_accounts_with_issues"
-    ]
+    assert (
+        accounts["problem_accounts"]
+        == accounts["negative_accounts"]
+        == accounts["open_accounts_with_issues"]
+    )
     acc = accounts["problem_accounts"][0]
     assert acc["primary_issue"] == "charge_off"
     assert acc["account_number_last4"] == "6789"
@@ -141,7 +141,8 @@ def test_emitted_account_logs_payment_statuses(monkeypatch, caplog):
     with caplog.at_level("INFO", logger="backend.core.orchestrators"):
         extract_problematic_accounts_from_report("dummy.pdf")
     assert any(
-        "emitted_account" in r.message and "payment_statuses={'TransUnion': 'Collection/Chargeoff'}" in r.message
+        "emitted_account" in r.message
+        and "payment_statuses={'TransUnion': 'Collection/Chargeoff'}" in r.message
         for r in caplog.records
     )
 
@@ -167,4 +168,4 @@ def test_emitted_account_logs_co_marker(monkeypatch, caplog):
         and "co_bureaus=['Experian']" in r.message
         for r in caplog.records
     )
-    assert payload.disputes[0].extras.get("primary_issue") == "charge_off"
+    assert payload.disputes[0].primary_issue == "charge_off"

@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Type
 
-from .account import Account, Inquiry
+from .account import Inquiry
+from .problem_account import ProblemAccount
 
 
 @dataclass
@@ -13,20 +14,20 @@ class BureauPayload:
     Replaces the previous free-form ``dict`` layout used across the codebase.
     """
 
-    disputes: List[Account] = field(default_factory=list)
-    goodwill: List[Account] = field(default_factory=list)
+    disputes: List[ProblemAccount] = field(default_factory=list)
+    goodwill: List[ProblemAccount] = field(default_factory=list)
     inquiries: List[Inquiry] = field(default_factory=list)
-    high_utilization: List[Account] = field(default_factory=list)
+    high_utilization: List[ProblemAccount] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls: Type["BureauPayload"], data: Dict[str, Any]) -> "BureauPayload":
         return cls(
             disputes=[
-                Account.from_dict(d) if isinstance(d, dict) else d
+                BureauAccount.from_dict(d) if isinstance(d, dict) else d
                 for d in data.get("disputes", [])
             ],
             goodwill=[
-                Account.from_dict(d) if isinstance(d, dict) else d
+                BureauAccount.from_dict(d) if isinstance(d, dict) else d
                 for d in data.get("goodwill", [])
             ],
             inquiries=[
@@ -34,7 +35,7 @@ class BureauPayload:
                 for i in data.get("inquiries", [])
             ],
             high_utilization=[
-                Account.from_dict(d) if isinstance(d, dict) else d
+                ProblemAccount.from_dict(d) if isinstance(d, dict) else d
                 for d in data.get("high_utilization", [])
             ],
         )
@@ -49,7 +50,7 @@ class BureauPayload:
 
 
 @dataclass
-class BureauAccount(Account):
+class BureauAccount(ProblemAccount):
     """Account entry associated with a specific credit bureau."""
 
     bureau: Optional[str] = None
@@ -58,7 +59,7 @@ class BureauAccount(Account):
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BureauAccount":
         data = {k: v for k, v in data.items() if k not in {"bureaus"}}
-        base = Account.from_dict(
+        base = ProblemAccount.from_dict(
             {k: v for k, v in data.items() if k not in {"bureau", "section"}}
         )
         return cls(

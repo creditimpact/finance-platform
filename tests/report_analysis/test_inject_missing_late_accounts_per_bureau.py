@@ -19,10 +19,10 @@ def test_inject_missing_late_accounts_aggregated():
 
     assert len(accounts) == 1
     acc = accounts[0]
-    assert acc.extras["late_payments"] == history["cap_one"]
-    assert acc.extras.get("source_stage") == "parser_aggregated"
-    assert acc.extras.get("issue_types") == ["late_payment"]
-    assert acc.status == "Delinquent"
+    assert acc.late_payments == history["cap_one"]
+    assert acc.source_stage == "parser_aggregated"
+    assert acc.issue_types == ["late_payment"]
+    assert acc.extras.get("status") == "Delinquent"
     assert len(result.get("negative_accounts", [])) == 1
 
 
@@ -38,9 +38,9 @@ def test_inject_missing_late_accounts_detects_charge_off():
 
     assert len(accounts) == 1
     acc = accounts[0]
-    assert acc.extras["late_payments"] == history["cap_one"]
+    assert acc.late_payments == history["cap_one"]
     assert acc.extras.get("grid_history_raw") == grid_map["cap_one"]
-    assert acc.extras.get("source_stage") == "parser_aggregated"
-    assert acc.extras.get("issue_types") == ["charge_off", "late_payment"]
-    assert acc.extras.get("primary_issue") == "charge_off"
-    assert acc.status == "Charge Off"
+    assert acc.source_stage == "parser_aggregated"
+    assert acc.issue_types == ["charge_off", "late_payment"]
+    assert acc.primary_issue == "charge_off"
+    assert acc.extras.get("status") == "Charge Off"

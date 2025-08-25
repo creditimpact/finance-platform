@@ -151,3 +151,16 @@ def test_enrich_account_metadata_uses_account_number_raw():
     rp.enrich_account_metadata(acc)
     assert acc["account_number_last4"] == "4321"
     assert "account_fingerprint" not in acc
+
+
+def test_enrich_account_metadata_skips_when_no_digits():
+    acc = {
+        "name": "Acme Bank",
+        "account_number_raw": "t disputed",
+        "bureaus": [{"bureau": "Experian", "account_number_raw": "N/A"}],
+    }
+    rp.enrich_account_metadata(acc)
+    assert "account_number_last4" not in acc
+    assert "account_number_raw" not in acc
+    assert all("account_number_raw" not in b for b in acc.get("bureaus", []))
+    assert "account_fingerprint" in acc

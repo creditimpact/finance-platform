@@ -58,6 +58,41 @@ def enrich_account_metadata(acc: dict[str, Any]) -> dict[str, Any]:
     name = acc.get("name", "")
     acc["normalized_name"] = normalize_creditor_name(name)
 
+    def _clean_number(value: str) -> str | None:
+        """Normalize ``value`` if it contains digits; otherwise return ``None``."""
+
+        if not re.search(r"\d", value or ""):
+            return None
+        return re.sub(r"[\s-]", "", value)
+
+    # Sanitize any pre-existing account number fields on the root object
+    for field in ("account_number_raw", "account_number", "account_number_masked"):
+        val = acc.get(field)
+        if isinstance(val, str):
+            cleaned = _clean_number(val)
+            if cleaned:
+                if field == "account_number":
+                    cleaned = re.sub(r"\D", "", cleaned)
+                acc[field] = cleaned
+            else:
+                acc.pop(field, None)
+
+    # Sanitize bureau level account numbers
+    for info in acc.get("bureaus", []) or []:
+        if not isinstance(info, dict):
+            continue
+        for field in ("account_number_raw", "account_number", "account_number_masked"):
+            val = info.get(field)
+            if not isinstance(val, str):
+                continue
+            cleaned = _clean_number(val)
+            if cleaned:
+                if field == "account_number":
+                    cleaned = re.sub(r"\D", "", cleaned)
+                info[field] = cleaned
+            else:
+                info.pop(field, None)
+
     # Derive a last4 account number from any available account number field
     acct_num = (
         acc.get("account_number")
@@ -101,8 +136,7 @@ def enrich_account_metadata(acc: dict[str, Any]) -> dict[str, Any]:
     # Derive a stable fingerprint when no account number is available
     if "account_number_last4" not in acc:
         acc["account_fingerprint"] = sha1(
-            f"{acc['normalized_name']}|{acc.get('date_opened')}|{','.join(sorted((acc.get('late_payments') or {}).keys()))}"
-            .encode()
+            f"{acc['normalized_name']}|{acc.get('date_opened')}|{','.join(sorted((acc.get('late_payments') or {}).keys()))}".encode()
         ).hexdigest()[:8]
 
     # Build a distilled status per bureau when bureau level info is available
@@ -369,7 +403,9 @@ def _assign_issue_types(acc: dict) -> None:
     remarks = acc.get("remarks")
     if isinstance(remarks, str):
         rl = remarks.lower()
-        acc["remarks_contains_co"] = ("charge" in rl and "off" in rl) or "collection" in rl
+        acc["remarks_contains_co"] = (
+            "charge" in rl and "off" in rl
+        ) or "collection" in rl
 
     # Aggregate any status-like text from the account and its bureau entries
     status_parts = [
@@ -469,7 +505,9 @@ def _inject_missing_late_accounts(
         flags: List[str] = ["Late Payments"]
         histories = grid_map.get(norm_name, {})
         co_bureaus = [
-            b for b, txt in histories.items() if isinstance(txt, str) and "CO" in txt.upper()
+            b
+            for b, txt in histories.items()
+            if isinstance(txt, str) and "CO" in txt.upper()
         ]
         if co_bureaus:
             flags.append("Charge-Off")

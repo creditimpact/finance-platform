@@ -1,8 +1,8 @@
 import pytest
 
 from backend.core.logic.report_analysis.report_parsing import (
-    extract_payment_statuses,
     extract_account_numbers,
+    extract_payment_statuses,
 )
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 
@@ -39,7 +39,7 @@ Balance: 0
     numbers = extract_account_numbers(text)
     key = normalize_creditor_name("PALISADES FU")
     assert numbers[key] == {
-        "TransUnion": "1234-56",
+        "TransUnion": "123456",
         "Experian": "7890",
         "Equifax": "1357",
     }
@@ -55,6 +55,17 @@ Balance: 0
     key = normalize_creditor_name("PALISADES FU")
     assert numbers[key] == {
         "TransUnion": "****1234",
-        "Experian": "12 34 56",
-        "Equifax": "1234-5678-9012",
+        "Experian": "123456",
+        "Equifax": "123456789012",
     }
+
+
+def test_extract_account_numbers_skips_non_digits():
+    text = """
+PALISADES FU
+Account #            t disputed            ****1234            N/A
+Balance: 0
+"""
+    numbers = extract_account_numbers(text)
+    key = normalize_creditor_name("PALISADES FU")
+    assert numbers[key] == {"Experian": "****1234"}

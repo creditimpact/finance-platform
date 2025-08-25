@@ -215,7 +215,8 @@ test('renders evidence drawer when debug flag enabled', async () => {
   process.env.VITE_DEBUG_EVIDENCE = '1';
   const acc = {
     ...account,
-    account_trace: { payment_status: 'late' }
+    account_trace: { payment_status: 'late' },
+    bureau_details: { Experian: { account_status: '<script>alert(1)</script>' } }
   };
   const uploadData = {
     ...baseUploadData,
@@ -228,8 +229,11 @@ test('renders evidence drawer when debug flag enabled', async () => {
   );
   const expander = await screen.findByText('View evidence');
   const content = screen.getByText(/payment_status/i);
+  const raw = screen.getByText(/<script>alert\(1\)<\/script>/);
   expect(content).not.toBeVisible();
+  expect(raw).not.toBeVisible();
   fireEvent.click(expander);
   expect(content).toBeVisible();
+  expect(raw).toBeVisible();
   process.env.VITE_DEBUG_EVIDENCE = originalEnv;
 });

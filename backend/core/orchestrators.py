@@ -1170,6 +1170,7 @@ def extract_problematic_accounts_from_report(
                 ):
                     trace_missing_reasons.append("no_collection_in_status_texts")
             details_hint: dict[str, dict[str, Any]] = {}
+            details_contains_co = False
             for bureau, fields in (acc.get("bureau_details") or {}).items():
                 code = {
                     "TransUnion": "TU",
@@ -1182,6 +1183,11 @@ def extract_problematic_accounts_from_report(
                 )
                 if status_val:
                     hint["status"] = status_val
+                    status_lower = str(status_val).lower()
+                    if "collection" in status_lower or (
+                        "charge" in status_lower and "off" in status_lower
+                    ):
+                        details_contains_co = True
                 past_due_val = fields.get("past_due_amount")
                 if past_due_val not in (None, "", 0):
                     hint["past_due"] = past_due_val
@@ -1196,18 +1202,25 @@ def extract_problematic_accounts_from_report(
                 "payment_statuses": acc.get("payment_statuses"),
                 "payment_status": acc.get("payment_status"),
                 "has_co_marker": acc.get("has_co_marker"),
-                "co_bureaus": acc.get("co_bureaus"),
                 "remarks_contains_co": remarks_contains_co,
                 "late_payments": acc.get("late_payments"),
                 "bureau_statuses": acc.get("bureau_statuses"),
                 "account_number_last4": acc.get("account_number_last4"),
                 "account_fingerprint": acc.get("account_fingerprint"),
                 "original_creditor": acc.get("original_creditor"),
-                "trace_missing_reasons": trace_missing_reasons,
-                "details_hint": details_hint,
             }
+            co_bureaus = acc.get("co_bureaus")
+            if co_bureaus:
+                trace["co_bureaus"] = co_bureaus
+            if trace_missing_reasons:
+                trace["trace_missing_reasons"] = trace_missing_reasons
+            if details_hint:
+                trace["details_hint"] = details_hint
             if acc.get("primary_issue") in {"charge_off", "collection"} and not (
-                acc.get("has_co_marker") or status_contains_co or remarks_contains_co
+                acc.get("has_co_marker")
+                or status_contains_co
+                or remarks_contains_co
+                or details_contains_co
             ):
                 logger.info("account_trace_bug %s", json.dumps(trace, sort_keys=True))
             logger.info("account_trace %s", json.dumps(trace, sort_keys=True))

@@ -165,7 +165,14 @@ export default function ReviewPage() {
               <details className="evidence-toggle">
                 <summary>View evidence</summary>
                 <pre className="summary-box">
-                  {JSON.stringify(acc.account_trace ?? {}, null, 2)}
+                  {JSON.stringify(
+                    {
+                      account_trace: acc.account_trace ?? {},
+                      bureau_details: acc.bureau_details ?? {},
+                    },
+                    null,
+                    2,
+                  )}
                 </pre>
               </details>
             )}

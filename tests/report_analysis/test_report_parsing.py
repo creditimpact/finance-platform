@@ -7,6 +7,12 @@ from backend.core.logic.report_analysis.report_parsing import (
     _normalize_detail_value,
 )
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
+from tests.report_analysis.fixtures.account_detail_blocks import (
+    BLOCK_WITH_DIGITS,
+    BLOCK_WITH_MASKED,
+    BLOCK_WITHOUT_DIGITS,
+    BLOCK_WITH_COLLECTION_STATUS,
+)
 
 
 @pytest.mark.parametrize(
@@ -77,12 +83,7 @@ Balance: 0
 
 
 def test_extract_account_numbers_masked_forms():
-    text = """
-PALISADES FU
-Account #            ****1234            12 34 56            1234-5678-9012
-Balance: 0
-"""
-    numbers = extract_account_numbers(text)
+    numbers = extract_account_numbers(BLOCK_WITH_MASKED)
     key = normalize_creditor_name("PALISADES FU")
     assert numbers[key] == {
         "TransUnion": "****1234",
@@ -92,14 +93,29 @@ Balance: 0
 
 
 def test_extract_account_numbers_skips_non_digits():
-    text = """
-PALISADES FU
-Account #            t disputed            ****1234            N/A
-Balance: 0
-"""
-    numbers = extract_account_numbers(text)
+    numbers = extract_account_numbers(BLOCK_WITHOUT_DIGITS)
     key = normalize_creditor_name("PALISADES FU")
-    assert numbers[key] == {"Experian": "****1234"}
+    assert key not in numbers
+
+
+def test_account_detail_block_digits_fixture():
+    numbers = extract_account_numbers(BLOCK_WITH_DIGITS)
+    key = normalize_creditor_name("PALISADES FU")
+    assert numbers[key] == {
+        "TransUnion": "123",
+        "Experian": "456",
+        "Equifax": "789",
+    }
+
+
+def test_account_detail_block_collection_status():
+    statuses, _ = extract_payment_statuses(BLOCK_WITH_COLLECTION_STATUS)
+    key = normalize_creditor_name("PALISADES FU")
+    assert statuses[key] == {
+        "Transunion": "collection/chargeoff",
+        "Experian": "collection/chargeoff",
+        "Equifax": "charge-off",
+    }
 
 
 def _label_to_key(label: str) -> str | None:

@@ -193,7 +193,7 @@ def analyze_credit_report(
             text, account_names, return_raw_map=True
         )
         _sanitize_late_counts(history)
-        payment_status_map = extract_payment_statuses(text)
+        payment_status_map, _payment_status_raw_map = extract_payment_statuses(text)
         remarks_map = extract_creditor_remarks(text)
         account_number_map = extract_account_numbers(text)
 

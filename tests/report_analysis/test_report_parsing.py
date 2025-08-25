@@ -7,23 +7,52 @@ from backend.core.logic.report_analysis.report_parsing import (
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 
 
-def test_extract_payment_statuses_smartcredit_table():
-    text = """
+@pytest.mark.parametrize(
+    "header_line,payment_line,expected_map",
+    [
+        (
+            "TransUnion          Experian          Equifax",
+            "Payment Status:      Collection/Chargeoff  Collection/Chargeoff  Late 120 Days",
+            {
+                "Transunion": "collection/chargeoff",
+                "Experian": "collection/chargeoff",
+                "Equifax": "late 120 days",
+            },
+        ),
+        (
+            "TransUnion          Experian          Equifax",
+            "Payment Status: Collection/Chargeoff   Collection/Chargeoff       Late 120 Days",
+            {
+                "Transunion": "collection/chargeoff",
+                "Experian": "collection/chargeoff",
+                "Equifax": "late 120 days",
+            },
+        ),
+        (
+            "transunion          EXPERIAN          equifax",
+            "Payment Status: COLLECTION/CHARGEOFF  LATE 120 DAYS  Charge-Off",
+            {
+                "Transunion": "collection/chargeoff",
+                "Experian": "late 120 days",
+                "Equifax": "charge-off",
+            },
+        ),
+    ],
+)
+def test_extract_payment_statuses_smartcredit_table(header_line, payment_line, expected_map):
+    text = f"""
 PALISADES FU
+{header_line}
 Account #            123             123             123
-Account Status:      Open            Open            Open
-Payment Status:      Collection/Chargeoff  Collection/Chargeoff  Late 120 Days
-TransUnion  30:0 60:0 90:0
-Experian    30:0 60:0 90:0
-Equifax     30:0 60:0 90:0
+{payment_line}
 """
-    statuses = extract_payment_statuses(text)
+    statuses, raw_map = extract_payment_statuses(text)
     key = normalize_creditor_name("PALISADES FU")
-    assert statuses[key] == {
-        "TransUnion": "Collection/Chargeoff",
-        "Experian": "Collection/Chargeoff",
-        "Equifax": "Late 120 Days",
-    }
+    assert statuses[key] == expected_map
+    assert (
+        raw_map[key]
+        == payment_line.split("Payment Status:", 1)[1].strip()
+    )
 
 
 @pytest.mark.parametrize(

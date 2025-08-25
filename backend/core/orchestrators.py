@@ -1010,6 +1010,7 @@ def extract_problematic_accounts_from_report(
     sections.setdefault("negative_accounts", [])
     sections.setdefault("open_accounts_with_issues", [])
     sections.setdefault("all_accounts", [])
+    sections.setdefault("high_utilization_accounts", [])
     from backend.core.logic.report_analysis.report_postprocessing import (
         _inject_missing_late_accounts,
         enrich_account_metadata,
@@ -1092,22 +1093,26 @@ def extract_problematic_accounts_from_report(
     _annotate_with_tri_merge(sections)
     update_session(session_id, status="awaiting_user_explanations")
     _log_account_snapshot("pre_bureau_payload")
-    for acc in sections.get("negative_accounts", []) + sections.get(
-        "open_accounts_with_issues", []
+    for cat in (
+        "negative_accounts",
+        "open_accounts_with_issues",
+        "high_utilization_accounts",
     ):
-        acc.setdefault("primary_issue", "unknown")
-        acc.setdefault("issue_types", [])
-        acc.setdefault("status", acc.get("account_status") or "")
-        acc.setdefault("late_payments", {})
-        acc.setdefault("payment_statuses", {})
-        acc.setdefault("has_co_marker", False)
-        acc.setdefault("co_bureaus", [])
-        acc.setdefault("remarks_contains_co", False)
-        acc.setdefault("bureau_statuses", {})
-        acc.setdefault("account_number_last4", None)
-        acc.setdefault("account_fingerprint", None)
-        acc.setdefault("original_creditor", None)
-        acc.setdefault("source_stage", acc.get("source_stage") or "")
+        for acc in sections.get(cat, []):
+            acc.setdefault("primary_issue", "unknown")
+            acc.setdefault("issue_types", [])
+            acc.setdefault("status", acc.get("account_status") or "")
+            acc.setdefault("late_payments", {})
+            acc.setdefault("payment_statuses", {})
+            acc.setdefault("has_co_marker", False)
+            acc.setdefault("co_bureaus", [])
+            acc.setdefault("remarks_contains_co", False)
+            acc.setdefault("bureau_statuses", {})
+            acc.setdefault("account_number_last4", None)
+            acc.setdefault("account_fingerprint", None)
+            acc.setdefault("original_creditor", None)
+            acc.setdefault("source_stage", acc.get("source_stage") or "")
+            acc.setdefault("bureau_details", {})
     if os.getenv("ANALYSIS_TRACE"):
         for acc in sections.get("negative_accounts", []) + sections.get(
             "open_accounts_with_issues", []

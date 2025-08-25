@@ -17,10 +17,10 @@ import json
 import logging
 import os
 import re
-from difflib import SequenceMatcher
-from rapidfuzz import fuzz
 from pathlib import Path
 from typing import Any, Mapping
+
+from rapidfuzz import fuzz
 
 from backend.core.logic.utils.inquiries import extract_inquiries
 from backend.core.logic.utils.norm import normalize_heading
@@ -73,7 +73,7 @@ def _split_account_buckets(accounts: list[dict]) -> tuple[list[dict], list[dict]
     negatives: list[dict] = []
     open_issues: list[dict] = []
     for acc in accounts or []:
-        if not acc.get("issue_types"):
+        if not acc.get("issue_types") and not acc.get("high_utilization"):
             continue
 
         parts = [
@@ -83,26 +83,70 @@ def _split_account_buckets(accounts: list[dict]) -> tuple[list[dict], list[dict]
             acc.get("remarks"),
         ]
         parts.extend((acc.get("payment_statuses") or {}).values())
+        parts.extend((acc.get("status_texts") or {}).values())
+        for fields in (acc.get("bureau_details") or {}).values():
+            val = fields.get("account_status")
+            if val:
+                parts.append(val)
         status_text = " ".join(str(p) for p in parts if p).lower()
 
-        primary = acc.get("primary_issue")
-        has_negative = bool(acc.get("has_co_marker"))
-        if not has_negative and primary and primary != "late_payment":
-            has_negative = True
-        if not has_negative:
+        evidence = {
+            "status_text": status_text,
+            "closed_date": acc.get("closed_date"),
+            "past_due_amount": acc.get("past_due_amount"),
+            "late_payments": bool(acc.get("late_payments")),
+            "high_utilization": acc.get("high_utilization"),
+        }
+
+        negative_re = r"charge\s*off|charged\s*off|chargeoff|collection|derog|repossess"
+        has_negative = bool(re.search(negative_re, status_text))
+        if not has_negative and acc.get("closed_date"):
             has_negative = bool(
-                re.search(
-                    r"charge\s*off|charged\s*off|chargeoff|collection|repossession|foreclosure|closed|transferred|settled|paid",
-                    status_text,
-                )
+                re.search(r"derog|delinquent|charge|collection|repossess", status_text)
             )
 
-        has_open = bool(re.search(r"\bopen\b|current|pays\s+as\s+agreed", status_text))
+        if has_negative and acc.get("primary_issue") == "late_payment":
+            if "collection" in status_text:
+                acc["primary_issue"] = "collection"
+            elif re.search(r"charge\s*off|chargeoff", status_text):
+                acc["primary_issue"] = "charge_off"
+            elif "repossess" in status_text:
+                acc["primary_issue"] = "repossessed"
+            else:
+                acc["primary_issue"] = "derogatory"
+            acc.setdefault("issue_types", [])
+            if acc["primary_issue"] not in acc["issue_types"]:
+                acc["issue_types"].insert(0, acc["primary_issue"])
 
-        if has_negative or not has_open:
+        if has_negative:
+            bucket = "negative"
             negatives.append(acc)
         else:
-            open_issues.append(acc)
+            has_open = bool(
+                re.search(r"\bopen\b|current|pays\s+as\s+agreed", status_text)
+            ) and not acc.get("closed_date")
+            has_issue = (
+                (
+                    isinstance(acc.get("past_due_amount"), (int, float))
+                    and acc.get("past_due_amount") > 0
+                )
+                or bool(acc.get("late_payments"))
+                or bool(acc.get("high_utilization"))
+            )
+
+            if has_open and has_issue:
+                bucket = "open_issues"
+                open_issues.append(acc)
+            else:
+                bucket = "negative"
+                negatives.append(acc)
+
+        logger.info(
+            "bucket_decision %s",
+            json.dumps(
+                {"name": acc.get("name"), "bucket": bucket, "evidence": evidence}
+            ),
+        )
 
     return negatives, open_issues
 
@@ -185,7 +229,11 @@ def _join_heading_map(
                 mapping.pop(norm)
                 if match in mapping and field_name:
                     # merge dictionaries if both present
-                    if is_bureau_map and isinstance(mapping[match], dict) and isinstance(value, dict):
+                    if (
+                        is_bureau_map
+                        and isinstance(mapping[match], dict)
+                        and isinstance(value, dict)
+                    ):
                         mapping[match].update(value)
                     else:
                         mapping[match] = value
@@ -428,8 +476,12 @@ def analyze_credit_report(
                 accounts_by_norm.setdefault(norm, []).append(acc)
         existing_norms = set(accounts_by_norm.keys())
 
-        _join_heading_map(accounts_by_norm, existing_norms, history, "late_payments", raw_map)
-        _join_heading_map(accounts_by_norm, existing_norms, grid_map, "grid_history_raw", raw_map)
+        _join_heading_map(
+            accounts_by_norm, existing_norms, history, "late_payments", raw_map
+        )
+        _join_heading_map(
+            accounts_by_norm, existing_norms, grid_map, "grid_history_raw", raw_map
+        )
         _join_heading_map(
             accounts_by_norm,
             existing_norms,
@@ -511,7 +563,9 @@ def analyze_credit_report(
 
         def strip_unverified(acc_list):
             for acc in acc_list:
-                norm = acc.get("normalized_name") or normalize_heading(acc.get("name", ""))
+                norm = acc.get("normalized_name") or normalize_heading(
+                    acc.get("name", "")
+                )
                 acc["normalized_name"] = norm
                 if "late_payments" in acc and norm not in verified_names:
                     acc.pop("late_payments", None)
@@ -540,7 +594,9 @@ def analyze_credit_report(
 
         def _merge_account_numbers(acc_list, field_map):
             for acc in acc_list or []:
-                norm = acc.get("normalized_name") or normalize_heading(acc.get("name", ""))
+                norm = acc.get("normalized_name") or normalize_heading(
+                    acc.get("name", "")
+                )
                 acc["normalized_name"] = norm
                 values_map = field_map.get(norm)
                 if not values_map:
@@ -573,7 +629,9 @@ def analyze_credit_report(
 
         def _merge_bureau_details(acc_list, detail_map):
             for acc in acc_list or []:
-                norm = acc.get("normalized_name") or normalize_heading(acc.get("name", ""))
+                norm = acc.get("normalized_name") or normalize_heading(
+                    acc.get("name", "")
+                )
                 acc["normalized_name"] = norm
                 values_map = detail_map.get(norm)
                 if not values_map:

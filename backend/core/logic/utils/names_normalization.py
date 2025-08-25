@@ -81,6 +81,8 @@ COMMON_CREDITOR_ALIASES = {
     "aes": "aes (american education services)",
     "fedloan": "fedloan servicing",
     "credit one": "credit one bank",
+    "credit one bank": "credit one bank",
+    "creditonebnk": "credit one bank",
     "first premier": "first premier bank",
     "mission lane": "mission lane",
     "ollo": "ollo card",
@@ -97,6 +99,7 @@ COMMON_CREDITOR_ALIASES = {
     "american express national bank": "american express",
     "santander": "santander bank",
     "santander bank": "santander bank",
+    "gs bank usa": "gs",
     "bbva": "bbva usa",
     "bbva usa": "bbva usa",
     "fifth third": "fifth third bank",
@@ -109,6 +112,9 @@ COMMON_CREDITOR_ALIASES = {
     "freedom financial": "freedomplus",
     "freedom plus": "freedomplus",
     "freedomplus": "freedomplus",
+    "webbank fhut": "webbank fingerhut",
+    "webbnk fhut": "webbank fingerhut",
+    "webbank fingerhut": "webbank fingerhut",
 }
 
 

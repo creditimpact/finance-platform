@@ -84,10 +84,8 @@ def scan_page_markers(page_texts: Sequence[str]) -> dict[str, Any]:
     }
 
 
-from backend.core.logic.utils.names_normalization import (  # noqa: E402
-    normalize_bureau_name,
-    normalize_creditor_name,
-)
+from backend.core.logic.utils.names_normalization import normalize_bureau_name  # noqa: E402
+from backend.core.logic.utils.norm import normalize_heading  # noqa: E402
 from backend.core.logic.utils.text_parsing import extract_account_blocks  # noqa: E402
 from backend.core.models.bureau import BureauAccount  # noqa: E402
 
@@ -187,7 +185,7 @@ def extract_three_column_fields(
                 heading_text = " ".join(
                     sp.get("text", "") for sp in heading_line.get("spans", [])
                 ).strip()
-                acc_norm = normalize_creditor_name(heading_text)
+                acc_norm = normalize_heading(heading_text)
                 ranges: dict[str, tuple[float, float]] | None = None
                 for line in lines[1:]:
                     spans = line.get("spans", [])
@@ -352,7 +350,7 @@ def extract_payment_statuses(
         if not block:
             continue
         heading = block[0].strip()
-        acc_norm = normalize_creditor_name(heading)
+        acc_norm = normalize_heading(heading)
 
         bureau_order = _find_boundaries(block[1:])
         ps_line: str | None = None
@@ -429,7 +427,7 @@ def extract_account_numbers(text: str) -> dict[str, dict[str, str]]:
         if not block:
             continue
         heading = block[0].strip()
-        acc_norm = normalize_creditor_name(heading)
+        acc_norm = normalize_heading(heading)
 
         block_text = "\n".join(block[1:])
         row = ACCOUNT_NUMBER_ROW_RE.search(block_text)
@@ -490,7 +488,7 @@ def extract_creditor_remarks(text: str) -> dict[str, dict[str, str]]:
         if not block:
             continue
         heading = block[0].strip()
-        acc_norm = normalize_creditor_name(heading)
+        acc_norm = normalize_heading(heading)
         current_bureau: str | None = None
         for line in block[1:]:
             clean = line.strip()

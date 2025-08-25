@@ -18,9 +18,10 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import Any, Mapping
 
 from backend.core.logic.utils.inquiries import extract_inquiries
-from backend.core.logic.utils.names_normalization import normalize_creditor_name
+from backend.core.logic.utils.norm import normalize_heading
 from backend.core.logic.utils.text_parsing import (
     enforce_collection_status,
     extract_account_headings,
@@ -115,9 +116,8 @@ def _attach_parser_signals(
     for acc in accounts or []:
         if acc.get("source_stage") != "parser_aggregated":
             continue
-        norm = acc.get("normalized_name") or normalize_creditor_name(
-            acc.get("name", "")
-        )
+        norm = acc.get("normalized_name") or normalize_heading(acc.get("name", ""))
+        acc["normalized_name"] = norm
         bureau_map = payment_statuses_by_heading.get(norm, {})
         acc["payment_statuses"] = bureau_map
         if bureau_map:
@@ -131,6 +131,35 @@ def _attach_parser_signals(
                 elif re.search(r"\bcollection(s)?\b", raw, re.I):
                     acc["payment_status"] = "collection"
         acc["remarks"] = remarks_by_heading.get(norm, "")
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics
+# ---------------------------------------------------------------------------
+
+
+def _log_heading_join_misses(
+    mapping: Mapping[str, Any],
+    map_name: str,
+    existing_norms: set[str],
+    heading_map: Mapping[str, str],
+) -> None:
+    """Log join misses when *mapping* keys lack a target account."""
+    for norm in mapping:
+        if norm not in existing_norms:
+            raw = heading_map.get(norm, norm)
+            logger.info(
+                "heading_join_miss %s",
+                json.dumps(
+                    {
+                        "raw_key": raw,
+                        "normalized": norm,
+                        "target_present": False,
+                        "map": map_name,
+                    },
+                    sort_keys=True,
+                ),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +248,7 @@ def analyze_credit_report(
 
     parsed_inquiries = extract_inquiries(text)
     inquiry_raw_map = {
-        normalize_creditor_name(i["creditor_name"]): i["creditor_name"]
+        normalize_heading(i["creditor_name"]): i["creditor_name"]
         for i in parsed_inquiries
     }
     if parsed_inquiries:
@@ -281,10 +310,11 @@ def analyze_credit_report(
         existing_norms = set()
         for acc in result.get("all_accounts", []):
             raw_name = acc.get("name", "")
-            norm = normalize_creditor_name(raw_name)
+            norm = normalize_heading(raw_name)
             if raw_name and norm != raw_name.lower().strip():
                 print(f"[~] Normalized account heading '{raw_name}' -> '{norm}'")
             existing_norms.add(norm)
+            acc["normalized_name"] = norm
             if norm in history:
                 acc["late_payments"] = history[norm]
                 if any(
@@ -309,9 +339,10 @@ def analyze_credit_report(
         ]:
             for acc in result.get(section, []):
                 raw_name = acc.get("name", "")
-                norm = normalize_creditor_name(raw_name)
+                norm = normalize_heading(raw_name)
                 if raw_name and norm != raw_name.lower().strip():
                     print(f"[~] Normalized account heading '{raw_name}' -> '{norm}'")
+                acc["normalized_name"] = norm
                 if norm in history:
                     acc["late_payments"] = history[norm]
                     if any(
@@ -348,7 +379,8 @@ def analyze_credit_report(
 
         def strip_unverified(acc_list):
             for acc in acc_list:
-                norm = normalize_creditor_name(acc.get("name", ""))
+                norm = acc.get("normalized_name") or normalize_heading(acc.get("name", ""))
+                acc["normalized_name"] = norm
                 if "late_payments" in acc and norm not in verified_names:
                     acc.pop("late_payments", None)
 
@@ -365,6 +397,15 @@ def analyze_credit_report(
 
         _inject_missing_late_accounts(result, history_all, raw_map, grid_all)
 
+        for name, mapping in [
+            ("late_payments", history),
+            ("late_grids", grid_map),
+            ("payment_statuses", payment_status_map),
+            ("remarks", remarks_map),
+            ("status_texts", status_text_map),
+        ]:
+            _log_heading_join_misses(mapping, name, existing_norms, heading_map)
+
         _attach_parser_signals(
             result.get("all_accounts"),
             payment_status_map,
@@ -376,7 +417,8 @@ def analyze_credit_report(
 
         def _merge_bureau_field(acc_list, field_map, field_name):
             for acc in acc_list or []:
-                norm = normalize_creditor_name(acc.get("name", ""))
+                norm = acc.get("normalized_name") or normalize_heading(acc.get("name", ""))
+                acc["normalized_name"] = norm
                 values_map = field_map.get(norm)
                 if not values_map:
                     continue
@@ -397,7 +439,8 @@ def analyze_credit_report(
 
         def _merge_account_numbers(acc_list, field_map):
             for acc in acc_list or []:
-                norm = normalize_creditor_name(acc.get("name", ""))
+                norm = acc.get("normalized_name") or normalize_heading(acc.get("name", ""))
+                acc["normalized_name"] = norm
                 values_map = field_map.get(norm)
                 if not values_map:
                     continue
@@ -429,7 +472,8 @@ def analyze_credit_report(
 
         def _merge_payment_status(acc_list, field_map):
             for acc in acc_list or []:
-                norm = normalize_creditor_name(acc.get("name", ""))
+                norm = acc.get("normalized_name") or normalize_heading(acc.get("name", ""))
+                acc["normalized_name"] = norm
                 values_map = field_map.get(norm)
                 if not values_map:
                     continue
@@ -486,7 +530,7 @@ def analyze_credit_report(
 
         found_pairs = {
             (
-                normalize_creditor_name(i.get("creditor_name")),
+                normalize_heading(i.get("creditor_name")),
                 i.get("date"),
                 normalize_bureau_name(i.get("bureau", "")),
             )
@@ -494,7 +538,7 @@ def analyze_credit_report(
         }
         for parsed in parsed_inquiries:
             key = (
-                normalize_creditor_name(parsed["creditor_name"]),
+                normalize_heading(parsed["creditor_name"]),
                 parsed["date"],
                 normalize_bureau_name(parsed["bureau"]),
             )

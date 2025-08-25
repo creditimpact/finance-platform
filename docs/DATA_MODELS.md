@@ -22,10 +22,25 @@ This document summarizes dataclasses under `models/` and their relationships.
 - `flags: List[str]`
 - `extras: Dict[str, object]`
 
+## problem_account.py
+
+### `ProblemAccount`
+- `name: str`
+- `account_number_last4: Optional[str]`
+- `account_fingerprint: Optional[str]`
+- `primary_issue: str`
+- `issue_types: List[str]`
+- `late_payments: Dict[str, Any]`
+- `payment_statuses: Dict[str, Any]`
+- `bureau_statuses: Dict[str, Any]`
+- `original_creditor: Optional[str]`
+- `source_stage: str`
+- `extras: Dict[str, Any]`
+
 ## bureau.py
 
 ### `BureauAccount`
-- extends `Account`
+- extends `ProblemAccount`
 - `bureau: Optional[str]`
 - `section: Optional[str]`
 
@@ -34,10 +49,10 @@ This document summarizes dataclasses under `models/` and their relationships.
 - `accounts: List[BureauAccount]`
 
 ### `BureauPayload`
-- `disputes: List[Account]`
-- `goodwill: List[Account]`
+- `disputes: List[ProblemAccount]`
+- `goodwill: List[ProblemAccount]`
 - `inquiries: List[Inquiry]`
-- `high_utilization: List[Account]`
+- `high_utilization: List[ProblemAccount]`
 - Returned by `extract_problematic_accounts_from_report` instead of a raw `dict`.
 
 ## client.py

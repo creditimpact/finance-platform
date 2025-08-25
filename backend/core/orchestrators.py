@@ -57,11 +57,11 @@ from backend.core.logic.utils.report_sections import (
     filter_sections_by_bureau,
 )
 from backend.core.models import (
-    Account,
     BureauAccount,
     BureauPayload,
     ClientInfo,
     Inquiry,
+    ProblemAccount,
     ProofDocuments,
 )
 from backend.core.services.ai_client import AIClient, _StubAIClient, get_ai_client
@@ -1267,9 +1267,7 @@ def extract_problematic_accounts_from_report(
             sections["open_accounts_with_issues"] = list(all_acc)
         neg = sections.get("negative_accounts", [])
         open_acc = sections.get("open_accounts_with_issues", [])
-        return {
-            "problem_accounts": neg + [acc for acc in open_acc if acc not in neg]
-        }
+        return {"problem_accounts": neg + [acc for acc in open_acc if acc not in neg]}
     payload = BureauPayload(
         disputes=[
             BureauAccount.from_dict(d) for d in sections.get("negative_accounts", [])
@@ -1285,7 +1283,8 @@ def extract_problematic_accounts_from_report(
             )
         ],
         high_utilization=[
-            Account.from_dict(d) for d in sections.get("high_utilization_accounts", [])
+            ProblemAccount.from_dict(d)
+            for d in sections.get("high_utilization_accounts", [])
         ],
     )
     logger.info(

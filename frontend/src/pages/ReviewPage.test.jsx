@@ -1,4 +1,3 @@
-/* global process, jest, describe, test, expect */
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import ReviewPage from './ReviewPage';
@@ -29,6 +28,7 @@ const account = {
 };
 
 describe.each([
+  'problem_accounts',
   'negative_accounts',
   'disputes',
   'open_accounts_with_issues',
@@ -59,44 +59,22 @@ describe.each([
   });
 });
 
-test('filters out accounts without issue_types when flag disabled', async () => {
+test('renders accounts without issue_types', async () => {
   const uploadData = {
     ...baseUploadData,
     accounts: {
-      negative_accounts: [
-        account,
-        { account_id: 'acc2', name: 'Account 2', account_number_last4: '5678' }
+      problem_accounts: [
+        { account_id: 'acc2', name: 'Account 2', account_number_last4: '5678', primary_issue: 'unknown' }
       ]
     }
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
-      <ReviewPage />
-    </MemoryRouter>
-  );
-  expect(await screen.findByText('Account 1')).toBeInTheDocument();
-  expect(screen.queryByText('Account 2')).not.toBeInTheDocument();
-});
-
-test('shows accounts without issue_types when flag enabled', async () => {
-  const originalEnv = process.env.VITE_ALLOW_EMPTY_ISSUES_IN_UI;
-  process.env.VITE_ALLOW_EMPTY_ISSUES_IN_UI = '1';
-  const uploadData = {
-    ...baseUploadData,
-    accounts: {
-      negative_accounts: [
-        { account_id: 'acc2', name: 'Account 2', account_number_last4: '5678' }
-      ]
-    }
-  };
-  render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
       <ReviewPage />
     </MemoryRouter>
   );
   expect(await screen.findByText('Account 2')).toBeInTheDocument();
   expect(screen.getByText('Unknown')).toHaveClass('badge');
-  process.env.VITE_ALLOW_EMPTY_ISSUES_IN_UI = originalEnv;
 });
 
 test('renders primary badge from primary_issue and secondary chips with identifiers', async () => {

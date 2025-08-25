@@ -1,4 +1,3 @@
-/* global process */
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { submitExplanations, getSummaries } from '../api';
@@ -15,17 +14,6 @@ export default function ReviewPage() {
       return (
         process.env.VITE_DEBUG_EVIDENCE === '1' ||
         new Function('return import.meta.env?.VITE_DEBUG_EVIDENCE')() === '1'
-      );
-    } catch {
-      return false;
-    }
-  })();
-
-  const allowEmptyIssues = (() => {
-    try {
-      return (
-        process.env.VITE_ALLOW_EMPTY_ISSUES_IN_UI === '1' ||
-        new Function('return import.meta.env?.VITE_ALLOW_EMPTY_ISSUES_IN_UI')() === '1'
       );
     } catch {
       return false;
@@ -50,14 +38,15 @@ export default function ReviewPage() {
     return <p>No upload data available.</p>;
   }
 
-  const allAccounts = [
-    ...(uploadData.accounts?.negative_accounts ?? uploadData.accounts?.disputes ?? []),
-    ...(uploadData.accounts?.open_accounts_with_issues ?? uploadData.accounts?.goodwill ?? []),
-  ];
-
-  const accounts = allowEmptyIssues
-    ? allAccounts
-    : allAccounts.filter((acc) => (acc.issue_types ?? []).length);
+  const accounts =
+    uploadData.accounts?.problem_accounts ?? [
+      ...(uploadData.accounts?.negative_accounts ??
+        uploadData.accounts?.disputes ??
+        []),
+      ...(uploadData.accounts?.open_accounts_with_issues ??
+        uploadData.accounts?.goodwill ??
+        []),
+    ];
 
   // Debug: log first card's props
   if (accounts[0]) {
@@ -99,7 +88,7 @@ export default function ReviewPage() {
       case 'charge_off':
         return 'Charge-Off';
       default:
-        return type;
+        return type ? type.charAt(0).toUpperCase() + type.slice(1) : type;
     }
   };
 

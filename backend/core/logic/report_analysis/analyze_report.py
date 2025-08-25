@@ -116,11 +116,13 @@ def _attach_parser_signals(
         if bureau_map:
             acc["payment_status"] = "; ".join(sorted(set(bureau_map.values())))
         else:
-            raw = payment_status_raw_by_heading.get(norm, "").lower()
-            if "charge" in raw and "off" in raw:
-                acc["payment_status"] = "charge_off"
-            elif "collection" in raw:
-                acc["payment_status"] = "collection"
+            raw = payment_status_raw_by_heading.get(norm, "")
+            acc["payment_status_raw"] = raw
+            if raw:
+                if re.search(r"\bcharge[-\s]?off\b", raw, re.I):
+                    acc["payment_status"] = "charge_off"
+                elif re.search(r"\bcollection(s)?\b", raw, re.I):
+                    acc["payment_status"] = "collection"
         acc["remarks"] = remarks_by_heading.get(norm, "")
 
 

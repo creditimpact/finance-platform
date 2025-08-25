@@ -429,7 +429,7 @@ def _assign_issue_types(acc: dict) -> None:
                 if "history" in key:
                     status_parts.append(str(val or ""))
     status_text = " ".join(status_parts).lower()
-    status_clean = status_text.replace("-", " ")
+    status_clean = status_text.replace("-", " ").replace("_", " ")
 
     flags = [f.lower().replace("-", " ") for f in acc.get("flags", [])]
 

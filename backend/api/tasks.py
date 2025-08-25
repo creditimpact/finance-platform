@@ -78,13 +78,13 @@ def extract_problematic_accounts(self, file_path: str, session_id: str | None = 
     try:
         logger.info("Extracting accounts from %s", file_path)
         _ensure_file(file_path)
-        payload = extract_problematic_accounts_from_report(file_path, session_id)
+        result = extract_problematic_accounts_from_report(file_path, session_id)
         warnings.warn(
             "extract_problematic_accounts task will return BureauPayload in the future; current dict output is deprecated",
             DeprecationWarning,
             stacklevel=2,
         )
-        return payload.to_dict()
+        return result
     except Exception as exc:
         logger.exception("[ERROR] Error extracting accounts")
         raise exc

@@ -1,5 +1,5 @@
 import backend.core.logic.report_analysis.report_postprocessing as rp
-from backend.core.logic.utils.names_normalization import normalize_creditor_name
+from backend.core.logic.utils.norm import normalize_heading
 
 
 def test_merge_parser_inquiries_preserves_creditor_name():
@@ -13,7 +13,7 @@ def test_merge_parser_inquiries_preserves_creditor_name():
         {"creditor_name": "Chase Bank", "date": "02/2024", "bureau": "TransUnion"},
     ]
     raw_map = {
-        normalize_creditor_name(p["creditor_name"]): p["creditor_name"] for p in parsed
+        normalize_heading(p["creditor_name"]): p["creditor_name"] for p in parsed
     }
     rp._merge_parser_inquiries(result, parsed, raw_map)
 

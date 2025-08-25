@@ -1,3 +1,4 @@
+/* global process */
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { submitExplanations, getSummaries } from '../api';
@@ -13,8 +14,18 @@ export default function ReviewPage() {
     try {
       return (
         process.env.VITE_DEBUG_EVIDENCE === '1' ||
-        // eslint-disable-next-line no-new-func
         new Function('return import.meta.env?.VITE_DEBUG_EVIDENCE')() === '1'
+      );
+    } catch {
+      return false;
+    }
+  })();
+
+  const allowEmptyIssues = (() => {
+    try {
+      return (
+        process.env.VITE_ALLOW_EMPTY_ISSUES_IN_UI === '1' ||
+        new Function('return import.meta.env?.VITE_ALLOW_EMPTY_ISSUES_IN_UI')() === '1'
       );
     } catch {
       return false;
@@ -39,10 +50,14 @@ export default function ReviewPage() {
     return <p>No upload data available.</p>;
   }
 
-  const accounts = [
+  const allAccounts = [
     ...(uploadData.accounts?.negative_accounts ?? uploadData.accounts?.disputes ?? []),
     ...(uploadData.accounts?.open_accounts_with_issues ?? uploadData.accounts?.goodwill ?? []),
-  ].filter((acc) => (acc.issue_types ?? []).length);
+  ];
+
+  const accounts = allowEmptyIssues
+    ? allAccounts
+    : allAccounts.filter((acc) => (acc.issue_types ?? []).length);
 
   // Debug: log first card's props
   if (accounts[0]) {
@@ -110,12 +125,8 @@ export default function ReviewPage() {
     <div className="container">
       <h2>Explain Your Situation</h2>
       {dedupedAccounts.map((acc, idx) => {
-        const late = acc.late_payments ?? {};
-        const paymap = acc.payment_statuses ?? {};
-        const bureauStatuses = acc.bureau_statuses ?? {};
-        const coBureaus = acc.co_bureaus ?? [];
         const issues = acc.issue_types ?? [];
-        const primary = acc.primary_issue ?? 'unknown';
+        const primary = acc.primary_issue;
         const idLast4 = acc.account_number_last4 ?? null;
         const fingerprint = acc.account_fingerprint ?? null;
         const displayId = idLast4 ? `••••${idLast4}` : fingerprint ?? '';
@@ -128,7 +139,7 @@ export default function ReviewPage() {
               {acc.original_creditor && ` - ${acc.original_creditor}`}
             </p>
             <div className="issue-badges">
-              <span className="badge">{formatIssueType(primary)}</span>
+              <span className="badge">{primary ? formatIssueType(primary) : 'Unknown'}</span>
               {secondaryIssues.map((type, i) => (
                 <span key={i} className="chip">
                   {formatIssueType(type)}

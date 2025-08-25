@@ -144,7 +144,7 @@ def test_emitted_account_logs_co_marker(monkeypatch, caplog):
             {
                 "name": "Acc1",
                 "late_payments": {"Experian": {"30": 1}},
-                "late_payment_history": {"Experian": "OK CO"},
+                "grid_history_raw": {"Experian": "OK CO"},
             }
         ]
     }

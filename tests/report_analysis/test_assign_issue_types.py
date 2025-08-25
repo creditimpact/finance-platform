@@ -54,10 +54,11 @@ def test_assign_issue_types_charge_off_overrides_late():
     assert acc["advisor_comment"] == "Account charged off"
 
 
-def test_assign_issue_types_detects_charge_off_from_history_grid():
-    acc = {"history": "OK OK CO"}
+def test_assign_issue_types_detects_charge_off_from_grid_only():
+    acc = {"grid_history_raw": {"Experian": "OK OK CO"}}
     rp._assign_issue_types(acc)
     assert acc["has_co_marker"] is True
+    assert acc.get("co_bureaus") == ["Experian"]
     assert acc["issue_types"] == ["charge_off"]
     assert acc["primary_issue"] == "charge_off"
     assert acc["status"] == "Charge Off"
@@ -75,7 +76,7 @@ def test_assign_issue_types_detects_charge_off_from_late_map():
 def test_assign_issue_types_co_grid_with_late_counts():
     acc = {
         "late_payments": {"Experian": {"30": 1}},
-        "late_payment_history": {"Experian": "OK OK CO"},
+        "grid_history_raw": {"Experian": "OK OK CO"},
     }
     rp._assign_issue_types(acc)
     assert acc["has_co_marker"] is True
@@ -83,6 +84,18 @@ def test_assign_issue_types_co_grid_with_late_counts():
     assert acc["primary_issue"] == "charge_off"
     assert acc["status"] == "Charge Off"
     assert acc.get("co_bureaus") == ["Experian"]
+
+
+def test_assign_issue_types_no_co_in_grid():
+    acc = {
+        "late_payments": {"Experian": {"30": 1}},
+        "grid_history_raw": {"Experian": "OK OK"},
+    }
+    rp._assign_issue_types(acc)
+    assert acc.get("has_co_marker") is None or acc.get("has_co_marker") is False
+    assert acc.get("co_bureaus") in (None, [])
+    assert acc["issue_types"] == ["late_payment"]
+    assert acc["primary_issue"] == "late_payment"
 
 
 @pytest.mark.parametrize(

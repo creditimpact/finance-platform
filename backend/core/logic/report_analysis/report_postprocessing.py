@@ -387,8 +387,8 @@ def _assign_issue_types(acc: dict) -> None:
                 except (TypeError, ValueError):
                     continue
 
-    for bureau, hist in (acc.get("late_payment_history") or {}).items():
-        if isinstance(hist, str) and "CO" in hist.upper():
+    for bureau, hist in (acc.get("grid_history_raw") or {}).items():
+        if isinstance(hist, str) and re.search(r"\bCO\b", hist, re.I):
             has_co_marker = True
             co_bureaus.add(bureau)
 
@@ -507,7 +507,7 @@ def _inject_missing_late_accounts(
         co_bureaus = [
             b
             for b, txt in histories.items()
-            if isinstance(txt, str) and "CO" in txt.upper()
+            if isinstance(txt, str) and re.search(r"\bCO\b", txt, re.I)
         ]
         if co_bureaus:
             flags.append("Charge-Off")
@@ -521,7 +521,7 @@ def _inject_missing_late_accounts(
             "source_stage": "parser_aggregated",
         }
         if histories:
-            entry["late_payment_history"] = histories
+            entry["grid_history_raw"] = histories
         if co_bureaus:
             entry["co_bureaus"] = sorted(co_bureaus)
         _assign_issue_types(entry)

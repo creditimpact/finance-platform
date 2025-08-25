@@ -39,7 +39,7 @@ def test_inject_missing_late_accounts_detects_charge_off():
     assert len(accounts) == 1
     acc = accounts[0]
     assert acc.extras["late_payments"] == history["cap_one"]
-    assert acc.extras.get("late_payment_history") == grid_map["cap_one"]
+    assert acc.extras.get("grid_history_raw") == grid_map["cap_one"]
     assert acc.extras.get("source_stage") == "parser_aggregated"
     assert acc.extras.get("issue_types") == ["charge_off", "late_payment"]
     assert acc.extras.get("primary_issue") == "charge_off"

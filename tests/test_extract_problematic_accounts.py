@@ -686,3 +686,32 @@ def test_ai_failure_falls_back_to_parser(monkeypatch):
     payload = extract_problematic_accounts_from_report("dummy.pdf")
     assert [a.name for a in payload.disputes] == ["Parser Bank"]
     assert getattr(payload, "needs_human_review", False)
+
+
+def test_tri_merge_disabled_preconfirm_returns_sections(monkeypatch):
+    sections = {
+        "negative_accounts": [{"name": "Acc1", "issue_types": ["late_payment"]}],
+        "open_accounts_with_issues": [],
+        "unauthorized_inquiries": [],
+        "high_utilization_accounts": [],
+    }
+    _mock_dependencies(monkeypatch, sections)
+    monkeypatch.setattr(
+        "backend.core.logic.report_analysis.report_postprocessing.enrich_account_metadata",
+        lambda acc: acc,
+    )
+    called = False
+
+    def fake_tri_merge(secs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "backend.core.orchestrators._annotate_with_tri_merge",
+        fake_tri_merge,
+    )
+    monkeypatch.setenv("DISABLE_TRI_MERGE_PRECONFIRM", "1")
+    result = extract_problematic_accounts_from_report("dummy.pdf")
+    assert isinstance(result, dict)
+    assert result == sections
+    assert called is False

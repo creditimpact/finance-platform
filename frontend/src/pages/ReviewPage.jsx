@@ -9,6 +9,16 @@ export default function ReviewPage() {
   const [explanations, setExplanations] = useState({});
   const [summaries, setSummaries] = useState({});
   const [showSummary, setShowSummary] = useState({});
+  const debugEvidence =
+    process.env.VITE_DEBUG_EVIDENCE === '1' ||
+    (() => {
+      try {
+        // eslint-disable-next-line no-new-func
+        return new Function('return import.meta.env.VITE_DEBUG_EVIDENCE')() === '1';
+      } catch {
+        return false;
+      }
+    })();
 
   useEffect(() => {
     if (uploadData?.session_id) {
@@ -137,6 +147,14 @@ export default function ReviewPage() {
               <pre className="summary-box">
                 {JSON.stringify(summaries[acc.account_id], null, 2)}
               </pre>
+            )}
+            {debugEvidence && acc.account_trace && (
+              <details className="evidence-toggle">
+                <summary>View evidence</summary>
+                <pre className="summary-box">
+                  {JSON.stringify(acc.account_trace, null, 2)}
+                </pre>
+              </details>
             )}
           </div>
         );

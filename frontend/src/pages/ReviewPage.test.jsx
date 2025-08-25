@@ -179,3 +179,27 @@ test('dedup uses last4 before fingerprint', async () => {
   const headers = await screen.findAllByText('Account 6');
   expect(headers).toHaveLength(1);
 });
+
+test('renders evidence drawer when debug flag enabled', async () => {
+  const originalEnv = process.env.VITE_DEBUG_EVIDENCE;
+  process.env.VITE_DEBUG_EVIDENCE = '1';
+  const acc = {
+    ...account,
+    account_trace: { payment_status: 'late' }
+  };
+  const uploadData = {
+    ...baseUploadData,
+    accounts: { negative_accounts: [acc] },
+  };
+  render(
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+      <ReviewPage />
+    </MemoryRouter>
+  );
+  const expander = await screen.findByText('View evidence');
+  const content = screen.getByText(/payment_status/i);
+  expect(content).not.toBeVisible();
+  fireEvent.click(expander);
+  expect(content).toBeVisible();
+  process.env.VITE_DEBUG_EVIDENCE = originalEnv;
+});

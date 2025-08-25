@@ -538,6 +538,59 @@ def test_account_trace_logs_co_bureaus_from_details(monkeypatch, caplog):
     assert traces[0]["co_bureaus"] == ["Experian"]
 
 
+def test_account_trace_skips_empty_fields(monkeypatch, caplog):
+    sections = {
+        "negative_accounts": [
+            {
+                "name": "Acc1",
+                "issue_types": ["late_payment"],
+                "remarks": "note",
+                "payment_statuses": {"Experian": "OK"},
+                "status_texts": {"Experian": "collection"},
+            }
+        ]
+    }
+    _mock_dependencies(monkeypatch, sections)
+    monkeypatch.setenv("ANALYSIS_TRACE", "1")
+    with caplog.at_level(logging.INFO, logger="backend.core.orchestrators"):
+        extract_problematic_accounts_from_report("dummy.pdf")
+    traces = [
+        json.loads(r.getMessage().split("account_trace ")[1])
+        for r in caplog.records
+        if "account_trace" in r.getMessage()
+    ]
+    trace = traces[0]
+    assert "details_hint" not in trace
+    assert "co_bureaus" not in trace
+    assert "trace_missing_reasons" not in trace
+
+
+def test_account_trace_logs_missing_reasons_when_applicable(monkeypatch, caplog):
+    sections = {
+        "negative_accounts": [
+            {
+                "name": "Acc1",
+                "issue_types": ["late_payment"],
+                "remarks": "",
+                "payment_statuses": {},
+                "grid_history_raw": {},
+                "status_texts": {},
+            }
+        ]
+    }
+    _mock_dependencies(monkeypatch, sections)
+    monkeypatch.setenv("ANALYSIS_TRACE", "1")
+    with caplog.at_level(logging.INFO, logger="backend.core.orchestrators"):
+        extract_problematic_accounts_from_report("dummy.pdf")
+    traces = [
+        json.loads(r.getMessage().split("account_trace ")[1])
+        for r in caplog.records
+        if "account_trace" in r.getMessage()
+    ]
+    reasons = traces[0].get("trace_missing_reasons")
+    assert reasons and "no_payment_status_line" in reasons and "no_remarks" in reasons
+
+
 def test_ai_failure_falls_back_to_parser(monkeypatch):
     from pathlib import Path
 

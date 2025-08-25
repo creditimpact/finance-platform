@@ -27,10 +27,10 @@ from backend.core.logic.utils.text_parsing import (
 from backend.core.services.ai_client import AIClient, get_ai_client
 
 from .report_parsing import (
-    extract_text_from_pdf,
-    extract_payment_statuses,
-    extract_creditor_remarks,
     extract_account_numbers,
+    extract_creditor_remarks,
+    extract_payment_statuses,
+    extract_text_from_pdf,
 )
 from .report_postprocessing import (
     _assign_issue_types,
@@ -87,9 +87,7 @@ def _split_account_buckets(accounts: list[dict]) -> tuple[list[dict], list[dict]
                 )
             )
 
-        has_open = bool(
-            re.search(r"\bopen\b|current|pays\s+as\s+agreed", status_text)
-        )
+        has_open = bool(re.search(r"\bopen\b|current|pays\s+as\s+agreed", status_text))
 
         if has_negative or not has_open:
             negatives.append(acc)
@@ -97,6 +95,34 @@ def _split_account_buckets(accounts: list[dict]) -> tuple[list[dict], list[dict]
             open_issues.append(acc)
 
     return negatives, open_issues
+
+
+def _attach_parser_signals(
+    accounts: list[dict] | None,
+    payment_statuses_by_heading: dict[str, dict[str, str]],
+    remarks_by_heading: dict[str, str],
+    payment_status_raw_by_heading: dict[str, str],
+) -> None:
+    """Populate parser-derived fields for aggregated accounts."""
+
+    for acc in accounts or []:
+        if acc.get("source_stage") != "parser_aggregated":
+            continue
+        norm = acc.get("normalized_name") or normalize_creditor_name(
+            acc.get("name", "")
+        )
+        bureau_map = payment_statuses_by_heading.get(norm, {})
+        acc["payment_statuses"] = bureau_map
+        if bureau_map:
+            acc["payment_status"] = "; ".join(sorted(set(bureau_map.values())))
+        else:
+            raw = payment_status_raw_by_heading.get(norm, "").lower()
+            if "charge" in raw and "off" in raw:
+                acc["payment_status"] = "charge_off"
+            elif "collection" in raw:
+                acc["payment_status"] = "collection"
+        acc["remarks"] = remarks_by_heading.get(norm, "")
+
 
 # ---------------------------------------------------------------------------
 # Orchestrator
@@ -187,7 +213,9 @@ def analyze_credit_report(
 
     try:
         account_names = {acc.get("name", "") for acc in result.get("all_accounts", [])}
-        history_all, raw_map, grid_all = extract_late_history_blocks(text, return_raw_map=True)
+        history_all, raw_map, grid_all = extract_late_history_blocks(
+            text, return_raw_map=True
+        )
         _sanitize_late_counts(history_all)
         history, _, grid_map = extract_late_history_blocks(
             text, account_names, return_raw_map=True
@@ -292,6 +320,13 @@ def analyze_credit_report(
         _cleanup_unverified_late_text(result, verified_names)
 
         _inject_missing_late_accounts(result, history_all, raw_map, grid_all)
+
+        _attach_parser_signals(
+            result.get("all_accounts"),
+            payment_status_map,
+            remarks_map,
+            _payment_status_raw_map,
+        )
 
         _merge_parser_inquiries(result, parsed_inquiries, inquiry_raw_map)
 

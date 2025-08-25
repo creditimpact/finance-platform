@@ -146,6 +146,30 @@ def test_assign_issue_types_from_payment_statuses_map():
     assert acc["issue_types"] == ["collection", "charge_off", "late_payment"]
 
 
+def test_assign_issue_types_from_status_texts_map():
+    acc = {"status_texts": {"TransUnion": "Collection/Chargeoff"}}
+    rp._assign_issue_types(acc)
+    assert acc["primary_issue"] == "collection"
+    assert acc["issue_types"] == ["collection", "charge_off"]
+
+
+def test_assign_issue_types_status_texts_override_late():
+    acc = {
+        "status_texts": {"Experian": "Collection/Chargeoff"},
+        "late_payments": {"Experian": {"30": 2}},
+    }
+    rp._assign_issue_types(acc)
+    assert acc["primary_issue"] == "collection"
+    assert acc["issue_types"] == ["collection", "charge_off", "late_payment"]
+
+
+def test_assign_issue_types_charge_off_from_status_texts_only():
+    acc = {"status_texts": {"Equifax": "Account charged off"}}
+    rp._assign_issue_types(acc)
+    assert acc["primary_issue"] == "charge_off"
+    assert acc["issue_types"] == ["charge_off"]
+
+
 def test_enrich_account_metadata_sets_last4_from_bureaus():
     acc = {
         "name": "Acme Bank",

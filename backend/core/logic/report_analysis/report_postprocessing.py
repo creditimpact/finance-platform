@@ -416,6 +416,19 @@ def _assign_issue_types(acc: dict) -> None:
     ]
     for val in (acc.get("payment_statuses") or {}).values():
         status_parts.append(str(val or ""))
+    status_text_hits: list[str] = []
+    for bureau, txt in (acc.get("status_texts") or {}).items():
+        text = str(txt or "")
+        status_parts.append(text)
+        low = text.lower()
+        matches: list[str] = []
+        if re.search(r"\bcharge[-\s]?off\b|\bchargeoff\b", low):
+            matches.append("Chargeoff")
+        if re.search(r"\bcollection(s)?\b", low):
+            matches.append("Collection")
+        if matches:
+            bureau_name = normalize_bureau_name(bureau)
+            status_text_hits.append(f"{bureau_name}: {'/'.join(matches)}")
     for key, val in acc.items():
         if "history" in key:
             status_parts.append(str(val or ""))
@@ -485,6 +498,13 @@ def _assign_issue_types(acc: dict) -> None:
         acc["status"] = status
     if comment:
         acc["advisor_comment"] = comment
+
+    if status_text_hits:
+        evidence = acc.setdefault("evidence", {})
+        existing_hits = evidence.setdefault("status_text_hits", [])
+        for hit in status_text_hits:
+            if hit not in existing_hits:
+                existing_hits.append(hit)
 
 
 def _inject_missing_late_accounts(

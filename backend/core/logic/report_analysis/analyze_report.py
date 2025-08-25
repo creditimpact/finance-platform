@@ -255,7 +255,7 @@ def analyze_credit_report(
                     if status_text == "closed":
                         acc["goodwill_on_closed"] = True
             if norm in grid_map:
-                acc["late_payment_history"] = grid_map[norm]
+                acc["grid_history_raw"] = grid_map[norm]
 
         for section in [
             "negative_accounts",
@@ -287,7 +287,7 @@ def analyze_credit_report(
                         if status_text == "closed":
                             acc["goodwill_on_closed"] = True
                 if norm in grid_map:
-                    acc["late_payment_history"] = grid_map[norm]
+                    acc["grid_history_raw"] = grid_map[norm]
 
         for raw_norm, bureaus in history_all.items():
             linked = raw_norm in history

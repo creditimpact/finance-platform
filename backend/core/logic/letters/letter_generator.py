@@ -38,6 +38,7 @@ from backend.core.models.letter import LetterAccount, LetterArtifact, LetterCont
 from backend.core.services.ai_client import AIClient
 
 from .dispute_preparation import prepare_disputes_and_inquiries
+from backend.core.logic.problem_resolution import build_dispute_payload
 from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
 from .exceptions import StrategyContextMissing
 from .utils import ensure_strategy_context, populate_required_fields
@@ -361,12 +362,40 @@ def generate_all_dispute_letters_with_ai(
         )
 
 
+def generate_letters_from_selection(
+    client: ClientInfo,
+    selected_accounts: Mapping[str, Any],
+    explanations: Mapping[str, Any],
+    output_path: Path,
+    is_identity_theft: bool,
+    audit: AuditLogger | None,
+    *,
+    classification_map: Mapping[str, ClassificationRecord] | None = None,
+    ai_client: AIClient,
+    **kwargs: Any,
+):
+    """Generate dispute letters from user-selected accounts."""
+
+    bureau_map = build_dispute_payload(selected_accounts, explanations)
+    return generate_all_dispute_letters_with_ai(
+        client,
+        bureau_map,
+        output_path,
+        is_identity_theft,
+        audit,
+        classification_map=classification_map,
+        ai_client=ai_client,
+        **kwargs,
+    )
+
+
 generate_dispute_letters_for_all_bureaus = generate_all_dispute_letters_with_ai
 
 
 __all__ = [
     "generate_all_dispute_letters_with_ai",
     "generate_dispute_letters_for_all_bureaus",
+    "generate_letters_from_selection",
     "DEFAULT_DISPUTE_REASON",
     "ESCALATION_NOTE",
     "call_gpt_dispute_letter",

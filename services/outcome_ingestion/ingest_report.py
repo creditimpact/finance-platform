@@ -14,6 +14,7 @@ from backend.outcomes.models import Outcome
 from backend.analytics.analytics_tracker import emit_counter
 from backend.core.logic.report_analysis.tri_merge import normalize_and_match
 from backend.core.logic.report_analysis.tri_merge_models import Tradeline, TradelineFamily
+from backend.core.logic.problem_resolution import build_dispute_payload
 
 from . import ingest
 
@@ -187,3 +188,16 @@ def ingest_report(account_id: str | None, new_report: Mapping[str, Any]) -> List
     session_manager.update_session(session_id, tri_merge=tri_merge)
 
     return events
+
+
+def ingest_selected_accounts(
+    selected_accounts: Mapping[str, Any],
+    explanations: Mapping[str, Any] | None = None,
+) -> List[OutcomeEvent]:
+    """Ingest outcome events from user-selected accounts."""
+
+    report = {
+        b: payload.to_dict()
+        for b, payload in build_dispute_payload(selected_accounts, explanations).items()
+    }
+    return ingest_report(None, report)

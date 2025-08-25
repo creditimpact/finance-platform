@@ -9,22 +9,29 @@ export default function ReviewPage() {
   const [explanations, setExplanations] = useState({});
   const [summaries, setSummaries] = useState({});
   const [showSummary, setShowSummary] = useState({});
-  const debugEvidence =
-    process.env.VITE_DEBUG_EVIDENCE === '1' ||
-    (() => {
-      try {
+  const debugEvidence = (() => {
+    try {
+      return (
+        process.env.VITE_DEBUG_EVIDENCE === '1' ||
         // eslint-disable-next-line no-new-func
-        return new Function('return import.meta.env.VITE_DEBUG_EVIDENCE')() === '1';
-      } catch {
-        return false;
-      }
-    })();
+        new Function('return import.meta.env?.VITE_DEBUG_EVIDENCE')() === '1'
+      );
+    } catch {
+      return false;
+    }
+  })();
 
   useEffect(() => {
     if (uploadData?.session_id) {
-      getSummaries(uploadData.session_id)
-        .then((res) => setSummaries(res.summaries || {}))
-        .catch(() => {});
+      (async () => {
+        try {
+          const res = await getSummaries(uploadData.session_id);
+          setSummaries(res?.summaries ?? {});
+        } catch (err) {
+          console.warn('failed to fetch summaries', err);
+          setSummaries({});
+        }
+      })();
     }
   }, [uploadData?.session_id]);
 
@@ -35,7 +42,7 @@ export default function ReviewPage() {
   const accounts = [
     ...(uploadData.accounts?.negative_accounts ?? uploadData.accounts?.disputes ?? []),
     ...(uploadData.accounts?.open_accounts_with_issues ?? uploadData.accounts?.goodwill ?? []),
-  ].filter((acc) => acc.issue_types && acc.issue_types.length);
+  ].filter((acc) => (acc.issue_types ?? []).length);
 
   // Debug: log first card's props
   if (accounts[0]) {
@@ -50,14 +57,16 @@ export default function ReviewPage() {
   const dedupedAccounts = Array.from(
     accounts
       .reduce((map, acc) => {
-        const identifier =
-          acc.account_number_last4 || acc.account_fingerprint || '';
+        const identifier = acc.account_number_last4 ?? acc.account_fingerprint ?? '';
         const key = `${
           acc.normalized_name ?? acc.name?.toLowerCase() ?? ''
         }|${identifier}`;
         const existing = map.get(key);
         if (existing) {
-          existing.late_payments = { ...existing.late_payments, ...acc.late_payments };
+          existing.late_payments = {
+            ...(existing.late_payments ?? {}),
+            ...(acc.late_payments ?? {}),
+          };
           return map;
         }
         map.set(key, acc);
@@ -101,21 +110,25 @@ export default function ReviewPage() {
     <div className="container">
       <h2>Explain Your Situation</h2>
       {dedupedAccounts.map((acc, idx) => {
-        const primaryIssue = acc.primary_issue || acc.issue_types[0];
-        const secondaryIssues = acc.issue_types.filter((t) => t !== primaryIssue);
+        const late = acc.late_payments ?? {};
+        const paymap = acc.payment_statuses ?? {};
+        const bureauStatuses = acc.bureau_statuses ?? {};
+        const coBureaus = acc.co_bureaus ?? [];
+        const issues = acc.issue_types ?? [];
+        const primary = acc.primary_issue ?? 'unknown';
+        const idLast4 = acc.account_number_last4 ?? null;
+        const fingerprint = acc.account_fingerprint ?? null;
+        const displayId = idLast4 ? `••••${idLast4}` : fingerprint ?? '';
+        const secondaryIssues = issues.filter((t) => t !== primary);
         return (
           <div key={idx} className="account-block">
             <p>
               <strong>{acc.name}</strong>
-              {acc.account_number_last4
-                ? ` ••••${acc.account_number_last4}`
-                : acc.account_fingerprint
-                ? ` (${acc.account_fingerprint})`
-                : ''}
+              {displayId && ` ${displayId}`}
               {acc.original_creditor && ` - ${acc.original_creditor}`}
             </p>
             <div className="issue-badges">
-              <span className="badge">{formatIssueType(primaryIssue)}</span>
+              <span className="badge">{formatIssueType(primary)}</span>
               {secondaryIssues.map((type, i) => (
                 <span key={i} className="chip">
                   {formatIssueType(type)}
@@ -148,11 +161,11 @@ export default function ReviewPage() {
                 {JSON.stringify(summaries[acc.account_id], null, 2)}
               </pre>
             )}
-            {debugEvidence && acc.account_trace && (
+            {debugEvidence && (
               <details className="evidence-toggle">
                 <summary>View evidence</summary>
                 <pre className="summary-box">
-                  {JSON.stringify(acc.account_trace, null, 2)}
+                  {JSON.stringify(acc.account_trace ?? {}, null, 2)}
                 </pre>
               </details>
             )}

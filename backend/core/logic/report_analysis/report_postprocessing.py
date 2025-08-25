@@ -152,9 +152,14 @@ def enrich_account_metadata(acc: dict[str, Any]) -> dict[str, Any]:
 
     # Derive a stable fingerprint when no account number is available
     if "account_number_last4" not in acc:
-        acc["account_fingerprint"] = sha1(
-            f"{acc['normalized_name']}|{acc.get('date_opened')}|{','.join(sorted((acc.get('late_payments') or {}).keys()))}".encode()
-        ).hexdigest()[:8]
+        late = acc.get("late_payments") or {}
+        seed = (
+            f"{acc['normalized_name']}|{acc.get('date_opened')}|"
+            f"{','.join(sorted(late.keys()))}"
+        )
+        if not acc.get("date_opened") and not late:
+            seed += f"|{acc.get('original_creditor')}|{acc.get('balance')}"
+        acc["account_fingerprint"] = sha1(seed.encode()).hexdigest()[:8]
 
     # Build a distilled status per bureau when bureau level info is available
     statuses: dict[str, str] = {}

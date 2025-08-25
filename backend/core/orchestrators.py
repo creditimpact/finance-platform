@@ -1092,6 +1092,22 @@ def extract_problematic_accounts_from_report(
     _annotate_with_tri_merge(sections)
     update_session(session_id, status="awaiting_user_explanations")
     _log_account_snapshot("pre_bureau_payload")
+    for acc in sections.get("negative_accounts", []) + sections.get(
+        "open_accounts_with_issues", []
+    ):
+        acc.setdefault("primary_issue", "unknown")
+        acc.setdefault("issue_types", [])
+        acc.setdefault("status", acc.get("account_status") or "")
+        acc.setdefault("late_payments", {})
+        acc.setdefault("payment_statuses", {})
+        acc.setdefault("has_co_marker", False)
+        acc.setdefault("co_bureaus", [])
+        acc.setdefault("remarks_contains_co", False)
+        acc.setdefault("bureau_statuses", {})
+        acc.setdefault("account_number_last4", None)
+        acc.setdefault("account_fingerprint", None)
+        acc.setdefault("original_creditor", None)
+        acc.setdefault("source_stage", acc.get("source_stage") or "")
     if os.getenv("ANALYSIS_TRACE"):
         for acc in sections.get("negative_accounts", []) + sections.get(
             "open_accounts_with_issues", []
@@ -1133,6 +1149,7 @@ def extract_problematic_accounts_from_report(
                 "bureau_statuses": acc.get("bureau_statuses"),
                 "account_number_last4": acc.get("account_number_last4"),
                 "account_fingerprint": acc.get("account_fingerprint"),
+                "original_creditor": acc.get("original_creditor"),
             }
             if acc.get("primary_issue") in {"charge_off", "collection"} and not (
                 acc.get("has_co_marker") or status_contains_co or remarks_contains_co

@@ -118,12 +118,12 @@ test('renders account_fingerprint when last4 missing', async () => {
     accounts: { negative_accounts: [acc] },
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
       <ReviewPage />
     </MemoryRouter>
   );
   const header = await screen.findByText('Account 4');
-  expect(header.parentElement).toHaveTextContent('Account 4 (deadbeef) - Creditor 4');
+  expect(header.parentElement).toHaveTextContent('Account 4 deadbeef - Creditor 4');
 });
 
 test('prefers last4 over fingerprint when both provided', async () => {
@@ -178,6 +178,36 @@ test('dedup uses last4 before fingerprint', async () => {
   // Only one card should render despite differing fingerprints
   const headers = await screen.findAllByText('Account 6');
   expect(headers).toHaveLength(1);
+});
+
+test('handles missing payment maps and late payments with identifier fallback', async () => {
+  const acc1 = {
+    account_id: 'acc8',
+    name: 'Account 8',
+    normalized_name: 'account 8',
+    account_number_last4: '1234',
+    issue_types: ['late_payment'],
+  };
+  const acc2 = {
+    account_id: 'acc9',
+    name: 'Account 9',
+    normalized_name: 'account 9',
+    account_fingerprint: 'ff99',
+    issue_types: ['late_payment'],
+  };
+  const uploadData = {
+    ...baseUploadData,
+    accounts: { negative_accounts: [acc1, acc2] },
+  };
+  render(
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+      <ReviewPage />
+    </MemoryRouter>
+  );
+  const h1 = await screen.findByText('Account 8');
+  const h2 = await screen.findByText('Account 9');
+  expect(h1.parentElement).toHaveTextContent('Account 8 ••••1234');
+  expect(h2.parentElement).toHaveTextContent('Account 9 ff99');
 });
 
 test('renders evidence drawer when debug flag enabled', async () => {

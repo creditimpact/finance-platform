@@ -60,10 +60,9 @@ def bureau_data_from_dict(
 PAYMENT_STATUS_RE = re.compile(r"payment status:\s*(.+)", re.I)
 CREDITOR_REMARKS_RE = re.compile(r"creditor remarks:\s*(.+)", re.I)
 
-PAYMENT_STATUS_ROW_RE = re.compile(
-    r"Payment\s*Status\s*:?\s*(?P<tu>.+?)\s{2,}(?P<ex>.+?)\s{2,}(?P<eq>.+?)(?:\n|$)",
-    re.I | re.S,
-)
+# ---------------------------------------------------------------------------
+# Payment status parsing
+# ---------------------------------------------------------------------------
 
 # Account number extraction
 ACCOUNT_NUMBER_ROW_RE = re.compile(
@@ -91,8 +90,16 @@ def _normalize_account_number(value: str) -> str | None:
     return re.sub(r"[\s-]", "", value)
 
 
-def extract_payment_statuses(text: str) -> dict[str, dict[str, str]]:
+def extract_payment_statuses(
+    text: str,
+) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
     """Extract ``Payment Status`` lines for each bureau section.
+
+    The function detects the bureau column boundaries from the header row in
+    each account block and then slices the single ``Payment Status`` line into
+    individual bureau values. The extracted values are normalized to lowercase
+    with collapsed internal whitespace. A raw fallback of the right-hand side
+    of the ``Payment Status`` line is also returned.
 
     Parameters
     ----------
@@ -101,53 +108,97 @@ def extract_payment_statuses(text: str) -> dict[str, dict[str, str]]:
 
     Returns
     -------
-    dict[str, dict[str, str]]
-        Mapping of normalized account names to a mapping of
-        ``bureau -> payment status`` strings.
+    tuple[dict[str, dict[str, str]], dict[str, str]]
+        Two mappings: ``payment_statuses_by_heading`` and
+        ``payment_status_raw_by_heading``.
     """
 
+    def _normalize_val(value: str) -> str:
+        return re.sub(r"\s+", " ", value.strip()).lower()
+
+    def _find_boundaries(lines: list[str]) -> list[str] | None:
+        """Return bureau order based on the header row positions."""
+        for line in lines:
+            low = line.lower()
+            if all(k in low for k in ("transunion", "experian", "equifax")):
+                positions = {
+                    "Transunion": low.index("transunion"),
+                    "Experian": low.index("experian"),
+                    "Equifax": low.index("equifax"),
+                }
+                ordered = sorted(positions.items(), key=lambda x: x[1])
+                return [name for name, _ in ordered]
+        positions: dict[str, int] = {}
+        for line in lines:
+            low = line.lower()
+            if "transunion" in low and "Transunion" not in positions:
+                positions["Transunion"] = low.index("transunion")
+            if "experian" in low and "Experian" not in positions:
+                positions["Experian"] = low.index("experian")
+            if "equifax" in low and "Equifax" not in positions:
+                positions["Equifax"] = low.index("equifax")
+        if len(positions) == 3:
+            ordered = sorted(positions.items(), key=lambda x: x[1])
+            return [name for name, _ in ordered]
+        return None
+
     statuses: dict[str, dict[str, str]] = {}
+    raw_map: dict[str, str] = {}
     for block in extract_account_blocks(text):
         if not block:
             continue
         heading = block[0].strip()
         acc_norm = normalize_creditor_name(heading)
 
-        block_text = "\n".join(block[1:])
-        row = PAYMENT_STATUS_ROW_RE.search(block_text)
-        if row:
-            statuses.setdefault(acc_norm, {})[normalize_bureau_name("TransUnion")] = (
-                row.group("tu").strip()
-            )
-            statuses.setdefault(acc_norm, {})[normalize_bureau_name("Experian")] = (
-                row.group("ex").strip()
-            )
-            statuses.setdefault(acc_norm, {})[normalize_bureau_name("Equifax")] = (
-                row.group("eq").strip()
-            )
+        bureau_order = _find_boundaries(block[1:])
+        ps_line: str | None = None
+        for line in block[1:]:
+            if re.search(r"payment\s*status", line, re.I):
+                ps_line = line
+                break
+        if ps_line:
+            raw_match = re.search(r"Payment\s*Status\s*:?(.*)", ps_line, re.I)
+            if raw_match:
+                rhs = raw_match.group(1).strip()
+                raw_map[acc_norm] = rhs
+                if bureau_order:
+                    parts = re.split(r"\s{2,}", rhs)
+                    parts += ["", "", ""]
+                    vals = {}
+                    for bureau, part in zip(bureau_order, parts):
+                        norm_val = _normalize_val(part)
+                        if norm_val:
+                            vals[bureau] = norm_val
+                    if vals:
+                        statuses[acc_norm] = vals
 
+        # Additional per-bureau lines may specify payment status individually
         current_bureau: str | None = None
         for line in block[1:]:
             clean = line.strip()
+            if sum(
+                1 for b in ("TransUnion", "Experian", "Equifax") if re.search(b, clean, re.I)
+            ) > 1:
+                current_bureau = None
+                continue
             bureau_match = re.match(r"(TransUnion|Experian|Equifax)\b", clean, re.I)
             if bureau_match:
-                current_bureau = normalize_bureau_name(bureau_match.group(1))
-                # If the bureau line itself contains a payment status
+                current_bureau = normalize_bureau_name(bureau_match.group(1)).title()
                 ps_inline = PAYMENT_STATUS_RE.search(clean)
                 if ps_inline:
-                    statuses.setdefault(acc_norm, {})[current_bureau] = ps_inline.group(
-                        1
-                    ).strip()
+                    statuses.setdefault(acc_norm, {})[current_bureau] = _normalize_val(
+                        ps_inline.group(1)
+                    )
                 continue
 
-            if current_bureau:
+            if current_bureau and not re.search(r"payment\s*status", clean, re.I):
                 ps = PAYMENT_STATUS_RE.match(clean)
                 if ps:
-                    statuses.setdefault(acc_norm, {})[current_bureau] = ps.group(
-                        1
-                    ).strip()
+                    statuses.setdefault(acc_norm, {})[current_bureau] = _normalize_val(
+                        ps.group(1)
+                    )
 
-    return statuses
+    return statuses, raw_map
 
 
 def extract_account_numbers(text: str) -> dict[str, dict[str, str]]:

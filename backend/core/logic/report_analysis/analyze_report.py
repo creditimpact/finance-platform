@@ -17,6 +17,8 @@ import json
 import logging
 import os
 import re
+from difflib import SequenceMatcher
+from rapidfuzz import fuzz
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -134,29 +136,124 @@ def _attach_parser_signals(
 
 
 # ---------------------------------------------------------------------------
-# Diagnostics
+# Join helpers
 # ---------------------------------------------------------------------------
 
 
-def _log_heading_join_misses(
-    mapping: Mapping[str, Any],
-    map_name: str,
+def _fuzzy_match(name: str, choices: set[str]) -> str | None:
+    """Return best fuzzy match for *name* within *choices* when >= 0.9."""
+
+    best_score = 0.0
+    best: str | None = None
+    for cand in choices:
+        score = fuzz.WRatio(name, cand) / 100.0
+        if score > best_score:
+            best_score = score
+            best = cand
+    if best_score >= 0.8:
+        return best
+    return None
+
+
+def _join_heading_map(
+    accounts: Mapping[str, list[dict]],
     existing_norms: set[str],
+    mapping: dict[str, Any],
+    field_name: str | None,
     heading_map: Mapping[str, str],
+    *,
+    is_bureau_map: bool = False,
+    aggregate_field: str | None = None,
 ) -> None:
-    """Log join misses when *mapping* keys lack a target account."""
-    for norm in mapping:
-        if norm not in existing_norms:
-            raw = heading_map.get(norm, norm)
+    """Join a heading-keyed *mapping* onto *accounts* in-place.
+
+    When *field_name* is ``None`` the mapping keys are reconciled (alias/fuzzy)
+    but no fields are attached to accounts.  ``is_bureau_map`` controls whether
+    values are ``{bureau: value}`` mappings that should be merged into the
+    account's ``bureaus`` list.  For payment status maps an additional
+    ``aggregate_field`` (e.g. ``"payment_status"``) may be specified to store a
+    combined string value.
+    """
+
+    for norm, value in list(mapping.items()):
+        raw = heading_map.get(norm, norm)
+        targets = accounts.get(norm)
+        method: str | None = None
+        if targets is None:
+            match = _fuzzy_match(norm, existing_norms)
+            if match:
+                mapping.pop(norm)
+                if match in mapping and field_name:
+                    # merge dictionaries if both present
+                    if is_bureau_map and isinstance(mapping[match], dict) and isinstance(value, dict):
+                        mapping[match].update(value)
+                    else:
+                        mapping[match] = value
+                else:
+                    mapping[match] = value
+                targets = accounts.get(match)
+                norm = match
+                method = "fuzzy"
+            else:
+                logger.info(
+                    "heading_join_miss %s",
+                    json.dumps(
+                        {
+                            "raw_key": raw,
+                            "normalized": norm,
+                            "target_present": False,
+                            "map": field_name or "",
+                        },
+                        sort_keys=True,
+                    ),
+                )
+                continue
+        elif raw.upper() != norm.upper():
+            method = "alias"
+
+        if field_name is None:
+            if method:
+                logger.info(
+                    "joined_heading %s",
+                    json.dumps(
+                        {"raw_key": raw, "normalized_target": norm, "method": method},
+                        sort_keys=True,
+                    ),
+                )
+            continue
+
+        for acc in targets or []:
+            if is_bureau_map and isinstance(value, dict):
+                acc.setdefault(field_name, {})
+                acc[field_name].update(value)
+                if aggregate_field:
+                    acc[aggregate_field] = "; ".join(
+                        sorted(set(acc[field_name].values()))
+                    )
+                acc.setdefault("bureaus", [])
+                for bureau, val in value.items():
+                    info = None
+                    for b in acc["bureaus"]:
+                        if isinstance(b, dict) and b.get("bureau") == bureau:
+                            info = b
+                            break
+                    if info is None:
+                        info = {"bureau": bureau}
+                        acc["bureaus"].append(info)
+                    if field_name == "payment_statuses":
+                        if not info.get("payment_status"):
+                            info["payment_status"] = val
+                    else:
+                        if not info.get(field_name):
+                            info[field_name] = val
+            else:
+                acc[field_name] = value
+
+        if method:
             logger.info(
-                "heading_join_miss %s",
+                "joined_heading %s",
                 json.dumps(
-                    {
-                        "raw_key": raw,
-                        "normalized": norm,
-                        "target_present": False,
-                        "map": map_name,
-                    },
+                    {"raw_key": raw, "normalized_target": norm, "method": method},
                     sort_keys=True,
                 ),
             )
@@ -307,20 +404,81 @@ def analyze_credit_report(
         else:
             print("[ERROR] No late payment history blocks detected.")
 
-        existing_norms = set()
-        for acc in result.get("all_accounts", []):
-            raw_name = acc.get("name", "")
-            norm = normalize_heading(raw_name)
-            if raw_name and norm != raw_name.lower().strip():
-                print(f"[~] Normalized account heading '{raw_name}' -> '{norm}'")
-            existing_norms.add(norm)
-            acc["normalized_name"] = norm
-            if norm in history:
-                acc["late_payments"] = history[norm]
-                if any(
+        accounts_by_norm: dict[str, list[dict]] = {}
+        sections = [
+            "all_accounts",
+            "negative_accounts",
+            "open_accounts_with_issues",
+            "positive_accounts",
+            "high_utilization_accounts",
+        ]
+        for section in sections:
+            for acc in result.get(section, []):
+                raw_name = acc.get("name", "")
+                norm = normalize_heading(raw_name)
+                if raw_name and norm != raw_name.lower().strip():
+                    print(f"[~] Normalized account heading '{raw_name}' -> '{norm}'")
+                acc["normalized_name"] = norm
+                accounts_by_norm.setdefault(norm, []).append(acc)
+        existing_norms = set(accounts_by_norm.keys())
+
+        _join_heading_map(accounts_by_norm, existing_norms, history, "late_payments", raw_map)
+        _join_heading_map(accounts_by_norm, existing_norms, grid_map, "grid_history_raw", raw_map)
+        _join_heading_map(
+            accounts_by_norm,
+            existing_norms,
+            payment_status_map,
+            "payment_statuses",
+            heading_map,
+            is_bureau_map=True,
+            aggregate_field="payment_status",
+        )
+        _join_heading_map(
+            accounts_by_norm,
+            existing_norms,
+            _payment_status_raw_map,
+            "payment_status_raw",
+            heading_map,
+        )
+        _join_heading_map(
+            accounts_by_norm,
+            existing_norms,
+            remarks_map,
+            "remarks",
+            heading_map,
+            is_bureau_map=True,
+        )
+        _join_heading_map(
+            accounts_by_norm,
+            existing_norms,
+            status_text_map,
+            "account_status",
+            heading_map,
+            is_bureau_map=True,
+        )
+        _join_heading_map(
+            accounts_by_norm,
+            existing_norms,
+            account_number_map,
+            None,
+            heading_map,
+        )
+        # Reconcile global maps for later bookkeeping
+        _join_heading_map(accounts_by_norm, existing_norms, history_all, None, raw_map)
+        _join_heading_map(accounts_by_norm, existing_norms, grid_all, None, raw_map)
+
+        def _apply_late_flags(acc_list, section_name):
+            for acc in acc_list or []:
+                norm = acc.get("normalized_name")
+                if norm in history and any(
                     v >= 1 for vals in history[norm].values() for v in vals.values()
                 ):
                     acc.setdefault("flags", []).append("Late Payments")
+                    if section_name not in [
+                        "negative_accounts",
+                        "open_accounts_with_issues",
+                    ]:
+                        acc["goodwill_candidate"] = True
                     status_text = (
                         str(acc.get("status") or acc.get("account_status") or "")
                         .strip()
@@ -328,41 +486,9 @@ def analyze_credit_report(
                     )
                     if status_text == "closed":
                         acc["goodwill_on_closed"] = True
-            if norm in grid_map:
-                acc["grid_history_raw"] = grid_map[norm]
 
-        for section in [
-            "negative_accounts",
-            "open_accounts_with_issues",
-            "positive_accounts",
-            "high_utilization_accounts",
-        ]:
-            for acc in result.get(section, []):
-                raw_name = acc.get("name", "")
-                norm = normalize_heading(raw_name)
-                if raw_name and norm != raw_name.lower().strip():
-                    print(f"[~] Normalized account heading '{raw_name}' -> '{norm}'")
-                acc["normalized_name"] = norm
-                if norm in history:
-                    acc["late_payments"] = history[norm]
-                    if any(
-                        v >= 1 for vals in history[norm].values() for v in vals.values()
-                    ):
-                        acc.setdefault("flags", []).append("Late Payments")
-                        if section not in [
-                            "negative_accounts",
-                            "open_accounts_with_issues",
-                        ]:
-                            acc["goodwill_candidate"] = True
-                        status_text = (
-                            str(acc.get("status") or acc.get("account_status") or "")
-                            .strip()
-                            .lower()
-                        )
-                        if status_text == "closed":
-                            acc["goodwill_on_closed"] = True
-                if norm in grid_map:
-                    acc["grid_history_raw"] = grid_map[norm]
+        for section in sections:
+            _apply_late_flags(result.get(section, []), section)
 
         for raw_norm, bureaus in history_all.items():
             linked = raw_norm in history
@@ -397,15 +523,6 @@ def analyze_credit_report(
 
         _inject_missing_late_accounts(result, history_all, raw_map, grid_all)
 
-        for name, mapping in [
-            ("late_payments", history),
-            ("late_grids", grid_map),
-            ("payment_statuses", payment_status_map),
-            ("remarks", remarks_map),
-            ("status_texts", status_text_map),
-        ]:
-            _log_heading_join_misses(mapping, name, existing_norms, heading_map)
-
         _attach_parser_signals(
             result.get("all_accounts"),
             payment_status_map,
@@ -414,28 +531,6 @@ def analyze_credit_report(
         )
 
         _merge_parser_inquiries(result, parsed_inquiries, inquiry_raw_map)
-
-        def _merge_bureau_field(acc_list, field_map, field_name):
-            for acc in acc_list or []:
-                norm = acc.get("normalized_name") or normalize_heading(acc.get("name", ""))
-                acc["normalized_name"] = norm
-                values_map = field_map.get(norm)
-                if not values_map:
-                    continue
-                if not acc.get(field_name):
-                    acc[field_name] = "; ".join(values_map.values())
-                acc.setdefault("bureaus", [])
-                for bureau, value in values_map.items():
-                    info = None
-                    for b in acc["bureaus"]:
-                        if isinstance(b, dict) and b.get("bureau") == bureau:
-                            info = b
-                            break
-                    if info is None:
-                        info = {"bureau": bureau}
-                        acc["bureaus"].append(info)
-                    if not info.get(field_name):
-                        info[field_name] = value
 
         def _merge_account_numbers(acc_list, field_map):
             for acc in acc_list or []:
@@ -470,32 +565,6 @@ def analyze_credit_report(
                 if not acc.get("account_number") and len(digit_unique) == 1:
                     acc["account_number"] = next(iter(digit_unique))
 
-        def _merge_payment_status(acc_list, field_map):
-            for acc in acc_list or []:
-                norm = acc.get("normalized_name") or normalize_heading(acc.get("name", ""))
-                acc["normalized_name"] = norm
-                values_map = field_map.get(norm)
-                if not values_map:
-                    continue
-                acc.setdefault("payment_statuses", {})
-                for bureau, value in values_map.items():
-                    acc["payment_statuses"].setdefault(bureau, value)
-                acc["payment_status"] = "; ".join(
-                    sorted(set(acc["payment_statuses"].values()))
-                )
-                acc.setdefault("bureaus", [])
-                for bureau, value in values_map.items():
-                    info = None
-                    for b in acc["bureaus"]:
-                        if isinstance(b, dict) and b.get("bureau") == bureau:
-                            info = b
-                            break
-                    if info is None:
-                        info = {"bureau": bureau}
-                        acc["bureaus"].append(info)
-                    if not info.get("payment_status"):
-                        info["payment_status"] = value
-
         for sec in [
             "all_accounts",
             "negative_accounts",
@@ -503,9 +572,6 @@ def analyze_credit_report(
             "positive_accounts",
             "high_utilization_accounts",
         ]:
-            _merge_payment_status(result.get(sec, []), payment_status_map)
-            _merge_bureau_field(result.get(sec, []), remarks_map, "remarks")
-            _merge_bureau_field(result.get(sec, []), status_text_map, "account_status")
             _merge_account_numbers(result.get(sec, []), account_number_map)
 
         for section in [

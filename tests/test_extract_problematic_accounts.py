@@ -421,7 +421,7 @@ def test_account_fingerprint_uses_original_creditor_and_balance(monkeypatch):
     acc = payload.to_dict()["disputes"][0]
     assert acc["account_number_last4"] is None
     expected_seed = (
-        f"{normalize_creditor_name('Acme Bank')}|{acc.get('date_opened')}|"
+        f"{normalize_creditor_name('Acme Bank')}|{acc.get('date_opened') or ''}|"
         f"{','.join(sorted((acc.get('late_payments') or {}).keys()))}"
         f"|{acc.get('original_creditor')}|{acc.get('balance')}"
     )

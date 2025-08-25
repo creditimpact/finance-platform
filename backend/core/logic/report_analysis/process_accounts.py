@@ -1,4 +1,5 @@
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, cast
@@ -13,6 +14,8 @@ from backend.core.logic.utils.names_normalization import (
 from backend.core.logic.utils.text_parsing import enforce_collection_status
 
 BUREAUS = ["Experian", "Equifax", "TransUnion"]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -159,10 +162,19 @@ def process_analyzed_report(
                 else:
                     output[bureau_norm]["disputes"].append(account)
                 seen_entries.add(key)
-            elif bureau_norm in output and log_list is not None:
-                log_list.append(
-                    f"[{bureau_norm}] Duplicate entry skipped for '{account.name}'"
+            elif bureau_norm in output:
+                logger.info(
+                    "suppressed_account %s",
+                    {
+                        "suppression_reason": "duplicate_entry",
+                        "name": account.name,
+                        "bureau": bureau_norm,
+                    },
                 )
+                if log_list is not None:
+                    log_list.append(
+                        f"[{bureau_norm}] Duplicate entry skipped for '{account.name}'"
+                    )
 
     # 2. Open Accounts with Issues
     for account_data in data.get("open_accounts_with_issues", []):
@@ -190,10 +202,19 @@ def process_analyzed_report(
                 else:
                     output[bureau_norm]["disputes"].append(account)
                 seen_entries.add(key)
-            elif bureau_norm in output and log_list is not None:
-                log_list.append(
-                    f"[{bureau_norm}] Duplicate entry skipped for '{account.name}'"
+            elif bureau_norm in output:
+                logger.info(
+                    "suppressed_account %s",
+                    {
+                        "suppression_reason": "duplicate_entry",
+                        "name": account.name,
+                        "bureau": bureau_norm,
+                    },
                 )
+                if log_list is not None:
+                    log_list.append(
+                        f"[{bureau_norm}] Duplicate entry skipped for '{account.name}'"
+                    )
 
     # 3. High Utilization Accounts - NOT sent to disputes
     for account_data in data.get("high_utilization_accounts", []):
@@ -209,10 +230,19 @@ def process_analyzed_report(
             if bureau_norm in output and key not in seen_entries:
                 output[bureau_norm]["high_utilization"].append(account)
                 seen_entries.add(key)
-            elif bureau_norm in output and log_list is not None:
-                log_list.append(
-                    f"[{bureau_norm}] Duplicate entry skipped for '{account.name}'"
+            elif bureau_norm in output:
+                logger.info(
+                    "suppressed_account %s",
+                    {
+                        "suppression_reason": "duplicate_entry",
+                        "name": account.name,
+                        "bureau": bureau_norm,
+                    },
                 )
+                if log_list is not None:
+                    log_list.append(
+                        f"[{bureau_norm}] Duplicate entry skipped for '{account.name}'"
+                    )
 
     # 4. Inquiries (exclude matched)
     def norm(name: str | None) -> str:

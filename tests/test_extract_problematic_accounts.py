@@ -82,6 +82,43 @@ def test_payload_to_dict(monkeypatch):
     assert data["high_utilization"][0]["name"] == "Acc3"
 
 
+def test_backfills_default_fields(monkeypatch):
+    sections = {
+        "negative_accounts": [{"name": "Acc1", "issue_types": ["late_payment"]}],
+        "open_accounts_with_issues": [
+            {"name": "Acc2", "issue_types": ["late_payment"]}
+        ],
+        "unauthorized_inquiries": [],
+        "high_utilization_accounts": [],
+    }
+    _mock_dependencies(monkeypatch, sections)
+    monkeypatch.setattr(
+        "backend.core.logic.report_analysis.report_postprocessing.enrich_account_metadata",
+        lambda acc: acc,
+    )
+    payload = extract_problematic_accounts_from_report("dummy.pdf")
+    expected = {
+        "primary_issue": "unknown",
+        "issue_types": ["late_payment"],
+        "status": "",
+        "late_payments": {},
+        "payment_statuses": {},
+        "has_co_marker": False,
+        "co_bureaus": [],
+        "remarks_contains_co": False,
+        "bureau_statuses": {},
+        "account_number_last4": None,
+        "account_fingerprint": None,
+        "original_creditor": None,
+        "source_stage": "",
+    }
+    neg = payload.disputes[0].to_dict()
+    good = payload.goodwill[0].to_dict()
+    for acc in (neg, good):
+        for key, val in expected.items():
+            assert acc.get(key) == val
+
+
 def test_parser_only_late_accounts_excluded_when_flag_set(monkeypatch):
     from backend.core.logic.report_analysis.report_postprocessing import (
         _inject_missing_late_accounts,
@@ -255,7 +292,7 @@ def test_account_fingerprint_added_when_last4_missing(monkeypatch):
     _mock_dependencies(monkeypatch, sections)
     payload = extract_problematic_accounts_from_report("dummy.pdf")
     acc = payload.to_dict()["disputes"][0]
-    assert "account_number_last4" not in acc
+    assert acc["account_number_last4"] is None
     expected = sha1(
         f"{normalize_creditor_name('Acme Bank')}|2020-01-01|30".encode()
     ).hexdigest()[:8]

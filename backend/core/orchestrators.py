@@ -1109,9 +1109,8 @@ def extract_problematic_accounts_from_report(
             )
             filtered.append(enriched)
         sections[cat] = filtered
-    if os.getenv("DISABLE_TRI_MERGE_PRECONFIRM") == "1":
-        return sections
-    _annotate_with_tri_merge(sections)
+    if os.getenv("DISABLE_TRI_MERGE_PRECONFIRM", "1") != "1":
+        _annotate_with_tri_merge(sections)
     update_session(session_id, status="awaiting_user_explanations")
     _log_account_snapshot("pre_bureau_payload")
     for cat in (

@@ -498,6 +498,7 @@ def test_tri_merge_toggle_does_not_change_counts_or_primary_issue(monkeypatch, c
 
     # Tri-merge disabled baseline
     monkeypatch.delenv("ENABLE_TRI_MERGE", raising=False)
+    monkeypatch.delenv("DISABLE_TRI_MERGE_PRECONFIRM", raising=False)
     _mock_dependencies(monkeypatch, copy.deepcopy(base_sections))
     with caplog.at_level(logging.INFO, logger="backend.core.orchestrators"):
         payload = extract_problematic_accounts_from_report("dummy.pdf")
@@ -513,6 +514,7 @@ def test_tri_merge_toggle_does_not_change_counts_or_primary_issue(monkeypatch, c
     # Tri-merge enabled
     _mock_dependencies(monkeypatch, copy.deepcopy(base_sections))
     monkeypatch.setenv("ENABLE_TRI_MERGE", "1")
+    monkeypatch.setenv("DISABLE_TRI_MERGE_PRECONFIRM", "0")
     with caplog.at_level(logging.INFO, logger="backend.core.orchestrators"):
         payload_tri = extract_problematic_accounts_from_report("dummy.pdf")
 
@@ -720,7 +722,7 @@ def test_ai_failure_falls_back_to_parser(monkeypatch):
     assert getattr(payload, "needs_human_review", False)
 
 
-def test_tri_merge_disabled_preconfirm_returns_sections(monkeypatch):
+def test_tri_merge_disabled_preconfirm_returns_payload(monkeypatch):
     sections = {
         "negative_accounts": [{"name": "Acc1", "issue_types": ["late_payment"]}],
         "open_accounts_with_issues": [],
@@ -742,8 +744,8 @@ def test_tri_merge_disabled_preconfirm_returns_sections(monkeypatch):
         "backend.core.orchestrators._annotate_with_tri_merge",
         fake_tri_merge,
     )
-    monkeypatch.setenv("DISABLE_TRI_MERGE_PRECONFIRM", "1")
-    result = extract_problematic_accounts_from_report("dummy.pdf")
-    assert isinstance(result, dict)
-    assert result == sections
+    monkeypatch.delenv("DISABLE_TRI_MERGE_PRECONFIRM", raising=False)
+    payload = extract_problematic_accounts_from_report("dummy.pdf")
+    assert isinstance(payload, BureauPayload)
+    assert payload.disputes[0].name == "Acc1"
     assert called is False

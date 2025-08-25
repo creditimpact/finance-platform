@@ -1,8 +1,11 @@
 """Utilities for parsing credit report PDFs into text and sections."""
 
+import logging
 import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
+
+logger = logging.getLogger(__name__)
 
 
 def extract_text_from_pdf(pdf_path: str | Path) -> str:
@@ -87,6 +90,153 @@ from backend.core.logic.utils.names_normalization import (  # noqa: E402
 )
 from backend.core.logic.utils.text_parsing import extract_account_blocks  # noqa: E402
 from backend.core.models.bureau import BureauAccount  # noqa: E402
+
+_PAYMENT_LABEL_RE = re.compile(r"payment\s*status[:]?", re.I)
+_REMARKS_LABEL_RE = re.compile(r"creditor\s*remarks?[:]?")
+_ACCOUNT_STATUS_LABEL_RE = re.compile(
+    r"account\s*status|account\s*description[:]?", re.I
+)
+
+
+def extract_three_column_fields(
+    pdf_path: str | Path,
+) -> tuple[
+    dict[str, dict[str, str]],
+    dict[str, dict[str, str]],
+    dict[str, dict[str, str]],
+    dict[str, str],
+    dict[str, str],
+    dict[str, str],
+]:
+    """Extract key rows split into three bureau columns using x-coordinates.
+
+    Parameters
+    ----------
+    pdf_path:
+        Path to the SmartCredit PDF report.
+
+    Returns
+    -------
+    tuple
+        Maps of payment statuses, remarks and account status/description per
+        account along with raw line text for each category.
+    """
+
+    try:
+        import fitz  # type: ignore
+    except Exception as exc:  # pragma: no cover - fitz missing
+        logger.warning("PyMuPDF unavailable: %s", exc)
+        return {}, {}, {}, {}, {}, {}
+
+    payment_map: dict[str, dict[str, str]] = {}
+    remarks_map: dict[str, dict[str, str]] = {}
+    status_map: dict[str, dict[str, str]] = {}
+    payment_raw: dict[str, str] = {}
+    remarks_raw: dict[str, str] = {}
+    status_raw: dict[str, str] = {}
+
+    def _compute_ranges(spans, page_width: float) -> dict[str, tuple[float, float]]:
+        positions: dict[str, float] = {}
+        for sp in spans:
+            low = sp.get("text", "").lower()
+            x0 = sp.get("bbox", [0, 0, 0, 0])[0]
+            if "transunion" in low:
+                positions["TransUnion"] = x0
+            elif "experian" in low:
+                positions["Experian"] = x0
+            elif "equifax" in low:
+                positions["Equifax"] = x0
+        if len(positions) != 3:
+            return {}
+        ordered = sorted(positions.items(), key=lambda x: x[1])
+        bounds: dict[str, tuple[float, float]] = {}
+        for idx, (name, pos) in enumerate(ordered):
+            left = 0.0 if idx == 0 else (ordered[idx - 1][1] + pos) / 2
+            right = (
+                page_width
+                if idx == len(ordered) - 1
+                else (pos + ordered[idx + 1][1]) / 2
+            )
+            bounds[name] = (left, right)
+        return bounds
+
+    def _split_line(spans, ranges, label_re):
+        raw = " ".join(sp.get("text", "") for sp in spans).strip()
+        values: dict[str, str] = {k: "" for k in ranges}
+        for sp in spans:
+            text = sp.get("text", "")
+            if label_re.search(text.lower()):
+                continue
+            x0 = sp.get("bbox", [0, 0, 0, 0])[0]
+            for bureau, (xmin, xmax) in ranges.items():
+                if xmin <= x0 < xmax:
+                    values[bureau] += text + " "
+                    break
+        cleaned = {k: v.strip() for k, v in values.items() if v.strip()}
+        return cleaned, raw
+
+    with fitz.open(pdf_path) as doc:  # pragma: no cover - requires fitz
+        for page in doc:
+            width = float(page.rect.width)
+            page_dict = page.get_text("dict")
+            for block in page_dict.get("blocks", []):
+                lines = block.get("lines", [])
+                if not lines:
+                    continue
+                heading_line = lines[0]
+                heading_text = " ".join(
+                    sp.get("text", "") for sp in heading_line.get("spans", [])
+                ).strip()
+                acc_norm = normalize_creditor_name(heading_text)
+                ranges: dict[str, tuple[float, float]] | None = None
+                for line in lines[1:]:
+                    spans = line.get("spans", [])
+                    if not spans:
+                        continue
+                    text_line = " ".join(sp.get("text", "") for sp in spans).strip()
+                    low = text_line.lower()
+                    if ranges is None and all(
+                        k in low for k in ("transunion", "experian", "equifax")
+                    ):
+                        ranges = _compute_ranges(spans, width)
+                        continue
+                    if not ranges:
+                        continue
+                    if _PAYMENT_LABEL_RE.search(low):
+                        vals, raw = _split_line(spans, ranges, _PAYMENT_LABEL_RE)
+                        if vals:
+                            payment_map[acc_norm] = vals
+                            payment_raw[acc_norm] = raw
+                            for bureau, val in vals.items():
+                                logger.info(
+                                    "col_extract payment_status %s %s",
+                                    bureau,
+                                    val[:120],
+                                )
+                        continue
+                    if _REMARKS_LABEL_RE.search(low):
+                        vals, raw = _split_line(spans, ranges, _REMARKS_LABEL_RE)
+                        if vals:
+                            remarks_map[acc_norm] = vals
+                            remarks_raw[acc_norm] = raw
+                            for bureau, val in vals.items():
+                                logger.info(
+                                    "col_extract remarks %s %s", bureau, val[:120]
+                                )
+                        continue
+                    if _ACCOUNT_STATUS_LABEL_RE.search(low):
+                        vals, raw = _split_line(spans, ranges, _ACCOUNT_STATUS_LABEL_RE)
+                        if vals:
+                            status_map[acc_norm] = vals
+                            status_raw[acc_norm] = raw
+                            for bureau, val in vals.items():
+                                logger.info(
+                                    "col_extract account_status %s %s",
+                                    bureau,
+                                    val[:120],
+                                )
+
+    return payment_map, remarks_map, status_map, payment_raw, remarks_raw, status_raw
 
 
 def bureau_data_from_dict(
@@ -230,9 +380,14 @@ def extract_payment_statuses(
         current_bureau: str | None = None
         for line in block[1:]:
             clean = line.strip()
-            if sum(
-                1 for b in ("TransUnion", "Experian", "Equifax") if re.search(b, clean, re.I)
-            ) > 1:
+            if (
+                sum(
+                    1
+                    for b in ("TransUnion", "Experian", "Equifax")
+                    if re.search(b, clean, re.I)
+                )
+                > 1
+            ):
                 current_bureau = None
                 continue
             bureau_match = re.match(r"(TransUnion|Experian|Equifax)\b", clean, re.I)

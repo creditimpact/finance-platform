@@ -34,6 +34,7 @@ from .report_parsing import (
     extract_payment_statuses,
     extract_pdf_page_texts,
     extract_text_from_pdf,
+    extract_three_column_fields,
     scan_page_markers,
 )
 from .report_postprocessing import (
@@ -52,7 +53,6 @@ from .report_prompting import (
     PIPELINE_VERSION,
     call_ai_analysis,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +236,11 @@ def analyze_credit_report(
     else:
         result["inquiries"] = parsed_inquiries
 
+    payment_status_map: dict[str, dict[str, str]] = {}
+    _payment_status_raw_map: dict[str, str] = {}
+    remarks_map: dict[str, dict[str, str]] = {}
+    status_text_map: dict[str, dict[str, str]] = {}
+    account_number_map: dict[str, dict[str, str]] = {}
     try:
         account_names = {acc.get("name", "") for acc in result.get("all_accounts", [])}
         history_all, raw_map, grid_all = extract_late_history_blocks(
@@ -246,8 +251,22 @@ def analyze_credit_report(
             text, account_names, return_raw_map=True
         )
         _sanitize_late_counts(history)
+        (
+            col_payment_map,
+            col_remarks_map,
+            status_text_map,
+            col_payment_raw,
+            _col_remarks_raw,
+            _col_status_raw,
+        ) = extract_three_column_fields(pdf_path)
         payment_status_map, _payment_status_raw_map = extract_payment_statuses(text)
+        for name, vals in col_payment_map.items():
+            payment_status_map.setdefault(name, {}).update(vals)
+        for name, raw in col_payment_raw.items():
+            _payment_status_raw_map.setdefault(name, raw)
         remarks_map = extract_creditor_remarks(text)
+        for name, vals in col_remarks_map.items():
+            remarks_map.setdefault(name, {}).update(vals)
         account_number_map = extract_account_numbers(text)
 
         if history:
@@ -442,6 +461,7 @@ def analyze_credit_report(
         ]:
             _merge_payment_status(result.get(sec, []), payment_status_map)
             _merge_bureau_field(result.get(sec, []), remarks_map, "remarks")
+            _merge_bureau_field(result.get(sec, []), status_text_map, "account_status")
             _merge_account_numbers(result.get(sec, []), account_number_map)
 
         for section in [

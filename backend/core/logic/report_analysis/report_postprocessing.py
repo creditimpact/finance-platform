@@ -400,6 +400,44 @@ def _assign_issue_types(acc: dict) -> None:
         if "Charge-Off" not in flags_list:
             flags_list.append("Charge-Off")
 
+    # Bureau detail lines may indicate charge-off or collection statuses even
+    # when no explicit late history is available. Inspect each bureau's
+    # ``account_status``, ``account_description`` and ``payment_status`` fields
+    # for key phrases. If found, elevate the issue type and treat it as evidence
+    # of a charge-off/collection. Past-due amounts without such markers should
+    # still yield a ``late_payment`` issue.
+    details_map = acc.get("bureau_details") or {}
+    detail_co = False
+    detail_past_due = False
+    for bureau, fields in details_map.items():
+        if not isinstance(fields, dict):
+            continue
+        text = " ".join(
+            str(fields.get(k) or "")
+            for k in ("account_status", "account_description", "payment_status")
+        ).lower()
+        if re.search(r"collection", text):
+            issue_types.add("collection")
+            co_bureaus.add(bureau)
+            detail_co = True
+        if re.search(r"charge[ -]?off|bad debt", text):
+            issue_types.add("charge_off")
+            co_bureaus.add(bureau)
+            detail_co = True
+        if re.search(r"repossession", text):
+            issue_types.add("repossession")
+        past_due_val = fields.get("past_due_amount")
+        try:
+            if float(str(past_due_val).replace(",", "")) > 0:
+                detail_past_due = True
+        except (TypeError, ValueError):
+            pass
+    if detail_co:
+        acc["has_co_marker"] = True
+        acc["co_bureaus"] = sorted(co_bureaus)
+    elif detail_past_due:
+        issue_types.add("late_payment")
+
     remarks = acc.get("remarks")
     if isinstance(remarks, str):
         rl = remarks.lower()

@@ -170,6 +170,43 @@ def test_assign_issue_types_charge_off_from_status_texts_only():
     assert acc["issue_types"] == ["charge_off"]
 
 
+def test_assign_issue_types_from_bureau_details_status_only():
+    acc = {
+        "bureau_details": {
+            "Experian": {
+                "account_status": "Collection/Charge-Off/Bad Debt",
+                "past_due_amount": 50,
+            }
+        }
+    }
+    rp._assign_issue_types(acc)
+    assert acc["primary_issue"] == "collection"
+    assert acc["issue_types"] == ["collection", "charge_off"]
+    assert acc["co_bureaus"] == ["Experian"]
+
+
+def test_assign_issue_types_from_bureau_details_past_due_only():
+    acc = {"bureau_details": {"Experian": {"past_due_amount": 25}}}
+    rp._assign_issue_types(acc)
+    assert acc["primary_issue"] == "late_payment"
+    assert acc["issue_types"] == ["late_payment"]
+
+
+def test_assign_issue_types_bureau_details_mixed_late():
+    acc = {
+        "bureau_details": {
+            "Experian": {
+                "account_status": "Collection",
+                "past_due_amount": 100,
+            }
+        },
+        "late_payments": {"30": 1},
+    }
+    rp._assign_issue_types(acc)
+    assert acc["primary_issue"] == "collection"
+    assert acc["issue_types"] == ["collection", "late_payment"]
+
+
 def test_enrich_account_metadata_sets_last4_from_bureaus():
     acc = {
         "name": "Acme Bank",

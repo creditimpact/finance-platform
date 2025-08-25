@@ -511,7 +511,31 @@ def test_account_trace_includes_details_hint(monkeypatch, caplog):
         for r in caplog.records
         if "account_trace" in r.getMessage()
     ]
-    assert traces[0]["details_hint"] == {"EX": {"status": "Collection", "past_due": 123}}
+    assert traces[0]["details_hint"] == {
+        "EX": {"status": "Collection", "past_due": 123}
+    }
+
+
+def test_account_trace_logs_co_bureaus_from_details(monkeypatch, caplog):
+    from backend.core.logic.report_analysis import report_postprocessing as rp
+
+    acc = {
+        "name": "Acc1",
+        "bureau_details": {"Experian": {"account_status": "Charge-Off/Bad Debt"}},
+    }
+    rp._assign_issue_types(acc)
+    sections = {"negative_accounts": [acc]}
+    _mock_dependencies(monkeypatch, sections)
+    monkeypatch.setenv("ANALYSIS_TRACE", "1")
+    with caplog.at_level(logging.INFO, logger="backend.core.orchestrators"):
+        extract_problematic_accounts_from_report("dummy.pdf")
+    traces = [
+        json.loads(r.getMessage().split("account_trace ")[1])
+        for r in caplog.records
+        if "account_trace" in r.getMessage()
+    ]
+    assert traces[0]["primary_issue"] == "charge_off"
+    assert traces[0]["co_bureaus"] == ["Experian"]
 
 
 def test_ai_failure_falls_back_to_parser(monkeypatch):

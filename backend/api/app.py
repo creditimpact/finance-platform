@@ -151,19 +151,24 @@ def start_process():
             problem_accounts.extend(result.get("disputes", []))
             problem_accounts.extend(result.get("goodwill", []))
 
+        legacy = request.args.get("legacy", "").lower() in ("1", "true", "yes")
+
         accounts = {
             # Primary field
             "problem_accounts": problem_accounts,
-            # Backward compatibility fields
-            "negative_accounts": problem_accounts,
-            "open_accounts_with_issues": problem_accounts,
-            "unauthorized_inquiries": result.get(
-                "unauthorized_inquiries", result.get("inquiries", [])
-            ),
-            "high_utilization_accounts": result.get(
-                "high_utilization_accounts", result.get("high_utilization", [])
-            ),
         }
+
+        if legacy:
+            # Backward compatibility fields for legacy clients
+            accounts["negative_accounts"] = problem_accounts
+            accounts["open_accounts_with_issues"] = problem_accounts
+
+        accounts["unauthorized_inquiries"] = result.get(
+            "unauthorized_inquiries", result.get("inquiries", [])
+        )
+        accounts["high_utilization_accounts"] = result.get(
+            "high_utilization_accounts", result.get("high_utilization", [])
+        )
 
         payload = {
             "status": "awaiting_user_explanations",

@@ -11,7 +11,6 @@ import logging
 import os
 import random
 import time
-import warnings
 from datetime import datetime
 from pathlib import Path
 from shutil import copyfile
@@ -1287,7 +1286,7 @@ def extract_problematic_accounts_from_report(
             for d in sections.get("high_utilization_accounts", [])
         ],
     )
-    logger.info(
+    logger.debug(
         "constructed_bureau_payload disputes=%d goodwill=%d inquiries=%d high_utilization=%d",
         len(payload.disputes),
         len(payload.goodwill),
@@ -1302,11 +1301,8 @@ def extract_problematic_accounts_from_report_dict(
     file_path: str, session_id: str | None = None
 ) -> Mapping[str, Any]:
     """Deprecated adapter returning ``dict`` for old clients."""
-    warnings.warn(
-        "extract_problematic_accounts_from_report_dict is deprecated;"
-        " use extract_problematic_accounts_from_report instead",
-        DeprecationWarning,
-        stacklevel=2,
+    logger.debug(
+        "extract_problematic_accounts_from_report_dict is deprecated; use extract_problematic_accounts_from_report instead"
     )
     payload = extract_problematic_accounts_from_report(file_path, session_id)
     if isinstance(payload, Mapping):

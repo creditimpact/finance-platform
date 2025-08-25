@@ -142,7 +142,7 @@ def _split_account_buckets(accounts: list[dict]) -> tuple[list[dict], list[dict]
                 bucket = "negative"
                 negatives.append(acc)
 
-        logger.info(
+        logger.debug(
             "bucket_decision %s",
             json.dumps(
                 {"name": acc.get("name"), "bucket": bucket, "evidence": evidence}

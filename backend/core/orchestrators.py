@@ -1052,14 +1052,14 @@ def extract_problematic_accounts_from_report(
         if a.get("source_stage") == "parser_aggregated"
     }
 
-    skip_issue_check = env_bool("PROBLEM_DETECTION_ONLY", False) or env_bool(
-        "DEFER_ASSIGN_ISSUE_TYPES", False
+    suppress_accounts_without_issue_types = env_bool(
+        "SUPPRESS_ACCOUNTS_WITHOUT_ISSUE_TYPES", False
     )
 
     for cat in ["negative_accounts", "open_accounts_with_issues"]:
         filtered = []
         for acc in sections.get(cat, []):
-            if not skip_issue_check and not acc.get("issue_types"):
+            if suppress_accounts_without_issue_types and not acc.get("issue_types"):
                 logger.info(
                     "suppressed_account %s",
                     {

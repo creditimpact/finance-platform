@@ -228,7 +228,9 @@ def test_extract_problematic_accounts_without_openai(monkeypatch):
     assert not payload.goodwill
 
 
-def test_extract_problematic_accounts_filters_out_clean_accounts(monkeypatch):
+def test_extract_problematic_accounts_includes_accounts_without_issue_types(
+    monkeypatch,
+):
     sections = {
         "negative_accounts": [
             {"name": "Bad", "issue_types": ["late_payment"]},
@@ -241,8 +243,8 @@ def test_extract_problematic_accounts_filters_out_clean_accounts(monkeypatch):
     }
     _mock_dependencies(monkeypatch, sections)
     payload = extract_problematic_accounts_from_report("dummy.pdf")
-    assert [a.name for a in payload.disputes] == ["Bad"]
-    assert [a.name for a in payload.goodwill] == ["GoodwillBad"]
+    assert [a.name for a in payload.disputes] == ["Bad", "Clean"]
+    assert [a.name for a in payload.goodwill] == ["GoodwillBad", "GoodwillClean"]
 
 
 def test_detection_mode_keeps_accounts_without_issue_types(monkeypatch):
@@ -265,7 +267,7 @@ def test_detection_mode_keeps_accounts_without_issue_types(monkeypatch):
     assert {a["name"] for a in result["problem_accounts"]} == {"Bad", "NoIssue"}
 
 
-def test_logs_suppressed_accounts(monkeypatch, caplog):
+def test_accounts_without_issue_types_can_be_suppressed_with_flag(monkeypatch, caplog):
     sections = {
         "negative_accounts": [
             {"name": "Bad", "issue_types": ["late_payment"]},
@@ -278,6 +280,7 @@ def test_logs_suppressed_accounts(monkeypatch, caplog):
         "backend.core.logic.report_analysis.report_postprocessing.enrich_account_metadata",
         lambda acc: acc,
     )
+    monkeypatch.setenv("SUPPRESS_ACCOUNTS_WITHOUT_ISSUE_TYPES", "1")
     with caplog.at_level(logging.INFO):
         payload = extract_problematic_accounts_from_report("dummy.pdf")
     assert [a.name for a in payload.disputes] == ["Bad"]

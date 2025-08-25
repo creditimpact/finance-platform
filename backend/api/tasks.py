@@ -1,9 +1,12 @@
 # ruff: noqa: E402
+import json
 import logging
 import os
 import sys
 import uuid
 import warnings
+from collections.abc import Mapping
+from dataclasses import asdict, is_dataclass
 
 from dotenv import load_dotenv
 
@@ -35,12 +38,11 @@ def configure_worker(**_):
         os.environ.setdefault("OPENAI_API_KEY", cfg.ai.api_key)
         app.conf.update(
             broker_url=os.getenv("CELERY_BROKER_URL", cfg.celery_broker_url),
-            result_backend=os.getenv(
-                "CELERY_RESULT_BACKEND", cfg.celery_broker_url
-            ),
+            result_backend=os.getenv("CELERY_RESULT_BACKEND", cfg.celery_broker_url),
         )
     except EnvironmentError as exc:
         logger.warning("Starting in parser-only mode: %s", exc)
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -79,12 +81,20 @@ def extract_problematic_accounts(self, file_path: str, session_id: str | None = 
         logger.info("Extracting accounts from %s", file_path)
         _ensure_file(file_path)
         result = extract_problematic_accounts_from_report(file_path, session_id)
+        if hasattr(result, "to_dict") and callable(result.to_dict):
+            result = result.to_dict()
+        elif hasattr(result, "asdict") and callable(result.asdict):
+            result = result.asdict()
+        elif is_dataclass(result):
+            result = asdict(result)
         warnings.warn(
             "extract_problematic_accounts task will return BureauPayload in the future; current dict output is deprecated",
             DeprecationWarning,
             stacklevel=2,
         )
-        return result
+        if not isinstance(result, Mapping):
+            result = dict(result)
+        return json.loads(json.dumps(result))
     except Exception as exc:
         logger.exception("[ERROR] Error extracting accounts")
         raise exc

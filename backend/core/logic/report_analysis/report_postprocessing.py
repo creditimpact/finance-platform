@@ -11,6 +11,8 @@ from backend.core.logic.utils.names_normalization import (
     normalize_bureau_name,
     normalize_creditor_name,
 )
+from backend.core.logic.utils.norm import normalize_heading
+from rapidfuzz import fuzz
 
 # Ordered by descending severity
 ISSUE_SEVERITY = [
@@ -30,6 +32,21 @@ ISSUE_TEXT: Mapping[str, tuple[str, str]] = {
     "foreclosure": ("Foreclosure", "Account in foreclosure"),
     "late_payment": ("Delinquent", "Late payments detected"),
 }
+
+
+def _fuzzy_match(name: str, choices: Set[str]) -> str | None:
+    """Return best fuzzy match for *name* within *choices* when >= 0.8."""
+
+    best_score = 0.0
+    best: str | None = None
+    for cand in choices:
+        score = fuzz.WRatio(name, cand) / 100.0
+        if score > best_score:
+            best_score = score
+            best = cand
+    if best_score >= 0.8:
+        return best
+    return None
 
 
 def pick_primary_issue(issue_set: set[str]) -> str:
@@ -215,46 +232,55 @@ def _merge_parser_inquiries(
 
     gpt_set = {
         (
-            normalize_creditor_name(i.get("creditor_name")),
+            normalize_heading(i.get("creditor_name")),
             i.get("date"),
             normalize_bureau_name(i.get("bureau")),
         )
         for i in result.get("inquiries", [])
     }
+    gpt_by_db: Dict[tuple[str | None, str], Set[str]] = {}
+    for norm_name, date, bureau in gpt_set:
+        gpt_by_db.setdefault((date, bureau), set()).add(norm_name)
+
+    raw_keys: Set[str] = set(raw_map.keys())
+
+    def _lookup_raw(name: str) -> str | None:
+        if name in raw_map:
+            return raw_map[name]
+        match = _fuzzy_match(name, raw_keys)
+        if match:
+            return raw_map.get(match)
+        return None
 
     for inq in parsed:
-        key_name = normalize_creditor_name(inq.get("creditor_name"))
-        key = (
-            key_name,
-            inq.get("date"),
-            normalize_bureau_name(inq.get("bureau")),
-        )
+        key_name = normalize_heading(inq.get("creditor_name"))
+        date = inq.get("date")
+        bureau = normalize_bureau_name(inq.get("bureau"))
+        names = gpt_by_db.get((date, bureau), set())
+        match = key_name if key_name in names else _fuzzy_match(key_name, names)
+        key = (match or key_name, date, bureau)
         if key in seen:
             continue
-        creditor_name = (
-            raw_map.get(key_name) or inq.get("creditor_name") or str(uuid4())
-        )
+        creditor_name = _lookup_raw(key_name) or inq.get("creditor_name") or str(uuid4())
         entry = {
             "creditor_name": creditor_name,
-            "date": inq.get("date"),
-            "bureau": normalize_bureau_name(inq.get("bureau")),
+            "date": date,
+            "bureau": bureau,
         }
-        if key not in gpt_set:
+        if not match:
             entry["advisor_comment"] = "Detected by parser; missing from AI output"
         cleaned.append(entry)
         seen.add(key)
 
     for inq in result.get("inquiries", []):
-        key_name = normalize_creditor_name(inq.get("creditor_name"))
+        key_name = normalize_heading(inq.get("creditor_name"))
         key = (
             key_name,
             inq.get("date"),
             normalize_bureau_name(inq.get("bureau")),
         )
         if key not in seen:
-            creditor_name = (
-                raw_map.get(key_name) or inq.get("creditor_name") or str(uuid4())
-            )
+            creditor_name = _lookup_raw(key_name) or inq.get("creditor_name") or str(uuid4())
             inq["creditor_name"] = creditor_name
             cleaned.append(inq)
             seen.add(key)
@@ -285,14 +311,16 @@ def _reconcile_account_headings(result: dict, headings: Mapping[str, str]) -> No
         "positive_accounts",
         "high_utilization_accounts",
     ]
+    heading_keys: Set[str] = set(headings.keys())
     for sec in sections:
         for acc in result.get(sec, []):
             raw = acc.get("name", "")
-            norm = normalize_creditor_name(raw)
-            if norm in headings:
-                if headings[norm] != raw:
-                    acc["name"] = headings[norm]
-                seen.add(norm)
+            norm = normalize_heading(raw)
+            match = norm if norm in headings else _fuzzy_match(norm, heading_keys)
+            if match:
+                if headings[match] != raw:
+                    acc["name"] = headings[match]
+                seen.add(match)
 
     for norm, raw in headings.items():
         if norm not in seen:

@@ -852,7 +852,8 @@ def run_credit_repair_process(
             ingest_outcome_report(None, bureau_data)
         except Exception:
             pass
-        _annotate_with_tri_merge(sections)
+        if os.getenv("DISABLE_TRI_MERGE_PRECONFIRM") != "1":
+            _annotate_with_tri_merge(sections)
         facts_map: dict[str, dict[str, Any]] = {}
         for key in (
             "negative_accounts",
@@ -1125,8 +1126,6 @@ def extract_problematic_accounts_from_report(
             )
             filtered.append(enriched)
         sections[cat] = filtered
-    if os.getenv("DISABLE_TRI_MERGE_PRECONFIRM", "1") != "1":
-        _annotate_with_tri_merge(sections)
     update_session(session_id, status="awaiting_user_explanations")
     _log_account_snapshot("pre_bureau_payload")
     for cat in (

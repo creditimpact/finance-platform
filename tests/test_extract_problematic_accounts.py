@@ -58,8 +58,7 @@ def test_extract_problematic_accounts_dict_adapter(monkeypatch):
         "high_utilization_accounts": [{"name": "Acc3"}],
     }
     _mock_dependencies(monkeypatch, sections)
-    with pytest.deprecated_call():
-        result = extract_problematic_accounts_from_report_dict("dummy.pdf")
+    result = extract_problematic_accounts_from_report_dict("dummy.pdf")
     assert isinstance(result, dict)
     assert result["negative_accounts"][0]["name"] == "Acc1"
 
@@ -283,8 +282,7 @@ def test_detection_mode_dict_adapter(monkeypatch):
         "backend.core.logic.report_analysis.report_postprocessing.enrich_account_metadata",
         lambda acc: acc,
     )
-    with pytest.deprecated_call():
-        result = extract_problematic_accounts_from_report_dict("dummy.pdf")
+    result = extract_problematic_accounts_from_report_dict("dummy.pdf")
     assert {a["name"] for a in result["problem_accounts"]} == {"Bad", "NoIssue"}
 
 

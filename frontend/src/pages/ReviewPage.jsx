@@ -38,15 +38,7 @@ export default function ReviewPage() {
     return <p>No upload data available.</p>;
   }
 
-  const accounts =
-    uploadData.accounts?.problem_accounts ?? [
-      ...(uploadData.accounts?.negative_accounts ??
-        uploadData.accounts?.disputes ??
-        []),
-      ...(uploadData.accounts?.open_accounts_with_issues ??
-        uploadData.accounts?.goodwill ??
-        []),
-    ];
+  const accounts = uploadData.accounts?.problem_accounts ?? [];
 
   // Debug: log first card's props
   if (accounts[0]) {

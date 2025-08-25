@@ -27,14 +27,8 @@ const account = {
   issue_types: ['late_payment']
 };
 
-describe.each([
-  'problem_accounts',
-  'negative_accounts',
-  'disputes',
-  'open_accounts_with_issues',
-  'goodwill'
-])('ReviewPage with %s', (key) => {
-  const uploadData = { ...baseUploadData, accounts: { [key]: [account] } };
+describe('ReviewPage', () => {
+  const uploadData = { ...baseUploadData, accounts: { problem_accounts: [account] } };
 
   test('renders helper text', async () => {
     render(
@@ -59,17 +53,17 @@ describe.each([
   });
 });
 
-test('renders accounts without issue_types', async () => {
+test('renders accounts with empty issue_types and no primary_issue', async () => {
   const uploadData = {
     ...baseUploadData,
     accounts: {
       problem_accounts: [
-        { account_id: 'acc2', name: 'Account 2', account_number_last4: '5678', primary_issue: 'unknown' }
+        { account_id: 'acc2', name: 'Account 2', account_number_last4: '5678', issue_types: [] }
       ]
     }
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
       <ReviewPage />
     </MemoryRouter>
   );
@@ -89,7 +83,7 @@ test('renders primary badge from primary_issue and secondary chips with identifi
   };
   const uploadData = {
     ...baseUploadData,
-    accounts: { negative_accounts: [acc] },
+    accounts: { problem_accounts: [acc] },
   };
   render(
     <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
@@ -115,7 +109,7 @@ test('renders account_fingerprint when last4 missing', async () => {
   };
   const uploadData = {
     ...baseUploadData,
-    accounts: { negative_accounts: [acc] },
+    accounts: { problem_accounts: [acc] },
   };
   render(
     <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
@@ -139,7 +133,7 @@ test('prefers last4 over fingerprint when both provided', async () => {
   };
   const uploadData = {
     ...baseUploadData,
-    accounts: { negative_accounts: [acc] },
+    accounts: { problem_accounts: [acc] },
   };
   render(
     <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
@@ -168,7 +162,7 @@ test('dedup uses last4 before fingerprint', async () => {
   };
   const uploadData = {
     ...baseUploadData,
-    accounts: { negative_accounts: [acc1, acc2] },
+    accounts: { problem_accounts: [acc1, acc2] },
   };
   render(
     <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
@@ -197,7 +191,7 @@ test('handles missing payment maps and late payments with identifier fallback', 
   };
   const uploadData = {
     ...baseUploadData,
-    accounts: { negative_accounts: [acc1, acc2] },
+    accounts: { problem_accounts: [acc1, acc2] },
   };
   render(
     <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
@@ -220,7 +214,7 @@ test('renders evidence drawer when debug flag enabled', async () => {
   };
   const uploadData = {
     ...baseUploadData,
-    accounts: { negative_accounts: [acc] },
+    accounts: { problem_accounts: [acc] },
   };
   render(
     <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 

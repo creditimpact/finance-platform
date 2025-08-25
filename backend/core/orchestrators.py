@@ -1120,20 +1120,50 @@ def extract_problematic_accounts_from_report(
                     "charge" in remarks_lower and "off" in remarks_lower
                 ) or "collection" in remarks_lower
             statuses = acc.get("payment_statuses")
-            status_texts: list[str] = []
+            payment_status_texts: list[str] = []
             if isinstance(statuses, dict):
-                status_texts.extend(str(v or "") for v in statuses.values())
+                payment_status_texts.extend(str(v or "") for v in statuses.values())
             elif isinstance(statuses, (list, tuple, set)):
-                status_texts.extend(str(v or "") for v in statuses)
+                payment_status_texts.extend(str(v or "") for v in statuses)
             else:
-                status_texts.append(str(statuses or ""))
+                payment_status_texts.append(str(statuses or ""))
             single_status = acc.get("payment_status")
             if single_status:
-                status_texts.append(str(single_status))
-            status_lower = " ".join(status_texts).lower()
+                payment_status_texts.append(str(single_status))
+            status_lower = " ".join(payment_status_texts).lower()
             status_contains_co = "collection" in status_lower or (
                 "charge" in status_lower and "off" in status_lower
             )
+            trace_missing_reasons: list[str] = []
+            if not statuses:
+                trace_missing_reasons.append("no_payment_status_line")
+            grid_history = acc.get("grid_history_raw")
+            if grid_history:
+                if isinstance(grid_history, dict):
+                    grid_values = " ".join(str(v or "") for v in grid_history.values())
+                else:
+                    grid_values = str(grid_history)
+                if "CO" not in grid_values:
+                    trace_missing_reasons.append("no_co_in_grid")
+            remarks_val = acc.get("remarks")
+            if not remarks_val:
+                trace_missing_reasons.append("no_remarks")
+            if acc.get("heading_join_miss") or acc.get("heading_join_misses"):
+                trace_missing_reasons.append("heading_join_miss")
+            status_texts_field = acc.get("status_texts")
+            if status_texts_field:
+                texts: list[str] = []
+                if isinstance(status_texts_field, dict):
+                    texts.extend(str(v or "") for v in status_texts_field.values())
+                elif isinstance(status_texts_field, (list, tuple, set)):
+                    texts.extend(str(v or "") for v in status_texts_field)
+                else:
+                    texts.append(str(status_texts_field))
+                combined = " ".join(texts).lower()
+                if "collection" not in combined and not (
+                    "charge" in combined and "off" in combined
+                ):
+                    trace_missing_reasons.append("no_collection_in_status_texts")
             trace = {
                 "name": acc.get("normalized_name"),
                 "source_stage": acc.get("source_stage"),
@@ -1150,6 +1180,7 @@ def extract_problematic_accounts_from_report(
                 "account_number_last4": acc.get("account_number_last4"),
                 "account_fingerprint": acc.get("account_fingerprint"),
                 "original_creditor": acc.get("original_creditor"),
+                "trace_missing_reasons": trace_missing_reasons,
             }
             if acc.get("primary_issue") in {"charge_off", "collection"} and not (
                 acc.get("has_co_marker") or status_contains_co or remarks_contains_co

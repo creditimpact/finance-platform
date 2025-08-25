@@ -1169,6 +1169,24 @@ def extract_problematic_accounts_from_report(
                     "charge" in combined and "off" in combined
                 ):
                     trace_missing_reasons.append("no_collection_in_status_texts")
+            details_hint: dict[str, dict[str, Any]] = {}
+            for bureau, fields in (acc.get("bureau_details") or {}).items():
+                code = {
+                    "TransUnion": "TU",
+                    "Experian": "EX",
+                    "Equifax": "EQ",
+                }.get(bureau, bureau[:2].upper())
+                hint: dict[str, Any] = {}
+                status_val = fields.get("account_status") or fields.get(
+                    "payment_status"
+                )
+                if status_val:
+                    hint["status"] = status_val
+                past_due_val = fields.get("past_due_amount")
+                if past_due_val not in (None, "", 0):
+                    hint["past_due"] = past_due_val
+                if hint:
+                    details_hint[code] = hint
             trace = {
                 "name": acc.get("normalized_name"),
                 "source_stage": acc.get("source_stage"),
@@ -1186,6 +1204,7 @@ def extract_problematic_accounts_from_report(
                 "account_fingerprint": acc.get("account_fingerprint"),
                 "original_creditor": acc.get("original_creditor"),
                 "trace_missing_reasons": trace_missing_reasons,
+                "details_hint": details_hint,
             }
             if acc.get("primary_issue") in {"charge_off", "collection"} and not (
                 acc.get("has_co_marker") or status_contains_co or remarks_contains_co

@@ -3,6 +3,8 @@ import pytest
 from backend.core.logic.report_analysis.report_parsing import (
     extract_account_numbers,
     extract_payment_statuses,
+    _DETAIL_LABELS,
+    _normalize_detail_value,
 )
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 
@@ -98,3 +100,26 @@ Balance: 0
     numbers = extract_account_numbers(text)
     key = normalize_creditor_name("PALISADES FU")
     assert numbers[key] == {"Experian": "****1234"}
+
+
+def _label_to_key(label: str) -> str | None:
+    for key, regex in _DETAIL_LABELS:
+        if regex.search(label.lower()):
+            return key
+    return None
+
+
+def test_detail_label_variants_and_account_number_normalization():
+    assert _label_to_key("Acct #") == "account_number"
+    val, _ = _normalize_detail_value("account_number", "**** 1234")
+    assert val == "****1234"
+    val2, _ = _normalize_detail_value("account_number", "1234-5678-9012")
+    assert val2 == "1234-5678-9012"
+    val3, _ = _normalize_detail_value("account_number", "N/A")
+    assert val3 is None
+
+
+def test_normalize_date_formats():
+    assert _normalize_detail_value("date_opened", "1/2/23")[0] == "2023-01-02"
+    assert _normalize_detail_value("date_opened", "03/2023")[0] == "2023-03"
+    assert _normalize_detail_value("date_opened", "Jan 2020")[0] == "2020-01"

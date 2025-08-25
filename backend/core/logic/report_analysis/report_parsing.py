@@ -89,11 +89,97 @@ from backend.core.logic.utils.norm import normalize_heading  # noqa: E402
 from backend.core.logic.utils.text_parsing import extract_account_blocks  # noqa: E402
 from backend.core.models.bureau import BureauAccount  # noqa: E402
 
-_PAYMENT_LABEL_RE = re.compile(r"payment\s*status[:]?", re.I)
-_REMARKS_LABEL_RE = re.compile(r"creditor\s*remarks?[:]?")
-_ACCOUNT_STATUS_LABEL_RE = re.compile(
-    r"account\s*status|account\s*description[:]?", re.I
-)
+# Mapping of account detail labels to canonical keys. Each tuple contains the
+# canonical key and a regex that matches variations of the label in the PDF
+# table. The parser is case/space tolerant.
+_DETAIL_LABELS: list[tuple[str, re.Pattern[str]]] = [
+    ("account_number", re.compile(r"(?:account|acct)\s*(?:#|number|no\.?)", re.I)),
+    ("high_balance", re.compile(r"high\s*balance", re.I)),
+    ("last_verified", re.compile(r"last\s*verified", re.I)),
+    ("date_of_last_activity", re.compile(r"date\s*of\s*last\s*activity", re.I)),
+    ("date_reported", re.compile(r"date\s*reported", re.I)),
+    ("date_opened", re.compile(r"date\s*opened", re.I)),
+    ("balance_owed", re.compile(r"balance\s*owed", re.I)),
+    ("closed_date", re.compile(r"closed\s*date|date\s*closed", re.I)),
+    ("account_rating", re.compile(r"account\s*rating", re.I)),
+    ("account_description", re.compile(r"account\s*description", re.I)),
+    ("dispute_status", re.compile(r"dispute\s*status", re.I)),
+    ("creditor_type", re.compile(r"creditor\s*type", re.I)),
+    ("account_status", re.compile(r"account\s*status", re.I)),
+    ("payment_status", re.compile(r"payment\s*status", re.I)),
+    ("creditor_remarks", re.compile(r"creditor\s*remarks?", re.I)),
+    ("payment_amount", re.compile(r"payment\s*amount", re.I)),
+    ("last_payment", re.compile(r"last\s*payment", re.I)),
+    ("term_length", re.compile(r"term\s*length", re.I)),
+    ("past_due_amount", re.compile(r"past\s*due\s*amount", re.I)),
+    ("account_type", re.compile(r"account\s*type", re.I)),
+    ("payment_frequency", re.compile(r"payment\s*frequency", re.I)),
+    ("credit_limit", re.compile(r"credit\s*limit", re.I)),
+]
+
+_MONEY_FIELDS = {
+    "high_balance",
+    "balance_owed",
+    "credit_limit",
+    "past_due_amount",
+    "payment_amount",
+}
+
+_DATE_FIELDS = {
+    "date_opened",
+    "closed_date",
+    "date_reported",
+    "last_payment",
+    "last_verified",
+    "date_of_last_activity",
+}
+
+
+def _normalize_date(value: str) -> str | None:
+    """Normalize various date formats to ``YYYY-MM`` or ``YYYY-MM-DD``."""
+
+    value = value.strip()
+    if not value:
+        return None
+    from datetime import datetime
+
+    fmts_day = ["%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d", "%b %d %Y", "%B %d %Y"]
+    fmts_month = ["%m/%Y", "%Y-%m", "%b %Y", "%B %Y"]
+    for fmt in fmts_day:
+        try:
+            dt = datetime.strptime(value, fmt)
+            return dt.strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    for fmt in fmts_month:
+        try:
+            dt = datetime.strptime(value, fmt)
+            return dt.strftime("%Y-%m")
+        except ValueError:
+            pass
+    return None
+
+
+def _normalize_detail_value(key: str, value: str) -> tuple[Any | None, str | None]:
+    """Return normalized value and raw string for ``key``."""
+
+    raw = value.strip()
+    if not raw:
+        return None, None
+    if key == "account_number":
+        cleaned = re.sub(r"\s+", "", raw)
+        if not re.search(r"\d", cleaned):
+            return None, None
+        return cleaned, raw
+    if key in _MONEY_FIELDS:
+        digits = re.sub(r"[^0-9]", "", raw)
+        if not digits:
+            return None, raw
+        return int(digits), raw
+    if key in _DATE_FIELDS:
+        norm = _normalize_date(raw)
+        return norm, raw
+    return raw, raw
 
 
 def extract_three_column_fields(
@@ -105,6 +191,7 @@ def extract_three_column_fields(
     dict[str, str],
     dict[str, str],
     dict[str, str],
+    dict[str, dict[str, dict[str, Any]]],
 ]:
     """Extract key rows split into three bureau columns using x-coordinates.
 
@@ -124,7 +211,7 @@ def extract_three_column_fields(
         import fitz  # type: ignore
     except Exception as exc:  # pragma: no cover - fitz missing
         logger.warning("PyMuPDF unavailable: %s", exc)
-        return {}, {}, {}, {}, {}, {}
+        return {}, {}, {}, {}, {}, {}, {}
 
     payment_map: dict[str, dict[str, str]] = {}
     remarks_map: dict[str, dict[str, str]] = {}
@@ -132,6 +219,7 @@ def extract_three_column_fields(
     payment_raw: dict[str, str] = {}
     remarks_raw: dict[str, str] = {}
     status_raw: dict[str, str] = {}
+    details_map: dict[str, dict[str, dict[str, Any]]] = {}
 
     def _compute_ranges(spans, page_width: float) -> dict[str, tuple[float, float]]:
         positions: dict[str, float] = {}
@@ -200,41 +288,57 @@ def extract_three_column_fields(
                         continue
                     if not ranges:
                         continue
-                    if _PAYMENT_LABEL_RE.search(low):
-                        vals, raw = _split_line(spans, ranges, _PAYMENT_LABEL_RE)
-                        if vals:
-                            payment_map[acc_norm] = vals
-                            payment_raw[acc_norm] = raw
+                    for key, label_re in _DETAIL_LABELS:
+                        if label_re.search(low):
+                            vals, raw = _split_line(spans, ranges, label_re)
+                            if not vals:
+                                break
                             for bureau, val in vals.items():
+                                norm_val, raw_val = _normalize_detail_value(key, val)
+                                if norm_val is None:
+                                    continue
+                                details_map.setdefault(acc_norm, {}).setdefault(bureau, {})[
+                                    key
+                                ] = norm_val
+                                if raw_val and raw_val != norm_val:
+                                    details_map[acc_norm][bureau][key + "_raw"] = raw_val
+                                if key == "payment_status":
+                                    payment_map.setdefault(acc_norm, {})[bureau] = (
+                                        str(norm_val).lower()
+                                        if isinstance(norm_val, str)
+                                        else str(norm_val)
+                                    )
+                                if key == "creditor_remarks":
+                                    remarks_map.setdefault(acc_norm, {})[bureau] = str(
+                                        norm_val
+                                    )
+                                if key in {"account_status", "account_description"}:
+                                    status_map.setdefault(acc_norm, {})[bureau] = str(
+                                        norm_val
+                                    )
                                 logger.info(
-                                    "col_extract payment_status %s %s",
+                                    "col_extract %s %s %s",
+                                    key,
                                     bureau,
-                                    val[:120],
+                                    str(norm_val)[:120],
                                 )
-                        continue
-                    if _REMARKS_LABEL_RE.search(low):
-                        vals, raw = _split_line(spans, ranges, _REMARKS_LABEL_RE)
-                        if vals:
-                            remarks_map[acc_norm] = vals
-                            remarks_raw[acc_norm] = raw
-                            for bureau, val in vals.items():
-                                logger.info(
-                                    "col_extract remarks %s %s", bureau, val[:120]
-                                )
-                        continue
-                    if _ACCOUNT_STATUS_LABEL_RE.search(low):
-                        vals, raw = _split_line(spans, ranges, _ACCOUNT_STATUS_LABEL_RE)
-                        if vals:
-                            status_map[acc_norm] = vals
-                            status_raw[acc_norm] = raw
-                            for bureau, val in vals.items():
-                                logger.info(
-                                    "col_extract account_status %s %s",
-                                    bureau,
-                                    val[:120],
-                                )
+                            if key == "payment_status":
+                                payment_raw[acc_norm] = raw
+                            elif key == "creditor_remarks":
+                                remarks_raw[acc_norm] = raw
+                            elif key in {"account_status", "account_description"}:
+                                status_raw[acc_norm] = raw
+                            break
 
-    return payment_map, remarks_map, status_map, payment_raw, remarks_raw, status_raw
+    return (
+        payment_map,
+        remarks_map,
+        status_map,
+        payment_raw,
+        remarks_raw,
+        status_raw,
+        details_map,
+    )
 
 
 def bureau_data_from_dict(

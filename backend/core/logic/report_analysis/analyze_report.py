@@ -384,6 +384,7 @@ def analyze_credit_report(
             col_payment_raw,
             _col_remarks_raw,
             _col_status_raw,
+            detail_map,
         ) = extract_three_column_fields(pdf_path)
         payment_status_map, _payment_status_raw_map = extract_payment_statuses(text)
         for name, vals in col_payment_map.items():
@@ -394,6 +395,11 @@ def analyze_credit_report(
         for name, vals in col_remarks_map.items():
             remarks_map.setdefault(name, {}).update(vals)
         account_number_map = extract_account_numbers(text)
+        for acc_name, bureaus in detail_map.items():
+            for bureau, fields in bureaus.items():
+                num = fields.get("account_number")
+                if num:
+                    account_number_map.setdefault(acc_name, {})[bureau] = str(num)
 
         if history:
             print(f"[INFO] Found {len(history)} late payment block(s):")
@@ -565,6 +571,17 @@ def analyze_credit_report(
                 if not acc.get("account_number") and len(digit_unique) == 1:
                     acc["account_number"] = next(iter(digit_unique))
 
+        def _merge_bureau_details(acc_list, detail_map):
+            for acc in acc_list or []:
+                norm = acc.get("normalized_name") or normalize_heading(acc.get("name", ""))
+                acc["normalized_name"] = norm
+                values_map = detail_map.get(norm)
+                if not values_map:
+                    continue
+                bd = acc.setdefault("bureau_details", {})
+                for bureau, fields in values_map.items():
+                    bd.setdefault(bureau, {}).update(fields)
+
         for sec in [
             "all_accounts",
             "negative_accounts",
@@ -573,6 +590,7 @@ def analyze_credit_report(
             "high_utilization_accounts",
         ]:
             _merge_account_numbers(result.get(sec, []), account_number_map)
+            _merge_bureau_details(result.get(sec, []), detail_map)
 
         for section in [
             "all_accounts",

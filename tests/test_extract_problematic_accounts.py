@@ -487,6 +487,33 @@ def test_extract_problematic_accounts_logs_enriched_metadata(monkeypatch, caplog
     )
 
 
+def test_account_trace_includes_details_hint(monkeypatch, caplog):
+    sections = {
+        "negative_accounts": [
+            {
+                "name": "Acc1",
+                "issue_types": ["late_payment"],
+                "bureau_details": {
+                    "Experian": {
+                        "account_status": "Collection",
+                        "past_due_amount": 123,
+                    }
+                },
+            }
+        ]
+    }
+    _mock_dependencies(monkeypatch, sections)
+    monkeypatch.setenv("ANALYSIS_TRACE", "1")
+    with caplog.at_level(logging.INFO, logger="backend.core.orchestrators"):
+        extract_problematic_accounts_from_report("dummy.pdf")
+    traces = [
+        json.loads(r.getMessage().split("account_trace ")[1])
+        for r in caplog.records
+        if "account_trace" in r.getMessage()
+    ]
+    assert traces[0]["details_hint"] == {"EX": {"status": "Collection", "past_due": 123}}
+
+
 def test_ai_failure_falls_back_to_parser(monkeypatch):
     from pathlib import Path
 

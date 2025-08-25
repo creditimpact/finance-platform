@@ -288,6 +288,23 @@ def test_detection_mode_dict_adapter(monkeypatch):
     assert {a["name"] for a in result["problem_accounts"]} == {"Bad", "NoIssue"}
 
 
+def test_detection_mode_populates_from_all_accounts(monkeypatch):
+    sections = {
+        "negative_accounts": [],
+        "open_accounts_with_issues": [],
+        "all_accounts": [{"name": "A1"}, {"name": "A2"}],
+    }
+    _mock_dependencies(monkeypatch, sections)
+    monkeypatch.setenv("PROBLEM_DETECTION_ONLY", "1")
+    monkeypatch.setattr(
+        "backend.core.logic.report_analysis.report_postprocessing.enrich_account_metadata",
+        lambda acc: acc,
+    )
+    result = extract_problematic_accounts_from_report("dummy.pdf")
+    assert {a["name"] for a in result["problem_accounts"]} == {"A1", "A2"}
+    assert len(result["problem_accounts"]) == 2
+
+
 def test_accounts_without_issue_types_can_be_suppressed_with_flag(monkeypatch, caplog):
     sections = {
         "negative_accounts": [

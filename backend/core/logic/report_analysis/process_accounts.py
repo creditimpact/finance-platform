@@ -133,11 +133,6 @@ def process_analyzed_report(
         for bureau in BUREAUS
     }
 
-    def clean_num(n: str | None) -> str:
-        import re
-
-        return re.sub(r"\D", "", n or "")
-
     seen_entries = set()
 
     # 1. Negative Accounts
@@ -148,10 +143,8 @@ def process_analyzed_report(
         name_key = normalize_creditor_name(account.name)
         for bureau in account.bureaus:
             bureau_norm = normalize_bureau_name(bureau)
-            identifier = (
-                account.get("account_number_last4")
-                or clean_num(account.account_number)
-                or account.get("account_fingerprint")
+            identifier = account.get("account_number_last4") or account.get(
+                "account_fingerprint"
             )
             key = (name_key, identifier, bureau_norm)
             if bureau_norm in output and key not in seen_entries:
@@ -181,10 +174,8 @@ def process_analyzed_report(
         name_key = normalize_creditor_name(account.name)
         for bureau in account.bureaus:
             bureau_norm = normalize_bureau_name(bureau)
-            identifier = (
-                account.get("account_number_last4")
-                or clean_num(account.account_number)
-                or account.get("account_fingerprint")
+            identifier = account.get("account_number_last4") or account.get(
+                "account_fingerprint"
             )
             key = (name_key, identifier, bureau_norm)
             if bureau_norm in output and key not in seen_entries:
@@ -211,10 +202,8 @@ def process_analyzed_report(
         name_key = normalize_creditor_name(account.name)
         for bureau in account.bureaus:
             bureau_norm = normalize_bureau_name(bureau)
-            identifier = (
-                account.get("account_number_last4")
-                or clean_num(account.account_number)
-                or account.get("account_fingerprint")
+            identifier = account.get("account_number_last4") or account.get(
+                "account_fingerprint"
             )
             key = (name_key, identifier, bureau_norm)
             if bureau_norm in output and key not in seen_entries:

@@ -274,7 +274,9 @@ def analyze_credit_report(
                 if not values_map:
                     continue
                 acc.setdefault("bureaus", [])
-                for bureau, value in values_map.items():
+                raw_unique: set[str] = set()
+                digit_unique: set[str] = set()
+                for bureau, raw in values_map.items():
                     info = None
                     for b in acc["bureaus"]:
                         if isinstance(b, dict) and b.get("bureau") == bureau:
@@ -283,10 +285,19 @@ def analyze_credit_report(
                     if info is None:
                         info = {"bureau": bureau}
                         acc["bureaus"].append(info)
-                    if not info.get("account_number"):
-                        info["account_number"] = value
-                if not acc.get("account_number") and len(set(values_map.values())) == 1:
-                    acc["account_number"] = next(iter(values_map.values()))
+                    if not info.get("account_number_raw"):
+                        info["account_number_raw"] = raw
+                    digits = re.sub(r"\D", "", raw)
+                    if digits and not info.get("account_number"):
+                        info["account_number"] = digits
+                    if raw:
+                        raw_unique.add(raw)
+                    if digits:
+                        digit_unique.add(digits)
+                if not acc.get("account_number_raw") and len(raw_unique) == 1:
+                    acc["account_number_raw"] = next(iter(raw_unique))
+                if not acc.get("account_number") and len(digit_unique) == 1:
+                    acc["account_number"] = next(iter(digit_unique))
 
         def _merge_payment_status(acc_list, field_map):
             for acc in acc_list or []:

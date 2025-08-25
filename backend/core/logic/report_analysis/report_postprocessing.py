@@ -59,12 +59,20 @@ def enrich_account_metadata(acc: dict[str, Any]) -> dict[str, Any]:
     acc["normalized_name"] = normalize_creditor_name(name)
 
     # Derive a last4 account number from any available account number field
-    acct_num = acc.get("account_number") or acc.get("account_number_masked")
+    acct_num = (
+        acc.get("account_number")
+        or acc.get("account_number_masked")
+        or acc.get("account_number_raw")
+    )
     if not acct_num:
         for info in acc.get("bureaus", []) or []:
             if not isinstance(info, dict):
                 continue
-            acct_num = info.get("account_number") or info.get("account_number_masked")
+            acct_num = (
+                info.get("account_number")
+                or info.get("account_number_masked")
+                or info.get("account_number_raw")
+            )
             if acct_num:
                 break
     if isinstance(acct_num, str):

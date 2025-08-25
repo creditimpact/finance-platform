@@ -155,9 +155,9 @@ def extract_account_numbers(text: str) -> dict[str, dict[str, str]]:
         block_text = "\n".join(block[1:])
         row = ACCOUNT_NUMBER_ROW_RE.search(block_text)
         if row:
-            tu = re.sub(r"\D", "", row.group("tu"))
-            ex = re.sub(r"\D", "", row.group("ex"))
-            eq = re.sub(r"\D", "", row.group("eq"))
+            tu = row.group("tu").strip()
+            ex = row.group("ex").strip()
+            eq = row.group("eq").strip()
             if tu:
                 numbers.setdefault(acc_norm, {})[
                     normalize_bureau_name("TransUnion")
@@ -180,17 +180,17 @@ def extract_account_numbers(text: str) -> dict[str, dict[str, str]]:
                 # Bureau line itself might contain the account number
                 inline = ACCOUNT_NUMBER_LINE_RE.search(clean)
                 if inline:
-                    digits = re.sub(r"\D", "", inline.group(1))
-                    if digits:
-                        numbers.setdefault(acc_norm, {})[current_bureau] = digits
+                    value = inline.group(1).strip()
+                    if value:
+                        numbers.setdefault(acc_norm, {})[current_bureau] = value
                 continue
 
             if current_bureau:
                 m = ACCOUNT_NUMBER_LINE_RE.match(clean)
                 if m:
-                    digits = re.sub(r"\D", "", m.group(1))
-                    if digits:
-                        numbers.setdefault(acc_norm, {})[current_bureau] = digits
+                    value = m.group(1).strip()
+                    if value:
+                        numbers.setdefault(acc_norm, {})[current_bureau] = value
 
     return numbers
 

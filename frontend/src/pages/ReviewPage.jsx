@@ -40,9 +40,11 @@ export default function ReviewPage() {
   const dedupedAccounts = Array.from(
     accounts
       .reduce((map, acc) => {
+        const identifier =
+          acc.account_number_last4 || acc.account_fingerprint || '';
         const key = `${
           acc.normalized_name ?? acc.name?.toLowerCase() ?? ''
-        }|${acc.account_number_last4 ?? acc.account_fingerprint ?? ''}`;
+        }|${identifier}`;
         const existing = map.get(key);
         if (existing) {
           existing.late_payments = { ...existing.late_payments, ...acc.late_payments };

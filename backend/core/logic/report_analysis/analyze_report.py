@@ -49,6 +49,55 @@ from .report_prompting import (
     call_ai_analysis,
 )
 
+
+def _split_account_buckets(accounts: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split accounts into negative and open issue buckets.
+
+    The heuristics consider any charge-off/collection/closed indicators from
+    merged fields such as ``payment_status`` and ``remarks``. Accounts that are
+    currently open (e.g. "Open", "Current", "Pays as agreed") are classified
+    under ``open_accounts_with_issues`` while all others default to
+    ``negative_accounts``.
+    """
+
+    negatives: list[dict] = []
+    open_issues: list[dict] = []
+    for acc in accounts or []:
+        if not acc.get("issue_types"):
+            continue
+
+        parts = [
+            acc.get("status"),
+            acc.get("account_status"),
+            acc.get("payment_status"),
+            acc.get("remarks"),
+        ]
+        parts.extend((acc.get("payment_statuses") or {}).values())
+        status_text = " ".join(str(p) for p in parts if p).lower()
+
+        primary = acc.get("primary_issue")
+        has_negative = bool(acc.get("has_co_marker"))
+        if not has_negative and primary and primary != "late_payment":
+            has_negative = True
+        if not has_negative:
+            has_negative = bool(
+                re.search(
+                    r"charge\s*off|charged\s*off|chargeoff|collection|repossession|foreclosure|closed|transferred|settled|paid",
+                    status_text,
+                )
+            )
+
+        has_open = bool(
+            re.search(r"\bopen\b|current|pays\s+as\s+agreed", status_text)
+        )
+
+        if has_negative or not has_open:
+            negatives.append(acc)
+        else:
+            open_issues.append(acc)
+
+    return negatives, open_issues
+
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
@@ -348,18 +397,7 @@ def analyze_credit_report(
         for acc in result.get("all_accounts", []):
             _assign_issue_types(acc)
 
-        negatives = []
-        open_issues = []
-        for acc in result.get("all_accounts", []):
-            if acc.get("issue_types"):
-                status_text = str(
-                    acc.get("status") or acc.get("account_status") or ""
-                ).lower()
-                if "open" in status_text:
-                    open_issues.append(acc)
-                else:
-                    negatives.append(acc)
-
+        negatives, open_issues = _split_account_buckets(result.get("all_accounts", []))
         result["negative_accounts"] = negatives
         result["open_accounts_with_issues"] = open_issues
 

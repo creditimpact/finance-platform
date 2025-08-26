@@ -118,25 +118,33 @@ def collect_stageA_problem_accounts(
             data = art.model_dump()
             tier = str(data.get("tier", "none"))
             source = data.get("decision_source", "rules")
-            reasons = data.get("problem_reasons", [])
+            reasons = data.get("problem_reasons", []) or []
+            fields_used = (data.get("debug") or {}).get("fields_used")
             include = False
-            if config.ENABLE_AI_ADJUDICATOR and source == "ai":
-                if tier in {"Tier1", "Tier2", "Tier3"}:
+            if config.ENABLE_AI_ADJUDICATOR:
+                if source == "ai":
+                    if tier in {"Tier1", "Tier2", "Tier3"}:
+                        include = True
+                elif reasons:
                     include = True
             elif reasons:
                 include = True
+                source = "rules"
+                tier = "none"
+                data["primary_issue"] = "unknown"
+                data["confidence"] = 0.0
             if include:
-                acc = {"account_id": acc_id}
-                acc.update(
-                    {
-                        "primary_issue": data.get("primary_issue", "unknown"),
-                        "issue_types": data.get("issue_types", []),
-                        "problem_reasons": reasons,
-                        "confidence": data.get("confidence", 0.0),
-                        "tier": data.get("tier", 0),
-                        "decision_source": source,
-                    }
-                )
+                acc: dict[str, Any] = {
+                    "account_id": acc_id,
+                    "bureau": str(case.bureau.value),
+                    "primary_issue": data.get("primary_issue", "unknown"),
+                    "tier": tier,
+                    "problem_reasons": reasons,
+                    "confidence": data.get("confidence", 0.0),
+                    "decision_source": source,
+                }
+                if fields_used:
+                    acc["fields_used"] = fields_used
                 problems.append(acc)
     else:
         for acc in all_accounts or []:

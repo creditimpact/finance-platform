@@ -7,6 +7,7 @@ import pytest
 from backend.core.case_store import api, storage
 from backend.core.case_store.errors import CaseStoreError, NOT_FOUND, VALIDATION_FAILED
 from backend.core.case_store.models import Bureau
+from backend.core.case_store.telemetry import set_emitter
 
 
 # Helpers ---------------------------------------------------------------
@@ -137,3 +138,77 @@ def test_error_paths(tmp_path, monkeypatch):
     with pytest.raises(CaseStoreError) as exc:
         api.set_tags(session_id, "missing", foo=1)
     assert exc.value.code == NOT_FOUND
+
+
+def test_telemetry_events(tmp_path, monkeypatch):
+    configure(monkeypatch, tmp_path)
+    events = []
+
+    def _collector(name, fields):
+        events.append((name, fields))
+
+    set_emitter(_collector)
+    try:
+        # save and load events
+        case = api.create_session_case("sess", meta={})
+        api.save_session_case(case)
+        api.load_session_case("sess")
+
+        saves = [f for n, f in events if n == "case_store_save"]
+        loads = [f for n, f in events if n == "case_store_load"]
+        assert len(saves) == 1
+        assert len(loads) == 1
+        save_fields = saves[0]
+        load_fields = loads[0]
+        assert save_fields["session_id"] == "sess"
+        assert load_fields["session_id"] == "sess"
+        assert save_fields["file_bytes"] > 0
+        assert load_fields["file_bytes"] > 0
+        assert save_fields["duration_ms"] > 0
+        assert load_fields["duration_ms"] > 0
+
+        events.clear()
+
+        # upsert event
+        api.upsert_account_fields(
+            "sess",
+            "acc1",
+            "Equifax",
+            {"account_number": "1234", "balance_owed": 0},
+        )
+        upserts = [f for n, f in events if n == "case_store_upsert"]
+        assert len(upserts) == 1
+        up_fields = upserts[0]
+        assert up_fields["session_id"] == "sess"
+        assert up_fields["account_id"] == "acc1"
+        assert up_fields["bureau"] == "Equifax"
+        assert up_fields["duration_ms"] > 0
+        assert "masked_fields_count" in up_fields and up_fields["masked_fields_count"] >= 0
+
+        events.clear()
+
+        # artifact append event
+        payload: Dict[str, object] = {
+            "primary_issue": "unknown",
+            "confidence": 0.0,
+            "tier": "none",
+            "decision_source": "rules",
+            "problem_reasons": [],
+        }
+        api.append_artifact("sess", "acc1", "stageA_detection", payload)
+        arts = [f for n, f in events if n == "case_store_artifact_append"]
+        assert len(arts) == 1
+        art_fields = arts[0]
+        assert art_fields["namespace"] == "stageA_detection"
+        assert art_fields["overwrite"] is True
+        assert art_fields["duration_ms"] > 0
+
+        events.clear()
+
+        # error event
+        with pytest.raises(CaseStoreError):
+            api.get_account_case("missing", "acc")
+        errs = [f for n, f in events if n == "case_store_error"]
+        assert any(e.get("where") == "api" and e.get("code") == NOT_FOUND for e in errs)
+    finally:
+        set_emitter(None)

@@ -113,7 +113,7 @@ def collect_stageA_problem_accounts(
             if not art:
                 continue
             data = art.model_dump()
-            if data.get("primary_issue") != "unknown" or data.get("problem_reasons"):
+            if data.get("problem_reasons"):
                 acc = {"account_id": acc_id}
                 acc.update({
                     "primary_issue": data.get("primary_issue", "unknown"),

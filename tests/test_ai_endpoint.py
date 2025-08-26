@@ -57,3 +57,20 @@ def test_ai_endpoint_timeout(monkeypatch, client):
     monkeypatch.setattr(ai_endpoints, "run_llm_prompt", fake_prompt)
     resp = client.post("/internal/ai-adjudicate", json=_request_body())
     assert resp.status_code in {502, 504}
+
+
+def test_ai_endpoint_schema_validation(monkeypatch, client):
+    def fake_prompt(system, user, *, temperature, timeout):
+        return json.dumps(
+            {
+                "primary_issue": "collection",
+                "tier": "BadTier",
+                "problem_reasons": [],
+                "confidence": 0.9,
+                "decision_source": "ai",
+            }
+        )
+
+    monkeypatch.setattr(ai_endpoints, "run_llm_prompt", fake_prompt)
+    resp = client.post("/internal/ai-adjudicate", json=_request_body())
+    assert resp.status_code == 502

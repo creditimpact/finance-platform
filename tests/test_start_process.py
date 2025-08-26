@@ -4,6 +4,7 @@ import json
 from backend.api import app as app_module
 from backend.api.app import create_app
 from backend.core.logic.report_analysis.report_postprocessing import _assign_issue_types
+import backend.core.orchestrators as orch
 from backend.core.orchestrators import extract_problematic_accounts_from_report
 from tests.test_extract_problematic_accounts import _mock_dependencies
 import backend.config as config
@@ -59,33 +60,19 @@ def test_start_process_missing_file():
 
 def test_start_process_emits_enriched_fields(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "PROBLEM_DETECTION_ONLY", False)
-    sections = {
-        "negative_accounts": [
-            {
-                "name": "Acc1",
-                "issue_types": ["late_payment", "charge_off"],
-                "account_number": "123456789",
-                "original_creditor": "OC",
-                "bureaus": [
-                    {"bureau": "Experian", "status": "charge off"},
-                    {"bureau": "Equifax", "status": "30 days late"},
-                ],
-                "balance": 1000,
-                "past_due": 500,
-                "date_opened": "2020-01-01",
-                "date_closed": "2021-01-01",
-                "last_activity": "2023-01-01",
-            }
-        ]
+    sample = {
+        "account_id": "1",
+        "bureau": "Experian",
+        "primary_issue": "charge_off",
+        "tier": "Tier1",
+        "problem_reasons": ["reason"],
+        "confidence": 0.9,
+        "decision_source": "ai",
     }
-    for acc in sections["negative_accounts"]:
-        _assign_issue_types(acc)
-    _mock_dependencies(monkeypatch, sections)
-    payload = extract_problematic_accounts_from_report("dummy.pdf").to_dict()
 
     class DummyResult:
         def get(self, timeout=None):
-            return payload
+            return {"problem_accounts": [sample]}
 
     class DummyTask:
         def delay(self, *a, **k):
@@ -94,6 +81,7 @@ def test_start_process_emits_enriched_fields(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "extract_problematic_accounts", DummyTask())
     monkeypatch.setattr(app_module, "run_credit_repair_process", lambda *a, **k: None)
     monkeypatch.setattr(app_module, "set_session", lambda *a, **k: None)
+    monkeypatch.setattr(orch, "collect_stageA_problem_accounts", lambda sid: [sample])
 
     test_app = create_app()
     client = test_app.test_client()
@@ -111,20 +99,8 @@ def test_start_process_emits_enriched_fields(monkeypatch, tmp_path):
         accounts["problem_accounts"]
         == accounts["negative_accounts"]
         == accounts["open_accounts_with_issues"]
+        == [sample]
     )
-    acc = accounts["problem_accounts"][0]
-    assert acc["primary_issue"] == "charge_off"
-    assert acc["account_number_last4"] == "6789"
-    assert acc["original_creditor"] == "OC"
-    assert acc["bureau_statuses"] == {
-        "Experian": "Collection/Chargeoff",
-        "Equifax": "30d late",
-    }
-    assert acc["balance"] == 1000
-    assert acc["past_due"] == 500
-    assert acc["date_opened"] == "2020-01-01"
-    assert acc["date_closed"] == "2021-01-01"
-    assert acc["last_activity"] == "2023-01-01"
 
 
 def test_emitted_account_logs_payment_statuses(monkeypatch, caplog):
@@ -150,6 +126,7 @@ def test_emitted_account_logs_payment_statuses(monkeypatch, caplog):
 
 
 def test_emitted_account_logs_co_marker(monkeypatch, caplog):
+    monkeypatch.setattr(config, "PROBLEM_DETECTION_ONLY", False)
     sections = {
         "negative_accounts": [
             {

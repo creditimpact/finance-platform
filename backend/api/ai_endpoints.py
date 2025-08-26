@@ -4,16 +4,22 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from flask import Blueprint, jsonify, request
-from pydantic import ValidationError
+from jsonschema import Draft7Validator, ValidationError as SchemaValidationError
+from pydantic import ValidationError as PydanticValidationError
 
 from backend.config import AI_REQUEST_TIMEOUT_S
 from backend.core.ai.models import AIAdjudicateRequest, AIAdjudicateResponse
 from backend.core.ai.service import run_llm_prompt
 
 logger = logging.getLogger(__name__)
+
+SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schemas"
+with open(SCHEMA_DIR / "ai_adjudication.json") as _f:
+    _ai_response_validator = Draft7Validator(json.load(_f))
 
 ai_bp = Blueprint("ai_internal", __name__)
 
@@ -24,7 +30,7 @@ def ai_adjudicate() -> Any:
     try:
         raw = request.get_json(force=True) or {}
         req = AIAdjudicateRequest.model_validate(raw)
-    except ValidationError:
+    except PydanticValidationError:
         return jsonify({"error": "invalid_request"}), 400
 
     system_prompt = f"hierarchy_version={req.hierarchy_version}"
@@ -37,9 +43,14 @@ def ai_adjudicate() -> Any:
         )
         data = json.loads(llm_raw)
         resp = AIAdjudicateResponse.model_validate(data)
-        return jsonify(resp.model_dump())
+        payload = resp.model_dump()
+        _ai_response_validator.validate(payload)
+        return jsonify(payload)
     except TimeoutError:
         return jsonify({"error": "timeout"}), 504
+    except (PydanticValidationError, SchemaValidationError) as exc:
+        logger.debug("ai_adjudicate_schema_failure: %s", exc)
+        return jsonify({"error": "bad_gateway"}), 502
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("ai_adjudicate_failure: %s", exc)
         return jsonify({"error": "bad_gateway"}), 502

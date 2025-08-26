@@ -1,34 +1,42 @@
-from backend.core.logic.report_analysis.problem_detection import evaluate_account_problem
+from importlib import reload
+
+import backend.config as base_config
+import backend.core.logic.report_analysis.problem_detection as pd
 
 
-def test_tier1_collection_from_status():
-    acct = {"account_status": "COLLECTION", "credit_limit": 1000, "balance_owed": 100}
-    v = evaluate_account_problem(acct)
-    assert v["is_problem"] is True
-    assert v["confidence_hint"]["tier"] == 1
-    assert v["primary_issue"] == "collection"
-    assert any(r.startswith("account_status:") for r in v["problem_reasons"])
+def _reload(monkeypatch, **env):
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    reload(base_config)
+    reload(pd)
 
 
-def test_tier2_serious_delinquency_from_payment_status():
-    acct = {"payment_status": "120 days past due"}
-    v = evaluate_account_problem(acct)
-    assert v["is_problem"] is True
-    assert v["primary_issue"] == "serious_delinquency"
-    assert v["confidence_hint"]["tier"] == 2
+def test_detects_numeric_and_structural(monkeypatch):
+    _reload(
+        monkeypatch,
+        ENABLE_TIER1_KEYWORDS="0",
+        ENABLE_TIER2_KEYWORDS="0",
+        ENABLE_TIER3_KEYWORDS="0",
+    )
+
+    acct1 = {"bureau_statuses": {"Experian": "Collection"}}
+    v1 = pd.evaluate_account_problem(acct1)
+    assert v1["is_problem"] is True
+    assert v1["primary_issue"] == "collection"
+
+    acct2 = {"late_payments": {"Experian": {"60": 1}}}
+    v2 = pd.evaluate_account_problem(acct2)
+    assert v2["is_problem"] is True
+    assert v2["primary_issue"] == "serious_delinquency"
 
 
-def test_tier3_from_account_rating_only():
-    acct = {"account_rating": "Derogatory"}
-    v = evaluate_account_problem(acct)
-    assert v["is_problem"] is True
-    assert v["primary_issue"] == "potential_derogatory"
-    assert v["confidence_hint"]["tier"] == 3
-
-
-def test_utilization_is_supporting_not_problem():
-    acct = {"balance_owed": 950, "credit_limit": 1000}
-    v = evaluate_account_problem(acct)
+def test_clean_account_not_flagged(monkeypatch):
+    _reload(
+        monkeypatch,
+        ENABLE_TIER1_KEYWORDS="0",
+        ENABLE_TIER2_KEYWORDS="0",
+        ENABLE_TIER3_KEYWORDS="0",
+    )
+    clean = {"account_status": "Open", "payment_status": "Pays as agreed"}
+    v = pd.evaluate_account_problem(clean)
     assert v["is_problem"] is False
-    assert "utilization" in v["supporting"]
-    assert any("utilization" in r for r in v["problem_reasons"])

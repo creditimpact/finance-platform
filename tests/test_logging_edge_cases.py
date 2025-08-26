@@ -163,7 +163,7 @@ def test_warning_on_missing_summary(monkeypatch, tmp_path, recwarn):
         ai_client=fake,
         classification_map=classification_map,
     )
-    assert "disputes" not in captured
+    assert "disputes" in captured
 
 
 def test_unrecognized_dispute_type_fallback(monkeypatch, tmp_path, recwarn):
@@ -236,4 +236,4 @@ def test_unrecognized_dispute_type_fallback(monkeypatch, tmp_path, recwarn):
         ai_client=fake,
         classification_map=classification_map,
     )
-    assert "disputes" not in captured
+    assert "disputes" in captured

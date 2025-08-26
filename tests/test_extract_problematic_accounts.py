@@ -24,6 +24,16 @@ def _mock_dependencies(monkeypatch, sections):
     monkeypatch.setattr(
         "backend.core.orchestrators.update_session", lambda *a, **k: None
     )
+    sections.setdefault(
+        "problem_accounts",
+        sections.get("all_accounts")
+        or sections.get("negative_accounts", [])
+        + [
+            acc
+            for acc in sections.get("open_accounts_with_issues", [])
+            if acc not in sections.get("negative_accounts", [])
+        ],
+    )
     monkeypatch.setattr(
         "backend.core.logic.report_analysis.analyze_report.analyze_credit_report",
         lambda *a, **k: sections,

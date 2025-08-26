@@ -31,6 +31,7 @@ from backend.core.logic.utils.text_parsing import (
     extract_late_history_blocks,
 )
 from backend.core.services.ai_client import AIClient, get_ai_client
+from backend.core.logic.report_analysis.problem_detection import evaluate_account_problem
 
 from .report_parsing import (
     extract_account_numbers,
@@ -757,6 +758,18 @@ def analyze_credit_report(
         ]:
             for acc in result.get(section, []):
                 enforce_collection_status(acc)
+
+        for acc in result.get("all_accounts", []):
+            verdict = evaluate_account_problem(acc)
+            acc["primary_issue"] = verdict["primary_issue"]
+            acc["problem_reasons"] = verdict["problem_reasons"]
+            acc["confidence_hint"] = verdict["confidence_hint"]
+            acc["supporting"] = verdict["supporting"]
+            acc["_detector_is_problem"] = verdict["is_problem"]
+
+        result["problem_accounts"] = [
+            a for a in result.get("all_accounts", []) if a.get("_detector_is_problem")
+        ]
 
         if os.getenv("DEFER_ASSIGN_ISSUE_TYPES") == "1":
             for acc in result.get("all_accounts", []):

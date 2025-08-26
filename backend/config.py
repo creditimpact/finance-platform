@@ -4,11 +4,21 @@ from pathlib import Path
 from typing import Any, Tuple
 
 
-def _env_bool(name: str, default: bool = False) -> bool:
+def env_bool(name: str, default: bool = False) -> bool:
+    """Parse a boolean environment variable."""
     val = os.getenv(name)
     if val is None:
         return default
     return val.lower() in {"1", "true", "yes", "on"}
+
+
+def env_str(name: str, default: str) -> str:
+    """Fetch a string environment variable."""
+    return os.getenv(name, default)
+
+
+# Backwards compatibility for older imports
+_env_bool = env_bool
 
 
 def _load_keyword_lists() -> Tuple[dict, dict, dict]:
@@ -49,3 +59,12 @@ _raw_t1, _raw_t2, _raw_t3 = _load_keyword_lists()
 TIER1_KEYWORDS = _raw_t1 if ENABLE_TIER1_KEYWORDS else {}
 TIER2_KEYWORDS = _raw_t2 if ENABLE_TIER2_KEYWORDS else {}
 TIER3_KEYWORDS = _raw_t3 if ENABLE_TIER3_KEYWORDS else {}
+
+
+# Case Store configuration
+CASESTORE_DIR = env_str("CASESTORE_DIR", "/var/app/run/cases")
+CASESTORE_REDACT_BEFORE_STORE = env_bool(
+    "CASESTORE_REDACT_BEFORE_STORE", True
+)
+CASESTORE_ATOMIC_WRITES = env_bool("CASESTORE_ATOMIC_WRITES", True)
+CASESTORE_VALIDATE_ON_LOAD = env_bool("CASESTORE_VALIDATE_ON_LOAD", True)

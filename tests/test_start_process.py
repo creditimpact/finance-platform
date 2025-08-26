@@ -6,6 +6,7 @@ from backend.api.app import create_app
 from backend.core.logic.report_analysis.report_postprocessing import _assign_issue_types
 from backend.core.orchestrators import extract_problematic_accounts_from_report
 from tests.test_extract_problematic_accounts import _mock_dependencies
+import backend.config as config
 
 
 class DummyResult:
@@ -57,6 +58,7 @@ def test_start_process_missing_file():
 
 
 def test_start_process_emits_enriched_fields(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "PROBLEM_DETECTION_ONLY", False)
     sections = {
         "negative_accounts": [
             {

@@ -61,6 +61,25 @@ def neutral_stageA_decision(debug: dict | None = None) -> dict:
     }
 
 
+def adopt_or_fallback(ai_resp: dict | None, min_conf: float) -> dict:
+    """Return an AI decision if it meets quality gates, otherwise neutral."""
+    if (
+        ai_resp
+        and ai_resp.get("primary_issue") not in {"none", "unknown", None}
+        and ai_resp.get("confidence", 0.0) >= min_conf
+    ):
+        return {
+            "primary_issue": ai_resp.get("primary_issue", "unknown"),
+            "issue_types": ai_resp.get("issue_types", []),
+            "problem_reasons": ai_resp.get("problem_reasons", []),
+            "decision_source": "ai",
+            "confidence": float(ai_resp.get("confidence", 0.0)),
+            "tier": ai_resp.get("tier", NEUTRAL_TIER),
+            "debug": {"fields_used": ai_resp.get("fields_used", [])},
+        }
+    return neutral_stageA_decision()
+
+
 def evaluate_with_optional_ai(
     session_id: str,
     account_id: str,
@@ -70,9 +89,8 @@ def evaluate_with_optional_ai(
 ) -> dict:
     """Attempt AI adjudication and fall back to neutral decision."""
 
-    decision = neutral_stageA_decision(debug={"source": "rules_v1"})
     if not config.ENABLE_AI_ADJUDICATOR:
-        return decision
+        return neutral_stageA_decision(debug={"source": "rules_v1"})
 
     ai_fields = redact_for_ai({"fields": case_fields})["fields"]
     req = AIAdjudicateRequest(
@@ -82,22 +100,16 @@ def evaluate_with_optional_ai(
         fields=ai_fields,
     )
     resp = call_adjudicator(None, req)
-    if (
-        resp
-        and resp.confidence >= config.AI_MIN_CONFIDENCE
-        and resp.primary_issue not in ("none", "unknown")
-    ):
-        return {
+    resp_dict = None
+    if resp:
+        resp_dict = {
             "primary_issue": resp.primary_issue,
-            "issue_types": [],
-            "problem_reasons": resp.problem_reasons,
-            "decision_source": "ai",
-            "confidence": float(resp.confidence),
             "tier": resp.tier,
-            "debug": {"fields_used": resp.fields_used},
+            "confidence": float(resp.confidence),
+            "problem_reasons": resp.problem_reasons,
+            "fields_used": resp.fields_used,
         }
-
-    return decision
+    return adopt_or_fallback(resp_dict, config.AI_MIN_CONFIDENCE)
 
 
 def _format_amount(v) -> str:
@@ -252,6 +264,8 @@ def run_stage_a(
                         acc_id,
                         exc_info=True,
                     )
+            debug_data = dict(verdict.get("debug", {}))
+            debug_data["source"] = "casestore-stageA"
             payload = {
                 "primary_issue": verdict.get("primary_issue", "unknown"),
                 "issue_types": verdict.get("issue_types", []),
@@ -259,7 +273,7 @@ def run_stage_a(
                 "confidence": verdict.get("confidence", 0.0),
                 "tier": str(verdict.get("tier", NEUTRAL_TIER)),
                 "decision_source": verdict.get("decision_source", "rules"),
-                "debug": {"source": "casestore-stageA"},
+                "debug": debug_data,
             }
             try:
                 append_artifact(  # type: ignore[operator]

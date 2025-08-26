@@ -42,6 +42,7 @@ from backend.core.logic.letters.explanations_normalizer import (
     extract_structured,
     sanitize,
 )
+from backend.core import orchestrators as orch
 
 logger = logging.getLogger(__name__)
 
@@ -146,11 +147,17 @@ def start_process():
             timeout=300
         )
 
-        problem_accounts = result.get("problem_accounts")
-        if problem_accounts is None:
-            problem_accounts = []
-            problem_accounts.extend(result.get("disputes", []))
-            problem_accounts.extend(result.get("goodwill", []))
+        try:
+            problem_accounts = orch.collect_stageA_problem_accounts(session_id)
+        except Exception:
+            logger.warning(
+                "collect_stageA_problem_accounts_failed session=%s", session_id,
+                exc_info=True,
+            )
+            problem_accounts = result.get("problem_accounts") or []
+            if not problem_accounts:
+                problem_accounts.extend(result.get("disputes", []))
+                problem_accounts.extend(result.get("goodwill", []))
 
         legacy = request.args.get("legacy", "").lower() in ("1", "true", "yes")
 

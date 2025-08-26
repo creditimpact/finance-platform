@@ -82,3 +82,36 @@ def test_orchestrator_fallback(monkeypatch, session_case):
     problems = orch.collect_stageA_problem_accounts(session_case, [])
     ids = {p["account_id"] for p in problems}
     assert ids == {"acc2", "acc3"}
+
+
+def test_orchestrator_low_confidence(monkeypatch, session_case):
+    monkeypatch.setattr(config, "ENABLE_CASESTORE_STAGEA", True)
+    monkeypatch.setattr(config, "ENABLE_AI_ADJUDICATOR", True)
+
+    responses = [
+        AIAdjudicateResponse(
+            primary_issue="collection",
+            tier="Tier1",
+            confidence=0.5,
+            problem_reasons=["ai_reason"],
+            fields_used=["balance_owed"],
+        ),
+        AIAdjudicateResponse(
+            primary_issue="collection",
+            tier="Tier2",
+            confidence=0.6,
+            problem_reasons=["ai_reason"],
+            fields_used=["balance_owed"],
+        ),
+        None,
+    ]
+
+    def fake_call(session, req):
+        return responses.pop(0)
+
+    monkeypatch.setattr(pd, "call_adjudicator", fake_call)
+
+    pd.run_stage_a(session_case, [])
+    problems = orch.collect_stageA_problem_accounts(session_case, [])
+    ids = {p["account_id"] for p in problems}
+    assert ids == {"acc2", "acc3"}

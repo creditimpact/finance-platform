@@ -25,6 +25,7 @@ from backend.analytics.batch_runner import BatchFilters, BatchRunner
 from backend.api.admin import admin_bp
 from backend.api.auth import require_api_key_or_role
 from backend.api.config import ENABLE_BATCH_RUNNER, get_app_config
+from backend.api.internal_ai import internal_ai_bp
 from backend.api.session_manager import (
     get_session,
     set_session,
@@ -263,6 +264,7 @@ def create_app() -> Flask:
     CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
     app.register_blueprint(admin_bp)
     app.register_blueprint(api_bp)
+    app.register_blueprint(internal_ai_bp)
 
     @app.before_request
     def _load_config() -> None:

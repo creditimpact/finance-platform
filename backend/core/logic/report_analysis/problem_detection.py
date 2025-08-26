@@ -2,7 +2,10 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
+from backend.api.internal_ai import adjudicate as ai_adjudicate
 from backend.config import (
+    AI_MIN_CONFIDENCE,
+    ENABLE_AI_ADJUDICATOR,
     ENABLE_TIER1_KEYWORDS,
     ENABLE_TIER2_KEYWORDS,
     ENABLE_TIER2_NUMERIC,
@@ -13,6 +16,7 @@ from backend.config import (
     TIER3_KEYWORDS,
     UTILIZATION_PROBLEM_THRESHOLD,
 )
+from backend.core.logic.report_analysis.redaction import redact_account_for_ai
 
 PRIORITY_T1 = [
     "bankruptcy",
@@ -152,17 +156,6 @@ def evaluate_account_problem(acct: Dict[str, Any]) -> Dict[str, Any]:
     if acct.get("past_due_amount") is not None:
         supporting["past_due_amount"] = acct["past_due_amount"]
 
-    is_problem = primary_issue in {
-        "collection",
-        "charge_off",
-        "bankruptcy",
-        "foreclosure",
-        "judgment",
-        "tax_lien",
-        "serious_delinquency",
-        "potential_derogatory",
-    }
-
     conf = ConfidenceHint(
         tier=tier or 4,
         strongest_signal=primary_issue or "unknown",
@@ -170,11 +163,38 @@ def evaluate_account_problem(acct: Dict[str, Any]) -> Dict[str, Any]:
         latest_date_seen=None,
     )
 
-    return {
-        "is_problem": bool(is_problem and tier in {1, 2, 3}),
+    result = {
         "primary_issue": primary_issue or "unknown",
+        "issue_types": [primary_issue] if primary_issue else [],
         "problem_reasons": reasons,
-        "confidence_hint": asdict(conf),
-        "supporting": supporting,
-        "unknown_fields": [],
+        "confidence": 1.0 if primary_issue else 0.0,
+        "tier": tier or 0,
+        "decision_source": "rules",
+        "debug": {"supporting": supporting, "confidence_hint": asdict(conf)},
     }
+
+    if ENABLE_AI_ADJUDICATOR:
+        redacted = redact_account_for_ai(acct)
+        ai_resp = ai_adjudicate("stageA", "v1", redacted)
+        result["debug"]["ai_response"] = {
+            "primary_issue": ai_resp.get("primary_issue"),
+            "confidence": ai_resp.get("confidence"),
+            "tier": ai_resp.get("tier"),
+            "error": ai_resp.get("error"),
+        }
+        if (
+            ai_resp.get("confidence", 0) >= AI_MIN_CONFIDENCE
+            and ai_resp.get("primary_issue") != "unknown"
+        ):
+            result.update(
+                {
+                    "primary_issue": ai_resp.get("primary_issue", "unknown"),
+                    "issue_types": ai_resp.get("issue_types", []),
+                    "problem_reasons": ai_resp.get("problem_reasons", []),
+                    "confidence": ai_resp.get("confidence", 0.0),
+                    "tier": ai_resp.get("tier", 0),
+                    "decision_source": "ai",
+                }
+            )
+
+    return result

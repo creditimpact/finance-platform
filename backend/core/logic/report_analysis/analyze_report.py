@@ -766,11 +766,11 @@ def analyze_credit_report(
         for acc in result.get("all_accounts", []):
             candidate_logger.collect(acc)
             verdict = evaluate_account_problem(acc)
-            acc["primary_issue"] = verdict["primary_issue"]
-            acc["problem_reasons"] = verdict["problem_reasons"]
-            acc["confidence_hint"] = verdict["confidence_hint"]
-            acc["supporting"] = verdict["supporting"]
-            acc["_detector_is_problem"] = verdict["is_problem"]
+            acc.update(verdict)
+            acc["_detector_is_problem"] = bool(
+                verdict.get("problem_reasons")
+                or verdict.get("primary_issue") != "unknown"
+            )
         candidate_logger.save(Path("client_output") / request_id)
 
         result["problem_accounts"] = [

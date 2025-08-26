@@ -14,7 +14,11 @@ from pathlib import Path
 from typing import Any, List, Mapping
 
 from backend.api import config as api_config
+from backend.api.config import env_bool
 from backend.audit.audit import AuditLevel, AuditLogger, emit_event
+from backend.core.letters.client_context import format_safe_client_context
+from backend.core.letters.router import select_template
+from backend.core.letters.sanitizer import sanitize_rendered_html
 from backend.core.logic.compliance.compliance_pipeline import (
     DEFAULT_DISPUTE_REASON,
     ESCALATION_NOTE,
@@ -26,6 +30,7 @@ from backend.core.logic.compliance.compliance_pipeline import (
 from backend.core.logic.guardrails.summary_validator import (
     validate_structured_summaries,
 )
+from backend.core.logic.post_confirmation import build_dispute_payload
 from backend.core.logic.rendering import pdf_renderer
 from backend.core.logic.rendering.letter_rendering import render_dispute_letter_html
 from backend.core.logic.strategy.strategy_engine import generate_strategy
@@ -38,14 +43,9 @@ from backend.core.models.letter import LetterAccount, LetterArtifact, LetterCont
 from backend.core.services.ai_client import AIClient
 
 from .dispute_preparation import prepare_disputes_and_inquiries
-from backend.core.logic.post_confirmation import build_dispute_payload
-from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
 from .exceptions import StrategyContextMissing
+from .gpt_prompting import call_gpt_dispute_letter as _call_gpt_dispute_letter
 from .utils import ensure_strategy_context, populate_required_fields
-from backend.core.letters.router import select_template
-from backend.api.config import env_bool
-from backend.core.letters.client_context import format_safe_client_context
-from backend.core.letters.sanitizer import sanitize_rendered_html
 
 logger = logging.getLogger(__name__)
 
@@ -202,14 +202,16 @@ def generate_all_dispute_letters_with_ai(
         disputes = disputes or []
         filtered_inquiries = filtered_inquiries or []
 
-        sanitized, bureau_flag, fallback_norm_names, fallback_used = sanitize_disputes(
-            disputes,
-            bureau_name,
-            strategy_summaries,
-            log_messages,
-            is_identity_theft,
+        sanitized_flag, bureau_flag, fallback_norm_names, fallback_used = (
+            sanitize_disputes(
+                disputes,
+                bureau_name,
+                strategy_summaries,
+                log_messages,
+                is_identity_theft,
+            )
         )
-        sanitization_issues |= sanitized
+        sanitization_issues |= sanitized_flag
         bureau_sanitization |= bureau_flag
 
         client_info_for_gpt, raw_client_text_present = sanitize_client_info(
@@ -220,6 +222,11 @@ def generate_all_dispute_letters_with_ai(
         sanitization_issues |= raw_client_text_present
         bureau_sanitization |= raw_client_text_present
 
+        if sanitized_flag:
+            msg = f"[{bureau_name}] Sanitization issues detected - letter skipped"
+            log_messages.append(msg)
+            continue
+
         if not disputes and not filtered_inquiries:
             msg = f"[{bureau_name}] No disputes or inquiries after filtering - letter skipped"
             print(f"[WARN] No data to dispute for {bureau_name}, skipping.")
@@ -228,9 +235,7 @@ def generate_all_dispute_letters_with_ai(
 
         bureau_address = CREDIT_BUREAU_ADDRESSES.get(bureau_name, "Unknown")
 
-        dispute_objs = [
-            d.to_dict() if hasattr(d, "to_dict") else d for d in disputes
-        ]
+        dispute_objs = [d.to_dict() if hasattr(d, "to_dict") else d for d in disputes]
         inquiry_objs = [
             Inquiry.from_dict(i) if isinstance(i, dict) else i
             for i in filtered_inquiries
@@ -295,15 +300,11 @@ def generate_all_dispute_letters_with_ai(
             sentence = format_safe_client_context("bureau_dispute", "", {}, [])
             if sentence:
                 context.client_context_sentence = sentence
-        decision = select_template(
-            "dispute", {"bureau": bureau_name}, phase="finalize"
-        )
+        decision = select_template("dispute", {"bureau": bureau_name}, phase="finalize")
         if not decision.template_path:
             raise ValueError("router did not supply template_path")
         try:
-            artifact = render_dispute_letter_html(
-                context, decision.template_path
-            )
+            artifact = render_dispute_letter_html(context, decision.template_path)
         except ValueError:
             continue
         html = artifact.html if isinstance(artifact, LetterArtifact) else artifact

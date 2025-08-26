@@ -21,12 +21,10 @@ def test_detects_numeric_and_structural(monkeypatch):
 
     acct1 = {"bureau_statuses": {"Experian": "Collection"}}
     v1 = pd.evaluate_account_problem(acct1)
-    assert v1["is_problem"] is True
     assert v1["primary_issue"] == "collection"
 
     acct2 = {"late_payments": {"Experian": {"60": 1}}}
     v2 = pd.evaluate_account_problem(acct2)
-    assert v2["is_problem"] is True
     assert v2["primary_issue"] == "serious_delinquency"
 
 
@@ -39,4 +37,4 @@ def test_clean_account_not_flagged(monkeypatch):
     )
     clean = {"account_status": "Open", "payment_status": "Pays as agreed"}
     v = pd.evaluate_account_problem(clean)
-    assert v["is_problem"] is False
+    assert v["primary_issue"] == "unknown"

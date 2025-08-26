@@ -142,12 +142,16 @@ def _split_account_buckets(accounts: list[dict]) -> tuple[list[dict], list[dict]
                 bucket = "negative"
                 negatives.append(acc)
 
-        logger.debug(
-            "bucket_decision %s",
-            json.dumps(
-                {"name": acc.get("name"), "bucket": bucket, "evidence": evidence}
-            ),
-        )
+        if not (
+            os.getenv("PROBLEM_DETECTION_ONLY") == "1"
+            or os.getenv("DEFER_ASSIGN_ISSUE_TYPES") == "1"
+        ):
+            logger.debug(
+                "bucket_decision %s",
+                json.dumps(
+                    {"name": acc.get("name"), "bucket": bucket, "evidence": evidence}
+                ),
+            )
 
     return negatives, open_issues
 
@@ -762,6 +766,8 @@ def analyze_credit_report(
             for acc in result.get("all_accounts", []):
                 acc["primary_issue"] = "unknown"
                 acc["issue_types"] = []
+                if acc.get("status") in (None, "", "Delinquent"):
+                    acc["status"] = "Unknown"
             result["negative_accounts"] = []
             result["open_accounts_with_issues"] = []
             result["positive_accounts"] = []

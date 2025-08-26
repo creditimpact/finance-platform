@@ -24,7 +24,7 @@ const account = {
   account_number_last4: '1234',
   original_creditor: 'Creditor 1',
   primary_issue: 'late_payment',
-  issue_types: ['late_payment']
+  problem_reasons: ['late_payment_eqf_30']
 };
 
 describe('ReviewPage', () => {
@@ -53,12 +53,12 @@ describe('ReviewPage', () => {
   });
 });
 
-test('renders accounts with empty issue_types and no primary_issue', async () => {
+test('renders accounts with empty reasons and no primary_issue', async () => {
   const uploadData = {
     ...baseUploadData,
     accounts: {
       problem_accounts: [
-        { account_id: 'acc2', name: 'Account 2', account_number_last4: '5678', issue_types: [] }
+        { account_id: 'acc2', name: 'Account 2', account_number_last4: '5678', problem_reasons: [] }
       ]
     }
   };
@@ -79,7 +79,7 @@ test('renders primary badge from primary_issue and secondary chips with identifi
     account_number_last4: '7890',
     original_creditor: 'Bank A',
     primary_issue: 'charge_off',
-    issue_types: ['collection', 'charge_off', 'late_payment'],
+    problem_reasons: ['keyword:collection', 'late_payment_eqf_30'],
   };
   const uploadData = {
     ...baseUploadData,
@@ -93,8 +93,8 @@ test('renders primary badge from primary_issue and secondary chips with identifi
   const header = await screen.findByText('Account 3');
   expect(header.parentElement).toHaveTextContent('Account 3 ••••7890 - Bank A');
   expect(screen.getByText('Charge-Off')).toHaveClass('badge');
-  expect(screen.getByText('Collection')).toHaveClass('chip');
-  expect(screen.getByText('Late Payment')).toHaveClass('chip');
+  expect(screen.getByText('keyword:collection')).toHaveClass('chip');
+  expect(screen.getByText('late_payment_eqf_30')).toHaveClass('chip');
 });
 
 test('renders account_fingerprint when last4 missing', async () => {
@@ -104,15 +104,15 @@ test('renders account_fingerprint when last4 missing', async () => {
     normalized_name: 'account 4',
     account_fingerprint: 'deadbeef',
     original_creditor: 'Creditor 4',
-    primary_issue: 'late_payment',
-    issue_types: ['late_payment'],
+  primary_issue: 'late_payment',
+  problem_reasons: ['late_payment_eqf_30'],
   };
   const uploadData = {
     ...baseUploadData,
     accounts: { problem_accounts: [acc] },
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
       <ReviewPage />
     </MemoryRouter>
   );
@@ -129,14 +129,14 @@ test('prefers last4 over fingerprint when both provided', async () => {
     account_fingerprint: 'cafebabe',
     original_creditor: 'Creditor 5',
     primary_issue: 'late_payment',
-    issue_types: ['late_payment'],
+    problem_reasons: ['late_payment_eqf_30'],
   };
   const uploadData = {
     ...baseUploadData,
     accounts: { problem_accounts: [acc] },
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
       <ReviewPage />
     </MemoryRouter>
   );
@@ -153,7 +153,7 @@ test('dedup uses last4 before fingerprint', async () => {
     account_number_last4: '9999',
     account_fingerprint: 'aaaa',
     primary_issue: 'late_payment',
-    issue_types: ['late_payment'],
+    problem_reasons: ['late_payment_eqf_30'],
   };
   const acc2 = {
     ...acc1,
@@ -165,7 +165,7 @@ test('dedup uses last4 before fingerprint', async () => {
     accounts: { problem_accounts: [acc1, acc2] },
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
       <ReviewPage />
     </MemoryRouter>
   );
@@ -180,21 +180,21 @@ test('handles missing payment maps and late payments with identifier fallback', 
     name: 'Account 8',
     normalized_name: 'account 8',
     account_number_last4: '1234',
-    issue_types: ['late_payment'],
+    problem_reasons: ['late_payment_eqf_30'],
   };
   const acc2 = {
     account_id: 'acc9',
     name: 'Account 9',
     normalized_name: 'account 9',
     account_fingerprint: 'ff99',
-    issue_types: ['late_payment'],
+    problem_reasons: ['late_payment_eqf_30'],
   };
   const uploadData = {
     ...baseUploadData,
     accounts: { problem_accounts: [acc1, acc2] },
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
       <ReviewPage />
     </MemoryRouter>
   );
@@ -217,7 +217,7 @@ test('renders evidence drawer when debug flag enabled', async () => {
     accounts: { problem_accounts: [acc] },
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
       <ReviewPage />
     </MemoryRouter>
   );

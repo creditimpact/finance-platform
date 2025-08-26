@@ -1027,6 +1027,7 @@ def extract_problematic_accounts_from_report(
     sections.setdefault("open_accounts_with_issues", [])
     sections.setdefault("all_accounts", [])
     sections.setdefault("high_utilization_accounts", [])
+    from backend.core.logic.report_analysis.problem_detection import is_problematic
     from backend.core.logic.report_analysis.report_postprocessing import (
         _inject_missing_late_accounts,
         enrich_account_metadata,
@@ -1258,15 +1259,63 @@ def extract_problematic_accounts_from_report(
             ):
                 logger.info("account_trace_bug %s", json.dumps(trace, sort_keys=True))
             logger.info("account_trace %s", json.dumps(trace, sort_keys=True))
-    if os.getenv("PROBLEM_DETECTION_ONLY") == "1":
-        all_acc = sections.get("all_accounts") or []
-        if not sections.get("negative_accounts"):
-            sections["negative_accounts"] = list(all_acc)
-        if not sections.get("open_accounts_with_issues"):
-            sections["open_accounts_with_issues"] = list(all_acc)
-        neg = sections.get("negative_accounts", [])
-        open_acc = sections.get("open_accounts_with_issues", [])
-        return {"problem_accounts": neg + [acc for acc in open_acc if acc not in neg]}
+    if (
+        os.getenv("PROBLEM_DETECTION_ONLY") == "1"
+        or os.getenv("DEFER_ASSIGN_ISSUE_TYPES") == "1"
+    ):
+        problem_accounts = []
+        for acc in sections.get("all_accounts") or []:
+            ok, reasons, issue, ctx = is_problematic(acc)
+            if ok:
+                acc["primary_issue"] = issue
+                acc["problem_reasons"] = reasons
+                status = acc.get("status")
+                if status in (None, "", "Unknown", "Delinquent"):
+                    acc["status"] = (
+                        "Derogatory"
+                        if issue == "collection"
+                        else "Delinquent" if issue == "late_payment" else "Unknown"
+                    )
+                logger.info(
+                    "problem_selection %s",
+                    json.dumps(
+                        {
+                            "name": acc.get("name"),
+                            "reasons": reasons,
+                            "late_sum": ctx["late_sum"],
+                            "keywords_hit": ctx["keywords_hit"],
+                            "is_collector": ctx["is_collector"],
+                            "source_stage": acc.get("source_stage"),
+                        },
+                        sort_keys=True,
+                    ),
+                )
+                minimal = {
+                    "name": acc.get("name"),
+                    "normalized_name": acc.get("normalized_name"),
+                    "id": acc.get("account_number_last4")
+                    or acc.get("account_fingerprint"),
+                    "primary_issue": issue,
+                    "problem_reasons": reasons,
+                    "status": acc.get("status"),
+                    "late_payments": acc.get("late_payments"),
+                    "payment_statuses": acc.get("payment_statuses"),
+                    "bureau_statuses": acc.get("bureau_statuses"),
+                    "remarks": acc.get("remarks"),
+                    "source_stage": acc.get("source_stage"),
+                    "account_number_last4": acc.get("account_number_last4"),
+                    "account_fingerprint": acc.get("account_fingerprint"),
+                }
+                problem_accounts.append(minimal)
+            else:
+                logger.info(
+                    "problem_reject %s",
+                    json.dumps(
+                        {"name": acc.get("name"), "why": "no_evidence"},
+                        sort_keys=True,
+                    ),
+                )
+        return {"problem_accounts": problem_accounts}
     payload = BureauPayload(
         disputes=[
             BureauAccount.from_dict(d) for d in sections.get("negative_accounts", [])
@@ -1286,13 +1335,17 @@ def extract_problematic_accounts_from_report(
             for d in sections.get("high_utilization_accounts", [])
         ],
     )
-    logger.debug(
-        "constructed_bureau_payload disputes=%d goodwill=%d inquiries=%d high_utilization=%d",
-        len(payload.disputes),
-        len(payload.goodwill),
-        len(payload.inquiries),
-        len(payload.high_utilization),
-    )
+    if not (
+        os.getenv("PROBLEM_DETECTION_ONLY") == "1"
+        or os.getenv("DEFER_ASSIGN_ISSUE_TYPES") == "1"
+    ):
+        logger.debug(
+            "constructed_bureau_payload disputes=%d goodwill=%d inquiries=%d high_utilization=%d",
+            len(payload.disputes),
+            len(payload.goodwill),
+            len(payload.inquiries),
+            len(payload.high_utilization),
+        )
     payload.needs_human_review = sections.get("needs_human_review", False)
     return payload
 

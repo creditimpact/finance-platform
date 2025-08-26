@@ -3,8 +3,6 @@ import json
 import logging
 from hashlib import sha1
 
-import pytest
-
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.models import BureauPayload
 from backend.core.orchestrators import (
@@ -246,15 +244,15 @@ def test_extract_problematic_accounts_includes_accounts_without_issue_types(
     assert [a.name for a in payload.goodwill] == ["GoodwillBad", "GoodwillClean"]
 
 
-def test_detection_mode_keeps_accounts_without_issue_types(monkeypatch):
+def test_detection_mode_filters_clean_accounts(monkeypatch):
     sections = {
-        "negative_accounts": [
-            {"name": "Bad", "issue_types": ["late_payment"]},
+        "all_accounts": [
+            {
+                "name": "Bad",
+                "late_payments": {"EQF": {"30": 1}},
+            },
             {"name": "NoIssue"},
-        ],
-        "open_accounts_with_issues": [],
-        "unauthorized_inquiries": [],
-        "high_utilization_accounts": [],
+        ]
     }
     _mock_dependencies(monkeypatch, sections)
     monkeypatch.setenv("PROBLEM_DETECTION_ONLY", "1")
@@ -263,18 +261,18 @@ def test_detection_mode_keeps_accounts_without_issue_types(monkeypatch):
         lambda acc: acc,
     )
     result = extract_problematic_accounts_from_report("dummy.pdf")
-    assert {a["name"] for a in result["problem_accounts"]} == {"Bad", "NoIssue"}
+    assert {a["name"] for a in result["problem_accounts"]} == {"Bad"}
 
 
 def test_detection_mode_dict_adapter(monkeypatch):
     sections = {
-        "negative_accounts": [
-            {"name": "Bad", "issue_types": ["late_payment"]},
+        "all_accounts": [
+            {
+                "name": "Bad",
+                "late_payments": {"EQF": {"30": 1}},
+            },
             {"name": "NoIssue"},
-        ],
-        "open_accounts_with_issues": [],
-        "unauthorized_inquiries": [],
-        "high_utilization_accounts": [],
+        ]
     }
     _mock_dependencies(monkeypatch, sections)
     monkeypatch.setenv("PROBLEM_DETECTION_ONLY", "1")
@@ -283,14 +281,17 @@ def test_detection_mode_dict_adapter(monkeypatch):
         lambda acc: acc,
     )
     result = extract_problematic_accounts_from_report_dict("dummy.pdf")
-    assert {a["name"] for a in result["problem_accounts"]} == {"Bad", "NoIssue"}
+    assert {a["name"] for a in result["problem_accounts"]} == {"Bad"}
 
 
 def test_detection_mode_populates_from_all_accounts(monkeypatch):
     sections = {
         "negative_accounts": [],
         "open_accounts_with_issues": [],
-        "all_accounts": [{"name": "A1"}, {"name": "A2"}],
+        "all_accounts": [
+            {"name": "A1", "late_payments": {"EQF": {"30": 1}}},
+            {"name": "A2"},
+        ],
     }
     _mock_dependencies(monkeypatch, sections)
     monkeypatch.setenv("PROBLEM_DETECTION_ONLY", "1")
@@ -299,8 +300,28 @@ def test_detection_mode_populates_from_all_accounts(monkeypatch):
         lambda acc: acc,
     )
     result = extract_problematic_accounts_from_report("dummy.pdf")
-    assert {a["name"] for a in result["problem_accounts"]} == {"A1", "A2"}
-    assert len(result["problem_accounts"]) == 2
+    assert {a["name"] for a in result["problem_accounts"]} == {"A1"}
+    assert len(result["problem_accounts"]) == 1
+
+
+def test_detection_identifies_collector_by_name(monkeypatch):
+    sections = {
+        "all_accounts": [
+            {"name": "PALISADES FU", "normalized_name": "palisades fu"},
+            {"name": "Clean"},
+        ]
+    }
+    _mock_dependencies(monkeypatch, sections)
+    monkeypatch.setenv("PROBLEM_DETECTION_ONLY", "1")
+    monkeypatch.setattr(
+        "backend.core.logic.report_analysis.report_postprocessing.enrich_account_metadata",
+        lambda acc: acc,
+    )
+    result = extract_problematic_accounts_from_report("dummy.pdf")
+    assert {a["name"] for a in result["problem_accounts"]} == {"PALISADES FU"}
+    acc = result["problem_accounts"][0]
+    assert acc["primary_issue"] == "collection"
+    assert "name_matches_collector" in acc["problem_reasons"]
 
 
 def test_accounts_without_issue_types_can_be_suppressed_with_flag(monkeypatch, caplog):

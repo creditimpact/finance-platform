@@ -119,6 +119,26 @@ export default function ReviewPage() {
               {displayId && ` ${displayId}`}
               {acc.original_creditor && ` - ${acc.original_creditor}`}
             </p>
+            <div className="decision-row">
+              <span
+                className="decision-badge"
+                title={
+                  acc.decision_source === 'ai'
+                    ? `AI confidence: ${Number(acc.confidence).toFixed(2)}`
+                    : undefined
+                }
+              >
+                {acc.decision_source === 'ai'
+                  ? 'AI decision'
+                  : acc.decision_source === 'rules'
+                  ? 'Rule-based decision'
+                  : acc.decision_source === 'fallback_ai_low_conf' ||
+                    acc.decision_source === 'fallback_ai_error'
+                  ? 'AI fallback (rules)'
+                  : 'Unknown'}
+              </span>
+              {acc.tier > 0 && <span className="tier-label">Tier {acc.tier}</span>}
+            </div>
             <div className="issue-badges">
               <span className="badge">{primary ? formatIssueType(primary) : 'Unknown'}</span>
               {secondaryIssues.map((type, i) => (
@@ -127,6 +147,20 @@ export default function ReviewPage() {
                 </span>
               ))}
             </div>
+            {acc.problem_reasons && acc.problem_reasons.length > 0 && (
+              <div className="reason-chips">
+                {acc.problem_reasons.slice(0, 3).map((reason, i) => (
+                  <span key={i} className="chip">
+                    {reason}
+                  </span>
+                ))}
+                {acc.problem_reasons.length > 3 && (
+                  <span className="chip" title={acc.problem_reasons.join(', ')}>
+                    …
+                  </span>
+                )}
+              </div>
+            )}
             <textarea
               value={explanations[acc.name] || ''}
               onChange={(e) => handleChange(acc.name, e.target.value)}

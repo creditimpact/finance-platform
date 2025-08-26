@@ -64,10 +64,30 @@ from backend.core.models import (
     ProofDocuments,
 )
 from backend.core.services.ai_client import AIClient, _StubAIClient, get_ai_client
+from backend.core.telemetry.emit import emit
 from backend.policy.policy_loader import load_rulebook
 from planner import plan_next_step
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_stageA_events(session_id: str, accounts: list[Mapping[str, Any]]) -> None:
+    """Emit telemetry events for Stage A decisions."""
+    for acc in accounts or []:
+        emit(
+            "stageA_problem_decision",
+            {
+                "session_id": session_id,
+                "normalized_name": acc.get("normalized_name"),
+                "account_id": acc.get("account_number_last4")
+                or acc.get("account_fingerprint"),
+                "decision_source": acc.get("decision_source"),
+                "primary_issue": acc.get("primary_issue"),
+                "confidence": acc.get("confidence", 0.0),
+                "tier": acc.get("tier", 0),
+                "reasons_count": len(acc.get("problem_reasons", [])),
+            },
+        )
 
 
 def plan_and_generate_letters(session: dict, action_tags: list[str]) -> list[str]:
@@ -292,6 +312,7 @@ def analyze_credit_report(
         ai_client=ai_client,
         request_id=session_id,
     )
+    _emit_stageA_events(session_id, sections.get("problem_accounts", []))
     if (
         os.getenv("DEFER_ASSIGN_ISSUE_TYPES") == "1"
         and not sections.get("negative_accounts")
@@ -1260,16 +1281,6 @@ def extract_problematic_accounts_from_report(
             logger.info("account_trace %s", json.dumps(trace, sort_keys=True))
     if os.getenv("PROBLEM_DETECTION_ONLY") == "1":
         problem_accounts = sections.get("problem_accounts") or []
-        for acc in problem_accounts:
-            log = {
-                "normalized_name": acc.get("normalized_name"),
-                "decision_source": acc.get("decision_source"),
-                "primary_issue": acc.get("primary_issue"),
-                "confidence": acc.get("confidence"),
-                "tier": acc.get("tier"),
-                "reasons_count": len(acc.get("problem_reasons", [])),
-            }
-            logger.info("stageA_problem_decision %s", json.dumps(log, sort_keys=True))
         return {"problem_accounts": problem_accounts}
     payload = BureauPayload(
         disputes=[

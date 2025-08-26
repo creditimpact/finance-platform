@@ -22,6 +22,19 @@ from typing import Any, Mapping
 
 from rapidfuzz import fuzz
 
+from backend.config import (
+    CASESTORE_PARSER_LOG_PARITY,
+    CASESTORE_REDACT_BEFORE_STORE,
+    ENABLE_CASESTORE_WRITE,
+)
+from backend.core.case_store.api import (
+    create_session_case,
+    load_session_case,
+    save_session_case,
+    upsert_account_fields,
+)
+from backend.core.case_store.errors import CaseStoreError
+from backend.core.case_store.redaction import redact_account_fields
 from backend.core.logic.report_analysis.candidate_logger import (
     CandidateTokenLogger,
     StageATraceLogger,
@@ -67,6 +80,21 @@ from .report_prompting import (
 
 logger = logging.getLogger(__name__)
 
+
+def _parity_counts(original: dict[str, Any], stored: dict[str, Any]) -> tuple[int, int, int, int]:
+    """Return counts of added/changed/masked/missing keys between ``original`` and ``stored``."""
+
+    added = len(set(stored) - set(original))
+    missing = len(set(original) - set(stored))
+    changed = 0
+    masked = 0
+    redacted = redact_account_fields(original)
+    for key in set(original) & set(stored):
+        if stored.get(key) != original.get(key):
+            changed += 1
+            if stored.get(key) == redacted.get(key):
+                masked += 1
+    return added, changed, masked, missing
 
 def _split_account_buckets(accounts: list[dict]) -> tuple[list[dict], list[dict]]:
     """Split accounts into negative and open issue buckets.
@@ -362,6 +390,7 @@ def analyze_credit_report(
     run_ai: bool = True,
     *,
     request_id: str,
+    session_id: str | None = None,
 ):
     """Analyze ``pdf_path`` and write structured analysis to ``output_json_path``."""
     ai_client = ai_client or get_ai_client()
@@ -406,6 +435,27 @@ def analyze_credit_report(
             "utf-8"
         )
     ).hexdigest()
+
+    if ENABLE_CASESTORE_WRITE and session_id:
+        try:
+            meta: dict[str, Any] = {
+                "raw_source": {
+                    "vendor": "SmartCredit",
+                    "version": None,
+                    "doc_fingerprint": doc_fingerprint,
+                }
+            }
+            report_date = client_info.get("report_date")
+            if report_date:
+                meta["credit_report_date"] = report_date
+            case = create_session_case(session_id, meta=meta)
+            save_session_case(case)
+        except CaseStoreError as err:  # pragma: no cover - best effort
+            logger.warning(
+                "casestore_session_error session=%s error=%s",
+                session_id,
+                err,
+            )
     if run_ai:
         result = call_ai_analysis(
             text,
@@ -863,6 +913,60 @@ def analyze_credit_report(
         result[section] = [
             enrich_account_metadata(acc) for acc in result.get(section, [])
         ]
+
+    if ENABLE_CASESTORE_WRITE and session_id:
+        try:
+            case = load_session_case(session_id)
+            case.report_meta.personal_information.name = client_info.get("name")
+            case.report_meta.inquiries = result.get("inquiries") or []
+            case.report_meta.public_information = result.get("public_information") or []
+            case.summary.total_accounts = len(result.get("all_accounts") or [])
+            save_session_case(case)
+        except CaseStoreError as err:  # pragma: no cover - best effort
+            logger.warning(
+                "casestore_session_error session=%s error=%s",
+                session_id,
+                err,
+            )
+        for idx, acc in enumerate(result.get("all_accounts", []), start=1):
+            bureau_details = acc.get("bureau_details") or {}
+            fingerprint = acc.get("account_fingerprint") or f"acc{idx}"
+            for bureau, fields in bureau_details.items():
+                account_id = f"{fingerprint}_{bureau}"
+                try:
+                    upsert_account_fields(
+                        session_id=session_id,
+                        account_id=account_id,
+                        bureau=bureau,
+                        fields=fields,
+                    )
+                    if CASESTORE_PARSER_LOG_PARITY:
+                        stored = (
+                            redact_account_fields(fields)
+                            if CASESTORE_REDACT_BEFORE_STORE
+                            else fields
+                        )
+                        added, changed, masked, missing = _parity_counts(
+                            fields, stored
+                        )
+                        logger.info(
+                            "casestore_parity: session=%s account=%s bureau=%s added=%d changed=%d masked=%d missing=%d",
+                            session_id,
+                            account_id,
+                            bureau,
+                            added,
+                            changed,
+                            masked,
+                            missing,
+                        )
+                except CaseStoreError as err:  # pragma: no cover - best effort
+                    logger.warning(
+                        "casestore_upsert_error session=%s account=%s bureau=%s error=%s",
+                        session_id,
+                        account_id,
+                        bureau,
+                        err,
+                    )
 
     Path(output_json_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_json_path, "w", encoding="utf-8") as f:

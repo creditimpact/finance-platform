@@ -12,10 +12,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import json
 import logging
 import time
 import uuid
 from collections import defaultdict
+from pathlib import Path
+
+from jsonschema import Draft7Validator, ValidationError
 
 from flask import Blueprint, Flask, jsonify, redirect, request, url_for
 from flask_cors import CORS
@@ -47,6 +51,11 @@ from backend.core import orchestrators as orch
 logger = logging.getLogger(__name__)
 
 api_bp = Blueprint("api", __name__)
+
+
+SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schemas"
+with open(SCHEMA_DIR / "problem_account.json") as _f:
+    _problem_account_validator = Draft7Validator(json.load(_f))
 
 
 _request_counts: dict[str, list[float]] = defaultdict(list)
@@ -158,6 +167,18 @@ def start_process():
             if not problem_accounts:
                 problem_accounts.extend(result.get("disputes", []))
                 problem_accounts.extend(result.get("goodwill", []))
+
+        valid_accounts = []
+        for acc in problem_accounts:
+            try:
+                _problem_account_validator.validate(acc)
+                valid_accounts.append(acc)
+            except ValidationError:
+                logger.warning(
+                    "invalid_problem_account session=%s account=%s", session_id, acc,
+                    exc_info=True,
+                )
+        problem_accounts = valid_accounts
 
         legacy = request.args.get("legacy", "").lower() in ("1", "true", "yes")
 

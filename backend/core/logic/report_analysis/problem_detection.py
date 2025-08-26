@@ -1,13 +1,17 @@
-from dataclasses import dataclass, asdict
-from typing import Any, Dict, List, Optional
 import re
+from dataclasses import asdict, dataclass
+from typing import Any, Dict, List, Optional
 
 from backend.config import (
-    UTILIZATION_PROBLEM_THRESHOLD,
+    ENABLE_TIER1_KEYWORDS,
+    ENABLE_TIER2_KEYWORDS,
+    ENABLE_TIER2_NUMERIC,
+    ENABLE_TIER3_KEYWORDS,
     SERIOUS_DELINQUENCY_MIN_DPD,
     TIER1_KEYWORDS,
     TIER2_KEYWORDS,
     TIER3_KEYWORDS,
+    UTILIZATION_PROBLEM_THRESHOLD,
 )
 
 PRIORITY_T1 = [
@@ -70,13 +74,14 @@ def evaluate_account_problem(acct: Dict[str, Any]) -> Dict[str, Any]:
         "description": acct.get("account_description"),
         "bureau_statuses": " ".join((acct.get("bureau_statuses") or {}).values()),
     }
-    for label, tokens in TIER1_KEYWORDS.items():
-        for field_name, raw in scan_fields.items():
-            hit = _contains_any(raw, tokens)
-            if hit:
-                reasons.append(f"{field_name}:{label}")
-                primary_hits.setdefault(label, []).append(field_name)
-                repetition += 1
+    if ENABLE_TIER1_KEYWORDS:
+        for label, tokens in TIER1_KEYWORDS.items():
+            for field_name, raw in scan_fields.items():
+                hit = _contains_any(raw, tokens)
+                if hit:
+                    reasons.append(f"{field_name}:{label}")
+                    primary_hits.setdefault(label, []).append(field_name)
+                    repetition += 1
 
     primary_issue = None
     tier = None
@@ -84,29 +89,48 @@ def evaluate_account_problem(acct: Dict[str, Any]) -> Dict[str, Any]:
         primary_issue = _pick_t1(primary_hits)
         tier = 1
 
+    # Fallback detection for strong status keywords even when keyword lists are empty.
     if not primary_issue:
-        pstatus = _norm(acct.get("payment_status"))
-        kw = _contains_any(pstatus, TIER2_KEYWORDS["serious_delinquency"])
-        if kw:
-            reasons.append("payment_status:serious_delinquency")
-            primary_issue = "serious_delinquency"
-            tier = 2
-            repetition += 1
-        late = acct.get("late_payments") or {}
-        max_bucket = 0
-        for bureau, buckets in late.items():
-            for k, v in (buckets or {}).items():
-                try:
-                    days = int(k)
-                    if days > max_bucket and v and int(v) > 0:
-                        max_bucket = days
-                except Exception:
-                    continue
-        if not primary_issue and max_bucket >= SERIOUS_DELINQUENCY_MIN_DPD:
-            reasons.append(f"late_payments:{max_bucket}_dpd")
-            primary_issue = "serious_delinquency"
-            tier = 2
-            repetition += 1
+        for field_name, raw in scan_fields.items():
+            text = _norm(raw)
+            if re.search(r"charge[- ]?off", text):
+                reasons.append(f"{field_name}:charge_off")
+                primary_issue = "charge_off"
+                tier = 1
+                repetition += 1
+                break
+            if "collection" in text:
+                reasons.append(f"{field_name}:collection")
+                primary_issue = "collection"
+                tier = 1
+                repetition += 1
+                break
+
+    if not primary_issue:
+        if ENABLE_TIER2_KEYWORDS:
+            pstatus = _norm(acct.get("payment_status"))
+            kw = _contains_any(pstatus, TIER2_KEYWORDS.get("serious_delinquency", []))
+            if kw:
+                reasons.append("payment_status:serious_delinquency")
+                primary_issue = "serious_delinquency"
+                tier = 2
+                repetition += 1
+        if not primary_issue and ENABLE_TIER2_NUMERIC:
+            late = acct.get("late_payments") or {}
+            max_bucket = 0
+            for bureau, buckets in late.items():
+                for k, v in (buckets or {}).items():
+                    try:
+                        days = int(k)
+                        if days > max_bucket and v and int(v) > 0:
+                            max_bucket = days
+                    except Exception:
+                        continue
+            if max_bucket >= SERIOUS_DELINQUENCY_MIN_DPD:
+                reasons.append(f"late_payments:{max_bucket}_dpd")
+                primary_issue = "serious_delinquency"
+                tier = 2
+                repetition += 1
 
     util = _utilization(acct)
     if util is not None:
@@ -114,12 +138,11 @@ def evaluate_account_problem(acct: Dict[str, Any]) -> Dict[str, Any]:
         if util >= UTILIZATION_PROBLEM_THRESHOLD:
             reasons.append(f"utilization:>{int(UTILIZATION_PROBLEM_THRESHOLD*100)}%")
 
-    if not primary_issue:
+    if not primary_issue and ENABLE_TIER3_KEYWORDS:
         ar = _norm(acct.get("account_rating"))
         desc = _norm(acct.get("account_description"))
-        t3_hit = _contains_any(ar, TIER3_KEYWORDS["potential_derogatory"]) or _contains_any(
-            desc, TIER3_KEYWORDS["potential_derogatory"]
-        )
+        t3_tokens = TIER3_KEYWORDS.get("potential_derogatory", [])
+        t3_hit = _contains_any(ar, t3_tokens) or _contains_any(desc, t3_tokens)
         if t3_hit:
             reasons.append("account_rating:potential_derogatory")
             primary_issue = "potential_derogatory"

@@ -22,6 +22,10 @@ from typing import Any, Mapping
 
 from rapidfuzz import fuzz
 
+from backend.core.logic.report_analysis.candidate_logger import CandidateTokenLogger
+from backend.core.logic.report_analysis.problem_detection import (
+    evaluate_account_problem,
+)
 from backend.core.logic.utils.inquiries import extract_inquiries
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.logic.utils.norm import normalize_heading
@@ -31,7 +35,6 @@ from backend.core.logic.utils.text_parsing import (
     extract_late_history_blocks,
 )
 from backend.core.services.ai_client import AIClient, get_ai_client
-from backend.core.logic.report_analysis.problem_detection import evaluate_account_problem
 
 from .report_parsing import (
     extract_account_numbers,
@@ -759,13 +762,16 @@ def analyze_credit_report(
             for acc in result.get(section, []):
                 enforce_collection_status(acc)
 
+        candidate_logger = CandidateTokenLogger()
         for acc in result.get("all_accounts", []):
+            candidate_logger.collect(acc)
             verdict = evaluate_account_problem(acc)
             acc["primary_issue"] = verdict["primary_issue"]
             acc["problem_reasons"] = verdict["problem_reasons"]
             acc["confidence_hint"] = verdict["confidence_hint"]
             acc["supporting"] = verdict["supporting"]
             acc["_detector_is_problem"] = verdict["is_problem"]
+        candidate_logger.save(Path("client_output") / request_id)
 
         result["problem_accounts"] = [
             a for a in result.get("all_accounts", []) if a.get("_detector_is_problem")

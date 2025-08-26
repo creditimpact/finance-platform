@@ -16,6 +16,7 @@ from pathlib import Path
 from shutil import copyfile
 from typing import Any, Mapping
 
+import backend.config as config
 import tactical
 from backend.analytics.analytics.strategist_failures import tally_failure_reasons
 from backend.analytics.analytics_tracker import emit_counter, save_analytics_snapshot
@@ -34,6 +35,7 @@ from backend.api.config import (
 from backend.api.session_manager import update_session
 from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLevel
+from backend.core.case_store.api import get_account_case, list_accounts
 from backend.core.email_sender import send_email_with_attachment
 from backend.core.letters.field_population import apply_field_fillers
 from backend.core.logic.compliance.constants import StrategistFailureReason
@@ -67,8 +69,6 @@ from backend.core.services.ai_client import AIClient, _StubAIClient, get_ai_clie
 from backend.core.telemetry.emit import emit
 from backend.policy.policy_loader import load_rulebook
 from planner import plan_next_step
-import backend.config as config
-from backend.core.case_store.api import get_account_case, list_accounts
 
 logger = logging.getLogger(__name__)
 
@@ -111,18 +111,23 @@ def collect_stageA_problem_accounts(
                 continue
             art = case.artifacts.get("stageA_detection")
             if not art:
+                logger.warning(
+                    "stageA_artifact_missing session=%s account=%s", session_id, acc_id
+                )
                 continue
             data = art.model_dump()
             if data.get("problem_reasons"):
                 acc = {"account_id": acc_id}
-                acc.update({
-                    "primary_issue": data.get("primary_issue", "unknown"),
-                    "issue_types": data.get("issue_types", []),
-                    "problem_reasons": data.get("problem_reasons", []),
-                    "confidence": data.get("confidence", 0.0),
-                    "tier": data.get("tier", 0),
-                    "decision_source": data.get("decision_source", "rules"),
-                })
+                acc.update(
+                    {
+                        "primary_issue": data.get("primary_issue", "unknown"),
+                        "issue_types": data.get("issue_types", []),
+                        "problem_reasons": data.get("problem_reasons", []),
+                        "confidence": data.get("confidence", 0.0),
+                        "tier": data.get("tier", 0),
+                        "decision_source": data.get("decision_source", "rules"),
+                    }
+                )
                 problems.append(acc)
     else:
         for acc in all_accounts or []:
@@ -1322,7 +1327,7 @@ def extract_problematic_accounts_from_report(
             ):
                 logger.info("account_trace_bug %s", json.dumps(trace, sort_keys=True))
             logger.info("account_trace %s", json.dumps(trace, sort_keys=True))
-    if os.getenv("PROBLEM_DETECTION_ONLY") == "1":
+    if config.PROBLEM_DETECTION_ONLY:
         problem_accounts = sections.get("problem_accounts") or []
         return {"problem_accounts": problem_accounts}
     payload = BureauPayload(

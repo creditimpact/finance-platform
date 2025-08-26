@@ -64,7 +64,6 @@ def sanitize_disputes(
                     log_messages.append(
                         f"[{bureau_name}] Fallback dispute_type applied to '{d.get('name')}'"
                     )
-                    sanitization_issues = True
                     bureau_sanitization = True
                     dtype = "inaccurate_reporting"
                 d["dispute_type"] = dtype
@@ -80,7 +79,6 @@ def sanitize_disputes(
             log_messages.append(
                 f"[{bureau_name}] Missing structured summary for '{d.get('name')}'"
             )
-            sanitization_issues = True
             bureau_sanitization = True
 
     fallback_norm_names = {

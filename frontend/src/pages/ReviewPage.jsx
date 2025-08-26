@@ -44,7 +44,7 @@ export default function ReviewPage() {
   if (accounts[0]) {
     console.debug('review-card-props', {
       primary_issue: accounts[0].primary_issue,
-      issue_types: accounts[0].issue_types,
+      problem_reasons: accounts[0].problem_reasons,
       last4: accounts[0].account_number_last4,
       original_creditor: accounts[0].original_creditor,
     });
@@ -106,12 +106,11 @@ export default function ReviewPage() {
     <div className="container">
       <h2>Explain Your Situation</h2>
       {dedupedAccounts.map((acc, idx) => {
-        const issues = acc.issue_types ?? [];
+        const reasons = acc.problem_reasons ?? [];
         const primary = acc.primary_issue;
         const idLast4 = acc.account_number_last4 ?? null;
         const fingerprint = acc.account_fingerprint ?? null;
         const displayId = idLast4 ? `••••${idLast4}` : fingerprint ?? '';
-        const secondaryIssues = issues.filter((t) => t !== primary);
         return (
           <div key={idx} className="account-block">
             <p>
@@ -121,10 +120,8 @@ export default function ReviewPage() {
             </p>
             <div className="issue-badges">
               <span className="badge">{primary ? formatIssueType(primary) : 'Unknown'}</span>
-              {secondaryIssues.map((type, i) => (
-                <span key={i} className="chip">
-                  {formatIssueType(type)}
-                </span>
+              {reasons.map((reason, i) => (
+                <span key={i} className="chip">{reason}</span>
               ))}
             </div>
             <textarea

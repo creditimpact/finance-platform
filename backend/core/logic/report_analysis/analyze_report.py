@@ -768,7 +768,8 @@ def analyze_credit_report(
             verdict = evaluate_account_problem(acc)
             acc["primary_issue"] = verdict["primary_issue"]
             acc["problem_reasons"] = verdict["problem_reasons"]
-            acc["confidence_hint"] = verdict["confidence_hint"]
+            acc["decision_source"] = verdict["decision_source"]
+            acc["confidence"] = verdict["confidence"]
             acc["supporting"] = verdict["supporting"]
             acc["_detector_is_problem"] = verdict["is_problem"]
         candidate_logger.save(Path("client_output") / request_id)

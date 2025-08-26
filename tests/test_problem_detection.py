@@ -1,42 +1,23 @@
-from importlib import reload
-
-import backend.config as base_config
-import backend.core.logic.report_analysis.problem_detection as pd
+from backend.core.logic.report_analysis.problem_detection import evaluate_account_problem
 
 
-def _reload(monkeypatch, **env):
-    for k, v in env.items():
-        monkeypatch.setenv(k, v)
-    reload(base_config)
-    reload(pd)
-
-
-def test_detects_numeric_and_structural(monkeypatch):
-    _reload(
-        monkeypatch,
-        ENABLE_TIER1_KEYWORDS="0",
-        ENABLE_TIER2_KEYWORDS="0",
-        ENABLE_TIER3_KEYWORDS="0",
-    )
-
-    acct1 = {"bureau_statuses": {"Experian": "Collection"}}
-    v1 = pd.evaluate_account_problem(acct1)
+def test_flags_late_payments_and_past_due():
+    acct1 = {"late_payments": {"Equifax": {"30": 1}}}
+    v1 = evaluate_account_problem(acct1)
     assert v1["is_problem"] is True
-    assert v1["primary_issue"] == "collection"
+    assert v1["primary_issue"] == "unknown"
+    assert v1["problem_reasons"] == ["late_payment: 1×30 on Equifax"]
 
-    acct2 = {"late_payments": {"Experian": {"60": 1}}}
-    v2 = pd.evaluate_account_problem(acct2)
+    acct2 = {"past_due_amount": 50}
+    v2 = evaluate_account_problem(acct2)
     assert v2["is_problem"] is True
-    assert v2["primary_issue"] == "serious_delinquency"
+    assert v2["primary_issue"] == "unknown"
+    assert "past_due_amount" in v2["problem_reasons"]
 
 
-def test_clean_account_not_flagged(monkeypatch):
-    _reload(
-        monkeypatch,
-        ENABLE_TIER1_KEYWORDS="0",
-        ENABLE_TIER2_KEYWORDS="0",
-        ENABLE_TIER3_KEYWORDS="0",
-    )
+def test_clean_account_not_flagged():
     clean = {"account_status": "Open", "payment_status": "Pays as agreed"}
-    v = pd.evaluate_account_problem(clean)
+    v = evaluate_account_problem(clean)
     assert v["is_problem"] is False
+    assert v["primary_issue"] == "unknown"
+    assert v["problem_reasons"] == []

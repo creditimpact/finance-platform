@@ -1,134 +1,106 @@
-"""Rule/AI hybrid problem detection for Stage A."""
-
 from __future__ import annotations
 
-import time
+import logging
 from typing import Any, Dict, List, Mapping
 
-from backend.api.internal_ai import adjudicate as ai_adjudicate
-from backend.config import AI_MIN_CONFIDENCE, ENABLE_AI_ADJUDICATOR
 import backend.config as config
-
-from .redaction import redact_account_for_ai
-
 from backend.core.case_store.api import (
     append_artifact,
-    get_account_case,
     get_account_fields,
     list_accounts,
 )
 from backend.core.case_store.telemetry import emit, timed
 
-import logging
-
 logger = logging.getLogger(__name__)
 
-STAGEA_REQUIRED_FIELDS = [
-    "balance_owed",
-    "payment_status",
-    "account_status",
-    "credit_limit",
+EVIDENCE_FIELDS_NUMERIC = (
     "past_due_amount",
-    "account_rating",
-    "account_description",
-    "creditor_remarks",
-    "account_type",
-    "creditor_type",
-    "dispute_status",
-    "two_year_payment_history",
-    "days_late_7y",
-]
+    "balance_owed",
+    "credit_limit",
+    "high_balance",
+)
+EVIDENCE_FIELDS_STATUS = ("payment_status", "account_status")
+EVIDENCE_FIELDS_HISTORY = ("two_year_payment_history", "days_late_7y")
+
+STAGEA_REQUIRED_FIELDS = list(
+    EVIDENCE_FIELDS_NUMERIC + EVIDENCE_FIELDS_STATUS + EVIDENCE_FIELDS_HISTORY
+)
+
+NEUTRAL_TIER = "none"
+
+
+def neutral_stageA_decision(debug: dict | None = None) -> dict:
+    return {
+        "primary_issue": "unknown",
+        "issue_types": [],
+        "problem_reasons": [],
+        "decision_source": "rules",
+        "confidence": 0.0,
+        "tier": NEUTRAL_TIER,
+        "debug": debug or {},
+    }
+
+
+def _format_amount(v) -> str:
+    try:
+        return f"{float(v):.2f}"
+    except Exception:
+        return str(v)
+
+
+def _extract_late_counts(history) -> dict:
+    codes: List[str] = []
+    if history is None:
+        return {}
+    if isinstance(history, str):
+        codes = [c.strip() for c in history.split(",")]
+    elif isinstance(history, list):
+        codes = [str(c).strip() for c in history]
+    buckets = {"30": 0, "60": 0, "90": 0, "120": 0}
+    for c in codes:
+        if c in buckets:
+            buckets[c] += 1
+        elif c.endswith("D") and c[:-1] in buckets:
+            buckets[c[:-1]] += 1
+        elif c.endswith("+") and c[:-1] in buckets:
+            buckets[c[:-1]] += 1
+    return {k: v for k, v in buckets.items() if v > 0}
+
+
+def build_problem_reasons(fields: dict) -> List[str]:
+    reasons: List[str] = []
+    if fields.get("past_due_amount", 0):
+        reasons.append(
+            f"past_due_amount: {_format_amount(fields['past_due_amount'])}"
+        )
+    for fname in EVIDENCE_FIELDS_STATUS:
+        if fields.get(fname):
+            reasons.append(f"status_present: {fname}")
+    for hname in EVIDENCE_FIELDS_HISTORY:
+        counts = _extract_late_counts(fields.get(hname))
+        if counts:
+            bits = [f"{v}×{k}" for k, v in counts.items()]
+            reasons.append(f"late: {','.join(bits)}")
+    return reasons
 
 
 def evaluate_account_problem(acct: Dict[str, Any]) -> Dict[str, Any]:
-    """Evaluate an account for potential problems.
-
-    The function applies lightweight rule-based checks and optionally consults
-    the AI adjudicator.  It returns a unified decision dictionary and mutates
-    ``acct`` in-place so the decision fields are available to later stages.
-    """
-
-    reasons: List[str] = []
-    late = acct.get("late_payments") or {}
-    for bureau, buckets in late.items():
-        for days, count in (buckets or {}).items():
-            try:
-                c = int(count)
-                d = int(days)
-            except Exception:
-                continue
-            if c > 0:
-                reasons.append(f"late_payment: {c}x{d} on {bureau}")
-    if acct.get("past_due_amount") is not None:
-        try:
-            if float(acct["past_due_amount"]) > 0:
-                reasons.append("past_due_amount")
-        except Exception:
-            pass
-
-    decision: Dict[str, Any] = {
-        "primary_issue": "unknown",
-        "issue_types": [],
-        "problem_reasons": list(reasons),
-        "tier": 0,
-        "confidence": 0.0,
-        "decision_source": "rules",
-        "adjudicator_version": "rules-v1",
-        "debug": {
-            "ai_latency_ms": 0,
-            "ai_tokens_in": 0,
-            "ai_tokens_out": 0,
-            "ai_error": None,
-        },
-    }
-
-    is_problem = bool(reasons)
-
-    if ENABLE_AI_ADJUDICATOR:
-        start = time.perf_counter()
-        try:
-            redacted = redact_account_for_ai(acct)
-            ai_resp = ai_adjudicate("stageA", "v1", redacted)
-            decision["debug"].update(
-                {
-                    "ai_latency_ms": int((time.perf_counter() - start) * 1000),
-                    "ai_tokens_in": ai_resp.get("tokens_in", 0),
-                    "ai_tokens_out": ai_resp.get("tokens_out", 0),
-                    "ai_error": ai_resp.get("error"),
-                }
-            )
-            if ai_resp.get("error"):
-                decision["decision_source"] = "fallback_ai_error"
-            elif (
-                ai_resp.get("confidence", 0.0) >= AI_MIN_CONFIDENCE
-                and ai_resp.get("primary_issue") != "unknown"
-            ):
-                decision.update(
-                    {
-                        "primary_issue": ai_resp.get("primary_issue", "unknown"),
-                        "issue_types": ai_resp.get("issue_types", []),
-                        "problem_reasons": ai_resp.get("problem_reasons", []),
-                        "confidence": ai_resp.get("confidence", 0.0),
-                        "tier": ai_resp.get("tier", 0),
-                        "decision_source": "ai",
-                        "adjudicator_version": ai_resp.get(
-                            "adjudicator_version", "ai-v1"
-                        ),
-                    }
-                )
-                is_problem = True
-            else:
-                decision["decision_source"] = "fallback_ai_low_conf"
-        except Exception as exc:  # pragma: no cover - defensive
-            decision["decision_source"] = "fallback_ai_error"
-            decision["debug"]["ai_error"] = str(exc)
-            decision["debug"]["ai_latency_ms"] = int(
-                (time.perf_counter() - start) * 1000
-            )
-
+    reasons = build_problem_reasons(acct)
+    signals: List[Any] = []
+    if acct.get("past_due_amount", 0):
+        signals.append("past_due_amount")
+    for fname in EVIDENCE_FIELDS_STATUS:
+        if acct.get(fname):
+            signals.append(f"status_present:{fname}")
+    for hname in EVIDENCE_FIELDS_HISTORY:
+        counts = _extract_late_counts(acct.get(hname))
+        if counts:
+            signals.append({hname: counts})
+    decision = neutral_stageA_decision(debug={"signals": signals})
+    decision["problem_reasons"] = reasons
     acct.update({k: v for k, v in decision.items() if k != "debug"})
     acct["debug"] = decision["debug"]
-    acct["_detector_is_problem"] = bool(is_problem)
+    acct["_detector_is_problem"] = bool(reasons)
     return decision
 
 
@@ -136,25 +108,16 @@ def run_stage_a(
     session_id: str,
     legacy_accounts: List[Mapping[str, Any]] | None = None,
 ) -> None:
-    """Evaluate Stage A for a session.
-
-    When ``ENABLE_CASESTORE_STAGEA`` is true, account data is read from the
-    Case Store.  Otherwise the provided ``legacy_accounts`` are evaluated in
-    memory.  Results are written back to the Case Store under the
-    ``stageA_detection`` namespace when the flag is enabled.
-    """
-
     legacy_map = {str(a.get("account_id")): dict(a) for a in legacy_accounts or []}
 
     if not config.ENABLE_CASESTORE_STAGEA:
         for acc in legacy_accounts or []:
-            evaluate_account_problem(acc)  # mutates in-place
+            evaluate_account_problem(acc)
         return
 
-    account_ids: List[str] = []
     try:
         account_ids = list_accounts(session_id)  # type: ignore[operator]
-    except Exception:  # pragma: no cover - defensive
+    except Exception:
         logger.warning("stageA_list_accounts_failed session=%s", session_id)
         return
 
@@ -186,7 +149,7 @@ def run_stage_a(
                 "issue_types": verdict.get("issue_types", []),
                 "problem_reasons": verdict.get("problem_reasons", []),
                 "confidence": verdict.get("confidence", 0.0),
-                "tier": str(verdict.get("tier", "none")),
+                "tier": str(verdict.get("tier", NEUTRAL_TIER)),
                 "decision_source": verdict.get("decision_source", "rules"),
                 "debug": {"source": "casestore-stageA"},
             }
@@ -197,24 +160,3 @@ def run_stage_a(
                 payload,
                 attach_provenance={"module": "problem_detection", "algo": "rules_v1"},
             )
-
-            if config.CASESTORE_STAGEA_LOG_PARITY and acc_id in legacy_map:
-                legacy_verdict = evaluate_account_problem(dict(legacy_map[acc_id]))
-                same_primary = (
-                    legacy_verdict.get("primary_issue")
-                    == verdict.get("primary_issue")
-                )
-                same_tier = legacy_verdict.get("tier") == verdict.get("tier")
-                reasons_diff = len(
-                    set(legacy_verdict.get("problem_reasons", []))
-                    ^ set(verdict.get("problem_reasons", []))
-                )
-                logger.info(
-                    "stageA_parity: session=%s account=%s same_primary=%s same_tier=%s reasons_diff=%d",
-                    session_id,
-                    acc_id,
-                    same_primary,
-                    same_tier,
-                    reasons_diff,
-                )
-

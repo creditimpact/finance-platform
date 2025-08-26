@@ -13,18 +13,34 @@ from backend.core.case_store.telemetry import emit, timed
 
 logger = logging.getLogger(__name__)
 
+# Field groups used for constructing problem reasons.  These are a subset of
+# the fields fetched for Stage A; ``STAGEA_REQUIRED_FIELDS`` enumerates the
+# complete minimal field set we request from Case Store.
 EVIDENCE_FIELDS_NUMERIC = (
     "past_due_amount",
     "balance_owed",
     "credit_limit",
-    "high_balance",
 )
 EVIDENCE_FIELDS_STATUS = ("payment_status", "account_status")
 EVIDENCE_FIELDS_HISTORY = ("two_year_payment_history", "days_late_7y")
 
-STAGEA_REQUIRED_FIELDS = list(
-    EVIDENCE_FIELDS_NUMERIC + EVIDENCE_FIELDS_STATUS + EVIDENCE_FIELDS_HISTORY
-)
+# Explicit list of all fields Stage A fetches from Case Store.  Keeping this
+# centralized avoids drifting field usage between the detector and orchestrator.
+STAGEA_REQUIRED_FIELDS = [
+    "balance_owed",
+    "payment_status",
+    "account_status",
+    "credit_limit",
+    "past_due_amount",
+    "account_rating",
+    "account_description",
+    "creditor_remarks",
+    "account_type",
+    "creditor_type",
+    "dispute_status",
+    "two_year_payment_history",
+    "days_late_7y",
+]
 
 NEUTRAL_TIER = "none"
 
@@ -70,9 +86,7 @@ def _extract_late_counts(history) -> dict:
 def build_problem_reasons(fields: dict) -> List[str]:
     reasons: List[str] = []
     if fields.get("past_due_amount", 0):
-        reasons.append(
-            f"past_due_amount: {_format_amount(fields['past_due_amount'])}"
-        )
+        reasons.append(f"past_due_amount: {_format_amount(fields['past_due_amount'])}")
     for fname in EVIDENCE_FIELDS_STATUS:
         if fields.get(fname):
             reasons.append(f"status_present: {fname}")
@@ -153,10 +167,45 @@ def run_stage_a(
                 "decision_source": verdict.get("decision_source", "rules"),
                 "debug": {"source": "casestore-stageA"},
             }
-            append_artifact(  # type: ignore[operator]
-                session_id,
-                acc_id,
-                "stageA_detection",
-                payload,
-                attach_provenance={"module": "problem_detection", "algo": "rules_v1"},
-            )
+            try:
+                append_artifact(  # type: ignore[operator]
+                    session_id,
+                    acc_id,
+                    "stageA_detection",
+                    payload,
+                    attach_provenance={
+                        "module": "problem_detection",
+                        "algo": "rules_v1",
+                    },
+                )
+            except Exception:
+                logger.warning(
+                    "stageA_append_failed session=%s account=%s", session_id, acc_id
+                )
+                emit(
+                    "stageA_append_failed",
+                    session_id=session_id,
+                    account_id=acc_id,
+                )
+                continue
+
+            if config.CASESTORE_STAGEA_LOG_PARITY:
+                legacy_decision = evaluate_account_problem(
+                    dict(legacy_map.get(acc_id, {}))
+                )
+                same_primary = legacy_decision.get("primary_issue") == verdict.get(
+                    "primary_issue"
+                )
+                same_tier = legacy_decision.get("tier") == verdict.get("tier")
+                reasons_diff = len(
+                    set(legacy_decision.get("problem_reasons", []))
+                    ^ set(verdict.get("problem_reasons", []))
+                )
+                logger.info(
+                    "stageA_parity: session=%s account=%s same_primary=%s same_tier=%s reasons_diff=%d",
+                    session_id,
+                    acc_id,
+                    same_primary,
+                    same_tier,
+                    reasons_diff,
+                )

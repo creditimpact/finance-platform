@@ -1259,14 +1259,8 @@ def extract_problematic_accounts_from_report(
                 logger.info("account_trace_bug %s", json.dumps(trace, sort_keys=True))
             logger.info("account_trace %s", json.dumps(trace, sort_keys=True))
     if os.getenv("PROBLEM_DETECTION_ONLY") == "1":
-        all_acc = sections.get("all_accounts") or []
-        if not sections.get("negative_accounts"):
-            sections["negative_accounts"] = list(all_acc)
-        if not sections.get("open_accounts_with_issues"):
-            sections["open_accounts_with_issues"] = list(all_acc)
-        neg = sections.get("negative_accounts", [])
-        open_acc = sections.get("open_accounts_with_issues", [])
-        return {"problem_accounts": neg + [acc for acc in open_acc if acc not in neg]}
+        problem_accounts = sections.get("problem_accounts") or []
+        return {"problem_accounts": problem_accounts}
     payload = BureauPayload(
         disputes=[
             BureauAccount.from_dict(d) for d in sections.get("negative_accounts", [])

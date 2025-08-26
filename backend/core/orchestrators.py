@@ -67,6 +67,8 @@ from backend.core.services.ai_client import AIClient, _StubAIClient, get_ai_clie
 from backend.core.telemetry.emit import emit
 from backend.policy.policy_loader import load_rulebook
 from planner import plan_next_step
+import backend.config as config
+from backend.core.case_store.api import get_account_case, list_accounts
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +90,47 @@ def _emit_stageA_events(session_id: str, accounts: list[Mapping[str, Any]]) -> N
                 "reasons_count": len(acc.get("problem_reasons", [])),
             },
         )
+
+
+def collect_stageA_problem_accounts(
+    session_id: str, all_accounts: list[Mapping[str, Any]] | None = None
+) -> list[Mapping[str, Any]]:
+    """Return problem accounts for Stage A.
+
+    When ``ENABLE_CASESTORE_STAGEA`` is true the decisions are read from the
+    Case Store ``stageA_detection`` artifacts.  Otherwise ``all_accounts`` is
+    filtered using the legacy ``_detector_is_problem`` flag.
+    """
+
+    problems: list[Mapping[str, Any]] = []
+    if config.ENABLE_CASESTORE_STAGEA:
+        for acc_id in list_accounts(session_id):  # type: ignore[operator]
+            try:
+                case = get_account_case(session_id, acc_id)  # type: ignore[operator]
+            except Exception:  # pragma: no cover - defensive
+                continue
+            art = case.artifacts.get("stageA_detection")
+            if not art:
+                continue
+            data = art.model_dump()
+            if data.get("primary_issue") != "unknown" or data.get("problem_reasons"):
+                acc = {"account_id": acc_id}
+                acc.update({
+                    "primary_issue": data.get("primary_issue", "unknown"),
+                    "issue_types": data.get("issue_types", []),
+                    "problem_reasons": data.get("problem_reasons", []),
+                    "confidence": data.get("confidence", 0.0),
+                    "tier": data.get("tier", 0),
+                    "decision_source": data.get("decision_source", "rules"),
+                })
+                problems.append(acc)
+    else:
+        for acc in all_accounts or []:
+            if acc.get("_detector_is_problem"):
+                problems.append(acc)
+
+    _emit_stageA_events(session_id, problems)
+    return problems
 
 
 def plan_and_generate_letters(session: dict, action_tags: list[str]) -> list[str]:

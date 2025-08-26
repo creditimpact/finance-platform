@@ -17,6 +17,28 @@ def env_str(name: str, default: str) -> str:
     return os.getenv(name, default)
 
 
+def env_float(name: str, default: float) -> float:
+    """Parse a float environment variable."""
+    val = os.getenv(name)
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except ValueError:
+        return default
+
+
+def env_int(name: str, default: int) -> int:
+    """Parse an int environment variable."""
+    val = os.getenv(name)
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        return default
+
+
 # Backwards compatibility for older imports
 _env_bool = env_bool
 
@@ -49,9 +71,11 @@ ENABLE_TIER2_KEYWORDS = _env_bool("ENABLE_TIER2_KEYWORDS", False)
 ENABLE_TIER3_KEYWORDS = _env_bool("ENABLE_TIER3_KEYWORDS", False)
 ENABLE_TIER2_NUMERIC = _env_bool("ENABLE_TIER2_NUMERIC", True)
 
-ENABLE_AI_ADJUDICATOR = _env_bool("ENABLE_AI_ADJUDICATOR", False)
-AI_MIN_CONFIDENCE = float(os.getenv("AI_MIN_CONFIDENCE", "0.65"))
-AI_TIMEOUT_SEC = float(os.getenv("AI_TIMEOUT_SEC", "8"))
+ENABLE_AI_ADJUDICATOR = env_bool("ENABLE_AI_ADJUDICATOR", False)
+AI_MIN_CONFIDENCE = env_float("AI_MIN_CONFIDENCE", 0.70)
+AI_REQUEST_TIMEOUT_S = env_int("AI_REQUEST_TIMEOUT_S", 8)
+AI_MAX_RETRIES = env_int("AI_MAX_RETRIES", 1)
+AI_HIERARCHY_VERSION = env_str("AI_HIERARCHY_VERSION", "v1")
 AI_REDACT_STRATEGY = os.getenv("AI_REDACT_STRATEGY", "hash_last4")
 
 _raw_t1, _raw_t2, _raw_t3 = _load_keyword_lists()
@@ -63,9 +87,7 @@ TIER3_KEYWORDS = _raw_t3 if ENABLE_TIER3_KEYWORDS else {}
 
 # Case Store configuration
 CASESTORE_DIR = env_str("CASESTORE_DIR", "/var/app/run/cases")
-CASESTORE_REDACT_BEFORE_STORE = env_bool(
-    "CASESTORE_REDACT_BEFORE_STORE", True
-)
+CASESTORE_REDACT_BEFORE_STORE = env_bool("CASESTORE_REDACT_BEFORE_STORE", True)
 CASESTORE_ATOMIC_WRITES = env_bool("CASESTORE_ATOMIC_WRITES", True)
 CASESTORE_VALIDATE_ON_LOAD = env_bool("CASESTORE_VALIDATE_ON_LOAD", True)
 
@@ -81,7 +103,5 @@ CASESTORE_STAGEA_LOG_PARITY = env_bool("CASESTORE_STAGEA_LOG_PARITY", True)
 PROBLEM_DETECTION_ONLY = env_bool("PROBLEM_DETECTION_ONLY", True)
 
 # Candidate token logging
-ENABLE_CANDIDATE_TOKEN_LOGGER = env_bool(
-    "ENABLE_CANDIDATE_TOKEN_LOGGER", True
-)
+ENABLE_CANDIDATE_TOKEN_LOGGER = env_bool("ENABLE_CANDIDATE_TOKEN_LOGGER", True)
 CANDIDATE_LOG_FORMAT = env_str("CANDIDATE_LOG_FORMAT", "jsonl")

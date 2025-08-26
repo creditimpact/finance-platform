@@ -1,56 +1,59 @@
-from importlib import reload
+from __future__ import annotations
 
-from flask import Flask
+import json
 
-import backend.api.internal_ai as ai
-import backend.config as base_config
+import pytest
+
+from backend.api import ai_endpoints, app as app_module
 
 
-def _client(monkeypatch, **env):
-    for k, v in env.items():
-        monkeypatch.setenv(k, v)
-    reload(base_config)
-    reload(ai)
-    app = Flask(__name__)
-    app.register_blueprint(ai.internal_ai_bp)
+@pytest.fixture
+def client(monkeypatch):
+    app = app_module.create_app()
     return app.test_client()
 
 
-def test_endpoint_disabled(monkeypatch):
-    client = _client(monkeypatch, ENABLE_AI_ADJUDICATOR="0")
-    resp = client.post(
-        "/internal/ai-adjudicate",
-        json={"session_id": "s", "hierarchy_version": "v1", "account": {}},
-    )
-    data = resp.get_json()
-    assert data["primary_issue"] == "unknown"
-    assert data["error"] == "Disabled"
-
-
-def test_endpoint_success(monkeypatch):
-    client = _client(monkeypatch, ENABLE_AI_ADJUDICATOR="1")
-    payload = {
-        "session_id": "s",
-        "hierarchy_version": "v1",
-        "account": {"account_status": "Collection"},
+def _request_body():
+    return {
+        "doc_fingerprint": "doc",
+        "account_fingerprint": "acct",
+        "fields": {"balance_owed": 1},
     }
-    resp = client.post("/internal/ai-adjudicate", json=payload)
+
+
+def test_ai_endpoint_success(monkeypatch, client):
+    def fake_prompt(system, user, *, temperature, timeout):
+        return json.dumps(
+            {
+                "primary_issue": "collection",
+                "tier": "Tier1",
+                "problem_reasons": ["foo"],
+                "confidence": 0.85,
+                "fields_used": ["balance_owed"],
+            }
+        )
+
+    monkeypatch.setattr(ai_endpoints, "run_llm_prompt", fake_prompt)
+    resp = client.post("/internal/ai-adjudicate", json=_request_body())
+    assert resp.status_code == 200
     data = resp.get_json()
     assert data["primary_issue"] == "collection"
-    assert data["confidence"] > 0
+    assert data["tier"] == "Tier1"
 
 
-def test_endpoint_timeout(monkeypatch):
-    client = _client(monkeypatch, ENABLE_AI_ADJUDICATOR="1")
+def test_ai_endpoint_bad_json(monkeypatch, client):
+    def fake_prompt(system, user, *, temperature, timeout):
+        return "not json"
 
-    def boom(*a, **k):
-        raise TimeoutError("boom")
+    monkeypatch.setattr(ai_endpoints, "run_llm_prompt", fake_prompt)
+    resp = client.post("/internal/ai-adjudicate", json=_request_body())
+    assert resp.status_code == 502
 
-    monkeypatch.setattr(ai, "_basic_model", boom)
-    resp = client.post(
-        "/internal/ai-adjudicate",
-        json={"session_id": "s", "hierarchy_version": "v1", "account": {}},
-    )
-    data = resp.get_json()
-    assert data["primary_issue"] == "unknown"
-    assert data["error"] == "Timeout"
+
+def test_ai_endpoint_timeout(monkeypatch, client):
+    def fake_prompt(system, user, *, temperature, timeout):
+        raise TimeoutError
+
+    monkeypatch.setattr(ai_endpoints, "run_llm_prompt", fake_prompt)
+    resp = client.post("/internal/ai-adjudicate", json=_request_body())
+    assert resp.status_code in {502, 504}

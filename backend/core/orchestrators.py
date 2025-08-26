@@ -116,16 +116,25 @@ def collect_stageA_problem_accounts(
                 )
                 continue
             data = art.model_dump()
-            if data.get("problem_reasons"):
+            tier = str(data.get("tier", "none"))
+            source = data.get("decision_source", "rules")
+            reasons = data.get("problem_reasons", [])
+            include = False
+            if config.ENABLE_AI_ADJUDICATOR and source == "ai":
+                if tier in {"Tier1", "Tier2", "Tier3"}:
+                    include = True
+            elif reasons:
+                include = True
+            if include:
                 acc = {"account_id": acc_id}
                 acc.update(
                     {
                         "primary_issue": data.get("primary_issue", "unknown"),
                         "issue_types": data.get("issue_types", []),
-                        "problem_reasons": data.get("problem_reasons", []),
+                        "problem_reasons": reasons,
                         "confidence": data.get("confidence", 0.0),
                         "tier": data.get("tier", 0),
-                        "decision_source": data.get("decision_source", "rules"),
+                        "decision_source": source,
                     }
                 )
                 problems.append(acc)

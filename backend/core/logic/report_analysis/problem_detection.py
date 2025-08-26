@@ -4,16 +4,16 @@ import logging
 from typing import Any, Dict, List, Mapping
 
 import backend.config as config
+from backend.core.ai.adjudicator_client import call_adjudicator
+from backend.core.ai.models import AIAdjudicateRequest
 from backend.core.case_store.api import (
     append_artifact,
     get_account_fields,
     list_accounts,
 )
+from backend.core.case_store.redaction import redact_for_ai
 from backend.core.case_store.telemetry import emit, timed
-from backend.core.logic.report_analysis.candidate_logger import (
-    log_stageA_candidates,
-)
-from backend.config import ENABLE_CANDIDATE_TOKEN_LOGGER
+from backend.core.logic.report_analysis.candidate_logger import log_stageA_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,45 @@ def neutral_stageA_decision(debug: dict | None = None) -> dict:
         "tier": NEUTRAL_TIER,
         "debug": debug or {},
     }
+
+
+def evaluate_with_optional_ai(
+    session_id: str,
+    account_id: str,
+    case_fields: dict,
+    doc_fingerprint: str,
+    account_fingerprint: str,
+) -> dict:
+    """Attempt AI adjudication and fall back to neutral decision."""
+
+    decision = neutral_stageA_decision(debug={"source": "rules_v1"})
+    if not config.ENABLE_AI_ADJUDICATOR:
+        return decision
+
+    ai_fields = redact_for_ai({"fields": case_fields})["fields"]
+    req = AIAdjudicateRequest(
+        doc_fingerprint=doc_fingerprint or "",
+        account_fingerprint=account_fingerprint or "",
+        hierarchy_version=config.AI_HIERARCHY_VERSION,
+        fields=ai_fields,
+    )
+    resp = call_adjudicator(None, req)
+    if (
+        resp
+        and resp.confidence >= config.AI_MIN_CONFIDENCE
+        and resp.primary_issue not in ("none", "unknown")
+    ):
+        return {
+            "primary_issue": resp.primary_issue,
+            "issue_types": [],
+            "problem_reasons": resp.problem_reasons,
+            "decision_source": "ai",
+            "confidence": float(resp.confidence),
+            "tier": resp.tier,
+            "debug": {"fields_used": resp.fields_used},
+        }
+
+    return decision
 
 
 def _format_amount(v) -> str:
@@ -162,7 +201,7 @@ def run_stage_a(
                 continue
 
             bureau = str(fields.get("bureau") or acc_id.split("_")[-1])
-            if ENABLE_CANDIDATE_TOKEN_LOGGER:
+            if config.ENABLE_CANDIDATE_TOKEN_LOGGER:
                 try:
                     log_stageA_candidates(
                         session_id,
@@ -181,9 +220,21 @@ def run_stage_a(
                         exc_info=True,
                     )
 
-            verdict = evaluate_account_problem(dict(fields))
+            rules_verdict = evaluate_account_problem(dict(fields))
+            ai_verdict = evaluate_with_optional_ai(
+                session_id,
+                acc_id,
+                dict(fields),
+                str(fields.get("doc_fingerprint") or ""),
+                str(fields.get("account_fingerprint") or ""),
+            )
+            verdict = (
+                ai_verdict
+                if ai_verdict.get("decision_source") == "ai"
+                else rules_verdict
+            )
 
-            if ENABLE_CANDIDATE_TOKEN_LOGGER:
+            if config.ENABLE_CANDIDATE_TOKEN_LOGGER:
                 try:
                     log_stageA_candidates(
                         session_id,

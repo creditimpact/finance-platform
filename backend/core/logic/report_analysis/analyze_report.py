@@ -22,7 +22,10 @@ from typing import Any, Mapping
 
 from rapidfuzz import fuzz
 
-from backend.core.logic.report_analysis.candidate_logger import CandidateTokenLogger
+from backend.core.logic.report_analysis.candidate_logger import (
+    CandidateTokenLogger,
+    StageATraceLogger,
+)
 from backend.core.logic.report_analysis.problem_detection import (
     evaluate_account_problem,
 )
@@ -763,15 +766,41 @@ def analyze_credit_report(
                 enforce_collection_status(acc)
 
         candidate_logger = CandidateTokenLogger()
+        trace_logger = StageATraceLogger(request_id)
         for acc in result.get("all_accounts", []):
             candidate_logger.collect(acc)
             verdict = evaluate_account_problem(acc)
+            if acc.get("_detector_is_problem"):
+                trace_logger.append(
+                    {
+                        "normalized_name": acc.get("normalized_name"),
+                        "account_id": acc.get("account_number_last4")
+                        or acc.get("account_fingerprint"),
+                        "decision_source": verdict.get("decision_source"),
+                        "primary_issue": verdict.get("primary_issue"),
+                        "confidence": verdict.get("confidence"),
+                        "tier": verdict.get("tier"),
+                        "reasons": verdict.get("problem_reasons", []),
+                        "ai_latency_ms": verdict.get("debug", {}).get(
+                            "ai_latency_ms", 0
+                        ),
+                        "ai_tokens_in": verdict.get("debug", {}).get("ai_tokens_in", 0),
+                        "ai_tokens_out": verdict.get("debug", {}).get(
+                            "ai_tokens_out", 0
+                        ),
+                        "ai_error": verdict.get("debug", {}).get("ai_error"),
+                    }
+                )
 
         candidate_logger.save(Path("client_output") / request_id)
 
         result["problem_accounts"] = [
             a for a in result.get("all_accounts", []) if a.get("_detector_is_problem")
         ]
+        for acc in result["problem_accounts"]:
+            acc.pop("_detector_is_problem", None)
+            if os.getenv("INCLUDE_DEBUG_IN_API") != "1":
+                acc.pop("debug", None)
 
         if os.getenv("DEFER_ASSIGN_ISSUE_TYPES") == "1":
             for acc in result.get("all_accounts", []):

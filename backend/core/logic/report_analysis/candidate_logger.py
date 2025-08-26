@@ -12,7 +12,6 @@ import re
 from pathlib import Path
 from typing import Dict, Set
 
-
 _FIELDS = [
     "balance_owed",
     "account_rating",
@@ -74,3 +73,26 @@ class CandidateTokenLogger:
         path = folder / "candidate_tokens.json"
         with path.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Stage A trace logging
+# ---------------------------------------------------------------------------
+
+
+class StageATraceLogger:
+    """Append per-account Stage A decisions to a JSONL trace file."""
+
+    def __init__(self, session_id: str, base_folder: Path | None = None) -> None:
+        base = base_folder or Path("uploads")
+        self.path = base / session_id / "stageA_trace.jsonl"
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def append(self, row: Dict[str, object]) -> None:
+        from datetime import datetime
+
+        data = dict(row)
+        data["ts"] = datetime.utcnow().isoformat() + "Z"
+        with self.path.open("a", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+            f.write("\n")

@@ -68,7 +68,8 @@ test('renders accounts with empty issue_types and no primary_issue', async () =>
     </MemoryRouter>
   );
   expect(await screen.findByText('Account 2')).toBeInTheDocument();
-  expect(screen.getByText('Unknown')).toHaveClass('badge');
+  const unknowns = screen.getAllByText('Unknown');
+  expect(unknowns.filter((el) => el.classList.contains('badge')).length).toBe(1);
 });
 
 test('renders primary badge from primary_issue and secondary chips with identifiers', async () => {
@@ -112,7 +113,7 @@ test('renders account_fingerprint when last4 missing', async () => {
     accounts: { problem_accounts: [acc] },
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
       <ReviewPage />
     </MemoryRouter>
   );
@@ -136,7 +137,7 @@ test('prefers last4 over fingerprint when both provided', async () => {
     accounts: { problem_accounts: [acc] },
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
       <ReviewPage />
     </MemoryRouter>
   );
@@ -165,7 +166,7 @@ test('dedup uses last4 before fingerprint', async () => {
     accounts: { problem_accounts: [acc1, acc2] },
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
       <ReviewPage />
     </MemoryRouter>
   );
@@ -194,7 +195,7 @@ test('handles missing payment maps and late payments with identifier fallback', 
     accounts: { problem_accounts: [acc1, acc2] },
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
       <ReviewPage />
     </MemoryRouter>
   );
@@ -217,7 +218,7 @@ test('renders evidence drawer when debug flag enabled', async () => {
     accounts: { problem_accounts: [acc] },
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
       <ReviewPage />
     </MemoryRouter>
   );
@@ -230,4 +231,57 @@ test('renders evidence drawer when debug flag enabled', async () => {
   expect(content).toBeVisible();
   expect(raw).toBeVisible();
   process.env.VITE_DEBUG_EVIDENCE = originalEnv;
+});
+
+test('renders AI decision badge with confidence and reasons', async () => {
+  const acc = {
+    account_id: 'acc10',
+    name: 'AI Account',
+    normalized_name: 'ai account',
+    account_number_last4: '1111',
+    decision_source: 'ai',
+    confidence: 0.74,
+    tier: 1,
+    problem_reasons: ['late_payment'],
+    primary_issue: 'collection',
+    issue_types: ['collection'],
+  };
+  const uploadData = { ...baseUploadData, accounts: { problem_accounts: [acc] } };
+  render(
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
+      <ReviewPage />
+    </MemoryRouter>
+  );
+  const badge = await screen.findByText('AI decision');
+  expect(badge).toHaveAttribute('title', 'AI confidence: 0.74');
+  expect(screen.getByText('late_payment')).toHaveClass('chip');
+  expect(screen.getByText('Tier 1')).toBeInTheDocument();
+});
+
+test('renders rule-based and fallback decision badges', async () => {
+  const acc1 = {
+    account_id: 'r1',
+    name: 'Rule Acc',
+    decision_source: 'rules',
+    primary_issue: 'late_payment',
+    issue_types: ['late_payment'],
+  };
+  const acc2 = {
+    account_id: 'r2',
+    name: 'Fallback Acc',
+    decision_source: 'fallback_ai_low_conf',
+    primary_issue: 'late_payment',
+    issue_types: ['late_payment'],
+  };
+  const uploadData = {
+    ...baseUploadData,
+    accounts: { problem_accounts: [acc1, acc2] },
+  };
+  render(
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
+      <ReviewPage />
+    </MemoryRouter>
+  );
+  expect(await screen.findByText('Rule-based decision')).toBeInTheDocument();
+  expect(await screen.findByText('AI fallback (rules)')).toBeInTheDocument();
 });

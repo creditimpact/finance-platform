@@ -33,6 +33,9 @@ def test_ai_high_confidence(monkeypatch):
     result = pd.evaluate_account_problem(acct)
     assert result["primary_issue"] == "collection"
     assert result["decision_source"] == "ai"
+    assert result["confidence"] >= 0.9
+    assert result["tier"] == 1
+    assert result["problem_reasons"]
 
 
 def test_ai_low_confidence_fallback(monkeypatch):
@@ -54,4 +57,19 @@ def test_ai_low_confidence_fallback(monkeypatch):
     acct = {"account_status": "Open"}
     result = pd.evaluate_account_problem(acct)
     assert result["primary_issue"] == "unknown"
-    assert result["decision_source"] == "rules"
+    assert result["decision_source"] == "fallback_ai_low_conf"
+    assert result["confidence"] == 0
+    assert result["tier"] == 0
+
+
+def test_ai_error_fallback(monkeypatch):
+    def fake_adjudicate(session_id, hv, account):
+        raise RuntimeError("boom")
+
+    _reload(monkeypatch, ENABLE_AI_ADJUDICATOR="1")
+    monkeypatch.setattr(pd, "ai_adjudicate", fake_adjudicate)
+    acct = {"late_payments": {"exp": {"30": 1}}}
+    result = pd.evaluate_account_problem(acct)
+    assert result["decision_source"] == "fallback_ai_error"
+    assert result["confidence"] == 0
+    assert result["problem_reasons"]

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
-
 
 def evaluate_account_problem(acct: Dict[str, Any]) -> Dict[str, Any]:
     """Detect potential problems on a credit account without classification.
@@ -38,13 +36,30 @@ def evaluate_account_problem(acct: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             pass
 
-    is_problem = bool(reasons)
-
-    return {
-        "is_problem": is_problem,
-        "primary_issue": "unknown",
-        "problem_reasons": reasons,
-        "decision_source": "rules",
-        "confidence": 0.0,
-        "supporting": supporting,
     }
+
+    if ENABLE_AI_ADJUDICATOR:
+        redacted = redact_account_for_ai(acct)
+        ai_resp = ai_adjudicate("stageA", "v1", redacted)
+        result["debug"]["ai_response"] = {
+            "primary_issue": ai_resp.get("primary_issue"),
+            "confidence": ai_resp.get("confidence"),
+            "tier": ai_resp.get("tier"),
+            "error": ai_resp.get("error"),
+        }
+        if (
+            ai_resp.get("confidence", 0) >= AI_MIN_CONFIDENCE
+            and ai_resp.get("primary_issue") != "unknown"
+        ):
+            result.update(
+                {
+                    "primary_issue": ai_resp.get("primary_issue", "unknown"),
+                    "issue_types": ai_resp.get("issue_types", []),
+                    "problem_reasons": ai_resp.get("problem_reasons", []),
+                    "confidence": ai_resp.get("confidence", 0.0),
+                    "tier": ai_resp.get("tier", 0),
+                    "decision_source": "ai",
+                }
+            )
+
+    return result

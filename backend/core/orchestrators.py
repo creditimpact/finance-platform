@@ -1260,6 +1260,16 @@ def extract_problematic_accounts_from_report(
             logger.info("account_trace %s", json.dumps(trace, sort_keys=True))
     if os.getenv("PROBLEM_DETECTION_ONLY") == "1":
         problem_accounts = sections.get("problem_accounts") or []
+        for acc in problem_accounts:
+            log = {
+                "normalized_name": acc.get("normalized_name"),
+                "decision_source": acc.get("decision_source"),
+                "primary_issue": acc.get("primary_issue"),
+                "confidence": acc.get("confidence"),
+                "tier": acc.get("tier"),
+                "reasons_count": len(acc.get("problem_reasons", [])),
+            }
+            logger.info("stageA_problem_decision %s", json.dumps(log, sort_keys=True))
         return {"problem_accounts": problem_accounts}
     payload = BureauPayload(
         disputes=[

@@ -39,6 +39,11 @@ ENABLE_TIER2_KEYWORDS = _env_bool("ENABLE_TIER2_KEYWORDS", False)
 ENABLE_TIER3_KEYWORDS = _env_bool("ENABLE_TIER3_KEYWORDS", False)
 ENABLE_TIER2_NUMERIC = _env_bool("ENABLE_TIER2_NUMERIC", True)
 
+ENABLE_AI_ADJUDICATOR = _env_bool("ENABLE_AI_ADJUDICATOR", False)
+AI_MIN_CONFIDENCE = float(os.getenv("AI_MIN_CONFIDENCE", "0.65"))
+AI_TIMEOUT_SEC = float(os.getenv("AI_TIMEOUT_SEC", "8"))
+AI_REDACT_STRATEGY = os.getenv("AI_REDACT_STRATEGY", "hash_last4")
+
 _raw_t1, _raw_t2, _raw_t3 = _load_keyword_lists()
 
 TIER1_KEYWORDS = _raw_t1 if ENABLE_TIER1_KEYWORDS else {}

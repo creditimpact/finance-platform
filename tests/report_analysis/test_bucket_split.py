@@ -86,6 +86,19 @@ def test_split_accounts_integration(monkeypatch, tmp_path: Path):
         }
 
     monkeypatch.setattr(analyze_report, "call_ai_analysis", fake_call_ai_analysis)
+    monkeypatch.setattr(
+        analyze_report,
+        "evaluate_account_problem",
+        lambda acc: {
+            "primary_issue": acc.get("primary_issue", "unknown"),
+            "issue_types": acc.get("issue_types", []),
+            "problem_reasons": [],
+            "confidence": 0.0,
+            "tier": 0,
+            "decision_source": "rules",
+            "debug": {},
+        },
+    )
 
     result = analyze_report.analyze_credit_report(
         pdf_path, out_path, {}, ai_client=None, run_ai=True, request_id="req"

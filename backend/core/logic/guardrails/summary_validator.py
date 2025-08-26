@@ -15,7 +15,9 @@ def validate_structured_summaries(data: Dict[str, Any]) -> Dict[str, Any]:
         return {}
     cleaned: Dict[str, Any] = {}
     for k, v in data.items():
-        entry = dict(v) if isinstance(v, dict) else {}
+        if not isinstance(v, dict):
+            continue
+        entry = dict(v)
         para = str(entry.get("paragraph", "")).strip()
         if _ADMISSION.search(para) or _EMOTION.search(para):
             entry["paragraph"] = (

@@ -10,6 +10,10 @@ from backend.core.case_store.api import (
     list_accounts,
 )
 from backend.core.case_store.telemetry import emit, timed
+from backend.core.logic.report_analysis.candidate_logger import (
+    log_stageA_candidates,
+)
+from backend.config import ENABLE_CANDIDATE_TOKEN_LOGGER
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +161,46 @@ def run_stage_a(
                 )
                 continue
 
+            bureau = str(fields.get("bureau") or acc_id.split("_")[-1])
+            if ENABLE_CANDIDATE_TOKEN_LOGGER:
+                try:
+                    log_stageA_candidates(
+                        session_id,
+                        acc_id,
+                        bureau,
+                        "pre",
+                        dict(fields),
+                        decision={},
+                        meta={"source": "stageA"},
+                    )
+                except Exception:
+                    logger.debug(
+                        "candidate_tokens_log_failed session=%s account=%s phase=pre",
+                        session_id,
+                        acc_id,
+                        exc_info=True,
+                    )
+
             verdict = evaluate_account_problem(dict(fields))
+
+            if ENABLE_CANDIDATE_TOKEN_LOGGER:
+                try:
+                    log_stageA_candidates(
+                        session_id,
+                        acc_id,
+                        bureau,
+                        "post",
+                        dict(fields),
+                        verdict,
+                        meta={"source": "stageA"},
+                    )
+                except Exception:
+                    logger.debug(
+                        "candidate_tokens_log_failed session=%s account=%s phase=post",
+                        session_id,
+                        acc_id,
+                        exc_info=True,
+                    )
             payload = {
                 "primary_issue": verdict.get("primary_issue", "unknown"),
                 "issue_types": verdict.get("issue_types", []),

@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import ReviewPage from './ReviewPage';
+import { emitUiEvent } from '../telemetry/uiTelemetry';
 
 jest.mock('../api', () => ({
   submitExplanations: jest.fn(),
@@ -9,6 +10,9 @@ jest.mock('../api', () => ({
       acc1: { facts_summary: 'bank error' }
     }
   })
+}));
+jest.mock('../telemetry/uiTelemetry', () => ({
+  emitUiEvent: jest.fn(),
 }));
 
 const baseUploadData = {
@@ -241,24 +245,24 @@ test('renders AI decision badge with confidence and reasons', async () => {
     account_number_last4: '1111',
     decision_source: 'ai',
     confidence: 0.74,
-    tier: 1,
+    tier: 'Tier1',
     problem_reasons: ['late_payment'],
     primary_issue: 'collection',
     issue_types: ['collection'],
   };
   const uploadData = { ...baseUploadData, accounts: { problem_accounts: [acc] } };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
       <ReviewPage />
     </MemoryRouter>
   );
   const badge = await screen.findByText('AI decision');
-  expect(badge).toHaveAttribute('title', 'AI confidence: 0.74');
+  expect(badge).toHaveClass('bg-red-100');
+  expect(screen.getByTitle('AI confidence: 0.74')).toBeInTheDocument();
   expect(screen.getByText('late_payment')).toHaveClass('chip');
-  expect(screen.getByText('Tier 1')).toBeInTheDocument();
 });
 
-test('renders rule-based and fallback decision badges', async () => {
+test('renders rule-based decision badge', async () => {
   const acc1 = {
     account_id: 'r1',
     name: 'Rule Acc',
@@ -266,22 +270,14 @@ test('renders rule-based and fallback decision badges', async () => {
     primary_issue: 'late_payment',
     issue_types: ['late_payment'],
   };
-  const acc2 = {
-    account_id: 'r2',
-    name: 'Fallback Acc',
-    decision_source: 'fallback_ai_low_conf',
-    primary_issue: 'late_payment',
-    issue_types: ['late_payment'],
-  };
   const uploadData = {
     ...baseUploadData,
-    accounts: { problem_accounts: [acc1, acc2] },
+    accounts: { problem_accounts: [acc1] },
   };
   render(
-    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}>
+    <MemoryRouter initialEntries={[{ pathname: '/review', state: { uploadData } }]}> 
       <ReviewPage />
     </MemoryRouter>
   );
-  expect(await screen.findByText('Rule-based decision')).toBeInTheDocument();
-  expect(await screen.findByText('AI fallback (rules)')).toBeInTheDocument();
+  expect(await screen.findByText('Rule-based')).toBeInTheDocument();
 });

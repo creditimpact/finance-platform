@@ -13,6 +13,9 @@ def emit_parser_audit(
     call_ai_ms: int | None,
     fields_written: int | None,
     errors: str | None,
+    parser_pdf_pages_ocr: int = 0,
+    parser_ocr_latency_ms_total: int = 0,
+    parser_ocr_errors: int = 0,
 ) -> None:
     """Emit a ``parser_audit`` telemetry event."""
 
@@ -26,5 +29,7 @@ def emit_parser_audit(
         call_ai_ms=call_ai_ms,
         fields_written=fields_written,
         errors=errors,
+        parser_pdf_pages_ocr=parser_pdf_pages_ocr,
+        parser_ocr_latency_ms_total=parser_ocr_latency_ms_total,
+        parser_ocr_errors=parser_ocr_errors,
     )
-

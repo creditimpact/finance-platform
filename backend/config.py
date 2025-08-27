@@ -33,6 +33,15 @@ def env_int(name: str, default: int) -> int:
     val = os.getenv(name)
     if val is None:
         return default
+
+
+def env_list(name: str, default: list[str]) -> list[str]:
+    """Parse a comma-separated list environment variable."""
+    val = os.getenv(name)
+    if val is None:
+        return default
+    parts = [p.strip() for p in val.split(",") if p.strip()]
+    return parts or default
     try:
         return int(val)
     except ValueError:
@@ -114,13 +123,15 @@ API_DECISION_META_MAX_FIELDS_USED = env_int("API_DECISION_META_MAX_FIELDS_USED",
 
 # Cross-bureau resolution
 ENABLE_CROSS_BUREAU_RESOLUTION = env_bool("ENABLE_CROSS_BUREAU_RESOLUTION", False)
-API_AGGREGATION_ID_STRATEGY = env_str(
-    "API_AGGREGATION_ID_STRATEGY", "winner"
-)
-API_INCLUDE_AGG_MEMBERS_META = env_bool(
-    "API_INCLUDE_AGG_MEMBERS_META", False
-)
+API_AGGREGATION_ID_STRATEGY = env_str("API_AGGREGATION_ID_STRATEGY", "winner")
+API_INCLUDE_AGG_MEMBERS_META = env_bool("API_INCLUDE_AGG_MEMBERS_META", False)
 
 # Parser audit instrumentation
 PARSER_AUDIT_ENABLED = env_bool("PARSER_AUDIT_ENABLED", True)
 PDF_TEXT_MIN_CHARS_PER_PAGE = env_int("PDF_TEXT_MIN_CHARS_PER_PAGE", 64)
+
+# OCR fallback configuration
+OCR_ENABLED = env_bool("OCR_ENABLED", False)
+OCR_PROVIDER = env_str("OCR_PROVIDER", "tesseract")
+OCR_TIMEOUT_MS = env_int("OCR_TIMEOUT_MS", 8000)
+OCR_LANGS = env_list("OCR_LANGS", ["eng"])

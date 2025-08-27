@@ -27,6 +27,10 @@ from backend.config import (
     CASESTORE_PARSER_LOG_PARITY,
     CASESTORE_REDACT_BEFORE_STORE,
     ENABLE_CASESTORE_WRITE,
+    OCR_ENABLED,
+    OCR_LANGS,
+    OCR_PROVIDER,
+    OCR_TIMEOUT_MS,
     PARSER_AUDIT_ENABLED,
     PDF_TEXT_MIN_CHARS_PER_PAGE,
 )
@@ -54,8 +58,11 @@ from backend.core.logic.utils.text_parsing import (
     extract_late_history_blocks,
 )
 from backend.core.services.ai_client import AIClient, get_ai_client
+from backend.core.telemetry.parser_metrics import emit_parser_audit
 
-from .report_parsing import (
+from .ocr_provider import get_ocr_provider
+from .pdf_io import char_count, extract_text_per_page, merge_text_with_ocr
+from .report_parsing import (  # noqa: F401 - kept for test monkeypatching
     extract_account_numbers,
     extract_creditor_remarks,
     extract_payment_statuses,
@@ -64,7 +71,6 @@ from .report_parsing import (
     extract_three_column_fields,
     scan_page_markers,
 )
-from .pdf_io import extract_text_per_page, char_count
 from .report_postprocessing import (
     _assign_issue_types,
     _cleanup_unverified_late_text,
@@ -81,12 +87,13 @@ from .report_prompting import (
     PIPELINE_VERSION,
     call_ai_analysis,
 )
-from backend.core.telemetry.parser_metrics import emit_parser_audit
 
 logger = logging.getLogger(__name__)
 
 
-def _parity_counts(original: dict[str, Any], stored: dict[str, Any]) -> tuple[int, int, int, int]:
+def _parity_counts(
+    original: dict[str, Any], stored: dict[str, Any]
+) -> tuple[int, int, int, int]:
     """Return counts of added/changed/masked/missing keys between ``original`` and ``stored``."""
 
     added = len(set(stored) - set(original))
@@ -100,6 +107,7 @@ def _parity_counts(original: dict[str, Any], stored: dict[str, Any]) -> tuple[in
             if stored.get(key) == redacted.get(key):
                 masked += 1
     return added, changed, masked, missing
+
 
 def _split_account_buckets(accounts: list[dict]) -> tuple[list[dict], list[dict]]:
     """Split accounts into negative and open issue buckets.
@@ -404,6 +412,9 @@ def analyze_credit_report(
     pages_with_text = 0
     pages_empty_text = 0
     extract_text_ms = 0
+    pages_ocr = 0
+    ocr_latency_ms_total = 0
+    ocr_errors = 0
     call_ai_ms: int | None = None
     fields_written: int | None = None
     errors: str | None = None
@@ -413,15 +424,38 @@ def analyze_credit_report(
         texts = extract_text_per_page(pdf_path)
         extract_text_ms = int((time.perf_counter() - start) * 1000)
         pages_total = len(texts)
-        pages_with_text = sum(
-            1 for t in texts if char_count(t) >= PDF_TEXT_MIN_CHARS_PER_PAGE
-        )
+        counts = [char_count(t) for t in texts]
+        pages_with_text = sum(1 for c in counts if c >= PDF_TEXT_MIN_CHARS_PER_PAGE)
         pages_empty_text = pages_total - pages_with_text
+        if OCR_ENABLED:
+            provider = get_ocr_provider(OCR_PROVIDER)
+            ocr_texts: dict[int, str] = {}
+            for idx, count in enumerate(counts):
+                if count < PDF_TEXT_MIN_CHARS_PER_PAGE:
+                    pages_ocr += 1
+                    res = provider.ocr_page(
+                        pdf_path,
+                        idx,
+                        timeout_ms=OCR_TIMEOUT_MS,
+                        langs=OCR_LANGS,
+                    )
+                    ocr_latency_ms_total += res.duration_ms
+                    if res.text:
+                        ocr_texts[idx] = res.text
+                    else:
+                        ocr_errors += 1
+            if ocr_texts:
+                texts = merge_text_with_ocr(texts, ocr_texts)
     except Exception:  # pragma: no cover - best effort
         extract_text_ms = int((time.perf_counter() - start) * 1000)
         errors = "TextExtractionError"
+        texts = []
 
-    text = extract_text_from_pdf(pdf_path)
+    joined = "\n".join(texts)
+    if joined:
+        text = joined
+    else:  # fallback to legacy extractor if per-page failed
+        text = extract_text_from_pdf(pdf_path)
 
     def _emit_audit() -> None:
         if PARSER_AUDIT_ENABLED:
@@ -434,7 +468,11 @@ def analyze_credit_report(
                 call_ai_ms=call_ai_ms,
                 fields_written=fields_written,
                 errors=errors,
+                parser_pdf_pages_ocr=pages_ocr,
+                parser_ocr_latency_ms_total=ocr_latency_ms_total,
+                parser_ocr_errors=ocr_errors,
             )
+
     if os.getenv("EXPORT_RAW_PAGES", "0") != "0":
         pages = extract_pdf_page_texts(pdf_path)
         trace_dir = Path("trace") / request_id
@@ -977,6 +1015,7 @@ def analyze_credit_report(
                 session_id,
                 err,
             )
+
         def _count_fields(mapping: Mapping[str, Any]) -> int:
             return sum(
                 1
@@ -1004,9 +1043,7 @@ def analyze_credit_report(
                             if CASESTORE_REDACT_BEFORE_STORE
                             else fields
                         )
-                        added, changed, masked, missing = _parity_counts(
-                            fields, stored
-                        )
+                        added, changed, masked, missing = _parity_counts(fields, stored)
                         logger.info(
                             "casestore_parity: session=%s account=%s bureau=%s added=%d changed=%d masked=%d missing=%d",
                             session_id,

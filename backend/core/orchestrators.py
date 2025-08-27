@@ -249,6 +249,22 @@ def collect_stageA_logical_accounts(
     resolved: list[Mapping[str, Any]] = []
     for logical_id, items in grouped.items():
         decision = resolve_cross_bureau(items)
+        group_members = members.get(logical_id, [])
+        try:  # pragma: no cover - defensive
+            emit(
+                "stageA_cross_bureau_winner",
+                session_id=session_id,
+                logical_account_id=logical_id,
+                winner_bureau=decision.get("bureau"),
+                primary_issue=decision.get("primary_issue"),
+                tier=decision.get("tier"),
+                decision_source=decision.get("decision_source"),
+                confidence=float(decision.get("confidence", 0.0)),
+                reasons_count=len(decision.get("problem_reasons", [])),
+                members=len(group_members),
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("stageA_cross_bureau_winner_emit_failed")
         if decision.get("tier") == "Tier4":
             continue
         winner_bureau = decision.get("bureau")
@@ -261,7 +277,7 @@ def collect_stageA_logical_accounts(
         if config.API_INCLUDE_AGG_MEMBERS_META:
             decision["aggregation_meta"] = {
                 "logical_account_id": logical_id,
-                "members": members.get(logical_id, []),
+                "members": group_members,
             }
         resolved.append(decision)
 

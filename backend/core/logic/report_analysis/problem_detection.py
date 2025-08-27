@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Mapping
 
 import backend.config as config
@@ -12,7 +13,7 @@ from backend.core.case_store.api import (
     list_accounts,
 )
 from backend.core.case_store.redaction import redact_for_ai
-from backend.core.case_store.telemetry import emit, timed
+from backend.core.case_store import telemetry
 from backend.core.logic.report_analysis.candidate_logger import log_stageA_candidates
 
 logger = logging.getLogger(__name__)
@@ -86,11 +87,17 @@ def evaluate_with_optional_ai(
     case_fields: dict,
     doc_fingerprint: str,
     account_fingerprint: str,
-) -> dict:
-    """Attempt AI adjudication and fall back to neutral decision."""
+) -> tuple[dict, bool, float | None, str | None, float | None]:
+    """Attempt AI adjudication and return decision with telemetry info.
+
+    Returns a tuple ``(decision, ai_called, ai_latency_ms, fallback_reason,
+    ai_confidence)`` where ``ai_called`` indicates whether the adjudicator was
+    invoked and ``ai_latency_ms`` is the duration of that call when available.
+    ``fallback_reason`` is populated when AI was attempted but not adopted.
+    """
 
     if not config.ENABLE_AI_ADJUDICATOR:
-        return neutral_stageA_decision(debug={"source": "rules_v1"})
+        return neutral_stageA_decision(debug={"source": "rules_v1"}), False, None, None, None
 
     ai_fields = redact_for_ai({"fields": case_fields})["fields"]
     req = AIAdjudicateRequest(
@@ -99,7 +106,29 @@ def evaluate_with_optional_ai(
         hierarchy_version=config.AI_HIERARCHY_VERSION,
         fields=ai_fields,
     )
-    resp = call_adjudicator(None, req)
+
+    meta: dict[str, Any] = {}
+    prev_emit = telemetry.get_emitter()
+
+    def _capture(event: str, fields: Mapping[str, Any]) -> None:
+        if event == "stageA_ai_call":
+            meta.update(fields)
+        if prev_emit:
+            try:
+                prev_emit(event, fields)
+            except Exception:
+                pass
+
+    telemetry.set_emitter(_capture)
+    try:
+        resp = call_adjudicator(None, req)
+    finally:
+        telemetry.set_emitter(prev_emit)
+
+    ai_latency = meta.get("duration_ms")
+    status = meta.get("status")
+    ai_conf = meta.get("confidence")
+
     resp_dict = None
     if resp:
         resp_dict = {
@@ -109,7 +138,24 @@ def evaluate_with_optional_ai(
             "problem_reasons": resp.problem_reasons,
             "fields_used": resp.fields_used,
         }
-    return adopt_or_fallback(resp_dict, config.AI_MIN_CONFIDENCE)
+    decision = adopt_or_fallback(resp_dict, config.AI_MIN_CONFIDENCE)
+
+    fallback_reason: str | None = None
+    if decision.get("decision_source") != "ai":
+        if resp_dict:
+            fallback_reason = "low_confidence"
+            ai_conf = resp_dict.get("confidence")
+        else:
+            mapping = {
+                "TimeoutException": "timeout",
+                "HTTPStatusError": "http_error",
+                "HTTPError": "http_error",
+                "JSONDecodeError": "invalid_json",
+                "ValidationError": "schema_reject",
+            }
+            fallback_reason = mapping.get(status, "http_error")
+
+    return decision, True, ai_latency, fallback_reason, ai_conf if ai_conf is not None else None
 
 
 def _format_amount(v) -> str:
@@ -191,7 +237,7 @@ def run_stage_a(
         return
 
     for acc_id in account_ids:
-        with timed(
+        with telemetry.timed(
             "stageA_casestore_eval",
             session_id=session_id,
             account_id=acc_id,
@@ -205,7 +251,7 @@ def run_stage_a(
                 logger.warning(
                     "stageA_missing_account session=%s account=%s", session_id, acc_id
                 )
-                emit(
+                telemetry.emit(
                     "stageA_missing_account",
                     session_id=session_id,
                     account_id=acc_id,
@@ -232,8 +278,15 @@ def run_stage_a(
                         exc_info=True,
                     )
 
+            t0 = time.perf_counter()
             rules_verdict = evaluate_account_problem(dict(fields))
-            ai_verdict = evaluate_with_optional_ai(
+            (
+                ai_verdict,
+                ai_called,
+                ai_latency_ms,
+                fallback_reason,
+                ai_confidence,
+            ) = evaluate_with_optional_ai(
                 session_id,
                 acc_id,
                 dict(fields),
@@ -245,6 +298,29 @@ def run_stage_a(
                 if ai_verdict.get("decision_source") == "ai"
                 else rules_verdict
             )
+            total_latency = (time.perf_counter() - t0) * 1000.0
+            telemetry.emit(
+                "stageA_eval",
+                session_id=session_id,
+                account_id=acc_id,
+                bureau=bureau,
+                decision_source=verdict.get("decision_source"),
+                primary_issue=verdict.get("primary_issue"),
+                tier=verdict.get("tier"),
+                confidence=float(verdict.get("confidence", 0.0)),
+                latency_ms=round(total_latency, 3),
+                ai_latency_ms=ai_latency_ms if ai_called else None,
+            )
+            if ai_called and verdict.get("decision_source") != "ai":
+                telemetry.emit(
+                    "stageA_fallback",
+                    session_id=session_id,
+                    account_id=acc_id,
+                    bureau=bureau,
+                    reason=fallback_reason,
+                    ai_confidence=ai_confidence,
+                    latency_ms=ai_latency_ms,
+                )
 
             if config.ENABLE_CANDIDATE_TOKEN_LOGGER:
                 try:
@@ -290,7 +366,7 @@ def run_stage_a(
                 logger.warning(
                     "stageA_append_failed session=%s account=%s", session_id, acc_id
                 )
-                emit(
+                telemetry.emit(
                     "stageA_append_failed",
                     session_id=session_id,
                     account_id=acc_id,

@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -26,6 +27,8 @@ from backend.config import (
     CASESTORE_PARSER_LOG_PARITY,
     CASESTORE_REDACT_BEFORE_STORE,
     ENABLE_CASESTORE_WRITE,
+    PARSER_AUDIT_ENABLED,
+    PDF_TEXT_MIN_CHARS_PER_PAGE,
 )
 from backend.core.case_store.api import (
     create_session_case,
@@ -61,6 +64,7 @@ from .report_parsing import (
     extract_three_column_fields,
     scan_page_markers,
 )
+from .pdf_io import extract_text_per_page, char_count
 from .report_postprocessing import (
     _assign_issue_types,
     _cleanup_unverified_late_text,
@@ -77,6 +81,7 @@ from .report_prompting import (
     PIPELINE_VERSION,
     call_ai_analysis,
 )
+from backend.core.telemetry.parser_metrics import emit_parser_audit
 
 logger = logging.getLogger(__name__)
 
@@ -394,7 +399,42 @@ def analyze_credit_report(
 ):
     """Analyze ``pdf_path`` and write structured analysis to ``output_json_path``."""
     ai_client = ai_client or get_ai_client()
+
+    pages_total = 0
+    pages_with_text = 0
+    pages_empty_text = 0
+    extract_text_ms = 0
+    call_ai_ms: int | None = None
+    fields_written: int | None = None
+    errors: str | None = None
+
+    start = time.perf_counter()
+    try:
+        texts = extract_text_per_page(pdf_path)
+        extract_text_ms = int((time.perf_counter() - start) * 1000)
+        pages_total = len(texts)
+        pages_with_text = sum(
+            1 for t in texts if char_count(t) >= PDF_TEXT_MIN_CHARS_PER_PAGE
+        )
+        pages_empty_text = pages_total - pages_with_text
+    except Exception:  # pragma: no cover - best effort
+        extract_text_ms = int((time.perf_counter() - start) * 1000)
+        errors = "TextExtractionError"
+
     text = extract_text_from_pdf(pdf_path)
+
+    def _emit_audit() -> None:
+        if PARSER_AUDIT_ENABLED:
+            emit_parser_audit(
+                session_id=session_id or "",
+                pages_total=pages_total,
+                pages_with_text=pages_with_text,
+                pages_empty_text=pages_empty_text,
+                extract_text_ms=extract_text_ms,
+                call_ai_ms=call_ai_ms,
+                fields_written=fields_written,
+                errors=errors,
+            )
     if os.getenv("EXPORT_RAW_PAGES", "0") != "0":
         pages = extract_pdf_page_texts(pdf_path)
         trace_dir = Path("trace") / request_id
@@ -457,15 +497,24 @@ def analyze_credit_report(
                 err,
             )
     if run_ai:
-        result = call_ai_analysis(
-            text,
-            is_identity_theft,
-            Path(output_json_path),
-            ai_client=ai_client,
-            strategic_context=strategic_context,
-            request_id=request_id,
-            doc_fingerprint=doc_fingerprint,
-        )
+        _start = time.perf_counter()
+        try:
+            result = call_ai_analysis(
+                text,
+                is_identity_theft,
+                Path(output_json_path),
+                ai_client=ai_client,
+                strategic_context=strategic_context,
+                request_id=request_id,
+                doc_fingerprint=doc_fingerprint,
+            )
+        except Exception:
+            call_ai_ms = int((time.perf_counter() - _start) * 1000)
+            errors = "AIAnalysisError"
+            _emit_audit()
+            raise
+        else:
+            call_ai_ms = int((time.perf_counter() - _start) * 1000)
     else:
         result = {
             "negative_accounts": [],
@@ -928,6 +977,14 @@ def analyze_credit_report(
                 session_id,
                 err,
             )
+        def _count_fields(mapping: Mapping[str, Any]) -> int:
+            return sum(
+                1
+                for v in mapping.values()
+                if v not in (None, "") and not isinstance(v, (dict, list, tuple, set))
+            )
+
+        fields_written = 0
         for idx, acc in enumerate(result.get("all_accounts", []), start=1):
             bureau_details = acc.get("bureau_details") or {}
             fingerprint = acc.get("account_fingerprint") or f"acc{idx}"
@@ -940,6 +997,7 @@ def analyze_credit_report(
                         bureau=bureau,
                         fields=fields,
                     )
+                    fields_written += _count_fields(fields)
                     if CASESTORE_PARSER_LOG_PARITY:
                         stored = (
                             redact_account_fields(fields)
@@ -972,4 +1030,5 @@ def analyze_credit_report(
     with open(output_json_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=4, ensure_ascii=False)
 
+    _emit_audit()
     return result

@@ -46,7 +46,7 @@ def test_detection_only_neutral(monkeypatch, session_case):
     monkeypatch.setattr(config, "ENABLE_CASESTORE_STAGEA", True)
     monkeypatch.setattr(config, "PROBLEM_DETECTION_ONLY", True)
     pd.run_stage_a(session_case, [])
-    problems = orch.collect_stageA_problem_accounts(session_case, [])
+    problems = orch.collect_stageA_problem_accounts(session_case)
     ids = {p["account_id"] for p in problems}
     assert ids == {"acc2", "acc3"}
     dec2 = _decision(session_case, "acc2")

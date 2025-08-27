@@ -25,7 +25,8 @@ def _setup_app(monkeypatch, accounts, meta_map):
     monkeypatch.setattr(app_module, 'extract_problematic_accounts', DummyTask())
     monkeypatch.setattr(app_module, 'run_credit_repair_process', lambda *a, **k: None)
     monkeypatch.setattr(app_module, 'set_session', lambda *a, **k: None)
-    monkeypatch.setattr(orch, 'collect_stageA_problem_accounts', lambda sid: accounts)
+    monkeypatch.setattr(app_module.cs_api, 'load_session_case', lambda sid: None)
+    monkeypatch.setattr(orch, 'collect_stageA_logical_accounts', lambda sid: accounts)
     monkeypatch.setattr(orch, 'get_stageA_decision_meta', lambda sid, aid: meta_map.get(aid))
     return create_app()
 

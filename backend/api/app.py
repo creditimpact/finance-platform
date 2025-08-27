@@ -48,6 +48,8 @@ from backend.core.logic.letters.explanations_normalizer import (
     sanitize,
 )
 from backend.core import orchestrators as orch
+from backend.core.case_store import api as cs_api
+from backend.core.case_store.errors import CaseStoreError
 import backend.config as config
 
 logger = logging.getLogger(__name__)
@@ -159,16 +161,19 @@ def start_process():
         )
 
         try:
+            cs_api.load_session_case(session_id)
             problem_accounts = orch.collect_stageA_logical_accounts(session_id)
-        except Exception:
-            logger.warning(
-                "collect_stageA_problem_accounts_failed session=%s", session_id,
-                exc_info=True,
+        except CaseStoreError:
+            logger.exception("casestore_unavailable session=%s", session_id)
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "Case Store unavailable",
+                    }
+                ),
+                503,
             )
-            problem_accounts = result.get("problem_accounts") or []
-            if not problem_accounts:
-                problem_accounts.extend(result.get("disputes", []))
-                problem_accounts.extend(result.get("goodwill", []))
 
         valid_accounts = []
         for acc in problem_accounts:

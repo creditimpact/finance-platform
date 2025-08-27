@@ -21,6 +21,8 @@ def test_start_process_success(monkeypatch, tmp_path):
             return DummyResult()
 
     monkeypatch.setattr(app_module, "extract_problematic_accounts", DummyTask())
+    monkeypatch.setattr(app_module.cs_api, "load_session_case", lambda sid: None)
+    monkeypatch.setattr(orch, "collect_stageA_logical_accounts", lambda sid: [])
     called = {}
 
     def fake_run(client, proofs, flag):
@@ -81,7 +83,8 @@ def test_start_process_emits_enriched_fields(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "extract_problematic_accounts", DummyTask())
     monkeypatch.setattr(app_module, "run_credit_repair_process", lambda *a, **k: None)
     monkeypatch.setattr(app_module, "set_session", lambda *a, **k: None)
-    monkeypatch.setattr(orch, "collect_stageA_problem_accounts", lambda sid: [sample])
+    monkeypatch.setattr(app_module.cs_api, "load_session_case", lambda sid: None)
+    monkeypatch.setattr(orch, "collect_stageA_logical_accounts", lambda sid: [sample])
 
     test_app = create_app()
     client = test_app.test_client()

@@ -420,7 +420,6 @@ def analyze_credit_report(
     ocr_latency_ms_total = 0
     ocr_errors = 0
     norm_stats = NormalizationStats()
-    call_ai_ms: int | None = None
     fields_written: int | None = None
     errors: str | None = None
     extract_sections_ms: int | None = None
@@ -485,7 +484,6 @@ def analyze_credit_report(
                 pages_with_text=pages_with_text,
                 pages_empty_text=pages_empty_text,
                 extract_text_ms=extract_text_ms,
-                call_ai_ms=call_ai_ms,
                 fields_written=fields_written,
                 errors=errors,
                 parser_pdf_pages_ocr=pages_ocr,
@@ -591,7 +589,6 @@ def analyze_credit_report(
         fields_written = (fields_written or 0) + len(summary_fields)
 
     if run_ai and ENABLE_LLM_PARSING:
-        _start = time.perf_counter()
         try:
             result = call_ai_analysis(
                 text,
@@ -603,12 +600,9 @@ def analyze_credit_report(
                 doc_fingerprint=doc_fingerprint,
             )
         except Exception:
-            call_ai_ms = int((time.perf_counter() - _start) * 1000)
             errors = "AIAnalysisError"
             _emit_audit()
             raise
-        else:
-            call_ai_ms = int((time.perf_counter() - _start) * 1000)
     else:
         result = {
             "negative_accounts": [],

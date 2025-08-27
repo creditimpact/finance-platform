@@ -8,22 +8,21 @@ observable via telemetry.  Historical helpers ``CandidateTokenLogger`` and
 
 from __future__ import annotations
 
-from dataclasses import dataclass  # noqa: F401  (imported for parity with spec)
-from datetime import datetime
 import json
 import os
 import re
 import tempfile
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from backend.config import (
+    CANDIDATE_LOG_FORMAT,
     CASESTORE_DIR,
     ENABLE_CANDIDATE_TOKEN_LOGGER,
-    CANDIDATE_LOG_FORMAT,
 )
 from backend.core.case_store.telemetry import emit
-
 
 # ---------------------------------------------------------------------------
 # Helper utilities
@@ -56,47 +55,82 @@ _ALLOWED_FIELDS = {
 # PII regexes ---------------------------------------------------------------
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-PHONE_RE = re.compile(r"(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}")
+PHONE_RE = re.compile(r"\b(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}\b")
 SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b|\b\d{9}\b")
 LONG_DIGITS_RE = re.compile(r"\b\d{8,}\b")
 ADDRESS_RE = re.compile(
-    r"\b(?:street|st\.|ave|road|rd\.|blvd|apt|suite)\b", re.IGNORECASE
+    r"\b(?:street|st\.?|ave|road|rd\.?|blvd|apt|suite)(?:\b|$)",
+    re.IGNORECASE,
 )
 
 
-def _sanitize_str(value: str) -> str:
-    value = EMAIL_RE.sub("[redacted]", value)
-    value = PHONE_RE.sub("[redacted]", value)
-    value = SSN_RE.sub("[redacted]", value)
+@dataclass
+class MaskCounts:
+    total: int = 0
+    email: int = 0
+    phone: int = 0
+    ssn: int = 0
+    address: int = 0
+    account_number: int = 0
+
+
+def _sanitize_str(value: str, counts: MaskCounts) -> str:
+    def _email_sub(match: re.Match[str]) -> str:
+        counts.email += 1
+        counts.total += 1
+        return "[redacted]"
+
+    value = EMAIL_RE.sub(_email_sub, value)
+
+    def _phone_sub(match: re.Match[str]) -> str:
+        counts.phone += 1
+        counts.total += 1
+        return "[redacted]"
+
+    value = PHONE_RE.sub(_phone_sub, value)
+
+    def _ssn_sub(match: re.Match[str]) -> str:
+        counts.ssn += 1
+        counts.total += 1
+        return "[redacted]"
+
+    value = SSN_RE.sub(_ssn_sub, value)
 
     def _mask_long_digits(match: re.Match[str]) -> str:
+        counts.account_number += 1
+        counts.total += 1
         digits = match.group()
         return "****" + digits[-4:]
 
     value = LONG_DIGITS_RE.sub(_mask_long_digits, value)
     if ADDRESS_RE.search(value):
+        counts.address += 1
+        counts.total += 1
         return "[redacted]"
     return value
 
 
-def _sanitize_value(val: Any) -> Any:
+def _sanitize_value(val: Any, counts: MaskCounts) -> Any:
     if isinstance(val, str):
-        return _sanitize_str(val)
+        return _sanitize_str(val, counts)
     if isinstance(val, list):
-        return [_sanitize_value(v) for v in val]
+        return [_sanitize_value(v, counts) for v in val]
     if isinstance(val, dict):
-        return {k: _sanitize_value(v) for k, v in val.items()}
+        return {k: _sanitize_value(v, counts) for k, v in val.items()}
     return val
 
 
-def sanitize_fields_for_tokens(fields: Dict[str, Any]) -> Dict[str, Any]:
+def sanitize_fields_for_tokens(
+    fields: Dict[str, Any]
+) -> Tuple[Dict[str, Any], MaskCounts]:
     """Deep-copy & sanitize fields for logging."""
 
+    counts = MaskCounts()
     cleaned: Dict[str, Any] = {}
     for name in _ALLOWED_FIELDS:
         if name in fields and fields[name] is not None:
-            cleaned[name] = _sanitize_value(fields[name])
-    return cleaned
+            cleaned[name] = _sanitize_value(fields[name], counts)
+    return cleaned, counts
 
 
 def log_stageA_candidates(
@@ -113,13 +147,14 @@ def log_stageA_candidates(
     if not ENABLE_CANDIDATE_TOKEN_LOGGER:
         return
 
+    sanitized_fields, masked = sanitize_fields_for_tokens(fields)
     record = {
         "session_id": session_id,
         "account_id": account_id,
         "bureau": bureau,
         "phase": phase,
         "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "fields": sanitize_fields_for_tokens(fields),
+        "fields": sanitized_fields,
         "decision": decision,
     }
     if meta:
@@ -137,6 +172,7 @@ def log_stageA_candidates(
                 f.flush()
                 os.fsync(f.fileno())
             bytes_written += 1  # newline
+            records_count = 1
         else:
             records: List[Dict[str, Any]] = []
             if os.path.exists(path):
@@ -154,6 +190,7 @@ def log_stageA_candidates(
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp_path, path)
+            records_count = len(records)
 
         try:
             emit(
@@ -162,17 +199,24 @@ def log_stageA_candidates(
                 account_id=account_id,
                 phase=phase,
                 bytes_written=bytes_written,
+                records=records_count,
+                fields_masked_total=masked.total,
+                fields_masked_email=masked.email,
+                fields_masked_phone=masked.phone,
+                fields_masked_ssn=masked.ssn,
+                fields_masked_address=masked.address,
+                fields_masked_account=masked.account_number,
             )
         except Exception:
             pass
-    except Exception:
+    except Exception as e:
         try:
             emit(
                 "candidate_tokens_error",
                 session_id=session_id,
                 account_id=account_id,
                 phase=phase,
-                error="IO_ERROR",
+                error=e.__class__.__name__,
             )
         except Exception:
             pass
@@ -261,4 +305,3 @@ class StageATraceLogger:
         with self.path.open("a", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
             f.write("\n")
-

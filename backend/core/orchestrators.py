@@ -6,12 +6,13 @@ steps of the credit repair workflow.  All core orchestration lives here;
 ``main.py`` only provides thin CLI wrappers.
 """
 
+import hashlib
 import json
 import logging
 import os
 import random
 import time
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 from shutil import copyfile
 from typing import Any, Mapping
@@ -36,6 +37,7 @@ from backend.api.session_manager import update_session
 from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLevel
 from backend.core.case_store.api import get_account_case, list_accounts
+from backend.core.case_store.models import AccountCase
 from backend.core.email_sender import send_email_with_attachment
 from backend.core.letters.field_population import apply_field_fillers
 from backend.core.logic.compliance.constants import StrategistFailureReason
@@ -123,6 +125,34 @@ def resolve_cross_bureau(decisions: list[dict]) -> dict:
     return normalize_decision(result)
 
 
+def compute_logical_account_key(account_case: AccountCase) -> str:
+    """Return a stable, PII-safe key for cross-bureau grouping.
+
+    The key is derived from non-PII attributes in priority order:
+    1. Last 4 digits of the account number (hashed)
+    2. Creditor type or account type
+    3. Date opened in ISO format (or empty string)
+
+    These parts are concatenated and hashed using SHA-256. The first 16
+    hexadecimal characters of the resulting digest form the logical
+    account identifier.
+    """
+
+    last4_raw = (account_case.fields.account_number or "")[-4:]
+    last4_hash = (
+        hashlib.sha256(last4_raw.encode("utf-8")).hexdigest() if last4_raw else ""
+    )
+    creditor = (
+        (account_case.fields.creditor_type or "")
+        or (account_case.fields.account_type or "")
+    )
+    opened = account_case.fields.date_opened or ""
+    if isinstance(opened, (datetime, date)):
+        opened = opened.isoformat()
+    base = "|".join([last4_hash, str(creditor), str(opened)])
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
+
+
 def collect_stageA_problem_accounts(
     session_id: str, all_accounts: list[Mapping[str, Any]] | None = None
 ) -> list[Mapping[str, Any]]:
@@ -164,7 +194,7 @@ def collect_stageA_problem_accounts(
                 tier = "none"
                 data["primary_issue"] = "unknown"
                 data["confidence"] = 0.0
-            if include:
+            if include and tier != "Tier4":
                 acc: dict[str, Any] = {
                     "account_id": acc_id,
                     "bureau": str(case.bureau.value),
@@ -200,30 +230,39 @@ def collect_stageA_logical_accounts(
         return problems
 
     grouped: dict[str, list[dict]] = {}
+    members: dict[str, list[dict[str, str]]] = {}
     for acc in problems:
         acc_id = str(acc.get("account_id") or "")
-        last4 = acc.get("account_number_last4")
-        person_id = ""
+        logical_id = acc_id
         if config.ENABLE_CASESTORE_STAGEA:
             try:
                 case = get_account_case(session_id, acc_id)  # type: ignore[operator]
             except Exception:  # pragma: no cover - defensive
                 case = None
             if case is not None:
-                num = case.fields.account_number
-                if num:
-                    last4 = str(num)[-4:]
-                person_id = str(case.tags.get("person_id") or "")
-        parts = [p for p in [last4, person_id] if p]
-        key = ":".join(parts) if parts else acc_id
-        grouped.setdefault(key, []).append(acc)
+                logical_id = compute_logical_account_key(case)
+        grouped.setdefault(logical_id, []).append(dict(acc))
+        members.setdefault(logical_id, []).append(
+            {"bureau": str(acc.get("bureau")), "account_id": acc_id}
+        )
 
     resolved: list[Mapping[str, Any]] = []
     for logical_id, items in grouped.items():
-        decision = resolve_cross_bureau([dict(it) for it in items])
+        decision = resolve_cross_bureau(items)
         if decision.get("tier") == "Tier4":
             continue
-        decision["account_id"] = logical_id
+        winner_bureau = decision.get("bureau")
+        if config.API_AGGREGATION_ID_STRATEGY == "logical":
+            decision["account_id"] = logical_id
+            decision["bureau"] = winner_bureau
+        else:  # winner strategy
+            decision["account_id"] = decision.get("account_id")
+            decision["bureau"] = winner_bureau
+        if config.API_INCLUDE_AGG_MEMBERS_META:
+            decision["aggregation_meta"] = {
+                "logical_account_id": logical_id,
+                "members": members.get(logical_id, []),
+            }
         resolved.append(decision)
 
     emit("stageA_cross_bureau_aggregated", session_id=session_id, groups=len(resolved))

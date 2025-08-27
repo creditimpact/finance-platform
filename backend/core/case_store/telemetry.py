@@ -8,6 +8,10 @@ def set_emitter(fn: Optional[Callable[[str, Mapping[str, Any]], None]]) -> None:
     global _emit
     _emit = fn
 
+def get_emitter() -> Optional[Callable[[str, Mapping[str, Any]], None]]:
+    """Return the currently registered emitter, if any."""
+    return _emit
+
 def emit(event: str, **fields: Any) -> None:
     """Fire-and-forget; safe if no emitter is registered."""
     if _emit:

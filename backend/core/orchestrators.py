@@ -66,29 +66,29 @@ from backend.core.models import (
     ProofDocuments,
 )
 from backend.core.services.ai_client import AIClient, _StubAIClient, get_ai_client
-from backend.core.telemetry.emit import emit
+from backend.core.case_store.telemetry import emit
 from backend.policy.policy_loader import load_rulebook
 from planner import plan_next_step
 
 logger = logging.getLogger(__name__)
 
 
-def _emit_stageA_events(session_id: str, accounts: list[Mapping[str, Any]]) -> None:
-    """Emit telemetry events for Stage A decisions."""
+def _emit_stageA_orchestrated(session_id: str, accounts: list[Mapping[str, Any]]) -> None:
+    """Emit telemetry for Stage A orchestration decisions."""
     for acc in accounts or []:
         emit(
-            "stageA_problem_decision",
-            {
-                "session_id": session_id,
-                "normalized_name": acc.get("normalized_name"),
-                "account_id": acc.get("account_number_last4")
-                or acc.get("account_fingerprint"),
-                "decision_source": acc.get("decision_source"),
-                "primary_issue": acc.get("primary_issue"),
-                "confidence": acc.get("confidence", 0.0),
-                "tier": acc.get("tier", 0),
-                "reasons_count": len(acc.get("problem_reasons", [])),
-            },
+            "stageA_orchestrated",
+            session_id=session_id,
+            account_id=acc.get("account_id")
+            or acc.get("account_number_last4")
+            or acc.get("account_fingerprint"),
+            bureau=acc.get("bureau"),
+            decision_source=acc.get("decision_source"),
+            primary_issue=acc.get("primary_issue"),
+            tier=acc.get("tier"),
+            confidence=float(acc.get("confidence", 0.0)),
+            reasons_count=len(acc.get("problem_reasons", [])),
+            included=True,
         )
 
 
@@ -151,7 +151,7 @@ def collect_stageA_problem_accounts(
             if acc.get("_detector_is_problem"):
                 problems.append(acc)
 
-    _emit_stageA_events(session_id, problems)
+    _emit_stageA_orchestrated(session_id, problems)
     return problems
 
 

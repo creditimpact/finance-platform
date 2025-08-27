@@ -52,8 +52,8 @@ def test_orchestrator_filters_ai_tiers(monkeypatch, session_case):
             fields_used=["balance_owed"],
         ),
         AIAdjudicateResponse(
-            primary_issue="collection",
-            tier="Tier4",
+            primary_issue="high_utilization",
+            tier="Tier2",
             confidence=0.9,
             problem_reasons=["ai_reason"],
             fields_used=["balance_owed"],

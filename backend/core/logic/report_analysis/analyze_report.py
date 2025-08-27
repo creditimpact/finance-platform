@@ -27,6 +27,8 @@ from backend.config import (
     CASESTORE_PARSER_LOG_PARITY,
     CASESTORE_REDACT_BEFORE_STORE,
     ENABLE_CASESTORE_WRITE,
+    DETERMINISTIC_EXTRACTORS_ENABLED,
+    ENABLE_LLM_PARSING,
     OCR_ENABLED,
     OCR_LANGS,
     OCR_PROVIDER,
@@ -421,6 +423,11 @@ def analyze_credit_report(
     call_ai_ms: int | None = None
     fields_written: int | None = None
     errors: str | None = None
+    extract_sections_ms: int | None = None
+    extract_accounts_ms: int | None = None
+    extract_report_meta_ms: int | None = None
+    extract_summary_ms: int | None = None
+    extractor_accounts_total: dict[str, int] | None = None
 
     start = time.perf_counter()
     try:
@@ -488,6 +495,12 @@ def analyze_credit_report(
                 normalize_amounts_converted=norm_stats.amounts_converted,
                 normalize_bidi_stripped=norm_stats.bidi_stripped,
                 normalize_space_reduced_chars=norm_stats.space_reduced_chars,
+                extract_sections_ms=extract_sections_ms,
+                extract_accounts_ms=extract_accounts_ms,
+                extract_report_meta_ms=extract_report_meta_ms,
+                extract_summary_ms=extract_summary_ms,
+                extractor_field_coverage_total=fields_written,
+                extractor_accounts_total=extractor_accounts_total,
             )
 
     if os.getenv("EXPORT_RAW_PAGES", "0") != "0":
@@ -551,7 +564,33 @@ def analyze_credit_report(
                 session_id,
                 err,
             )
-    if run_ai:
+    extractor_accounts_total = {}
+    if DETERMINISTIC_EXTRACTORS_ENABLED and ENABLE_CASESTORE_WRITE and session_id:
+        from .extractors import sections as sec_mod, accounts as acc_mod, report_meta as rm_mod, summary as sum_mod
+
+        _start = time.perf_counter()
+        sec = sec_mod.detect(texts)
+        extract_sections_ms = int((time.perf_counter() - _start) * 1000)
+
+        bureaus = sec.get("bureaus", {})
+        _start = time.perf_counter()
+        for bureau, lines in bureaus.items():
+            res = acc_mod.extract(lines, session_id=session_id, bureau=bureau)
+            extractor_accounts_total[bureau] = len(res)
+            fields_written = (fields_written or 0) + sum(len(r["fields"]) for r in res)
+        extract_accounts_ms = int((time.perf_counter() - _start) * 1000)
+
+        _start = time.perf_counter()
+        meta_fields = rm_mod.extract(sec.get("report_meta", []), session_id=session_id)
+        extract_report_meta_ms = int((time.perf_counter() - _start) * 1000)
+        fields_written = (fields_written or 0) + len(meta_fields)
+
+        _start = time.perf_counter()
+        summary_fields = sum_mod.extract(sec.get("summary", []), session_id=session_id)
+        extract_summary_ms = int((time.perf_counter() - _start) * 1000)
+        fields_written = (fields_written or 0) + len(summary_fields)
+
+    if run_ai and ENABLE_LLM_PARSING:
         _start = time.perf_counter()
         try:
             result = call_ai_analysis(
@@ -1024,7 +1063,8 @@ def analyze_credit_report(
             case.report_meta.personal_information.name = client_info.get("name")
             case.report_meta.inquiries = result.get("inquiries") or []
             case.report_meta.public_information = result.get("public_information") or []
-            case.summary.total_accounts = len(result.get("all_accounts") or [])
+            if not DETERMINISTIC_EXTRACTORS_ENABLED:
+                case.summary.total_accounts = len(result.get("all_accounts") or [])
             save_session_case(case)
         except CaseStoreError as err:  # pragma: no cover - best effort
             logger.warning(

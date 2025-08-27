@@ -33,6 +33,7 @@ from backend.config import (
     OCR_TIMEOUT_MS,
     PARSER_AUDIT_ENABLED,
     PDF_TEXT_MIN_CHARS_PER_PAGE,
+    TEXT_NORMALIZE_ENABLED,
 )
 from backend.core.case_store.api import (
     create_session_case,
@@ -59,6 +60,7 @@ from backend.core.logic.utils.text_parsing import (
 )
 from backend.core.services.ai_client import AIClient, get_ai_client
 from backend.core.telemetry.parser_metrics import emit_parser_audit
+from .text_normalization import NormalizationStats, normalize_page
 
 from .ocr_provider import get_ocr_provider
 from .pdf_io import char_count, extract_text_per_page, merge_text_with_ocr
@@ -415,6 +417,7 @@ def analyze_credit_report(
     pages_ocr = 0
     ocr_latency_ms_total = 0
     ocr_errors = 0
+    norm_stats = NormalizationStats()
     call_ai_ms: int | None = None
     fields_written: int | None = None
     errors: str | None = None
@@ -446,6 +449,16 @@ def analyze_credit_report(
                         ocr_errors += 1
             if ocr_texts:
                 texts = merge_text_with_ocr(texts, ocr_texts)
+        if TEXT_NORMALIZE_ENABLED:
+            normalized_pages: list[str] = []
+            for t in texts:
+                normed, s = normalize_page(t)
+                normalized_pages.append(normed)
+                norm_stats.dates_converted += s.dates_converted
+                norm_stats.amounts_converted += s.amounts_converted
+                norm_stats.bidi_stripped += s.bidi_stripped
+                norm_stats.space_reduced_chars += s.space_reduced_chars
+            texts = normalized_pages
     except Exception:  # pragma: no cover - best effort
         extract_text_ms = int((time.perf_counter() - start) * 1000)
         errors = "TextExtractionError"
@@ -471,6 +484,10 @@ def analyze_credit_report(
                 parser_pdf_pages_ocr=pages_ocr,
                 parser_ocr_latency_ms_total=ocr_latency_ms_total,
                 parser_ocr_errors=ocr_errors,
+                normalize_dates_converted=norm_stats.dates_converted,
+                normalize_amounts_converted=norm_stats.amounts_converted,
+                normalize_bidi_stripped=norm_stats.bidi_stripped,
+                normalize_space_reduced_chars=norm_stats.space_reduced_chars,
             )
 
     if os.getenv("EXPORT_RAW_PAGES", "0") != "0":

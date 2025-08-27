@@ -4,6 +4,7 @@ import { submitExplanations, getSummaries } from '../api';
 import DecisionBadge from '../components/DecisionBadge';
 import ReasonChips from '../components/ReasonChips';
 import ConfidenceTooltip from '../components/ConfidenceTooltip';
+import DecisionDebugPanel from '../components/DecisionDebugPanel';
 import { emitUiEvent } from '../telemetry/uiTelemetry';
 
 export default function ReviewPage() {
@@ -136,6 +137,12 @@ export default function ReviewPage() {
               decision_source: source,
               tier,
             });
+          } else {
+            emitUiEvent('ui_review_collapse', {
+              session_id: uploadData.session_id,
+              account_id: acc.account_id,
+              bureau: acc.bureau,
+            });
           }
         };
         return (
@@ -207,6 +214,7 @@ export default function ReviewPage() {
                 </pre>
               </details>
             )}
+            <DecisionDebugPanel meta={acc.decision_meta} decision={acc} />
           </div>
         );
       })}

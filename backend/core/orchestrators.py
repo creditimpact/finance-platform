@@ -68,6 +68,7 @@ from backend.core.models import (
 from backend.core.services.ai_client import AIClient, _StubAIClient, get_ai_client
 from backend.core.case_store.telemetry import emit
 from backend.policy.policy_loader import load_rulebook
+from backend.core.taxonomy.problem_taxonomy import compare_tiers, normalize_decision
 from planner import plan_next_step
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,36 @@ def _emit_stageA_orchestrated(session_id: str, accounts: list[Mapping[str, Any]]
             reasons_count=len(acc.get("problem_reasons", [])),
             included=True,
         )
+
+
+def resolve_cross_bureau(decisions: list[dict]) -> dict:
+    """Resolve multiple bureau decisions for the same logical account.
+
+    The strongest tier wins. For ties, the higher confidence prevails. Problem
+    reasons from all inputs are merged and deduplicated. The decision source is
+    ``'ai'`` only if the winning decision originated from AI.
+    """
+
+    if not decisions:
+        return {}
+
+    normalized = [normalize_decision(d) for d in decisions]
+    winner = normalized[0]
+    for dec in normalized[1:]:
+        tier = compare_tiers(dec.get("tier", "none"), winner.get("tier", "none"))
+        if tier != winner.get("tier", "none"):
+            winner = dec
+            continue
+        if dec.get("tier") == winner.get("tier") and dec.get("confidence", 0.0) > winner.get("confidence", 0.0):
+            winner = dec
+
+    merged_reasons: list[str] = []
+    for dec in normalized:
+        merged_reasons.extend(dec.get("problem_reasons", []))
+
+    result = dict(winner)
+    result["problem_reasons"] = merged_reasons
+    return normalize_decision(result)
 
 
 def collect_stageA_problem_accounts(
@@ -153,6 +184,32 @@ def collect_stageA_problem_accounts(
 
     _emit_stageA_orchestrated(session_id, problems)
     return problems
+
+
+def collect_stageA_logical_accounts(
+    session_id: str, all_accounts: list[Mapping[str, Any]] | None = None
+) -> list[Mapping[str, Any]]:
+    """Return logical account decisions aggregated across bureaus.
+
+    When ``ENABLE_CROSS_BUREAU_RESOLUTION`` is disabled this simply returns the
+    per-bureau decisions from :func:`collect_stageA_problem_accounts`.
+    """
+
+    problems = collect_stageA_problem_accounts(session_id, all_accounts)
+    if not config.ENABLE_CROSS_BUREAU_RESOLUTION:
+        return problems
+
+    grouped: dict[str, list[dict]] = {}
+    for acc in problems:
+        key = str(acc.get("account_id") or acc.get("account_fingerprint") or "")
+        grouped.setdefault(key, []).append(acc)
+
+    resolved: list[Mapping[str, Any]] = []
+    for acc_id, items in grouped.items():
+        decision = resolve_cross_bureau([dict(it) for it in items])
+        decision["account_id"] = acc_id
+        resolved.append(decision)
+    return resolved
 
 
 

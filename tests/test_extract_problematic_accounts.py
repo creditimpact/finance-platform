@@ -1,15 +1,23 @@
 import copy
 import json
 import logging
+import os
 from hashlib import sha1
 
 import pytest
 
+os.environ["PROBLEM_DETECTION_ONLY"] = "0"
+
+import backend.config as config
+config.PROBLEM_DETECTION_ONLY = False
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.models import BureauPayload
 from backend.core.orchestrators import (
     extract_problematic_accounts_from_report,
     extract_problematic_accounts_from_report_dict,
+)
+from backend.core.logic.report_analysis.extract_problematic_accounts import (
+    extract_problematic_accounts,
 )
 
 
@@ -38,6 +46,68 @@ def _mock_dependencies(monkeypatch, sections):
         "backend.core.logic.report_analysis.analyze_report.analyze_credit_report",
         lambda *a, **k: sections,
     )
+
+
+def test_extract_problematic_accounts_adapter(monkeypatch):
+    import backend.config as config
+    import backend.core.orchestrators as orch
+
+    monkeypatch.setattr(config, "ENABLE_CASESTORE_STAGEA", True)
+    monkeypatch.setattr(config, "ENABLE_AI_ADJUDICATOR", True)
+
+    class Artifact:
+        def __init__(self, data):
+            self._data = data
+
+        def model_dump(self):
+            return self._data
+
+    class Case:
+        def __init__(self, bureau, data):
+            self.bureau = type("Bureau", (), {"value": bureau})
+            self.artifacts = {"stageA_detection": Artifact(data)}
+
+    cases = {
+        "rules": Case(
+            "Experian",
+            {"decision_source": "rules", "tier": "none", "problem_reasons": ["r1"], "debug": {"fields_used": ["f1"]}},
+        ),
+        "ai_good": Case(
+            "TransUnion",
+            {
+                "decision_source": "ai",
+                "tier": "Tier2",
+                "primary_issue": "late",
+                "confidence": 0.8,
+                "problem_reasons": ["ai"],
+            },
+        ),
+        "ai_bad": Case(
+            "Equifax",
+            {
+                "decision_source": "ai",
+                "tier": "Tier4",
+                "primary_issue": "bad",
+                "confidence": 0.9,
+                "problem_reasons": ["bad"],
+            },
+        ),
+    }
+
+    monkeypatch.setattr(orch, "list_accounts", lambda session_id: list(cases.keys()))
+    monkeypatch.setattr(orch, "get_account_case", lambda session_id, acc_id: cases[acc_id])
+
+    result = extract_problematic_accounts("s1")
+
+    assert {r["account_id"] for r in result} == {"rules", "ai_good"}
+    rules = next(r for r in result if r["account_id"] == "rules")
+    assert rules["tier"] == "none"
+    assert rules["primary_issue"] == "unknown"
+    assert rules["confidence"] == 0.0
+
+    ai_good = next(r for r in result if r["account_id"] == "ai_good")
+    assert ai_good["tier"] == "Tier2"
+    assert ai_good["confidence"] == 0.8
 
 
 def test_extract_problematic_accounts_returns_models(monkeypatch):
@@ -268,6 +338,7 @@ def test_detection_mode_keeps_accounts_without_issue_types(monkeypatch):
     }
     _mock_dependencies(monkeypatch, sections)
     monkeypatch.setenv("PROBLEM_DETECTION_ONLY", "1")
+    monkeypatch.setattr(config, "PROBLEM_DETECTION_ONLY", True)
     monkeypatch.setattr(
         "backend.core.logic.report_analysis.report_postprocessing.enrich_account_metadata",
         lambda acc: acc,
@@ -288,6 +359,7 @@ def test_detection_mode_dict_adapter(monkeypatch):
     }
     _mock_dependencies(monkeypatch, sections)
     monkeypatch.setenv("PROBLEM_DETECTION_ONLY", "1")
+    monkeypatch.setattr(config, "PROBLEM_DETECTION_ONLY", True)
     monkeypatch.setattr(
         "backend.core.logic.report_analysis.report_postprocessing.enrich_account_metadata",
         lambda acc: acc,
@@ -304,6 +376,7 @@ def test_detection_mode_populates_from_all_accounts(monkeypatch):
     }
     _mock_dependencies(monkeypatch, sections)
     monkeypatch.setenv("PROBLEM_DETECTION_ONLY", "1")
+    monkeypatch.setattr(config, "PROBLEM_DETECTION_ONLY", True)
     monkeypatch.setattr(
         "backend.core.logic.report_analysis.report_postprocessing.enrich_account_metadata",
         lambda acc: acc,

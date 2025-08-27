@@ -67,7 +67,7 @@ def test_orchestrator_filters_ai_tiers(monkeypatch, session_case):
     monkeypatch.setattr(pd, "call_adjudicator", fake_call)
 
     pd.run_stage_a(session_case, [])
-    problems = orch.collect_stageA_problem_accounts(session_case, [])
+    problems = orch.collect_stageA_problem_accounts(session_case)
     ids = {p["account_id"] for p in problems}
     assert ids == {"acc1", "acc3"}
 
@@ -79,7 +79,7 @@ def test_orchestrator_fallback(monkeypatch, session_case):
     monkeypatch.setattr(pd, "call_adjudicator", lambda session, req: None)
 
     pd.run_stage_a(session_case, [])
-    problems = orch.collect_stageA_problem_accounts(session_case, [])
+    problems = orch.collect_stageA_problem_accounts(session_case)
     ids = {p["account_id"] for p in problems}
     assert ids == {"acc2", "acc3"}
 
@@ -112,6 +112,6 @@ def test_orchestrator_low_confidence(monkeypatch, session_case):
     monkeypatch.setattr(pd, "call_adjudicator", fake_call)
 
     pd.run_stage_a(session_case, [])
-    problems = orch.collect_stageA_problem_accounts(session_case, [])
+    problems = orch.collect_stageA_problem_accounts(session_case)
     ids = {p["account_id"] for p in problems}
     assert ids == {"acc2", "acc3"}

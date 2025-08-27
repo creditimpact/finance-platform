@@ -375,23 +375,3 @@ def run_stage_a(
                 )
                 continue
 
-            if config.CASESTORE_STAGEA_LOG_PARITY:
-                legacy_decision = evaluate_account_problem(
-                    dict(legacy_map.get(acc_id, {}))
-                )
-                same_primary = legacy_decision.get("primary_issue") == verdict.get(
-                    "primary_issue"
-                )
-                same_tier = legacy_decision.get("tier") == verdict.get("tier")
-                reasons_diff = len(
-                    set(legacy_decision.get("problem_reasons", []))
-                    ^ set(verdict.get("problem_reasons", []))
-                )
-                logger.info(
-                    "stageA_parity: session=%s account=%s same_primary=%s same_tier=%s reasons_diff=%d",
-                    session_id,
-                    acc_id,
-                    same_primary,
-                    same_tier,
-                    reasons_diff,
-                )

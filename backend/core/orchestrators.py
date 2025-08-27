@@ -153,79 +153,62 @@ def compute_logical_account_key(account_case: AccountCase) -> str:
     return hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
 
 
-def collect_stageA_problem_accounts(
-    session_id: str, all_accounts: list[Mapping[str, Any]] | None = None
-) -> list[Mapping[str, Any]]:
-    """Return problem accounts for Stage A.
-
-    When ``ENABLE_CASESTORE_STAGEA`` is true the decisions are read from the
-    Case Store ``stageA_detection`` artifacts.  Otherwise ``all_accounts`` is
-    filtered using the legacy ``_detector_is_problem`` flag.
-    """
+def collect_stageA_problem_accounts(session_id: str) -> list[Mapping[str, Any]]:
+    """Return problem accounts for Stage A using the Case Store only."""
 
     problems: list[Mapping[str, Any]] = []
-    if config.ENABLE_CASESTORE_STAGEA:
-        for acc_id in list_accounts(session_id):  # type: ignore[operator]
-            try:
-                case = get_account_case(session_id, acc_id)  # type: ignore[operator]
-            except Exception:  # pragma: no cover - defensive
-                continue
-            art = case.artifacts.get("stageA_detection")
-            if not art:
-                logger.warning(
-                    "stageA_artifact_missing session=%s account=%s", session_id, acc_id
-                )
-                continue
-            data = art.model_dump()
-            tier = str(data.get("tier", "none"))
-            source = data.get("decision_source", "rules")
-            reasons = data.get("problem_reasons", []) or []
-            fields_used = (data.get("debug") or {}).get("fields_used")
-            include = False
-            if config.ENABLE_AI_ADJUDICATOR:
-                if source == "ai":
-                    if tier in {"Tier1", "Tier2", "Tier3"}:
-                        include = True
-                elif reasons:
+    for acc_id in list_accounts(session_id):  # type: ignore[operator]
+        case = get_account_case(session_id, acc_id)  # type: ignore[operator]
+        art = case.artifacts.get("stageA_detection")
+        if not art:
+            logger.warning(
+                "stageA_artifact_missing session=%s account=%s", session_id, acc_id
+            )
+            continue
+        data = art.model_dump()
+        tier = str(data.get("tier", "none"))
+        source = data.get("decision_source", "rules")
+        reasons = data.get("problem_reasons", []) or []
+        fields_used = (data.get("debug") or {}).get("fields_used")
+        include = False
+        if config.ENABLE_AI_ADJUDICATOR:
+            if source == "ai":
+                if tier in {"Tier1", "Tier2", "Tier3"}:
                     include = True
             elif reasons:
                 include = True
-                source = "rules"
-                tier = "none"
-                data["primary_issue"] = "unknown"
-                data["confidence"] = 0.0
-            if include and tier != "Tier4":
-                acc: dict[str, Any] = {
-                    "account_id": acc_id,
-                    "bureau": str(case.bureau.value),
-                    "primary_issue": data.get("primary_issue", "unknown"),
-                    "tier": tier,
-                    "problem_reasons": reasons,
-                    "confidence": data.get("confidence", 0.0),
-                    "decision_source": source,
-                }
-                if fields_used:
-                    acc["fields_used"] = fields_used
-                problems.append(acc)
-    else:
-        for acc in all_accounts or []:
-            if acc.get("_detector_is_problem"):
-                problems.append(acc)
+        elif reasons:
+            include = True
+            source = "rules"
+            tier = "none"
+            data["primary_issue"] = "unknown"
+            data["confidence"] = 0.0
+        if include and tier != "Tier4":
+            acc: dict[str, Any] = {
+                "account_id": acc_id,
+                "bureau": str(case.bureau.value),
+                "primary_issue": data.get("primary_issue", "unknown"),
+                "tier": tier,
+                "problem_reasons": reasons,
+                "confidence": data.get("confidence", 0.0),
+                "decision_source": source,
+            }
+            if fields_used:
+                acc["fields_used"] = fields_used
+            problems.append(acc)
 
     _emit_stageA_orchestrated(session_id, problems)
     return problems
 
 
-def collect_stageA_logical_accounts(
-    session_id: str, all_accounts: list[Mapping[str, Any]] | None = None
-) -> list[Mapping[str, Any]]:
+def collect_stageA_logical_accounts(session_id: str) -> list[Mapping[str, Any]]:
     """Return logical account decisions aggregated across bureaus.
 
     When ``ENABLE_CROSS_BUREAU_RESOLUTION`` is disabled this simply returns the
     per-bureau decisions from :func:`collect_stageA_problem_accounts`.
     """
 
-    problems = collect_stageA_problem_accounts(session_id, all_accounts)
+    problems = collect_stageA_problem_accounts(session_id)
     if not config.ENABLE_CROSS_BUREAU_RESOLUTION:
         return problems
 
@@ -233,14 +216,8 @@ def collect_stageA_logical_accounts(
     members: dict[str, list[dict[str, str]]] = {}
     for acc in problems:
         acc_id = str(acc.get("account_id") or "")
-        logical_id = acc_id
-        if config.ENABLE_CASESTORE_STAGEA:
-            try:
-                case = get_account_case(session_id, acc_id)  # type: ignore[operator]
-            except Exception:  # pragma: no cover - defensive
-                case = None
-            if case is not None:
-                logical_id = compute_logical_account_key(case)
+        case = get_account_case(session_id, acc_id)  # type: ignore[operator]
+        logical_id = compute_logical_account_key(case)
         grouped.setdefault(logical_id, []).append(dict(acc))
         members.setdefault(logical_id, []).append(
             {"bureau": str(acc.get("bureau")), "account_id": acc_id}
@@ -289,8 +266,6 @@ def collect_stageA_logical_accounts(
 
 def get_stageA_decision_meta(session_id: str, account_id: str) -> Mapping[str, Any] | None:
     """Fetch Stage A decision metadata for an account if available."""
-    if not config.ENABLE_CASESTORE_STAGEA:
-        return None
     try:
         case = get_account_case(session_id, account_id)  # type: ignore[operator]
     except Exception:  # pragma: no cover - defensive

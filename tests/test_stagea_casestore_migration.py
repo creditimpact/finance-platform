@@ -49,14 +49,6 @@ def session_case(tmp_path, monkeypatch):
     return session_id, legacy_accounts
 
 
-def test_legacy_path(session_case, monkeypatch):
-    session_id, legacy_accounts = session_case
-    monkeypatch.setattr(config, "ENABLE_CASESTORE_STAGEA", False)
-    pd.run_stage_a(session_id, legacy_accounts)
-    problems = orch.collect_stageA_problem_accounts(session_id, legacy_accounts)
-    assert {p["account_id"] for p in problems} == {"acc2", "acc3"}
-
-
 def test_casestore_path(session_case, monkeypatch):
     session_id, legacy_accounts = session_case
     monkeypatch.setattr(config, "ENABLE_CASESTORE_STAGEA", True)
@@ -65,7 +57,7 @@ def test_casestore_path(session_case, monkeypatch):
     for aid in ["acc1", "acc2", "acc3"]:
         case = cs_api.get_account_case(session_id, aid)
         assert "stageA_detection" in case.artifacts
-    problems = orch.collect_stageA_problem_accounts(session_id, [])
+    problems = orch.collect_stageA_problem_accounts(session_id)
     ids = {p["account_id"] for p in problems}
     assert ids == {"acc2", "acc3"}
     for acc in problems:
@@ -76,16 +68,6 @@ def test_casestore_path(session_case, monkeypatch):
     reasons = {p["account_id"]: p["problem_reasons"] for p in problems}
     assert reasons["acc2"] == ["past_due_amount: 50.00"]
     assert reasons["acc3"] == ["late: 1×30,1×60"]
-
-
-def test_parity_logging(session_case, monkeypatch, caplog):
-    session_id, legacy_accounts = session_case
-    monkeypatch.setattr(config, "ENABLE_CASESTORE_STAGEA", True)
-    monkeypatch.setattr(config, "CASESTORE_STAGEA_LOG_PARITY", True)
-    caplog.set_level(logging.INFO)
-    pd.run_stage_a(session_id, legacy_accounts)
-    parity_logs = [r for r in caplog.records if "stageA_parity" in r.message]
-    assert len(parity_logs) == 3
 
 
 def test_idempotent(session_case, monkeypatch):

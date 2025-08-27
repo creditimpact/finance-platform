@@ -8,7 +8,7 @@ import backend.config as config
 from backend.api.app import create_app
 from backend.api import app as app_module
 from backend.core.ai.models import AIAdjudicateResponse
-from backend.core.case_store import api as cs_api
+from backend.core.case_store import api as cs_api, telemetry
 from backend.core.logic.report_analysis import problem_detection as pd
 
 
@@ -20,6 +20,80 @@ class DummyResult:
 class DummyTask:
     def delay(self, *a, **k):
         return DummyResult()
+
+
+def _setup_cross_bureau_case(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CASESTORE_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "ENABLE_CASESTORE_STAGEA", True)
+    monkeypatch.setattr(config, "ENABLE_AI_ADJUDICATOR", True)
+    monkeypatch.setattr(config, "API_INCLUDE_DECISION_META", False)
+    monkeypatch.setattr(app_module, "extract_problematic_accounts", DummyTask())
+    monkeypatch.setattr(app_module, "set_session", lambda *a, **k: None)
+
+    session_id = "sess1"
+
+    class DummyUUID:
+        hex = "filehex"
+
+        def __str__(self):
+            return session_id
+
+    monkeypatch.setattr(uuid, "uuid4", lambda: DummyUUID())
+
+    case = cs_api.create_session_case(session_id)
+    cs_api.save_session_case(case)
+
+    base = {
+        "balance_owed": 100.0,
+        "credit_limit": 1000.0,
+        "high_balance": 500.0,
+        "payment_status": "",
+        "account_status": "",
+        "two_year_payment_history": "",
+        "days_late_7y": "",
+    }
+
+    cs_api.upsert_account_fields(
+        session_id,
+        "acc_exp",
+        "Experian",
+        dict(base, account_number="00001234", past_due_amount=0.0),
+    )
+    cs_api.set_tags(session_id, "acc_exp", person_id="p1")
+    cs_api.append_artifact(
+        session_id,
+        "acc_exp",
+        "stageA_detection",
+        {
+            "primary_issue": "collection",
+            "tier": "Tier2",
+            "confidence": 0.4,
+            "problem_reasons": ["late"],
+            "decision_source": "ai",
+        },
+    )
+
+    cs_api.upsert_account_fields(
+        session_id,
+        "acc_tu",
+        "TransUnion",
+        dict(base, account_number="99991234", past_due_amount=0.0),
+    )
+    cs_api.set_tags(session_id, "acc_tu", person_id="p1")
+    cs_api.append_artifact(
+        session_id,
+        "acc_tu",
+        "stageA_detection",
+        {
+            "primary_issue": "collection",
+            "tier": "Tier1",
+            "confidence": 0.6,
+            "problem_reasons": ["charge"],
+            "decision_source": "ai",
+        },
+    )
+
+    return session_id
 
 
 def test_start_process_problem_accounts_filtered(monkeypatch, tmp_path):
@@ -120,4 +194,44 @@ def test_start_process_problem_accounts_filtered(monkeypatch, tmp_path):
     assert rules_acc["decision_source"] == "rules"
     assert rules_acc["tier"] == "none"
     assert rules_acc["primary_issue"] == "unknown"
+
+
+def test_start_process_cross_bureau_flag_off(monkeypatch, tmp_path):
+    session_id = _setup_cross_bureau_case(monkeypatch, tmp_path)
+    monkeypatch.setattr(config, "ENABLE_CROSS_BUREAU_RESOLUTION", False)
+
+    test_app = create_app()
+    client = test_app.test_client()
+    data = {"email": "a@example.com", "file": (io.BytesIO(b"%PDF-1.4"), "test.pdf")}
+    resp = client.post("/api/start-process", data=data, content_type="multipart/form-data")
+    assert resp.status_code == 200
+    payload = json.loads(resp.data)
+    accounts = payload["accounts"]["problem_accounts"]
+    assert len(accounts) == 2
+    bureaus = {a["bureau"] for a in accounts}
+    assert bureaus == {"Experian", "TransUnion"}
+
+
+def test_start_process_cross_bureau_flag_on(monkeypatch, tmp_path):
+    session_id = _setup_cross_bureau_case(monkeypatch, tmp_path)
+    monkeypatch.setattr(config, "ENABLE_CROSS_BUREAU_RESOLUTION", True)
+    events: list[tuple[str, dict]] = []
+    telemetry.set_emitter(lambda e, f: events.append((e, f)))
+
+    test_app = create_app()
+    client = test_app.test_client()
+    data = {"email": "a@example.com", "file": (io.BytesIO(b"%PDF-1.4"), "test.pdf")}
+    resp = client.post("/api/start-process", data=data, content_type="multipart/form-data")
+    telemetry.set_emitter(None)
+    assert resp.status_code == 200
+    payload = json.loads(resp.data)
+    accounts = payload["accounts"]["problem_accounts"]
+    assert len(accounts) == 1
+    acc = accounts[0]
+    assert acc["bureau"] == "TransUnion"
+    assert acc["tier"] == "Tier1"
+    assert acc["confidence"] == pytest.approx(0.6)
+    assert set(acc["problem_reasons"]) == {"late", "charge"}
+    assert acc["decision_source"] == "ai"
+    assert any(e == "stageA_cross_bureau_aggregated" for e, _ in events)
 

@@ -201,14 +201,32 @@ def collect_stageA_logical_accounts(
 
     grouped: dict[str, list[dict]] = {}
     for acc in problems:
-        key = str(acc.get("account_id") or acc.get("account_fingerprint") or "")
+        acc_id = str(acc.get("account_id") or "")
+        last4 = acc.get("account_number_last4")
+        person_id = ""
+        if config.ENABLE_CASESTORE_STAGEA:
+            try:
+                case = get_account_case(session_id, acc_id)  # type: ignore[operator]
+            except Exception:  # pragma: no cover - defensive
+                case = None
+            if case is not None:
+                num = case.fields.account_number
+                if num:
+                    last4 = str(num)[-4:]
+                person_id = str(case.tags.get("person_id") or "")
+        parts = [p for p in [last4, person_id] if p]
+        key = ":".join(parts) if parts else acc_id
         grouped.setdefault(key, []).append(acc)
 
     resolved: list[Mapping[str, Any]] = []
-    for acc_id, items in grouped.items():
+    for logical_id, items in grouped.items():
         decision = resolve_cross_bureau([dict(it) for it in items])
-        decision["account_id"] = acc_id
+        if decision.get("tier") == "Tier4":
+            continue
+        decision["account_id"] = logical_id
         resolved.append(decision)
+
+    emit("stageA_cross_bureau_aggregated", session_id=session_id, groups=len(resolved))
     return resolved
 
 

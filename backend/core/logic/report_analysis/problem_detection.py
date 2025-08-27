@@ -15,6 +15,7 @@ from backend.core.case_store.api import (
 from backend.core.case_store.redaction import redact_for_ai
 from backend.core.case_store import telemetry
 from backend.core.logic.report_analysis.candidate_logger import log_stageA_candidates
+from backend.core.taxonomy.problem_taxonomy import normalize_decision
 
 logger = logging.getLogger(__name__)
 
@@ -298,6 +299,7 @@ def run_stage_a(
                 if ai_verdict.get("decision_source") == "ai"
                 else rules_verdict
             )
+            verdict = normalize_decision(verdict)
             total_latency = (time.perf_counter() - t0) * 1000.0
             telemetry.emit(
                 "stageA_eval",

@@ -26,6 +26,7 @@ def test_start_process_problem_accounts_filtered(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "CASESTORE_DIR", str(tmp_path))
     monkeypatch.setattr(config, "ENABLE_CASESTORE_STAGEA", True)
     monkeypatch.setattr(config, "ENABLE_AI_ADJUDICATOR", True)
+    monkeypatch.setattr(config, "API_INCLUDE_DECISION_META", False)
 
     monkeypatch.setattr(app_module, "extract_problematic_accounts", DummyTask())
     monkeypatch.setattr(app_module, "set_session", lambda *a, **k: None)

@@ -158,7 +158,7 @@ def start_process():
         )
 
         try:
-            problem_accounts = orch.collect_stageA_problem_accounts(session_id)
+            problem_accounts = orch.collect_stageA_logical_accounts(session_id)
         except Exception:
             logger.warning(
                 "collect_stageA_problem_accounts_failed session=%s", session_id,

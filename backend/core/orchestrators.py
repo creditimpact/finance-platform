@@ -72,6 +72,7 @@ from backend.core.case_store.telemetry import emit
 from backend.policy.policy_loader import load_rulebook
 from backend.core.taxonomy.problem_taxonomy import compare_tiers, normalize_decision
 from planner import plan_next_step
+from backend.core.telemetry.stageE_summary import emit_stageE_summary
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +210,7 @@ def collect_stageA_logical_accounts(session_id: str) -> list[Mapping[str, Any]]:
     """
 
     problems = collect_stageA_problem_accounts(session_id)
+    emit_stageE_summary(session_id, problems)
     if not config.ENABLE_CROSS_BUREAU_RESOLUTION:
         return problems
 

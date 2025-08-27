@@ -1,9 +1,8 @@
-import json
+﻿import json
 from pathlib import Path
 
 from backend.config import (
     DETERMINISTIC_EXTRACTORS_ENABLED,
-    ENABLE_LLM_PARSING,
     ENABLE_CASESTORE_WRITE,
     TEXT_NORMALIZE_ENABLED,
 )
@@ -28,7 +27,6 @@ def setup_env(tmp_path, monkeypatch):
     monkeypatch.setattr(ar, "emit_parser_audit", lambda **kw: TELEMETRY.append(kw))
     monkeypatch.setattr(ar, "TEXT_NORMALIZE_ENABLED", False, raising=False)
     monkeypatch.setattr(ar, "DETERMINISTIC_EXTRACTORS_ENABLED", True, raising=False)
-    monkeypatch.setattr(ar, "ENABLE_LLM_PARSING", False, raising=False)
     monkeypatch.setattr(ar, "ENABLE_CASESTORE_WRITE", True, raising=False)
 
 
@@ -56,3 +54,4 @@ def test_deterministic_flow(tmp_path, monkeypatch):
     assert stored.summary.total_accounts == 2
     assert str(stored.report_meta.credit_report_date) == "2024-05-01"
     assert TELEMETRY and TELEMETRY[0]["extractor_accounts_total"]["Experian"] == 1
+

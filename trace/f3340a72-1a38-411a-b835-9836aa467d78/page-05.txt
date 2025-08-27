@@ -1,0 +1,201 @@
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+Transunion
+426684**********
+$1,234
+10/27/2024
+10/27/2024
+10/27/2024
+6/28/2019
+$1,195
+--
+Open
+Individual
+Account not disputed
+Bank Credit Cards
+Open
+Current
+--
+$59
+10/25/2024
+--
+$0
+Credit Card
+--
+$1,200
+Experian
+426684******
+$1,234
+--
+10/1/2024
+10/27/2024
+6/1/2019
+$1,195
+--
+Open
+Individual
+Account not disputed
+Bank Credit Cards
+Open
+Current
+--
+$59
+10/25/2024
+--
+$0
+Credit Card
+--
+$1,200
+Equifax
+426684******
+$0
+--
+10/1/2024
+10/1/2024
+6/1/2019
+$1,195
+--
+Open
+Individual
+Account not disputed
+National Credit Card
+Companies
+Open
+Current
+Credit card
+Amount in H/C column is credit
+limit
+$59
+10/1/2024
+--
+$0
+Credit Card
+--
+$1,200
+Two-Year Payment History
+Transunion
+OK
+Oct
+OK
+Nov
+OK
+Dec
+OK
+'23
+OK
+Feb
+OK
+Mar
+OK
+Apr
+OK
+May
+OK
+Jun
+OK
+Jul
+OK
+Aug
+OK
+Sep
+OK
+Oct
+OK
+Nov
+OK
+Dec
+OK
+'24
+OK
+Feb
+OK
+Mar
+OK
+Apr
+OK
+May
+OK
+Jun
+OK
+Jul
+OK
+Aug
+OK
+Sep
+Experian
+OK
+Nov
+OK
+Dec
+OK
+'23
+OK
+Feb
+OK
+Mar
+OK
+Apr
+OK
+May
+OK
+Jun
+OK
+Jul
+OK
+Aug
+OK
+Sep
+OK
+Oct
+OK
+Nov
+OK
+Dec
+OK
+'24
+OK
+Feb
+OK
+Mar
+OK
+Apr
+OK
+May
+OK
+Jun
+OK
+Jul
+OK
+Aug
+OK
+Sep
+OK
+Oct
+Equifax
+®
+®
+®
+5/28/25, 12:47 PM
+3-Bureau Credit Report & Scores | SmartCredit
+https://www.smartcredit.com/member/credit-report/3b?serviceBundleFulfillmentId=155de433-6da1-4166-9293-46b9a6289190
+5/16

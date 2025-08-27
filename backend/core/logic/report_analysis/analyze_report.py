@@ -28,7 +28,6 @@ from backend.config import (
     CASESTORE_REDACT_BEFORE_STORE,
     ENABLE_CASESTORE_WRITE,
     DETERMINISTIC_EXTRACTORS_ENABLED,
-    ENABLE_LLM_PARSING,
     OCR_ENABLED,
     OCR_LANGS,
     OCR_PROVIDER,
@@ -60,7 +59,6 @@ from backend.core.logic.utils.text_parsing import (
     extract_account_headings,
     extract_late_history_blocks,
 )
-from backend.core.services.ai_client import AIClient, get_ai_client
 from backend.core.telemetry.parser_metrics import emit_parser_audit
 from .text_normalization import NormalizationStats, normalize_page
 
@@ -89,7 +87,6 @@ from .report_prompting import (
     ANALYSIS_PROMPT_VERSION,
     ANALYSIS_SCHEMA_VERSION,
     PIPELINE_VERSION,
-    call_ai_analysis,
 )
 
 logger = logging.getLogger(__name__)
@@ -403,14 +400,14 @@ def analyze_credit_report(
     pdf_path,
     output_json_path,
     client_info,
-    ai_client: AIClient | None = None,
+    ai_client: Any | None = None,
     run_ai: bool = True,
     *,
     request_id: str,
     session_id: str | None = None,
 ):
     """Analyze ``pdf_path`` and write structured analysis to ``output_json_path``."""
-    ai_client = ai_client or get_ai_client()
+    # Parsing is fully deterministic; Stage A adjudication (AI) is separate.
 
     pages_total = 0
     pages_with_text = 0
@@ -588,32 +585,17 @@ def analyze_credit_report(
         extract_summary_ms = int((time.perf_counter() - _start) * 1000)
         fields_written = (fields_written or 0) + len(summary_fields)
 
-    if run_ai and ENABLE_LLM_PARSING:
-        try:
-            result = call_ai_analysis(
-                text,
-                is_identity_theft,
-                Path(output_json_path),
-                ai_client=ai_client,
-                strategic_context=strategic_context,
-                request_id=request_id,
-                doc_fingerprint=doc_fingerprint,
-            )
-        except Exception:
-            errors = "AIAnalysisError"
-            _emit_audit()
-            raise
-    else:
-        result = {
-            "negative_accounts": [],
-            "open_accounts_with_issues": [],
-            "positive_accounts": [],
-            "high_utilization_accounts": [],
-            "all_accounts": [],
-            "inquiries": [],
-            "needs_human_review": False,
-            "missing_bureaus": [],
-        }
+    # Initialize deterministic result container; AI parsing path removed.
+    result = {
+        "negative_accounts": [],
+        "open_accounts_with_issues": [],
+        "positive_accounts": [],
+        "high_utilization_accounts": [],
+        "all_accounts": [],
+        "inquiries": [],
+        "needs_human_review": False,
+        "missing_bureaus": [],
+    }
 
     result["prompt_version"] = ANALYSIS_PROMPT_VERSION
     result["schema_version"] = ANALYSIS_SCHEMA_VERSION
@@ -630,14 +612,8 @@ def analyze_credit_report(
     else:
         print("[WARN] Parser did not find any inquiries in the report text.")
 
-    if run_ai and result.get("inquiries"):
-        print(f"[INFO] GPT found {len(result['inquiries'])} inquiries:")
-        for inq in result["inquiries"]:
-            print(f"  * {inq['creditor_name']} - {inq['date']} ({inq['bureau']})")
-    elif run_ai:
-        print("[WARN] No inquiries found in GPT result.")
-    else:
-        result["inquiries"] = parsed_inquiries
+    # Always use parser-derived inquiries in deterministic pipeline
+    result["inquiries"] = parsed_inquiries
 
     payment_status_map: dict[str, dict[str, str]] = {}
     _payment_status_raw_map: dict[str, str] = {}
@@ -1007,27 +983,7 @@ def analyze_credit_report(
             result["negative_accounts"] = negatives
             result["open_accounts_with_issues"] = open_issues
 
-        # Check that GPT returned all parser-detected inquiries
-        from backend.core.logic.utils.names_normalization import normalize_bureau_name
-
-        found_pairs = {
-            (
-                normalize_heading(i.get("creditor_name")),
-                i.get("date"),
-                normalize_bureau_name(i.get("bureau", "")),
-            )
-            for i in result.get("inquiries", [])
-        }
-        for parsed in parsed_inquiries:
-            key = (
-                normalize_heading(parsed["creditor_name"]),
-                parsed["date"],
-                normalize_bureau_name(parsed["bureau"]),
-            )
-            if key not in found_pairs:
-                print(
-                    f"[WARN] Inquiry missing from GPT output: {parsed['creditor_name']} {parsed['date']} ({parsed['bureau']})"
-                )
+        # In deterministic mode, inquiries come solely from parser
 
     except Exception as e:
         print(f"[WARN] Late history parsing failed: {e}")

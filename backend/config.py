@@ -130,13 +130,14 @@ API_INCLUDE_AGG_MEMBERS_META = env_bool("API_INCLUDE_AGG_MEMBERS_META", False)
 PARSER_AUDIT_ENABLED = env_bool("PARSER_AUDIT_ENABLED", True)
 PDF_TEXT_MIN_CHARS_PER_PAGE = env_int("PDF_TEXT_MIN_CHARS_PER_PAGE", 64)
 
-# OCR fallback configuration
+# OCR fallback configuration (flag-gated; disabled by default for prod)
+# Parsing is deterministic; OCR runs only when page text is too sparse.
 OCR_ENABLED = env_bool("OCR_ENABLED", False)
 OCR_PROVIDER = env_str("OCR_PROVIDER", "tesseract")
 OCR_TIMEOUT_MS = env_int("OCR_TIMEOUT_MS", 8000)
 OCR_LANGS = env_list("OCR_LANGS", ["eng"])
 
-# Unified text normalization configuration
+# Unified text normalization configuration (enabled by default)
 TEXT_NORMALIZE_ENABLED = env_bool("TEXT_NORMALIZE_ENABLED", True)
 TEXT_NORMALIZE_COLLAPSE_SPACES = env_bool("TEXT_NORMALIZE_COLLAPSE_SPACES", True)
 TEXT_NORMALIZE_BIDI_STRIP = env_bool("TEXT_NORMALIZE_BIDI_STRIP", True)
@@ -145,9 +146,10 @@ TEXT_NORMALIZE_AMOUNT_CANONICAL = env_bool(
     "TEXT_NORMALIZE_AMOUNT_CANONICAL", True
 )
 
-# Deterministic SmartCredit extractors
+# Deterministic SmartCredit extractors (final/primary path)
+# Leave this flag enabled by default; downstream may hard-code in future.
 DETERMINISTIC_EXTRACTORS_ENABLED = env_bool(
     "DETERMINISTIC_EXTRACTORS_ENABLED", True
 )
-ENABLE_LLM_PARSING = env_bool("ENABLE_LLM_PARSING", False)
+
 EXTRACTOR_STRICT_MODE = env_bool("EXTRACTOR_STRICT_MODE", True)

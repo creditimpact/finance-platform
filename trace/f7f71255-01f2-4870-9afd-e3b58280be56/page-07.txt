@@ -1,0 +1,160 @@
+OK
+Feb
+OK
+Mar
+OK
+Apr
+Experian
+Feb
+Mar
+Apr
+May
+Jun
+Jul
+Aug
+Sep
+Oct
+Nov
+Dec
+OK
+'21
+OK
+Feb
+OK
+Mar
+OK
+Apr
+OK
+May
+OK
+Jun
+Jul
+OK
+Aug
+OK
+Sep
+OK
+Oct
+OK
+Nov
+OK
+Dec
+'22
+Equifax
+Apr
+May
+Jun
+Jul
+Aug
+Sep
+Oct
+Nov
+Dec
+'21
+Feb
+Mar
+Apr
+May
+Jun
+Jul
+Aug
+Sep
+Oct
+Nov
+Dec
+'22
+Feb
+Mar
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+GS BANK USA
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Transunion
+****
+$1,021
+9/30/2024
+9/30/2024
+9/30/2024
+9/25/2019
+$1,019
+--
+Open
+Individual
+Account not disputed
+Bank Credit Cards
+Open
+Current
+--
+$25
+Experian
+110001**********
+$1,021
+--
+9/1/2024
+9/30/2024
+9/1/2019
+$1,019
+--
+Open
+Individual
+Account not disputed
+All Banks
+Open
+Current
+--
+$25
+Equifax
+110001**********
+$0
+--
+9/1/2024
+9/1/2024
+9/1/2019
+$1,019
+--
+Open
+Individual
+Account not disputed
+All Banks
+Open
+Current
+Credit card
+Amount in H/C column is credit
+limit
+$25
+®
+®
+®
+®
+®
+®
+5/28/25, 12:47 PM
+3-Bureau Credit Report & Scores | SmartCredit
+https://www.smartcredit.com/member/credit-report/3b?serviceBundleFulfillmentId=155de433-6da1-4166-9293-46b9a6289190
+7/16

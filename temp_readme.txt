@@ -1,18 +1,15 @@
-# Report Analysis
+﻿# Report Analysis
 
 ## Purpose
 Extract structured sections from SmartCredit reports and categorize accounts for downstream strategy and letter generation.
 
 ## Pipeline position
-Ingests the uploaded PDF and produces bureau-specific sections (`disputes`, `goodwill`, `inquiries`, etc.) consumed by strategy modules.
-
-## Parsing flow (deterministic)
-PyMuPDF text → Selective OCR (flag-gated) → Normalization → Deterministic Extractors → Case Store
+Ingests the uploaded PDF and produces bureauâ€‘specific sections (`disputes`, `goodwill`, `inquiries`, etc.) consumed by strategy modules.
 
 ## Files
 - `__init__.py`: package marker.
-- `analyze_report.py`: orchestrates deterministic parsing and post-processing; integrates Stage A adjudication results when enabled (separate stage).
-  - Key function: `analyze_credit_report()` runs deterministic parsing and prepares data for downstream consumers.
+- `analyze_report.py`: orchestrates parsing, prompting, and postâ€‘processing.
+  - Key function: `analyze_credit_report()` runs AI analysis and merges parsed results.
   - Internal deps: `.report_parsing`, `.report_prompting`, `.report_postprocessing`, `backend.core.logic.utils.text_parsing`, `backend.core.logic.utils.inquiries`.
 - `extract_info.py`: pull identity columns from the report.
   - Key functions: `extract_clean_name()`, `normalize_name_order()`, `extract_bureau_info_column_refined()`.
@@ -23,10 +20,10 @@ PyMuPDF text → Selective OCR (flag-gated) → Normalization → Deterministic 
 - `report_parsing.py`: read PDF text and helper for converting dicts.
   - Key functions: `extract_text_from_pdf()`, `bureau_data_from_dict()`.
   - Internal deps: `pdfplumber`.
-- `report_postprocessing.py`: clean and augment parsed data; may merge Stage A adjudication outputs if enabled.
+- `report_postprocessing.py`: clean and augment AI results.
   - Key functions: `_merge_parser_inquiries()`, `_sanitize_late_counts()`, `_cleanup_unverified_late_text()`, `_inject_missing_late_accounts()`, `validate_analysis_sanity()`.
   - Internal deps: `backend.core.logic.utils` modules.
-- `report_prompting.py`: Stage A AI adjudication (separate from parsing); builds prompts and calls the AI client.
+- `report_prompting.py`: build LLM prompts and call the AI client.
   - Key function: `call_ai_analysis()`.
   - Internal deps: `backend.core.services.ai_client`.
 
@@ -42,7 +39,7 @@ PyMuPDF text → Selective OCR (flag-gated) → Normalization → Deterministic 
 The JSON produced by this stage may include informational fields that are not
 yet consumed by downstream modules:
 
-- `confidence`: heuristic confidence score from AI adjudication (if enabled).
+- `confidence`: heuristic confidence score for AI parsing.
 - `needs_human_review`: flag indicating analysis uncertainty.
 - `missing_bureaus`: list of bureaus absent from the source report.
 

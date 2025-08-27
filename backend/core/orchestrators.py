@@ -155,6 +155,30 @@ def collect_stageA_problem_accounts(
     return problems
 
 
+
+
+def get_stageA_decision_meta(session_id: str, account_id: str) -> Mapping[str, Any] | None:
+    """Fetch Stage A decision metadata for an account if available."""
+    if not config.ENABLE_CASESTORE_STAGEA:
+        return None
+    try:
+        case = get_account_case(session_id, account_id)  # type: ignore[operator]
+    except Exception:  # pragma: no cover - defensive
+        return None
+    art = case.artifacts.get("stageA_detection")
+    if not art:
+        return None
+    data = art.model_dump()
+    meta: dict[str, Any] = {
+        "decision_source": data.get("decision_source", "rules"),
+        "confidence": data.get("confidence", 0.0),
+        "tier": str(data.get("tier", "none")),
+    }
+    fields_used = (data.get("debug") or {}).get("fields_used")
+    if fields_used:
+        meta["fields_used"] = fields_used
+    return meta
+
 def plan_and_generate_letters(session: dict, action_tags: list[str]) -> list[str]:
     """Optionally run the planner before generating letters.
 

@@ -1,6 +1,10 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { submitExplanations, getSummaries } from '../api';
+import DecisionBadge from '../components/DecisionBadge';
+import ReasonChips from '../components/ReasonChips';
+import ConfidenceTooltip from '../components/ConfidenceTooltip';
+import { emitUiEvent } from '../telemetry/uiTelemetry';
 
 export default function ReviewPage() {
   const { state } = useLocation();
@@ -9,6 +13,11 @@ export default function ReviewPage() {
   const [explanations, setExplanations] = useState({});
   const [summaries, setSummaries] = useState({});
   const [showSummary, setShowSummary] = useState({});
+
+  const UI_DECISION_BADGES = process.env.REACT_APP_UI_DECISION_BADGES !== 'false';
+  const MAX_REASON_CHIPS = Number(process.env.REACT_APP_UI_MAX_REASON_CHIPS || 4);
+  const CONF_DECIMALS = Number(process.env.REACT_APP_UI_CONFIDENCE_DECIMALS || 2);
+  const SHOW_FIELDS_USED = process.env.REACT_APP_UI_SHOW_FIELDS_USED === 'true';
   const debugEvidence = (() => {
     try {
       return (
@@ -112,6 +121,23 @@ export default function ReviewPage() {
         const fingerprint = acc.account_fingerprint ?? null;
         const displayId = idLast4 ? `••••${idLast4}` : fingerprint ?? '';
         const secondaryIssues = issues.filter((t) => t !== primary);
+        const source = acc.decision_meta?.decision_source ?? acc.decision_source;
+        const tier = acc.decision_meta?.tier ?? acc.tier ?? 'none';
+        const confidence = acc.decision_meta?.confidence ?? acc.confidence;
+        const fields = acc.decision_meta?.fields_used;
+        const handleExpandChange = (e) => {
+          const checked = e.target.checked;
+          setShowSummary((prev) => ({ ...prev, [acc.account_id]: checked }));
+          if (checked) {
+            emitUiEvent('ui_review_expand', {
+              session_id: uploadData.session_id,
+              account_id: acc.account_id,
+              bureau: acc.bureau,
+              decision_source: source,
+              tier,
+            });
+          }
+        };
         return (
           <div key={idx} className="account-block">
             <p>
@@ -119,26 +145,18 @@ export default function ReviewPage() {
               {displayId && ` ${displayId}`}
               {acc.original_creditor && ` - ${acc.original_creditor}`}
             </p>
-            <div className="decision-row">
-              <span
-                className="decision-badge"
-                title={
-                  acc.decision_source === 'ai'
-                    ? `AI confidence: ${Number(acc.confidence).toFixed(2)}`
-                    : undefined
-                }
-              >
-                {acc.decision_source === 'ai'
-                  ? 'AI decision'
-                  : acc.decision_source === 'rules'
-                  ? 'Rule-based decision'
-                  : acc.decision_source === 'fallback_ai_low_conf' ||
-                    acc.decision_source === 'fallback_ai_error'
-                  ? 'AI fallback (rules)'
-                  : 'Unknown'}
-              </span>
-              {acc.tier > 0 && <span className="tier-label">Tier {acc.tier}</span>}
-            </div>
+            {UI_DECISION_BADGES && (
+              <div className="decision-row">
+                <DecisionBadge decisionSource={source} tier={tier} />
+                <ConfidenceTooltip
+                  decisionSource={source}
+                  confidence={confidence}
+                  fieldsUsed={fields}
+                  showFieldsUsed={SHOW_FIELDS_USED}
+                  decimals={CONF_DECIMALS}
+                />
+              </div>
+            )}
             <div className="issue-badges">
               <span className="badge">{primary ? formatIssueType(primary) : 'Unknown'}</span>
               {secondaryIssues.map((type, i) => (
@@ -148,18 +166,7 @@ export default function ReviewPage() {
               ))}
             </div>
             {acc.problem_reasons && acc.problem_reasons.length > 0 && (
-              <div className="reason-chips">
-                {acc.problem_reasons.slice(0, 3).map((reason, i) => (
-                  <span key={i} className="chip">
-                    {reason}
-                  </span>
-                ))}
-                {acc.problem_reasons.length > 3 && (
-                  <span className="chip" title={acc.problem_reasons.join(', ')}>
-                    …
-                  </span>
-                )}
-              </div>
+              <ReasonChips reasons={acc.problem_reasons} max={MAX_REASON_CHIPS} />
             )}
             <textarea
               value={explanations[acc.name] || ''}
@@ -175,9 +182,7 @@ export default function ReviewPage() {
                 <input
                   type="checkbox"
                   checked={!!showSummary[acc.account_id]}
-                  onChange={(e) =>
-                    setShowSummary((prev) => ({ ...prev, [acc.account_id]: e.target.checked }))
-                  }
+                  onChange={handleExpandChange}
                 />
                 Show how the system understood your explanation
               </label>

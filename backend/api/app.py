@@ -47,6 +47,7 @@ from backend.core.logic.letters.explanations_normalizer import (
     sanitize,
 )
 from backend.core import orchestrators as orch
+import backend.config as config
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,22 @@ def start_process():
                     exc_info=True,
                 )
         problem_accounts = valid_accounts
+        if config.API_INCLUDE_DECISION_META:
+            for acc in problem_accounts:
+                meta = orch.get_stageA_decision_meta(session_id, acc.get('account_id'))
+                if meta is None:
+                    meta = {
+                        'decision_source': acc.get('decision_source', 'rules'),
+                        'confidence': acc.get('confidence', 0.0),
+                        'tier': acc.get('tier', 'none'),
+                    }
+                    fields_used = acc.get('fields_used')
+                    if fields_used:
+                        meta['fields_used'] = fields_used
+                fields_used = meta.get('fields_used')
+                if fields_used:
+                    meta['fields_used'] = list(fields_used)[: config.API_DECISION_META_MAX_FIELDS_USED]
+                acc['decision_meta'] = meta
 
         legacy = request.args.get("legacy", "").lower() in ("1", "true", "yes")
 

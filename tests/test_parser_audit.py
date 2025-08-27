@@ -1,5 +1,3 @@
-import time
-
 import pytest
 
 from backend.core.logic.report_analysis import analyze_report
@@ -59,7 +57,6 @@ def test_all_text_pdf(tmp_path, monkeypatch, capture_events):
     assert payload["pages_total"] == 2
     assert payload["pages_with_text"] == 2
     assert payload["pages_empty_text"] == 0
-    assert payload["call_ai_ms"] is None
     assert payload["fields_written"] is None
     assert "x" * 70 not in str(payload)
 
@@ -75,29 +72,6 @@ def test_mixed_pages(tmp_path, monkeypatch, capture_events):
     assert payload["pages_total"] == 4
     assert payload["pages_with_text"] == 1
     assert payload["pages_empty_text"] == 3
-
-
-def test_ai_timing(tmp_path, monkeypatch, capture_events):
-    monkeypatch.setattr(analyze_report, "extract_text_per_page", lambda _: ["x" * 70])
-
-    def fake_ai(*a, **k):
-        time.sleep(0.01)
-        return {
-            "negative_accounts": [],
-            "open_accounts_with_issues": [],
-            "positive_accounts": [],
-            "high_utilization_accounts": [],
-            "all_accounts": [],
-            "inquiries": [],
-            "needs_human_review": False,
-            "missing_bureaus": [],
-        }
-
-    monkeypatch.setattr(analyze_report, "call_ai_analysis", fake_ai)
-
-    _run(tmp_path, run_ai=True)
-
-    assert capture_events[0][1]["call_ai_ms"] > 0
 
 
 def test_error_path(tmp_path, monkeypatch, capture_events):

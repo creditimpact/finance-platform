@@ -95,6 +95,19 @@ def test_timeout_fallback(monkeypatch, session_case):
     assert dec3["problem_reasons"] == ["late: 1×30,1×60"]
 
 
+def test_schema_reject_fallback(monkeypatch, session_case):
+    monkeypatch.setattr(config, "ENABLE_CASESTORE_STAGEA", True)
+    monkeypatch.setattr(config, "ENABLE_AI_ADJUDICATOR", True)
+
+    monkeypatch.setattr(pd, "call_adjudicator", lambda session, req: None)
+
+    pd.run_stage_a(session_case, [])
+    dec = _decision(session_case, "acc1")
+    assert dec["decision_source"] == "rules"
+    assert dec["tier"] == "none"
+    assert dec["problem_reasons"] == []
+
+
 def test_idempotent(monkeypatch, session_case):
     monkeypatch.setattr(config, "ENABLE_CASESTORE_STAGEA", True)
     monkeypatch.setattr(config, "ENABLE_AI_ADJUDICATOR", True)

@@ -171,8 +171,10 @@ def start_process():
 
         valid_accounts = []
         for acc in problem_accounts:
+            to_validate = dict(acc)
+            to_validate.pop("aggregation_meta", None)
             try:
-                _problem_account_validator.validate(acc)
+                _problem_account_validator.validate(to_validate)
                 valid_accounts.append(acc)
             except ValidationError:
                 logger.warning(

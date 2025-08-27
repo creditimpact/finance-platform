@@ -1,9 +1,46 @@
 import pytest
-from backend.core.orchestrators import resolve_cross_bureau
+from backend.core.case_store.models import AccountCase, AccountFields, Bureau
+from backend.core.orchestrators import (
+    compute_logical_account_key,
+    resolve_cross_bureau,
+)
 
 
-def test_tier_precedence_and_ai_source():
+def test_compute_logical_account_key_deterministic_and_safe():
+    case = AccountCase(
+        bureau=Bureau.Equifax,
+        fields=AccountFields(
+            account_number="1234567890",
+            creditor_type="bank",
+            date_opened="2020-01-02",
+        ),
+    )
+    key1 = compute_logical_account_key(case)
+    key2 = compute_logical_account_key(case)
+    assert key1 == key2
+    assert "7890" not in key1
+
+    case2 = AccountCase(
+        bureau=Bureau.Equifax,
+        fields=AccountFields(
+            account_number="99991234",
+            creditor_type="bank",
+            date_opened="2020-01-02",
+        ),
+    )
+    key3 = compute_logical_account_key(case2)
+    assert key3 != key1
+
+
+def test_tier_precedence():
     decisions = [
+        {
+            "primary_issue": "collection",
+            "tier": "Tier1",
+            "confidence": 0.7,
+            "problem_reasons": ["collection account"],
+            "decision_source": "ai",
+        },
         {
             "primary_issue": "severe_delinquency",
             "tier": "Tier2",
@@ -12,11 +49,25 @@ def test_tier_precedence_and_ai_source():
             "decision_source": "rules",
         },
         {
-            "primary_issue": "collection",
-            "tier": "Tier1",
-            "confidence": 0.7,
-            "problem_reasons": ["collection account"],
-            "decision_source": "ai",
+            "primary_issue": "utilization",
+            "tier": "Tier3",
+            "confidence": 0.9,
+            "problem_reasons": ["util"],
+            "decision_source": "rules",
+        },
+        {
+            "primary_issue": "high_utilization",
+            "tier": "Tier4",
+            "confidence": 0.9,
+            "problem_reasons": ["util"],
+            "decision_source": "rules",
+        },
+        {
+            "primary_issue": "unknown",
+            "tier": "none",
+            "confidence": 0.9,
+            "problem_reasons": ["n/a"],
+            "decision_source": "rules",
         },
     ]
     resolved = resolve_cross_bureau(decisions)

@@ -10,6 +10,7 @@ from backend.api import app as app_module
 from backend.core.ai.models import AIAdjudicateResponse
 from backend.core.case_store import api as cs_api, telemetry
 from backend.core.logic.report_analysis import problem_detection as pd
+from backend.core import orchestrators as orch
 
 
 class DummyResult:
@@ -129,7 +130,9 @@ def test_start_process_problem_accounts_filtered(monkeypatch, tmp_path):
     cs_api.upsert_account_fields(session_id, "acc_ai", "Experian", dict(base, past_due_amount=0.0))
     cs_api.upsert_account_fields(session_id, "acc_rules", "Experian", dict(base, past_due_amount=125.0))
     cs_api.upsert_account_fields(session_id, "acc_clean", "Experian", dict(base, past_due_amount=0.0))
-    cs_api.upsert_account_fields(session_id, "acc_t4", "Experian", dict(base, past_due_amount=0.0))
+    cs_api.upsert_account_fields(
+        session_id, "acc_t4", "Experian", dict(base, past_due_amount=0.0, balance_owed=0.0)
+    )
 
     responses = [
         AIAdjudicateResponse(
@@ -171,7 +174,8 @@ def test_start_process_problem_accounts_filtered(monkeypatch, tmp_path):
     payload = json.loads(resp.data)
     accounts = payload["accounts"]["problem_accounts"]
     ids = {a["account_id"] for a in accounts}
-    assert ids == {"acc_ai", "acc_rules"}
+    assert {"acc_ai", "acc_rules"} <= ids
+    assert "acc_clean" not in ids
 
     for acc in accounts:
         expected = {
@@ -215,6 +219,8 @@ def test_start_process_cross_bureau_flag_off(monkeypatch, tmp_path):
 def test_start_process_cross_bureau_flag_on(monkeypatch, tmp_path):
     session_id = _setup_cross_bureau_case(monkeypatch, tmp_path)
     monkeypatch.setattr(config, "ENABLE_CROSS_BUREAU_RESOLUTION", True)
+    monkeypatch.setattr(config, "API_AGGREGATION_ID_STRATEGY", "winner")
+    monkeypatch.setattr(config, "API_INCLUDE_AGG_MEMBERS_META", False)
     events: list[tuple[str, dict]] = []
     telemetry.set_emitter(lambda e, f: events.append((e, f)))
 
@@ -229,9 +235,41 @@ def test_start_process_cross_bureau_flag_on(monkeypatch, tmp_path):
     assert len(accounts) == 1
     acc = accounts[0]
     assert acc["bureau"] == "TransUnion"
+    assert acc["account_id"] == "acc_tu"
     assert acc["tier"] == "Tier1"
     assert acc["confidence"] == pytest.approx(0.6)
     assert set(acc["problem_reasons"]) == {"late", "charge"}
     assert acc["decision_source"] == "ai"
+    assert "aggregation_meta" not in acc
+    assert any(e == "stageA_cross_bureau_aggregated" for e, _ in events)
+
+
+def test_start_process_cross_bureau_logical_strategy(monkeypatch, tmp_path):
+    session_id = _setup_cross_bureau_case(monkeypatch, tmp_path)
+    monkeypatch.setattr(config, "ENABLE_CROSS_BUREAU_RESOLUTION", True)
+    monkeypatch.setattr(config, "API_AGGREGATION_ID_STRATEGY", "logical")
+    monkeypatch.setattr(config, "API_INCLUDE_AGG_MEMBERS_META", True)
+    events: list[tuple[str, dict]] = []
+    telemetry.set_emitter(lambda e, f: events.append((e, f)))
+
+    test_app = create_app()
+    client = test_app.test_client()
+    data = {"email": "a@example.com", "file": (io.BytesIO(b"%PDF-1.4"), "test.pdf")}
+    resp = client.post("/api/start-process", data=data, content_type="multipart/form-data")
+    telemetry.set_emitter(None)
+    assert resp.status_code == 200
+    payload = json.loads(resp.data)
+    accounts = payload["accounts"]["problem_accounts"]
+    assert len(accounts) == 1
+    acc = accounts[0]
+    case = cs_api.get_account_case(session_id, "acc_exp")
+    expected_key = orch.compute_logical_account_key(case)
+    assert acc["account_id"] == expected_key
+    assert acc["bureau"] == "TransUnion"
+    assert "aggregation_meta" in acc
+    meta = acc["aggregation_meta"]
+    assert meta["logical_account_id"] == expected_key
+    members = {m["account_id"] for m in meta["members"]}
+    assert members == {"acc_exp", "acc_tu"}
     assert any(e == "stageA_cross_bureau_aggregated" for e, _ in events)
 

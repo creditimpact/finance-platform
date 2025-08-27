@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from typing import Optional
 
 import httpx
+from jsonschema import Draft7Validator, ValidationError as SchemaValidationError
 from pydantic import ValidationError
 
 from backend.config import AI_MAX_RETRIES, AI_REQUEST_TIMEOUT_S
@@ -12,6 +14,10 @@ from backend.core.ai.models import AIAdjudicateRequest, AIAdjudicateResponse
 from backend.core.case_store.telemetry import emit
 
 AI_URL = "/internal/ai-adjudicate"
+
+SCHEMA_DIR = Path(__file__).resolve().parent.parent.parent / "schemas"
+with open(SCHEMA_DIR / "ai_adjudication.json") as _f:
+    _ai_response_validator = Draft7Validator(json.load(_f))
 
 
 def call_adjudicator(
@@ -34,6 +40,7 @@ def call_adjudicator(
             r.raise_for_status()
             data = r.json()
             resp = AIAdjudicateResponse.model_validate(data)
+            _ai_response_validator.validate(resp.model_dump())
             dur = (time.perf_counter() - t0) * 1000
             emit(
                 "stageA_ai_call",
@@ -48,6 +55,7 @@ def call_adjudicator(
             httpx.HTTPError,
             json.JSONDecodeError,
             ValidationError,
+            SchemaValidationError,
         ) as e:
             status = e.__class__.__name__
             dur = (time.perf_counter() - t0) * 1000

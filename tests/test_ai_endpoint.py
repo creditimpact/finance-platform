@@ -59,18 +59,56 @@ def test_ai_endpoint_timeout(monkeypatch, client):
     assert resp.status_code in {502, 504}
 
 
-def test_ai_endpoint_schema_validation(monkeypatch, client):
+def test_ai_endpoint_invalid_tier(monkeypatch, client):
     def fake_prompt(system, user, *, temperature, timeout):
         return json.dumps(
             {
                 "primary_issue": "collection",
-                "tier": "BadTier",
+                "tier": "TIER1",
                 "problem_reasons": [],
                 "confidence": 0.9,
-                "decision_source": "ai",
+                "fields_used": [],
             }
         )
 
     monkeypatch.setattr(ai_endpoints, "run_llm_prompt", fake_prompt)
     resp = client.post("/internal/ai-adjudicate", json=_request_body())
     assert resp.status_code == 502
+    assert resp.get_json() == {"error": "SchemaValidationError"}
+
+
+def test_ai_endpoint_extra_property(monkeypatch, client):
+    def fake_prompt(system, user, *, temperature, timeout):
+        return json.dumps(
+            {
+                "primary_issue": "collection",
+                "tier": "Tier1",
+                "problem_reasons": [],
+                "confidence": 0.9,
+                "fields_used": [],
+                "extra": "nope",
+            }
+        )
+
+    monkeypatch.setattr(ai_endpoints, "run_llm_prompt", fake_prompt)
+    resp = client.post("/internal/ai-adjudicate", json=_request_body())
+    assert resp.status_code == 502
+    assert resp.get_json() == {"error": "SchemaValidationError"}
+
+
+def test_ai_endpoint_invalid_fields_used(monkeypatch, client):
+    def fake_prompt(system, user, *, temperature, timeout):
+        return json.dumps(
+            {
+                "primary_issue": "collection",
+                "tier": "Tier1",
+                "problem_reasons": [],
+                "confidence": 0.9,
+                "fields_used": ["Payment Status"],
+            }
+        )
+
+    monkeypatch.setattr(ai_endpoints, "run_llm_prompt", fake_prompt)
+    resp = client.post("/internal/ai-adjudicate", json=_request_body())
+    assert resp.status_code == 502
+    assert resp.get_json() == {"error": "SchemaValidationError"}

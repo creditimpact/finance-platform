@@ -48,9 +48,13 @@ def ai_adjudicate() -> Any:
         return jsonify(payload)
     except TimeoutError:
         return jsonify({"error": "timeout"}), 504
-    except (PydanticValidationError, SchemaValidationError) as exc:
+    except (
+        json.JSONDecodeError,
+        PydanticValidationError,
+        SchemaValidationError,
+    ) as exc:
         logger.debug("ai_adjudicate_schema_failure: %s", exc)
-        return jsonify({"error": "bad_gateway"}), 502
+        return jsonify({"error": "SchemaValidationError"}), 502
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("ai_adjudicate_failure: %s", exc)
         return jsonify({"error": "bad_gateway"}), 502

@@ -529,6 +529,37 @@ def materialize_accounts(
                     )
                 if items:
                     raw["inquiries"]["items"] = items
+                elif inqs:
+                    logger.warning(
+                        "inquiries_detected_but_not_written session=%s account=%s",
+                        session_id,
+                        src.get("account_id") or _slug(src.get("name")),
+                    )
+            except Exception:
+                pass
+            # Populate raw.public_information from OCR doc if present
+            try:
+                pub = ocr_doc.get("public_information") if isinstance(ocr_doc, Mapping) else []
+                pitems: list[dict] = []
+                for it in pub or []:
+                    if not isinstance(it, Mapping):
+                        continue
+                    bureau = _norm_bureau_key(it.get("bureau")) if it.get("bureau") else None
+                    date_filed = _to_iso_date(it.get("date_filed")) if it.get("date_filed") else None
+                    amount = _to_number(it.get("amount")) if it.get("amount") else None
+                    pitems.append(
+                        {
+                            "bureau": bureau,
+                            "item_type": it.get("item_type") or it.get("type"),
+                            "status": it.get("status"),
+                            "date_filed": date_filed,
+                            "amount": amount,
+                            "remarks": it.get("remarks"),
+                            "_provenance": it.get("_provenance", {}),
+                        }
+                    )
+                if pitems:
+                    raw["public_information"]["items"] = pitems
             except Exception:
                 pass
             src["raw"] = raw

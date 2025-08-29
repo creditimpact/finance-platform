@@ -941,9 +941,8 @@ def analyze_credit_report(
                 name = normalize_creditor_name(block[0].strip()) or f"account_{i}"
                 (out_dir / f"{i:02d}-{name}.txt").write_text("\n".join(block), encoding="utf-8")
                 count += 1
-            print(
-                f"[TRACE] account blocks exported: {count} -> {str(out_dir).replace('\\', '/').rstrip('/')}/"
-            )
+            path_str = str(out_dir).replace("\\", "/").rstrip("/")
+            print(f"[TRACE] account blocks exported: {count} -> {path_str}/")
     except Exception:
         # Best effort only
         pass

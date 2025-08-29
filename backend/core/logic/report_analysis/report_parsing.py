@@ -88,7 +88,12 @@ from backend.core.logic.utils.names_normalization import normalize_bureau_name  
 from backend.core.logic.utils.norm import normalize_heading  # noqa: E402
 from backend.core.logic.utils.text_parsing import extract_account_blocks  # noqa: E402
 from backend.core.models.bureau import BureauAccount  # noqa: E402
-from .constants import BUREAUS, ACCOUNT_FIELD_SET  # noqa: E402
+from .constants import (
+    BUREAUS,
+    ACCOUNT_FIELD_SET,
+    INQUIRY_FIELDS,
+    PUBLIC_INFO_FIELDS,
+)
 from .normalize import to_number, to_iso_date  # noqa: E402
 
 # Mapping of account detail labels to canonical keys. Each tuple contains the
@@ -674,21 +679,14 @@ def _fill_bureau_map_from_sources(acc: Mapping[str, Any], bureau: str, dst: dict
     # 1) bureaus[] entry
     src = _find_bureau_entry(acc, bureau)
     if isinstance(src, Mapping):
-        # Map overlapping keys
-        mapping: dict[str, str] = {
-            "payment_status": "payment_status",
-            "account_status": "account_status",
-            "remarks": "creditor_remarks",  # normalize key name
-            "creditor_remarks": "creditor_remarks",
-            "past_due_amount": "past_due_amount",
+        # Map overlapping keys (identity plus known aliases)
+        mapping: dict[str, str] = {f: f for f in ACCOUNT_FIELD_SET}
+        mapping.update({
             "balance": "balance_owed",
-            "credit_limit": "credit_limit",
             "last_reported": "date_reported",
             "date_reported": "date_reported",
-            "date_opened": "date_opened",
-            "account_number_display": "account_number_display",
-            "account_number_last4": "account_number_last4",
-        }
+            "remarks": "creditor_remarks",
+        })
         for s_key, d_key in mapping.items():
             if dst.get(d_key) is None and src.get(s_key) not in (None, "", {}, []):
                 val = src.get(s_key)
@@ -750,26 +748,107 @@ def _fill_bureau_map_from_sources(acc: Mapping[str, Any], bureau: str, dst: dict
 
 
 def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
-    """Attach per-bureau 25-field meta tables to each account in-place.
+    """Attach per-bureau meta tables and supplemental RAW blocks."""
 
-    Operates on sections["all_accounts"]. Builds acc.raw.account_history.by_bureau
-    with a value or None for each field in the defined set. Logs simple
-    coverage metrics per account for visibility.
-    """
     accounts = sections.get("all_accounts") or []
     if not isinstance(accounts, list):
         return
+
+    session_id = sections.get("session_id") or ""
+
+    # Normalize report-level inquiries/public info once
+    inq_src = sections.get("inquiries") or []
+    norm_inqs: list[dict[str, Any]] = []
+    if isinstance(inq_src, list):
+        for inq in inq_src:
+            if not isinstance(inq, Mapping):
+                continue
+            bureau = (
+                normalize_bureau_name(inq.get("bureau")) if inq.get("bureau") else None
+            )
+            item = {
+                "bureau": bureau.lower() if bureau else None,
+                "subscriber": inq.get("subscriber") or inq.get("creditor_name") or inq.get("name"),
+                "date": to_iso_date(inq.get("date")) if inq.get("date") else None,
+                "type": inq.get("type"),
+                "permissible_purpose": inq.get("permissible_purpose"),
+                "remarks": inq.get("remarks"),
+                "_provenance": inq.get("_provenance", {}),
+            }
+            for k in INQUIRY_FIELDS:
+                item.setdefault(k, None)
+            norm_inqs.append(item)
+
+    pub_src = sections.get("public_information") or []
+    norm_pub: list[dict[str, Any]] = []
+    if isinstance(pub_src, list):
+        for item in pub_src:
+            if not isinstance(item, Mapping):
+                continue
+            bureau = (
+                normalize_bureau_name(item.get("bureau")) if item.get("bureau") else None
+            )
+            date_val = item.get("date_filed") or item.get("date")
+            pi = {
+                "bureau": bureau.lower() if bureau else None,
+                "item_type": item.get("item_type") or item.get("type"),
+                "status": item.get("status"),
+                "date_filed": to_iso_date(date_val) if date_val else None,
+                "amount": to_number(item.get("amount")) if item.get("amount") else None,
+                "remarks": item.get("remarks"),
+                "_provenance": item.get("_provenance", {}),
+            }
+            for k in PUBLIC_INFO_FIELDS:
+                pi.setdefault(k, None)
+            norm_pub.append(pi)
 
     for acc in accounts:
         if not isinstance(acc, dict):
             continue
         by = _ensure_paths(acc)
+
+        raw = acc.setdefault("raw", {})
+        raw.setdefault("inquiries", {"items": []})
+        raw.setdefault("public_information", {"items": []})
+
+        if norm_inqs:
+            if not raw.get("inquiries", {}).get("items"):
+                raw["inquiries"]["items"] = norm_inqs
+        elif inq_src:
+            slug = acc.get("account_id") or acc.get("normalized_name") or acc.get("name") or ""
+            logger.warning(
+                "inquiries_detected_but_not_written session=%s account=%s",
+                session_id,
+                slug,
+            )
+
+        if norm_pub and not raw.get("public_information", {}).get("items"):
+            raw["public_information"]["items"] = norm_pub
+
         for b in BUREAUS:
             dst = by.get(b) or {}
             _fill_bureau_map_from_sources(acc, b, dst)
             by[b] = dst
 
-        # Coverage log
+        # Coverage + fill log
+        try:
+            filled = {
+                b: sum(1 for f in ACCOUNT_FIELD_SET if by.get(b, {}).get(f) is not None)
+                for b in BUREAUS
+            }
+            slug = acc.get("account_id") or acc.get("normalized_name") or acc.get("name") or ""
+            logger.info(
+                "parser_bureau_fill session=%s account=%s tu=%d/25 ex=%d/25 eq=%d/25",
+                session_id,
+                slug,
+                filled.get("transunion", 0),
+                filled.get("experian", 0),
+                filled.get("equifax", 0),
+            )
+        except Exception:
+            pass
+
+        # Existing coverage diagnostic (missing fields + top missing)
         try:
             counts = {b: sum(1 for f in ACCOUNT_FIELD_SET if by.get(b, {}).get(f) is None) for b in BUREAUS}
             field_miss: dict[str, int] = {f: 0 for f in ACCOUNT_FIELD_SET}

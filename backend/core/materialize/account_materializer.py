@@ -560,6 +560,12 @@ def materialize_accounts(
                     )
                 if pitems:
                     raw["public_information"]["items"] = pitems
+                elif pub:
+                    logger.warning(
+                        "public_info_detected_but_not_written session=%s account=%s",
+                        session_id,
+                        src.get("account_id") or _slug(src.get("name")),
+                    )
             except Exception:
                 pass
             src["raw"] = raw

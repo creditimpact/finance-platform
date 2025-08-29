@@ -628,25 +628,269 @@ def extract_creditor_remarks(text: str) -> dict[str, dict[str, str]]:
 # Bureau meta tables for accounts (raw.account_history.by_bureau)
 # ---------------------------------------------------------------------------
 
-def _empty_bureau_map() -> dict[str, dict[str, Any]]:
-    """Return a by-bureau map filled with the 25-field set as None."""
-    return {b: {f: None for f in ACCOUNT_FIELD_SET} for b in BUREAUS}
+
+def _ensure_paths(obj: dict, *path: str) -> dict:
+    """Ensure nested dictionaries exist for ``path`` and return the final node."""
+
+    cur: dict = obj
+    for key in path:
+        nxt = cur.get(key)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            cur[key] = nxt
+        cur = nxt
+    return cur
 
 
-def _ensure_paths(acc: dict) -> dict[str, dict[str, Any]]:
-    """Ensure acc.raw.account_history.by_bureau scaffold exists and is complete.
+def _empty_bureau_map() -> dict[str, Any]:
+    """Return a single-bureau map with the 25-field set all ``None``."""
 
-    Returns the by_bureau dict for further mutation.
-    """
-    raw = acc.setdefault("raw", {})
-    ah = raw.setdefault("account_history", {})
-    by = ah.setdefault("by_bureau", {})
-    # Ensure each bureau and each field exists
+    return {field: None for field in ACCOUNT_FIELD_SET}
+
+
+def _to_num(s: str) -> Any | None:
+    s = (s or "").strip()
+    if s in {"--", "-", ""}:
+        return None
+    s = s.replace(",", "")
+    try:
+        return float(s)
+    except Exception:
+        return s
+
+
+def _to_iso(s: str) -> Any | None:
+    s = (s or "").strip()
+    if s in {"--", "-", ""}:
+        return None
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+    if m:
+        mm, dd, yyyy = m.groups()
+        return f"{int(yyyy):04d}-{int(mm):02d}-{int(dd):02d}"
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        return s
+    return s
+
+
+BUREAU_LINE_RE = re.compile(
+    r"^(Transunion|Experian|Equifax)\s+([0-9\*]+)\s+([\d,]+|0|--)\s+([-\d/]+|--)\s+([-\d/]+|--)\s+([-\d/]+|--)\s+([-\d/]+|--)\s+([\d,]+|0|--)\s+--?\s+(\w+)\s+(.*?)\s+(Bank|All Banks|National.*|.*?)\s+(.*?)\s+(Current|Late|.*?)(?:\s+--)?\s+(\d+|0|--)\s+([-\d/]+|--)\s+--?\s+(\d+|0|--)",
+    re.I,
+)
+
+
+def parse_three_footer_lines(lines: list[str]) -> dict[str, dict[str, Any | None]]:
+    out = {
+        b: {"account_type": None, "payment_frequency": None, "credit_limit": None}
+        for b in BUREAUS
+    }
+    joined = " ".join(lines)
+    items = re.findall(r"([A-Za-z ][A-Za-z]+)\s+--\s+(\d+)", joined)
+    for i, b in enumerate(BUREAUS):
+        if i < len(items):
+            typ, lim = items[i]
+            out[b]["account_type"] = typ.strip().lower()
+            out[b]["credit_limit"] = _to_num(lim)
+    return out
+
+
+def parse_two_year_history(lines: list[str]) -> dict[str, Any | None]:
+    text = "\n".join(lines)
+    out = {b: None for b in BUREAUS}
     for b in BUREAUS:
-        entry = by.setdefault(b, {})
-        for field in ACCOUNT_FIELD_SET:
-            entry.setdefault(field, None)
-    return by  # type: ignore[return-value]
+        m = re.search(
+            rf"Two-Year Payment History.*?{b}(.+?)Days Late -7 Year History",
+            text,
+            re.S | re.I,
+        )
+        if m:
+            out[b] = " ".join(m.group(1).split())
+    return out
+
+
+def parse_seven_year_days_late(lines: list[str]) -> dict[str, Any | None]:
+    text = "\n".join(lines)
+    out = {b: None for b in BUREAUS}
+    for b in BUREAUS:
+        m = re.search(rf"{b}.*?30:(\d+)\s+60:(\d+)\s+90:(\d+)", text, re.I)
+        if m:
+            d30, d60, d90 = map(int, m.groups())
+            out[b] = d30 + d60 + d90
+    return out
+
+
+def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | None]]:
+    def _init_maps():
+        return {
+            b: {
+                "account_number_display": None,
+                "account_number_last4": None,
+                "high_balance": None,
+                "last_verified": None,
+                "date_of_last_activity": None,
+                "date_reported": None,
+                "date_opened": None,
+                "balance_owed": None,
+                "closed_date": None,
+                "account_rating": None,
+                "account_description": None,
+                "dispute_status": None,
+                "creditor_type": None,
+                "account_status": None,
+                "payment_status": None,
+                "creditor_remarks": None,
+                "payment_amount": None,
+                "last_payment": None,
+                "term_length": None,
+                "past_due_amount": None,
+                "account_type": None,
+                "payment_frequency": None,
+                "credit_limit": None,
+                "two_year_payment_history": None,
+                "seven_year_days_late": None,
+            }
+            for b in BUREAUS
+        }
+
+    bureau_maps = _init_maps()
+    raw_lines = [l.rstrip() for l in block_lines if l.strip()]
+    joined = [" ".join(l.split()) for l in raw_lines]
+    bureau_rows = [l for l in joined if re.match(r"^(Transunion|Experian|Equifax)\s", l, re.I)]
+
+    parsed_any = False
+    for row in bureau_rows:
+        m = BUREAU_LINE_RE.search(row)
+        if not m:
+            continue
+        parsed_any = True
+        label = m.group(1).lower()
+        b = "transunion" if "trans" in label else ("experian" if "exp" in label else "equifax")
+        masked = m.group(2)
+        bm = bureau_maps[b]
+        bm["account_number_display"] = masked
+        bm["account_number_last4"] = re.sub(r"\D", "", masked)[-4:] if re.search(r"\d", masked) else None
+        bm["high_balance"] = _to_num(m.group(3))
+        bm["last_verified"] = _to_iso(m.group(4))
+        bm["date_of_last_activity"] = _to_iso(m.group(5))
+        bm["date_reported"] = _to_iso(m.group(6))
+        bm["date_opened"] = _to_iso(m.group(7))
+        bm["balance_owed"] = _to_num(m.group(8))
+        bm["closed_date"] = None
+        bm["account_rating"] = m.group(9)
+        bm["account_description"] = m.group(10)
+        bm["creditor_type"] = m.group(11)
+        bm["account_status"] = m.group(12)
+        bm["payment_status"] = m.group(13)
+        bm["payment_amount"] = _to_num(m.group(14))
+        bm["last_payment"] = _to_iso(m.group(15))
+        bm["past_due_amount"] = _to_num(m.group(16))
+
+    if not parsed_any:
+        bureau_maps = _init_maps()
+        # Determine bureau column order
+        bureau_order = list(BUREAUS)
+        positions = {b: i * 10 for i, b in enumerate(BUREAUS)}
+        for line in raw_lines:
+            low = line.lower()
+            if all(k in low for k in ("transunion", "experian", "equifax")):
+                positions = {
+                    "transunion": low.index("transunion"),
+                    "experian": low.index("experian"),
+                    "equifax": low.index("equifax"),
+                }
+                bureau_order = [k for k, _ in sorted(positions.items(), key=lambda x: x[1])]
+                break
+        mapping = {
+            "account #": "account_number_display",
+            "high balance": "high_balance",
+            "last verified": "last_verified",
+            "date of last activity": "date_of_last_activity",
+            "date reported": "date_reported",
+            "date opened": "date_opened",
+            "balance owed": "balance_owed",
+            "closed date": "closed_date",
+            "account rating": "account_rating",
+            "account description": "account_description",
+            "dispute status": "dispute_status",
+            "creditor type": "creditor_type",
+            "account status": "account_status",
+            "payment status": "payment_status",
+            "creditor remarks": "creditor_remarks",
+            "payment amount": "payment_amount",
+            "last payment": "last_payment",
+            "term length": "term_length",
+            "past due amount": "past_due_amount",
+            "account type": "account_type",
+            "payment frequency": "payment_frequency",
+            "credit limit": "credit_limit",
+        }
+        num_fields = {
+            "high_balance",
+            "balance_owed",
+            "payment_amount",
+            "past_due_amount",
+            "credit_limit",
+        }
+        date_fields = {
+            "last_verified",
+            "date_of_last_activity",
+            "date_reported",
+            "date_opened",
+            "last_payment",
+            "closed_date",
+        }
+        capture_remarks = False
+        for line in raw_lines:
+            clean = line.strip()
+            if not clean:
+                continue
+            if clean.lower().startswith("two-year payment history"):
+                break
+            if capture_remarks:
+                if re.match(r"^[A-Za-z]+:\s", clean):
+                    capture_remarks = False
+                else:
+                    # Append continuation to all bureaus with existing remarks
+                    for b in BUREAUS:
+                        if bureau_maps[b]["creditor_remarks"]:
+                            bureau_maps[b]["creditor_remarks"] += " " + clean
+                    continue
+            m = re.match(r"([^:]+):\s*(.*)", clean)
+            if not m:
+                continue
+            label, rest = m.groups()
+            key = mapping.get(label.strip().lower())
+            if not key:
+                continue
+            max_pos = max(positions.values()) + 20
+            val = rest.ljust(max_pos)
+            parts = [
+                val[positions[bureau_order[0]]:positions[bureau_order[1]]].strip(),
+                val[positions[bureau_order[1]]:positions[bureau_order[2]]].strip(),
+                val[positions[bureau_order[2]]:].strip(),
+            ]
+            for b, val in zip(bureau_order, parts):
+                if val in (None, "", "--"):
+                    continue
+                if key == "account_number_display":
+                    bureau_maps[b][key] = val
+                    digits = re.sub(r"\D", "", val)
+                    bureau_maps[b]["account_number_last4"] = digits[-4:] if digits else None
+                elif key in num_fields:
+                    bureau_maps[b][key] = _to_num(val)
+                elif key in date_fields:
+                    bureau_maps[b][key] = _to_iso(val)
+                else:
+                    bureau_maps[b][key] = val
+            if key == "creditor_remarks":
+                capture_remarks = True
+
+    hist2y = parse_two_year_history(block_lines)
+    sev7 = parse_seven_year_days_late(block_lines)
+    for b in BUREAUS:
+        bm = bureau_maps[b]
+        bm["two_year_payment_history"] = hist2y[b]
+        bm["seven_year_days_late"] = sev7[b]
+    return bureau_maps
 
 
 def _find_bureau_entry(acc: Mapping[str, Any], bureau: str) -> Mapping[str, Any] | None:
@@ -685,7 +929,10 @@ def _fill_bureau_map_from_sources(acc: Mapping[str, Any], bureau: str, dst: dict
             "balance": "balance_owed",
             "last_reported": "date_reported",
             "date_reported": "date_reported",
+            "reported_date": "date_reported",
             "remarks": "creditor_remarks",
+            "status": "account_status",
+            "rating": "account_rating",
         })
         for s_key, d_key in mapping.items():
             if dst.get(d_key) is None and src.get(s_key) not in (None, "", {}, []):
@@ -746,6 +993,35 @@ def _fill_bureau_map_from_sources(acc: Mapping[str, Any], bureau: str, dst: dict
         if disp not in (None, "", {}, []):
             dst["account_number_display"] = disp
 
+    # 4) Parse raw SmartCredit block text if still missing fields
+    missing = [f for f in ACCOUNT_FIELD_SET if dst.get(f) is None]
+    if missing:
+        block_lines: list[str] | None = None
+        raw = acc.get("raw") or {}
+        for key in (
+            "account_block_lines",
+            "account_block",
+            "block_lines",
+            "text_block",
+            "smartcredit_block",
+        ):
+            val = raw.get(key) or acc.get(key)
+            if isinstance(val, list):
+                block_lines = [str(x) for x in val]
+                break
+            if isinstance(val, str):
+                block_lines = val.splitlines()
+                break
+        if block_lines:
+            parsed = acc.get("_parsed_block")
+            if parsed is None:
+                parsed = parse_account_block(block_lines)
+                acc["_parsed_block"] = parsed
+            bm = parsed.get(bureau, {}) if isinstance(parsed, dict) else {}
+            for k, v in bm.items():
+                if dst.get(k) is None and v is not None:
+                    dst[k] = v
+
 
 def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
     """Attach per-bureau meta tables and supplemental RAW blocks."""
@@ -805,7 +1081,7 @@ def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
     for acc in accounts:
         if not isinstance(acc, dict):
             continue
-        by = _ensure_paths(acc)
+        by = _ensure_paths(acc, "raw", "account_history", "by_bureau")
 
         raw = acc.setdefault("raw", {})
         raw.setdefault("inquiries", {"items": []})
@@ -822,11 +1098,24 @@ def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
                 slug,
             )
 
-        if norm_pub and not raw.get("public_information", {}).get("items"):
-            raw["public_information"]["items"] = norm_pub
+        if norm_pub:
+            if not raw.get("public_information", {}).get("items"):
+                raw["public_information"]["items"] = norm_pub
+        elif pub_src:
+            slug = acc.get("account_id") or acc.get("normalized_name") or acc.get("name") or ""
+            logger.warning(
+                "public_info_detected_but_not_written session=%s account=%s",
+                session_id,
+                slug,
+            )
 
         for b in BUREAUS:
-            dst = by.get(b) or {}
+            dst = by.get(b)
+            if not isinstance(dst, Mapping):
+                dst = _empty_bureau_map()
+            else:
+                for field in ACCOUNT_FIELD_SET:
+                    dst.setdefault(field, None)
             _fill_bureau_map_from_sources(acc, b, dst)
             by[b] = dst
 

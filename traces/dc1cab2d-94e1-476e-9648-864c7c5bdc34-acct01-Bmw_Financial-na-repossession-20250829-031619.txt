@@ -1,0 +1,9 @@
+Creditor: Bmw Financial
+Account:  na
+Status:   repossession
+PastDue:  None
+LateFlags:None
+Opened:   None
+Reported: None
+
+Source markers: n/a

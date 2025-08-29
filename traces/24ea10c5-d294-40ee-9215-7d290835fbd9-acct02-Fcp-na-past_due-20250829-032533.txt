@@ -1,0 +1,9 @@
+Creditor: Fcp
+Account:  na
+Status:   past due
+PastDue:  None
+LateFlags:None
+Opened:   None
+Reported: None
+
+Source markers: n/a

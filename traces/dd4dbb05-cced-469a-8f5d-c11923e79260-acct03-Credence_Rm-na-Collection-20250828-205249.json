@@ -1,0 +1,59 @@
+{
+  "name": "Credence Rm",
+  "normalized_name": "credence rm",
+  "source_stage": "parser_aggregated",
+  "payment_statuses": {
+    "transunion": "collection/chargeoff"
+  },
+  "fbk_hits": {
+    "transunion": {
+      "__unknown__": {
+        "labels": [
+          "collection",
+          "collection/chargeoff"
+        ],
+        "evidence": [
+          "Creditor Type: Other Collection Agencies Other Collection Agencies --",
+          "Payment Status: Collection/Chargeoff Collection/Chargeoff --",
+          "Creditor Type: Other Collection Agencies Other Collection Agencies --",
+          "Payment Status: Collection/Chargeoff Collection/Chargeoff --"
+        ]
+      }
+    }
+  },
+  "payment_status": "collection/chargeoff",
+  "primary_issue": "collection",
+  "problem_reasons": [
+    "status_present: payment_status"
+  ],
+  "advisor_comment": "Account in collection",
+  "recommendations": [
+    "Send debt validation",
+    "Prepare goodwill/dispute letter"
+  ],
+  "remarks": "",
+  "account_type": "Collection",
+  "flags": [
+    "Collection"
+  ],
+  "tags": [
+    "Collection"
+  ],
+  "issue_types": [
+    "collection",
+    "charge_off"
+  ],
+  "decision_source": "rules",
+  "confidence": 0.0,
+  "tier": "none",
+  "remarks_contains_co": false,
+  "has_co_marker": true,
+  "status": "Collection",
+  "account_fingerprint": "f26bd15b",
+  "late_payments": {},
+  "co_bureaus": [],
+  "bureau_statuses": {},
+  "account_number_last4": null,
+  "original_creditor": null,
+  "bureau_details": {}
+}

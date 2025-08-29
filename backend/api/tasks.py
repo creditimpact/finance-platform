@@ -22,11 +22,13 @@ load_dotenv()
 from celery import Celery, signals
 
 from backend.api.config import get_app_config
+from backend.api.session_manager import update_session
 from backend.core.models import ClientInfo, ProofDocuments
 from backend.core.orchestrators import (
     extract_problematic_accounts_from_report,
     run_credit_repair_process,
 )
+from backend.core.utils.json_utils import _json_safe
 
 app = Celery("tasks")
 
@@ -80,6 +82,11 @@ def extract_problematic_accounts(self, file_path: str, session_id: str | None = 
     try:
         logger.info("Extracting accounts from %s", file_path)
         _ensure_file(file_path)
+        if session_id:
+            try:
+                update_session(session_id, status="processing")
+            except Exception:
+                logger.debug("session_update_processing_failed session=%s", session_id)
         result = extract_problematic_accounts_from_report(file_path, session_id)
         if hasattr(result, "to_dict") and callable(result.to_dict):
             result = result.to_dict()
@@ -94,9 +101,30 @@ def extract_problematic_accounts(self, file_path: str, session_id: str | None = 
         )
         if not isinstance(result, Mapping):
             result = dict(result)
-        return json.loads(json.dumps(result))
+        # Make JSON-safe (convert sets/tuples recursively)
+        safe_result = _json_safe(result)
+        # Optional guard: ensure jsonable and log first failure
+        try:
+            json.dumps(safe_result, ensure_ascii=False)
+        except TypeError as e:
+            logger.error(
+                "Non-JSON value at tasks.extract_problematic_accounts return: %s",
+                e,
+            )
+            raise
+        if session_id:
+            try:
+                update_session(session_id, status="done", result=safe_result)
+            except Exception:
+                logger.debug("session_update_done_failed session=%s", session_id)
+        return safe_result
     except Exception as exc:
         logger.exception("[ERROR] Error extracting accounts")
+        if session_id:
+            try:
+                update_session(session_id, status="error", error=str(exc))
+            except Exception:
+                logger.debug("session_update_error_failed session=%s", session_id)
         raise exc
 
 

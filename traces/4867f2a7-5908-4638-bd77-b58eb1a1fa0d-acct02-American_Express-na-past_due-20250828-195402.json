@@ -1,0 +1,20 @@
+{
+  "name": "American Express",
+  "normalized_name": "american express",
+  "source_stage": "parser_aggregated",
+  "payment_statuses": {
+    "Transunion": "past due"
+  },
+  "payment_status": "past due",
+  "primary_issue": "unknown",
+  "remarks": "",
+  "issue_types": [],
+  "problem_reasons": [
+    "status_present: payment_status"
+  ],
+  "decision_source": "rules",
+  "confidence": 0.0,
+  "tier": "none",
+  "remarks_contains_co": false,
+  "account_fingerprint": "57f6ec96"
+}

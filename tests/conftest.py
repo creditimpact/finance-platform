@@ -1,18 +1,24 @@
-import os
 import sys
-import types
 
-os.environ.setdefault("OPENAI_API_KEY", "test-key")
-os.environ.setdefault("OPENAI_BASE_URL", "https://example.com/v1")
 
-# Stub optional heavy dependencies to keep tests lightweight
-sys.modules.setdefault("openai", types.SimpleNamespace(OpenAI=lambda *_, **__: None))
-sys.modules.setdefault(
-    "pdfkit",
-    types.SimpleNamespace(
-        configuration=lambda *_, **__: None, from_string=lambda *_, **__: None
-    ),
-)
-sys.modules.setdefault("fpdf", types.SimpleNamespace(FPDF=object))
-sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__: None))
-sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None))
+def _install_stub_rapidfuzz():
+    class _Fuzz:
+        @staticmethod
+        def WRatio(a, b):
+            try:
+                from difflib import SequenceMatcher
+
+                return int(SequenceMatcher(None, a or "", b or "").ratio() * 100)
+            except Exception:
+                return 0
+
+    mod = type(sys)("rapidfuzz")
+    mod.fuzz = _Fuzz()
+    return mod
+
+
+try:  # pragma: no cover - environment-dependent
+    import rapidfuzz  # type: ignore
+except Exception:  # pragma: no cover - provide a minimal stub for tests
+    sys.modules["rapidfuzz"] = _install_stub_rapidfuzz()
+

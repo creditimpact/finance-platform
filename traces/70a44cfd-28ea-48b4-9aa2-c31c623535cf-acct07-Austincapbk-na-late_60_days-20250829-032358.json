@@ -1,0 +1,45 @@
+{
+  "name": "Austincapbk",
+  "normalized_name": "austincapbk",
+  "source_stage": "parser_aggregated",
+  "payment_statuses": {
+    "transunion": "late 60 days"
+  },
+  "flags": [
+    "Late Payments"
+  ],
+  "fbk_hits": {
+    "transunion": {
+      "__unknown__": {
+        "labels": [
+          "late 60 days"
+        ],
+        "evidence": [
+          "Payment Status: Late 60 Days Late 60 Days Late 60 Days",
+          "Payment Status: Late 60 Days Late 60 Days Late 60 Days",
+          "Payment Status: Late 60 Days Late 60 Days Late 60 Days"
+        ],
+        "mask": null
+      }
+    }
+  },
+  "payment_status": "late 60 days",
+  "bureaus": [
+    {
+      "bureau": "transunion",
+      "payment_status": "late 60 days"
+    }
+  ],
+  "_detector_is_problem": true,
+  "primary_issue": "past_due",
+  "problem_reasons": [
+    "transunion: late 60 days"
+  ],
+  "advisor_comment": "Late payment markers detected. Consider on-time streak plan and a goodwill letter.",
+  "recommendations": [
+    "Set up auto-pay",
+    "Send goodwill letter"
+  ],
+  "account_number_display": "****nion",
+  "account_number_source": "bureaus"
+}

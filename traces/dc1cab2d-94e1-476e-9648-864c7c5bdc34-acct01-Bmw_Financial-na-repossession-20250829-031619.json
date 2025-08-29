@@ -1,0 +1,44 @@
+{
+  "name": "Bmw Financial",
+  "normalized_name": "bmw financial",
+  "source_stage": "parser_aggregated",
+  "payment_statuses": {
+    "transunion": "repossession"
+  },
+  "flags": [
+    "Late Payments"
+  ],
+  "fbk_hits": {
+    "transunion": {
+      "__unknown__": {
+        "labels": [
+          "repossession"
+        ],
+        "evidence": [
+          "Creditor Remarks: Dispute resolved; reported by Account was in dispute - now Redeemed repossession",
+          "Creditor Remarks: Dispute resolved; reported by Account was in dispute - now Redeemed repossession",
+          "Creditor Remarks: Dispute resolved; reported by Account was in dispute - now Redeemed repossession"
+        ],
+        "mask": null
+      }
+    }
+  },
+  "payment_status": "repossession",
+  "bureaus": [
+    {
+      "bureau": "transunion",
+      "payment_status": "repossession"
+    }
+  ],
+  "_detector_is_problem": true,
+  "primary_issue": "repossessed",
+  "problem_reasons": [
+    "transunion: repossession"
+  ],
+  "recommendations": [
+    "Set up auto-pay",
+    "Send goodwill letter"
+  ],
+  "account_number_display": "****nion",
+  "account_number_source": "bureaus"
+}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from hashlib import sha1
 from typing import Any, Dict, List, Mapping, Set
@@ -13,6 +14,9 @@ from backend.core.logic.utils.names_normalization import (
 )
 from backend.core.logic.utils.norm import normalize_heading
 from rapidfuzz import fuzz
+import re
+
+logger = logging.getLogger(__name__)
 
 # Ordered by descending severity
 ISSUE_SEVERITY = [
@@ -69,6 +73,9 @@ def enrich_account_metadata(acc: dict[str, Any]) -> dict[str, Any]:
     receive a consistent set of fields regardless of whether the account
     originated from the AI analysis or was synthesized from parser signals.
     The function mutates ``acc`` in place and also returns it for convenience.
+    NOTE: Do not overwrite SSOT core fields like ``primary_issue``,
+    ``advisor_comment``, or ``recommendations`` here; enrichment should only
+    add derived/UI fields and safe normalizations.
     """
 
     # Normalized creditor name for reliable matching
@@ -217,6 +224,153 @@ def enrich_account_metadata(acc: dict[str, Any]) -> dict[str, Any]:
                 existing.append(flag)
 
     return acc
+
+
+# ---------------------------------------------------------------------------
+# Account number extraction (last4 and display)
+# ---------------------------------------------------------------------------
+
+# Examples seen in SmartCredit text:
+#   426684********** 1234
+#   444796********** 327
+#   517805****** 329
+MASKED_TRAIL_LAST4_RE = re.compile(r"\b\d{2,6}\*{2,}\s*(?P<last>\d{2,6})\b")
+
+# Strict field patterns
+ACC_FIELD_RE = re.compile(
+    r"\b(?:account(?:\s*number)?|acct(?:ount)?)\s*(?:#|no\.?)?\s*:?\s*(?P<tok>[0-9Xx\*\-\s]{3,30})\b",
+    re.IGNORECASE,
+)
+MASKED_PAIR_RE = re.compile(r"\b(?P<prefix>\d{3,6})\*{2,}\s*(?P<last>\d{2,6})\b")
+TRAIL_LAST_RE = re.compile(r"\b\*{2,}\s*(?P<last>\d{2,6})\b")
+GENERIC_ACCNUM_RE = re.compile(
+    r"\b(?:account(?:\s*number)?|acct)\s*#?:?\s*(?:\*{2,}\s*)?(?P<num>(?:\d[\d\-\s]{1,20}\d))",
+    re.IGNORECASE,
+)
+BLACKLIST_WORDS = {
+    "collection",
+    "chargeoff",
+    "charge off",
+    "transunion",
+    "equifax",
+    "experian",
+    "late",
+    "days",
+    "current",
+}
+
+
+def _extract_account_number_fields(acc: dict) -> dict:
+    """Extract account number hints and return derived fields.
+
+    Returns possibly:
+      - account_number_last4
+      - account_number_display
+      - account_number_source
+    """
+
+    nm = (acc.get("normalized_name") or acc.get("name") or "").strip()
+
+    def _reject(reason: str, tok: str) -> None:
+        try:
+            logger.debug("accnum_reject name=%s reason=%s token=%r", nm, reason, tok)
+        except Exception:
+            pass
+
+    def _digits_only(s: str) -> str:
+        return re.sub(r"\D", "", s)
+
+    def _display_from_digits(digs: str) -> str | None:
+        n = len(digs)
+        if n >= 4:
+            return f"****{digs[-4:]}"
+        if n == 3:
+            return f"***{digs}"
+        if n == 2:
+            return f"**{digs}"
+        return digs if n >= 1 else None
+
+    def _scan_tokens_for_account_number(txt: str) -> tuple[str | None, str | None]:
+        if not txt:
+            return None, None
+        # 1) Account # / Account Number / Acct
+        for m in ACC_FIELD_RE.finditer(txt):
+            tok = m.group("tok")
+            low = tok.lower()
+            if any(w in low for w in BLACKLIST_WORDS):
+                _reject("blacklisted_token", tok)
+                continue
+            digs = _digits_only(tok)
+            if len(digs) >= 3:
+                disp = _display_from_digits(digs)
+                last = digs[-4:] if len(digs) >= 4 else digs
+                return disp, last
+        # 2) masked pair 426684********** 1234
+        for m in MASKED_PAIR_RE.finditer(txt):
+            last = m.group("last")
+            digs = _digits_only(m.group("prefix") + last)
+            if len(digs) >= 4:
+                return _display_from_digits(digs), digs[-4:]
+            _reject("masked_pair_too_short", m.group(0))
+        # 3) ****1234
+        for m in TRAIL_LAST_RE.finditer(txt):
+            last = _digits_only(m.group("last"))
+            if 3 <= len(last) <= 6:
+                return _display_from_digits(last), (last[-4:] if len(last) >= 4 else last)
+            _reject("trail_last_too_short", m.group(0))
+        return None, None
+
+    # Aggregate candidate text, prefer evidence first
+    blobs: list[str] = []
+    for bureau_obj in (acc.get("fbk_hits") or {}).values():
+        if not isinstance(bureau_obj, dict):
+            continue
+        for block in bureau_obj.values():
+            ev = (block or {}).get("evidence") or []
+            for line in ev:
+                if isinstance(line, str):
+                    blobs.append(line)
+    # Bureau textual fields
+    for b in acc.get("bureaus") or []:
+        if not isinstance(b, dict):
+            continue
+        for k in ("account_number", "account_number_masked", "remarks", "status", "account_status", "payment_status"):
+            v = b.get(k)
+            if isinstance(v, str):
+                blobs.append(v)
+
+    # Scan blobs
+    for src in blobs:
+        disp, last = _scan_tokens_for_account_number(src)
+        if disp:
+            return {
+                "account_number_display": disp,
+                "account_number_last4": (last if last and len(last) == 4 else (last or None)),
+                "account_number_source": "evidence_or_field",
+            }
+
+    return {}
+
+
+def enrich_problem_accounts_with_numbers(problem_accounts: list[dict]) -> list[dict]:
+    """Return a new list with derived account number fields injected."""
+
+    out: list[dict] = []
+    for acc in problem_accounts or []:
+        # Do not mutate original (which may be frozen later)
+        acc2 = dict(acc)
+        fields = _extract_account_number_fields(acc2)
+        for k, v in fields.items():
+            if v:
+                acc2[k] = v
+        logger.debug(
+            "accnum %s -> %s (%s)",
+            acc.get("normalized_name") or acc.get("name"),
+            acc2.get("account_number_display"),
+            acc2.get("account_number_source"),
+        )
+        out.append(acc2)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -369,9 +523,10 @@ def _cleanup_unverified_late_text(result: dict, verified: Set[str]):
             acc["flags"] = [f for f in acc["flags"] if "late" not in f.lower()]
             if not acc["flags"]:
                 acc.pop("flags")
+        # Do not delete core advisor_comment after finalize; only adjust UI short form
         comment = acc.get("advisor_comment")
         if comment and re.search(r"late|delinqu", comment, re.I):
-            acc.pop("advisor_comment", None)
+            acc.pop("advisor_comment_short", None)
 
     for sec in [
         "all_accounts",
@@ -555,7 +710,19 @@ def _assign_issue_types(acc: dict) -> None:
         primary = "collection"
     else:
         primary = pick_primary_issue(issue_types)
-    acc["primary_issue"] = primary
+    # Do not overwrite core field after finalize; only set if missing/unknown
+    cur = acc.get("primary_issue")
+    if cur in (None, "", "unknown"):
+        acc["primary_issue"] = primary
+    else:
+        if cur != primary:
+            logger.info(
+                "SKIP overwrite_primary_after_finalize name=%s kept=%s cand=%s",
+                acc.get("normalized_name") or acc.get("name"),
+                cur,
+                primary,
+            )
+        acc.setdefault("ui_primary_issue", primary)
 
     severity_index = {t: i for i, t in enumerate(ISSUE_SEVERITY)}
     sorted_all = sorted(
@@ -570,8 +737,13 @@ def _assign_issue_types(acc: dict) -> None:
     status, comment = ISSUE_TEXT.get(primary, (None, None))
     if status:
         acc["status"] = status
+    # Only set a short UI comment if core comment missing/short; never overwrite long core comment
     if comment:
-        acc["advisor_comment"] = comment
+        base = str(acc.get("advisor_comment") or "")
+        if not base:
+            acc.setdefault("advisor_comment_short", comment)
+        elif len(base) < 60:
+            acc.setdefault("advisor_comment_short", comment)
 
     if status_text_hits:
         evidence = acc.setdefault("evidence", {})
@@ -659,13 +831,57 @@ def validate_analysis_sanity(analysis: Mapping[str, Any]) -> List[str]:
                 "WARN Too many inquiries detected - may indicate parsing issue."
             )
 
-    if not analysis.get("strategic_recommendations"):
+    # Consider per-account recommendations instead of top-level only
+    has_any_recs = False
+    for section in ["negative_accounts", "open_accounts_with_issues", "all_accounts"]:
+        for account in analysis.get(section, []) or []:
+            recs = account.get("recommendations") or []
+            if isinstance(recs, list) and len(recs) > 0:
+                has_any_recs = True
+                break
+        if has_any_recs:
+            break
+    if not has_any_recs and not analysis.get("strategic_recommendations"):
         warnings.append("WARN No strategic recommendations provided.")
 
+    # Build SSOT index from finalized problem_accounts for QA comparisons
+    ssot_index: dict[str, dict[str, int | str | None]] = {}
+    try:
+        for a in analysis.get("problem_accounts", []) or []:
+            name = (a.get("normalized_name") or a.get("name") or "").strip()
+            if not name:
+                continue
+            ssot_index[name] = {
+                "primary_issue": a.get("primary_issue"),
+                "advisor_len": len(str(a.get("advisor_comment") or "")),
+            }
+    except Exception:
+        ssot_index = {}
+
     for section in ["negative_accounts", "open_accounts_with_issues", "all_accounts"]:
-        for account in analysis.get(section, []):
+        for account in analysis.get(section, []) or []:
             comment = account.get("advisor_comment", "")
-            if len(comment.split()) < 4:
+            recs = account.get("recommendations") or []
+            has_recs = isinstance(recs, list) and len(recs) > 0
+            nm = (account.get("normalized_name") or account.get("name") or "").strip()
+            ssot = ssot_index.get(nm) or {}
+            logger.debug(
+                "DBG qa_fields (derived) name=%s primary=%s advisor_len=%d has_recs=%s recs_len=%d ssot_primary=%s ssot_advisor_len=%s",
+                nm,
+                account.get("primary_issue"),
+                len(str(comment)),
+                has_recs,
+                len(recs) if isinstance(recs, list) else 0,
+                ssot.get("primary_issue"),
+                ssot.get("advisor_len"),
+            )
+            # Skip warn if core finalized comment is long enough
+            core_len = int(ssot.get("advisor_len", 0) or 0)
+            if len(str(comment).split()) < 4 and core_len < 60:
+                logger.warning(
+                    "WARN late_override_detected name=%s",
+                    account.get("normalized_name") or account.get("name"),
+                )
                 warnings.append(
                     f"WARN Advisor comment too short for account: {account.get('name')}"
                 )

@@ -1,0 +1,37 @@
+{
+  "accounts": [
+    {
+      "i": 1,
+      "creditor": "Palisades Fu",
+      "account_id": "na",
+      "status": "Collection",
+      "json": "traces\\dd4dbb05-cced-469a-8f5d-c11923e79260-acct01-Palisades_Fu-na-Collection-20250828-205249.json",
+      "txt": "traces\\dd4dbb05-cced-469a-8f5d-c11923e79260-acct01-Palisades_Fu-na-Collection-20250828-205249.txt"
+    },
+    {
+      "i": 2,
+      "creditor": "American Express",
+      "account_id": "na",
+      "status": "past due",
+      "json": "traces\\dd4dbb05-cced-469a-8f5d-c11923e79260-acct02-American_Express-na-past_due-20250828-205249.json",
+      "txt": "traces\\dd4dbb05-cced-469a-8f5d-c11923e79260-acct02-American_Express-na-past_due-20250828-205249.txt"
+    },
+    {
+      "i": 3,
+      "creditor": "Credence Rm",
+      "account_id": "na",
+      "status": "Collection",
+      "json": "traces\\dd4dbb05-cced-469a-8f5d-c11923e79260-acct03-Credence_Rm-na-Collection-20250828-205249.json",
+      "txt": "traces\\dd4dbb05-cced-469a-8f5d-c11923e79260-acct03-Credence_Rm-na-Collection-20250828-205249.txt"
+    },
+    {
+      "i": 4,
+      "creditor": "High Mountai",
+      "account_id": "na",
+      "status": "Collection",
+      "json": "traces\\dd4dbb05-cced-469a-8f5d-c11923e79260-acct04-High_Mountai-na-Collection-20250828-205249.json",
+      "txt": "traces\\dd4dbb05-cced-469a-8f5d-c11923e79260-acct04-High_Mountai-na-Collection-20250828-205249.txt"
+    }
+  ],
+  "main_dump": "traces\\dd4dbb05-cced-469a-8f5d-c11923e79260-extracted-20250828-205247.txt"
+}

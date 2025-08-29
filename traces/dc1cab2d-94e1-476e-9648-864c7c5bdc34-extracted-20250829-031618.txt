@@ -1,0 +1,66 @@
+OK OK OK OK OK OK
+Oct Nov Dec '21 Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec '22 Feb Mar Apr May Jun
+OK OK
+Jul Aug Sep
+Equifax
+Sep Oct Nov Nov Dec '21 Feb Apr May Jun Jul Aug Sep Oct Nov Nov Dec '22 Feb Apr May
+Jun Jul Aug
+Days Late - 7 Year History
+Transunion® Experian® Equifax®
+30: 0 60: 0 90: 0 30: 0 60: 0 90: 0 30: 0 60: 0 90: 0
+BMW FIN SVC
+Transunion® Experian® Equifax®
+Account # 400306**** 400306**** 400306****
+High Balance: $34,507 $34,507 $34,507
+Last Verified: 10/12/2021 -- --
+Date of Last Activity: 10/12/2021 10/1/2021 --
+Date Reported: 10/12/2021 10/10/2021 8/1/2023
+Date Opened: 10/19/2018 10/1/2018 10/1/2018
+Balance Owed: $0 $0 $0
+Closed Date: 10/12/2021 -- --
+Account Rating: Closed Paid Paid
+Account Description: Individual Individual Individual
+Dispute Status: Account not disputed Account not disputed Account not disputed
+Creditor Type: Miscellaneous Automotive Auto Financing All Banks
+Account Status: Closed Closed Closed
+Payment Status: Current Unknown Too New to Rate
+Creditor Remarks: Dispute resolved; reported by Account was in dispute - now Redeemed repossession
+grantor resolved - reported by Closed or paid account/zero
+subscriber. balance
+Account now redeemed/was
+repossession.
+Payment Amount: $0 $0 $0
+Last Payment: 9/19/2021 9/19/2021 --
+Term Length: 36 Month(s) 36 Month(s) 36 Month(s)
+Past Due Amount: $0 $0 $0
+Account Type: Auto Lease Lease --
+Payment Frequency: Monthly (every month) -- --
+Credit Limit: $0 $0 $0
+Two-Year Payment History
+Transunion
+OK OK OK OK OK OK OK OK OK OK OK OK OK OK OK OK OK OK OK OK OK
+Oct Nov Dec '20 Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec '21 Feb Mar Apr May Jun
+OK OK OK
+Jul Aug Sep
+Experian
+OK OK OK OK OK OK OK OK OK OK OK OK OK OK OK OK OK OK OK OK OK
+Nov Dec '20 Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec '21 Feb Mar Apr May Jun Jul
+OK
+Aug Sep Oct
+Equifax
+Aug Sep Oct Nov Nov Dec '22 Feb Apr May Jun Jul Aug Sep Oct Nov Nov Dec '23 Feb Apr
+May Jun Jul
+Days Late - 7 Year History
+Transunion® Experian® Equifax®
+30: 1 60: 1 90: 1 30: 1 60: 1 90: 1 30: 1 60: 1 90: 2
+ALLY FINCL
+Transunion® Experian® Equifax®
+Account # 228117****** 228117****** 228117******
+High Balance: $67,242 $67,242 $67,242
+Last Verified: 4/28/2025 -- --
+Date of Last Activity: 4/28/2025 4/1/2025 4/1/2025
+Date Reported: 4/28/2025 4/28/2025 4/1/2025
+Date Opened: 7/14/2022 7/1/2022 7/1/2022
+Balance Owed: $44,849 $44,849 $44,849
+Closed Date: -- -- --
+Account Rating: Open Open Open

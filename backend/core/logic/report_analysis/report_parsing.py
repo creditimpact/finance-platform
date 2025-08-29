@@ -88,6 +88,8 @@ from backend.core.logic.utils.names_normalization import normalize_bureau_name  
 from backend.core.logic.utils.norm import normalize_heading  # noqa: E402
 from backend.core.logic.utils.text_parsing import extract_account_blocks  # noqa: E402
 from backend.core.models.bureau import BureauAccount  # noqa: E402
+from .constants import BUREAUS, ACCOUNT_FIELD_SET  # noqa: E402
+from .normalize import to_number, to_iso_date  # noqa: E402
 
 # Mapping of account detail labels to canonical keys. Each tuple contains the
 # canonical key and a regex that matches variations of the label in the PDF
@@ -615,3 +617,174 @@ def extract_creditor_remarks(text: str) -> dict[str, dict[str, str]]:
                     ).strip()
 
     return remarks
+
+
+# ---------------------------------------------------------------------------
+# Bureau meta tables for accounts (raw.account_history.by_bureau)
+# ---------------------------------------------------------------------------
+
+def _empty_bureau_map() -> dict[str, dict[str, Any]]:
+    """Return a by-bureau map filled with the 25-field set as None."""
+    return {b: {f: None for f in ACCOUNT_FIELD_SET} for b in BUREAUS}
+
+
+def _ensure_paths(acc: dict) -> dict[str, dict[str, Any]]:
+    """Ensure acc.raw.account_history.by_bureau scaffold exists and is complete.
+
+    Returns the by_bureau dict for further mutation.
+    """
+    raw = acc.setdefault("raw", {})
+    ah = raw.setdefault("account_history", {})
+    by = ah.setdefault("by_bureau", {})
+    # Ensure each bureau and each field exists
+    for b in BUREAUS:
+        entry = by.setdefault(b, {})
+        for field in ACCOUNT_FIELD_SET:
+            entry.setdefault(field, None)
+    return by  # type: ignore[return-value]
+
+
+def _find_bureau_entry(acc: Mapping[str, Any], bureau: str) -> Mapping[str, Any] | None:
+    """Find matching entry in acc['bureaus'] for a bureau (accepts title/lower)."""
+    items = acc.get("bureaus") or []
+    if not isinstance(items, list):
+        return None
+    targets = {bureau, bureau.lower(), bureau.title()}
+    for it in items:
+        if not isinstance(it, Mapping):
+            continue
+        bname = it.get("bureau") or it.get("name")
+        if isinstance(bname, str) and bname in targets:
+            return it
+    return None
+
+
+def _fill_bureau_map_from_sources(acc: Mapping[str, Any], bureau: str, dst: dict[str, Any]) -> None:
+    """Fill a single bureau's 25-field map for an account.
+
+    Source priority (highest to lowest):
+    - acc.bureaus[]
+    - acc.bureau_details[bureau]
+    - acc.raw.account_history.by_bureau[bureau] (existing)
+
+    Gentle normalization for numeric/date fields only when unambiguous.
+    Also backfills account_number_display/last4 from top-level when missing.
+    """
+
+    # 1) bureaus[] entry
+    src = _find_bureau_entry(acc, bureau)
+    if isinstance(src, Mapping):
+        # Map overlapping keys
+        mapping: dict[str, str] = {
+            "payment_status": "payment_status",
+            "account_status": "account_status",
+            "remarks": "creditor_remarks",  # normalize key name
+            "creditor_remarks": "creditor_remarks",
+            "past_due_amount": "past_due_amount",
+            "balance": "balance_owed",
+            "credit_limit": "credit_limit",
+            "last_reported": "date_reported",
+            "date_reported": "date_reported",
+            "date_opened": "date_opened",
+            "account_number_display": "account_number_display",
+            "account_number_last4": "account_number_last4",
+        }
+        for s_key, d_key in mapping.items():
+            if dst.get(d_key) is None and src.get(s_key) not in (None, "", {}, []):
+                val = src.get(s_key)
+                if d_key in {"high_balance", "balance_owed", "credit_limit", "past_due_amount", "payment_amount"}:
+                    dst[d_key] = to_number(val)
+                elif d_key in {"date_opened", "date_reported", "closed_date", "last_verified", "last_payment", "date_of_last_activity"}:
+                    dst[d_key] = to_iso_date(val)
+                else:
+                    dst[d_key] = val
+
+    # 2) bureau_details[bureau]
+    details = (acc.get("bureau_details") or {}).get(bureau)
+    if not isinstance(details, Mapping):
+        # Try normalized keys in case caller stored lowercased keys
+        details = (acc.get("bureau_details") or {}).get(bureau.lower()) or (acc.get("bureau_details") or {}).get(bureau.title())
+    if isinstance(details, Mapping):
+        for key in ACCOUNT_FIELD_SET:
+            if dst.get(key) is not None:
+                continue
+            if details.get(key) in (None, "", {}, []):
+                continue
+            val = details.get(key)
+            if key in {"high_balance", "balance_owed", "credit_limit", "past_due_amount", "payment_amount"}:
+                dst[key] = to_number(val)
+            elif key in {"date_opened", "date_reported", "closed_date", "last_verified", "last_payment", "date_of_last_activity"}:
+                dst[key] = to_iso_date(val)
+            else:
+                dst[key] = val
+
+    # 3) Existing raw.by_bureau values as last resort
+    try:
+        existing = (
+            acc.get("raw", {})
+            .get("account_history", {})
+            .get("by_bureau", {})
+            .get(bureau, {})
+        )
+        if isinstance(existing, Mapping):
+            for key in ACCOUNT_FIELD_SET:
+                if dst.get(key) is None and existing.get(key) not in (None, "", {}, []):
+                    dst[key] = existing.get(key)
+    except Exception:
+        pass
+
+    # Backfill account number fields (top-level fallbacks)
+    if dst.get("account_number_last4") in (None, ""):
+        last4 = acc.get("account_number_last4") or acc.get("account_number")
+        if isinstance(last4, str):
+            digits = re.sub(r"\D", "", last4)
+            dst["account_number_last4"] = digits[-4:] if digits else None
+        elif isinstance(last4, (int, float)):
+            s = str(int(last4))
+            dst["account_number_last4"] = s[-4:] if s else None
+
+    if dst.get("account_number_display") in (None, ""):
+        disp = acc.get("account_number_raw") or acc.get("account_number_display") or acc.get("account_number")
+        if disp not in (None, "", {}, []):
+            dst["account_number_display"] = disp
+
+
+def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
+    """Attach per-bureau 25-field meta tables to each account in-place.
+
+    Operates on sections["all_accounts"]. Builds acc.raw.account_history.by_bureau
+    with a value or None for each field in the defined set. Logs simple
+    coverage metrics per account for visibility.
+    """
+    accounts = sections.get("all_accounts") or []
+    if not isinstance(accounts, list):
+        return
+
+    for acc in accounts:
+        if not isinstance(acc, dict):
+            continue
+        by = _ensure_paths(acc)
+        for b in BUREAUS:
+            dst = by.get(b) or {}
+            _fill_bureau_map_from_sources(acc, b, dst)
+            by[b] = dst
+
+        # Coverage log
+        try:
+            counts = {b: sum(1 for f in ACCOUNT_FIELD_SET if by.get(b, {}).get(f) is None) for b in BUREAUS}
+            field_miss: dict[str, int] = {f: 0 for f in ACCOUNT_FIELD_SET}
+            for b in BUREAUS:
+                for f in ACCOUNT_FIELD_SET:
+                    if by.get(b, {}).get(f) is None:
+                        field_miss[f] += 1
+            top_missing = [k for k, _ in sorted(field_miss.items(), key=lambda x: x[1], reverse=True)[:5]]
+            logger.info(
+                "bureau_meta_coverage name=%s tu_missing=%d ex_missing=%d eq_missing=%d top_missing=%s",
+                acc.get("normalized_name") or acc.get("name"),
+                counts.get("transunion", 0),
+                counts.get("experian", 0),
+                counts.get("equifax", 0),
+                ",".join(top_missing),
+            )
+        except Exception:
+            pass

@@ -1,0 +1,9 @@
+Creditor: Jpmcb Card
+Account:  na
+Status:   late 30 days
+PastDue:  None
+LateFlags:None
+Opened:   None
+Reported: None
+
+Source markers: n/a

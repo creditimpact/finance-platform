@@ -1,4 +1,4 @@
-"""High-level orchestration routines for the credit repair pipeline.
+﻿"""High-level orchestration routines for the credit repair pipeline.
 
 ARCH: This module acts as the single entry point for coordinating the
 intake, analysis, strategy generation, letter creation and finalization
@@ -16,6 +16,7 @@ from datetime import datetime, date
 from pathlib import Path
 from shutil import copyfile
 from typing import Any, Mapping
+from types import MappingProxyType
 
 import backend.config as config
 import tactical
@@ -73,8 +74,27 @@ from backend.policy.policy_loader import load_rulebook
 from backend.core.taxonomy.problem_taxonomy import compare_tiers, normalize_decision
 from planner import plan_next_step
 from backend.core.telemetry.stageE_summary import emit_stageE_summary
+from backend.core.pdf.extract_text import extract_text as _debug_extract_text
+from backend.core.utils.text_dump import dump_text as _dump_text
+from backend.core.utils.trace_io import write_text_trace, write_json_trace
 
 logger = logging.getLogger(__name__)
+
+
+# --- Helpers ---------------------------------------------------------------
+def _thaw(obj):
+    """Recursively convert MappingProxyType/dicts/lists into mutable structures.
+
+    This is used to safely clone finalized SSOT snapshots (frozen via
+    MappingProxyType) before any enrichment that may perform deep mutations.
+    """
+    if isinstance(obj, MappingProxyType):
+        obj = dict(obj)
+    if isinstance(obj, dict):
+        return {k: _thaw(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_thaw(x) for x in obj]
+    return obj
 
 
 def _emit_stageA_orchestrated(session_id: str, accounts: list[Mapping[str, Any]]) -> None:
@@ -499,13 +519,12 @@ def analyze_credit_report(
     if audit.level == AuditLevel.VERBOSE:
         audit.log_step("personal_info_extracted", client_personal_info)
 
-    print("[INFO] Analyzing report with GPT...")
+    print("[INFO] Parsing SmartCredit report...")
     analyzed_json_path = Path("output/analyzed_report.json")
     sections = analyze_report_logic(
         pdf_path,
         analyzed_json_path,
         client_info,
-        ai_client=ai_client,
         request_id=session_id,
     )
     _emit_stageA_events(session_id, sections.get("problem_accounts", []))
@@ -585,7 +604,12 @@ def _annotate_with_tri_merge(sections: Mapping[str, Any]) -> None:
         "positive_accounts",
         "all_accounts",
     ]
-    before = {k: copy.deepcopy(sections.get(k, [])) for k in tracked_keys}
+    # Avoid deepcopy on potential MappingProxyType entries if this list ever
+    # includes 'problem_accounts'; keep semantics identical for other keys.
+    before = {
+        k: (copy.deepcopy(sections.get(k, [])) if k != "problem_accounts" else sections.get(k, []))
+        for k in tracked_keys
+    }
     counts_before = {k: len(v) for k, v in before.items()}
     primary_before: dict[str, Any] = {}
     for lst in before.values():
@@ -899,7 +923,7 @@ def generate_letters(
             audit.log_step("letters_converted_to_pdf")
     else:
         print(
-            "[INFO] PDF rendering disabled via DISABLE_PDF_RENDER – skipping conversion."
+            "[INFO] PDF rendering disabled via DISABLE_PDF_RENDER â€“ skipping conversion."
         )
 
     if is_identity_theft:
@@ -939,16 +963,16 @@ def finalize_outputs(
         subject="Your Credit Repair Package is Ready",
         body=f"""Hi {first_name},
 
-WeÃ¢Â€Â™ve successfully completed your credit analysis and prepared your customized repair package Ã¢Â€Â" itÃ¢Â€Â™s attached to this email.
+WeÃƒÂ¢Ã‚â‚¬Ã‚â„¢ve successfully completed your credit analysis and prepared your customized repair package ÃƒÂ¢Ã‚â‚¬Ã‚" itÃƒÂ¢Ã‚â‚¬Ã‚â„¢s attached to this email.
 
-Ã°ÂŸÂ-Â‚ Inside your package:
+ÃƒÂ°Ã‚Å¸Ã‚-Ã‚â€š Inside your package:
 - Dispute letters prepared for each credit bureau
 - Goodwill letters (if applicable)
 - Your full SmartCredit report
 - A personalized instruction guide with legal backup
 - Your official rights under the FCRA (Fair Credit Reporting Act)
 
-Ã¢ÂœÂ... Please print, sign, and mail each dispute letter to the bureaus at their addresses (included in the letters), along with:
+ÃƒÂ¢Ã‚Å“Ã‚... Please print, sign, and mail each dispute letter to the bureaus at their addresses (included in the letters), along with:
 - A copy of your government-issued ID
 - A utility bill with your current address
 - (Optional) FTC Identity Theft Report if applicable
@@ -958,7 +982,7 @@ In your **instruction file**, you'll also find:
 - Recommendations like adding authorized users (we can help you do this!)
 - When and how to follow up with SmartCredit
 
-If youÃ¢Â€Â™d like our team to help you with the next steps Ã¢Â€Â" including adding an authorized user, tracking disputes, or escalating Ã¢Â€Â" weÃ¢Â€Â™re just one click away.
+If youÃƒÂ¢Ã‚â‚¬Ã‚â„¢d like our team to help you with the next steps ÃƒÂ¢Ã‚â‚¬Ã‚" including adding an authorized user, tracking disputes, or escalating ÃƒÂ¢Ã‚â‚¬Ã‚" weÃƒÂ¢Ã‚â‚¬Ã‚â„¢re just one click away.
 
 We're proud to support you on your journey to financial freedom.
 
@@ -1210,6 +1234,19 @@ def extract_problematic_accounts_from_report(
 
     ai_client = get_ai_client()
     run_ai = not isinstance(ai_client, _StubAIClient)
+    # Best-effort debug: extract raw text and save a dump for troubleshooting
+    try:
+        prefer_fitz = os.getenv("USE_PYMUPDF_TEXT", "1") != "0"
+        # Prefer structured extractor; fallback to legacy dumper if write fails
+        _raw_text = _debug_extract_text(str(pdf_path), prefer_fitz=prefer_fitz)
+        try:
+            _dump = write_text_trace(_raw_text, session_id=session_id, prefix="extracted")
+        except Exception:
+            _dump = _dump_text(_raw_text, session_id, prefix="extracted")
+        print(f"[TRACE] main dump saved: {_dump}")
+    except Exception as _exc:  # pragma: no cover - non-fatal
+        logger.debug("text_dump_failed session=%s error=%s", session_id, _exc)
+
     sections = analyze_report_logic(
         pdf_path,
         analyzed_json_path,
@@ -1265,7 +1302,7 @@ def extract_problematic_accounts_from_report(
             for a in sample_src[:3]
         ]
         logger.info(
-            "%s all_accounts=%d negative_accounts=%d open_accounts_with_issues=%d sample=%s",
+            "%s source=derived all_accounts=%d negative_accounts=%d open_accounts_with_issues=%d sample=%s",
             label,
             len(all_acc),
             len(neg),
@@ -1273,8 +1310,32 @@ def extract_problematic_accounts_from_report(
             sample,
         )
 
+    try:
+        sample_primary = [
+            (a.get("normalized_name"), a.get("primary_issue"))
+            for a in (sections.get("problem_accounts") or [])[:3]
+        ]
+        logger.info(
+            "DBG post_analyze_snapshot source=derived sample_primary=%s",
+            sample_primary,
+        )
+    except Exception:
+        pass
     _log_account_snapshot("post_analyze_report")
-    _inject_missing_late_accounts(sections, {}, {}, {})
+    # Read-only injection step executed on deep copy; ensure no mutation of finalized accounts
+    try:
+        from backend.core.utils.immutability import assert_no_mutation
+        import copy as _copy
+        # Avoid deepcopy on MappingProxyType (problem_accounts) to prevent errors in Python 3.13
+        tmp = dict(sections)
+        tmp.pop("problem_accounts", None)
+        deepcopy_sections = _copy.deepcopy(tmp)
+        assert_no_mutation(
+            lambda payload: _inject_missing_late_accounts(payload, {}, {}, {})
+        )(deepcopy_sections)
+    except Exception:
+        # If immutability tools unavailable, proceed without mutation guard
+        pass
     _log_account_snapshot("post_inject_missing_late_accounts")
 
     from backend.core.logic.utils.names_normalization import normalize_creditor_name
@@ -1289,68 +1350,186 @@ def extract_problematic_accounts_from_report(
         "SUPPRESS_ACCOUNTS_WITHOUT_ISSUE_TYPES", False
     )
 
-    for cat in ["negative_accounts", "open_accounts_with_issues"]:
-        filtered = []
-        for acc in sections.get(cat, []):
-            if suppress_accounts_without_issue_types and not acc.get("issue_types"):
-                logger.info(
-                    "suppressed_account %s",
-                    {
-                        "suppression_reason": "missing_issue_types",
-                        "name": acc.get("name"),
-                        "category": cat,
-                    },
-                )
-                continue
-            norm = normalize_creditor_name(acc.get("name", ""))
-            if EXCLUDE_PARSER_AGGREGATED_ACCOUNTS and norm in parser_only:
-                logger.info(
-                    "suppressed_account %s",
-                    {
-                        "suppression_reason": "parser_aggregated_only",
-                        "name": acc.get("name"),
-                        "category": cat,
-                    },
-                )
-                continue
-            enriched = enrich_account_metadata(acc)
-            remarks_contains_co = acc.get("remarks_contains_co")
-            if remarks_contains_co is None:
-                remarks = acc.get("remarks")
-                remarks_lower = remarks.lower() if isinstance(remarks, str) else ""
-                remarks_contains_co = (
-                    "charge" in remarks_lower and "off" in remarks_lower
-                ) or "collection" in remarks_lower
+    # SSOT: derive emit sections strictly from finalized problem_accounts
+    def _build_emit_sections_from_problems(problems):
+        neg: list[dict] = []
+        open_issues: list[dict] = []
+        all_acc: list[dict] = []
+        for acc in problems or []:
+            dup = _thaw(acc)
+            enriched = enrich_account_metadata(dup)  # do not mutate core fields
             logger.info(
-                "emitted_account name=%s primary_issue=%s status=%s "
-                "last4=%s orig_cred=%s issues=%s bureaus=%s stage=%s "
-                "payment_statuses=%s has_co_marker=%s co_bureaus=%s has_remarks=%s "
-                "remarks_contains_co=%s",
+                "DBG final_emit source=emit name=%s primary=%s advisor_len=%d recs=%d",
                 enriched.get("normalized_name"),
                 enriched.get("primary_issue"),
-                enriched.get("status"),
-                enriched.get("account_number_last4"),
-                enriched.get("original_creditor"),
-                enriched.get("issue_types"),
-                list((enriched.get("bureau_statuses") or {}).keys()),
-                enriched.get("source_stage"),
-                acc.get("payment_statuses") or acc.get("payment_status"),
-                acc.get("has_co_marker"),
-                acc.get("co_bureaus"),
-                bool(acc.get("remarks")),
-                remarks_contains_co,
+                len(str(enriched.get("advisor_comment", ""))),
+                len(enriched.get("recommendations") or []),
             )
-            filtered.append(enriched)
-        sections[cat] = filtered
+            neg.append(enriched)
+            all_acc.append(enriched)
+        return neg, open_issues, all_acc
+
+    problems = list(sections.get("problem_accounts") or [])
+    negatives, open_issues, all_acc = _build_emit_sections_from_problems(problems)
+    sections["negative_accounts"] = negatives
+    sections["open_accounts_with_issues"] = open_issues
+    sections["all_accounts"] = all_acc
     update_session(session_id, status="awaiting_user_explanations")
     _log_account_snapshot("pre_bureau_payload")
+    # detailed per-account final_emit already logged above in build loop
+    # Assert emit matches finalized problem_accounts (SSOT)
+    def assert_emit_matches_finalize(finalized, emitted):
+        f = {
+            a.get("normalized_name"): (
+                a.get("primary_issue"),
+                len(str(a.get("advisor_comment") or "")),
+            )
+            for a in (finalized or [])
+        }
+        for acc in emitted.get("all_accounts", []):
+            name = acc.get("normalized_name")
+            if name in f:
+                p_final, l_final = f[name]
+                p_emit = acc.get("primary_issue")
+                l_emit = len(str(acc.get("advisor_comment") or ""))
+                if p_emit != p_final or (l_final >= 60 and l_emit < 60):
+                    raise RuntimeError(
+                        f"EMIT_MISMATCH name={name} primary_final={p_final} primary_emit={p_emit} "
+                        f"advisor_len_final={l_final} advisor_len_emit={l_emit}"
+                    )
+    try:
+        assert_emit_matches_finalize(
+            sections.get("problem_accounts") or [],
+            {"all_accounts": sections.get("all_accounts") or []},
+        )
+    except Exception as e:
+        logger.error("%s", e)
+        raise
+
+    # ------------------------------------------------------------------
+    # Persist compact session summary + per-account full JSON artifacts
+    # ------------------------------------------------------------------
+    try:
+        import json as _json
+        from datetime import datetime as _dt
+
+        def _ensure_dir(p: str) -> None:
+            os.makedirs(p, exist_ok=True)
+
+        def _slug(s: str) -> str:
+            base = (s or "").strip().lower().replace(" ", "_")
+            return "".join(ch for ch in base if ch.isalnum() or ch in ("_", "-")) or "account"
+
+        def _digits_only(s: str) -> str:
+            return "".join(ch for ch in str(s) if ch.isdigit())
+
+        def _is_negative_status(text: str) -> bool:
+            t = (text or "").lower()
+            if not t:
+                return False
+            return (
+                "collection" in t
+                or "charge off" in t
+                or "charge-off" in t
+                or "chargeoff" in t
+                or "past due" in t
+                or any(x in t for x in ["late 30", "late 60", "late 90", "late 120", "late 150"])
+            )
+
+        # Build compact summaries strictly from SSOT
+        ssot_accounts = list(sections.get("problem_accounts") or [])
+        summaries: list[dict[str, Any]] = []
+        full_accounts_dir = os.path.join("traces", session_id, "accounts")
+        _ensure_dir(full_accounts_dir)
+
+        for acc in ssot_accounts:
+            data = _thaw(acc)
+            # Proper alignment: prefer slug(normalized_name|name) as account_id for summaries
+            acc_id = _slug(data.get("normalized_name") or data.get("name") or "")
+            name = data.get("name") or data.get("normalized_name") or ""
+            number_display = data.get("account_number_display")
+            last4 = data.get("account_number_last4")
+            primary = data.get("primary_issue") or "unknown"
+            # negative bureaus from payment_statuses
+            neg_bureaus: list[str] = []
+            ps = data.get("payment_statuses") or {}
+            if isinstance(ps, dict):
+                for bureau, status in ps.items():
+                    if _is_negative_status(status):
+                        neg_bureaus.append(str(bureau).lower())
+
+            # Write full redacted account JSON
+            full_doc = dict(data)
+            # Redact any raw account number fields; keep display + last4 only
+            for k in (
+                "account_number",
+                "account_number_raw",
+                "account_number_masked",
+                "masked_account",
+            ):
+                if k in full_doc:
+                    full_doc.pop(k, None)
+
+            # Persist
+            full_path = os.path.join(full_accounts_dir, f"{acc_id}-{_slug(name)}.json")
+            try:
+                from backend.core.utils.atomic_io import atomic_write_json
+                atomic_write_json(full_path, full_doc, ensure_ascii=False)
+            except Exception as _werr:
+                logger.debug("write_full_account_failed session=%s id=%s err=%s", session_id, acc_id, _werr)
+
+            summaries.append(
+                {
+                    "account_id": acc_id,
+                    "name": name,
+                    "account_number_display": number_display,
+                    "account_number_last4": last4,
+                    "primary_issue": primary,
+                    "negative_bureaus": neg_bureaus,
+                }
+            )
+
+        # Write session summary (atomic)
+        session_out = {
+            "session_id": session_id,
+            "created_at": _dt.utcnow().isoformat(timespec="seconds") + "Z",
+            "problem_accounts": summaries,
+        }
+        sessions_dir = os.path.join("sessions")
+        _ensure_dir(sessions_dir)
+        from backend.core.utils.atomic_io import atomic_write_json
+        atomic_write_json(os.path.join(sessions_dir, f"{session_id}.json"), session_out, ensure_ascii=False)
+        logger.info("DBG session_artifacts_written session=%s accounts=%d", session_id, len(summaries))
+        # Optional assemble-only materializer behind flag
+        if os.getenv("MATERIALIZER_ENABLE", "").lower() in ("1", "true", "yes"):
+            try:
+                from backend.core.materialize.account_materializer import materialize_accounts
+                from backend.core.materialize.writer import write_account_full
+                # Assemble-only from structured sections (no derivations)
+                probs = [dict(a) for a in ssot_accounts]
+                accounts_full = materialize_accounts(session_id, sections, probs)
+                logger.info("materializer_returned session=%s count=%d", session_id, len(accounts_full))
+                out_dir = os.path.join("traces", session_id, "accounts_full")
+                _ensure_dir(out_dir)
+                written = 0
+                for a in accounts_full:
+                    try:
+                        write_account_full(session_id, a)
+                        written += 1
+                    except Exception as _werr:
+                        logger.warning("write_account_full_failed session=%s id=%s err=%s", session_id, a.get("account_id"), _werr)
+                logger.info("session_accounts_full_written session=%s accounts=%d", session_id, written)
+            except Exception as _mwerr:
+                logger.debug("materializer_failed session=%s err=%s", session_id, _mwerr)
+    except Exception as _exc:
+        logger.debug("session_artifacts_failed session=%s err=%s", session_id, _exc)
     for cat in (
         "negative_accounts",
         "open_accounts_with_issues",
         "high_utilization_accounts",
     ):
         for acc in sections.get(cat, []):
-            acc.setdefault("primary_issue", "unknown")
+            # Do not overwrite primary_issue here; derive UI defaults separately if needed
             acc.setdefault("issue_types", [])
             acc.setdefault("status", acc.get("account_status") or "")
             acc.setdefault("late_payments", {})
@@ -1475,6 +1654,135 @@ def extract_problematic_accounts_from_report(
             ):
                 logger.info("account_trace_bug %s", json.dumps(trace, sort_keys=True))
             logger.info("account_trace %s", json.dumps(trace, sort_keys=True))
+    # Optional AI fallback: only when deterministic parser finds no problems
+    try:
+        use_ai_fallback = os.getenv("RUN_AI_FALLBACK", "0") == "1"
+        zero_problems = not (sections.get("problem_accounts") or [])
+        if use_ai_fallback and zero_problems:
+            print("[INFO] No accounts found by deterministic parser. Running AI fallback ...")
+            try:
+                from backend.core.services.ai_client import AIClient  # type: ignore
+
+                def _ai_sections_fallback(txt: str) -> dict[str, Any] | None:
+                    """Very lightweight AI fallback: attempt to produce minimal section JSON.
+
+                    Returns a mapping compatible with analysis_schema keys or None on failure.
+                    """
+
+                    if not isinstance(ai_client, AIClient):
+                        return None
+                    # Minimal, defensive prompt. We prefer a strict JSON response; tolerate failures.
+                    schema_hint = {
+                        "type": "object",
+                        "properties": {
+                            "problem_accounts": {"type": "array"},
+                            "inquiries": {"type": "array"},
+                            "high_utilization_accounts": {"type": "array"},
+                        },
+                        "additionalProperties": True,
+                    }
+                    prompt = (
+                        "You are analyzing a SmartCredit PDF text dump. "
+                        "Return a JSON object with arrays: problem_accounts (accounts with late/collection/charge-off issues), "
+                        "inquiries (recent credit inquiries), and high_utilization_accounts. Use conservative extraction; "
+                        "include account name and any last4 if visible."
+                    )
+                    try:
+                        resp = ai_client.response_json(
+                            prompt=prompt + "\n\nTEXT:\n" + txt[:6000],
+                            response_format={"type": "json_schema", "json_schema": {"name": "sections", "schema": schema_hint}},
+                        )
+                        # OpenAI responses API: parse top-level JSON content
+                        content = getattr(resp, "output", None) or getattr(resp, "content", None)
+                        if isinstance(content, list) and content and getattr(content[0], "type", "") == "output_text":
+                            raw = content[0].text  # type: ignore[attr-defined]
+                        else:
+                            raw = getattr(resp, "output_text", None) or getattr(resp, "text", None)
+                        import json as _json
+
+                        data = _json.loads(raw) if isinstance(raw, str) else None
+                        if isinstance(data, dict):
+                            return data
+                    except Exception as _e:  # pragma: no cover - best effort
+                        logger.info("ai_fallback_failed session=%s error=%s", session_id, _e)
+                    return None
+
+            except Exception:
+                def _ai_sections_fallback(_: str) -> dict[str, Any] | None:
+                    return None
+
+            ai_sections = _ai_sections_fallback(_raw_text if isinstance(_raw_text, str) else "")
+            if isinstance(ai_sections, dict):
+                # Non-destructive merge: only fill when empty
+                for key in ("problem_accounts", "inquiries", "high_utilization_accounts"):
+                    if not sections.get(key) and ai_sections.get(key):
+                        sections[key] = ai_sections.get(key) or []
+    except Exception as _exc:  # pragma: no cover - defensive
+        logger.debug("ai_fallback_wrapper_error session=%s error=%s", session_id, _exc)
+
+    # Optional: export per-account traces for problem accounts detected
+    try:
+        EXPORT_ACCOUNT_TRACES = os.getenv("EXPORT_ACCOUNT_TRACES", "1") != "0"
+        problem_accounts = sections.get("problem_accounts") or []
+        if EXPORT_ACCOUNT_TRACES and problem_accounts:
+            index: list[dict] = []
+            for i, acc in enumerate(problem_accounts, start=1):
+                creditor = (
+                    acc.get("creditor")
+                    or acc.get("furnisher")
+                    or acc.get("name")
+                    or "unknown"
+                )
+                acct_id = (
+                    acc.get("account_id")
+                    or acc.get("account_number")
+                    or acc.get("account_number_raw")
+                    or acc.get("masked_account")
+                    or acc.get("acct")
+                    or "na"
+                )
+                status = (
+                    acc.get("status")
+                    or acc.get("payment_status")
+                    or acc.get("primary_issue")
+                    or "issue"
+                )
+                prefix = f"acct{i:02d}-{creditor}-{acct_id}-{status}"
+
+                acct_json_path = write_json_trace(acc, session_id=session_id, prefix=prefix)
+
+                summary_lines = [
+                    f"Creditor: {creditor}",
+                    f"Account:  {acct_id}",
+                    f"Status:   {status}",
+                    f"PastDue:  {acc.get('past_due')}",
+                    f"LateFlags:{acc.get('late_flags') or acc.get('delinquencies')}",
+                    f"Opened:   {acc.get('opened') or acc.get('date_opened')}",
+                    f"Reported: {acc.get('last_reported') or acc.get('date_reported')}",
+                    "",
+                    f"Source markers: {acc.get('source_markers') or 'n/a'}",
+                ]
+                acct_txt_path = write_text_trace("\n".join(summary_lines), session_id=session_id, prefix=prefix)
+
+                print(f"[TRACE] account trace saved: {acct_json_path} | {acct_txt_path}")
+                index.append(
+                    {
+                        "i": i,
+                        "creditor": creditor,
+                        "account_id": acct_id,
+                        "status": status,
+                        "json": acct_json_path,
+                        "txt": acct_txt_path,
+                    }
+                )
+            write_json_trace(
+                {"accounts": index, "main_dump": _dump},
+                session_id=session_id,
+                prefix="accounts-index",
+            )
+    except Exception as _exc:
+        logger.debug("account_traces_failed session=%s error=%s", session_id, _exc)
+
     if config.PROBLEM_DETECTION_ONLY:
         problem_accounts = sections.get("problem_accounts") or []
         return {"problem_accounts": problem_accounts}

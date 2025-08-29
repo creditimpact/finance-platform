@@ -1,0 +1,9 @@
+Creditor: Gs
+Account:  na
+Status:   collection/chargeoff
+PastDue:  None
+LateFlags:None
+Opened:   None
+Reported: None
+
+Source markers: n/a

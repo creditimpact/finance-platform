@@ -1,0 +1,9 @@
+Creditor: Sps
+Account:  na
+Status:   late 120 days
+PastDue:  None
+LateFlags:None
+Opened:   None
+Reported: None
+
+Source markers: n/a

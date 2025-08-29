@@ -1,0 +1,45 @@
+{
+  "name": "American Express",
+  "normalized_name": "american express",
+  "source_stage": "parser_aggregated",
+  "payment_statuses": {
+    "transunion": "past due"
+  },
+  "flags": [
+    "Late Payments"
+  ],
+  "fbk_hits": {
+    "transunion": {
+      "__unknown__": {
+        "labels": [
+          "past due"
+        ],
+        "evidence": [
+          "Past Due Amount: $0 $0 --",
+          "Past Due Amount: $0 $0 --",
+          "Past Due Amount: $0 $0 --"
+        ],
+        "mask": null
+      }
+    }
+  },
+  "payment_status": "past due",
+  "bureaus": [
+    {
+      "bureau": "transunion",
+      "payment_status": "past due"
+    }
+  ],
+  "_detector_is_problem": true,
+  "primary_issue": "past_due",
+  "problem_reasons": [
+    "transunion: past due"
+  ],
+  "advisor_comment": "Late payment markers detected. Consider on-time streak plan and a goodwill letter.",
+  "recommendations": [
+    "Set up auto-pay",
+    "Send goodwill letter"
+  ],
+  "account_number_display": "****nion",
+  "account_number_source": "bureaus"
+}

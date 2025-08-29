@@ -1,0 +1,21 @@
+{
+  "accounts": [
+    {
+      "i": 1,
+      "creditor": "Verizon",
+      "account_id": "na",
+      "status": "collection",
+      "json": "traces\\425526dc-3ef5-4796-9970-588b51301e0d-acct01-Verizon-na-collection-20250829-031807.json",
+      "txt": "traces\\425526dc-3ef5-4796-9970-588b51301e0d-acct01-Verizon-na-collection-20250829-031807.txt"
+    },
+    {
+      "i": 2,
+      "creditor": "Acima Digital Fka Simp",
+      "account_id": "na",
+      "status": "collection",
+      "json": "traces\\425526dc-3ef5-4796-9970-588b51301e0d-acct02-Acima_Digital_Fka_Simp-na-collection-20250829-031807.json",
+      "txt": "traces\\425526dc-3ef5-4796-9970-588b51301e0d-acct02-Acima_Digital_Fka_Simp-na-collection-20250829-031807.txt"
+    }
+  ],
+  "main_dump": "traces\\425526dc-3ef5-4796-9970-588b51301e0d-extracted-20250829-031805.txt"
+}

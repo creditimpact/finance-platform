@@ -1,0 +1,45 @@
+{
+  "name": "Gs",
+  "normalized_name": "gs",
+  "source_stage": "parser_aggregated",
+  "payment_statuses": {
+    "transunion": "collection/chargeoff"
+  },
+  "flags": [
+    "Late Payments"
+  ],
+  "fbk_hits": {
+    "transunion": {
+      "__unknown__": {
+        "labels": [
+          "collection/chargeoff"
+        ],
+        "evidence": [
+          "Payment Status: Collection/Chargeoff Collection/Chargeoff Collection/Chargeoff",
+          "Payment Status: Collection/Chargeoff Collection/Chargeoff Collection/Chargeoff",
+          "Payment Status: Collection/Chargeoff Collection/Chargeoff Collection/Chargeoff"
+        ],
+        "mask": null
+      }
+    }
+  },
+  "payment_status": "collection/chargeoff",
+  "bureaus": [
+    {
+      "bureau": "transunion",
+      "payment_status": "collection/chargeoff"
+    }
+  ],
+  "_detector_is_problem": true,
+  "primary_issue": "collection",
+  "problem_reasons": [
+    "transunion: collection/chargeoff"
+  ],
+  "advisor_comment": "Account appears in collection/charge-off. Consider debt validation and goodwill/dispute steps.",
+  "recommendations": [
+    "Send debt validation",
+    "Prepare goodwill/dispute letter"
+  ],
+  "account_number_display": "****nion",
+  "account_number_source": "bureaus"
+}

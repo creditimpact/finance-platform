@@ -1,0 +1,37 @@
+{
+  "name": "American Express",
+  "normalized_name": "american express",
+  "source_stage": "parser_aggregated",
+  "payment_statuses": {
+    "transunion": "past due"
+  },
+  "fbk_hits": {
+    "transunion": {
+      "__unknown__": {
+        "labels": [
+          "past due"
+        ],
+        "evidence": [
+          "Past Due Amount: $0 $0 --",
+          "Past Due Amount: $0 $0 --"
+        ]
+      }
+    }
+  },
+  "payment_status": "past due",
+  "primary_issue": "unknown",
+  "problem_reasons": [
+    "status_present: payment_status"
+  ],
+  "recommendations": [
+    "Set up auto-pay",
+    "Send goodwill letter"
+  ],
+  "remarks": "",
+  "issue_types": [],
+  "decision_source": "rules",
+  "confidence": 0.0,
+  "tier": "none",
+  "remarks_contains_co": false,
+  "account_fingerprint": "57f6ec96"
+}

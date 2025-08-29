@@ -1,0 +1,13 @@
+{
+  "accounts": [
+    {
+      "i": 1,
+      "creditor": "Bmw Financial",
+      "account_id": "na",
+      "status": "repossession",
+      "json": "traces\\dc1cab2d-94e1-476e-9648-864c7c5bdc34-acct01-Bmw_Financial-na-repossession-20250829-031619.json",
+      "txt": "traces\\dc1cab2d-94e1-476e-9648-864c7c5bdc34-acct01-Bmw_Financial-na-repossession-20250829-031619.txt"
+    }
+  ],
+  "main_dump": "traces\\dc1cab2d-94e1-476e-9648-864c7c5bdc34-extracted-20250829-031618.txt"
+}

@@ -42,7 +42,7 @@ def capture_events(monkeypatch):
 
 def _run(tmp_path, **kwargs):
     return analyze_report.analyze_credit_report(
-        "dummy.pdf", tmp_path / "out.json", {}, request_id="rid", session_id="sid", **kwargs
+        "dummy.pdf", tmp_path / "out.json", {}, request_id="rid", session_id="sid"
     )
 
 
@@ -50,7 +50,7 @@ def test_all_text_pdf(tmp_path, monkeypatch, capture_events):
     monkeypatch.setattr(analyze_report, "extract_text_per_page", lambda _: ["x" * 70, "y" * 70])
     monkeypatch.setattr(config, "PDF_TEXT_MIN_CHARS_PER_PAGE", 64)
 
-    _run(tmp_path, run_ai=False)
+    _run(tmp_path)
 
     event, payload = capture_events[0]
     assert event == "parser_audit"
@@ -66,7 +66,7 @@ def test_mixed_pages(tmp_path, monkeypatch, capture_events):
     monkeypatch.setattr(analyze_report, "extract_text_per_page", lambda _: pages)
     monkeypatch.setattr(config, "PDF_TEXT_MIN_CHARS_PER_PAGE", 64)
 
-    _run(tmp_path, run_ai=False)
+    _run(tmp_path)
 
     payload = capture_events[0][1]
     assert payload["pages_total"] == 4
@@ -80,7 +80,7 @@ def test_error_path(tmp_path, monkeypatch, capture_events):
 
     monkeypatch.setattr(analyze_report, "extract_text_per_page", boom)
 
-    _run(tmp_path, run_ai=False)
+    _run(tmp_path)
 
     payload = capture_events[0][1]
     assert payload["errors"] == "TextExtractionError"
@@ -89,7 +89,7 @@ def test_error_path(tmp_path, monkeypatch, capture_events):
 def test_pii_safety(tmp_path, monkeypatch, capture_events):
     monkeypatch.setattr(analyze_report, "extract_text_per_page", lambda _: ["secret"])
 
-    _run(tmp_path, run_ai=False)
+    _run(tmp_path)
 
     payload_str = str(capture_events[0][1])
     assert "secret" not in payload_str

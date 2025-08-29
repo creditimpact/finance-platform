@@ -1,0 +1,60 @@
+{
+  "name": "High Mountai",
+  "normalized_name": "high mountai",
+  "source_stage": "parser_aggregated",
+  "payment_statuses": {
+    "transunion": "collection"
+  },
+  "fbk_hits": {
+    "transunion": {
+      "__unknown__": {
+        "labels": [
+          "collection",
+          "collection/chargeoff"
+        ],
+        "evidence": [
+          "Creditor Type: Other Collection Agencies -- --",
+          "Payment Status: Collection/Chargeoff -- --",
+          "Creditor Remarks: Placed for collection -- --",
+          "Creditor Type: Other Collection Agencies -- --",
+          "Payment Status: Collection/Chargeoff -- --",
+          "Creditor Remarks: Placed for collection -- --"
+        ]
+      }
+    }
+  },
+  "payment_status": "collection",
+  "primary_issue": "collection",
+  "problem_reasons": [
+    "status_present: payment_status"
+  ],
+  "advisor_comment": "Account in collection",
+  "recommendations": [
+    "Send debt validation",
+    "Prepare goodwill/dispute letter"
+  ],
+  "remarks": "",
+  "account_type": "Collection",
+  "flags": [
+    "Collection"
+  ],
+  "tags": [
+    "Collection"
+  ],
+  "issue_types": [
+    "collection"
+  ],
+  "decision_source": "rules",
+  "confidence": 0.0,
+  "tier": "none",
+  "remarks_contains_co": false,
+  "has_co_marker": true,
+  "status": "Collection",
+  "account_fingerprint": "4424245d",
+  "late_payments": {},
+  "co_bureaus": [],
+  "bureau_statuses": {},
+  "account_number_last4": null,
+  "original_creditor": null,
+  "bureau_details": {}
+}

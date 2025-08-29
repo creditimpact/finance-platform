@@ -1,0 +1,21 @@
+{
+  "accounts": [
+    {
+      "i": 1,
+      "creditor": "Affirm",
+      "account_id": "na",
+      "status": "past due",
+      "json": "traces\\24ea10c5-d294-40ee-9215-7d290835fbd9-acct01-Affirm-na-past_due-20250829-032533.json",
+      "txt": "traces\\24ea10c5-d294-40ee-9215-7d290835fbd9-acct01-Affirm-na-past_due-20250829-032533.txt"
+    },
+    {
+      "i": 2,
+      "creditor": "Fcp",
+      "account_id": "na",
+      "status": "past due",
+      "json": "traces\\24ea10c5-d294-40ee-9215-7d290835fbd9-acct02-Fcp-na-past_due-20250829-032533.json",
+      "txt": "traces\\24ea10c5-d294-40ee-9215-7d290835fbd9-acct02-Fcp-na-past_due-20250829-032533.txt"
+    }
+  ],
+  "main_dump": "traces\\24ea10c5-d294-40ee-9215-7d290835fbd9-extracted-20250829-032507.txt"
+}

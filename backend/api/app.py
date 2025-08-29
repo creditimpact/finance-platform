@@ -241,6 +241,102 @@ def start_process():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+# ---------------------------------------------------------------------------
+# Async upload → queue analysis
+# ---------------------------------------------------------------------------
+
+
+@api_bp.route("/api/upload", methods=["POST"])
+def api_upload():
+    try:
+        form = request.form or {}
+        email = (form.get("email") or "").strip()
+        file = request.files.get("file")
+        if not email or not file:
+            return jsonify({"ok": False, "message": "missing fields"}), 400
+
+        session_id = str(uuid.uuid4())
+        upload_folder = os.path.join("uploads", session_id)
+        os.makedirs(upload_folder, exist_ok=True)
+
+        original_name = file.filename or "report.pdf"
+        sanitized = secure_filename(original_name) or "report.pdf"
+        ext = os.path.splitext(sanitized)[1] or ".pdf"
+        unique_name = f"{uuid.uuid4().hex}{ext}"
+        local_filename = os.path.join(upload_folder, unique_name)
+        file.save(local_filename)
+
+        # Basic PDF validation
+        with open(local_filename, "rb") as f:
+            if f.read(4) != b"%PDF":
+                return jsonify({"ok": False, "message": "Invalid PDF file"}), 400
+
+        # Persist initial session state
+        set_session(
+            session_id,
+            {
+                "file_path": local_filename,
+                "original_filename": original_name,
+                "email": email,
+                "status": "queued",
+            },
+        )
+
+        # Queue background extraction (non-blocking)
+        task = extract_problematic_accounts.delay(local_filename, session_id)
+        update_session(session_id, task_id=task.id, status="queued")
+
+        # Return explicit async contract (frontend polls /api/result)
+        return (
+            jsonify(
+                {
+                    "ok": True,
+                    "status": "queued",
+                    "session_id": session_id,
+                    "task_id": task.id,
+                }
+            ),
+            202,
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.exception("upload failed")
+        return jsonify({"ok": False, "message": str(e)}), 500
+
+
+@api_bp.route("/api/result", methods=["GET"])
+def api_result():
+    session_id = (request.args.get("session_id") or "").strip()
+    if not session_id:
+        return jsonify({"ok": False, "message": "missing session_id"}), 400
+    session = get_session(session_id)
+    if session is None:
+        # Tolerant contract: treat not-found as in-progress to avoid noisy 404s
+        return jsonify({"ok": True, "status": "processing"}), 200
+
+    status = session.get("status") or "queued"
+    if status in ("queued", "processing"):
+        return jsonify({"ok": True, "status": status}), 200
+    if status == "error":
+        return (
+            jsonify({"ok": False, "status": "error", "message": session.get("error") or ""}),
+            200,
+        )
+
+    # done
+    payload = session.get("result") or {}
+    return (
+        jsonify(
+            {
+                "ok": True,
+                "status": "done",
+                "session_id": session_id,
+                "result": payload,
+            }
+        ),
+        200,
+    )
+
+
 @api_bp.route("/api/explanations", methods=["POST"])
 def explanations_endpoint():
     data = request.get_json(force=True)
@@ -358,6 +454,131 @@ def create_app() -> Flask:
         _request_counts[identifier] = recent
 
     return app
+
+
+# ---------------------------------------------------------------------------
+# Accounts API (reads analyzer-produced artifacts)
+# ---------------------------------------------------------------------------
+
+
+@api_bp.route("/api/accounts/<session_id>", methods=["GET"])
+def list_accounts_api(session_id: str):
+    """Return compact list of problem accounts for a session.
+
+    Prefers reading `sessions/<session_id>.json`. Falls back to
+    `session_manager.get_session(session_id)['result']` when file not found.
+    """
+
+    import json as _json
+    import glob as _glob
+    import os as _os
+
+    if not session_id:
+        return jsonify({"ok": False, "message": "missing session_id"}), 400
+
+    sess_file = _os.path.join("sessions", f"{session_id}.json")
+    if _os.path.exists(sess_file):
+        try:
+            with open(sess_file, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+            return jsonify({"ok": True, "session_id": session_id, "accounts": data.get("problem_accounts", [])})
+        except Exception as exc:
+            logger.exception("read_session_summary_failed session=%s", session_id)
+            return jsonify({"ok": False, "message": str(exc)}), 500
+
+    # Fallback for older runs: build summaries from session store
+    session = get_session(session_id)
+    if not session:
+        return jsonify({"ok": False, "message": "session not found"}), 404
+    result = session.get("result") or {}
+    problems = result.get("problem_accounts") or []
+
+    def _is_negative_status(s: str) -> bool:
+        t = (s or "").lower()
+        return (
+            "collection" in t
+            or "charge off" in t
+            or "charge-off" in t
+            or "chargeoff" in t
+            or "past due" in t
+            or any(x in t for x in ["late 30", "late 60", "late 90", "late 120", "late 150"])
+        )
+
+    accounts = []
+    for acc in problems:
+        name = acc.get("name") or acc.get("normalized_name")
+        acc_id = str(acc.get("account_id") or acc.get("account_fingerprint") or (name or ""))
+        ps = acc.get("payment_statuses") or {}
+        neg_bureaus = [str(b).lower() for b, v in ps.items() if _is_negative_status(v)]
+        accounts.append(
+            {
+                "account_id": acc_id,
+                "name": name,
+                "account_number_display": acc.get("account_number_display"),
+                "account_number_last4": acc.get("account_number_last4"),
+                "primary_issue": acc.get("primary_issue") or "unknown",
+                "negative_bureaus": neg_bureaus,
+            }
+        )
+    return jsonify({"ok": True, "session_id": session_id, "accounts": accounts})
+
+
+@api_bp.route("/api/accounts/<session_id>/<account_id>", methods=["GET"])
+def get_account_api(session_id: str, account_id: str):
+    """Return full account JSON from analyzer artifacts.
+
+    Tries `traces/<session_id>/accounts/<account_id>-*.json`. Falls back to
+    returning thawed/redacted doc from `session['result']['problem_accounts']`.
+    """
+
+    import json as _json
+    import glob as _glob
+    import os as _os
+
+    if not session_id or not account_id:
+        return jsonify({"ok": False, "message": "missing session_id or account_id"}), 400
+
+    # Prefer accounts_full; then legacy accounts dir
+    pattern_full = _os.path.join("traces", session_id, "accounts_full", f"{account_id}-*.json")
+    matches = _glob.glob(pattern_full)
+    if not matches:
+        # Fallback: account_id might be the slug suffix
+        pattern_suffix = _os.path.join("traces", session_id, "accounts_full", f"*-{account_id}.json")
+        matches = _glob.glob(pattern_suffix)
+        if matches:
+            logger.info(
+                "accounts_full_suffix_match session=%s account_id=%s file=%s",
+                session_id,
+                account_id,
+                matches[0],
+            )
+    if not matches:
+        pattern_legacy = _os.path.join("traces", session_id, "accounts", f"{account_id}-*.json")
+        matches = _glob.glob(pattern_legacy)
+    if matches:
+        try:
+            with open(matches[0], "r", encoding="utf-8") as f:
+                acc = _json.load(f)
+            return jsonify({"ok": True, "session_id": session_id, "account_id": account_id, "account": acc})
+        except Exception as exc:
+            logger.exception("read_account_file_failed session=%s id=%s", session_id, account_id)
+            return jsonify({"ok": False, "message": str(exc)}), 500
+
+    # Fallback for older runs
+    session = get_session(session_id)
+    if not session:
+        return jsonify({"ok": False, "message": "session not found"}), 404
+    result = session.get("result") or {}
+    problems = result.get("problem_accounts") or []
+    for acc in problems:
+        if str(acc.get("account_id") or "") == account_id:
+            # Redact raw numbers
+            doc = dict(acc)
+            for k in ("account_number", "account_number_raw", "account_number_masked", "masked_account"):
+                doc.pop(k, None)
+            return jsonify({"ok": True, "session_id": session_id, "account_id": account_id, "account": doc})
+
+    return jsonify({"ok": False, "message": "account not found"}), 404
 
 
 if __name__ == "__main__":  # pragma: no cover - manual execution

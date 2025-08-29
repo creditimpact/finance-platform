@@ -1,6 +1,7 @@
 """Name normalization helpers for creditors and bureaus."""
 
 from __future__ import annotations
+import logging
 
 import re
 
@@ -118,6 +119,9 @@ COMMON_CREDITOR_ALIASES = {
 }
 
 
+logger = logging.getLogger(__name__)
+
+
 def normalize_creditor_name(raw_name: str) -> str:
     """Return a cleaned, canonical creditor name."""
 
@@ -125,7 +129,7 @@ def normalize_creditor_name(raw_name: str) -> str:
     for alias, canonical in COMMON_CREDITOR_ALIASES.items():
         if alias in name:
             if canonical != name:
-                print(f"[~] Alias match: '{raw_name}' -> '{canonical}'")
+                logger.debug("Alias match: %r -> %r", raw_name, canonical)
             return canonical
     name = re.sub(r"\b(bank|usa|na|n.a\.|llc|inc|corp|co|company)\b", "", name)
     name = re.sub(r"[^a-z0-9 ]", "", name)

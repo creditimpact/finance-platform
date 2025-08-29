@@ -1,0 +1,50 @@
+{
+  "name": "Palisades Fu",
+  "normalized_name": "palisades fu",
+  "source_stage": "parser_aggregated",
+  "payment_statuses": {
+    "transunion": "collection"
+  },
+  "flags": [
+    "Late Payments"
+  ],
+  "fbk_hits": {
+    "transunion": {
+      "__unknown__": {
+        "labels": [
+          "collection",
+          "collection/chargeoff"
+        ],
+        "evidence": [
+          "Payment Status: Collection/Chargeoff Collection/Chargeoff Late 120 Days",
+          "Creditor Remarks: Collection Account Merchandise was taken back by Collection account",
+          "Placed for collection credit grantor; there may be a Auto",
+          "Payment Status: Collection/Chargeoff Collection/Chargeoff Late 120 Days",
+          "Creditor Remarks: Collection Account Merchandise was taken back by Collection account",
+          "Placed for collection credit grantor; there may be a Auto",
+          "Payment Status: Collection/Chargeoff Collection/Chargeoff Late 120 Days",
+          "Creditor Remarks: Collection Account Merchandise was taken back by Collection account",
+          "Placed for collection credit grantor; there may be a Auto"
+        ],
+        "mask": null
+      }
+    }
+  },
+  "payment_status": "collection",
+  "bureaus": [
+    {
+      "bureau": "transunion",
+      "payment_status": "collection"
+    }
+  ],
+  "_detector_is_problem": true,
+  "primary_issue": "collection",
+  "problem_reasons": [
+    "transunion: collection, collection/chargeoff"
+  ],
+  "advisor_comment": "Account appears in collection/charge-off. Consider debt validation and goodwill/dispute steps.",
+  "recommendations": [
+    "Send debt validation",
+    "Prepare goodwill/dispute letter"
+  ]
+}

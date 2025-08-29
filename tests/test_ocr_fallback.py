@@ -1,5 +1,9 @@
 import pytest
 
+# Optional OCR stack: skip cleanly when not available in CI runner
+pytest.importorskip("pdf2image", reason="OCR tests require pdf2image installed")
+pytest.importorskip("pytesseract", reason="OCR tests require pytesseract installed")
+
 from backend.core.logic.report_analysis import analyze_report, ocr_provider
 from backend.core.telemetry import parser_metrics
 
@@ -57,7 +61,6 @@ def _run(tmp_path, **kwargs):
         {},
         request_id="rid",
         session_id="sid",
-        **kwargs,
     )
 
 
@@ -74,7 +77,7 @@ def test_no_ocr_when_disabled(tmp_path, monkeypatch, capture_events):
 
     monkeypatch.setattr(analyze_report, "get_ocr_provider", fake_get)
 
-    _run(tmp_path, run_ai=False)
+    _run(tmp_path)
 
     assert called is False
     payload = capture_events[0][1]
@@ -108,7 +111,7 @@ def test_selective_ocr_merge(tmp_path, monkeypatch, capture_events):
         analyze_report, "extract_account_headings", fake_extract_headings
     )
 
-    _run(tmp_path, run_ai=False)
+    _run(tmp_path)
 
     assert provider.calls == [0, 1]
     text = captured_text[0]
@@ -136,7 +139,7 @@ def test_ocr_timeout_counts_error(tmp_path, monkeypatch, capture_events):
 
     monkeypatch.setattr(analyze_report, "get_ocr_provider", lambda name: ErrProvider())
 
-    _run(tmp_path, run_ai=False)
+    _run(tmp_path)
 
     payload = capture_events[0][1]
     assert payload["parser_pdf_pages_ocr"] == 1

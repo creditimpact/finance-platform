@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import deque
 
 LATE_PATTERN = re.compile(
     r"(\d+\s*x\s*30|\d+\s*x\s*60|30[-\s]*day[s]?\s*late|60[-\s]*day[s]?\s*late|90[-\s]*day[s]?\s*late|late payment|past due)",
@@ -15,6 +16,15 @@ NO_LATE_PATTERN = re.compile(
 )
 
 GENERIC_NAME_RE = re.compile(r"days?\s+late|payment\s+history|year\s+history", re.I)
+
+# Relaxed heading candidate and bureau header patterns (exact definitions)
+HEADING_CANDIDATE_RE = re.compile(
+    r"^(?!transunion$|experian$|equifax$)"
+    r"(?!.*(days\s+late|payment\s+history|year\s+history))"
+    r"(?=[A-Za-z0-9])[A-Za-z0-9/&\-',\. ]{3,60}$",
+    re.IGNORECASE,
+)
+BUREAU_HDR_RE = re.compile(r"^(TransUnion|Experian|Equifax)\b", re.IGNORECASE)
 
 
 # Internal helpers ---------------------------------------------------------
@@ -72,7 +82,8 @@ def _potential_account_name(line: str) -> bool:
     tokens = lower.split()
     if len(tokens) >= 2 and len(set(tokens)) == 1 and len(tokens[0]) <= 3:
         return False
-    if not re.fullmatch(r"[A-Z/&\-\s]+", stripped):
+    # Relaxed candidate: allow mixed case, punctuation and digits
+    if not HEADING_CANDIDATE_RE.match(stripped):
         return False
     return (
         len(stripped) >= 3
@@ -140,7 +151,24 @@ def extract_account_blocks(text: str, debug: bool = False) -> list[list[str]]:
     capturing = False
     await_equifax_counts = False
 
+    recent: deque[str] = deque(maxlen=8)
     for idx, line in enumerate(lines):
+        # Secondary heuristic: if a bureau header appears before a heading, pick
+        # the nearest previous relaxed heading candidate.
+        if not capturing and BUREAU_HDR_RE.match(line):
+            candidate: str | None = None
+            for prev in reversed(recent):
+                prev_s = prev.strip()
+                if HEADING_CANDIDATE_RE.match(prev_s):
+                    candidate = prev_s
+                    break
+            if candidate:
+                current_block = [candidate]
+                capturing = True
+                await_equifax_counts = False
+                if debug:
+                    print(f"[+] Start block (heuristic) '{candidate}'")
+
         if _potential_account_name(line):
             if capturing:
                 if _has_account_fields(current_block):
@@ -157,9 +185,11 @@ def extract_account_blocks(text: str, debug: bool = False) -> list[list[str]]:
             continue
 
         if not capturing:
+            recent.append(line)
             continue
 
         current_block.append(line)
+        recent.append(line)
 
         if re.match(r"Equifax\b", line, re.I):
             await_equifax_counts = True

@@ -1,6 +1,9 @@
 from typing import List, Mapping
 
-import fitz  # PyMuPDF
+try:  # Allow import in environments without PyMuPDF binaries
+    import fitz  # type: ignore  # PyMuPDF
+except Exception:  # pragma: no cover - test environments may lack PyMuPDF
+    fitz = None  # type: ignore
 
 
 def extract_text_per_page(pdf_path: str) -> List[str]:
@@ -9,8 +12,11 @@ def extract_text_per_page(pdf_path: str) -> List[str]:
     Never returns ``None``; empty string if no text.
     """
 
+    if fitz is None:  # pragma: no cover - surfaced only if not monkeypatched
+        raise ImportError("PyMuPDF (fitz) is required for PDF text extraction")
+
     texts: List[str] = []
-    with fitz.open(pdf_path) as doc:  # pragma: no cover - thin wrapper
+    with fitz.open(pdf_path) as doc:  # thin wrapper
         for page in doc:
             texts.append(page.get_text("text") or "")
     return texts

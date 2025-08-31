@@ -1076,6 +1076,12 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
             end = pos_list[idx + 1][0] if idx + 1 < len(pos_list) else len(header_line)
             spans.append((key, start, end))
 
+    column_spans = spans
+    logger.info(
+        "parse_account_block header_detected=%s columns=%s",
+        bool(header_line),
+        column_spans,
+    )
     parsed = set()
     if spans and header_idx is not None:
         for line in raw_lines[header_idx + 1 :]:
@@ -1141,7 +1147,14 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
         bm = bureau_maps[b]
         _assign_std(bm, "two_year_payment_history", hist2y[b])
         _assign_std(bm, "seven_year_days_late", sev7[b])
-    return bureau_maps
+    result = bureau_maps
+    for b in ("transunion", "experian", "equifax"):
+        m = result.get(b) or {}
+        non_null = sum(1 for f in ACCOUNT_FIELD_SET if m.get(f) is not None)
+        logger.info(
+            "parse_account_block result bureau=%s filled=%d/25", b, non_null
+        )
+    return result
 
 
 def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | None]]:
@@ -1213,8 +1226,14 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
         remarks = re.search(r"(?:remarks?|comment)\s*:?\s*(.+)", body, re.I)
         if remarks:
             _assign_std(bm, "creditor_remarks", remarks.group(1).strip())
-
-    return maps
+    result = maps
+    for b in ("transunion", "experian", "equifax"):
+        m = result.get(b) or {}
+        non_null = sum(1 for f in ACCOUNT_FIELD_SET if m.get(f) is not None)
+        logger.info(
+            "parse_collection_block result bureau=%s filled=%d/25", b, non_null
+        )
+    return result
 
 
 def _find_bureau_entry(acc: Mapping[str, Any], bureau: str) -> Mapping[str, Any] | None:

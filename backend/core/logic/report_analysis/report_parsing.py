@@ -1183,7 +1183,7 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
                         _assign_std(
                             bm,
                             "account_number_last4",
-                            digits[-4:] if digits else None,
+                            digits[-4:] if len(digits) >= 4 else None,
                         )
             count += 1
         logger.info(
@@ -1273,7 +1273,7 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
                             _assign_std(
                                 bm,
                                 "account_number_last4",
-                                digits[-4:] if digits else None,
+                                digits[-4:] if len(digits) >= 4 else None,
                             )
                 parsed.add(bureau)
 
@@ -1301,7 +1301,11 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
             bm = bureau_maps[b]
             _assign_std(bm, "account_number_display", masked)
             digits = re.sub(r"\D", "", masked) if re.search(r"\d", masked) else ""
-            _assign_std(bm, "account_number_last4", digits[-4:] if digits else None)
+            _assign_std(
+                bm,
+                "account_number_last4",
+                digits[-4:] if len(digits) >= 4 else None,
+            )
             _assign_std(bm, "high_balance", m.group(3))
             _assign_std(bm, "last_verified", m.group(4))
             _assign_std(bm, "date_of_last_activity", m.group(5))
@@ -1361,7 +1365,11 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
             masked = acct.group(1)
             _assign_std(bm, "account_number_display", masked)
             digits = re.sub(r"\D", "", masked)
-            _assign_std(bm, "account_number_last4", digits[-4:] if digits else None)
+            _assign_std(
+                bm,
+                "account_number_last4",
+                digits[-4:] if len(digits) >= 4 else None,
+            )
 
         hb = re.search(
             r"(?:high balance|original (?:amount|balance))\s*:?\s*([-\d\$,CRDR ]+)",
@@ -1495,10 +1503,18 @@ def _fill_bureau_map_from_sources(
         last4 = acc.get("account_number_last4") or acc.get("account_number")
         if isinstance(last4, str):
             digits = re.sub(r"\D", "", last4)
-            _assign_std(dst, "account_number_last4", digits[-4:] if digits else None)
+            _assign_std(
+                dst,
+                "account_number_last4",
+                digits[-4:] if len(digits) >= 4 else None,
+            )
         elif isinstance(last4, (int, float)):
             s = str(int(last4))
-            _assign_std(dst, "account_number_last4", s[-4:] if s else None)
+            _assign_std(
+                dst,
+                "account_number_last4",
+                s[-4:] if len(s) >= 4 else None,
+            )
 
     if dst.get("account_number_display") in (None, ""):
         disp = (

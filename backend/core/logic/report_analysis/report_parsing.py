@@ -785,6 +785,8 @@ def parse_seven_year_days_late(lines: list[str]) -> dict[str, Any | None]:
 
 
 def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | None]]:
+    logger.debug("parse_account_block start lines=%d", len(block_lines))
+
     def _init_maps():
         return {
             b: {
@@ -962,7 +964,12 @@ def _find_bureau_entry(acc: Mapping[str, Any], bureau: str) -> Mapping[str, Any]
     return None
 
 
-def _fill_bureau_map_from_sources(acc: Mapping[str, Any], bureau: str, dst: dict[str, Any]) -> None:
+def _fill_bureau_map_from_sources(
+    acc: Mapping[str, Any],
+    bureau: str,
+    dst: dict[str, Any],
+    account_block_lines: list[str] | None = None,
+) -> None:
     """Fill a single bureau's 25-field map for an account.
 
     Source priority (highest to lowest):
@@ -1047,34 +1054,38 @@ def _fill_bureau_map_from_sources(acc: Mapping[str, Any], bureau: str, dst: dict
         if disp not in (None, "", {}, []):
             dst["account_number_display"] = disp
 
-    # 4) Parse raw SmartCredit block text if still missing fields
-    missing = [f for f in ACCOUNT_FIELD_SET if dst.get(f) is None]
-    if missing:
-        block_lines: list[str] | None = None
-        raw = acc.get("raw") or {}
-        for key in (
-            "account_block_lines",
-            "account_block",
-            "block_lines",
-            "text_block",
-            "smartcredit_block",
-        ):
-            val = raw.get(key) or acc.get(key)
-            if isinstance(val, list):
-                block_lines = [str(x) for x in val]
-                break
-            if isinstance(val, str):
-                block_lines = val.splitlines()
-                break
-        if block_lines:
-            parsed = acc.get("_parsed_block")
-            if parsed is None:
-                parsed = parse_account_block(block_lines)
-                acc["_parsed_block"] = parsed
-            bm = parsed.get(bureau, {}) if isinstance(parsed, dict) else {}
-            for k, v in bm.items():
-                if dst.get(k) is None and v is not None:
-                    dst[k] = v
+    # --- BEFORE return, after merging from known sources ---
+    missing_before = [k for k, v in dst.items() if v is None]
+    logger.debug(
+        "pre-parse gap: account=%s bureau=%s missing=%d top=%s",
+        acc.get("normalized_name") or acc.get("name"),
+        bureau,
+        len(missing_before),
+        ",".join(missing_before[:5]),
+    )
+
+    # If still missing keys and block lines were provided, backfill via parser
+    if missing_before and account_block_lines:
+        try:
+            block_maps = parse_account_block(account_block_lines)
+            bm = block_maps.get(bureau, {})
+            for k in dst.keys():
+                if dst[k] is None and k in bm:
+                    dst[k] = bm[k]
+        except Exception:
+            logger.exception(
+                "parse_account_block_failed account=%s bureau=%s",
+                acc.get("normalized_name") or acc.get("name"),
+                bureau,
+            )
+
+    filled = sum(1 for v in dst.values() if v is not None)
+    logger.info(
+        "parser_bureau_fill account=%s bureau=%s filled=%d/25",
+        acc.get("normalized_name") or acc.get("name"),
+        bureau,
+        filled,
+    )
 
 
 def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
@@ -1163,6 +1174,11 @@ def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
                 slug,
             )
 
+        account_block_lines = (
+            sections.get("blocks_by_account", {})
+            .get(acc.get("normalized_name") or acc.get("name"))
+        )
+
         for b in BUREAUS:
             dst = by.get(b)
             if not isinstance(dst, Mapping):
@@ -1170,43 +1186,16 @@ def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
             else:
                 for field in ACCOUNT_FIELD_SET:
                     dst.setdefault(field, None)
-            _fill_bureau_map_from_sources(acc, b, dst)
+            _fill_bureau_map_from_sources(acc, b, dst, account_block_lines)
             by[b] = dst
 
-        # Coverage + fill log
-        try:
-            filled = {
-                b: sum(1 for f in ACCOUNT_FIELD_SET if by.get(b, {}).get(f) is not None)
-                for b in BUREAUS
-            }
-            slug = acc.get("account_id") or acc.get("normalized_name") or acc.get("name") or ""
-            logger.info(
-                "parser_bureau_fill session=%s account=%s tu=%d/25 ex=%d/25 eq=%d/25",
-                session_id,
-                slug,
-                filled.get("transunion", 0),
-                filled.get("experian", 0),
-                filled.get("equifax", 0),
-            )
-        except Exception:
-            pass
-
-        # Existing coverage diagnostic (missing fields + top missing)
-        try:
-            counts = {b: sum(1 for f in ACCOUNT_FIELD_SET if by.get(b, {}).get(f) is None) for b in BUREAUS}
-            field_miss: dict[str, int] = {f: 0 for f in ACCOUNT_FIELD_SET}
-            for b in BUREAUS:
-                for f in ACCOUNT_FIELD_SET:
-                    if by.get(b, {}).get(f) is None:
-                        field_miss[f] += 1
-            top_missing = [k for k, _ in sorted(field_miss.items(), key=lambda x: x[1], reverse=True)[:5]]
-            logger.info(
-                "bureau_meta_coverage name=%s tu_missing=%d ex_missing=%d eq_missing=%d top_missing=%s",
-                acc.get("normalized_name") or acc.get("name"),
-                counts.get("transunion", 0),
-                counts.get("experian", 0),
-                counts.get("equifax", 0),
-                ",".join(top_missing),
-            )
-        except Exception:
-            pass
+        tu = sum(1 for v in by.get("transunion", {}).values() if v is not None)
+        ex = sum(1 for v in by.get("experian", {}).values() if v is not None)
+        eq = sum(1 for v in by.get("equifax", {}).values() if v is not None)
+        logger.info(
+            "bureau_meta_coverage name=%s tu_missing=%d ex_missing=%d eq_missing=%d",
+            acc.get("normalized_name") or acc.get("name"),
+            25 - tu,
+            25 - ex,
+            25 - eq,
+        )

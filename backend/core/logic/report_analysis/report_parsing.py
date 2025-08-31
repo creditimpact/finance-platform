@@ -772,6 +772,48 @@ def _to_iso(s: str) -> Any | None:
     return to_iso_date(s)
 
 
+SUMMARY_HEADING_TOKENS = (
+    "total accounts",
+    "open accounts",
+    "closed accounts",
+    "delinquent",
+    "derogatory",
+    "balances",
+)
+
+SUMMARY_REQUIRED_WORDS = (
+    "account",
+    "acct",
+    "high balance",
+    "date",
+    "balance",
+    "remarks",
+)
+
+
+def is_summary_block(block_lines: list[str]) -> bool:
+    """Heuristics to exclude dashboard/summary blocks (e.g., 'Total Accounts 10 9 7', 'Open Accounts: ...').
+    Return True if the block is a summary, False otherwise.
+    """
+
+    if not block_lines:
+        return False
+
+    heading = (block_lines[0] or "").strip().lower()
+
+    if any(tok in heading for tok in SUMMARY_HEADING_TOKENS):
+        return True
+
+    if not any(word in heading for word in SUMMARY_REQUIRED_WORDS):
+        has_bureau = any(
+            any(b in ln.lower() for b in BUREAUS) for ln in block_lines
+        )
+        if not has_bureau:
+            return True
+
+    return False
+
+
 def build_block_fuzzy(blocks: list[Mapping[str, Any]]) -> dict[str, list[str]]:
     """Return mapping of normalized headings to their OCR lines.
 
@@ -861,12 +903,19 @@ def _find_block_lines_for_account(
 
         lines = mapping.get(norm)
         if lines:
+            block_lines = list(lines)
+            if is_summary_block(block_lines):
+                logger.info(
+                    "parse_skip summary_block heading=%r",
+                    block_lines[0] if block_lines else "",
+                )
+                return []
             logger.debug(
                 "block_lines_found name=%s method=exact lines=%d",
                 norm,
-                len(lines),
+                len(block_lines),
             )
-            return list(lines)
+            return block_lines
 
         try:
             from .analyze_report import _fuzzy_match  # type: ignore
@@ -878,13 +927,20 @@ def _find_block_lines_for_account(
                 score = _fuzz.WRatio(norm, match) / 100.0
                 if score >= 0.9 and mapping.get(match):
                     lines = mapping[match]
+                    block_lines = list(lines)
+                    if is_summary_block(block_lines):
+                        logger.info(
+                            "parse_skip summary_block heading=%r",
+                            block_lines[0] if block_lines else "",
+                        )
+                        return []
                     logger.debug(
                         "block_lines_found name=%s method=fuzzy match=%s lines=%d",
                         norm,
                         match,
-                        len(lines),
+                        len(block_lines),
                     )
-                    return list(lines)
+                    return block_lines
         except Exception:
             pass
 

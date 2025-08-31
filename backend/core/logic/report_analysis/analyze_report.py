@@ -12,6 +12,7 @@ reason about. The functionality has been split into dedicated modules:
 
 from __future__ import annotations
 
+import copy as _copy
 import hashlib
 import json
 import logging
@@ -19,17 +20,16 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Mapping
 from types import MappingProxyType
-import copy as _copy
+from typing import Any, Dict, List, Mapping
 
 from rapidfuzz import fuzz
 
 from backend.config import (
     CASESTORE_PARSER_LOG_PARITY,
     CASESTORE_REDACT_BEFORE_STORE,
-    ENABLE_CASESTORE_WRITE,
     DETERMINISTIC_EXTRACTORS_ENABLED,
+    ENABLE_CASESTORE_WRITE,
     OCR_ENABLED,
     OCR_LANGS,
     OCR_PROVIDER,
@@ -58,14 +58,16 @@ from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from backend.core.logic.utils.norm import normalize_heading
 from backend.core.logic.utils.text_parsing import (
     enforce_collection_status,
+    extract_account_blocks,
     extract_account_headings,
     extract_late_history_blocks,
-    extract_account_blocks,
 )
 from backend.core.telemetry.parser_metrics import emit_parser_audit
-from .text_normalization import NormalizationStats, normalize_page
 
 from .ocr_provider import get_ocr_provider
+from .text_normalization import NormalizationStats, normalize_page
+
+
 # Lazy wrappers to avoid importing PyMuPDF at module import time in environments
 # without the binary. Tests can monkeypatch these names directly.
 def extract_text_per_page(pdf_path):
@@ -84,7 +86,11 @@ def merge_text_with_ocr(page_texts, ocr_texts):
     from .pdf_io import merge_text_with_ocr as _impl
 
     return _impl(page_texts, ocr_texts)
-from .report_parsing import (  # noqa: F401 - kept for test monkeypatching
+
+
+from .report_parsing import (  # noqa: E402,F401 - kept for test monkeypatching
+    attach_bureau_meta_tables,
+    build_block_fuzzy,
     extract_account_numbers,
     extract_creditor_remarks,
     extract_payment_statuses,
@@ -92,10 +98,8 @@ from .report_parsing import (  # noqa: F401 - kept for test monkeypatching
     extract_text_from_pdf,
     extract_three_column_fields,
     scan_page_markers,
-    attach_bureau_meta_tables,
-    build_block_fuzzy,
 )
-from .report_postprocessing import (
+from .report_postprocessing import (  # noqa: E402
     _assign_issue_types,
     _cleanup_unverified_late_text,
     _inject_missing_late_accounts,
@@ -105,7 +109,7 @@ from .report_postprocessing import (
     enrich_account_metadata,
     validate_analysis_sanity,
 )
-from .report_prompting import (
+from .report_prompting import (  # noqa: E402
     ANALYSIS_PROMPT_VERSION,
     ANALYSIS_SCHEMA_VERSION,
     PIPELINE_VERSION,
@@ -134,10 +138,10 @@ NEG_STATUS_RE = re.compile(
 )
 MASKED_ACCT_RE = re.compile(
     r"^(?:"
-    r"[A-Z]{0,4}\d{2,}[Xx\*]{2,}\d*"   # e.g. M20191************
-    r"|[Xx\*]{2,}\d{2,}"               # **5678 or XX1234
+    r"[A-Z]{0,4}\d{2,}[Xx\*]{2,}\d*"  # e.g. M20191************
+    r"|[Xx\*]{2,}\d{2,}"  # **5678 or XX1234
     r"|XX\d{2,}"
-    r"|\d{2,}\*{2,}\d*"                # 349992**********
+    r"|\d{2,}\*{2,}\d*"  # 349992**********
     r"|\d{4,}\*+"
     r")$"
 )
@@ -202,8 +206,10 @@ def add_status_hit(
     cred = (creditor or "").strip() or "__unknown__"
     bure = norm_bureau(bureau)
     acct = (acct_mask or "").strip() or "__unknown__"
-    info = hits.setdefault(cred, {}).setdefault(bure, {}).setdefault(
-        acct, {"labels": set(), "evidence": [], "mask": None}
+    info = (
+        hits.setdefault(cred, {})
+        .setdefault(bure, {})
+        .setdefault(acct, {"labels": set(), "evidence": [], "mask": None})
     )
     info["labels"].add(label)
     if evidence:
@@ -228,11 +234,14 @@ def safe_join_or_passthrough(
         # Skip stoplisted pseudo-headings
         if normalize_creditor_name(cred) in STOP_HEADINGS:
             continue
-        cred_norm = normalize_creditor_name(cred) if cred != "__unknown__" else "unknown creditor"
+        cred_norm = (
+            normalize_creditor_name(cred)
+            if cred != "__unknown__"
+            else "unknown creditor"
+        )
         if cred_norm == "":
             cred_norm = "unknown creditor"
         targets = accounts_by_norm.get(cred_norm)
-        synthesized = False
         if not targets:
             # Create a synthetic account entry
             acc = {
@@ -248,10 +257,7 @@ def safe_join_or_passthrough(
             result.setdefault("all_accounts", []).append(acc)
             accounts_by_norm.setdefault(cred_norm, []).append(acc)
             targets = [acc]
-            synthesized = True
-            logger.info(
-                "FBK: synthesized account for unresolved key=%r", cred
-            )
+            logger.info("FBK: synthesized account for unresolved key=%r", cred)
         # Merge hits into all target accounts
         for acc in targets or []:
             ps = acc.setdefault("payment_statuses", {})
@@ -265,7 +271,10 @@ def safe_join_or_passthrough(
                 labels: set[str] = set()
                 for acct_id, payload in acct_map.items():
                     # Merge payload into fbk node
-                    cur = node.setdefault(acct_id or "__unknown__", {"labels": set(), "evidence": [], "mask": None})
+                    cur = node.setdefault(
+                        acct_id or "__unknown__",
+                        {"labels": set(), "evidence": [], "mask": None},
+                    )
                     for L in payload.get("labels", []) or []:
                         cur["labels"].add(L)
                         labels.add(L)
@@ -314,12 +323,29 @@ def finalize_problem_accounts(result: dict, hits: dict | None = None) -> None:
 
     # Promote based on current accounts
     promoted = 0
+
     def _derive_primary(labels: set[str], acc: dict) -> str:
         L = {s.lower() for s in labels}
-        if any(x in L for x in {"collection", "collection/chargeoff", "charge off", "chargeoff"}):
+        if any(
+            x in L
+            for x in {"collection", "collection/chargeoff", "charge off", "chargeoff"}
+        ):
             return "collection"
         # Candidate past-due from labels
-        if any(any(y in lab for y in ["past due", "late 30", "late 60", "late 90", "late 120", "late 150"]) for lab in L):
+        if any(
+            any(
+                y in lab
+                for y in [
+                    "past due",
+                    "late 30",
+                    "late 60",
+                    "late 90",
+                    "late 120",
+                    "late 150",
+                ]
+            )
+            for lab in L
+        ):
             # Gate by real evidence: late history or positive past-due amount
             if _has_late_history(acc) or _has_positive_past_due(acc):
                 return "past_due"
@@ -333,10 +359,14 @@ def finalize_problem_accounts(result: dict, hits: dict | None = None) -> None:
         ps_map = acc.get("payment_statuses") or {}
         if ps_map:
             joined = " ".join(str(v or "").lower() for v in ps_map.values())
-            past_due_hit = bool(re.search(r"\bpast\s*due\b", joined) or re.search(r"late\s*(30|60|90|120|150\+?)", joined))
+            past_due_hit = bool(
+                re.search(r"\bpast\s*due\b", joined)
+                or re.search(r"late\s*(30|60|90|120|150\+?)", joined)
+            )
             if past_due_hit and (_has_late_history(acc) or _has_positive_past_due(acc)):
                 return "past_due"
         return "late_payment"
+
     def _has_late_history(acc: dict) -> bool:
         lm = acc.get("late_payments") or {}
         try:
@@ -352,11 +382,15 @@ def finalize_problem_accounts(result: dict, hits: dict | None = None) -> None:
         except Exception:
             return False
         return False
+
     def _has_positive_past_due(acc: dict) -> bool:
         # account-level value
         try:
             val = acc.get("past_due_amount")
-            if val is not None and float(str(val).replace(",", "").replace("$", "")) > 0:
+            if (
+                val is not None
+                and float(str(val).replace(",", "").replace("$", "")) > 0
+            ):
                 return True
         except Exception:
             pass
@@ -371,6 +405,7 @@ def finalize_problem_accounts(result: dict, hits: dict | None = None) -> None:
         except Exception:
             pass
         return False
+
     for acc in result.get("all_accounts", []) or []:
         ps_map = acc.get("payment_statuses") or {}
         joined = " ".join(str(v or "").lower() for v in ps_map.values())
@@ -379,7 +414,12 @@ def finalize_problem_accounts(result: dict, hits: dict | None = None) -> None:
         only_past_due = bool(re.search(r"\bpast\s*due\b", joined)) and not (
             re.search(r"collection|charge\s*off|repossession|foreclosure", joined)
         )
-        if neg_hit and only_past_due and (not _has_late_history(acc)) and (not _has_positive_past_due(acc)):
+        if (
+            neg_hit
+            and only_past_due
+            and (not _has_late_history(acc))
+            and (not _has_positive_past_due(acc))
+        ):
             logger.info(
                 "DBG past_due_downgrade name=%s reason=no_history_and_amount_zero",
                 acc.get("normalized_name") or acc.get("name"),
@@ -403,7 +443,9 @@ def finalize_problem_accounts(result: dict, hits: dict | None = None) -> None:
             )
             promoted += 1
     if promoted:
-        logger.info("FBK: promoted problem accounts from payment_statuses: %d", promoted)
+        logger.info(
+            "FBK: promoted problem accounts from payment_statuses: %d", promoted
+        )
     # Fallback: for hits with unknown creditor, synthesize accounts now
     if hits:
         accounts_by_norm: dict[str, list[dict]] = {}
@@ -412,8 +454,12 @@ def finalize_problem_accounts(result: dict, hits: dict | None = None) -> None:
         safe_join_or_passthrough(result, accounts_by_norm, hits)
     # Build final problem_accounts list
     result["problem_accounts"] = [
-        a for a in result.get("all_accounts", []) if a.get("_detector_is_problem") or any(
-            NEG_STATUS_RE.search(str(v or "")) for v in (a.get("payment_statuses") or {}).values()
+        a
+        for a in result.get("all_accounts", [])
+        if a.get("_detector_is_problem")
+        or any(
+            NEG_STATUS_RE.search(str(v or ""))
+            for v in (a.get("payment_statuses") or {}).values()
         )
     ]
     # Advisor comments and basic recommendations
@@ -435,7 +481,10 @@ def finalize_problem_accounts(result: dict, hits: dict | None = None) -> None:
                     reasons.append(f"{bure}: {val}")
             if reasons:
                 a["problem_reasons"] = reasons
-        if not a.get("advisor_comment") or len(str(a.get("advisor_comment"))) < MIN_ADVISOR_COMMENT_LEN:
+        if (
+            not a.get("advisor_comment")
+            or len(str(a.get("advisor_comment"))) < MIN_ADVISOR_COMMENT_LEN
+        ):
             if pi in ("collection", "charge_off"):
                 a["advisor_comment"] = (
                     "Account appears in collection/charge-off. Consider debt validation and goodwill/dispute steps."
@@ -449,7 +498,7 @@ def finalize_problem_accounts(result: dict, hits: dict | None = None) -> None:
             if pi in ("collection", "charge_off"):
                 recs.extend(["Send debt validation", "Prepare goodwill/dispute letter"])
             else:
-                recs.extend(["Set up auto-pay", "Send goodwill letter"]) 
+                recs.extend(["Set up auto-pay", "Send goodwill letter"])
         logger.info(
             "DBG advisor_fill name=%s primary=%s comment_len=%d recs=%d",
             a.get("normalized_name"),
@@ -460,7 +509,11 @@ def finalize_problem_accounts(result: dict, hits: dict | None = None) -> None:
         # QA guard: log WARN if missing critical fields
         ps_map = a.get("payment_statuses") or {}
         if any(NEG_STATUS_RE.search(str(v or "")) for v in ps_map.values()):
-            if (a.get("primary_issue") or "").lower() == "unknown" or not a.get("advisor_comment") or not (a.get("recommendations") or []):
+            if (
+                (a.get("primary_issue") or "").lower() == "unknown"
+                or not a.get("advisor_comment")
+                or not (a.get("recommendations") or [])
+            ):
                 logger.warning(
                     "WARN qa_missing_fields name=%s primary=%s ps=%s",
                     a.get("normalized_name"),
@@ -940,7 +993,9 @@ def analyze_credit_report(
                 if not block:
                     continue
                 name = normalize_creditor_name(block[0].strip()) or f"account_{i}"
-                (out_dir / f"{i:02d}-{name}.txt").write_text("\n".join(block), encoding="utf-8")
+                (out_dir / f"{i:02d}-{name}.txt").write_text(
+                    "\n".join(block), encoding="utf-8"
+                )
                 count += 1
             path_str = str(out_dir).replace("\\", "/").rstrip("/")
             print(f"[TRACE] account blocks exported: {count} -> {path_str}/")
@@ -997,7 +1052,12 @@ def analyze_credit_report(
             )
     extractor_accounts_total = {}
     if DETERMINISTIC_EXTRACTORS_ENABLED and ENABLE_CASESTORE_WRITE and session_id:
-        from .extractors import sections as sec_mod, accounts as acc_mod, report_meta as rm_mod, summary as sum_mod
+        from .extractors import (
+            accounts as acc_mod,
+            report_meta as rm_mod,
+            sections as sec_mod,
+            summary as sum_mod,
+        )
 
         _start = time.perf_counter()
         sec = sec_mod.detect(texts)
@@ -1100,7 +1160,10 @@ def analyze_credit_report(
             # Compare blocks before/after PyMuPDF reflow
             blocks_before = extract_account_blocks(full_text)
             try:
-                from backend.core.pdf.extract_text import extract_text as _reflow_extract
+                from backend.core.pdf.extract_text import (
+                    extract_text as _reflow_extract,
+                )
+
                 reflowed = _reflow_extract(pdf_path, prefer_fitz=True)
             except Exception:
                 reflowed = full_text
@@ -1122,7 +1185,11 @@ def analyze_credit_report(
             logger.info("FBK: blocks found=%d", len(blocks))
             for i, b in enumerate(blocks[:5], 1):
                 try:
-                    has_bureau = any(BUREAU_RE.match(l or "") for l in b[1:]) if b else False
+                    has_bureau = (
+                        any(BUREAU_RE.match(line or "") for line in b[1:])
+                        if b
+                        else False
+                    )
                     logger.info(
                         "FBK: block[%d] heading=%r lines=%d has_bureau=%s",
                         i,
@@ -1134,11 +1201,12 @@ def analyze_credit_report(
                     pass
 
             # Persist raw blocks for downstream parsers
-            fbk_blocks = []
+            fbk_blocks: List[Dict[str, Any]] = []
             for blk in blocks:
                 if not blk:
                     continue
-                fbk_blocks.append({"heading": blk[0], "lines": blk})
+                heading = (blk[0] or "").strip()
+                fbk_blocks.append({"heading": heading, "lines": blk})
             result["fbk_blocks"] = fbk_blocks
 
             # Build fuzzy lookup for account headings
@@ -1154,8 +1222,12 @@ def analyze_credit_report(
 
             # Export discovered blocks for trace/debugging
             try:
-                sid = result.get("session_id") or session_id
-                if sid and fbk_blocks:
+                sid = result.get("session_id") or session_id or request_id
+                if (
+                    sid
+                    and fbk_blocks
+                    and os.getenv("EXPORT_ACCOUNT_BLOCKS", "0") != "0"
+                ):
                     out_dir = Path("traces") / "blocks" / sid
                     out_dir.mkdir(parents=True, exist_ok=True)
                     idx_info = []
@@ -1163,7 +1235,9 @@ def analyze_credit_report(
                         jpath = out_dir / f"block_{i:02d}.json"
                         with jpath.open("w", encoding="utf-8") as f:
                             json.dump(b, f, ensure_ascii=False, indent=2)
-                        idx_info.append({"i": i, "heading": b["heading"], "file": str(jpath)})
+                        idx_info.append(
+                            {"i": i, "heading": b["heading"], "file": str(jpath)}
+                        )
                     with (out_dir / "_index.json").open("w", encoding="utf-8") as f:
                         json.dump(idx_info, f, ensure_ascii=False, indent=2)
                     logger.warning(
@@ -1218,7 +1292,9 @@ def analyze_credit_report(
                         )
             tot_accounts = len(fallback_statuses)
             tot_pairs = sum(len(v) for v in fallback_statuses.values())
-            logger.info("FBK: negatives found accounts=%d bureaus=%d", tot_accounts, tot_pairs)
+            logger.info(
+                "FBK: negatives found accounts=%d bureaus=%d", tot_accounts, tot_pairs
+            )
             for acc, bureaus in list(fallback_statuses.items())[:5]:
                 logger.info("FBK: negatives for %s -> %s", acc, bureaus)
             # Doc-level scan independent of blocks
@@ -1236,7 +1312,9 @@ def analyze_credit_report(
                 n = len(lines)
                 # Precompute context flags
                 is_bureau = [bool(BUREAU_RE.match((ln or "").strip())) for ln in lines]
-                is_mask = [bool(MASKED_ACCT_RE.search((ln or "").strip())) for ln in lines]
+                is_mask = [
+                    bool(MASKED_ACCT_RE.search((ln or "").strip())) for ln in lines
+                ]
                 for idx, raw in enumerate(lines):
                     line = (raw or "").strip()
                     if not line:
@@ -1292,7 +1370,9 @@ def analyze_credit_report(
                             continue
                         bureau = norm_bureau(current_bureau2) or "__unknown__"
                         val = mneg.group(0).lower()
-                        fallback_statuses_doc.setdefault(key, {}).setdefault(bureau, val)
+                        fallback_statuses_doc.setdefault(key, {}).setdefault(
+                            bureau, val
+                        )
                         add_status_hit(
                             fallback_hits_doc,
                             key,
@@ -1303,7 +1383,8 @@ def analyze_credit_report(
                         )
                 if fallback_statuses_doc:
                     logger.info(
-                        "FBK: doc-scan negatives accounts=%d", len(fallback_statuses_doc)
+                        "FBK: doc-scan negatives accounts=%d",
+                        len(fallback_statuses_doc),
                     )
                     for acc, vals in list(fallback_statuses_doc.items())[:5]:
                         logger.info("FBK: doc-scan negatives for %s -> %s", acc, vals)
@@ -1324,7 +1405,7 @@ def analyze_credit_report(
                                         acct,
                                         lab,
                                     )
-            
+
             except Exception:
                 pass
             # merge fallback only where missing
@@ -1355,7 +1436,9 @@ def analyze_credit_report(
         # Fallback masked account numbers when label is missing
         try:
             fallback_numbers: dict[str, dict[str, str]] = {}
-            blocks_nums = blocks if 'blocks' in locals() else extract_account_blocks(text)
+            blocks_nums = (
+                blocks if "blocks" in locals() else extract_account_blocks(text)
+            )
             for block in blocks_nums:
                 if not block:
                     continue
@@ -1382,9 +1465,15 @@ def analyze_credit_report(
                     within_idx += 1
                     if within_idx <= 3 and MASKED_ACCT_RE.match(clean):
                         # only if not already present
-                        existing = account_number_map.get(acc_name, {}).get(current_bureau)
-                        if not existing and current_bureau not in fallback_numbers.get(acc_name, {}):
-                            fallback_numbers.setdefault(acc_name, {})[current_bureau] = clean
+                        existing = account_number_map.get(acc_name, {}).get(
+                            current_bureau
+                        )
+                        if not existing and current_bureau not in fallback_numbers.get(
+                            acc_name, {}
+                        ):
+                            fallback_numbers.setdefault(acc_name, {})[
+                                current_bureau
+                            ] = clean
                             logger.info(
                                 "FBK: masked account set for %s/%s: %s",
                                 acc_name,
@@ -1460,7 +1549,9 @@ def analyze_credit_report(
             for k, lst in list(accounts_by_norm.items())[:5]:
                 if lst:
                     sample_accounts.append((k, lst[0].get("payment_statuses")))
-            logger.info("FBK: accounts payment_statuses sample (post-join): %r", sample_accounts)
+            logger.info(
+                "FBK: accounts payment_statuses sample (post-join): %r", sample_accounts
+            )
         except Exception:
             pass
 
@@ -1474,7 +1565,10 @@ def analyze_credit_report(
                     if not any(str(f).lower() == "late payments" for f in flags):
                         flags.append("Late Payments")
                         affected += 1
-            logger.info("FBK: accounts flagged by NEG_STATUS_RE in payment_statuses: %d", affected)
+            logger.info(
+                "FBK: accounts flagged by NEG_STATUS_RE in payment_statuses: %d",
+                affected,
+            )
         except Exception:
             pass
 
@@ -1501,6 +1595,7 @@ def analyze_credit_report(
                 from backend.core.logic.report_analysis.report_postprocessing import (
                     enrich_problem_accounts_with_numbers,
                 )
+
                 if isinstance(result.get("problem_accounts"), list):
                     result["problem_accounts"] = enrich_problem_accounts_with_numbers(
                         result.get("problem_accounts") or []
@@ -1509,7 +1604,9 @@ def analyze_credit_report(
                 pass
             # Snapshot and freeze immediately after finalize to prevent mutation later in this pipeline
             try:
-                _finalized_snapshot = _copy.deepcopy(result.get("problem_accounts") or [])
+                _finalized_snapshot = _copy.deepcopy(
+                    result.get("problem_accounts") or []
+                )
                 result["problem_accounts"] = tuple(
                     MappingProxyType(_copy.deepcopy(a)) if isinstance(a, dict) else a
                     for a in _finalized_snapshot
@@ -1537,9 +1634,17 @@ def analyze_credit_report(
         # Summaries before merges to reduce unresolved warnings
         try:
             total = len(account_number_map or {})
-            matched = sum(1 for k in (account_number_map or {}) if normalize_creditor_name(k) in accounts_by_norm)
+            matched = sum(
+                1
+                for k in (account_number_map or {})
+                if normalize_creditor_name(k) in accounts_by_norm
+            )
             unresolved = total - matched
-            logger.info("DBG join_result map=account_number matched=%d unresolved=%d", matched, unresolved)
+            logger.info(
+                "DBG join_result map=account_number matched=%d unresolved=%d",
+                matched,
+                unresolved,
+            )
         except Exception:
             pass
         _join_heading_map(
@@ -1567,9 +1672,17 @@ def analyze_credit_report(
         )
         try:
             total = len(detail_map or {})
-            matched = sum(1 for k in (detail_map or {}) if normalize_creditor_name(k) in accounts_by_norm)
+            matched = sum(
+                1
+                for k in (detail_map or {})
+                if normalize_creditor_name(k) in accounts_by_norm
+            )
             unresolved = total - matched
-            logger.info("DBG join_result map=bureau_details matched=%d unresolved=%d", matched, unresolved)
+            logger.info(
+                "DBG join_result map=bureau_details matched=%d unresolved=%d",
+                matched,
+                unresolved,
+            )
         except Exception:
             pass
         # Reconcile global maps for later bookkeeping
@@ -1816,14 +1929,24 @@ def analyze_credit_report(
     issues = validate_analysis_sanity(result)
     try:
         # Warn only if late terms present but no relevant problem accounts
-        relevant = {"past_due", "late_payment", "collection", "charge_off", "collection/chargeoff", "repossessed", "foreclosure", "bankruptcy"}
-        has_relevant = any((acc.get("primary_issue") or "").lower() in relevant for acc in result.get("problem_accounts", []))
+        relevant = {
+            "past_due",
+            "late_payment",
+            "collection",
+            "charge_off",
+            "collection/chargeoff",
+            "repossessed",
+            "foreclosure",
+            "bankruptcy",
+        }
+        has_relevant = any(
+            (acc.get("primary_issue") or "").lower() in relevant
+            for acc in result.get("problem_accounts", [])
+        )
         # Prefer reflowed text if available
-        late_terms = detected_late_phrases(reflowed if 'reflowed' in locals() else text)
+        late_terms = detected_late_phrases(reflowed if "reflowed" in locals() else text)
         if late_terms and not has_relevant:
-            msg = (
-                "WARN Late payment terms found in text but no accounts marked with issues."
-            )
+            msg = "WARN Late payment terms found in text but no accounts marked with issues."
             issues.append(msg)
             print(msg)
     except Exception:
@@ -1907,8 +2030,10 @@ def analyze_credit_report(
     try:
         from backend.core.utils.json_utils import _json_safe as __json_safe
     except Exception:
+
         def __json_safe(x):
             return x
+
     with open(output_json_path, "w", encoding="utf-8") as f:
         json.dump(__json_safe(result), f, indent=4, ensure_ascii=False)
 
@@ -1959,7 +2084,6 @@ def dev_parse_text_dump(dump_path: str, expect_bureau: str | None = None):
     import re as _re
     import unicodedata as _ud
 
-    logger = logging.getLogger(__name__)
     full_text = Path(dump_path).read_text(encoding="utf-8", errors="ignore")
     print(f"FBK: raw len={len(full_text)}")
 
@@ -2012,6 +2136,7 @@ def dev_parse_text_dump(dump_path: str, expect_bureau: str | None = None):
         print("FBK-DEV: PALISADES heading NOT found in blocks")
 
     from collections import defaultdict
+
     payment_status_map: dict[str, dict[str, str]] = defaultdict(dict)
     bureaus_seen = 0
     for block in blocks:

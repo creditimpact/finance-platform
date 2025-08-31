@@ -1892,6 +1892,16 @@ def analyze_credit_report(
     else:
         result["blocks_by_account_fuzzy"] = {}
 
+    # --- BEGIN: persist identifiers on analysis result ---
+    try:
+        if "session_id" not in result and session_id:
+            result["session_id"] = session_id
+        if "request_id" not in result and request_id:
+            result["request_id"] = request_id
+    except Exception:
+        logger.exception("persist_identifiers_failed")
+    # --- END: persist identifiers on analysis result ---
+
     try:
         sid = result.get("session_id") or session_id or request_id
         if sid and os.getenv("EXPORT_ACCOUNT_BLOCKS", "0") != "0":

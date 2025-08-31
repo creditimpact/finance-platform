@@ -503,7 +503,16 @@ def materialize_accounts(
             raw.setdefault("summary", {"_provenance": {}})
             # Account history by bureau (full field set)
             raw.setdefault("account_history", {})
-            raw["account_history"]["by_bureau"] = _build_account_history_by_bureau(src)
+            existing_by = raw.get("account_history", {}).get("by_bureau") or {}
+            built_by = _build_account_history_by_bureau(src)
+            merged: dict[str, dict[str, Any]] = {}
+            for b in BUREAUS:
+                cur = {f: None for f in ACCOUNT_FIELD_SET}
+                if isinstance(existing_by, Mapping):
+                    cur.update(existing_by.get(b) or {})
+                cur.update(built_by.get(b) or {})
+                merged[b] = cur
+            raw["account_history"]["by_bureau"] = merged
             # Public information / Inquiries arrays
             raw.setdefault("public_information", {"items": []})
             raw.setdefault("inquiries", {"items": []})

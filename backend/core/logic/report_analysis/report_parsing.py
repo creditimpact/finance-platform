@@ -8,6 +8,117 @@ from typing import Any, Mapping, Sequence, cast
 logger = logging.getLogger(__name__)
 
 
+# --- Standard 25-field set per bureau ---
+ACCOUNT_FIELD_SET: tuple[str, ...] = (
+    "account_number_display",
+    "account_number_last4",
+    "high_balance",
+    "last_verified",
+    "date_of_last_activity",
+    "date_reported",
+    "date_opened",
+    "balance_owed",
+    "closed_date",
+    "account_rating",
+    "account_description",
+    "dispute_status",
+    "creditor_type",
+    "account_status",
+    "payment_status",
+    "creditor_remarks",
+    "payment_amount",
+    "last_payment",
+    "term_length",
+    "past_due_amount",
+    "account_type",
+    "payment_frequency",
+    "credit_limit",
+    "two_year_payment_history",
+    "seven_year_days_late",
+)
+
+
+# --- Alias mapping (OCR/headers -> standard keys) ---
+ALIAS_TO_STD: dict[str, str] = {
+    # Numbers / amounts
+    "balance": "balance_owed",
+    "current_balance": "balance_owed",
+    "amount": "balance_owed",
+    "past_due": "past_due_amount",
+    "pmt_amount": "payment_amount",
+    "last_pmt": "last_payment",
+    "limit": "credit_limit",
+
+    # Dates
+    "last_reported": "date_reported",
+    "reported_date": "date_reported",
+    "date reported": "date_reported",
+    "opened": "date_opened",
+    "closed": "closed_date",
+    "dla": "date_of_last_activity",
+    "verified": "last_verified",
+
+    # Account number / last4
+    "account #": "account_number_display",
+    "acct #": "account_number_display",
+    "account_no": "account_number_display",
+    "account_last4": "account_number_last4",
+    "acct_last4": "account_number_last4",
+    "last4": "account_number_last4",
+
+    # Status & descriptions
+    "rating": "account_rating",
+    "description": "account_description",
+    "status": "account_status",
+
+    # Remarks
+    "remarks": "creditor_remarks",
+    "comment": "creditor_remarks",
+
+    # Types
+    "type": "account_type",
+    "freq": "payment_frequency",
+}
+
+
+NUMERIC_FIELDS = {
+    "high_balance",
+    "balance_owed",
+    "credit_limit",
+    "past_due_amount",
+    "payment_amount",
+}
+
+DATE_FIELDS = {
+    "date_opened",
+    "date_reported",
+    "closed_date",
+    "last_verified",
+    "last_payment",
+    "date_of_last_activity",
+}
+
+
+def _std_field_name(raw_key: str) -> str:
+    k = (raw_key or "").strip().lower()
+    return ALIAS_TO_STD.get(k, k)
+
+
+def _assign_std(dst: dict[str, Any], key: str, val: Any) -> None:
+    std = _std_field_name(key)
+    if std not in ACCOUNT_FIELD_SET:
+        return
+    if val is None:
+        dst[std] = None
+        return
+    if std in NUMERIC_FIELDS:
+        dst[std] = to_number(str(val))
+    elif std in DATE_FIELDS:
+        dst[std] = to_iso_date(str(val))
+    else:
+        dst[std] = str(val).strip()
+
+
 def extract_text_from_pdf(pdf_path: str | Path) -> str:
     """Return text extracted from *pdf_path* using a robust multi-engine approach.
 
@@ -90,7 +201,6 @@ from backend.core.logic.utils.text_parsing import extract_account_blocks  # noqa
 from backend.core.models.bureau import BureauAccount  # noqa: E402
 from .constants import (
     BUREAUS,
-    ACCOUNT_FIELD_SET,
     INQUIRY_FIELDS,
     PUBLIC_INFO_FIELDS,
 )
@@ -911,36 +1021,7 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
     logger.info("parse_account_block start lines=%d", len(block_lines))
 
     def _init_maps():
-        return {
-            b: {
-                "account_number_display": None,
-                "account_number_last4": None,
-                "high_balance": None,
-                "last_verified": None,
-                "date_of_last_activity": None,
-                "date_reported": None,
-                "date_opened": None,
-                "balance_owed": None,
-                "closed_date": None,
-                "account_rating": None,
-                "account_description": None,
-                "dispute_status": None,
-                "creditor_type": None,
-                "account_status": None,
-                "payment_status": None,
-                "creditor_remarks": None,
-                "payment_amount": None,
-                "last_payment": None,
-                "term_length": None,
-                "past_due_amount": None,
-                "account_type": None,
-                "payment_frequency": None,
-                "credit_limit": None,
-                "two_year_payment_history": None,
-                "seven_year_days_late": None,
-            }
-            for b in BUREAUS
-        }
+        return {b: _empty_bureau_map() for b in BUREAUS}
 
     bureau_maps = _init_maps()
     raw_lines = [l.rstrip("\n") for l in block_lines if l.strip()]
@@ -1008,26 +1089,12 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
             for key, start, end in spans:
                 seg = body[start:end].strip()
                 if seg in {"", "--"}:
-                    val = None
+                    _assign_std(bm, key, None)
                 else:
+                    _assign_std(bm, key, seg)
                     if key == "account_number_display":
-                        val = seg
                         digits = re.sub(r"\D", "", seg)
-                        bm["account_number_last4"] = digits[-4:] if digits else None
-                    elif key in {"high_balance", "balance_owed", "payment_amount", "past_due_amount"}:
-                        val = _to_num(seg)
-                    elif key in {
-                        "last_verified",
-                        "date_of_last_activity",
-                        "date_reported",
-                        "date_opened",
-                        "last_payment",
-                        "closed_date",
-                    }:
-                        val = _to_iso(seg)
-                    else:
-                        val = seg
-                bm[key] = val
+                        _assign_std(bm, "account_number_last4", digits[-4:] if digits else None)
             parsed.add(bureau)
 
     # Fallback to legacy regex parsing if header spans failed
@@ -1042,24 +1109,23 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
             b = "transunion" if "trans" in bname else ("experian" if "exp" in bname else "equifax")
             masked = m.group(2)
             bm = bureau_maps[b]
-            bm["account_number_display"] = masked
-            bm["account_number_last4"] = (
-                re.sub(r"\D", "", masked)[-4:] if re.search(r"\d", masked) else None
-            )
-            bm["high_balance"] = _to_num(m.group(3))
-            bm["last_verified"] = _to_iso(m.group(4))
-            bm["date_of_last_activity"] = _to_iso(m.group(5))
-            bm["date_reported"] = _to_iso(m.group(6))
-            bm["date_opened"] = _to_iso(m.group(7))
-            bm["balance_owed"] = _to_num(m.group(8))
-            bm["account_rating"] = m.group(9)
-            bm["account_description"] = m.group(10)
-            bm["creditor_type"] = m.group(11)
-            bm["account_status"] = m.group(12)
-            bm["payment_status"] = m.group(13)
-            bm["payment_amount"] = _to_num(m.group(14))
-            bm["last_payment"] = _to_iso(m.group(15))
-            bm["past_due_amount"] = _to_num(m.group(16))
+            _assign_std(bm, "account_number_display", masked)
+            digits = re.sub(r"\D", "", masked) if re.search(r"\d", masked) else ""
+            _assign_std(bm, "account_number_last4", digits[-4:] if digits else None)
+            _assign_std(bm, "high_balance", m.group(3))
+            _assign_std(bm, "last_verified", m.group(4))
+            _assign_std(bm, "date_of_last_activity", m.group(5))
+            _assign_std(bm, "date_reported", m.group(6))
+            _assign_std(bm, "date_opened", m.group(7))
+            _assign_std(bm, "balance_owed", m.group(8))
+            _assign_std(bm, "account_rating", m.group(9))
+            _assign_std(bm, "account_description", m.group(10))
+            _assign_std(bm, "creditor_type", m.group(11))
+            _assign_std(bm, "account_status", m.group(12))
+            _assign_std(bm, "payment_status", m.group(13))
+            _assign_std(bm, "payment_amount", m.group(14))
+            _assign_std(bm, "last_payment", m.group(15))
+            _assign_std(bm, "past_due_amount", m.group(16))
 
     # Footer triplet lines (account type / payment frequency / credit limit)
     footer = parse_three_footer_lines(raw_lines)
@@ -1067,14 +1133,14 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
         for k in ("account_type", "payment_frequency", "credit_limit"):
             val = footer.get(b, {}).get(k)
             if val is not None:
-                bureau_maps[b][k] = val
+                _assign_std(bureau_maps[b], k, val)
 
     hist2y = parse_two_year_history(raw_lines)
     sev7 = parse_seven_year_days_late(raw_lines)
     for b in BUREAUS:
         bm = bureau_maps[b]
-        bm["two_year_payment_history"] = hist2y[b]
-        bm["seven_year_days_late"] = sev7[b]
+        _assign_std(bm, "two_year_payment_history", hist2y[b])
+        _assign_std(bm, "seven_year_days_late", sev7[b])
     return bureau_maps
 
 
@@ -1084,10 +1150,7 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
     logger.info("parse_collection_block start lines=%d", len(block_lines))
 
     def _init():
-        return {
-            b: {field: None for field in ACCOUNT_FIELD_SET}
-            for b in BUREAUS
-        }
+        return {b: _empty_bureau_map() for b in BUREAUS}
 
     maps = _init()
     for line in block_lines:
@@ -1101,9 +1164,9 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
         acct = re.search(r"account\s*#?\s*([\d\*]+)", body, re.I)
         if acct:
             masked = acct.group(1)
-            bm["account_number_display"] = masked
+            _assign_std(bm, "account_number_display", masked)
             digits = re.sub(r"\D", "", masked)
-            bm["account_number_last4"] = digits[-4:] if digits else None
+            _assign_std(bm, "account_number_last4", digits[-4:] if digits else None)
 
         hb = re.search(
             r"(?:high balance|original (?:amount|balance))\s*:?\s*([-\d\$,CRDR ]+)",
@@ -1111,7 +1174,7 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
             re.I,
         )
         if hb:
-            bm["high_balance"] = _to_num(hb.group(1))
+            _assign_std(bm, "high_balance", hb.group(1))
 
         bal = re.search(
             r"(?:amount|current balance|balance owed|(?<!high )balance)\s*:?\s*([-\d\$,CRDR ]+)",
@@ -1119,7 +1182,7 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
             re.I,
         )
         if bal:
-            bm["balance_owed"] = _to_num(bal.group(1))
+            _assign_std(bm, "balance_owed", bal.group(1))
 
         past = re.search(
             r"past due(?: amount)?\s*:?\s*([-\d\$,CRDR ]+)",
@@ -1127,7 +1190,7 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
             re.I,
         )
         if past:
-            bm["past_due_amount"] = _to_num(past.group(1))
+            _assign_std(bm, "past_due_amount", past.group(1))
 
         for label, key in {
             "date reported": "date_reported",
@@ -1137,19 +1200,19 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
         }.items():
             m2 = re.search(label + r"\s*:?\s*([-\d/]+)", body, re.I)
             if m2:
-                bm[key] = _to_iso(m2.group(1))
+                _assign_std(bm, key, m2.group(1))
 
         astatus = re.search(r"account status\s*:?\s*([\w /-]+)", body, re.I)
         if astatus:
-            bm["account_status"] = astatus.group(1).strip()
+            _assign_std(bm, "account_status", astatus.group(1).strip())
 
         pstatus = re.search(r"payment status\s*:?\s*([\w /-]+)", body, re.I)
         if pstatus:
-            bm["payment_status"] = pstatus.group(1).strip()
+            _assign_std(bm, "payment_status", pstatus.group(1).strip())
 
         remarks = re.search(r"(?:remarks?|comment)\s*:?\s*(.+)", body, re.I)
         if remarks:
-            bm["creditor_remarks"] = remarks.group(1).strip()
+            _assign_std(bm, "creditor_remarks", remarks.group(1).strip())
 
     return maps
 
@@ -1189,48 +1252,26 @@ def _fill_bureau_map_from_sources(
     # 1) bureaus[] entry
     src = _find_bureau_entry(acc, bureau)
     if isinstance(src, Mapping):
-        # Map overlapping keys (identity plus known aliases)
-        mapping: dict[str, str] = {f: f for f in ACCOUNT_FIELD_SET}
-        mapping.update({
-            "balance": "balance_owed",
-            "current_balance": "balance_owed",
-            "amount": "balance_owed",
-            "last_reported": "date_reported",
-            "date_reported": "date_reported",
-            "reported_date": "date_reported",
-            "remarks": "creditor_remarks",
-            "comment": "creditor_remarks",
-            "status": "account_status",
-            "rating": "account_rating",
-        })
-        for s_key, d_key in mapping.items():
-            if dst.get(d_key) is None and src.get(s_key) not in (None, "", {}, []):
-                val = src.get(s_key)
-                if d_key in {"high_balance", "balance_owed", "credit_limit", "past_due_amount", "payment_amount"}:
-                    dst[d_key] = to_number(val)
-                elif d_key in {"date_opened", "date_reported", "closed_date", "last_verified", "last_payment", "date_of_last_activity"}:
-                    dst[d_key] = to_iso_date(val)
-                else:
-                    dst[d_key] = val
+        for s_key, val in src.items():
+            std = _std_field_name(s_key)
+            if std not in ACCOUNT_FIELD_SET:
+                continue
+            if dst.get(std) is None and val not in (None, "", {}, []):
+                _assign_std(dst, s_key, val)
 
     # 2) bureau_details[bureau]
     details = (acc.get("bureau_details") or {}).get(bureau)
     if not isinstance(details, Mapping):
-        # Try normalized keys in case caller stored lowercased keys
-        details = (acc.get("bureau_details") or {}).get(bureau.lower()) or (acc.get("bureau_details") or {}).get(bureau.title())
+        details = (acc.get("bureau_details") or {}).get(bureau.lower()) or (
+            acc.get("bureau_details") or {}
+        ).get(bureau.title())
     if isinstance(details, Mapping):
-        for key in ACCOUNT_FIELD_SET:
-            if dst.get(key) is not None:
+        for key, val in details.items():
+            std = _std_field_name(key)
+            if std not in ACCOUNT_FIELD_SET:
                 continue
-            if details.get(key) in (None, "", {}, []):
-                continue
-            val = details.get(key)
-            if key in {"high_balance", "balance_owed", "credit_limit", "past_due_amount", "payment_amount"}:
-                dst[key] = to_number(val)
-            elif key in {"date_opened", "date_reported", "closed_date", "last_verified", "last_payment", "date_of_last_activity"}:
-                dst[key] = to_iso_date(val)
-            else:
-                dst[key] = val
+            if dst.get(std) is None and val not in (None, "", {}, []):
+                _assign_std(dst, key, val)
 
     # 3) Existing raw.by_bureau values as last resort
     try:
@@ -1241,9 +1282,12 @@ def _fill_bureau_map_from_sources(
             .get(bureau, {})
         )
         if isinstance(existing, Mapping):
-            for key in ACCOUNT_FIELD_SET:
-                if dst.get(key) is None and existing.get(key) not in (None, "", {}, []):
-                    dst[key] = existing.get(key)
+            for key, val in existing.items():
+                std = _std_field_name(key)
+                if std not in ACCOUNT_FIELD_SET:
+                    continue
+                if dst.get(std) is None and val not in (None, "", {}, []):
+                    _assign_std(dst, key, val)
     except Exception:
         pass
 
@@ -1252,15 +1296,19 @@ def _fill_bureau_map_from_sources(
         last4 = acc.get("account_number_last4") or acc.get("account_number")
         if isinstance(last4, str):
             digits = re.sub(r"\D", "", last4)
-            dst["account_number_last4"] = digits[-4:] if digits else None
+            _assign_std(dst, "account_number_last4", digits[-4:] if digits else None)
         elif isinstance(last4, (int, float)):
             s = str(int(last4))
-            dst["account_number_last4"] = s[-4:] if s else None
+            _assign_std(dst, "account_number_last4", s[-4:] if s else None)
 
     if dst.get("account_number_display") in (None, ""):
-        disp = acc.get("account_number_raw") or acc.get("account_number_display") or acc.get("account_number")
+        disp = (
+            acc.get("account_number_raw")
+            or acc.get("account_number_display")
+            or acc.get("account_number")
+        )
         if disp not in (None, "", {}, []):
-            dst["account_number_display"] = disp
+            _assign_std(dst, "account_number_display", disp)
 
     # --- BEFORE return, after merging from known sources ---
     missing_before = [k for k, v in dst.items() if v is None]
@@ -1279,7 +1327,7 @@ def _fill_bureau_map_from_sources(
             bm = block_maps.get(bureau, {})
             for k in dst.keys():
                 if dst[k] is None and k in bm:
-                    dst[k] = bm[k]
+                    _assign_std(dst, k, bm[k])
         except Exception:
             logger.exception(
                 "parse_account_block_failed account=%s bureau=%s",
@@ -1294,7 +1342,7 @@ def _fill_bureau_map_from_sources(
                 bm2 = coll_maps.get(bureau, {})
                 for k in dst.keys():
                     if dst[k] is None and k in bm2:
-                        dst[k] = bm2[k]
+                        _assign_std(dst, k, bm2[k])
             except Exception:
                 logger.exception(
                     "parse_collection_block_failed account=%s bureau=%s",

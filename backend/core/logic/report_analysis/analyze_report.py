@@ -1926,9 +1926,10 @@ def analyze_credit_report(
             with (out_dir / "_index.json").open("w", encoding="utf-8") as f:
                 json.dump(idx_info, f, ensure_ascii=False, indent=2)
             logger.warning(
-                "[TRACE] account blocks exported: %d -> traces/blocks/%s/",
-                len(fbk_blocks),
+                "ANZ: export blocks sid=%s dir=%s files=%d",
                 sid,
+                str(out_dir),
+                len(fbk_blocks),
             )
     except Exception:
         logger.exception("block_export_failed")

@@ -1902,6 +1902,16 @@ def analyze_credit_report(
         logger.exception("persist_identifiers_failed")
     # --- END: persist identifiers on analysis result ---
 
+    # --- BEGIN: ANZ diagnostics ---
+    logger.warning(
+        "ANZ: pre-save fbk=%d fuzzy=%d sid=%s req=%s",
+        len(result.get("fbk_blocks") or []),
+        len((result.get("blocks_by_account_fuzzy") or {}).keys()),
+        result.get("session_id"),
+        result.get("request_id"),
+    )
+    # --- END: ANZ diagnostics ---
+
     try:
         sid = result.get("session_id") or session_id or request_id
         if sid and os.getenv("EXPORT_ACCOUNT_BLOCKS", "0") != "0":

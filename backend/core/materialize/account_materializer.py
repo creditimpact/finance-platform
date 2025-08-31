@@ -490,42 +490,55 @@ def materialize_accounts(
             # Initialize empty 25-field maps for each bureau and attempt to fill
             # them using available sources and OCR block lines.
             by = {b: _empty_bureau_map() for b in BUREAUS}
-            # Ensure block data exists; if missing, rebuild from traces
-            try:  # pragma: no cover - best effort rebuild
-                if not (
-                    isinstance(ocr_doc, Mapping)
-                    and ocr_doc.get("fbk_blocks")
-                    and ocr_doc.get("blocks_by_account_fuzzy")
-                ):
-                    sid = (
-                        ocr_doc.get("session_id")
-                        if isinstance(ocr_doc, Mapping)
-                        else None
-                    ) or session_id
-                    if sid:
-                        from pathlib import Path
-                        import json
 
-                        blkdir = Path("traces") / "blocks" / sid
-                        blocks = []
-                        for p in sorted(blkdir.glob("block_*.json")):
-                            with p.open("r", encoding="utf-8") as f:
-                                blocks.append(json.load(f))
-                        if blocks:
-                            ocr_doc["fbk_blocks"] = blocks
-                            from backend.core.logic.report_analysis.analyze_report import (
-                                build_block_fuzzy,
-                            )
+            # --- BEGIN: unified SID ---
+            sections = locals().get("sections")
+            sid = (
+                (ocr_doc.get("session_id") if isinstance(ocr_doc, Mapping) else None)
+                or (ocr_doc.get("request_id") if isinstance(ocr_doc, Mapping) else None)
+                or (sections.get("session_id") if isinstance(sections, Mapping) else None)
+                or (sections.get("request_id") if isinstance(sections, Mapping) else None)
+            )
+            # --- END: unified SID ---
 
-                            ocr_doc["blocks_by_account_fuzzy"] = build_block_fuzzy(
-                                blocks
-                            )
-                            logger.info(
-                                "MAT: rebuilt blocks_by_account_fuzzy from traces, size=%d",
-                                len(ocr_doc["blocks_by_account_fuzzy"]),
-                            )
+            # --- BEGIN: MAT fallback diagnostics ---
+            try:
+                from pathlib import Path
+                import json
+
+                blkdir = Path("traces") / "blocks" / (sid or "")
+                dir_exists = blkdir.is_dir()
+                files_count = len(list(blkdir.glob("block_*.json"))) if dir_exists else 0
+                logger.warning(
+                    "MAT: fallback sid=%s dir=%s exists=%s files=%d",
+                    sid,
+                    str(blkdir),
+                    dir_exists,
+                    files_count,
+                )
+
+                if not ocr_doc.get("fbk_blocks") and dir_exists and files_count > 0:
+                    blocks = []
+                    for p in sorted(blkdir.glob("block_*.json")):
+                        with p.open("r", encoding="utf-8") as f:
+                            blocks.append(json.load(f))
+                    if blocks:
+                        ocr_doc["fbk_blocks"] = blocks
+                        from backend.core.logic.report_analysis.analyze_report import build_block_fuzzy
+                        ocr_doc["blocks_by_account_fuzzy"] = build_block_fuzzy(blocks)
+                        logger.warning(
+                            "MAT: rebuilt lines_map=%d from traces",
+                            len((ocr_doc.get("blocks_by_account_fuzzy") or {}).keys()),
+                        )
             except Exception:
                 logger.exception("materializer_block_fallback_failed")
+
+            logger.warning(
+                "MAT: before-find lines_map=%d sid=%s",
+                len((ocr_doc.get("blocks_by_account_fuzzy") or {}).keys()),
+                sid,
+            )
+            # --- END: MAT fallback diagnostics ---
 
             lines = _find_block_lines_for_account(ocr_doc, src)
             for b in BUREAUS:

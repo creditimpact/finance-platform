@@ -843,7 +843,7 @@ def parse_seven_year_days_late(lines: list[str]) -> dict[str, Any | None]:
 
 
 def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | None]]:
-    logger.debug("parse_account_block start lines=%d", len(block_lines))
+    logger.info("parse_account_block start lines=%d", len(block_lines))
 
     def _init_maps():
         return {
@@ -1010,7 +1010,7 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
 def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | None]]:
     """Parse simplified collection/charge-off blocks."""
 
-    logger.debug("parse_collection_block start lines=%d", len(block_lines))
+    logger.info("parse_collection_block start lines=%d", len(block_lines))
 
     def _init():
         return {
@@ -1087,10 +1087,13 @@ def _fill_bureau_map_from_sources(
         mapping: dict[str, str] = {f: f for f in ACCOUNT_FIELD_SET}
         mapping.update({
             "balance": "balance_owed",
+            "current_balance": "balance_owed",
+            "amount": "balance_owed",
             "last_reported": "date_reported",
             "date_reported": "date_reported",
             "reported_date": "date_reported",
             "remarks": "creditor_remarks",
+            "comment": "creditor_remarks",
             "status": "account_status",
             "rating": "account_rating",
         })

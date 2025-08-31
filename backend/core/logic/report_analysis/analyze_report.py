@@ -1133,37 +1133,51 @@ def analyze_credit_report(
                 except Exception:
                     pass
 
-            # Persist raw blocks and fuzzy indices for downstream parsers
+            # Persist raw blocks for downstream parsers
+            fbk_blocks = []
+            for blk in blocks:
+                if not blk:
+                    continue
+                fbk_blocks.append({"heading": blk[0], "lines": blk})
+            result["fbk_blocks"] = fbk_blocks
+
+            # Build fuzzy lookup for account headings
             try:
-                result["fbk_blocks"] = [
-                    {"heading": blk[0] if blk else "", "lines": blk}
-                    for blk in blocks
-                    if blk
-                ]
-                result["blocks_by_account_fuzzy"] = build_block_fuzzy(
-                    result.get("fbk_blocks", [])
-                )
+                if fbk_blocks:
+                    result["blocks_by_account_fuzzy"] = build_block_fuzzy(fbk_blocks)
+                    logger.info(
+                        "blocks_by_account_fuzzy size=%d",
+                        len(result.get("blocks_by_account_fuzzy") or {}),
+                    )
             except Exception:
                 logger.exception("block_fuzzy_build_failed")
 
             # Export discovered blocks for trace/debugging
             try:
-                out_dir = Path("traces") / "blocks" / (session_id or "no-session")
-                out_dir.mkdir(parents=True, exist_ok=True)
-                count = 0
-                for idx, block in enumerate(blocks, start=1):
-                    if not block:
-                        continue
-                    name = normalize_creditor_name(block[0].strip()) or f"account_{idx}"
-                    (out_dir / f"{idx:02d}-{name}.txt").write_text(
-                        "\n".join(block),
-                        encoding="utf-8",
+                sid = result.get("session_id") or session_id
+                if sid and fbk_blocks:
+                    out_dir = Path("traces") / "blocks" / sid
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    idx_info = []
+                    for i, b in enumerate(fbk_blocks, 1):
+                        jpath = out_dir / f"block_{i:02d}.json"
+                        with jpath.open("w", encoding="utf-8") as f:
+                            json.dump(b, f, ensure_ascii=False, indent=2)
+                        idx_info.append({"i": i, "heading": b["heading"], "file": str(jpath)})
+                    with (out_dir / "_index.json").open("w", encoding="utf-8") as f:
+                        json.dump(idx_info, f, ensure_ascii=False, indent=2)
+                    logger.warning(
+                        "[TRACE] account blocks exported: %d -> traces/blocks/%s/",
+                        len(fbk_blocks),
+                        sid,
                     )
-                    count += 1
-                path_str = str(out_dir).replace("\\", "/").rstrip("/")
-                logger.info("account blocks exported: %d -> %s/", count, path_str)
+                else:
+                    logger.warning(
+                        "[TRACE] account blocks exported: 0 -> traces/blocks/%s/",
+                        sid or "<no-session>",
+                    )
             except Exception:
-                logger.exception("account_block_export_failed")
+                logger.exception("block_export_failed")
 
             fallback_statuses: dict[str, dict[str, str]] = {}
             fallback_hits_additive: dict = {}

@@ -652,24 +652,14 @@ def _to_num(s: str) -> Any | None:
     s = (s or "").strip()
     if s in {"--", "-", ""}:
         return None
-    s = s.replace(",", "")
-    try:
-        return float(s)
-    except Exception:
-        return s
+    return to_number(s)
 
 
 def _to_iso(s: str) -> Any | None:
     s = (s or "").strip()
     if s in {"--", "-", ""}:
         return None
-    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
-    if m:
-        mm, dd, yyyy = m.groups()
-        return f"{int(yyyy):04d}-{int(mm):02d}-{int(dd):02d}"
-    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
-        return s
-    return s
+    return to_iso_date(s)
 
 
 BUREAU_LINE_RE = re.compile(
@@ -679,37 +669,113 @@ BUREAU_LINE_RE = re.compile(
 
 
 def parse_three_footer_lines(lines: list[str]) -> dict[str, dict[str, Any | None]]:
+    """Parse the trailing three footer lines mapping to the bureaus.
+
+    Each footer line corresponds to a single bureau in TU→EX→EQ order and may
+    contain an account type, optional payment frequency and an optional credit
+    limit ("--" or empty values are treated as ``None``).
+    """
+
     out = {
         b: {"account_type": None, "payment_frequency": None, "credit_limit": None}
         for b in BUREAUS
     }
-    joined = " ".join(lines)
-    items = re.findall(r"([A-Za-z ][A-Za-z]+)\s+--\s+(\d+)", joined)
-    for i, b in enumerate(BUREAUS):
-        if i < len(items):
-            typ, lim = items[i]
-            out[b]["account_type"] = typ.strip().lower()
-            out[b]["credit_limit"] = _to_num(lim)
+
+    # Identify the three lines immediately preceding the two-year history block
+    try:
+        hist_idx = next(
+            i for i, ln in enumerate(lines) if "two-year payment history" in ln.lower()
+        )
+    except StopIteration:
+        hist_idx = len(lines)
+
+    candidates = [ln.strip() for ln in lines[max(0, hist_idx - 3) : hist_idx] if ln.strip()]
+    if len(candidates) > 3:
+        candidates = candidates[-3:]
+
+    for line, bureau in zip(candidates, BUREAUS):
+        parts = line.split()
+        if not parts:
+            continue
+        # Credit limit is assumed to be the last token and numeric
+        credit_limit = _to_num(parts[-1])
+        if credit_limit is not None:
+            parts = parts[:-1]
+        else:
+            credit_limit = None
+
+        payment_frequency = None
+        if parts:
+            freq_cand = parts[-1].lower()
+            if freq_cand in {
+                "monthly",
+                "weekly",
+                "bi-weekly",
+                "semi-monthly",
+                "quarterly",
+                "annually",
+                "yearly",
+                "--",
+            }:
+                if freq_cand != "--":
+                    payment_frequency = freq_cand
+                parts = parts[:-1]
+
+        account_type = " ".join(parts).strip().lower() or None
+
+        out[bureau]["account_type"] = account_type
+        out[bureau]["payment_frequency"] = payment_frequency
+        out[bureau]["credit_limit"] = credit_limit
+
     return out
 
 
 def parse_two_year_history(lines: list[str]) -> dict[str, Any | None]:
-    text = "\n".join(lines)
+    """Extract per-bureau two-year payment history strings."""
+
     out = {b: None for b in BUREAUS}
-    for b in BUREAUS:
-        m = re.search(
-            rf"Two-Year Payment History.*?{b}(.+?)Days Late -7 Year History",
-            text,
-            re.S | re.I,
+
+    try:
+        start = next(i for i, ln in enumerate(lines) if "two-year payment history" in ln.lower())
+        end = next(
+            i
+            for i, ln in enumerate(lines[start + 1 :], start + 1)
+            if "days late -7 year history" in ln.lower()
         )
+    except StopIteration:
+        return out
+
+    seg_lines = lines[start + 1 : end]
+    current: str | None = None
+    buffer: list[str] = []
+    for ln in seg_lines:
+        m = re.match(r"(Transunion|Experian|Equifax)\s*(.*)", ln, re.I)
         if m:
-            out[b] = " ".join(m.group(1).split())
+            if current and buffer:
+                out[current] = " ".join(" ".join(buffer).split())
+            current = m.group(1).lower()
+            buffer = [m.group(2)]
+        else:
+            if current:
+                buffer.append(ln)
+    if current and buffer:
+        out[current] = " ".join(" ".join(buffer).split())
     return out
 
 
 def parse_seven_year_days_late(lines: list[str]) -> dict[str, Any | None]:
-    text = "\n".join(lines)
+    """Sum 30/60/90 day late counts over seven years per bureau."""
+
     out = {b: None for b in BUREAUS}
+
+    try:
+        start = next(
+            i for i, ln in enumerate(lines) if "days late -7 year history" in ln.lower()
+        )
+    except StopIteration:
+        return out
+
+    text = "\n".join(lines[start + 1 :])
     for b in BUREAUS:
         m = re.search(rf"{b}.*?30:(\d+)\s+60:(\d+)\s+90:(\d+)", text, re.I)
         if m:
@@ -752,140 +818,128 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
         }
 
     bureau_maps = _init_maps()
-    raw_lines = [l.rstrip() for l in block_lines if l.strip()]
-    joined = [" ".join(l.split()) for l in raw_lines]
-    bureau_rows = [l for l in joined if re.match(r"^(Transunion|Experian|Equifax)\s", l, re.I)]
+    raw_lines = [l.rstrip("\n") for l in block_lines if l.strip()]
 
-    parsed_any = False
-    for row in bureau_rows:
-        m = BUREAU_LINE_RE.search(row)
-        if not m:
-            continue
-        parsed_any = True
-        label = m.group(1).lower()
-        b = "transunion" if "trans" in label else ("experian" if "exp" in label else "equifax")
-        masked = m.group(2)
-        bm = bureau_maps[b]
-        bm["account_number_display"] = masked
-        bm["account_number_last4"] = re.sub(r"\D", "", masked)[-4:] if re.search(r"\d", masked) else None
-        bm["high_balance"] = _to_num(m.group(3))
-        bm["last_verified"] = _to_iso(m.group(4))
-        bm["date_of_last_activity"] = _to_iso(m.group(5))
-        bm["date_reported"] = _to_iso(m.group(6))
-        bm["date_opened"] = _to_iso(m.group(7))
-        bm["balance_owed"] = _to_num(m.group(8))
-        bm["closed_date"] = None
-        bm["account_rating"] = m.group(9)
-        bm["account_description"] = m.group(10)
-        bm["creditor_type"] = m.group(11)
-        bm["account_status"] = m.group(12)
-        bm["payment_status"] = m.group(13)
-        bm["payment_amount"] = _to_num(m.group(14))
-        bm["last_payment"] = _to_iso(m.group(15))
-        bm["past_due_amount"] = _to_num(m.group(16))
+    # --- Header-based column spans ---------------------------------------
+    header_idx: int | None = None
+    header_line: str | None = None
+    for i, line in enumerate(raw_lines):
+        low = line.lower()
+        if "account #" in low and "high balance" in low:
+            header_idx = i
+            header_line = line
+            break
 
-    if not parsed_any:
-        bureau_maps = _init_maps()
-        # Determine bureau column order
-        bureau_order = list(BUREAUS)
-        positions = {b: i * 10 for i, b in enumerate(BUREAUS)}
-        for line in raw_lines:
-            low = line.lower()
-            if all(k in low for k in ("transunion", "experian", "equifax")):
-                positions = {
-                    "transunion": low.index("transunion"),
-                    "experian": low.index("experian"),
-                    "equifax": low.index("equifax"),
-                }
-                bureau_order = [k for k, _ in sorted(positions.items(), key=lambda x: x[1])]
-                break
-        mapping = {
-            "account #": "account_number_display",
-            "high balance": "high_balance",
-            "last verified": "last_verified",
-            "date of last activity": "date_of_last_activity",
-            "date reported": "date_reported",
-            "date opened": "date_opened",
-            "balance owed": "balance_owed",
-            "closed date": "closed_date",
-            "account rating": "account_rating",
-            "account description": "account_description",
-            "dispute status": "dispute_status",
-            "creditor type": "creditor_type",
-            "account status": "account_status",
-            "payment status": "payment_status",
-            "creditor remarks": "creditor_remarks",
-            "payment amount": "payment_amount",
-            "last payment": "last_payment",
-            "term length": "term_length",
-            "past due amount": "past_due_amount",
-            "account type": "account_type",
-            "payment frequency": "payment_frequency",
-            "credit limit": "credit_limit",
-        }
-        num_fields = {
-            "high_balance",
-            "balance_owed",
-            "payment_amount",
-            "past_due_amount",
-            "credit_limit",
-        }
-        date_fields = {
-            "last_verified",
-            "date_of_last_activity",
-            "date_reported",
-            "date_opened",
-            "last_payment",
-            "closed_date",
-        }
-        capture_remarks = False
-        for line in raw_lines:
-            clean = line.strip()
-            if not clean:
-                continue
-            if clean.lower().startswith("two-year payment history"):
-                break
-            if capture_remarks:
-                if re.match(r"^[A-Za-z]+:\s", clean):
-                    capture_remarks = False
-                else:
-                    # Append continuation to all bureaus with existing remarks
-                    for b in BUREAUS:
-                        if bureau_maps[b]["creditor_remarks"]:
-                            bureau_maps[b]["creditor_remarks"] += " " + clean
-                    continue
-            m = re.match(r"([^:]+):\s*(.*)", clean)
+    spans: list[tuple[str, int, int]] = []
+    if header_line is not None:
+        cols = [
+            ("account_number_display", "account #"),
+            ("high_balance", "high balance"),
+            ("last_verified", "last verified"),
+            ("date_of_last_activity", "date of last activity"),
+            ("date_reported", "date reported"),
+            ("date_opened", "date opened"),
+            ("balance_owed", "balance owed"),
+            ("closed_date", "closed date"),
+            ("account_rating", "account rating"),
+            ("account_description", "account description"),
+            ("dispute_status", "dispute status"),
+            ("creditor_type", "creditor type"),
+            ("account_status", "account status"),
+            ("payment_status", "payment status"),
+            ("creditor_remarks", "creditor remarks"),
+            ("payment_amount", "payment amount"),
+            ("last_payment", "last payment"),
+            ("term_length", "term length"),
+            ("past_due_amount", "past due amount"),
+        ]
+        hlow = header_line.lower()
+        pos_list: list[tuple[int, str]] = []
+        for key, label in cols:
+            idx = hlow.find(label)
+            if idx >= 0:
+                pos_list.append((idx, key))
+        pos_list.sort()
+        for idx, (start, key) in enumerate(pos_list):
+            end = pos_list[idx + 1][0] if idx + 1 < len(pos_list) else len(header_line)
+            spans.append((key, start, end))
+
+    parsed = set()
+    if spans and header_idx is not None:
+        for line in raw_lines[header_idx + 1 :]:
+            m = re.match(r"(Transunion|Experian|Equifax)\s+(.*)", line, re.I)
             if not m:
                 continue
-            label, rest = m.groups()
-            key = mapping.get(label.strip().lower())
-            if not key:
-                continue
-            max_pos = max(positions.values()) + 20
-            val = rest.ljust(max_pos)
-            parts = [
-                val[positions[bureau_order[0]]:positions[bureau_order[1]]].strip(),
-                val[positions[bureau_order[1]]:positions[bureau_order[2]]].strip(),
-                val[positions[bureau_order[2]]:].strip(),
-            ]
-            for b, val in zip(bureau_order, parts):
-                if val in (None, "", "--"):
-                    continue
-                if key == "account_number_display":
-                    bureau_maps[b][key] = val
-                    digits = re.sub(r"\D", "", val)
-                    bureau_maps[b]["account_number_last4"] = digits[-4:] if digits else None
-                elif key in num_fields:
-                    bureau_maps[b][key] = _to_num(val)
-                elif key in date_fields:
-                    bureau_maps[b][key] = _to_iso(val)
+            bureau = m.group(1).lower()
+            body = m.group(2)
+            body = body.ljust(len(header_line))
+            bm = bureau_maps[bureau]
+            for key, start, end in spans:
+                seg = body[start:end].strip()
+                if seg in {"", "--"}:
+                    val = None
                 else:
-                    bureau_maps[b][key] = val
-            if key == "creditor_remarks":
-                capture_remarks = True
+                    if key == "account_number_display":
+                        val = seg
+                        digits = re.sub(r"\D", "", seg)
+                        bm["account_number_last4"] = digits[-4:] if digits else None
+                    elif key in {"high_balance", "balance_owed", "payment_amount", "past_due_amount"}:
+                        val = _to_num(seg)
+                    elif key in {
+                        "last_verified",
+                        "date_of_last_activity",
+                        "date_reported",
+                        "date_opened",
+                        "last_payment",
+                        "closed_date",
+                    }:
+                        val = _to_iso(seg)
+                    else:
+                        val = seg
+                bm[key] = val
+            parsed.add(bureau)
 
-    hist2y = parse_two_year_history(block_lines)
-    sev7 = parse_seven_year_days_late(block_lines)
+    # Fallback to legacy regex parsing if header spans failed
+    if not parsed:
+        joined = [" ".join(l.split()) for l in raw_lines]
+        bureau_rows = [l for l in joined if re.match(r"^(Transunion|Experian|Equifax)\s", l, re.I)]
+        for row in bureau_rows:
+            m = BUREAU_LINE_RE.search(row)
+            if not m:
+                continue
+            bname = m.group(1).lower()
+            b = "transunion" if "trans" in bname else ("experian" if "exp" in bname else "equifax")
+            masked = m.group(2)
+            bm = bureau_maps[b]
+            bm["account_number_display"] = masked
+            bm["account_number_last4"] = (
+                re.sub(r"\D", "", masked)[-4:] if re.search(r"\d", masked) else None
+            )
+            bm["high_balance"] = _to_num(m.group(3))
+            bm["last_verified"] = _to_iso(m.group(4))
+            bm["date_of_last_activity"] = _to_iso(m.group(5))
+            bm["date_reported"] = _to_iso(m.group(6))
+            bm["date_opened"] = _to_iso(m.group(7))
+            bm["balance_owed"] = _to_num(m.group(8))
+            bm["account_rating"] = m.group(9)
+            bm["account_description"] = m.group(10)
+            bm["creditor_type"] = m.group(11)
+            bm["account_status"] = m.group(12)
+            bm["payment_status"] = m.group(13)
+            bm["payment_amount"] = _to_num(m.group(14))
+            bm["last_payment"] = _to_iso(m.group(15))
+            bm["past_due_amount"] = _to_num(m.group(16))
+
+    # Footer triplet lines (account type / payment frequency / credit limit)
+    footer = parse_three_footer_lines(raw_lines)
+    for b in BUREAUS:
+        for k in ("account_type", "payment_frequency", "credit_limit"):
+            val = footer.get(b, {}).get(k)
+            if val is not None:
+                bureau_maps[b][k] = val
+
+    hist2y = parse_two_year_history(raw_lines)
+    sev7 = parse_seven_year_days_late(raw_lines)
     for b in BUREAUS:
         bm = bureau_maps[b]
         bm["two_year_payment_history"] = hist2y[b]

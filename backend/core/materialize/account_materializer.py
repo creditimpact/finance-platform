@@ -490,6 +490,43 @@ def materialize_accounts(
             # Initialize empty 25-field maps for each bureau and attempt to fill
             # them using available sources and OCR block lines.
             by = {b: _empty_bureau_map() for b in BUREAUS}
+            # Ensure block data exists; if missing, rebuild from traces
+            try:  # pragma: no cover - best effort rebuild
+                if not (
+                    isinstance(ocr_doc, Mapping)
+                    and ocr_doc.get("fbk_blocks")
+                    and ocr_doc.get("blocks_by_account_fuzzy")
+                ):
+                    sid = (
+                        ocr_doc.get("session_id")
+                        if isinstance(ocr_doc, Mapping)
+                        else None
+                    ) or session_id
+                    if sid:
+                        from pathlib import Path
+                        import json
+
+                        blkdir = Path("traces") / "blocks" / sid
+                        blocks = []
+                        for p in sorted(blkdir.glob("block_*.json")):
+                            with p.open("r", encoding="utf-8") as f:
+                                blocks.append(json.load(f))
+                        if blocks:
+                            ocr_doc["fbk_blocks"] = blocks
+                            from backend.core.logic.report_analysis.analyze_report import (
+                                build_block_fuzzy,
+                            )
+
+                            ocr_doc["blocks_by_account_fuzzy"] = build_block_fuzzy(
+                                blocks
+                            )
+                            logger.info(
+                                "MAT: rebuilt blocks_by_account_fuzzy from traces, size=%d",
+                                len(ocr_doc["blocks_by_account_fuzzy"]),
+                            )
+            except Exception:
+                logger.exception("materializer_block_fallback_failed")
+
             lines = _find_block_lines_for_account(ocr_doc, src)
             for b in BUREAUS:
                 try:

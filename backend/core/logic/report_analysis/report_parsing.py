@@ -8,6 +8,21 @@ from typing import Any, Mapping, Sequence, cast
 logger = logging.getLogger(__name__)
 
 
+def _clean_line(s: str) -> str:
+    """Remove registration symbols and collapse whitespace."""
+    s = s.replace("Â", "").replace("®", "")
+    s = re.sub(r"\s+", " ", s.strip())
+    return s
+
+
+BUREAU_NAME_PATTERN = r"(Trans\s*Union|Experian|Equifax)"
+BUREAU_PATTERNS = {
+    "Transunion": re.compile(r"trans\s*union", re.I),
+    "Experian": re.compile(r"experian", re.I),
+    "Equifax": re.compile(r"equifax", re.I),
+}
+
+
 # --- Standard 25-field set per bureau ---
 ACCOUNT_FIELD_SET: tuple[str, ...] = (
     "account_number_display",
@@ -341,13 +356,13 @@ def extract_three_column_fields(
     def _compute_ranges(spans, page_width: float) -> dict[str, tuple[float, float]]:
         positions: dict[str, float] = {}
         for sp in spans:
-            low = sp.get("text", "").lower()
+            txt = _clean_line(sp.get("text", ""))
             x0 = sp.get("bbox", [0, 0, 0, 0])[0]
-            if "transunion" in low:
+            if BUREAU_PATTERNS["TransUnion"].search(txt):
                 positions["TransUnion"] = x0
-            elif "experian" in low:
+            elif BUREAU_PATTERNS["Experian"].search(txt):
                 positions["Experian"] = x0
-            elif "equifax" in low:
+            elif BUREAU_PATTERNS["Equifax"].search(txt):
                 positions["Equifax"] = x0
         if len(positions) != 3:
             return {}
@@ -542,27 +557,26 @@ def extract_payment_statuses(
     def _find_boundaries(lines: list[str]) -> list[str] | None:
         """Return bureau order based on the header row positions."""
         for line in lines:
-            low = line.lower()
-            if all(k in low for k in ("transunion", "experian", "equifax")):
-                positions = {
-                    "Transunion": low.index("transunion"),
-                    "Experian": low.index("experian"),
-                    "Equifax": low.index("equifax"),
-                }
-                ordered = sorted(positions.items(), key=lambda x: x[1])
-                return [name for name, _ in ordered]
+            clean = _clean_line(line)
+            positions: dict[str, int] = {}
+            for name, pat in BUREAU_PATTERNS.items():
+                m = pat.search(clean)
+                if m:
+                    positions[name] = m.start()
+            if len(positions) == 3:
+                ordered = [name for name, _ in sorted(positions.items(), key=lambda x: x[1])]
+                return ordered
         positions: dict[str, int] = {}
         for line in lines:
-            low = line.lower()
-            if "transunion" in low and "Transunion" not in positions:
-                positions["Transunion"] = low.index("transunion")
-            if "experian" in low and "Experian" not in positions:
-                positions["Experian"] = low.index("experian")
-            if "equifax" in low and "Equifax" not in positions:
-                positions["Equifax"] = low.index("equifax")
+            clean = _clean_line(line)
+            for name, pat in BUREAU_PATTERNS.items():
+                if name not in positions:
+                    m = pat.search(clean)
+                    if m:
+                        positions[name] = m.start()
         if len(positions) == 3:
-            ordered = sorted(positions.items(), key=lambda x: x[1])
-            return [name for name, _ in ordered]
+            ordered = [name for name, _ in sorted(positions.items(), key=lambda x: x[1])]
+            return ordered
         return None
 
     statuses: dict[str, dict[str, str]] = {}
@@ -574,17 +588,25 @@ def extract_payment_statuses(
         acc_norm = normalize_heading(heading)
 
         bureau_order = _find_boundaries(block[1:])
+        logger.info(
+            "parse_account_block bureau_header_detected=%s order=%s",
+            bool(bureau_order),
+            [b.lower() for b in bureau_order] if bureau_order else None,
+        )
         ps_line: str | None = None
-        for line in block[1:]:
-            if re.search(r"payment\s*status", line, re.I):
-                ps_line = line
+        for raw_line in block[1:]:
+            clean_line = _clean_line(raw_line)
+            if re.search(r"payment\s*status", clean_line, re.I):
+                ps_line = raw_line
                 break
         if ps_line:
             raw_match = re.search(r"Payment\s*Status\s*:?(.*)", ps_line, re.I)
             if raw_match:
-                rhs = raw_match.group(1).strip()
-                raw_map[acc_norm] = rhs
+                rhs_raw = raw_match.group(1)
+                rhs_clean = rhs_raw.replace("Â", "").replace("®", "")
+                raw_map[acc_norm] = rhs_clean.strip()
                 if bureau_order:
+                    rhs = rhs_clean.strip()
                     parts = re.split(r"\s{2,}", rhs)
                     parts += ["", "", ""]
                     vals = {}
@@ -598,18 +620,11 @@ def extract_payment_statuses(
         # Additional per-bureau lines may specify payment status individually
         current_bureau: str | None = None
         for line in block[1:]:
-            clean = line.strip()
-            if (
-                sum(
-                    1
-                    for b in ("TransUnion", "Experian", "Equifax")
-                    if re.search(b, clean, re.I)
-                )
-                > 1
-            ):
+            clean = _clean_line(line)
+            if sum(1 for pat in BUREAU_PATTERNS.values() if pat.search(clean)) > 1:
                 current_bureau = None
                 continue
-            bureau_match = re.match(r"(TransUnion|Experian|Equifax)\b", clean, re.I)
+            bureau_match = re.match(rf"{BUREAU_NAME_PATTERN}\b", clean, re.I)
             if bureau_match:
                 current_bureau = normalize_bureau_name(bureau_match.group(1)).title()
                 ps_inline = PAYMENT_STATUS_RE.search(clean)
@@ -667,8 +682,8 @@ def extract_account_numbers(text: str) -> dict[str, dict[str, str]]:
 
         current_bureau: str | None = None
         for line in block[1:]:
-            clean = line.strip()
-            bureau_match = re.match(r"(TransUnion|Experian|Equifax)\b", clean, re.I)
+            clean = _clean_line(line)
+            bureau_match = re.match(rf"{BUREAU_NAME_PATTERN}\b", clean, re.I)
             if bureau_match:
                 current_bureau = normalize_bureau_name(bureau_match.group(1))
                 # Bureau line itself might contain the account number
@@ -712,10 +727,10 @@ def extract_creditor_remarks(text: str) -> dict[str, dict[str, str]]:
         acc_norm = normalize_heading(heading)
         current_bureau: str | None = None
         for line in block[1:]:
-            clean = line.strip()
-            bureau_match = re.match(r"(TransUnion|Experian|Equifax)\b", clean, re.I)
+            clean = _clean_line(line)
+            bureau_match = re.match(rf"{BUREAU_NAME_PATTERN}\b", clean, re.I)
             if bureau_match:
-                current_bureau = bureau_match.group(1).title()
+                current_bureau = normalize_bureau_name(bureau_match.group(1)).title()
                 # If the bureau line itself contains remarks
                 rem_inline = CREDITOR_REMARKS_RE.search(clean)
                 if rem_inline:
@@ -952,7 +967,7 @@ def _find_block_lines_for_account(
 
 
 BUREAU_LINE_RE = re.compile(
-    r"^(Transunion|Experian|Equifax)\s+([0-9\*]+)\s+([\d,]+|0|--)\s+([-\d/]+|--)\s+([-\d/]+|--)\s+([-\d/]+|--)\s+([-\d/]+|--)\s+([\d,]+|0|--)\s+--?\s+(\w+)\s+(.*?)\s+(Bank|All Banks|National.*|.*?)\s+(.*?)\s+(Current|Late|.*?)(?:\s+--)?\s+(\d+|0|--)\s+([-\d/]+|--)\s+--?\s+(\d+|0|--)",
+    r"^(Trans\s*Union|Experian|Equifax)\s+([0-9\*]+)\s+([\d,]+|0|--)\s+([-\d/]+|--)\s+([-\d/]+|--)\s+([-\d/]+|--)\s+([-\d/]+|--)\s+([\d,]+|0|--)\s+--?\s+(\w+)\s+(.*?)\s+(Bank|All Banks|National.*|.*?)\s+(.*?)\s+(Current|Late|.*?)(?:\s+--)?\s+(\d+|0|--)\s+([-\d/]+|--)\s+--?\s+(\d+|0|--)",
     re.I,
 )
 
@@ -1038,11 +1053,12 @@ def parse_two_year_history(lines: list[str]) -> dict[str, Any | None]:
     current: str | None = None
     buffer: list[str] = []
     for ln in seg_lines:
-        m = re.match(r"(Transunion|Experian|Equifax)\s*(.*)", ln, re.I)
+        ln = _clean_line(ln)
+        m = re.match(rf"{BUREAU_NAME_PATTERN}\s*(.*)", ln, re.I)
         if m:
             if current and buffer:
                 out[current] = " ".join(" ".join(buffer).split())
-            current = m.group(1).lower()
+            current = re.sub(r"\s+", "", m.group(1)).lower()
             buffer = [m.group(2)]
         else:
             if current:
@@ -1080,7 +1096,7 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
         return {b: _empty_bureau_map() for b in BUREAUS}
 
     bureau_maps = _init_maps()
-    raw_lines = [l.rstrip("\n") for l in block_lines if l.strip()]
+    raw_lines = [_clean_line(l.rstrip("\n")) for l in block_lines if l.strip()]
 
     # --- Header-based column spans ---------------------------------------
     header_idx: int | None = None
@@ -1141,10 +1157,10 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
     parsed = set()
     if spans and header_idx is not None:
         for line in raw_lines[header_idx + 1 :]:
-            m = re.match(r"(Transunion|Experian|Equifax)\s+(.*)", line, re.I)
+            m = re.match(rf"{BUREAU_NAME_PATTERN}\s+(.*)", line, re.I)
             if not m:
                 continue
-            bureau = m.group(1).lower()
+            bureau = re.sub(r"\s+", "", m.group(1)).lower()
             body = m.group(2)
             body = body.ljust(len(header_line))
             bm = bureau_maps[bureau]
@@ -1161,14 +1177,16 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
 
     # Fallback to legacy regex parsing if header spans failed
     if not parsed:
-        joined = [" ".join(l.split()) for l in raw_lines]
-        bureau_rows = [l for l in joined if re.match(r"^(Transunion|Experian|Equifax)\s", l, re.I)]
+        joined = raw_lines
+        bureau_rows = [l for l in joined if re.match(rf"^{BUREAU_NAME_PATTERN}\s", l, re.I)]
         for row in bureau_rows:
             m = BUREAU_LINE_RE.search(row)
             if not m:
                 continue
-            bname = m.group(1).lower()
-            b = "transunion" if "trans" in bname else ("experian" if "exp" in bname else "equifax")
+            bname = re.sub(r"\s+", "", m.group(1)).lower()
+            b = bname if bname in BUREAUS else (
+                "transunion" if "trans" in bname else ("experian" if "exp" in bname else "equifax")
+            )
             masked = m.group(2)
             bm = bureau_maps[b]
             _assign_std(bm, "account_number_display", masked)
@@ -1222,11 +1240,11 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
         return {b: _empty_bureau_map() for b in BUREAUS}
 
     maps = _init()
-    for line in block_lines:
-        m = re.match(r"(Transunion|Experian|Equifax)\s+(.*)", line, re.I)
+    for line in (_clean_line(l) for l in block_lines):
+        m = re.match(rf"{BUREAU_NAME_PATTERN}\s+(.*)", line, re.I)
         if not m:
             continue
-        bureau = m.group(1).lower()
+        bureau = re.sub(r"\s+", "", m.group(1)).lower()
         body = m.group(2)
         bm = maps[bureau]
 

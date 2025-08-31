@@ -93,6 +93,7 @@ from .report_parsing import (  # noqa: F401 - kept for test monkeypatching
     extract_three_column_fields,
     scan_page_markers,
     attach_bureau_meta_tables,
+    build_block_fuzzy,
 )
 from .report_postprocessing import (
     _assign_issue_types,
@@ -1131,6 +1132,38 @@ def analyze_credit_report(
                     )
                 except Exception:
                     pass
+
+            # Persist raw blocks and fuzzy indices for downstream parsers
+            try:
+                result["fbk_blocks"] = [
+                    {"heading": blk[0] if blk else "", "lines": blk}
+                    for blk in blocks
+                    if blk
+                ]
+                result["blocks_by_account_fuzzy"] = build_block_fuzzy(
+                    result.get("fbk_blocks", [])
+                )
+            except Exception:
+                logger.exception("block_fuzzy_build_failed")
+
+            # Export discovered blocks for trace/debugging
+            try:
+                out_dir = Path("traces") / "blocks" / (session_id or "no-session")
+                out_dir.mkdir(parents=True, exist_ok=True)
+                count = 0
+                for idx, block in enumerate(blocks, start=1):
+                    if not block:
+                        continue
+                    name = normalize_creditor_name(block[0].strip()) or f"account_{idx}"
+                    (out_dir / f"{idx:02d}-{name}.txt").write_text(
+                        "\n".join(block),
+                        encoding="utf-8",
+                    )
+                    count += 1
+                path_str = str(out_dir).replace("\\", "/").rstrip("/")
+                logger.info("account blocks exported: %d -> %s/", count, path_str)
+            except Exception:
+                logger.exception("account_block_export_failed")
 
             fallback_statuses: dict[str, dict[str, str]] = {}
             fallback_hits_additive: dict = {}

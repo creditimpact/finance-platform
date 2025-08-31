@@ -662,62 +662,127 @@ def _to_iso(s: str) -> Any | None:
     return to_iso_date(s)
 
 
-def _norm(s: str) -> str:
-    """Lowercase, trim and collapse internal whitespace."""
-    return re.sub(r"\s+", " ", (s or "").strip().lower())
-
-
-def _alnum(s: str) -> str:
-    """Return alphanumeric-only version of ``s`` for fuzzy matching."""
-    return re.sub(r"[^a-z0-9]", "", _norm(s))
-
-
 def build_block_fuzzy(blocks: list[Mapping[str, Any]]) -> dict[str, list[str]]:
-    """Index block lines by multiple fuzzy keys for quick lookup."""
+    """Return mapping of normalized headings to their OCR lines.
+
+    Parameters
+    ----------
+    blocks:
+        List of blocks as produced by ``extract_account_blocks`` with
+        ``{"heading": <raw heading>, "lines": [...]}`` entries.
+
+    Returns
+    -------
+    dict[str, list[str]]
+        Mapping of multiple fuzzy-normalized heading variants to the
+        corresponding list of lines for quick lookup.
+    """
+
+    try:  # local import to avoid heavy dependencies at module import time
+        from backend.core.logic.utils.names_normalization import normalize_creditor_name
+    except Exception:  # pragma: no cover - should not happen
+        def normalize_creditor_name(s: str) -> str:  # type: ignore
+            return re.sub(r"\s+", " ", (s or "").lower()).strip()
+
+    def _alnum(s: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", s)
 
     mapping: dict[str, list[str]] = {}
     for blk in blocks or []:
         heading = blk.get("heading") or ""
-        lines = blk.get("lines") or []
-        base = _norm(heading)
+        lines = list(blk.get("lines") or [])
+        base = normalize_creditor_name(heading)
+        if not base:
+            continue
         words = base.split()
         keys = {base, _alnum(base)}
         if words:
             keys.add(words[0])
         if len(words) > 1:
             keys.add(" ".join(words[:2]))
-        for k in keys:
+        for k in filter(None, keys):
             mapping.setdefault(k, lines)
     return mapping
 
 
 def _find_block_lines_for_account(
-    sections: Mapping[str, Any], acc: Mapping[str, Any]
-) -> list[str] | None:
-    """Return raw block lines for *acc* using fuzzy heading matching."""
+    sections: Mapping[str, Any], account: Mapping[str, Any] | str
+) -> list[str]:
+    """Return OCR lines for the block matching ``account``.
 
-    name = acc.get("normalized_name") or acc.get("name") or ""
-    keys = set()
-    for base in {_norm(name), _alnum(name)}:
-        if base:
-            keys.add(base)
-            parts = base.split()
-            if parts:
-                keys.add(parts[0])
-            if len(parts) > 1:
-                keys.add(" ".join(parts[:2]))
+    Parameters
+    ----------
+    sections:
+        Mapping returned by :func:`analyze_report` which must include a
+        ``"blocks_by_account_fuzzy"`` entry.
+    account:
+        Account mapping containing ``normalized_name`` or a raw/normalized
+        creditor name string.
 
-    block_map = sections.get("blocks_by_account_fuzzy", {})
-    for key in keys:
-        lines = block_map.get(key)
+    Returns
+    -------
+    list[str]
+        List of lines for the matched block.  Returns an empty list when no
+        suitable block is found or on error.
+    """
+
+    try:
+        if isinstance(account, Mapping):
+            raw_name = (
+                account.get("normalized_name")
+                or account.get("name")
+                or ""
+            )
+        else:
+            raw_name = str(account or "")
+
+        try:  # normalize in a way consistent with account detection
+            from backend.core.logic.utils.names_normalization import normalize_creditor_name
+        except Exception:  # pragma: no cover - fallback minimal normalizer
+            def normalize_creditor_name(s: str) -> str:  # type: ignore
+                return re.sub(r"\s+", " ", (s or "").lower()).strip()
+
+        norm = normalize_creditor_name(raw_name)
+
+        mapping = sections.get("blocks_by_account_fuzzy") or {}
+        if not isinstance(mapping, Mapping) or not mapping:
+            logger.warning("blocks_by_account_fuzzy_missing")
+            return []
+
+        lines = mapping.get(norm)
         if lines:
-            return lines
+            logger.debug(
+                "block_lines_found name=%s method=exact lines=%d",
+                norm,
+                len(lines),
+            )
+            return list(lines)
 
-    logger.info(
-        "no_block_lines_for_account name=%s",
-        name,
-    )
-    return None
+        try:
+            from .analyze_report import _fuzzy_match  # type: ignore
+            choices = set(mapping.keys())
+            match = _fuzzy_match(norm, choices)
+            if match:
+                from rapidfuzz import fuzz as _fuzz
+
+                score = _fuzz.WRatio(norm, match) / 100.0
+                if score >= 0.9 and mapping.get(match):
+                    lines = mapping[match]
+                    logger.debug(
+                        "block_lines_found name=%s method=fuzzy match=%s lines=%d",
+                        norm,
+                        match,
+                        len(lines),
+                    )
+                    return list(lines)
+        except Exception:
+            pass
+
+        logger.info("no_block_lines_for_account name=%s", norm)
+        return []
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("find_block_lines_failed")
+        return []
 
 
 BUREAU_LINE_RE = re.compile(

@@ -21,6 +21,16 @@ import re
 from typing import Optional
 from datetime import datetime
 
+from backend.core.logic.report_analysis.report_parsing import (
+    _empty_bureau_map,
+    _find_block_lines_for_account,
+    parse_account_block,
+    parse_collection_block,
+    _fill_bureau_map_from_sources,
+    ACCOUNT_FIELD_SET,
+)
+from backend.core.logic.report_analysis.normalize import to_number, to_iso_date
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,34 +65,7 @@ FIELDS = (
     "account_number_last4",
 )
 
-# Extended field set for raw.account_history.by_bureau
-ACCOUNT_FIELD_SET = (
-    "account_number_display",
-    "account_number_last4",
-    "high_balance",
-    "last_verified",
-    "date_of_last_activity",
-    "date_reported",
-    "date_opened",
-    "balance_owed",
-    "closed_date",
-    "account_rating",
-    "account_description",
-    "dispute_status",
-    "creditor_type",
-    "account_status",
-    "payment_status",
-    "creditor_remarks",
-    "payment_amount",
-    "last_payment",
-    "term_length",
-    "past_due_amount",
-    "account_type",
-    "payment_frequency",
-    "credit_limit",
-    "two_year_payment_history",
-    "seven_year_days_late",
-)
+# ACCOUNT_FIELD_SET imported from report_parsing
 
 
 def _norm_bureau_key(s: str | None) -> str:
@@ -503,16 +486,28 @@ def materialize_accounts(
             raw.setdefault("summary", {"_provenance": {}})
             # Account history by bureau (full field set)
             raw.setdefault("account_history", {})
-            existing_by = raw.get("account_history", {}).get("by_bureau") or {}
-            built_by = _build_account_history_by_bureau(src)
-            merged: dict[str, dict[str, Any]] = {}
+
+            # Initialize empty 25-field maps for each bureau and attempt to fill
+            # them using available sources and OCR block lines.
+            by = {b: _empty_bureau_map() for b in BUREAUS}
+            lines = _find_block_lines_for_account(ocr_doc, src)
             for b in BUREAUS:
-                cur = {f: None for f in ACCOUNT_FIELD_SET}
-                if isinstance(existing_by, Mapping):
-                    cur.update(existing_by.get(b) or {})
-                cur.update(built_by.get(b) or {})
-                merged[b] = cur
-            raw["account_history"]["by_bureau"] = merged
+                try:
+                    _fill_bureau_map_from_sources(src, b, by[b], lines)
+                except Exception:
+                    logger.exception("_fill_bureau_map_from_sources_failed")
+
+            # Merge into raw.account_history.by_bureau without overriding
+            # existing non-null values.
+            ah = raw.setdefault("account_history", {})
+            byb = ah.setdefault("by_bureau", {})
+            for b in BUREAUS:
+                dest = byb.setdefault(b, _empty_bureau_map())
+                for k in ACCOUNT_FIELD_SET:
+                    v = by[b].get(k)
+                    if dest.get(k) is None and v is not None:
+                        dest[k] = v
+
             # Public information / Inquiries arrays
             raw.setdefault("public_information", {"items": []})
             raw.setdefault("inquiries", {"items": []})
@@ -578,6 +573,20 @@ def materialize_accounts(
             except Exception:
                 pass
             src["raw"] = raw
+            # Final coverage log for this account
+            def _count_filled(d: dict[str, object]) -> int:
+                return sum(1 for v in d.values() if v is not None)
+
+            tu = _count_filled(raw["account_history"]["by_bureau"]["transunion"])
+            ex = _count_filled(raw["account_history"]["by_bureau"]["experian"])
+            eq = _count_filled(raw["account_history"]["by_bureau"]["equifax"])
+            logger.info(
+                "bureau_meta_coverage name=%s tu_missing=%d ex_missing=%d eq_missing=%d",
+                src.get("normalized_name") or src.get("name"),
+                25 - tu,
+                25 - ex,
+                25 - eq,
+            )
         except Exception:
             pass
 

@@ -1200,59 +1200,6 @@ def analyze_credit_report(
                 except Exception:
                     pass
 
-            # Persist raw blocks for downstream parsers
-            fbk_blocks: List[Dict[str, Any]] = []
-            for blk in blocks:
-                if not blk:
-                    continue
-                heading = (blk[0] or "").strip()
-                fbk_blocks.append({"heading": heading, "lines": blk})
-            result["fbk_blocks"] = fbk_blocks
-
-            # Build fuzzy lookup for account headings
-            try:
-                if fbk_blocks:
-                    result["blocks_by_account_fuzzy"] = build_block_fuzzy(fbk_blocks)
-                    logger.info(
-                        "blocks_by_account_fuzzy size=%d",
-                        len(result.get("blocks_by_account_fuzzy") or {}),
-                    )
-            except Exception:
-                logger.exception("block_fuzzy_build_failed")
-
-            # Export discovered blocks for trace/debugging
-            try:
-                sid = result.get("session_id") or session_id or request_id
-                if (
-                    sid
-                    and fbk_blocks
-                    and os.getenv("EXPORT_ACCOUNT_BLOCKS", "0") != "0"
-                ):
-                    out_dir = Path("traces") / "blocks" / sid
-                    out_dir.mkdir(parents=True, exist_ok=True)
-                    idx_info = []
-                    for i, b in enumerate(fbk_blocks, 1):
-                        jpath = out_dir / f"block_{i:02d}.json"
-                        with jpath.open("w", encoding="utf-8") as f:
-                            json.dump(b, f, ensure_ascii=False, indent=2)
-                        idx_info.append(
-                            {"i": i, "heading": b["heading"], "file": str(jpath)}
-                        )
-                    with (out_dir / "_index.json").open("w", encoding="utf-8") as f:
-                        json.dump(idx_info, f, ensure_ascii=False, indent=2)
-                    logger.warning(
-                        "[TRACE] account blocks exported: %d -> traces/blocks/%s/",
-                        len(fbk_blocks),
-                        sid,
-                    )
-                else:
-                    logger.warning(
-                        "[TRACE] account blocks exported: 0 -> traces/blocks/%s/",
-                        sid or "<no-session>",
-                    )
-            except Exception:
-                logger.exception("block_export_failed")
-
             fallback_statuses: dict[str, dict[str, str]] = {}
             fallback_hits_additive: dict = {}
             for block in blocks:
@@ -1925,6 +1872,46 @@ def analyze_credit_report(
 
     except Exception as e:
         print(f"[WARN] Late history parsing failed: {e}")
+
+    # Persist raw blocks and build fuzzy index independent of export
+    blocks = extract_account_blocks(text_norm if "text_norm" in locals() else text)
+    fbk_blocks: List[Dict[str, Any]] = []
+    for blk in blocks:
+        if not blk:
+            continue
+        heading = (blk[0] or "").strip()
+        fbk_blocks.append({"heading": heading, "lines": blk})
+    result["fbk_blocks"] = fbk_blocks
+
+    if fbk_blocks:
+        result["blocks_by_account_fuzzy"] = build_block_fuzzy(fbk_blocks)
+        logger.info(
+            "blocks_by_account_fuzzy size=%d",
+            len(result["blocks_by_account_fuzzy"]),
+        )
+    else:
+        result["blocks_by_account_fuzzy"] = {}
+
+    try:
+        sid = result.get("session_id") or session_id or request_id
+        if sid and os.getenv("EXPORT_ACCOUNT_BLOCKS", "0") != "0":
+            out_dir = Path("traces") / "blocks" / sid
+            out_dir.mkdir(parents=True, exist_ok=True)
+            idx_info = []
+            for i, blk in enumerate(fbk_blocks, 1):
+                jpath = out_dir / f"block_{i:02d}.json"
+                with jpath.open("w", encoding="utf-8") as f:
+                    json.dump(blk, f, ensure_ascii=False, indent=2)
+                idx_info.append({"i": i, "heading": blk["heading"], "file": str(jpath)})
+            with (out_dir / "_index.json").open("w", encoding="utf-8") as f:
+                json.dump(idx_info, f, ensure_ascii=False, indent=2)
+            logger.warning(
+                "[TRACE] account blocks exported: %d -> traces/blocks/%s/",
+                len(fbk_blocks),
+                sid,
+            )
+    except Exception:
+        logger.exception("block_export_failed")
 
     issues = validate_analysis_sanity(result)
     try:

@@ -836,13 +836,14 @@ def is_summary_block(block_lines: list[str]) -> bool:
     if not block_lines:
         return False
 
-    heading = (block_lines[0] or "").strip().lower()
+    heading = _clean_line(block_lines[0] or "").lower()
 
     if any(tok in heading for tok in SUMMARY_HEADING_TOKENS):
         return True
 
     if not any(word in heading for word in SUMMARY_REQUIRED_WORDS):
-        has_bureau = any(any(b in ln.lower() for b in BUREAUS) for ln in block_lines)
+        cleaned = [_clean_line(ln) for ln in block_lines]
+        has_bureau = any(any(b in ln.lower() for b in BUREAUS) for ln in cleaned)
         if not has_bureau:
             return True
 
@@ -1115,13 +1116,15 @@ def parse_seven_year_days_late(lines: list[str]) -> dict[str, Any | None]:
 
 
 def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | None]]:
-    logger.info("parse_account_block start lines=%d", len(block_lines))
+    lines_raw = block_lines or []
+    lines = [_clean_line(x) for x in lines_raw]
+    logger.info("parse_account_block start lines=%d", len(lines))
+    logger.info("parse_account_block lines[0..3]=%r", lines[:4])
 
     def _init_maps():
         return {b: _empty_bureau_map() for b in BUREAUS}
 
     bureau_maps = _init_maps()
-    raw_lines = [_clean_line(l.rstrip("\n")) for l in block_lines if l.strip()]
 
     def _norm_bureau(tag: str) -> str:
         t = re.sub(r"\W+", "", tag).lower()
@@ -1135,7 +1138,7 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
 
     vt_idx: int | None = None
     bureau_order: list[str] | None = None
-    for i, line in enumerate(raw_lines):
+    for i, line in enumerate(lines):
         m = re.match(r"field\s*:\s*(\w+)\s+(\w+)\s+(\w+)", line, re.I)
         if m:
             bureau_order = [
@@ -1158,7 +1161,7 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
         pattern = re.compile(
             r"^(?P<key>[\w #/]+):\s*(?P<v1>[^ ]+)(?:\s+(?P<v2>[^ ]+))?(?:\s+(?P<v3>.+))?$"
         )
-        for line in raw_lines[vt_idx + 1 :]:
+        for line in lines[vt_idx + 1 :]:
             m = pattern.match(line)
             if not m:
                 continue
@@ -1196,7 +1199,7 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
         # --- Header-based column spans -----------------------------------
         header_idx: int | None = None
         header_line: str | None = None
-        for i, line in enumerate(raw_lines):
+        for i, line in enumerate(lines):
             low = line.lower()
             if "account #" in low and "high balance" in low:
                 header_idx = i
@@ -1254,7 +1257,7 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
             column_spans,
         )
         if spans and header_idx is not None:
-            for line in raw_lines[header_idx + 1 :]:
+            for line in lines[header_idx + 1 :]:
                 m = re.match(rf"{BUREAU_NAME_PATTERN}\s+(.*)", line, re.I)
                 if not m:
                     continue
@@ -1279,7 +1282,7 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
 
     # Fallback to legacy regex parsing if header spans failed
     if not parsed:
-        joined = raw_lines
+        joined = lines
         bureau_rows = [
             l for l in joined if re.match(rf"^{BUREAU_NAME_PATTERN}\s", l, re.I)
         ]
@@ -1322,15 +1325,15 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
             _assign_std(bm, "past_due_amount", m.group(16))
 
     # Footer triplet lines (account type / payment frequency / credit limit)
-    footer = parse_three_footer_lines(raw_lines)
+    footer = parse_three_footer_lines(lines)
     for b in BUREAUS:
         for k in ("account_type", "payment_frequency", "credit_limit"):
             val = footer.get(b, {}).get(k)
             if val is not None:
                 _assign_std(bureau_maps[b], k, val)
 
-    hist2y = parse_two_year_history(raw_lines)
-    sev7 = parse_seven_year_days_late(raw_lines)
+    hist2y = parse_two_year_history(lines)
+    sev7 = parse_seven_year_days_late(lines)
     for b in BUREAUS:
         bm = bureau_maps[b]
         _assign_std(bm, "two_year_payment_history", hist2y[b])

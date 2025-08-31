@@ -58,38 +58,52 @@ ALIAS_TO_STD: dict[str, str] = {
     # Numbers / amounts
     "balance": "balance_owed",
     "current_balance": "balance_owed",
+    "current balance": "balance_owed",
     "amount": "balance_owed",
+    "amt": "balance_owed",
+    "high balance": "high_balance",
     "past_due": "past_due_amount",
     "pmt_amount": "payment_amount",
     "last_pmt": "last_payment",
     "limit": "credit_limit",
-
+    "credit limit": "credit_limit",
     # Dates
     "last_reported": "date_reported",
     "reported_date": "date_reported",
     "date reported": "date_reported",
+    "reported": "date_reported",
+    "last reported": "date_reported",
     "opened": "date_opened",
+    "date opened": "date_opened",
+    "open date": "date_opened",
     "closed": "closed_date",
     "dla": "date_of_last_activity",
+    "date of last activity": "date_of_last_activity",
+    "last activity": "date_of_last_activity",
     "verified": "last_verified",
-
+    "last verified": "last_verified",
     # Account number / last4
     "account #": "account_number_display",
     "acct #": "account_number_display",
     "account_no": "account_number_display",
+    "account no": "account_number_display",
+    "account number": "account_number_display",
+    "acct number": "account_number_display",
     "account_last4": "account_number_last4",
     "acct_last4": "account_number_last4",
     "last4": "account_number_last4",
-
     # Status & descriptions
     "rating": "account_rating",
     "description": "account_description",
     "status": "account_status",
-
+    "account status": "account_status",
+    "pay status": "payment_status",
+    "payment status": "payment_status",
     # Remarks
     "remarks": "creditor_remarks",
     "comment": "creditor_remarks",
-
+    "comments": "creditor_remarks",
+    "notes": "creditor_remarks",
     # Types
     "type": "account_type",
     "freq": "payment_frequency",
@@ -210,7 +224,9 @@ def scan_page_markers(page_texts: Sequence[str]) -> dict[str, Any]:
     }
 
 
-from backend.core.logic.utils.names_normalization import normalize_bureau_name  # noqa: E402
+from backend.core.logic.utils.names_normalization import (
+    normalize_bureau_name,
+)  # noqa: E402
 from backend.core.logic.utils.norm import normalize_heading  # noqa: E402
 from backend.core.logic.utils.text_parsing import extract_account_blocks  # noqa: E402
 from backend.core.models.bureau import BureauAccount  # noqa: E402
@@ -429,11 +445,13 @@ def extract_three_column_fields(
                                 norm_val, raw_val = _normalize_detail_value(key, val)
                                 if norm_val is None:
                                     continue
-                                details_map.setdefault(acc_norm, {}).setdefault(bureau, {})[
-                                    key
-                                ] = norm_val
+                                details_map.setdefault(acc_norm, {}).setdefault(
+                                    bureau, {}
+                                )[key] = norm_val
                                 if raw_val and raw_val != norm_val:
-                                    details_map[acc_norm][bureau][key + "_raw"] = raw_val
+                                    details_map[acc_norm][bureau][
+                                        key + "_raw"
+                                    ] = raw_val
                                 if key == "payment_status":
                                     payment_map.setdefault(acc_norm, {})[bureau] = (
                                         str(norm_val).lower()
@@ -564,7 +582,9 @@ def extract_payment_statuses(
                 if m:
                     positions[name] = m.start()
             if len(positions) == 3:
-                ordered = [name for name, _ in sorted(positions.items(), key=lambda x: x[1])]
+                ordered = [
+                    name for name, _ in sorted(positions.items(), key=lambda x: x[1])
+                ]
                 return ordered
         positions: dict[str, int] = {}
         for line in lines:
@@ -575,7 +595,9 @@ def extract_payment_statuses(
                     if m:
                         positions[name] = m.start()
         if len(positions) == 3:
-            ordered = [name for name, _ in sorted(positions.items(), key=lambda x: x[1])]
+            ordered = [
+                name for name, _ in sorted(positions.items(), key=lambda x: x[1])
+            ]
             return ordered
         return None
 
@@ -820,9 +842,7 @@ def is_summary_block(block_lines: list[str]) -> bool:
         return True
 
     if not any(word in heading for word in SUMMARY_REQUIRED_WORDS):
-        has_bureau = any(
-            any(b in ln.lower() for b in BUREAUS) for ln in block_lines
-        )
+        has_bureau = any(any(b in ln.lower() for b in BUREAUS) for ln in block_lines)
         if not has_bureau:
             return True
 
@@ -848,6 +868,7 @@ def build_block_fuzzy(blocks: list[Mapping[str, Any]]) -> dict[str, list[str]]:
     try:  # local import to avoid heavy dependencies at module import time
         from backend.core.logic.utils.names_normalization import normalize_creditor_name
     except Exception:  # pragma: no cover - should not happen
+
         def normalize_creditor_name(s: str) -> str:  # type: ignore
             return re.sub(r"\s+", " ", (s or "").lower()).strip()
 
@@ -895,17 +916,16 @@ def _find_block_lines_for_account(
 
     try:
         if isinstance(account, Mapping):
-            raw_name = (
-                account.get("normalized_name")
-                or account.get("name")
-                or ""
-            )
+            raw_name = account.get("normalized_name") or account.get("name") or ""
         else:
             raw_name = str(account or "")
 
         try:  # normalize in a way consistent with account detection
-            from backend.core.logic.utils.names_normalization import normalize_creditor_name
+            from backend.core.logic.utils.names_normalization import (
+                normalize_creditor_name,
+            )
         except Exception:  # pragma: no cover - fallback minimal normalizer
+
             def normalize_creditor_name(s: str) -> str:  # type: ignore
                 return re.sub(r"\s+", " ", (s or "").lower()).strip()
 
@@ -934,6 +954,7 @@ def _find_block_lines_for_account(
 
         try:
             from .analyze_report import _fuzzy_match  # type: ignore
+
             choices = set(mapping.keys())
             match = _fuzzy_match(norm, choices)
             if match:
@@ -993,7 +1014,9 @@ def parse_three_footer_lines(lines: list[str]) -> dict[str, dict[str, Any | None
     except StopIteration:
         hist_idx = len(lines)
 
-    candidates = [ln.strip() for ln in lines[max(0, hist_idx - 3) : hist_idx] if ln.strip()]
+    candidates = [
+        ln.strip() for ln in lines[max(0, hist_idx - 3) : hist_idx] if ln.strip()
+    ]
     if len(candidates) > 3:
         candidates = candidates[-3:]
 
@@ -1040,7 +1063,9 @@ def parse_two_year_history(lines: list[str]) -> dict[str, Any | None]:
     out = {b: None for b in BUREAUS}
 
     try:
-        start = next(i for i, ln in enumerate(lines) if "two-year payment history" in ln.lower())
+        start = next(
+            i for i, ln in enumerate(lines) if "two-year payment history" in ln.lower()
+        )
         end = next(
             i
             for i, ln in enumerate(lines[start + 1 :], start + 1)
@@ -1098,94 +1123,179 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
     bureau_maps = _init_maps()
     raw_lines = [_clean_line(l.rstrip("\n")) for l in block_lines if l.strip()]
 
-    # --- Header-based column spans ---------------------------------------
-    header_idx: int | None = None
-    header_line: str | None = None
+    def _norm_bureau(tag: str) -> str:
+        t = re.sub(r"\W+", "", tag).lower()
+        if t.startswith("tu") or "trans" in t:
+            return "transunion"
+        if t.startswith("ex"):
+            return "experian"
+        if t.startswith("eq") or "equ" in t:
+            return "equifax"
+        return t
+
+    vt_idx: int | None = None
+    bureau_order: list[str] | None = None
     for i, line in enumerate(raw_lines):
-        low = line.lower()
-        if "account #" in low and "high balance" in low:
-            header_idx = i
-            header_line = line
+        m = re.match(r"field\s*:\s*(\w+)\s+(\w+)\s+(\w+)", line, re.I)
+        if m:
+            bureau_order = [
+                _norm_bureau(m.group(1)),
+                _norm_bureau(m.group(2)),
+                _norm_bureau(m.group(3)),
+            ]
+            vt_idx = i
             break
 
-    spans: list[tuple[str, int, int]] = []
-    if header_line is not None:
-        col_aliases: dict[str, list[str]] = {
-            "account_number_display": ["account #"],
-            "high_balance": ["high balance"],
-            "last_verified": ["last verified"],
-            "date_of_last_activity": ["date of last activity"],
-            "date_reported": ["date reported", "last reported"],
-            "date_opened": ["date opened"],
-            "balance_owed": [
-                "balance owed",
-                "current balance",
-                "balance",
-                "amount",
-            ],
-            "closed_date": ["closed date"],
-            "account_rating": ["account rating"],
-            "account_description": ["account description"],
-            "dispute_status": ["dispute status"],
-            "creditor_type": ["creditor type"],
-            "account_status": ["account status"],
-            "payment_status": ["payment status"],
-            "creditor_remarks": ["creditor remarks", "remarks", "comment"],
-            "payment_amount": ["payment amount"],
-            "last_payment": ["last payment"],
-            "term_length": ["term length"],
-            "past_due_amount": ["past due amount"],
-        }
-        hlow = header_line.lower()
-        pos_list: list[tuple[int, str]] = []
-        for key, labels in col_aliases.items():
-            positions = [hlow.find(lbl) for lbl in labels]
-            positions = [p for p in positions if p >= 0]
-            if positions:
-                pos_list.append((min(positions), key))
-        pos_list.sort()
-        for idx, (start, key) in enumerate(pos_list):
-            end = pos_list[idx + 1][0] if idx + 1 < len(pos_list) else len(header_line)
-            spans.append((key, start, end))
-
-    column_spans = spans
     logger.info(
-        "parse_account_block header_detected=%s columns=%s",
-        bool(header_line),
-        column_spans,
+        "parse_account_block bureau_header_detected=%s order=%s",
+        bool(bureau_order),
+        bureau_order,
     )
-    parsed = set()
-    if spans and header_idx is not None:
-        for line in raw_lines[header_idx + 1 :]:
-            m = re.match(rf"{BUREAU_NAME_PATTERN}\s+(.*)", line, re.I)
+
+    parsed: set[str] = set()
+    if bureau_order is not None and vt_idx is not None:
+        count = 0
+        pattern = re.compile(
+            r"^(?P<key>[\w #/]+):\s*(?P<v1>[^ ]+)(?:\s+(?P<v2>[^ ]+))?(?:\s+(?P<v3>.+))?$"
+        )
+        for line in raw_lines[vt_idx + 1 :]:
+            m = pattern.match(line)
             if not m:
                 continue
-            bureau = re.sub(r"\s+", "", m.group(1)).lower()
-            body = m.group(2)
-            body = body.ljust(len(header_line))
-            bm = bureau_maps[bureau]
-            for key, start, end in spans:
-                seg = body[start:end].strip()
-                if seg in {"", "--"}:
-                    _assign_std(bm, key, None)
+            key = m.group("key").strip()
+            std_key = _std_field_name(key)
+            if std_key not in ACCOUNT_FIELD_SET:
+                low = key.lower()
+                if "status" in low:
+                    std_key = "payment_status" if "pay" in low else "account_status"
                 else:
-                    _assign_std(bm, key, seg)
-                    if key == "account_number_display":
-                        digits = re.sub(r"\D", "", seg)
-                        _assign_std(bm, "account_number_last4", digits[-4:] if digits else None)
-            parsed.add(bureau)
+                    continue
+            values = [m.group("v1"), m.group("v2"), m.group("v3")]
+            for b, v in zip(bureau_order, values):
+                val = None if v in {None, "", "--"} else v.strip()
+                if val is None:
+                    continue
+                bm = bureau_maps[b]
+                if bm.get(std_key) in (None, ""):
+                    _assign_std(bm, std_key, val)
+                    if std_key == "account_number_display":
+                        digits = re.sub(r"\D", "", val)
+                        _assign_std(
+                            bm,
+                            "account_number_last4",
+                            digits[-4:] if digits else None,
+                        )
+            count += 1
+        logger.info(
+            "parse_account_block layout=vertical_triples fields_parsed=%d",
+            count,
+        )
+        parsed.update(bureau_order)
+
+    if not parsed:
+        # --- Header-based column spans -----------------------------------
+        header_idx: int | None = None
+        header_line: str | None = None
+        for i, line in enumerate(raw_lines):
+            low = line.lower()
+            if "account #" in low and "high balance" in low:
+                header_idx = i
+                header_line = line
+                break
+
+        spans: list[tuple[str, int, int]] = []
+        if header_line is not None:
+            col_aliases: dict[str, list[str]] = {
+                "account_number_display": ["account #"],
+                "high_balance": ["high balance"],
+                "last_verified": ["last verified"],
+                "date_of_last_activity": ["date of last activity"],
+                "date_reported": ["date reported", "last reported"],
+                "date_opened": ["date opened"],
+                "balance_owed": [
+                    "balance owed",
+                    "current balance",
+                    "balance",
+                    "amount",
+                ],
+                "closed_date": ["closed date"],
+                "account_rating": ["account rating"],
+                "account_description": ["account description"],
+                "dispute_status": ["dispute status"],
+                "creditor_type": ["creditor type"],
+                "account_status": ["account status"],
+                "payment_status": ["payment status"],
+                "creditor_remarks": ["creditor remarks", "remarks", "comment"],
+                "payment_amount": ["payment amount"],
+                "last_payment": ["last payment"],
+                "term_length": ["term length"],
+                "past_due_amount": ["past due amount"],
+            }
+            hlow = header_line.lower()
+            pos_list: list[tuple[int, str]] = []
+            for key, labels in col_aliases.items():
+                positions = [hlow.find(lbl) for lbl in labels]
+                positions = [p for p in positions if p >= 0]
+                if positions:
+                    pos_list.append((min(positions), key))
+            pos_list.sort()
+            for idx, (start, key) in enumerate(pos_list):
+                end = (
+                    pos_list[idx + 1][0]
+                    if idx + 1 < len(pos_list)
+                    else len(header_line)
+                )
+                spans.append((key, start, end))
+
+        column_spans = spans
+        logger.info(
+            "parse_account_block header_detected=%s columns=%s",
+            bool(header_line),
+            column_spans,
+        )
+        if spans and header_idx is not None:
+            for line in raw_lines[header_idx + 1 :]:
+                m = re.match(rf"{BUREAU_NAME_PATTERN}\s+(.*)", line, re.I)
+                if not m:
+                    continue
+                bureau = re.sub(r"\s+", "", m.group(1)).lower()
+                body = m.group(2)
+                body = body.ljust(len(header_line))
+                bm = bureau_maps[bureau]
+                for key, start, end in spans:
+                    seg = body[start:end].strip()
+                    if seg in {"", "--"}:
+                        _assign_std(bm, key, None)
+                    else:
+                        _assign_std(bm, key, seg)
+                        if key == "account_number_display":
+                            digits = re.sub(r"\D", "", seg)
+                            _assign_std(
+                                bm,
+                                "account_number_last4",
+                                digits[-4:] if digits else None,
+                            )
+                parsed.add(bureau)
 
     # Fallback to legacy regex parsing if header spans failed
     if not parsed:
         joined = raw_lines
-        bureau_rows = [l for l in joined if re.match(rf"^{BUREAU_NAME_PATTERN}\s", l, re.I)]
+        bureau_rows = [
+            l for l in joined if re.match(rf"^{BUREAU_NAME_PATTERN}\s", l, re.I)
+        ]
         for row in bureau_rows:
             m = BUREAU_LINE_RE.search(row)
             if not m:
                 continue
             bname = re.sub(r"\s+", "", m.group(1)).lower()
-            b = bname if bname in BUREAUS else (
-                "transunion" if "trans" in bname else ("experian" if "exp" in bname else "equifax")
+            b = (
+                bname
+                if bname in BUREAUS
+                else (
+                    "transunion"
+                    if "trans" in bname
+                    else ("experian" if "exp" in bname else "equifax")
+                )
             )
             masked = m.group(2)
             bm = bureau_maps[b]
@@ -1225,9 +1335,7 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
     for b in ("transunion", "experian", "equifax"):
         m = result.get(b) or {}
         non_null = sum(1 for f in ACCOUNT_FIELD_SET if m.get(f) is not None)
-        logger.info(
-            "parse_account_block result bureau=%s filled=%d/25", b, non_null
-        )
+        logger.info("parse_account_block result bureau=%s filled=%d/25", b, non_null)
     return result
 
 
@@ -1304,9 +1412,7 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
     for b in ("transunion", "experian", "equifax"):
         m = result.get(b) or {}
         non_null = sum(1 for f in ACCOUNT_FIELD_SET if m.get(f) is not None)
-        logger.info(
-            "parse_collection_block result bureau=%s filled=%d/25", b, non_null
-        )
+        logger.info("parse_collection_block result bureau=%s filled=%d/25", b, non_null)
     return result
 
 
@@ -1468,7 +1574,9 @@ def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
                 sections.get("fbk_blocks") or []
             )
         except Exception:
-            logger.exception("build_block_fuzzy_in_attach_failed session=%s", session_id)
+            logger.exception(
+                "build_block_fuzzy_in_attach_failed session=%s", session_id
+            )
 
     # Normalize report-level inquiries/public info once
     inq_src = sections.get("inquiries") or []
@@ -1482,7 +1590,9 @@ def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
             )
             item = {
                 "bureau": bureau.lower() if bureau else None,
-                "subscriber": inq.get("subscriber") or inq.get("creditor_name") or inq.get("name"),
+                "subscriber": inq.get("subscriber")
+                or inq.get("creditor_name")
+                or inq.get("name"),
                 "date": to_iso_date(inq.get("date")) if inq.get("date") else None,
                 "type": inq.get("type"),
                 "permissible_purpose": inq.get("permissible_purpose"),
@@ -1500,7 +1610,9 @@ def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
             if not isinstance(item, Mapping):
                 continue
             bureau = (
-                normalize_bureau_name(item.get("bureau")) if item.get("bureau") else None
+                normalize_bureau_name(item.get("bureau"))
+                if item.get("bureau")
+                else None
             )
             date_val = item.get("date_filed") or item.get("date")
             pi = {
@@ -1529,7 +1641,12 @@ def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
             if not raw.get("inquiries", {}).get("items"):
                 raw["inquiries"]["items"] = norm_inqs
         elif inq_src:
-            slug = acc.get("account_id") or acc.get("normalized_name") or acc.get("name") or ""
+            slug = (
+                acc.get("account_id")
+                or acc.get("normalized_name")
+                or acc.get("name")
+                or ""
+            )
             logger.warning(
                 "inquiries_detected_but_not_written session=%s account=%s",
                 session_id,
@@ -1540,7 +1657,12 @@ def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
             if not raw.get("public_information", {}).get("items"):
                 raw["public_information"]["items"] = norm_pub
         elif pub_src:
-            slug = acc.get("account_id") or acc.get("normalized_name") or acc.get("name") or ""
+            slug = (
+                acc.get("account_id")
+                or acc.get("normalized_name")
+                or acc.get("name")
+                or ""
+            )
             logger.warning(
                 "public_info_detected_but_not_written session=%s account=%s",
                 session_id,

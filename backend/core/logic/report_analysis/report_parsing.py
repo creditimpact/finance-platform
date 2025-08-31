@@ -957,33 +957,39 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
 
     spans: list[tuple[str, int, int]] = []
     if header_line is not None:
-        cols = [
-            ("account_number_display", "account #"),
-            ("high_balance", "high balance"),
-            ("last_verified", "last verified"),
-            ("date_of_last_activity", "date of last activity"),
-            ("date_reported", "date reported"),
-            ("date_opened", "date opened"),
-            ("balance_owed", "balance owed"),
-            ("closed_date", "closed date"),
-            ("account_rating", "account rating"),
-            ("account_description", "account description"),
-            ("dispute_status", "dispute status"),
-            ("creditor_type", "creditor type"),
-            ("account_status", "account status"),
-            ("payment_status", "payment status"),
-            ("creditor_remarks", "creditor remarks"),
-            ("payment_amount", "payment amount"),
-            ("last_payment", "last payment"),
-            ("term_length", "term length"),
-            ("past_due_amount", "past due amount"),
-        ]
+        col_aliases: dict[str, list[str]] = {
+            "account_number_display": ["account #"],
+            "high_balance": ["high balance"],
+            "last_verified": ["last verified"],
+            "date_of_last_activity": ["date of last activity"],
+            "date_reported": ["date reported", "last reported"],
+            "date_opened": ["date opened"],
+            "balance_owed": [
+                "balance owed",
+                "current balance",
+                "balance",
+                "amount",
+            ],
+            "closed_date": ["closed date"],
+            "account_rating": ["account rating"],
+            "account_description": ["account description"],
+            "dispute_status": ["dispute status"],
+            "creditor_type": ["creditor type"],
+            "account_status": ["account status"],
+            "payment_status": ["payment status"],
+            "creditor_remarks": ["creditor remarks", "remarks", "comment"],
+            "payment_amount": ["payment amount"],
+            "last_payment": ["last payment"],
+            "term_length": ["term length"],
+            "past_due_amount": ["past due amount"],
+        }
         hlow = header_line.lower()
         pos_list: list[tuple[int, str]] = []
-        for key, label in cols:
-            idx = hlow.find(label)
-            if idx >= 0:
-                pos_list.append((idx, key))
+        for key, labels in col_aliases.items():
+            positions = [hlow.find(lbl) for lbl in labels]
+            positions = [p for p in positions if p >= 0]
+            if positions:
+                pos_list.append((min(positions), key))
         pos_list.sort()
         for idx, (start, key) in enumerate(pos_list):
             end = pos_list[idx + 1][0] if idx + 1 < len(pos_list) else len(header_line)
@@ -1091,15 +1097,38 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
         bureau = m.group(1).lower()
         body = m.group(2)
         bm = maps[bureau]
+
         acct = re.search(r"account\s*#?\s*([\d\*]+)", body, re.I)
         if acct:
             masked = acct.group(1)
             bm["account_number_display"] = masked
             digits = re.sub(r"\D", "", masked)
             bm["account_number_last4"] = digits[-4:] if digits else None
-        amt = re.search(r"(?:amount|balance owed|current balance)\s*:?\s*([-\d\$,CRDR ]+)", body, re.I)
-        if amt:
-            bm["balance_owed"] = _to_num(amt.group(1))
+
+        hb = re.search(
+            r"(?:high balance|original (?:amount|balance))\s*:?\s*([-\d\$,CRDR ]+)",
+            body,
+            re.I,
+        )
+        if hb:
+            bm["high_balance"] = _to_num(hb.group(1))
+
+        bal = re.search(
+            r"(?:amount|current balance|balance owed|(?<!high )balance)\s*:?\s*([-\d\$,CRDR ]+)",
+            body,
+            re.I,
+        )
+        if bal:
+            bm["balance_owed"] = _to_num(bal.group(1))
+
+        past = re.search(
+            r"past due(?: amount)?\s*:?\s*([-\d\$,CRDR ]+)",
+            body,
+            re.I,
+        )
+        if past:
+            bm["past_due_amount"] = _to_num(past.group(1))
+
         for label, key in {
             "date reported": "date_reported",
             "date opened": "date_opened",
@@ -1109,7 +1138,19 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
             m2 = re.search(label + r"\s*:?\s*([-\d/]+)", body, re.I)
             if m2:
                 bm[key] = _to_iso(m2.group(1))
-        bm["account_status"] = bm.get("account_status") or "collection/chargeoff"
+
+        astatus = re.search(r"account status\s*:?\s*([\w /-]+)", body, re.I)
+        if astatus:
+            bm["account_status"] = astatus.group(1).strip()
+
+        pstatus = re.search(r"payment status\s*:?\s*([\w /-]+)", body, re.I)
+        if pstatus:
+            bm["payment_status"] = pstatus.group(1).strip()
+
+        remarks = re.search(r"(?:remarks?|comment)\s*:?\s*(.+)", body, re.I)
+        if remarks:
+            bm["creditor_remarks"] = remarks.group(1).strip()
+
     return maps
 
 

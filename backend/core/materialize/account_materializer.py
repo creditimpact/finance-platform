@@ -547,6 +547,42 @@ def materialize_accounts(
                 except Exception:
                     logger.exception("_fill_bureau_map_from_sources_failed")
 
+            # --- BEGIN: parser-driven merge ---
+            try:
+                # 1) General parser for account table
+                maps_acc = parse_account_block(lines or [])
+            except Exception:
+                logger.exception("parse_account_block_failed")
+                maps_acc = {}
+
+            try:
+                # 2) Parser for collection/chargeoff (fills gaps)
+                maps_col = parse_collection_block(lines or [])
+            except Exception:
+                logger.exception("parse_collection_block_failed")
+                maps_col = {}
+
+            for b in BUREAUS:
+                # start with what we already have in by[b], then fill only None
+                bm = maps_acc.get(b, {}) if isinstance(maps_acc, dict) else {}
+                bm2 = maps_col.get(b, {}) if isinstance(maps_col, dict) else {}
+                for key in ACCOUNT_FIELD_SET:
+                    if by[b].get(key) is None and bm.get(key) is not None:
+                        by[b][key] = bm[key]
+                for key in ACCOUNT_FIELD_SET:
+                    if by[b].get(key) is None and bm2.get(key) is not None:
+                        by[b][key] = bm2[key]
+
+            filled = {b: sum(1 for k in ACCOUNT_FIELD_SET if by[b].get(k) is not None) for b in BUREAUS}
+            for b in BUREAUS:
+                logger.warning(
+                    "parser_bureau_fill account=%s bureau=%s filled=%d/25",
+                    src.get("normalized_name") or src.get("name"),
+                    b,
+                    filled[b],
+                )
+            # --- END: parser-driven merge ---
+
             # Merge into raw.account_history.by_bureau without overriding
             # existing non-null values.
             ah = raw.setdefault("account_history", {})
@@ -623,19 +659,29 @@ def materialize_accounts(
             except Exception:
                 pass
             src["raw"] = raw
-            # Final coverage log for this account
-            def _count_filled(d: dict[str, object]) -> int:
-                return sum(1 for v in d.values() if v is not None)
-
-            tu = _count_filled(raw["account_history"]["by_bureau"]["transunion"])
-            ex = _count_filled(raw["account_history"]["by_bureau"]["experian"])
-            eq = _count_filled(raw["account_history"]["by_bureau"]["equifax"])
-            logger.info(
-                "bureau_meta_coverage name=%s tu_missing=%d ex_missing=%d eq_missing=%d",
+            # --- ensure meta coverage log after merge ---
+            by_bureau = raw.get("account_history", {}).get("by_bureau", {})
+            tu = sum(
+                1
+                for f in ACCOUNT_FIELD_SET
+                if by_bureau.get("transunion", {}).get(f) is not None
+            )
+            ex = sum(
+                1
+                for f in ACCOUNT_FIELD_SET
+                if by_bureau.get("experian", {}).get(f) is not None
+            )
+            eq = sum(
+                1
+                for f in ACCOUNT_FIELD_SET
+                if by_bureau.get("equifax", {}).get(f) is not None
+            )
+            logger.warning(
+                "bureau_meta_coverage name=%s tu_filled=%d ex_filled=%d eq_filled=%d",
                 src.get("normalized_name") or src.get("name"),
-                25 - tu,
-                25 - ex,
-                25 - eq,
+                tu,
+                ex,
+                eq,
             )
         except Exception:
             pass

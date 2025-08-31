@@ -662,6 +662,64 @@ def _to_iso(s: str) -> Any | None:
     return to_iso_date(s)
 
 
+def _norm(s: str) -> str:
+    """Lowercase, trim and collapse internal whitespace."""
+    return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+
+def _alnum(s: str) -> str:
+    """Return alphanumeric-only version of ``s`` for fuzzy matching."""
+    return re.sub(r"[^a-z0-9]", "", _norm(s))
+
+
+def build_block_fuzzy(blocks: list[Mapping[str, Any]]) -> dict[str, list[str]]:
+    """Index block lines by multiple fuzzy keys for quick lookup."""
+
+    mapping: dict[str, list[str]] = {}
+    for blk in blocks or []:
+        heading = blk.get("heading") or ""
+        lines = blk.get("lines") or []
+        base = _norm(heading)
+        words = base.split()
+        keys = {base, _alnum(base)}
+        if words:
+            keys.add(words[0])
+        if len(words) > 1:
+            keys.add(" ".join(words[:2]))
+        for k in keys:
+            mapping.setdefault(k, lines)
+    return mapping
+
+
+def _find_block_lines_for_account(
+    sections: Mapping[str, Any], acc: Mapping[str, Any]
+) -> list[str] | None:
+    """Return raw block lines for *acc* using fuzzy heading matching."""
+
+    name = acc.get("normalized_name") or acc.get("name") or ""
+    keys = set()
+    for base in {_norm(name), _alnum(name)}:
+        if base:
+            keys.add(base)
+            parts = base.split()
+            if parts:
+                keys.add(parts[0])
+            if len(parts) > 1:
+                keys.add(" ".join(parts[:2]))
+
+    block_map = sections.get("blocks_by_account_fuzzy", {})
+    for key in keys:
+        lines = block_map.get(key)
+        if lines:
+            return lines
+
+    logger.info(
+        "no_block_lines_for_account name=%s",
+        name,
+    )
+    return None
+
+
 BUREAU_LINE_RE = re.compile(
     r"^(Transunion|Experian|Equifax)\s+([0-9\*]+)\s+([\d,]+|0|--)\s+([-\d/]+|--)\s+([-\d/]+|--)\s+([-\d/]+|--)\s+([-\d/]+|--)\s+([\d,]+|0|--)\s+--?\s+(\w+)\s+(.*?)\s+(Bank|All Banks|National.*|.*?)\s+(.*?)\s+(Current|Late|.*?)(?:\s+--)?\s+(\d+|0|--)\s+([-\d/]+|--)\s+--?\s+(\d+|0|--)",
     re.I,
@@ -949,6 +1007,47 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
     return bureau_maps
 
 
+def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | None]]:
+    """Parse simplified collection/charge-off blocks."""
+
+    logger.debug("parse_collection_block start lines=%d", len(block_lines))
+
+    def _init():
+        return {
+            b: {field: None for field in ACCOUNT_FIELD_SET}
+            for b in BUREAUS
+        }
+
+    maps = _init()
+    for line in block_lines:
+        m = re.match(r"(Transunion|Experian|Equifax)\s+(.*)", line, re.I)
+        if not m:
+            continue
+        bureau = m.group(1).lower()
+        body = m.group(2)
+        bm = maps[bureau]
+        acct = re.search(r"account\s*#?\s*([\d\*]+)", body, re.I)
+        if acct:
+            masked = acct.group(1)
+            bm["account_number_display"] = masked
+            digits = re.sub(r"\D", "", masked)
+            bm["account_number_last4"] = digits[-4:] if digits else None
+        amt = re.search(r"(?:amount|balance owed|current balance)\s*:?\s*([-\d\$,CRDR ]+)", body, re.I)
+        if amt:
+            bm["balance_owed"] = _to_num(amt.group(1))
+        for label, key in {
+            "date reported": "date_reported",
+            "date opened": "date_opened",
+            "date of last activity": "date_of_last_activity",
+            "last payment": "last_payment",
+        }.items():
+            m2 = re.search(label + r"\s*:?\s*([-\d/]+)", body, re.I)
+            if m2:
+                bm[key] = _to_iso(m2.group(1))
+        bm["account_status"] = bm.get("account_status") or "collection/chargeoff"
+    return maps
+
+
 def _find_bureau_entry(acc: Mapping[str, Any], bureau: str) -> Mapping[str, Any] | None:
     """Find matching entry in acc['bureaus'] for a bureau (accepts title/lower)."""
     items = acc.get("bureaus") or []
@@ -1079,6 +1178,21 @@ def _fill_bureau_map_from_sources(
                 bureau,
             )
 
+        missing_after_acc = [k for k, v in dst.items() if v is None]
+        if missing_after_acc:
+            try:
+                coll_maps = parse_collection_block(account_block_lines)
+                bm2 = coll_maps.get(bureau, {})
+                for k in dst.keys():
+                    if dst[k] is None and k in bm2:
+                        dst[k] = bm2[k]
+            except Exception:
+                logger.exception(
+                    "parse_collection_block_failed account=%s bureau=%s",
+                    acc.get("normalized_name") or acc.get("name"),
+                    bureau,
+                )
+
     filled = sum(1 for v in dst.values() if v is not None)
     logger.info(
         "parser_bureau_fill account=%s bureau=%s filled=%d/25",
@@ -1096,6 +1210,15 @@ def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
         return
 
     session_id = sections.get("session_id") or ""
+
+    # Build fuzzy block lookup if raw blocks were provided
+    if sections.get("fbk_blocks") and not sections.get("blocks_by_account_fuzzy"):
+        try:
+            sections["blocks_by_account_fuzzy"] = build_block_fuzzy(
+                sections.get("fbk_blocks") or []
+            )
+        except Exception:
+            logger.exception("build_block_fuzzy_in_attach_failed session=%s", session_id)
 
     # Normalize report-level inquiries/public info once
     inq_src = sections.get("inquiries") or []
@@ -1174,10 +1297,7 @@ def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
                 slug,
             )
 
-        account_block_lines = (
-            sections.get("blocks_by_account", {})
-            .get(acc.get("normalized_name") or acc.get("name"))
-        )
+        account_block_lines = _find_block_lines_for_account(sections, acc)
 
         for b in BUREAUS:
             dst = by.get(b)

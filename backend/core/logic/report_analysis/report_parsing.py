@@ -1011,6 +1011,9 @@ def _split_triple_fallback(
     """Heuristically split *value_part* into three columns when alignment is missing."""
 
     tokens = value_part.split()
+    if "--" not in tokens and len(tokens) == 3:
+        return tokens[0], tokens[1], tokens[2]
+
     segs: list[str | None] = []
     current: list[str] = []
     for tok in tokens:
@@ -1024,6 +1027,72 @@ def _split_triple_fallback(
     while len(segs) < 3:
         segs.append(None)
     return segs[0], segs[1], segs[2]
+
+
+def _is_page_footer(line: str) -> bool:
+    """Return ``True`` if *line* looks like a page footer/header.
+
+    Heuristics cover SmartCredit artifacts, generic URLs and timestamp lines
+    that frequently appear between account segments.
+    """
+
+    low = line.lower()
+    if "smartcredit" in low or "credit report & scores" in low:
+        return True
+    if re.match(r"https?://", line):
+        return True
+    if re.match(r"\d{1,2}/\d{1,2}/\d{2,4},\s*\d{1,2}:\d{2}\s*(?:am|pm)", low):
+        return True
+    return False
+
+
+def _is_section_header(line: str) -> bool:
+    """Heuristically detect account or category headers."""
+
+    low = line.lower().strip()
+    if not low:
+        return False
+    if low.startswith(
+        (
+            "collections",
+            "public records",
+            "inquiries",
+            "revolving accounts",
+        )
+    ):
+        return True
+    if ":" in line:
+        return False
+    return bool(line == line.upper() and re.search(r"[A-Z]", line))
+
+
+def _maybe_resume_after_history(line: str) -> bool:
+    """Return ``True`` if line appears to resume key/value details."""
+
+    if TRIPLE_LINE_RE.match(line):
+        return True
+    return ":" in line
+
+
+def _begin_account_session(lines: list[str], index: int) -> dict[str, Any]:
+    """Initialize a new account session starting at ``lines[index]``."""
+
+    heading = _clean_line(lines[index])
+    order = detect_bureau_order(lines[index : index + 5]) or [
+        "transunion",
+        "experian",
+        "equifax",
+    ]
+    session = {
+        "heading": heading,
+        "bureau_order": order,
+        "collected_rows": [heading],
+        "in_history": False,
+        "section": "details",
+        "start_index": index,
+    }
+    logger.info("STITCH: start account=%s bureau_order=%s", heading, order)
+    return session
 
 
 def parse_three_footer_lines(lines: list[str]) -> dict[str, dict[str, Any | None]]:
@@ -1185,6 +1254,10 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
                 )
                 key = m.group("key").strip()
                 raw_vals = [m.group("v1"), m.group("v2"), m.group("v3")]
+                if raw_vals[1] is None and raw_vals[2] is None:
+                    _, _, rest = line.partition(":")
+                    v1, v2, v3 = _split_triple_fallback(rest.strip(), order)
+                    raw_vals = [v1, v2, v3]
             else:
                 key, sep, rest = line.partition(":")
                 if not sep or not rest.strip():
@@ -1258,6 +1331,10 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
                 )
                 key = m.group("key").strip()
                 raw_vals = [m.group("v1"), m.group("v2"), m.group("v3")]
+                if raw_vals[1] is None and raw_vals[2] is None:
+                    _, _, rest = line.partition(":")
+                    v1, v2, v3 = _split_triple_fallback(rest.strip(), default_order)
+                    raw_vals = [v1, v2, v3]
             else:
                 key, sep, rest = line.partition(":")
                 if not sep or not rest.strip():
@@ -1599,6 +1676,71 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
         non_null = sum(1 for f in ACCOUNT_FIELD_SET if m.get(f) is not None)
         logger.info("parse_collection_block result bureau=%s filled=%d/25", b, non_null)
     return result
+
+
+def _flush_account_session(session: Mapping[str, Any]) -> dict[str, dict[str, Any | None]]:
+    """Flush collected rows of an account session via :func:`parse_account_block`."""
+
+    rows = [ln for ln in session.get("collected_rows", []) if not _is_page_footer(ln)]
+    block_maps = parse_account_block(rows)
+    fields = sum(
+        1 for b in BUREAUS for v in block_maps.get(b, {}).values() if v is not None
+    )
+    logger.info(
+        "STITCH: end account=%s rows_collected=%d fields_before_merge=%d",
+        session.get("heading"),
+        len(rows),
+        fields,
+    )
+    return block_maps
+
+
+def stitch_account_blocks(lines: list[str]) -> list[dict[str, dict[str, Any | None]]]:
+    """Stitch scattered account segments and parse them sequentially."""
+
+    results: list[dict[str, dict[str, Any | None]]] = []
+    session: dict[str, Any] | None = None
+
+    for idx, raw in enumerate(lines):
+        line = _clean_line(raw)
+        if not session:
+            if _is_section_header(line):
+                session = _begin_account_session(lines, idx)
+            continue
+
+        if _is_section_header(line) and idx != session.get("start_index"):
+            results.append(_flush_account_session(session))
+            session = _begin_account_session(lines, idx)
+            continue
+
+        if _is_page_footer(line):
+            logger.info("STITCH: skip footer line='%s'", line[:50])
+            continue
+
+        session["collected_rows"].append(line)
+
+        low = line.lower()
+        if (
+            "two-year payment history" in low
+            or "days late -7 year history" in low
+            or "days late – 7 year history" in low
+        ):
+            if not session.get("in_history"):
+                session["in_history"] = True
+                logger.info("STITCH: enter history account=%s", session["heading"])
+            continue
+
+        if session.get("in_history") and _maybe_resume_after_history(line):
+            session["in_history"] = False
+            logger.info("STITCH: resume details account=%s", session["heading"])
+            logger.info(
+                "STITCH: carry_forward bureau_order=%s", session.get("bureau_order")
+            )
+
+    if session:
+        results.append(_flush_account_session(session))
+
+    return results
 
 
 def _find_bureau_entry(acc: Mapping[str, Any], bureau: str) -> Mapping[str, Any] | None:

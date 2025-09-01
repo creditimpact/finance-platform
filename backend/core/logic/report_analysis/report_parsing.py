@@ -155,7 +155,9 @@ ALIAS_TO_STD: dict[str, str] = {
     "verified on": "last_verified",
     # Account number / last4
     "account #": "account_number_display",
+    "account#": "account_number_display",
     "acct #": "account_number_display",
+    "acct#": "account_number_display",
     "account_no": "account_number_display",
     "account no": "account_number_display",
     "account no.": "account_number_display",
@@ -214,6 +216,15 @@ ALIAS_TO_STD: dict[str, str] = {
     "freq": "payment_frequency",
 }
 
+ACCOUNT_NUMBER_ALIASES = {
+    k for k, v in ALIAS_TO_STD.items() if v == "account_number_display"
+}
+
+ACCOUNT_NUMERIC_KEY_RE = re.compile(
+    r"^(account|acct)\s*(?:number|no|#)?\s*[0-9xX\*-]+$",
+    re.I,
+)
+
 
 NUMERIC_FIELDS = {
     "high_balance",
@@ -235,6 +246,10 @@ DATE_FIELDS = {
 
 def _std_field_name(raw_key: str) -> str:
     k = (raw_key or "").strip().lower()
+    k = re.sub(r"\s+", " ", k)
+    if ACCOUNT_NUMERIC_KEY_RE.match(k):
+        logger.info("alias_norm: key='account #' matched from raw='%s'", raw_key)
+        k = "account #"
     return ALIAS_TO_STD.get(k, k)
 
 
@@ -1487,6 +1502,15 @@ def parse_account_block(
                     order_str,
                 )
             std_key = _std_field_name(key)
+            if (
+                std_key == "account_number_display"
+                and raw_vals[1] is None
+                and raw_vals[2] is None
+                and raw_vals[0]
+            ):
+                toks = str(raw_vals[0]).split()
+                if len(toks) == 3:
+                    raw_vals = toks
             if std_key not in ACCOUNT_FIELD_SET:
                 low = key.lower()
                 if "status" in low:
@@ -1496,6 +1520,12 @@ def parse_account_block(
                         "alias_not_found" if std_key == low else "not_in_field_set"
                     )
                     parsed_triples["rows"].append(row_dbg)
+                    if row_dbg["drop_reason"] == "alias_not_found":
+                        logger.info(
+                            "alias_not_found: raw_key=%r after_normalize=%r",
+                            key,
+                            std_key,
+                        )
                     logger.info(
                         "triple_parsed key=%s v1=%s v2=%s v3=%s dropped=unknown_field",
                         key,
@@ -1602,6 +1632,15 @@ def parse_account_block(
                     order_str,
                 )
             std_key = _std_field_name(key)
+            if (
+                std_key == "account_number_display"
+                and raw_vals[1] is None
+                and raw_vals[2] is None
+                and raw_vals[0]
+            ):
+                toks = str(raw_vals[0]).split()
+                if len(toks) == 3:
+                    raw_vals = toks
             if std_key not in ACCOUNT_FIELD_SET:
                 low = key.lower()
                 if "status" in low:
@@ -1611,6 +1650,12 @@ def parse_account_block(
                         "alias_not_found" if std_key == low else "not_in_field_set"
                     )
                     parsed_triples["rows"].append(row_dbg)
+                    if row_dbg["drop_reason"] == "alias_not_found":
+                        logger.info(
+                            "alias_not_found: raw_key=%r after_normalize=%r",
+                            key,
+                            std_key,
+                        )
                     logger.info(
                         "triple_parsed key=%s v1=%s v2=%s v3=%s dropped=unknown_field",
                         key,
@@ -1891,14 +1936,37 @@ def parse_collection_block(
                 else:
                     low = line.lower()
                     for alias in sorted(ALIAS_TO_STD.keys(), key=len, reverse=True):
-                        if low.startswith(alias) and (
-                            len(low) == len(alias) or low[len(alias)] in " :-—"
-                        ):
-                            rest = line[len(alias) :].lstrip(" :-—")
-                            key = alias
-                            v1, v2, v3 = _split_triple_fallback(rest, order)
-                            raw_vals = [v1, v2, v3]
-                            break
+                        if low.startswith(alias):
+                            after = low[len(alias) :]
+                            if (
+                                not after
+                                or after[0] in " :-—"
+                                or (
+                                    alias in ACCOUNT_NUMBER_ALIASES
+                                    and re.match(r"[0-9xX*]", after[0])
+                                )
+                            ):
+                                rest = line[len(alias) :]
+                                if after and after[0] in " :-—":
+                                    rest = rest.lstrip(" :-—")
+                                key = alias
+                                if alias in ACCOUNT_NUMBER_ALIASES:
+                                    logger.info(
+                                        "alias_norm: key='account #' matched from raw='%s'",
+                                        raw_line,
+                                    )
+                                v1, v2, v3 = _split_triple_fallback(rest, order)
+                                raw_vals = [v1, v2, v3]
+                                if (
+                                    alias in ACCOUNT_NUMBER_ALIASES
+                                    and raw_vals[1] is None
+                                    and raw_vals[2] is None
+                                    and raw_vals[0]
+                                ):
+                                    toks = str(raw_vals[0]).split()
+                                    if len(toks) == 3:
+                                        raw_vals = toks
+                                break
                     if key is None:
                         v1, v2, v3 = _split_triple_fallback(line, order)
                         if any(v and neg_pat.search(v) for v in (v1, v2, v3)):
@@ -1928,6 +1996,12 @@ def parse_collection_block(
                 else "not_in_field_set"
             )
             parsed_triples["rows"].append(row_dbg)
+            if row_dbg["drop_reason"] == "alias_not_found":
+                logger.info(
+                    "alias_not_found: raw_key=%r after_normalize=%r",
+                    key,
+                    std_key,
+                )
             continue
         values: list[Any | None] = []
         for rv in raw_vals:

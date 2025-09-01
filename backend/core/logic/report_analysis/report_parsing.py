@@ -5,7 +5,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Mapping, Sequence, cast
+from typing import Any, Mapping, Sequence, cast, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -288,21 +288,28 @@ def _assign_std(
     val: Any,
     *,
     raw_val: Any | None = None,
-    provenance: str | None = None,
+    provenance: Literal["aligned", "fallback", "footer", "collection", "unknown"]
+    | None = None,
 ) -> None:
     """Assign *val* to ``dst`` under the canonical field name for ``key``.
 
-    The stored value is a structure with ``{"raw", "normalized", "provenance"}``
-    to preserve the original string when normalisation fails.
+    Values are stored as ``{"raw", "normalized", "provenance"}`` so the
+    original string is preserved even when normalisation fails.
     """
 
     std = _std_field_name(key)
     if std not in ACCOUNT_FIELD_SET:
         return
 
+    prov = provenance or "unknown"
+
     # Accept pre-structured values (already carrying provenance)
     if isinstance(val, Mapping) and {"raw", "normalized"} <= set(val.keys()):
-        dst[std] = val
+        raw = val.get("raw")
+        norm = val.get("normalized")
+        prov = val.get("provenance", prov)
+        logger.info("CELL: key=%s prov=%s raw=%r norm=%r", std, prov, raw, norm)
+        dst[std] = {"raw": raw, "normalized": norm, "provenance": prov}
         return
 
     raw = raw_val if raw_val is not None else val
@@ -321,13 +328,11 @@ def _assign_std(
             normalized = str(val).strip()
 
     if normalized is None and raw not in (None, "") and val is not None:
-        logger.info("norm_failed key=%s raw=%r", std, raw)
+        logger.info("NORM: failed key=%s raw=%r", std, raw)
 
-    dst[std] = {
-        "raw": raw,
-        "normalized": normalized,
-        "provenance": provenance or "unknown",
-    }
+    logger.info("CELL: key=%s prov=%s raw=%r norm=%r", std, prov, raw, normalized)
+
+    dst[std] = {"raw": raw, "normalized": normalized, "provenance": prov}
 
 
 def extract_text_from_pdf(pdf_path: str | Path) -> str:
@@ -1436,9 +1441,8 @@ def parse_three_footer_lines(lines: list[str]) -> dict[str, dict[str, Any | None
 
         out[b]["account_type"] = atype
         out[b]["payment_frequency"] = freq
-        if limit_norm is not None:
-            out[b]["credit_limit"] = limit_norm
-        elif limit_raw:
+        out[b]["credit_limit"] = limit_raw
+        if limit_raw and limit_norm is None:
             logger.info(
                 "FOOTER: non-numeric credit_limit for bureau=%s raw=%r", b, limit_raw
             )
@@ -1670,7 +1674,6 @@ def parse_account_block(
                         raw_vals[2],
                     )
                     continue
-            raw_map = {b: rv for b, rv in zip(order, raw_vals)}
             values: list[Any | None] = []
             for idx2, rv in enumerate(raw_vals):
                 if rv is None or str(rv).strip() in {"", "--"}:
@@ -1723,13 +1726,7 @@ def parse_account_block(
                     continue
                 bm = bureau_maps[b]
                 if bm.get(std_key) in (None, ""):
-                    _assign_std(
-                        bm,
-                        std_key,
-                        v,
-                        raw_val=raw_map.get(b),
-                        provenance=source,
-                    )
+                    _assign_std(bm, std_key, v, raw_val=v, provenance=source)
                     if std_key == "account_number_display":
                         digits = re.sub(r"\D", "", str(v))
                         last4 = digits[-4:] if len(digits) >= 4 else None
@@ -1828,7 +1825,6 @@ def parse_account_block(
                         raw_vals[2],
                     )
                     continue
-            raw_map = {b: rv for b, rv in zip(default_order, raw_vals)}
             values: list[Any | None] = []
             for idx2, rv in enumerate(raw_vals):
                 if rv is None or str(rv).strip() in {"", "--"}:
@@ -1881,13 +1877,7 @@ def parse_account_block(
                     continue
                 bm = bureau_maps[b]
                 if bm.get(std_key) in (None, ""):
-                    _assign_std(
-                        bm,
-                        std_key,
-                        v,
-                        raw_val=raw_map.get(b),
-                        provenance=source,
-                    )
+                    _assign_std(bm, std_key, v, raw_val=v, provenance=source)
                     if std_key == "account_number_display":
                         digits = re.sub(r"\D", "", str(v))
                         last4 = digits[-4:] if len(digits) >= 4 else None
@@ -1988,15 +1978,25 @@ def parse_account_block(
                 for key, start, end in spans:
                     seg = body[start:end].strip()
                     if seg in {"", "--"}:
-                        _assign_std(bm, key, None)
+                        _assign_std(bm, key, None, provenance="aligned")
                     else:
-                        _assign_std(bm, key, seg)
+                        clean = _strip_leaked_prefix(key, seg)
+                        _assign_std(
+                            bm,
+                            key,
+                            clean,
+                            raw_val=clean,
+                            provenance="aligned",
+                        )
                         if key == "account_number_display":
-                            digits = re.sub(r"\D", "", seg)
+                            digits = re.sub(r"\D", "", clean)
+                            last4 = digits[-4:] if len(digits) >= 4 else None
                             _assign_std(
                                 bm,
                                 "account_number_last4",
-                                digits[-4:] if len(digits) >= 4 else None,
+                                last4,
+                                raw_val=last4,
+                                provenance="aligned",
                             )
                 parsed.add(bureau)
 
@@ -2022,30 +2022,106 @@ def parse_account_block(
             )
             masked = m.group(2)
             bm = bureau_maps[b]
-            _assign_std(bm, "account_number_display", masked)
+            _assign_std(
+                bm,
+                "account_number_display",
+                masked,
+                raw_val=masked,
+                provenance="aligned",
+            )
             digits = re.sub(r"\D", "", masked) if re.search(r"\d", masked) else ""
+            last4 = digits[-4:] if len(digits) >= 4 else None
             _assign_std(
                 bm,
                 "account_number_last4",
-                digits[-4:] if len(digits) >= 4 else None,
+                last4,
+                raw_val=last4,
+                provenance="aligned",
             )
-            _assign_std(bm, "high_balance", m.group(3))
-            _assign_std(bm, "last_verified", m.group(4))
-            _assign_std(bm, "date_of_last_activity", m.group(5))
-            _assign_std(bm, "date_reported", m.group(6))
-            _assign_std(bm, "date_opened", m.group(7))
-            _assign_std(bm, "balance_owed", m.group(8))
-            _assign_std(bm, "account_rating", m.group(9))
-            _assign_std(bm, "account_description", m.group(10))
-            _assign_std(bm, "creditor_type", m.group(11))
-            _assign_std(bm, "account_status", m.group(12))
-            _assign_std(bm, "payment_status", m.group(13))
-            _assign_std(bm, "payment_amount", m.group(14))
-            _assign_std(bm, "last_payment", m.group(15))
-            _assign_std(bm, "past_due_amount", m.group(16))
+            _assign_std(
+                bm, "high_balance", _strip_leaked_prefix("high_balance", m.group(3)),
+                raw_val=_strip_leaked_prefix("high_balance", m.group(3)), provenance="aligned"
+            )
+            _assign_std(
+                bm, "last_verified", _strip_leaked_prefix("last_verified", m.group(4)),
+                raw_val=_strip_leaked_prefix("last_verified", m.group(4)), provenance="aligned"
+            )
+            _assign_std(
+                bm,
+                "date_of_last_activity",
+                _strip_leaked_prefix("date_of_last_activity", m.group(5)),
+                raw_val=_strip_leaked_prefix("date_of_last_activity", m.group(5)),
+                provenance="aligned",
+            )
+            _assign_std(
+                bm, "date_reported", _strip_leaked_prefix("date_reported", m.group(6)),
+                raw_val=_strip_leaked_prefix("date_reported", m.group(6)), provenance="aligned"
+            )
+            _assign_std(
+                bm, "date_opened", _strip_leaked_prefix("date_opened", m.group(7)),
+                raw_val=_strip_leaked_prefix("date_opened", m.group(7)), provenance="aligned"
+            )
+            _assign_std(
+                bm, "balance_owed", _strip_leaked_prefix("balance_owed", m.group(8)),
+                raw_val=_strip_leaked_prefix("balance_owed", m.group(8)), provenance="aligned"
+            )
+            _assign_std(
+                bm, "account_rating", _strip_leaked_prefix("account_rating", m.group(9)),
+                raw_val=_strip_leaked_prefix("account_rating", m.group(9)), provenance="aligned"
+            )
+            _assign_std(
+                bm,
+                "account_description",
+                _strip_leaked_prefix("account_description", m.group(10)),
+                raw_val=_strip_leaked_prefix("account_description", m.group(10)),
+                provenance="aligned",
+            )
+            _assign_std(
+                bm, "creditor_type", _strip_leaked_prefix("creditor_type", m.group(11)),
+                raw_val=_strip_leaked_prefix("creditor_type", m.group(11)), provenance="aligned"
+            )
+            _assign_std(
+                bm, "account_status", _strip_leaked_prefix("account_status", m.group(12)),
+                raw_val=_strip_leaked_prefix("account_status", m.group(12)), provenance="aligned"
+            )
+            _assign_std(
+                bm, "payment_status", _strip_leaked_prefix("payment_status", m.group(13)),
+                raw_val=_strip_leaked_prefix("payment_status", m.group(13)), provenance="aligned"
+            )
+            _assign_std(
+                bm, "payment_amount", _strip_leaked_prefix("payment_amount", m.group(14)),
+                raw_val=_strip_leaked_prefix("payment_amount", m.group(14)), provenance="aligned"
+            )
+            _assign_std(
+                bm, "last_payment", _strip_leaked_prefix("last_payment", m.group(15)),
+                raw_val=_strip_leaked_prefix("last_payment", m.group(15)), provenance="aligned"
+            )
+            _assign_std(
+                bm, "past_due_amount", _strip_leaked_prefix("past_due_amount", m.group(16)),
+                raw_val=_strip_leaked_prefix("past_due_amount", m.group(16)), provenance="aligned"
+            )
 
     # Footer triplet lines (account type / payment frequency / credit limit)
-    footer = parse_three_footer_lines(lines)
+    try:
+        hist_idx = next(
+            i for i, ln in enumerate(lines) if "two-year payment history" in ln.lower()
+        )
+    except StopIteration:
+        hist_idx = len(lines)
+    last_lines = lines[max(0, hist_idx - 8) : hist_idx]
+    if last_lines:
+        logger.info(
+            "FOOTER: pre-scan last_lines=%d sample=%r",
+            len(last_lines),
+            last_lines[-5:],
+        )
+    else:
+        logger.info(
+            "FOOTER: pre-scan last_lines=0 hist_idx=%d total=%d",
+            hist_idx,
+            len(lines),
+        )
+    footer = parse_three_footer_lines(last_lines)
     for b in BUREAUS:
         for k in ("account_type", "payment_frequency", "credit_limit"):
             val = footer.get(b, {}).get(k)
@@ -2066,7 +2142,7 @@ def parse_account_block(
                 bureau_maps[b],
                 k,
                 clean,
-                raw_val=val,
+                raw_val=clean,
                 provenance="footer",
             )
 
@@ -2213,7 +2289,6 @@ def parse_collection_block(
                     std_key,
                 )
             continue
-        raw_map = {b: rv for b, rv in zip(order, raw_vals)}
         values: list[Any | None] = []
         for rv in raw_vals:
             if rv is None or rv.strip() in {"", "--"}:
@@ -2258,13 +2333,7 @@ def parse_collection_block(
         for b, v in zip(order, values):
             if v is None:
                 continue
-            _assign_std(
-                maps[b],
-                std_key,
-                v,
-                raw_val=raw_map.get(b),
-                provenance=source,
-            )
+            _assign_std(maps[b], std_key, v, raw_val=v, provenance="collection")
         logger.info(
             "COLL: parsed key=%s tu=%r ex=%r eq=%r",
             std_key,

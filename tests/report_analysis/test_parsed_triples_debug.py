@@ -4,7 +4,6 @@ from pathlib import Path
 
 from backend.core.logic.report_analysis.report_parsing import parse_account_block
 
-
 FULL_BLOCK = """Field: TransUnion Experian Equifax
 Account Number: 12345 23456 34567
 High Balance: 100 200 300

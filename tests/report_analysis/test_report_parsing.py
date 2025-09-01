@@ -1,17 +1,18 @@
 import pytest
 
 from backend.core.logic.report_analysis.report_parsing import (
-    extract_account_numbers,
-    extract_payment_statuses,
     _DETAIL_LABELS,
     _normalize_detail_value,
+    detect_bureau_order,
+    extract_account_numbers,
+    extract_payment_statuses,
 )
 from backend.core.logic.utils.names_normalization import normalize_creditor_name
 from tests.report_analysis.fixtures.account_detail_blocks import (
+    BLOCK_WITH_COLLECTION_STATUS,
     BLOCK_WITH_DIGITS,
     BLOCK_WITH_MASKED,
     BLOCK_WITHOUT_DIGITS,
-    BLOCK_WITH_COLLECTION_STATUS,
 )
 
 
@@ -22,32 +23,34 @@ from tests.report_analysis.fixtures.account_detail_blocks import (
             "TransUnion          Experian          Equifax",
             "Payment Status:      Collection/Chargeoff  Collection/Chargeoff  Late 120 Days",
             {
-                "Transunion": "collection/chargeoff",
-                "Experian": "collection/chargeoff",
-                "Equifax": "late 120 days",
+                "transunion": "collection/chargeoff",
+                "experian": "collection/chargeoff",
+                "equifax": "late 120 days",
             },
         ),
         (
             "TransUnion          Experian          Equifax",
             "Payment Status: Collection/Chargeoff   Collection/Chargeoff       Late 120 Days",
             {
-                "Transunion": "collection/chargeoff",
-                "Experian": "collection/chargeoff",
-                "Equifax": "late 120 days",
+                "transunion": "collection/chargeoff",
+                "experian": "collection/chargeoff",
+                "equifax": "late 120 days",
             },
         ),
         (
             "transunion          EXPERIAN          equifax",
             "Payment Status: COLLECTION/CHARGEOFF  LATE 120 DAYS  Charge-Off",
             {
-                "Transunion": "collection/chargeoff",
-                "Experian": "late 120 days",
-                "Equifax": "charge-off",
+                "transunion": "collection/chargeoff",
+                "experian": "late 120 days",
+                "equifax": "charge-off",
             },
         ),
     ],
 )
-def test_extract_payment_statuses_smartcredit_table(header_line, payment_line, expected_map):
+def test_extract_payment_statuses_smartcredit_table(
+    header_line, payment_line, expected_map
+):
     text = f"""
 PALISADES FU
 {header_line}
@@ -57,10 +60,7 @@ Account #            123             123             123
     statuses, raw_map = extract_payment_statuses(text)
     key = normalize_creditor_name("PALISADES FU")
     assert statuses[key] == expected_map
-    assert (
-        raw_map[key]
-        == payment_line.split("Payment Status:", 1)[1].strip()
-    )
+    assert raw_map[key] == payment_line.split("Payment Status:", 1)[1].strip()
 
 
 @pytest.mark.parametrize(
@@ -112,9 +112,9 @@ def test_account_detail_block_collection_status():
     statuses, _ = extract_payment_statuses(BLOCK_WITH_COLLECTION_STATUS)
     key = normalize_creditor_name("PALISADES FU")
     assert statuses[key] == {
-        "Transunion": "collection/chargeoff",
-        "Experian": "collection/chargeoff",
-        "Equifax": "charge-off",
+        "transunion": "collection/chargeoff",
+        "experian": "collection/chargeoff",
+        "equifax": "charge-off",
     }
 
 
@@ -139,3 +139,37 @@ def test_normalize_date_formats():
     assert _normalize_detail_value("date_opened", "1/2/23")[0] == "2023-01-02"
     assert _normalize_detail_value("date_opened", "03/2023")[0] == "2023-03"
     assert _normalize_detail_value("date_opened", "Jan 2020")[0] == "2020-01"
+
+
+def test_detect_bureau_order_single_line():
+    lines = [
+        "random",
+        "TransUnion Experian Equifax",
+        "footer",
+    ]
+    assert detect_bureau_order(lines) == [
+        "transunion",
+        "experian",
+        "equifax",
+    ]
+
+
+def test_detect_bureau_order_trans_union_variant():
+    lines = ["Trans Union Experian Equifax"]
+    assert detect_bureau_order(lines) == [
+        "transunion",
+        "experian",
+        "equifax",
+    ]
+
+
+def test_detect_bureau_order_split_lines_with_artifacts():
+    lines = [
+        "Field: TransUnion® Experian",
+        "EquifaxÂ additional",
+    ]
+    assert detect_bureau_order(lines) == [
+        "transunion",
+        "experian",
+        "equifax",
+    ]

@@ -23,6 +23,39 @@ BUREAU_PATTERNS = {
 }
 
 
+def detect_bureau_order(lines: list[str]) -> list[str] | None:
+    """Return bureau order from ``lines`` if all three are found.
+
+    Works on cleaned, case-insensitive lines and can handle headers that span
+    up to two consecutive lines. Any occurrence of ``TransUnion``/``Trans Union``,
+    ``Experian`` and ``Equifax`` is considered regardless of additional
+    characters. Returns the canonical lowercase bureau names in the detected
+    order, or ``None`` if no header is found.
+    """
+
+    # Clean the lines to remove stray characters such as ``Â`` or ``®``
+    cleaned = [_clean_line(ln) for ln in lines]
+
+    pats = {name.lower(): pat for name, pat in BUREAU_PATTERNS.items()}
+
+    for i in range(len(cleaned)):
+        candidates = [cleaned[i]]
+        if i + 1 < len(cleaned):
+            candidates.append(f"{cleaned[i]} {cleaned[i + 1]}")
+        for cand in candidates:
+            positions: dict[str, int] = {}
+            for name, pat in pats.items():
+                m = pat.search(cand)
+                if m:
+                    positions[name] = m.start()
+            if len(positions) == 3:
+                ordered = [
+                    name for name, _ in sorted(positions.items(), key=lambda x: x[1])
+                ]
+                return ordered
+    return None
+
+
 # --- Standard 25-field set per bureau ---
 ACCOUNT_FIELD_SET: tuple[str, ...] = (
     "account_number_display",
@@ -224,18 +257,15 @@ def scan_page_markers(page_texts: Sequence[str]) -> dict[str, Any]:
     }
 
 
-from backend.core.logic.utils.names_normalization import (
+from backend.core.logic.utils.names_normalization import (  # noqa: E402
     normalize_bureau_name,
-)  # noqa: E402
+)
 from backend.core.logic.utils.norm import normalize_heading  # noqa: E402
 from backend.core.logic.utils.text_parsing import extract_account_blocks  # noqa: E402
 from backend.core.models.bureau import BureauAccount  # noqa: E402
-from .constants import (
-    BUREAUS,
-    INQUIRY_FIELDS,
-    PUBLIC_INFO_FIELDS,
-)
-from .normalize import to_number, to_iso_date  # noqa: E402
+
+from .constants import BUREAUS, INQUIRY_FIELDS, PUBLIC_INFO_FIELDS  # noqa: E402
+from .normalize import to_iso_date, to_number  # noqa: E402
 
 # Mapping of account detail labels to canonical keys. Each tuple contains the
 # canonical key and a regex that matches variations of the label in the PDF
@@ -572,35 +602,6 @@ def extract_payment_statuses(
     def _normalize_val(value: str) -> str:
         return re.sub(r"\s+", " ", value.strip()).lower()
 
-    def _find_boundaries(lines: list[str]) -> list[str] | None:
-        """Return bureau order based on the header row positions."""
-        for line in lines:
-            clean = _clean_line(line)
-            positions: dict[str, int] = {}
-            for name, pat in BUREAU_PATTERNS.items():
-                m = pat.search(clean)
-                if m:
-                    positions[name] = m.start()
-            if len(positions) == 3:
-                ordered = [
-                    name for name, _ in sorted(positions.items(), key=lambda x: x[1])
-                ]
-                return ordered
-        positions: dict[str, int] = {}
-        for line in lines:
-            clean = _clean_line(line)
-            for name, pat in BUREAU_PATTERNS.items():
-                if name not in positions:
-                    m = pat.search(clean)
-                    if m:
-                        positions[name] = m.start()
-        if len(positions) == 3:
-            ordered = [
-                name for name, _ in sorted(positions.items(), key=lambda x: x[1])
-            ]
-            return ordered
-        return None
-
     statuses: dict[str, dict[str, str]] = {}
     raw_map: dict[str, str] = {}
     for block in extract_account_blocks(text):
@@ -609,11 +610,11 @@ def extract_payment_statuses(
         heading = block[0].strip()
         acc_norm = normalize_heading(heading)
 
-        bureau_order = _find_boundaries(block[1:])
+        bureau_order = detect_bureau_order(block[1:])
         logger.info(
             "parse_account_block bureau_header_detected=%s order=%s",
             bool(bureau_order),
-            [b.lower() for b in bureau_order] if bureau_order else None,
+            bureau_order,
         )
         ps_line: str | None = None
         for raw_line in block[1:]:
@@ -1126,37 +1127,22 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
 
     bureau_maps = _init_maps()
 
-    def _norm_bureau(tag: str) -> str:
-        t = re.sub(r"\W+", "", tag).lower()
-        if t.startswith("tu") or "trans" in t:
-            return "transunion"
-        if t.startswith("ex"):
-            return "experian"
-        if t.startswith("eq") or "equ" in t:
-            return "equifax"
-        return t
+    order = detect_bureau_order(lines)
 
     vt_idx: int | None = None
-    bureau_order: list[str] | None = None
     for i, line in enumerate(lines):
-        m = re.match(r"field\s*:\s*(\w+)\s+(\w+)\s+(\w+)", line, re.I)
-        if m:
-            bureau_order = [
-                _norm_bureau(m.group(1)),
-                _norm_bureau(m.group(2)),
-                _norm_bureau(m.group(3)),
-            ]
+        if re.match(r"field\s*:", line, re.I):
             vt_idx = i
             break
 
     logger.info(
         "parse_account_block bureau_header_detected=%s order=%s",
-        bool(bureau_order),
-        bureau_order,
+        bool(order),
+        order,
     )
 
     parsed: set[str] = set()
-    if bureau_order is not None and vt_idx is not None:
+    if order is not None and vt_idx is not None:
         count = 0
         pattern = re.compile(
             r"^(?P<key>[\w #/]+):\s*(?P<v1>[^ ]+)(?:\s+(?P<v2>[^ ]+))?(?:\s+(?P<v3>.+))?$"
@@ -1174,7 +1160,7 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
                 else:
                     continue
             values = [m.group("v1"), m.group("v2"), m.group("v3")]
-            for b, v in zip(bureau_order, values):
+            for b, v in zip(order, values):
                 val = None if v in {None, "", "--"} else v.strip()
                 if val is None:
                     continue
@@ -1193,7 +1179,7 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
             "parse_account_block layout=vertical_triples fields_parsed=%d",
             count,
         )
-        parsed.update(bureau_order)
+        parsed.update(order)
 
     if not parsed:
         # --- Header-based column spans -----------------------------------
@@ -1284,7 +1270,7 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
     if not parsed:
         joined = lines
         bureau_rows = [
-            l for l in joined if re.match(rf"^{BUREAU_NAME_PATTERN}\s", l, re.I)
+            ln for ln in joined if re.match(rf"^{BUREAU_NAME_PATTERN}\s", ln, re.I)
         ]
         for row in bureau_rows:
             m = BUREAU_LINE_RE.search(row)
@@ -1355,7 +1341,7 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
         return {b: _empty_bureau_map() for b in BUREAUS}
 
     maps = _init()
-    for line in (_clean_line(l) for l in block_lines):
+    for line in (_clean_line(ln) for ln in block_lines):
         m = re.match(rf"{BUREAU_NAME_PATTERN}\s+(.*)", line, re.I)
         if not m:
             continue

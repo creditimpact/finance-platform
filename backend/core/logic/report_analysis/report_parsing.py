@@ -253,6 +253,35 @@ def _std_field_name(raw_key: str) -> str:
     return ALIAS_TO_STD.get(k, k)
 
 
+PREFIX_STRIP_RE = re.compile(
+    r"^(?:payment\s*status|account\s*status|creditor\s*remarks)\s*:\s*",
+    re.I,
+)
+
+
+def _strip_leaked_prefix(key_norm: str, val: str | None) -> str | None:
+    if not val:
+        return val
+    fam = None
+    if key_norm in ("payment_status", "account_type"):
+        fam = "payment"
+    elif key_norm in ("account_status",):
+        fam = "account"
+    elif key_norm in ("creditor_remarks",):
+        fam = "creditor"
+    else:
+        return val
+
+    s = val.strip()
+    if fam == "payment" and s.lower().startswith("payment"):
+        s = PREFIX_STRIP_RE.sub("", s).strip()
+    elif fam == "account" and s.lower().startswith("account"):
+        s = PREFIX_STRIP_RE.sub("", s).strip()
+    elif fam == "creditor" and s.lower().startswith("creditor"):
+        s = PREFIX_STRIP_RE.sub("", s).strip()
+    return s
+
+
 def _assign_std(dst: dict[str, Any], key: str, val: Any) -> None:
     std = _std_field_name(key)
     if std not in ACCOUNT_FIELD_SET:
@@ -260,6 +289,8 @@ def _assign_std(dst: dict[str, Any], key: str, val: Any) -> None:
     if val is None:
         dst[std] = None
         return
+    if std == "account_number_display":
+        val = re.sub(r"^[\-\s]+", "", str(val or ""))
     if std in NUMERIC_FIELDS:
         dst[std] = to_number(str(val))
     elif std in DATE_FIELDS:
@@ -1621,6 +1652,28 @@ def parse_account_block(
                             val = val.split()[0]
                     values.append(val)
             val_map = {b: v for b, v in zip(order, values)}
+            values_dict = {
+                "tu": val_map.get("transunion"),
+                "ex": val_map.get("experian"),
+                "eq": val_map.get("equifax"),
+            }
+            orig = dict(values_dict)
+            values_dict["tu"] = _strip_leaked_prefix(std_key, values_dict.get("tu"))
+            values_dict["ex"] = _strip_leaked_prefix(std_key, values_dict.get("ex"))
+            values_dict["eq"] = _strip_leaked_prefix(std_key, values_dict.get("eq"))
+            if values_dict != orig:
+                logger.info(
+                    "VALPREFIX: stripped prefix for key=%s values_before=%s values_after=%s",
+                    std_key,
+                    orig,
+                    values_dict,
+                )
+            val_map = {
+                "transunion": values_dict["tu"],
+                "experian": values_dict["ex"],
+                "equifax": values_dict["eq"],
+            }
+            values = [val_map.get(b) for b in order]
             if all(v is None for v in values):
                 row_dbg["drop_reason"] = "empty"
                 parsed_triples["rows"].append(row_dbg)
@@ -1628,11 +1681,7 @@ def parse_account_block(
             row_dbg.update(
                 {
                     "key_norm": std_key,
-                    "values": {
-                        "tu": val_map.get("transunion"),
-                        "ex": val_map.get("experian"),
-                        "eq": val_map.get("equifax"),
-                    },
+                    "values": values_dict,
                     "source": source,
                 }
             )
@@ -1751,6 +1800,28 @@ def parse_account_block(
                             val = val.split()[0]
                     values.append(val)
             val_map = {b: v for b, v in zip(default_order, values)}
+            values_dict = {
+                "tu": val_map.get("transunion"),
+                "ex": val_map.get("experian"),
+                "eq": val_map.get("equifax"),
+            }
+            orig = dict(values_dict)
+            values_dict["tu"] = _strip_leaked_prefix(std_key, values_dict.get("tu"))
+            values_dict["ex"] = _strip_leaked_prefix(std_key, values_dict.get("ex"))
+            values_dict["eq"] = _strip_leaked_prefix(std_key, values_dict.get("eq"))
+            if values_dict != orig:
+                logger.info(
+                    "VALPREFIX: stripped prefix for key=%s values_before=%s values_after=%s",
+                    std_key,
+                    orig,
+                    values_dict,
+                )
+            val_map = {
+                "transunion": values_dict["tu"],
+                "experian": values_dict["ex"],
+                "equifax": values_dict["eq"],
+            }
+            values = [val_map.get(b) for b in default_order]
             if all(v is None for v in values):
                 row_dbg["drop_reason"] = "empty"
                 parsed_triples["rows"].append(row_dbg)
@@ -1758,11 +1829,7 @@ def parse_account_block(
             row_dbg.update(
                 {
                     "key_norm": std_key,
-                    "values": {
-                        "tu": val_map.get("transunion"),
-                        "ex": val_map.get("experian"),
-                        "eq": val_map.get("equifax"),
-                    },
+                    "values": values_dict,
                     "source": source,
                 }
             )
@@ -1931,8 +1998,20 @@ def parse_account_block(
     for b in BUREAUS:
         for k in ("account_type", "payment_frequency", "credit_limit"):
             val = footer.get(b, {}).get(k)
-            if val is not None:
-                _assign_std(bureau_maps[b], k, val)
+            if val is None:
+                continue
+            clean = val
+            if isinstance(val, str):
+                clean = _strip_leaked_prefix(k, val)
+                if clean != val:
+                    abbr = {"transunion": "tu", "experian": "ex", "equifax": "eq"}
+                    logger.info(
+                        "VALPREFIX: stripped prefix for key=%s values_before=%s values_after=%s",
+                        k,
+                        {abbr[b]: val},
+                        {abbr[b]: clean},
+                    )
+            _assign_std(bureau_maps[b], k, clean)
 
     hist2y = parse_two_year_history(lines)
     sev7 = parse_seven_year_days_late(lines)
@@ -2084,6 +2163,28 @@ def parse_collection_block(
             else:
                 values.append(rv.strip())
         val_map = {b: v for b, v in zip(order, values)}
+        values_dict = {
+            "tu": val_map.get("transunion"),
+            "ex": val_map.get("experian"),
+            "eq": val_map.get("equifax"),
+        }
+        orig = dict(values_dict)
+        values_dict["tu"] = _strip_leaked_prefix(std_key, values_dict.get("tu"))
+        values_dict["ex"] = _strip_leaked_prefix(std_key, values_dict.get("ex"))
+        values_dict["eq"] = _strip_leaked_prefix(std_key, values_dict.get("eq"))
+        if values_dict != orig:
+            logger.info(
+                "VALPREFIX: stripped prefix for key=%s values_before=%s values_after=%s",
+                std_key,
+                orig,
+                values_dict,
+            )
+        val_map = {
+            "transunion": values_dict["tu"],
+            "experian": values_dict["ex"],
+            "equifax": values_dict["eq"],
+        }
+        values = [val_map.get(b) for b in order]
         if all(v is None for v in values):
             row_dbg["drop_reason"] = "empty"
             parsed_triples["rows"].append(row_dbg)
@@ -2091,11 +2192,7 @@ def parse_collection_block(
         row_dbg.update(
             {
                 "key_norm": std_key,
-                "values": {
-                    "tu": val_map.get("transunion"),
-                    "ex": val_map.get("experian"),
-                    "eq": val_map.get("equifax"),
-                },
+                "values": values_dict,
                 "source": source,
             }
         )

@@ -42,7 +42,7 @@ def test_parsed_triples_debug(tmp_path):
     lines = [ln for ln in FULL_BLOCK.strip().split("\n")]
     parse_account_block(lines, heading="Sample", sid=sid, account_id=acc_id)
 
-    dbg_path = Path("traces") / sid / "parsed_triples" / f"{acc_id}.json"
+    dbg_path = Path("traces") / sid / "debug" / "parsed_triples" / f"{acc_id}.json"
     assert dbg_path.exists()
     data = json.loads(dbg_path.read_text())
     assert data["bureau_order"] == ["transunion", "experian", "equifax"]

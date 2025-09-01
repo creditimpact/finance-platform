@@ -639,7 +639,7 @@ def materialize_accounts(
             )
             for b in BUREAUS:
                 try:
-                    _fill_bureau_map_from_sources(src, b, by[b], lines)
+                    _fill_bureau_map_from_sources(src, b, by[b], lines, sid=sid)
                     filled = sum(
                         1 for f in ACCOUNT_FIELD_SET if by[b].get(f) is not None
                     )
@@ -667,7 +667,12 @@ def materialize_accounts(
 
             try:
                 # 2) Parser for collection/chargeoff (fills gaps)
-                maps_col = parse_collection_block(lines or [])
+                maps_col = parse_collection_block(
+                    lines or [],
+                    heading=src.get("normalized_name") or src.get("name"),
+                    sid=sid,
+                    account_id=src.get("account_id") or _slug(src.get("name")),
+                )
             except Exception:
                 logger.exception("parse_collection_block_failed")
                 maps_col = {}

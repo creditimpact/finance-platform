@@ -15,7 +15,7 @@ def _save_parsed_triples(
 ) -> None:
     if not sid or not account_id or not payload:
         return
-    out_dir = os.path.join("traces", sid, "parsed_triples")
+    out_dir = os.path.join("traces", sid, "debug", "parsed_triples")
     os.makedirs(out_dir, exist_ok=True)
     safe_id = account_id.replace("/", "_")
     fn = os.path.join(out_dir, f"{safe_id}.json")
@@ -1729,7 +1729,8 @@ def parse_account_block(
         bm = result.get(b, _empty_bureau_map())
         filled = sum(1 for k in ACCOUNT_FIELD_SET if bm[k] is not None)
         logger.info("parse_account_block result bureau=%s filled=%d/25", b, filled)
-    _save_parsed_triples(sid, account_id, heading, parsed_triples)
+    if sid and account_id:
+        _save_parsed_triples(sid, account_id, heading, parsed_triples)
     return result
 
 
@@ -1860,7 +1861,8 @@ def parse_collection_block(
         m = result.get(b) or {}
         non_null = sum(1 for f in ACCOUNT_FIELD_SET if m.get(f) is not None)
         logger.info("COLL: result bureau=%s filled=%d/25", b, non_null)
-    _save_parsed_triples(sid, account_id, heading, parsed_triples)
+    if sid and account_id:
+        _save_parsed_triples(sid, account_id, heading, parsed_triples)
     return result
 
 
@@ -1951,6 +1953,8 @@ def _fill_bureau_map_from_sources(
     bureau: str,
     dst: dict[str, Any],
     account_block_lines: list[str] | None = None,
+    *,
+    sid: str | None = None,
 ) -> None:
     """Fill a single bureau's 25-field map for an account.
 
@@ -1962,6 +1966,9 @@ def _fill_bureau_map_from_sources(
     Gentle normalization for numeric/date fields only when unambiguous.
     Also backfills account_number_display/last4 from top-level when missing.
     """
+
+    heading = acc.get("normalized_name") or acc.get("name")
+    acc_id = acc.get("account_id") or heading
 
     # 1) bureaus[] entry
     src = _find_bureau_entry(acc, bureau)
@@ -2045,7 +2052,12 @@ def _fill_bureau_map_from_sources(
     # If still missing keys and block lines were provided, backfill via parser
     if missing_before and account_block_lines:
         try:
-            block_maps = parse_account_block(account_block_lines)
+            block_maps = parse_account_block(
+                account_block_lines,
+                heading=heading,
+                sid=sid,
+                account_id=acc_id,
+            )
             bm = block_maps.get(bureau, {})
             for k in dst.keys():
                 if dst[k] is None and k in bm:
@@ -2060,7 +2072,12 @@ def _fill_bureau_map_from_sources(
         missing_after_acc = [k for k, v in dst.items() if v is None]
         if missing_after_acc:
             try:
-                coll_maps = parse_collection_block(account_block_lines)
+                coll_maps = parse_collection_block(
+                    account_block_lines,
+                    sid=sid,
+                    account_id=acc_id,
+                    heading=heading,
+                )
                 bm2 = coll_maps.get(bureau, {})
                 for k in dst.keys():
                     if dst[k] is None and k in bm2:
@@ -2201,7 +2218,13 @@ def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
             else:
                 for field in ACCOUNT_FIELD_SET:
                     dst.setdefault(field, None)
-            _fill_bureau_map_from_sources(acc, b, dst, account_block_lines)
+            _fill_bureau_map_from_sources(
+                acc,
+                b,
+                dst,
+                account_block_lines,
+                sid=session_id,
+            )
             by[b] = dst
 
         tu = sum(1 for v in by.get("transunion", {}).values() if v is not None)

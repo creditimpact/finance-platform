@@ -43,6 +43,18 @@ def _slug(s: str | None) -> str:
     return re.sub(r"[^a-z0-9_\-]", "", s) or "account"
 
 
+def _get_scalar(v: Any) -> Any:
+    """Return ``v['normalized']`` when *v* is a provenance dict.
+
+    Falls back to ``v['raw']`` when the normalized value is missing.
+    Non-dict values are returned unchanged.
+    """
+
+    if isinstance(v, Mapping):
+        return v.get("normalized") or v.get("raw")
+    return v
+
+
 # ---------------------------------------------------------------------------
 # Bureau-complete view (assemble-only)
 # ---------------------------------------------------------------------------
@@ -234,7 +246,7 @@ def _build_bureau_complete(acc: dict) -> dict[str, dict[str, Any]]:
         for b in BUREAUS:
             if by_field.get(b, {}).get("balance") is None:
                 val = (
-                    raw_by_bureau.get(b, {}).get("balance_owed")
+                    _get_scalar(raw_by_bureau.get(b, {}).get("balance_owed"))
                     if isinstance(raw_by_bureau, dict)
                     else None
                 )
@@ -699,6 +711,10 @@ def materialize_accounts(
                     v = by[b].get(k)
                     if dest.get(k) is None and v is not None:
                         dest[k] = v
+            ah["by_bureau_simple"] = {
+                b: {k: _get_scalar(v) for k, v in byb.get(b, {}).items()}
+                for b in BUREAUS
+            }
 
             # Public information / Inquiries arrays
             raw.setdefault("public_information", {"items": []})
@@ -788,7 +804,7 @@ def materialize_accounts(
                 return sum(
                     1
                     for f in ACCOUNT_FIELD_SET
-                    if (byb.get(bname, {}) or {}).get(f) is not None
+                    if _get_scalar((byb.get(bname, {}) or {}).get(f)) is not None
                 )
 
             tu = _count_non_null("transunion")
@@ -835,7 +851,9 @@ def materialize_accounts(
             )
             counts = {
                 b: sum(
-                    1 for f in ACCOUNT_FIELD_SET if by_bureau.get(b, {}).get(f) is None
+                    1
+                    for f in ACCOUNT_FIELD_SET
+                    if _get_scalar(by_bureau.get(b, {}).get(f)) is None
                 )
                 for b in BUREAUS
             }
@@ -843,7 +861,7 @@ def materialize_accounts(
             field_miss: dict[str, int] = {f: 0 for f in ACCOUNT_FIELD_SET}
             for b in BUREAUS:
                 for f in ACCOUNT_FIELD_SET:
-                    if by_bureau.get(b, {}).get(f) is None:
+                    if _get_scalar(by_bureau.get(b, {}).get(f)) is None:
                         field_miss[f] += 1
             top_missing = sorted(field_miss.items(), key=lambda x: x[1], reverse=True)[
                 :5

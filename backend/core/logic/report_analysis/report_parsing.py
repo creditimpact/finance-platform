@@ -282,21 +282,52 @@ def _strip_leaked_prefix(key_norm: str, val: str | None) -> str | None:
     return s
 
 
-def _assign_std(dst: dict[str, Any], key: str, val: Any) -> None:
+def _assign_std(
+    dst: dict[str, Any],
+    key: str,
+    val: Any,
+    *,
+    raw_val: Any | None = None,
+    provenance: str | None = None,
+) -> None:
+    """Assign *val* to ``dst`` under the canonical field name for ``key``.
+
+    The stored value is a structure with ``{"raw", "normalized", "provenance"}``
+    to preserve the original string when normalisation fails.
+    """
+
     std = _std_field_name(key)
     if std not in ACCOUNT_FIELD_SET:
         return
-    if val is None:
-        dst[std] = None
+
+    # Accept pre-structured values (already carrying provenance)
+    if isinstance(val, Mapping) and {"raw", "normalized"} <= set(val.keys()):
+        dst[std] = val
         return
-    if std == "account_number_display":
-        val = re.sub(r"^[\-\s]+", "", str(val or ""))
-    if std in NUMERIC_FIELDS:
-        dst[std] = to_number(str(val))
-    elif std in DATE_FIELDS:
-        dst[std] = to_iso_date(str(val))
-    else:
-        dst[std] = str(val).strip()
+
+    raw = raw_val if raw_val is not None else val
+    normalized: Any | None = None
+
+    if val is not None:
+        if std == "account_number_display":
+            val = re.sub(r"^[\-\s]+", "", str(val or ""))
+        if std in NUMERIC_FIELDS:
+            num = to_number(str(val))
+            normalized = num if isinstance(num, (int, float)) else None
+        elif std in DATE_FIELDS:
+            iso = to_iso_date(str(val))
+            normalized = iso if re.match(r"\d{4}-\d{2}-\d{2}", str(iso)) else None
+        else:
+            normalized = str(val).strip()
+
+    if normalized is None and raw not in (None, "") and val is not None:
+        logger.info("norm_failed key=%s raw=%r", std, raw)
+
+    dst[std] = {
+        "raw": raw,
+        "normalized": normalized,
+        "provenance": provenance or "unknown",
+    }
 
 
 def extract_text_from_pdf(pdf_path: str | Path) -> str:
@@ -1639,6 +1670,7 @@ def parse_account_block(
                         raw_vals[2],
                     )
                     continue
+            raw_map = {b: rv for b, rv in zip(order, raw_vals)}
             values: list[Any | None] = []
             for idx2, rv in enumerate(raw_vals):
                 if rv is None or str(rv).strip() in {"", "--"}:
@@ -1691,13 +1723,22 @@ def parse_account_block(
                     continue
                 bm = bureau_maps[b]
                 if bm.get(std_key) in (None, ""):
-                    _assign_std(bm, std_key, v)
+                    _assign_std(
+                        bm,
+                        std_key,
+                        v,
+                        raw_val=raw_map.get(b),
+                        provenance=source,
+                    )
                     if std_key == "account_number_display":
                         digits = re.sub(r"\D", "", str(v))
+                        last4 = digits[-4:] if len(digits) >= 4 else None
                         _assign_std(
                             bm,
                             "account_number_last4",
-                            digits[-4:] if len(digits) >= 4 else None,
+                            last4,
+                            raw_val=last4,
+                            provenance=source,
                         )
             logger.info(
                 "triple_parsed key=%s v1=%s v2=%s v3=%s dropped=None",
@@ -1787,6 +1828,7 @@ def parse_account_block(
                         raw_vals[2],
                     )
                     continue
+            raw_map = {b: rv for b, rv in zip(default_order, raw_vals)}
             values: list[Any | None] = []
             for idx2, rv in enumerate(raw_vals):
                 if rv is None or str(rv).strip() in {"", "--"}:
@@ -1839,13 +1881,22 @@ def parse_account_block(
                     continue
                 bm = bureau_maps[b]
                 if bm.get(std_key) in (None, ""):
-                    _assign_std(bm, std_key, v)
+                    _assign_std(
+                        bm,
+                        std_key,
+                        v,
+                        raw_val=raw_map.get(b),
+                        provenance=source,
+                    )
                     if std_key == "account_number_display":
                         digits = re.sub(r"\D", "", str(v))
+                        last4 = digits[-4:] if len(digits) >= 4 else None
                         _assign_std(
                             bm,
                             "account_number_last4",
-                            digits[-4:] if len(digits) >= 4 else None,
+                            last4,
+                            raw_val=last4,
+                            provenance=source,
                         )
             logger.info(
                 "triple_parsed key=%s v1=%s v2=%s v3=%s dropped=None",
@@ -2011,7 +2062,13 @@ def parse_account_block(
                         {abbr[b]: val},
                         {abbr[b]: clean},
                     )
-            _assign_std(bureau_maps[b], k, clean)
+            _assign_std(
+                bureau_maps[b],
+                k,
+                clean,
+                raw_val=val,
+                provenance="footer",
+            )
 
     hist2y = parse_two_year_history(lines)
     sev7 = parse_seven_year_days_late(lines)
@@ -2156,6 +2213,7 @@ def parse_collection_block(
                     std_key,
                 )
             continue
+        raw_map = {b: rv for b, rv in zip(order, raw_vals)}
         values: list[Any | None] = []
         for rv in raw_vals:
             if rv is None or rv.strip() in {"", "--"}:
@@ -2200,7 +2258,13 @@ def parse_collection_block(
         for b, v in zip(order, values):
             if v is None:
                 continue
-            _assign_std(maps[b], std_key, v)
+            _assign_std(
+                maps[b],
+                std_key,
+                v,
+                raw_val=raw_map.get(b),
+                provenance=source,
+            )
         logger.info(
             "COLL: parsed key=%s tu=%r ex=%r eq=%r",
             std_key,

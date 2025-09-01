@@ -12,11 +12,11 @@ import logging
 import os
 import random
 import time
-from datetime import datetime, date
+from datetime import date, datetime
 from pathlib import Path
 from shutil import copyfile
-from typing import Any, Mapping
 from types import MappingProxyType
+from typing import Any, Mapping
 
 import backend.config as config
 import tactical
@@ -26,7 +26,6 @@ from backend.api.config import (
     ENABLE_FIELD_POPULATION,
     ENABLE_PLANNER,
     ENABLE_PLANNER_PIPELINE,
-    EXCLUDE_PARSER_AGGREGATED_ACCOUNTS,
     FIELD_POPULATION_CANARY_PERCENT,
     PLANNER_CANARY_PERCENT,
     PLANNER_PIPELINE_CANARY_PERCENT,
@@ -39,6 +38,7 @@ from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLevel
 from backend.core.case_store.api import get_account_case, list_accounts
 from backend.core.case_store.models import AccountCase
+from backend.core.case_store.telemetry import emit
 from backend.core.email_sender import send_email_with_attachment
 from backend.core.letters.field_population import apply_field_fillers
 from backend.core.logic.compliance.constants import StrategistFailureReason
@@ -68,15 +68,14 @@ from backend.core.models import (
     ProblemAccount,
     ProofDocuments,
 )
-from backend.core.services.ai_client import AIClient, _StubAIClient, get_ai_client
-from backend.core.case_store.telemetry import emit
-from backend.policy.policy_loader import load_rulebook
-from backend.core.taxonomy.problem_taxonomy import compare_tiers, normalize_decision
-from planner import plan_next_step
-from backend.core.telemetry.stageE_summary import emit_stageE_summary
 from backend.core.pdf.extract_text import extract_text as _debug_extract_text
+from backend.core.services.ai_client import AIClient, _StubAIClient, get_ai_client
+from backend.core.taxonomy.problem_taxonomy import compare_tiers, normalize_decision
+from backend.core.telemetry.stageE_summary import emit_stageE_summary
 from backend.core.utils.text_dump import dump_text as _dump_text
-from backend.core.utils.trace_io import write_text_trace, write_json_trace
+from backend.core.utils.trace_io import write_json_trace, write_text_trace
+from backend.policy.policy_loader import load_rulebook
+from planner import plan_next_step
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +96,9 @@ def _thaw(obj):
     return obj
 
 
-def _emit_stageA_orchestrated(session_id: str, accounts: list[Mapping[str, Any]]) -> None:
+def _emit_stageA_orchestrated(
+    session_id: str, accounts: list[Mapping[str, Any]]
+) -> None:
     """Emit telemetry for Stage A orchestration decisions."""
     for acc in accounts or []:
         emit(
@@ -134,7 +135,9 @@ def resolve_cross_bureau(decisions: list[dict]) -> dict:
         if tier != winner.get("tier", "none"):
             winner = dec
             continue
-        if dec.get("tier") == winner.get("tier") and dec.get("confidence", 0.0) > winner.get("confidence", 0.0):
+        if dec.get("tier") == winner.get("tier") and dec.get(
+            "confidence", 0.0
+        ) > winner.get("confidence", 0.0):
             winner = dec
 
     merged_reasons: list[str] = []
@@ -163,9 +166,8 @@ def compute_logical_account_key(account_case: AccountCase) -> str:
     last4_hash = (
         hashlib.sha256(last4_raw.encode("utf-8")).hexdigest() if last4_raw else ""
     )
-    creditor = (
-        (account_case.fields.creditor_type or "")
-        or (account_case.fields.account_type or "")
+    creditor = (account_case.fields.creditor_type or "") or (
+        account_case.fields.account_type or ""
     )
     opened = account_case.fields.date_opened or ""
     if isinstance(opened, (datetime, date)):
@@ -284,9 +286,9 @@ def collect_stageA_logical_accounts(session_id: str) -> list[Mapping[str, Any]]:
     return resolved
 
 
-
-
-def get_stageA_decision_meta(session_id: str, account_id: str) -> Mapping[str, Any] | None:
+def get_stageA_decision_meta(
+    session_id: str, account_id: str
+) -> Mapping[str, Any] | None:
     """Fetch Stage A decision metadata for an account if available."""
     try:
         case = get_account_case(session_id, account_id)  # type: ignore[operator]
@@ -305,6 +307,7 @@ def get_stageA_decision_meta(session_id: str, account_id: str) -> Mapping[str, A
     if fields_used:
         meta["fields_used"] = fields_used
     return meta
+
 
 def plan_and_generate_letters(session: dict, action_tags: list[str]) -> list[str]:
     """Optionally run the planner before generating letters.
@@ -526,7 +529,7 @@ def analyze_credit_report(
         pdf_path,
         analyzed_json_path,
         client_info,
-        session_id=session_id,
+        session_id=session_id or req_id,
         request_id=req_id,
     )
     logger.info(
@@ -534,7 +537,7 @@ def analyze_credit_report(
         sections.get("session_id"),
         req_id,
     )
-    _emit_stageA_events(session_id, sections.get("problem_accounts", []))
+    _emit_stageA_events(session_id, sections.get("problem_accounts", []))  # noqa: F821
     if (
         os.getenv("DEFER_ASSIGN_ISSUE_TYPES") == "1"
         and not sections.get("negative_accounts")
@@ -614,7 +617,11 @@ def _annotate_with_tri_merge(sections: Mapping[str, Any]) -> None:
     # Avoid deepcopy on potential MappingProxyType entries if this list ever
     # includes 'problem_accounts'; keep semantics identical for other keys.
     before = {
-        k: (copy.deepcopy(sections.get(k, [])) if k != "problem_accounts" else sections.get(k, []))
+        k: (
+            copy.deepcopy(sections.get(k, []))
+            if k != "problem_accounts"
+            else sections.get(k, [])
+        )
         for k in tracked_keys
     }
     counts_before = {k: len(v) for k, v in before.items()}
@@ -1248,7 +1255,9 @@ def extract_problematic_accounts_from_report(
         # Prefer structured extractor; fallback to legacy dumper if write fails
         _raw_text = _debug_extract_text(str(pdf_path), prefer_fitz=prefer_fitz)
         try:
-            _dump = write_text_trace(_raw_text, session_id=session_id, prefix="extracted")
+            _dump = write_text_trace(
+                _raw_text, session_id=session_id, prefix="extracted"
+            )
         except Exception:
             _dump = _dump_text(_raw_text, session_id, prefix="extracted")
         print(f"[TRACE] main dump saved: {_dump}")
@@ -1261,7 +1270,7 @@ def extract_problematic_accounts_from_report(
         {},
         ai_client=ai_client if run_ai else None,
         run_ai=run_ai,
-        session_id=session_id,
+        session_id=session_id or req_id,
         request_id=req_id,
     )
     logger.info(
@@ -1279,7 +1288,7 @@ def extract_problematic_accounts_from_report(
             {},
             ai_client=None,
             run_ai=False,
-            session_id=session_id,
+            session_id=session_id or req_id,
             request_id=req_id,
         )
         sections["needs_human_review"] = True
@@ -1344,8 +1353,10 @@ def extract_problematic_accounts_from_report(
     _log_account_snapshot("post_analyze_report")
     # Read-only injection step executed on deep copy; ensure no mutation of finalized accounts
     try:
-        from backend.core.utils.immutability import assert_no_mutation
         import copy as _copy
+
+        from backend.core.utils.immutability import assert_no_mutation
+
         # Avoid deepcopy on MappingProxyType (problem_accounts) to prevent errors in Python 3.13
         tmp = dict(sections)
         tmp.pop("problem_accounts", None)
@@ -1360,13 +1371,13 @@ def extract_problematic_accounts_from_report(
 
     from backend.core.logic.utils.names_normalization import normalize_creditor_name
 
-    parser_only = {
+    parser_only = {  # noqa: F841
         normalize_creditor_name(a.get("name", ""))
         for a in sections.get("all_accounts", [])
         if a.get("source_stage") == "parser_aggregated"
     }
 
-    suppress_accounts_without_issue_types = env_bool(
+    suppress_accounts_without_issue_types = env_bool(  # noqa: F841
         "SUPPRESS_ACCOUNTS_WITHOUT_ISSUE_TYPES", False
     )
 
@@ -1396,6 +1407,7 @@ def extract_problematic_accounts_from_report(
     sections["all_accounts"] = all_acc
     update_session(session_id, status="awaiting_user_explanations")
     _log_account_snapshot("pre_bureau_payload")
+
     # detailed per-account final_emit already logged above in build loop
     # Assert emit matches finalized problem_accounts (SSOT)
     def assert_emit_matches_finalize(finalized, emitted):
@@ -1417,6 +1429,7 @@ def extract_problematic_accounts_from_report(
                         f"EMIT_MISMATCH name={name} primary_final={p_final} primary_emit={p_emit} "
                         f"advisor_len_final={l_final} advisor_len_emit={l_emit}"
                     )
+
     try:
         assert_emit_matches_finalize(
             sections.get("problem_accounts") or [],
@@ -1430,7 +1443,6 @@ def extract_problematic_accounts_from_report(
     # Persist compact session summary + per-account full JSON artifacts
     # ------------------------------------------------------------------
     try:
-        import json as _json
         from datetime import datetime as _dt
 
         def _ensure_dir(p: str) -> None:
@@ -1438,7 +1450,10 @@ def extract_problematic_accounts_from_report(
 
         def _slug(s: str) -> str:
             base = (s or "").strip().lower().replace(" ", "_")
-            return "".join(ch for ch in base if ch.isalnum() or ch in ("_", "-")) or "account"
+            return (
+                "".join(ch for ch in base if ch.isalnum() or ch in ("_", "-"))
+                or "account"
+            )
 
         def _digits_only(s: str) -> str:
             return "".join(ch for ch in str(s) if ch.isdigit())
@@ -1453,7 +1468,10 @@ def extract_problematic_accounts_from_report(
                 or "charge-off" in t
                 or "chargeoff" in t
                 or "past due" in t
-                or any(x in t for x in ["late 30", "late 60", "late 90", "late 120", "late 150"])
+                or any(
+                    x in t
+                    for x in ["late 30", "late 60", "late 90", "late 120", "late 150"]
+                )
             )
 
         # Build compact summaries strictly from SSOT
@@ -1494,9 +1512,15 @@ def extract_problematic_accounts_from_report(
             full_path = os.path.join(full_accounts_dir, f"{acc_id}-{_slug(name)}.json")
             try:
                 from backend.core.utils.atomic_io import atomic_write_json
+
                 atomic_write_json(full_path, full_doc, ensure_ascii=False)
             except Exception as _werr:
-                logger.debug("write_full_account_failed session=%s id=%s err=%s", session_id, acc_id, _werr)
+                logger.debug(
+                    "write_full_account_failed session=%s id=%s err=%s",
+                    session_id,
+                    acc_id,
+                    _werr,
+                )
 
             summaries.append(
                 {
@@ -1518,17 +1542,33 @@ def extract_problematic_accounts_from_report(
         sessions_dir = os.path.join("sessions")
         _ensure_dir(sessions_dir)
         from backend.core.utils.atomic_io import atomic_write_json
-        atomic_write_json(os.path.join(sessions_dir, f"{session_id}.json"), session_out, ensure_ascii=False)
-        logger.info("DBG session_artifacts_written session=%s accounts=%d", session_id, len(summaries))
+
+        atomic_write_json(
+            os.path.join(sessions_dir, f"{session_id}.json"),
+            session_out,
+            ensure_ascii=False,
+        )
+        logger.info(
+            "DBG session_artifacts_written session=%s accounts=%d",
+            session_id,
+            len(summaries),
+        )
         # Optional assemble-only materializer behind flag
         if os.getenv("MATERIALIZER_ENABLE", "").lower() in ("1", "true", "yes"):
             try:
-                from backend.core.materialize.account_materializer import materialize_accounts
+                from backend.core.materialize.account_materializer import (
+                    materialize_accounts,
+                )
                 from backend.core.materialize.writer import write_account_full
+
                 # Assemble-only from structured sections (no derivations)
                 probs = [dict(a) for a in ssot_accounts]
                 accounts_full = materialize_accounts(session_id, sections, probs)
-                logger.info("materializer_returned session=%s count=%d", session_id, len(accounts_full))
+                logger.info(
+                    "materializer_returned session=%s count=%d",
+                    session_id,
+                    len(accounts_full),
+                )
                 out_dir = os.path.join("traces", session_id, "accounts_full")
                 _ensure_dir(out_dir)
                 written = 0
@@ -1537,10 +1577,21 @@ def extract_problematic_accounts_from_report(
                         write_account_full(session_id, a)
                         written += 1
                     except Exception as _werr:
-                        logger.warning("write_account_full_failed session=%s id=%s err=%s", session_id, a.get("account_id"), _werr)
-                logger.info("session_accounts_full_written session=%s accounts=%d", session_id, written)
+                        logger.warning(
+                            "write_account_full_failed session=%s id=%s err=%s",
+                            session_id,
+                            a.get("account_id"),
+                            _werr,
+                        )
+                logger.info(
+                    "session_accounts_full_written session=%s accounts=%d",
+                    session_id,
+                    written,
+                )
             except Exception as _mwerr:
-                logger.debug("materializer_failed session=%s err=%s", session_id, _mwerr)
+                logger.debug(
+                    "materializer_failed session=%s err=%s", session_id, _mwerr
+                )
     except Exception as _exc:
         logger.debug("session_artifacts_failed session=%s err=%s", session_id, _exc)
     for cat in (
@@ -1679,7 +1730,9 @@ def extract_problematic_accounts_from_report(
         use_ai_fallback = os.getenv("RUN_AI_FALLBACK", "0") == "1"
         zero_problems = not (sections.get("problem_accounts") or [])
         if use_ai_fallback and zero_problems:
-            print("[INFO] No accounts found by deterministic parser. Running AI fallback ...")
+            print(
+                "[INFO] No accounts found by deterministic parser. Running AI fallback ..."
+            )
             try:
                 from backend.core.services.ai_client import AIClient  # type: ignore
 
@@ -1710,31 +1763,54 @@ def extract_problematic_accounts_from_report(
                     try:
                         resp = ai_client.response_json(
                             prompt=prompt + "\n\nTEXT:\n" + txt[:6000],
-                            response_format={"type": "json_schema", "json_schema": {"name": "sections", "schema": schema_hint}},
+                            response_format={
+                                "type": "json_schema",
+                                "json_schema": {
+                                    "name": "sections",
+                                    "schema": schema_hint,
+                                },
+                            },
                         )
                         # OpenAI responses API: parse top-level JSON content
-                        content = getattr(resp, "output", None) or getattr(resp, "content", None)
-                        if isinstance(content, list) and content and getattr(content[0], "type", "") == "output_text":
+                        content = getattr(resp, "output", None) or getattr(
+                            resp, "content", None
+                        )
+                        if (
+                            isinstance(content, list)
+                            and content
+                            and getattr(content[0], "type", "") == "output_text"
+                        ):
                             raw = content[0].text  # type: ignore[attr-defined]
                         else:
-                            raw = getattr(resp, "output_text", None) or getattr(resp, "text", None)
+                            raw = getattr(resp, "output_text", None) or getattr(
+                                resp, "text", None
+                            )
                         import json as _json
 
                         data = _json.loads(raw) if isinstance(raw, str) else None
                         if isinstance(data, dict):
                             return data
                     except Exception as _e:  # pragma: no cover - best effort
-                        logger.info("ai_fallback_failed session=%s error=%s", session_id, _e)
+                        logger.info(
+                            "ai_fallback_failed session=%s error=%s", session_id, _e
+                        )
                     return None
 
             except Exception:
+
                 def _ai_sections_fallback(_: str) -> dict[str, Any] | None:
                     return None
 
-            ai_sections = _ai_sections_fallback(_raw_text if isinstance(_raw_text, str) else "")
+            ai_sections = _ai_sections_fallback(
+                _raw_text if isinstance(_raw_text, str) else ""
+            )
             if isinstance(ai_sections, dict):
                 # Non-destructive merge: only fill when empty
-                for key in ("problem_accounts", "inquiries", "high_utilization_accounts"):
+                for key in (
+                    "problem_accounts",
+                    "inquiries",
+                    "high_utilization_accounts",
+                ):
                     if not sections.get(key) and ai_sections.get(key):
                         sections[key] = ai_sections.get(key) or []
     except Exception as _exc:  # pragma: no cover - defensive
@@ -1769,7 +1845,9 @@ def extract_problematic_accounts_from_report(
                 )
                 prefix = f"acct{i:02d}-{creditor}-{acct_id}-{status}"
 
-                acct_json_path = write_json_trace(acc, session_id=session_id, prefix=prefix)
+                acct_json_path = write_json_trace(
+                    acc, session_id=session_id, prefix=prefix
+                )
 
                 summary_lines = [
                     f"Creditor: {creditor}",
@@ -1782,9 +1860,13 @@ def extract_problematic_accounts_from_report(
                     "",
                     f"Source markers: {acc.get('source_markers') or 'n/a'}",
                 ]
-                acct_txt_path = write_text_trace("\n".join(summary_lines), session_id=session_id, prefix=prefix)
+                acct_txt_path = write_text_trace(
+                    "\n".join(summary_lines), session_id=session_id, prefix=prefix
+                )
 
-                print(f"[TRACE] account trace saved: {acct_json_path} | {acct_txt_path}")
+                print(
+                    f"[TRACE] account trace saved: {acct_json_path} | {acct_txt_path}"
+                )
                 index.append(
                     {
                         "i": i,

@@ -120,6 +120,9 @@ ALIAS_TO_STD: dict[str, str] = {
     "acct #": "account_number_display",
     "account_no": "account_number_display",
     "account no": "account_number_display",
+    "account no.": "account_number_display",
+    "acct no": "account_number_display",
+    "acct no.": "account_number_display",
     "account number": "account_number_display",
     "acct number": "account_number_display",
     "account_last4": "account_number_last4",
@@ -994,6 +997,10 @@ BUREAU_LINE_RE = re.compile(
     re.I,
 )
 
+TRIPLE_LINE_RE = re.compile(
+    r"^(?P<key>[^:]{2,}):\s*(?P<v1>\S+|\-\-)(?:\s+(?P<v2>\S+|\-\-))?(?:\s+(?P<v3>.+))?$"
+)
+
 
 def parse_three_footer_lines(lines: list[str]) -> dict[str, dict[str, Any | None]]:
     """Parse the trailing three footer lines mapping to the bureaus.
@@ -1142,14 +1149,11 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
     )
 
     parsed: set[str] = set()
-    pattern = re.compile(
-        r"^(?P<key>[\w #/]+):\s*(?P<v1>[^ ]+)(?:\s+(?P<v2>[^ ]+))?(?:\s+(?P<v3>.+))?$"
-    )
 
     if order is not None and vt_idx is not None:
         count = 0
         for line in lines[vt_idx + 1 :]:
-            m = pattern.match(line)
+            m = TRIPLE_LINE_RE.match(line)
             if not m:
                 continue
             key = m.group("key").strip()
@@ -1160,16 +1164,27 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
                     std_key = "payment_status" if "pay" in low else "account_status"
                 else:
                     continue
-            values = [m.group("v1"), m.group("v2"), m.group("v3")]
+            raw_vals = [m.group("v1"), m.group("v2"), m.group("v3")]
+            values: list[Any | None] = []
+            for idx, rv in enumerate(raw_vals):
+                if rv is None or rv.strip() in {"", "--"}:
+                    values.append(None)
+                else:
+                    val = rv.strip()
+                    if idx == 2:
+                        val = re.sub(r"\s+", " ", val)
+                        val = re.sub(r"[^\w/ ]", "", val).strip()
+                        if " " in val:
+                            val = val.split()[0]
+                    values.append(val)
             for b, v in zip(order, values):
-                val = None if v in {None, "", "--"} else v.strip()
-                if val is None:
+                if v is None:
                     continue
                 bm = bureau_maps[b]
                 if bm.get(std_key) in (None, ""):
-                    _assign_std(bm, std_key, val)
+                    _assign_std(bm, std_key, v)
                     if std_key == "account_number_display":
-                        digits = re.sub(r"\D", "", val)
+                        digits = re.sub(r"\D", "", str(v))
                         _assign_std(
                             bm,
                             "account_number_last4",
@@ -1187,7 +1202,7 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
         count = 0
         default_order = ["transunion", "experian", "equifax"]
         for line in lines[start:]:
-            m = pattern.match(line)
+            m = TRIPLE_LINE_RE.match(line)
             if not (m and m.group("v3")):
                 continue
             key = m.group("key").strip()
@@ -1198,16 +1213,27 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
                     std_key = "payment_status" if "pay" in low else "account_status"
                 else:
                     continue
-            values = [m.group("v1"), m.group("v2"), m.group("v3")]
+            raw_vals = [m.group("v1"), m.group("v2"), m.group("v3")]
+            values: list[Any | None] = []
+            for idx, rv in enumerate(raw_vals):
+                if rv is None or rv.strip() in {"", "--"}:
+                    values.append(None)
+                else:
+                    val = rv.strip()
+                    if idx == 2:
+                        val = re.sub(r"\s+", " ", val)
+                        val = re.sub(r"[^\w/ ]", "", val).strip()
+                        if " " in val:
+                            val = val.split()[0]
+                    values.append(val)
             for b, v in zip(default_order, values):
-                val = None if v in {None, "", "--"} else v.strip()
-                if val is None:
+                if v is None:
                     continue
                 bm = bureau_maps[b]
                 if bm.get(std_key) in (None, ""):
-                    _assign_std(bm, std_key, val)
+                    _assign_std(bm, std_key, v)
                     if std_key == "account_number_display":
-                        digits = re.sub(r"\D", "", val)
+                        digits = re.sub(r"\D", "", str(v))
                         _assign_std(
                             bm,
                             "account_number_last4",
@@ -1368,9 +1394,9 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
         _assign_std(bm, "seven_year_days_late", sev7[b])
     result = bureau_maps
     for b in ("transunion", "experian", "equifax"):
-        m = result.get(b) or {}
-        non_null = sum(1 for f in ACCOUNT_FIELD_SET if m.get(f) is not None)
-        logger.info("parse_account_block result bureau=%s filled=%d/25", b, non_null)
+        bm = result.get(b, _empty_bureau_map())
+        filled = sum(1 for k in ACCOUNT_FIELD_SET if bm[k] is not None)
+        logger.info("parse_account_block result bureau=%s filled=%d/25", b, filled)
     return result
 
 

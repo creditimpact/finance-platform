@@ -90,16 +90,29 @@ ACCOUNT_FIELD_SET: tuple[str, ...] = (
 ALIAS_TO_STD: dict[str, str] = {
     # Numbers / amounts
     "balance": "balance_owed",
+    "balance owed": "balance_owed",
     "current_balance": "balance_owed",
     "current balance": "balance_owed",
     "amount": "balance_owed",
     "amt": "balance_owed",
     "high balance": "high_balance",
+    "original amount": "high_balance",
     "past_due": "past_due_amount",
+    "past due": "past_due_amount",
+    "past due amount": "past_due_amount",
+    "amount past due": "past_due_amount",
     "pmt_amount": "payment_amount",
+    "payment amount": "payment_amount",
+    "monthly payment": "payment_amount",
+    "scheduled payment": "payment_amount",
     "last_pmt": "last_payment",
+    "last payment": "last_payment",
+    "last payment date": "last_payment",
     "limit": "credit_limit",
     "credit limit": "credit_limit",
+    "h/c": "credit_limit",
+    "hc": "credit_limit",
+    "high credit": "credit_limit",
     # Dates
     "last_reported": "date_reported",
     "reported_date": "date_reported",
@@ -110,11 +123,15 @@ ALIAS_TO_STD: dict[str, str] = {
     "date opened": "date_opened",
     "open date": "date_opened",
     "closed": "closed_date",
+    "closed date": "closed_date",
+    "date closed": "closed_date",
     "dla": "date_of_last_activity",
+    "dola": "date_of_last_activity",
     "date of last activity": "date_of_last_activity",
     "last activity": "date_of_last_activity",
     "verified": "last_verified",
     "last verified": "last_verified",
+    "verified on": "last_verified",
     # Account number / last4
     "account #": "account_number_display",
     "acct #": "account_number_display",
@@ -129,19 +146,49 @@ ALIAS_TO_STD: dict[str, str] = {
     "acct_last4": "account_number_last4",
     "last4": "account_number_last4",
     # Status & descriptions
-    "rating": "account_rating",
-    "description": "account_description",
-    "status": "account_status",
     "account status": "account_status",
-    "pay status": "payment_status",
+    "status": "account_status",
+    "current status": "account_status",
+    "rating": "account_status",
     "payment status": "payment_status",
+    "pay status": "payment_status",
+    "status detail": "payment_status",
+    "current": "payment_status",
+    "account description": "account_description",
+    "description": "account_description",
+    "desc": "account_description",
+    "dispute status": "dispute_status",
+    "dispute": "dispute_status",
+    "dispute flag": "dispute_status",
+    "account dispute status": "dispute_status",
     # Remarks
     "remarks": "creditor_remarks",
     "comment": "creditor_remarks",
     "comments": "creditor_remarks",
     "notes": "creditor_remarks",
     # Types
+    "creditor type": "creditor_type",
+    "creditor category": "creditor_type",
+    "creditor": "creditor_type",
+    "account type": "account_type",
     "type": "account_type",
+    "term length": "term_length",
+    "term": "term_length",
+    "terms": "term_length",
+    "loan term": "term_length",
+    "contract length": "term_length",
+    "payment frequency": "payment_frequency",
+    "frequency": "payment_frequency",
+    "two-year payment history": "two_year_payment_history",
+    "two year payment history": "two_year_payment_history",
+    "2-year payment history": "two_year_payment_history",
+    "two-year history": "two_year_payment_history",
+    "2 year hist": "two_year_payment_history",
+    "days late - 7 year history": "seven_year_days_late",
+    "7-year days late": "seven_year_days_late",
+    "7 year late summary": "seven_year_days_late",
+    "late - 7 yrs": "seven_year_days_late",
+    # Other shorthand
     "freq": "payment_frequency",
 }
 
@@ -1549,7 +1596,10 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
     return result
 
 
-def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | None]]:
+def parse_collection_block(
+    block_lines: list[str],
+    bureau_order: Sequence[str] | None = None,
+) -> dict[str, dict[str, Any | None]]:
     """Parse simplified collection/charge-off blocks."""
 
     logger.info("parse_collection_block start lines=%d", len(block_lines))
@@ -1559,98 +1609,56 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
 
     maps = _init()
     lines = [_clean_line(ln) for ln in block_lines]
-    order = detect_bureau_order(lines) or ["transunion", "experian", "equifax"]
+    order = detect_bureau_order(lines)
+    if not order:
+        if bureau_order:
+            order = list(bureau_order)
+            logger.info("COLL: using bureau_order from stitch=%s", bureau_order)
+        else:
+            order = ["transunion", "experian", "equifax"]
+
+    neg_pat = re.compile(r"(collection|charge[-\s]?off|repossession)", re.I)
 
     for line in lines:
+        key: str | None = None
+        raw_vals: list[str | None] = []
         m = TRIPLE_LINE_RE.match(line)
-        raw_vals: list[str | None]
         if m:
-            logger.info(
-                "triple_parse layout=aligned key=%s", m.group("key").strip()
-            )
             key = m.group("key").strip()
             raw_vals = [m.group("v1"), m.group("v2"), m.group("v3")]
         else:
-            key, sep, rest = line.partition(":")
-            if sep and rest.strip():
-                logger.info("triple_parse layout=fallback key=%s", key.strip())
-                v1, v2, v3 = _split_triple_fallback(rest.strip(), order)
+            parts = re.split(r"\s*[:\-—]\s*", line, 1)
+            if len(parts) == 2 and parts[1].strip():
+                key = parts[0].strip()
+                v1, v2, v3 = _split_triple_fallback(parts[1].strip(), order)
                 raw_vals = [v1, v2, v3]
             else:
-                m2 = re.match(rf"{BUREAU_NAME_PATTERN}\s+(.*)", line, re.I)
-                if not m2:
-                    continue
-                bureau = re.sub(r"\s+", "", m2.group(1)).lower()
-                body = m2.group(2)
-                bm = maps[bureau]
-
-                acct = re.search(r"account\s*#?\s*([\d\*]+)", body, re.I)
-                if acct:
-                    masked = acct.group(1)
-                    _assign_std(bm, "account_number_display", masked)
-                    digits = re.sub(r"\D", "", masked)
-                    _assign_std(
-                        bm,
-                        "account_number_last4",
-                        digits[-4:] if len(digits) >= 4 else None,
-                    )
-
-                hb = re.search(
-                    r"(?:high balance|original (?:amount|balance))\s*:?\s*([-\d\$,CRDR ]+)",
-                    body,
-                    re.I,
-                )
-                if hb:
-                    _assign_std(bm, "high_balance", hb.group(1))
-
-                bal = re.search(
-                    r"(?:amount|current balance|balance owed|(?<!high )balance)\s*:?\s*([-\d\$,CRDR ]+)",
-                    body,
-                    re.I,
-                )
-                if bal:
-                    _assign_std(bm, "balance_owed", bal.group(1))
-
-                past = re.search(
-                    r"past due(?: amount)?\s*:?\s*([-\d\$,CRDR ]+)",
-                    body,
-                    re.I,
-                )
-                if past:
-                    _assign_std(bm, "past_due_amount", past.group(1))
-
-                for label, key2 in {
-                    "date reported": "date_reported",
-                    "date opened": "date_opened",
-                    "date of last activity": "date_of_last_activity",
-                    "last payment": "last_payment",
-                }.items():
-                    m3 = re.search(label + r"\s*:?\s*([-\d/]+)", body, re.I)
-                    if m3:
-                        _assign_std(bm, key2, m3.group(1))
-
-                astatus = re.search(r"account status\s*:?\s*([\w /-]+)", body, re.I)
-                if astatus:
-                    _assign_std(bm, "account_status", astatus.group(1).strip())
-
-                pstatus = re.search(r"payment status\s*:?\s*([\w /-]+)", body, re.I)
-                if pstatus:
-                    _assign_std(bm, "payment_status", pstatus.group(1).strip())
-
-                remarks = re.search(r"(?:remarks?|comment)\s*:?\s*(.+)", body, re.I)
-                if remarks:
-                    _assign_std(bm, "creditor_remarks", remarks.group(1).strip())
-                continue
+                segs = re.split(r"\s{2,}", line)
+                if len(segs) >= 4:
+                    key = segs[0].strip()
+                    raw_vals = segs[1:4]
+                else:
+                    low = line.lower()
+                    for alias in sorted(ALIAS_TO_STD.keys(), key=len, reverse=True):
+                        if low.startswith(alias) and (
+                            len(low) == len(alias)
+                            or low[len(alias)] in " :-—"
+                        ):
+                            rest = line[len(alias):].lstrip(" :-—")
+                            key = alias
+                            v1, v2, v3 = _split_triple_fallback(rest, order)
+                            raw_vals = [v1, v2, v3]
+                            break
+                    if key is None:
+                        v1, v2, v3 = _split_triple_fallback(line, order)
+                        if any(v and neg_pat.search(v) for v in (v1, v2, v3)):
+                            key = "payment status"
+                            raw_vals = [v1, v2, v3]
+                        else:
+                            continue
 
         std_key = _std_field_name(key)
         if std_key not in ACCOUNT_FIELD_SET:
-            logger.info(
-                "triple_parsed key=%s v1=%s v2=%s v3=%s dropped=unknown_field",
-                std_key,
-                raw_vals[0],
-                raw_vals[1],
-                raw_vals[2],
-            )
             continue
         values: list[Any | None] = []
         for rv in raw_vals:
@@ -1663,7 +1671,7 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
                 continue
             _assign_std(maps[b], std_key, v)
         logger.info(
-            "triple_parsed key=%s v1=%s v2=%s v3=%s dropped=None",
+            "COLL: parsed key=%s tu=%r ex=%r eq=%r",
             std_key,
             values[0],
             values[1],
@@ -1674,7 +1682,7 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
     for b in ("transunion", "experian", "equifax"):
         m = result.get(b) or {}
         non_null = sum(1 for f in ACCOUNT_FIELD_SET if m.get(f) is not None)
-        logger.info("parse_collection_block result bureau=%s filled=%d/25", b, non_null)
+        logger.info("COLL: result bureau=%s filled=%d/25", b, non_null)
     return result
 
 

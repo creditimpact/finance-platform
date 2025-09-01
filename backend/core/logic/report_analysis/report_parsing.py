@@ -163,6 +163,7 @@ ALIAS_TO_STD: dict[str, str] = {
     "dispute flag": "dispute_status",
     "account dispute status": "dispute_status",
     # Remarks
+    "creditor remarks": "creditor_remarks",
     "remarks": "creditor_remarks",
     "comment": "creditor_remarks",
     "comments": "creditor_remarks",
@@ -1094,6 +1095,47 @@ def _is_page_footer(line: str) -> bool:
     return False
 
 
+def _join_wrapped_field_lines(lines: list[str]) -> list[str]:
+    """Merge a line with the following one when value text wraps."""
+
+    joined: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if i + 1 < len(lines):
+            nxt = lines[i + 1]
+            key_part: str | None = None
+            rest: str = ""
+            for sep in (":", "-", "—"):
+                if sep in line:
+                    key_part, _, rest = line.partition(sep)
+                    break
+            if key_part:
+                key_norm = _std_field_name(key_part.strip())
+                if key_norm in ACCOUNT_FIELD_SET or key_norm != key_part.strip().lower():
+                    vals = [v for v in re.split(r"\s{2,}", rest.strip()) if v]
+                    if len(vals) <= 1:
+                        nxt_low = nxt.strip().lower()
+                        next_has_key = any(
+                            nxt_low.startswith(alias)
+                            and len(nxt_low) > len(alias)
+                            and nxt_low[len(alias)] in " :-—"
+                            for alias in ALIAS_TO_STD
+                        )
+                        if not next_has_key and not re.match(
+                            rf"^{BUREAU_NAME_PATTERN}", nxt, re.I
+                        ):
+                            if re.match(r"^[a-z]{1,10}\b", nxt):
+                                line = f"{line.rstrip()} {nxt.strip()}".strip()
+                                logger.info(
+                                    "JOIN: merged line %d+%d key=%s", i, i + 1, key_norm
+                                )
+                                i += 1
+        joined.append(line)
+        i += 1
+    return joined
+
+
 def _is_section_header(line: str) -> bool:
     """Heuristically detect account or category headers."""
 
@@ -1272,7 +1314,8 @@ def parse_account_block(
     account_id: str | None = None,
 ) -> dict[str, dict[str, Any | None]]:
     lines_raw = block_lines or []
-    lines = [_clean_line(x) for x in lines_raw]
+    lines_clean = [_clean_line(x) for x in lines_raw]
+    lines = _join_wrapped_field_lines(lines_clean)
     logger.info("parse_account_block start lines=%d", len(lines))
     logger.info("parse_account_block lines[0..3]=%r", lines[:4])
 
@@ -1701,7 +1744,8 @@ def parse_collection_block(
         return {b: _empty_bureau_map() for b in BUREAUS}
 
     maps = _init()
-    lines = [_clean_line(ln) for ln in block_lines]
+    lines_clean = [_clean_line(ln) for ln in block_lines]
+    lines = _join_wrapped_field_lines(lines_clean)
     order = detect_bureau_order(lines)
     if not order:
         if bureau_order:
@@ -1876,9 +1920,9 @@ def stitch_account_blocks(lines: list[str]) -> list[dict[str, dict[str, Any | No
 
         if session.get("in_history") and _maybe_resume_after_history(line):
             session["in_history"] = False
-            logger.info("STITCH: resume details account=%s", session["heading"])
             logger.info(
-                "STITCH: carry_forward bureau_order=%s", session.get("bureau_order")
+                "STITCH: resume after history with order=%s",
+                session.get("bureau_order"),
             )
 
     if session:

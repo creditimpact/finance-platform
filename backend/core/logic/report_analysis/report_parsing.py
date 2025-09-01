@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__)
 
 
 def _clean_line(s: str) -> str:
-    """Remove registration symbols and collapse whitespace."""
-    s = s.replace("Â", "").replace("®", "")
+    """Remove registration symbols and collapse excess whitespace."""
+    s = s.replace("Â", "").replace("®", "").replace("™", "")
     s = re.sub(r"\s+", " ", s.strip())
     return s
 
@@ -998,8 +998,32 @@ BUREAU_LINE_RE = re.compile(
 )
 
 TRIPLE_LINE_RE = re.compile(
-    r"^(?P<key>[^:]{2,}):\s*(?P<v1>\S+|\-\-)(?:\s+(?P<v2>\S+|\-\-))?(?:\s+(?P<v3>.+))?$"
+    r"^(?P<key>[^:]{2,}):\s*"
+    r"(?P<v1>--|.+?)"
+    r"(?:\s{2,}(?P<v2>--|.+?))?"
+    r"(?:\s{2,}(?P<v3>--|.+))?$"
 )
+
+
+def _split_triple_fallback(
+    value_part: str, bureau_order: Sequence[str] | None = None
+) -> tuple[str | None, str | None, str | None]:
+    """Heuristically split *value_part* into three columns when alignment is missing."""
+
+    tokens = value_part.split()
+    segs: list[str | None] = []
+    current: list[str] = []
+    for tok in tokens:
+        if tok == "--":
+            segs.append(" ".join(current).strip() or None)
+            segs.append(None)
+            current = []
+        else:
+            current.append(tok)
+    segs.append(" ".join(current).strip() or None)
+    while len(segs) < 3:
+        segs.append(None)
+    return segs[0], segs[1], segs[2]
 
 
 def parse_three_footer_lines(lines: list[str]) -> dict[str, dict[str, Any | None]]:
@@ -1154,23 +1178,40 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
         count = 0
         for line in lines[vt_idx + 1 :]:
             m = TRIPLE_LINE_RE.match(line)
-            if not m:
-                continue
-            key = m.group("key").strip()
+            raw_vals: list[str | None]
+            if m:
+                logger.info(
+                    "triple_parse layout=aligned key=%s", m.group("key").strip()
+                )
+                key = m.group("key").strip()
+                raw_vals = [m.group("v1"), m.group("v2"), m.group("v3")]
+            else:
+                key, sep, rest = line.partition(":")
+                if not sep or not rest.strip():
+                    continue
+                logger.info("triple_parse layout=fallback key=%s", key.strip())
+                v1, v2, v3 = _split_triple_fallback(rest.strip(), order)
+                raw_vals = [v1, v2, v3]
             std_key = _std_field_name(key)
             if std_key not in ACCOUNT_FIELD_SET:
                 low = key.lower()
                 if "status" in low:
                     std_key = "payment_status" if "pay" in low else "account_status"
                 else:
+                    logger.info(
+                        "triple_parsed key=%s v1=%s v2=%s v3=%s dropped=unknown_field",
+                        key,
+                        raw_vals[0],
+                        raw_vals[1],
+                        raw_vals[2],
+                    )
                     continue
-            raw_vals = [m.group("v1"), m.group("v2"), m.group("v3")]
             values: list[Any | None] = []
             for idx, rv in enumerate(raw_vals):
-                if rv is None or rv.strip() in {"", "--"}:
+                if rv is None or str(rv).strip() in {"", "--"}:
                     values.append(None)
                 else:
-                    val = rv.strip()
+                    val = str(rv).strip()
                     if idx == 2:
                         val = re.sub(r"\s+", " ", val)
                         val = re.sub(r"[^\w/ ]", "", val).strip()
@@ -1190,6 +1231,13 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
                             "account_number_last4",
                             digits[-4:] if len(digits) >= 4 else None,
                         )
+            logger.info(
+                "triple_parsed key=%s v1=%s v2=%s v3=%s dropped=None",
+                std_key,
+                values[0],
+                values[1],
+                values[2],
+            )
             count += 1
         logger.info(
             "parse_account_block layout=vertical_triples fields_parsed=%d",
@@ -1203,23 +1251,40 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
         default_order = ["transunion", "experian", "equifax"]
         for line in lines[start:]:
             m = TRIPLE_LINE_RE.match(line)
-            if not (m and m.group("v3")):
-                continue
-            key = m.group("key").strip()
+            raw_vals: list[str | None]
+            if m:
+                logger.info(
+                    "triple_parse layout=aligned key=%s", m.group("key").strip()
+                )
+                key = m.group("key").strip()
+                raw_vals = [m.group("v1"), m.group("v2"), m.group("v3")]
+            else:
+                key, sep, rest = line.partition(":")
+                if not sep or not rest.strip():
+                    continue
+                logger.info("triple_parse layout=fallback key=%s", key.strip())
+                v1, v2, v3 = _split_triple_fallback(rest.strip(), default_order)
+                raw_vals = [v1, v2, v3]
             std_key = _std_field_name(key)
             if std_key not in ACCOUNT_FIELD_SET:
                 low = key.lower()
                 if "status" in low:
                     std_key = "payment_status" if "pay" in low else "account_status"
                 else:
+                    logger.info(
+                        "triple_parsed key=%s v1=%s v2=%s v3=%s dropped=unknown_field",
+                        key,
+                        raw_vals[0],
+                        raw_vals[1],
+                        raw_vals[2],
+                    )
                     continue
-            raw_vals = [m.group("v1"), m.group("v2"), m.group("v3")]
             values: list[Any | None] = []
             for idx, rv in enumerate(raw_vals):
-                if rv is None or rv.strip() in {"", "--"}:
+                if rv is None or str(rv).strip() in {"", "--"}:
                     values.append(None)
                 else:
-                    val = rv.strip()
+                    val = str(rv).strip()
                     if idx == 2:
                         val = re.sub(r"\s+", " ", val)
                         val = re.sub(r"[^\w/ ]", "", val).strip()
@@ -1239,6 +1304,13 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
                             "account_number_last4",
                             digits[-4:] if len(digits) >= 4 else None,
                         )
+            logger.info(
+                "triple_parsed key=%s v1=%s v2=%s v3=%s dropped=None",
+                std_key,
+                values[0],
+                values[1],
+                values[2],
+            )
             count += 1
         if count:
             logger.info(
@@ -1409,70 +1481,118 @@ def parse_collection_block(block_lines: list[str]) -> dict[str, dict[str, Any | 
         return {b: _empty_bureau_map() for b in BUREAUS}
 
     maps = _init()
-    for line in (_clean_line(ln) for ln in block_lines):
-        m = re.match(rf"{BUREAU_NAME_PATTERN}\s+(.*)", line, re.I)
-        if not m:
-            continue
-        bureau = re.sub(r"\s+", "", m.group(1)).lower()
-        body = m.group(2)
-        bm = maps[bureau]
+    lines = [_clean_line(ln) for ln in block_lines]
+    order = detect_bureau_order(lines) or ["transunion", "experian", "equifax"]
 
-        acct = re.search(r"account\s*#?\s*([\d\*]+)", body, re.I)
-        if acct:
-            masked = acct.group(1)
-            _assign_std(bm, "account_number_display", masked)
-            digits = re.sub(r"\D", "", masked)
-            _assign_std(
-                bm,
-                "account_number_last4",
-                digits[-4:] if len(digits) >= 4 else None,
+    for line in lines:
+        m = TRIPLE_LINE_RE.match(line)
+        raw_vals: list[str | None]
+        if m:
+            logger.info(
+                "triple_parse layout=aligned key=%s", m.group("key").strip()
             )
+            key = m.group("key").strip()
+            raw_vals = [m.group("v1"), m.group("v2"), m.group("v3")]
+        else:
+            key, sep, rest = line.partition(":")
+            if sep and rest.strip():
+                logger.info("triple_parse layout=fallback key=%s", key.strip())
+                v1, v2, v3 = _split_triple_fallback(rest.strip(), order)
+                raw_vals = [v1, v2, v3]
+            else:
+                m2 = re.match(rf"{BUREAU_NAME_PATTERN}\s+(.*)", line, re.I)
+                if not m2:
+                    continue
+                bureau = re.sub(r"\s+", "", m2.group(1)).lower()
+                body = m2.group(2)
+                bm = maps[bureau]
 
-        hb = re.search(
-            r"(?:high balance|original (?:amount|balance))\s*:?\s*([-\d\$,CRDR ]+)",
-            body,
-            re.I,
+                acct = re.search(r"account\s*#?\s*([\d\*]+)", body, re.I)
+                if acct:
+                    masked = acct.group(1)
+                    _assign_std(bm, "account_number_display", masked)
+                    digits = re.sub(r"\D", "", masked)
+                    _assign_std(
+                        bm,
+                        "account_number_last4",
+                        digits[-4:] if len(digits) >= 4 else None,
+                    )
+
+                hb = re.search(
+                    r"(?:high balance|original (?:amount|balance))\s*:?\s*([-\d\$,CRDR ]+)",
+                    body,
+                    re.I,
+                )
+                if hb:
+                    _assign_std(bm, "high_balance", hb.group(1))
+
+                bal = re.search(
+                    r"(?:amount|current balance|balance owed|(?<!high )balance)\s*:?\s*([-\d\$,CRDR ]+)",
+                    body,
+                    re.I,
+                )
+                if bal:
+                    _assign_std(bm, "balance_owed", bal.group(1))
+
+                past = re.search(
+                    r"past due(?: amount)?\s*:?\s*([-\d\$,CRDR ]+)",
+                    body,
+                    re.I,
+                )
+                if past:
+                    _assign_std(bm, "past_due_amount", past.group(1))
+
+                for label, key2 in {
+                    "date reported": "date_reported",
+                    "date opened": "date_opened",
+                    "date of last activity": "date_of_last_activity",
+                    "last payment": "last_payment",
+                }.items():
+                    m3 = re.search(label + r"\s*:?\s*([-\d/]+)", body, re.I)
+                    if m3:
+                        _assign_std(bm, key2, m3.group(1))
+
+                astatus = re.search(r"account status\s*:?\s*([\w /-]+)", body, re.I)
+                if astatus:
+                    _assign_std(bm, "account_status", astatus.group(1).strip())
+
+                pstatus = re.search(r"payment status\s*:?\s*([\w /-]+)", body, re.I)
+                if pstatus:
+                    _assign_std(bm, "payment_status", pstatus.group(1).strip())
+
+                remarks = re.search(r"(?:remarks?|comment)\s*:?\s*(.+)", body, re.I)
+                if remarks:
+                    _assign_std(bm, "creditor_remarks", remarks.group(1).strip())
+                continue
+
+        std_key = _std_field_name(key)
+        if std_key not in ACCOUNT_FIELD_SET:
+            logger.info(
+                "triple_parsed key=%s v1=%s v2=%s v3=%s dropped=unknown_field",
+                std_key,
+                raw_vals[0],
+                raw_vals[1],
+                raw_vals[2],
+            )
+            continue
+        values: list[Any | None] = []
+        for rv in raw_vals:
+            if rv is None or rv.strip() in {"", "--"}:
+                values.append(None)
+            else:
+                values.append(rv.strip())
+        for b, v in zip(order, values):
+            if v is None:
+                continue
+            _assign_std(maps[b], std_key, v)
+        logger.info(
+            "triple_parsed key=%s v1=%s v2=%s v3=%s dropped=None",
+            std_key,
+            values[0],
+            values[1],
+            values[2],
         )
-        if hb:
-            _assign_std(bm, "high_balance", hb.group(1))
 
-        bal = re.search(
-            r"(?:amount|current balance|balance owed|(?<!high )balance)\s*:?\s*([-\d\$,CRDR ]+)",
-            body,
-            re.I,
-        )
-        if bal:
-            _assign_std(bm, "balance_owed", bal.group(1))
-
-        past = re.search(
-            r"past due(?: amount)?\s*:?\s*([-\d\$,CRDR ]+)",
-            body,
-            re.I,
-        )
-        if past:
-            _assign_std(bm, "past_due_amount", past.group(1))
-
-        for label, key in {
-            "date reported": "date_reported",
-            "date opened": "date_opened",
-            "date of last activity": "date_of_last_activity",
-            "last payment": "last_payment",
-        }.items():
-            m2 = re.search(label + r"\s*:?\s*([-\d/]+)", body, re.I)
-            if m2:
-                _assign_std(bm, key, m2.group(1))
-
-        astatus = re.search(r"account status\s*:?\s*([\w /-]+)", body, re.I)
-        if astatus:
-            _assign_std(bm, "account_status", astatus.group(1).strip())
-
-        pstatus = re.search(r"payment status\s*:?\s*([\w /-]+)", body, re.I)
-        if pstatus:
-            _assign_std(bm, "payment_status", pstatus.group(1).strip())
-
-        remarks = re.search(r"(?:remarks?|comment)\s*:?\s*(.+)", body, re.I)
-        if remarks:
-            _assign_std(bm, "creditor_remarks", remarks.group(1).strip())
     result = maps
     for b in ("transunion", "experian", "equifax"):
         m = result.get(b) or {}

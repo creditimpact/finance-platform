@@ -1183,9 +1183,7 @@ def _split_triple_fallback(
     parts = (parts + [None, None, None])[:3]
 
     if used_heuristic and parts[1] is None and parts[2] is None:
-        logger.info(
-            "triple_parse fallback_partial columns=1/3 reason=weak_separators"
-        )
+        logger.info("triple_parse fallback_partial columns=1/3 reason=weak_separators")
 
     return parts[0], parts[1], parts[2]
 
@@ -1301,19 +1299,22 @@ def _begin_account_session(lines: list[str], index: int) -> dict[str, Any]:
 
 
 def parse_three_footer_lines(lines: list[str]) -> dict[str, dict[str, Any | None]]:
-    """Parse the trailing three footer lines mapping to the bureaus.
+    """Parse the trailing footer lines mapping to bureaus without shifting.
 
-    Each footer line corresponds to a single bureau in TU→EX→EQ order and may
-    contain an account type, optional payment frequency and an optional credit
-    limit ("--" or empty values are treated as ``None``).
+    The footer typically consists of three lines – one per bureau in the
+    TransUnion → Experian → Equifax order – containing ``Account Type``,
+    ``Payment Frequency`` and ``Credit Limit`` segments.  A bureau line may be
+    missing or contain only a subset of these fields.  ``Credit Limit`` is
+    considered numeric only when it clearly represents a number; otherwise the
+    normalised value is left as ``None``.
     """
 
-    out = {
+    out: dict[str, dict[str, Any | None]] = {
         b: {"account_type": None, "payment_frequency": None, "credit_limit": None}
         for b in BUREAUS
     }
 
-    # Identify the three lines immediately preceding the two-year history block
+    # Identify window before the two-year history where the footer lives
     try:
         hist_idx = next(
             i for i, ln in enumerate(lines) if "two-year payment history" in ln.lower()
@@ -1321,47 +1322,120 @@ def parse_three_footer_lines(lines: list[str]) -> dict[str, dict[str, Any | None
     except StopIteration:
         hist_idx = len(lines)
 
-    candidates = [
-        ln.strip() for ln in lines[max(0, hist_idx - 3) : hist_idx] if ln.strip()
-    ]
-    if len(candidates) > 3:
-        candidates = candidates[-3:]
+    window = lines[max(0, hist_idx - 15) : hist_idx]
 
-    for line, bureau in zip(candidates, BUREAUS):
-        parts = line.split()
-        if not parts:
+    # Collect up to three candidate lines from the bottom that look like footer
+    footer_pat = re.compile(
+        r"(?i)(account\s*type|payment\s*(?:frequency|freq)|credit\s*limit)"
+    )
+    candidates: list[str] = []
+    for raw in reversed(window):
+        clean = _clean_line(raw)
+        if not clean:
             continue
-        # Credit limit is assumed to be the last token and numeric
-        credit_limit = _to_num(parts[-1])
-        if credit_limit is not None:
-            parts = parts[:-1]
-        else:
-            credit_limit = None
+        if footer_pat.search(clean):
+            candidates.insert(0, clean)
+            if len(candidates) == 3:
+                break
 
-        payment_frequency = None
-        if parts:
-            freq_cand = parts[-1].lower()
-            if freq_cand in {
-                "monthly",
-                "weekly",
-                "bi-weekly",
-                "semi-monthly",
-                "quarterly",
-                "annually",
-                "yearly",
-                "--",
-            }:
-                if freq_cand != "--":
-                    payment_frequency = freq_cand
-                parts = parts[:-1]
+    order = detect_bureau_order(window) or list(BUREAUS)
+    logger.info("FOOTER: order=%s lines=%d", order, len(candidates))
 
-        account_type = " ".join(parts).strip().lower() or None
+    pats = {b.lower(): pat for b, pat in BUREAU_PATTERNS.items()}
+    bureau_lines: dict[str, str] = {}
+    unassigned: list[str] = []
 
-        out[bureau]["account_type"] = account_type
-        out[bureau]["payment_frequency"] = payment_frequency
-        out[bureau]["credit_limit"] = credit_limit
+    for line in candidates:
+        assigned = False
+        for b, pat in pats.items():
+            if pat.search(line):
+                bureau_lines[b] = line
+                assigned = True
+                break
+        if not assigned:
+            unassigned.append(line)
+
+    remaining = [b for b in order if b not in bureau_lines]
+    if not bureau_lines and len(candidates) == 2:
+        # Heuristic: when only two unlabeled lines are present assume TU and EQ
+        bureau_lines[order[0]] = candidates[0]
+        bureau_lines[order[2]] = candidates[1]
+    else:
+        for line, b in zip(unassigned, remaining):
+            bureau_lines[b] = line
+
+    for b in order:
+        line = bureau_lines.get(b)
+        if not line:
+            logger.info("FOOTER: missing bureau=%s (inserted None)", b)
+            continue
+
+        atype, freq, limit_raw, limit_norm = _parse_footer_fields(line)
+
+        out[b]["account_type"] = atype
+        out[b]["payment_frequency"] = freq
+        if limit_norm is not None:
+            out[b]["credit_limit"] = limit_norm
+        elif limit_raw:
+            logger.info(
+                "FOOTER: non-numeric credit_limit for bureau=%s raw=%r", b, limit_raw
+            )
+
+        logger.info(
+            "FOOTER: bureau=%s atype=%r freq=%r limit_raw=%r limit_norm=%r",
+            b,
+            atype,
+            freq,
+            limit_raw,
+            limit_norm,
+        )
 
     return out
+
+
+def _parse_footer_fields(
+    line: str,
+) -> tuple[Any | None, Any | None, str | None, Any | None]:
+    """Extract account type, payment frequency and credit limit from ``line``."""
+
+    account_re = re.compile(
+        r"(?i)account\s*type\s*[:\-]?\s*(?P<val>.+?)(?=(payment|credit|$))"
+    )
+    freq_re = re.compile(
+        r"(?i)payment\s*(?:frequency|freq)\s*[:\-]?\s*(?P<val>.+?)(?=(account|credit|limit|$))"
+    )
+    limit_re = re.compile(
+        r"(?i)credit\s*limit\s*[:\-]?\s*(?P<val>.+?)(?=(account|payment|freq|$))"
+    )
+
+    atype = None
+    freq = None
+    limit_raw: str | None = None
+
+    m = account_re.search(line)
+    if m:
+        atype = _clean_line(m.group("val")).lower() or None
+
+    m = freq_re.search(line)
+    if m:
+        freq = _clean_line(m.group("val")).lower() or None
+
+    m = limit_re.search(line)
+    if m:
+        limit_raw = _clean_line(m.group("val"))
+
+    if atype is None and freq is None and limit_raw is None:
+        atype = _clean_line(line).lower() or None
+
+    limit_norm = None
+    if limit_raw:
+        parsed = to_number(limit_raw)
+        if isinstance(parsed, (int, float)):
+            limit_norm = parsed
+        else:
+            limit_norm = None
+
+    return atype, freq, limit_raw, limit_norm
 
 
 def parse_two_year_history(lines: list[str]) -> dict[str, Any | None]:

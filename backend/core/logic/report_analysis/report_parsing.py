@@ -1077,25 +1077,102 @@ TRIPLE_LINE_RE = re.compile(
 def _split_triple_fallback(
     value_part: str, bureau_order: Sequence[str] | None = None
 ) -> tuple[str | None, str | None, str | None]:
-    """Heuristically split *value_part* into three columns when alignment is missing."""
+    """Heuristically split *value_part* into three columns when alignment is missing.
 
-    tokens = value_part.split()
-    if "--" not in tokens and len(tokens) == 3:
-        return tokens[0], tokens[1], tokens[2]
+    The function attempts a best-effort split of ``value_part`` into three
+    bureau-specific values.  It first tries strong separators (two or more
+    spaces or ``|``).  If those fail, it applies a set of heuristics to bucket a
+    stream of tokens without breaking multi-word values.  ``bureau_order`` is
+    only used to ensure a deterministic default order and to emphasise that the
+    returned tuple corresponds to that order.
+    """
 
-    segs: list[str | None] = []
-    current: list[str] = []
-    for tok in tokens:
-        if tok == "--":
-            segs.append(" ".join(current).strip() or None)
-            segs.append(None)
-            current = []
-        else:
-            current.append(tok)
-    segs.append(" ".join(current).strip() or None)
-    while len(segs) < 3:
-        segs.append(None)
-    return segs[0], segs[1], segs[2]
+    _order = list(bureau_order or ["transunion", "experian", "equifax"])
+
+    s = re.sub(r"\s+", " ", value_part.strip())
+
+    # --- 1) strong separator split -------------------------------------------------
+    parts = [p.strip() for p in re.split(r"\s{2,}|\s+\|\s+", s) if p is not None]
+    used_heuristic = False
+    if len(parts) < 2:
+        used_heuristic = True
+
+        date_re = re.compile(r"^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$")
+        money_re = re.compile(r"^\$?\d[\d,]*(?:\.\d+)?$")
+        status_phrases = {
+            "open",
+            "closed",
+            "current",
+            "collection",
+            "charge off",
+            "chargeoff",
+            "paid",
+            "paid in full",
+            "settled",
+            "repossession",
+            "foreclosure",
+        }
+
+        tokens = s.split()
+
+        def bucket_tokens() -> list[str | None]:
+            segs: list[str | None] = []
+            start = 0
+            i = 0
+            while i < len(tokens) and len(segs) < 3:
+                tok = tokens[i]
+                if tok == "--":
+                    if i > start:
+                        segs.append(" ".join(tokens[start:i]))
+                    segs.append(None)
+                    i += 1
+                    start = i
+                    continue
+
+                matched_phrase: str | None = None
+                matched_len = 0
+                for length in (3, 2, 1):
+                    if i + length <= len(tokens):
+                        phrase = " ".join(tokens[i : i + length]).lower()
+                        if phrase in status_phrases:
+                            matched_phrase = " ".join(tokens[i : i + length])
+                            matched_len = length
+                            break
+
+                if matched_phrase:
+                    if i > start:
+                        segs.append(" ".join(tokens[start:i]))
+                    segs.append(matched_phrase)
+                    i += matched_len
+                    start = i
+                    continue
+
+                if date_re.fullmatch(tok) or money_re.fullmatch(tok):
+                    if i > start:
+                        segs.append(" ".join(tokens[start:i]))
+                    segs.append(tok)
+                    i += 1
+                    start = i
+                    continue
+
+                i += 1
+
+            if len(segs) < 3 and start < len(tokens):
+                segs.append(" ".join(tokens[start:]))
+            return segs
+
+        parts = bucket_tokens()
+
+    # --- 2) normalise parts --------------------------------------------------------
+    parts = [None if (p is None or p == "--" or p == "") else p for p in parts]
+    parts = (parts + [None, None, None])[:3]
+
+    if used_heuristic and parts[1] is None and parts[2] is None:
+        logger.info(
+            "triple_parse fallback_partial columns=1/3 reason=weak_separators"
+        )
+
+    return parts[0], parts[1], parts[2]
 
 
 def _is_page_footer(line: str) -> bool:
@@ -1395,10 +1472,20 @@ def parse_account_block(
                     row_dbg["drop_reason"] = "malformed"
                     parsed_triples["rows"].append(row_dbg)
                     continue
-                logger.info("triple_parse layout=fallback key=%s", key.strip())
                 source = "fallback"
                 v1, v2, v3 = _split_triple_fallback(rest.strip(), order)
                 raw_vals = [v1, v2, v3]
+                std_key = _std_field_name(key)
+                abbr = {"transunion": "tu", "experian": "ex", "equifax": "eq"}
+                order_str = ",".join(abbr.get(b, b) for b in order)
+                logger.info(
+                    "triple_parse layout=fallback key=%s v1=%s v2=%s v3=%s order=%s source=fallback",
+                    std_key,
+                    v1,
+                    v2,
+                    v3,
+                    order_str,
+                )
             std_key = _std_field_name(key)
             if std_key not in ACCOUNT_FIELD_SET:
                 low = key.lower()
@@ -1500,10 +1587,20 @@ def parse_account_block(
                     row_dbg["drop_reason"] = "malformed"
                     parsed_triples["rows"].append(row_dbg)
                     continue
-                logger.info("triple_parse layout=fallback key=%s", key.strip())
                 source = "fallback"
                 v1, v2, v3 = _split_triple_fallback(rest.strip(), default_order)
                 raw_vals = [v1, v2, v3]
+                std_key = _std_field_name(key)
+                abbr = {"transunion": "tu", "experian": "ex", "equifax": "eq"}
+                order_str = ",".join(abbr.get(b, b) for b in default_order)
+                logger.info(
+                    "triple_parse layout=fallback key=%s v1=%s v2=%s v3=%s order=%s source=fallback",
+                    std_key,
+                    v1,
+                    v2,
+                    v3,
+                    order_str,
+                )
             std_key = _std_field_name(key)
             if std_key not in ACCOUNT_FIELD_SET:
                 low = key.lower()
@@ -1813,6 +1910,17 @@ def parse_collection_block(
                             continue
 
         std_key = _std_field_name(key)
+        if source == "fallback":
+            abbr = {"transunion": "tu", "experian": "ex", "equifax": "eq"}
+            order_str = ",".join(abbr.get(b, b) for b in order)
+            logger.info(
+                "triple_parse layout=fallback key=%s v1=%s v2=%s v3=%s order=%s source=fallback",
+                std_key,
+                raw_vals[0],
+                raw_vals[1],
+                raw_vals[2],
+                order_str,
+            )
         if std_key not in ACCOUNT_FIELD_SET:
             row_dbg["drop_reason"] = (
                 "alias_not_found"

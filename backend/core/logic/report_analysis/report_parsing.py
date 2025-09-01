@@ -1,12 +1,32 @@
 """Utilities for parsing credit report PDFs into text and sections."""
 
-import logging
 import json
+import logging
+import os
 import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
 
 logger = logging.getLogger(__name__)
+
+
+def _save_parsed_triples(
+    sid: str | None, account_id: str | None, heading: str | None, payload: dict
+) -> None:
+    if not sid or not account_id or not payload:
+        return
+    out_dir = os.path.join("traces", sid, "parsed_triples")
+    os.makedirs(out_dir, exist_ok=True)
+    safe_id = account_id.replace("/", "_")
+    fn = os.path.join(out_dir, f"{safe_id}.json")
+    try:
+        with open(fn, "w", encoding="utf-8") as f:
+            json.dump({"heading": heading, **payload}, f, ensure_ascii=False, indent=2)
+        logger.info(
+            "PARSEDBG: saved parsed_triples for account=%s file=%s", account_id, fn
+        )
+    except Exception as e:  # pragma: no cover - debug helper
+        logger.warning("PARSEDBG: failed to save for account=%s err=%s", account_id, e)
 
 
 def _clean_line(s: str) -> str:
@@ -1112,7 +1132,10 @@ def _join_wrapped_field_lines(lines: list[str]) -> list[str]:
                     break
             if key_part:
                 key_norm = _std_field_name(key_part.strip())
-                if key_norm in ACCOUNT_FIELD_SET or key_norm != key_part.strip().lower():
+                if (
+                    key_norm in ACCOUNT_FIELD_SET
+                    or key_norm != key_part.strip().lower()
+                ):
                     vals = [v for v in re.split(r"\s{2,}", rest.strip()) if v]
                     if len(vals) <= 1:
                         nxt_low = nxt.strip().lower()
@@ -1706,20 +1729,7 @@ def parse_account_block(
         bm = result.get(b, _empty_bureau_map())
         filled = sum(1 for k in ACCOUNT_FIELD_SET if bm[k] is not None)
         logger.info("parse_account_block result bureau=%s filled=%d/25", b, filled)
-    if sid and account_id:
-        try:
-            debug_dir = Path("traces") / sid / "parsed_triples"
-            debug_dir.mkdir(parents=True, exist_ok=True)
-            debug_path = debug_dir / f"{account_id}.json"
-            with debug_path.open("w", encoding="utf-8") as fh:
-                json.dump(parsed_triples, fh, ensure_ascii=False, indent=2)
-            logger.info(
-                "PARSEDBG: saved parsed_triples for account=%s rows=%d",
-                account_id,
-                len(parsed_triples["rows"]),
-            )
-        except Exception:
-            logger.exception("parsed_triples_write_failed")
+    _save_parsed_triples(sid, account_id, heading, parsed_triples)
     return result
 
 
@@ -1784,10 +1794,9 @@ def parse_collection_block(
                     low = line.lower()
                     for alias in sorted(ALIAS_TO_STD.keys(), key=len, reverse=True):
                         if low.startswith(alias) and (
-                            len(low) == len(alias)
-                            or low[len(alias)] in " :-—"
+                            len(low) == len(alias) or low[len(alias)] in " :-—"
                         ):
-                            rest = line[len(alias):].lstrip(" :-—")
+                            rest = line[len(alias) :].lstrip(" :-—")
                             key = alias
                             v1, v2, v3 = _split_triple_fallback(rest, order)
                             raw_vals = [v1, v2, v3]
@@ -1805,7 +1814,9 @@ def parse_collection_block(
         std_key = _std_field_name(key)
         if std_key not in ACCOUNT_FIELD_SET:
             row_dbg["drop_reason"] = (
-                "alias_not_found" if std_key == (key or "").lower() else "not_in_field_set"
+                "alias_not_found"
+                if std_key == (key or "").lower()
+                else "not_in_field_set"
             )
             parsed_triples["rows"].append(row_dbg)
             continue
@@ -1849,24 +1860,13 @@ def parse_collection_block(
         m = result.get(b) or {}
         non_null = sum(1 for f in ACCOUNT_FIELD_SET if m.get(f) is not None)
         logger.info("COLL: result bureau=%s filled=%d/25", b, non_null)
-    if sid and account_id:
-        try:
-            debug_dir = Path("traces") / sid / "parsed_triples"
-            debug_dir.mkdir(parents=True, exist_ok=True)
-            debug_path = debug_dir / f"{account_id}.json"
-            with debug_path.open("w", encoding="utf-8") as fh:
-                json.dump(parsed_triples, fh, ensure_ascii=False, indent=2)
-            logger.info(
-                "PARSEDBG: saved parsed_triples for account=%s rows=%d",
-                account_id,
-                len(parsed_triples["rows"]),
-            )
-        except Exception:
-            logger.exception("parsed_triples_write_failed")
+    _save_parsed_triples(sid, account_id, heading, parsed_triples)
     return result
 
 
-def _flush_account_session(session: Mapping[str, Any]) -> dict[str, dict[str, Any | None]]:
+def _flush_account_session(
+    session: Mapping[str, Any]
+) -> dict[str, dict[str, Any | None]]:
     """Flush collected rows of an account session via :func:`parse_account_block`."""
 
     rows = [ln for ln in session.get("collected_rows", []) if not _is_page_footer(ln)]

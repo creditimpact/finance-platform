@@ -1142,11 +1142,12 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
     )
 
     parsed: set[str] = set()
+    pattern = re.compile(
+        r"^(?P<key>[\w #/]+):\s*(?P<v1>[^ ]+)(?:\s+(?P<v2>[^ ]+))?(?:\s+(?P<v3>.+))?$"
+    )
+
     if order is not None and vt_idx is not None:
         count = 0
-        pattern = re.compile(
-            r"^(?P<key>[\w #/]+):\s*(?P<v1>[^ ]+)(?:\s+(?P<v2>[^ ]+))?(?:\s+(?P<v3>.+))?$"
-        )
         for line in lines[vt_idx + 1 :]:
             m = pattern.match(line)
             if not m:
@@ -1180,6 +1181,47 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
             count,
         )
         parsed.update(order)
+
+    elif order is None:
+        start = vt_idx + 1 if vt_idx is not None else 0
+        count = 0
+        default_order = ["transunion", "experian", "equifax"]
+        for line in lines[start:]:
+            m = pattern.match(line)
+            if not (m and m.group("v3")):
+                continue
+            key = m.group("key").strip()
+            std_key = _std_field_name(key)
+            if std_key not in ACCOUNT_FIELD_SET:
+                low = key.lower()
+                if "status" in low:
+                    std_key = "payment_status" if "pay" in low else "account_status"
+                else:
+                    continue
+            values = [m.group("v1"), m.group("v2"), m.group("v3")]
+            for b, v in zip(default_order, values):
+                val = None if v in {None, "", "--"} else v.strip()
+                if val is None:
+                    continue
+                bm = bureau_maps[b]
+                if bm.get(std_key) in (None, ""):
+                    _assign_std(bm, std_key, val)
+                    if std_key == "account_number_display":
+                        digits = re.sub(r"\D", "", val)
+                        _assign_std(
+                            bm,
+                            "account_number_last4",
+                            digits[-4:] if len(digits) >= 4 else None,
+                        )
+            count += 1
+        if count:
+            logger.info(
+                "parse_account_block layout=vertical_triples (fallback) default_order=TEQ"
+            )
+            logger.info(
+                "parse_account_block layout=vertical_triples fields_parsed=%d", count
+            )
+            parsed.update(default_order)
 
     if not parsed:
         # --- Header-based column spans -----------------------------------

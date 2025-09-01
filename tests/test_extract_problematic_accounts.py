@@ -274,6 +274,7 @@ def test_extract_problematic_accounts_without_openai(monkeypatch):
         ai_client=None,
         run_ai=True,
         request_id=None,
+        session_id=None,
     ):
         assert not run_ai
         result = {
@@ -447,6 +448,7 @@ def test_enriched_metadata_present_ai(monkeypatch):
         ai_client=None,
         run_ai=True,
         request_id=None,
+        session_id=None,
     ):
         assert run_ai
         return sections
@@ -563,6 +565,7 @@ def test_enriched_metadata_present_parser_only(monkeypatch):
         ai_client=None,
         run_ai=True,
         request_id=None,
+        session_id=None,
     ):
         assert not run_ai
         return sections
@@ -796,6 +799,7 @@ def test_ai_failure_falls_back_to_parser(monkeypatch):
         ai_client=None,
         run_ai=True,
         request_id=None,
+        session_id=None,
     ):
         if run_ai:
             return {

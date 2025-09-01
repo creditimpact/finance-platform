@@ -521,17 +521,18 @@ def analyze_credit_report(
 
     print("[INFO] Parsing SmartCredit report...")
     analyzed_json_path = Path("output/analyzed_report.json")
+    req_id = session_id
     sections = analyze_report_logic(
         pdf_path,
         analyzed_json_path,
         client_info,
         session_id=session_id,
-        request_id=session_id,
+        request_id=req_id,
     )
     logger.info(
         "ORCH: analyze_report returned sid=%s req=%s",
         sections.get("session_id"),
-        sections.get("request_id"),
+        req_id,
     )
     _emit_stageA_events(session_id, sections.get("problem_accounts", []))
     if (
@@ -1237,6 +1238,7 @@ def extract_problematic_accounts_from_report(
         raise ValueError("Uploaded file failed PDF safety checks.")
 
     analyzed_json_path = Path("output/analyzed_report.json")
+    req_id = session_id
 
     ai_client = get_ai_client()
     run_ai = not isinstance(ai_client, _StubAIClient)
@@ -1260,12 +1262,12 @@ def extract_problematic_accounts_from_report(
         ai_client=ai_client if run_ai else None,
         run_ai=run_ai,
         session_id=session_id,
-        request_id=session_id,
+        request_id=req_id,
     )
     logger.info(
         "ORCH: analyze_report returned sid=%s req=%s",
         sections.get("session_id"),
-        sections.get("request_id"),
+        req_id,
     )
 
     force_parser = os.getenv("ANALYSIS_FORCE_PARSER_ONLY") == "1"
@@ -1278,14 +1280,14 @@ def extract_problematic_accounts_from_report(
             ai_client=None,
             run_ai=False,
             session_id=session_id,
-            request_id=session_id,
+            request_id=req_id,
         )
         sections["needs_human_review"] = True
         sections["ai_failed"] = True
         logger.info(
             "ORCH: analyze_report returned sid=%s req=%s",
             sections.get("session_id"),
-            sections.get("request_id"),
+            req_id,
         )
     if (
         os.getenv("DEFER_ASSIGN_ISSUE_TYPES") == "1"

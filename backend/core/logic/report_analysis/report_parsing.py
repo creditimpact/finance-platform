@@ -1,6 +1,7 @@
 """Utilities for parsing credit report PDFs into text and sections."""
 
 import logging
+import json
 import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
@@ -1263,11 +1264,23 @@ def parse_seven_year_days_late(lines: list[str]) -> dict[str, Any | None]:
     return out
 
 
-def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | None]]:
+def parse_account_block(
+    block_lines: list[str],
+    heading: str | None = None,
+    *,
+    sid: str | None = None,
+    account_id: str | None = None,
+) -> dict[str, dict[str, Any | None]]:
     lines_raw = block_lines or []
     lines = [_clean_line(x) for x in lines_raw]
     logger.info("parse_account_block start lines=%d", len(lines))
     logger.info("parse_account_block lines[0..3]=%r", lines[:4])
+
+    parsed_triples: dict[str, Any] = {
+        "heading": heading,
+        "bureau_order": [],
+        "rows": [],
+    }
 
     def _init_maps():
         return {b: _empty_bureau_map() for b in BUREAUS}
@@ -1275,6 +1288,8 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
     bureau_maps = _init_maps()
 
     order = detect_bureau_order(lines)
+    if order:
+        parsed_triples["bureau_order"] = list(order)
 
     vt_idx: int | None = None
     for i, line in enumerate(lines):
@@ -1292,13 +1307,16 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
 
     if order is not None and vt_idx is not None:
         count = 0
-        for line in lines[vt_idx + 1 :]:
+        for idx, line in enumerate(lines[vt_idx + 1 :], start=vt_idx + 1):
+            raw_line = lines_raw[idx]
+            row_dbg: dict[str, Any] = {"raw": raw_line}
             m = TRIPLE_LINE_RE.match(line)
             raw_vals: list[str | None]
             if m:
                 logger.info(
                     "triple_parse layout=aligned key=%s", m.group("key").strip()
                 )
+                source = "aligned"
                 key = m.group("key").strip()
                 raw_vals = [m.group("v1"), m.group("v2"), m.group("v3")]
                 if raw_vals[1] is None and raw_vals[2] is None:
@@ -1308,8 +1326,11 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
             else:
                 key, sep, rest = line.partition(":")
                 if not sep or not rest.strip():
+                    row_dbg["drop_reason"] = "malformed"
+                    parsed_triples["rows"].append(row_dbg)
                     continue
                 logger.info("triple_parse layout=fallback key=%s", key.strip())
+                source = "fallback"
                 v1, v2, v3 = _split_triple_fallback(rest.strip(), order)
                 raw_vals = [v1, v2, v3]
             std_key = _std_field_name(key)
@@ -1318,6 +1339,10 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
                 if "status" in low:
                     std_key = "payment_status" if "pay" in low else "account_status"
                 else:
+                    row_dbg["drop_reason"] = (
+                        "alias_not_found" if std_key == low else "not_in_field_set"
+                    )
+                    parsed_triples["rows"].append(row_dbg)
                     logger.info(
                         "triple_parsed key=%s v1=%s v2=%s v3=%s dropped=unknown_field",
                         key,
@@ -1327,17 +1352,34 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
                     )
                     continue
             values: list[Any | None] = []
-            for idx, rv in enumerate(raw_vals):
+            for idx2, rv in enumerate(raw_vals):
                 if rv is None or str(rv).strip() in {"", "--"}:
                     values.append(None)
                 else:
                     val = str(rv).strip()
-                    if idx == 2:
+                    if idx2 == 2:
                         val = re.sub(r"\s+", " ", val)
-                        val = re.sub(r"[^\w/ ]", "", val).strip()
+                        val = re.sub(r"[^\w/* ]", "", val).strip()
                         if " " in val:
                             val = val.split()[0]
                     values.append(val)
+            val_map = {b: v for b, v in zip(order, values)}
+            if all(v is None for v in values):
+                row_dbg["drop_reason"] = "empty"
+                parsed_triples["rows"].append(row_dbg)
+                continue
+            row_dbg.update(
+                {
+                    "key_norm": std_key,
+                    "values": {
+                        "tu": val_map.get("transunion"),
+                        "ex": val_map.get("experian"),
+                        "eq": val_map.get("equifax"),
+                    },
+                    "source": source,
+                }
+            )
+            parsed_triples["rows"].append(row_dbg)
             for b, v in zip(order, values):
                 if v is None:
                     continue
@@ -1369,13 +1411,17 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
         start = vt_idx + 1 if vt_idx is not None else 0
         count = 0
         default_order = ["transunion", "experian", "equifax"]
-        for line in lines[start:]:
+        parsed_triples["bureau_order"] = list(default_order)
+        for idx, line in enumerate(lines[start:], start=start):
+            raw_line = lines_raw[idx]
+            row_dbg: dict[str, Any] = {"raw": raw_line}
             m = TRIPLE_LINE_RE.match(line)
             raw_vals: list[str | None]
             if m:
                 logger.info(
                     "triple_parse layout=aligned key=%s", m.group("key").strip()
                 )
+                source = "aligned"
                 key = m.group("key").strip()
                 raw_vals = [m.group("v1"), m.group("v2"), m.group("v3")]
                 if raw_vals[1] is None and raw_vals[2] is None:
@@ -1385,8 +1431,11 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
             else:
                 key, sep, rest = line.partition(":")
                 if not sep or not rest.strip():
+                    row_dbg["drop_reason"] = "malformed"
+                    parsed_triples["rows"].append(row_dbg)
                     continue
                 logger.info("triple_parse layout=fallback key=%s", key.strip())
+                source = "fallback"
                 v1, v2, v3 = _split_triple_fallback(rest.strip(), default_order)
                 raw_vals = [v1, v2, v3]
             std_key = _std_field_name(key)
@@ -1395,6 +1444,10 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
                 if "status" in low:
                     std_key = "payment_status" if "pay" in low else "account_status"
                 else:
+                    row_dbg["drop_reason"] = (
+                        "alias_not_found" if std_key == low else "not_in_field_set"
+                    )
+                    parsed_triples["rows"].append(row_dbg)
                     logger.info(
                         "triple_parsed key=%s v1=%s v2=%s v3=%s dropped=unknown_field",
                         key,
@@ -1404,17 +1457,34 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
                     )
                     continue
             values: list[Any | None] = []
-            for idx, rv in enumerate(raw_vals):
+            for idx2, rv in enumerate(raw_vals):
                 if rv is None or str(rv).strip() in {"", "--"}:
                     values.append(None)
                 else:
                     val = str(rv).strip()
-                    if idx == 2:
+                    if idx2 == 2:
                         val = re.sub(r"\s+", " ", val)
-                        val = re.sub(r"[^\w/ ]", "", val).strip()
+                        val = re.sub(r"[^\w/* ]", "", val).strip()
                         if " " in val:
                             val = val.split()[0]
                     values.append(val)
+            val_map = {b: v for b, v in zip(default_order, values)}
+            if all(v is None for v in values):
+                row_dbg["drop_reason"] = "empty"
+                parsed_triples["rows"].append(row_dbg)
+                continue
+            row_dbg.update(
+                {
+                    "key_norm": std_key,
+                    "values": {
+                        "tu": val_map.get("transunion"),
+                        "ex": val_map.get("experian"),
+                        "eq": val_map.get("equifax"),
+                    },
+                    "source": source,
+                }
+            )
+            parsed_triples["rows"].append(row_dbg)
             for b, v in zip(default_order, values):
                 if v is None:
                     continue
@@ -1593,16 +1663,39 @@ def parse_account_block(block_lines: list[str]) -> dict[str, dict[str, Any | Non
         bm = result.get(b, _empty_bureau_map())
         filled = sum(1 for k in ACCOUNT_FIELD_SET if bm[k] is not None)
         logger.info("parse_account_block result bureau=%s filled=%d/25", b, filled)
+    if sid and account_id:
+        try:
+            debug_dir = Path("traces") / sid / "parsed_triples"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            debug_path = debug_dir / f"{account_id}.json"
+            with debug_path.open("w", encoding="utf-8") as fh:
+                json.dump(parsed_triples, fh, ensure_ascii=False, indent=2)
+            logger.info(
+                "PARSEDBG: saved parsed_triples for account=%s rows=%d",
+                account_id,
+                len(parsed_triples["rows"]),
+            )
+        except Exception:
+            logger.exception("parsed_triples_write_failed")
     return result
 
 
 def parse_collection_block(
     block_lines: list[str],
     bureau_order: Sequence[str] | None = None,
+    *,
+    sid: str | None = None,
+    account_id: str | None = None,
+    heading: str | None = None,
 ) -> dict[str, dict[str, Any | None]]:
     """Parse simplified collection/charge-off blocks."""
 
     logger.info("parse_collection_block start lines=%d", len(block_lines))
+    parsed_triples: dict[str, Any] = {
+        "heading": heading,
+        "bureau_order": list(bureau_order) if bureau_order else [],
+        "rows": [],
+    }
 
     def _init():
         return {b: _empty_bureau_map() for b in BUREAUS}
@@ -1616,14 +1709,19 @@ def parse_collection_block(
             logger.info("COLL: using bureau_order from stitch=%s", bureau_order)
         else:
             order = ["transunion", "experian", "equifax"]
+    parsed_triples["bureau_order"] = list(order)
 
     neg_pat = re.compile(r"(collection|charge[-\s]?off|repossession)", re.I)
 
-    for line in lines:
+    for idx, line in enumerate(lines):
+        raw_line = block_lines[idx] if idx < len(block_lines) else line
+        row_dbg: dict[str, Any] = {"raw": raw_line}
         key: str | None = None
         raw_vals: list[str | None] = []
+        source = "fallback"
         m = TRIPLE_LINE_RE.match(line)
         if m:
+            source = "aligned"
             key = m.group("key").strip()
             raw_vals = [m.group("v1"), m.group("v2"), m.group("v3")]
         else:
@@ -1635,6 +1733,7 @@ def parse_collection_block(
             else:
                 segs = re.split(r"\s{2,}", line)
                 if len(segs) >= 4:
+                    source = "no_colon"
                     key = segs[0].strip()
                     raw_vals = segs[1:4]
                 else:
@@ -1655,10 +1754,16 @@ def parse_collection_block(
                             key = "payment status"
                             raw_vals = [v1, v2, v3]
                         else:
+                            row_dbg["drop_reason"] = "malformed"
+                            parsed_triples["rows"].append(row_dbg)
                             continue
 
         std_key = _std_field_name(key)
         if std_key not in ACCOUNT_FIELD_SET:
+            row_dbg["drop_reason"] = (
+                "alias_not_found" if std_key == (key or "").lower() else "not_in_field_set"
+            )
+            parsed_triples["rows"].append(row_dbg)
             continue
         values: list[Any | None] = []
         for rv in raw_vals:
@@ -1666,6 +1771,23 @@ def parse_collection_block(
                 values.append(None)
             else:
                 values.append(rv.strip())
+        val_map = {b: v for b, v in zip(order, values)}
+        if all(v is None for v in values):
+            row_dbg["drop_reason"] = "empty"
+            parsed_triples["rows"].append(row_dbg)
+            continue
+        row_dbg.update(
+            {
+                "key_norm": std_key,
+                "values": {
+                    "tu": val_map.get("transunion"),
+                    "ex": val_map.get("experian"),
+                    "eq": val_map.get("equifax"),
+                },
+                "source": source,
+            }
+        )
+        parsed_triples["rows"].append(row_dbg)
         for b, v in zip(order, values):
             if v is None:
                 continue
@@ -1683,6 +1805,20 @@ def parse_collection_block(
         m = result.get(b) or {}
         non_null = sum(1 for f in ACCOUNT_FIELD_SET if m.get(f) is not None)
         logger.info("COLL: result bureau=%s filled=%d/25", b, non_null)
+    if sid and account_id:
+        try:
+            debug_dir = Path("traces") / sid / "parsed_triples"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            debug_path = debug_dir / f"{account_id}.json"
+            with debug_path.open("w", encoding="utf-8") as fh:
+                json.dump(parsed_triples, fh, ensure_ascii=False, indent=2)
+            logger.info(
+                "PARSEDBG: saved parsed_triples for account=%s rows=%d",
+                account_id,
+                len(parsed_triples["rows"]),
+            )
+        except Exception:
+            logger.exception("parsed_triples_write_failed")
     return result
 
 

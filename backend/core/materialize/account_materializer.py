@@ -655,7 +655,12 @@ def materialize_accounts(
             # --- BEGIN: parser-driven merge ---
             try:
                 # 1) General parser for account table
-                maps_acc = parse_account_block(lines or [])
+                maps_acc = parse_account_block(
+                    lines or [],
+                    heading=src.get("normalized_name") or src.get("name"),
+                    sid=sid,
+                    account_id=src.get("account_id") or _slug(src.get("name")),
+                )
             except Exception:
                 logger.exception("parse_account_block_failed")
                 maps_acc = {}

@@ -6,10 +6,12 @@ from functools import wraps
 from pydantic import ValidationError
 
 from backend.config import CASESTORE_REDACT_BEFORE_STORE
+from backend.core.config.flags import FLAGS
 
 from .errors import CaseStoreError, NOT_FOUND, VALIDATION_FAILED
 from .models import Artifact, AccountCase, AccountFields, Bureau, SessionCase
 from .redaction import redact_account_fields
+from .merge import safe_deep_merge
 from .storage import load_session_case as _load, save_session_case as _save
 from .telemetry import emit, timed
 
@@ -129,9 +131,13 @@ def upsert_account_fields(
             account.bureau = bureau_enum
 
         current = account.fields.model_dump()
-        current.update(fields)
+        if FLAGS.safe_merge_enabled:
+            merged = safe_deep_merge(current, fields)
+        else:
+            current.update(fields)
+            merged = current
         try:
-            account.fields = AccountFields(**current)
+            account.fields = AccountFields(**merged)
         except ValidationError as exc:
             raise CaseStoreError(code=VALIDATION_FAILED, message=str(exc)) from exc
 

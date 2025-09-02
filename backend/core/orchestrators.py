@@ -1310,6 +1310,7 @@ def extract_problematic_accounts_from_report(
     from backend.core.logic.report_analysis.analyze_report import (
         analyze_credit_report as analyze_report_logic,
     )
+    from backend.core.logic.report_analysis.extractors.accounts import build_account_cases
 
     session_id = session_id or "session"
     pdf_path = move_uploaded_file(Path(file_path), session_id)
@@ -1351,6 +1352,22 @@ def extract_problematic_accounts_from_report(
         sections.get("session_id"),
         req_id,
     )
+    logger.debug("CASEBUILDER: starting session_id=%s", session_id)
+    try:
+        pre = len(list_accounts(session_id))  # type: ignore[operator]
+    except Exception:
+        pre = -1
+    logger.debug("CASEBUILDER: pre-count=%s", pre)
+
+    build_account_cases(session_id)
+
+    try:
+        post = len(list_accounts(session_id))  # type: ignore[operator]
+    except Exception:
+        post = -1
+    logger.debug("CASEBUILDER: post-count=%s", post)
+    if post == 0:
+        logger.error("CASEBUILDER: produced 0 cases (will abort)")
     if FLAGS.case_first_build_required:
         try:
             count = len(list_accounts(session_id))  # type: ignore[operator]

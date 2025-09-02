@@ -75,6 +75,7 @@ from backend.core.telemetry.stageE_summary import emit_stageE_summary
 from backend.core.utils.text_dump import dump_text as _dump_text
 from backend.core.utils.trace_io import write_json_trace, write_text_trace
 from backend.policy.policy_loader import load_rulebook
+from backend.core.config.flags import FLAGS
 from planner import plan_next_step
 
 logger = logging.getLogger(__name__)
@@ -128,25 +129,28 @@ def resolve_cross_bureau(decisions: list[dict]) -> dict:
     if not decisions:
         return {}
 
-    normalized = [normalize_decision(d) for d in decisions]
-    winner = normalized[0]
-    for dec in normalized[1:]:
-        tier = compare_tiers(dec.get("tier", "none"), winner.get("tier", "none"))
-        if tier != winner.get("tier", "none"):
-            winner = dec
+    pairs = [(d, normalize_decision(d)) for d in decisions]
+    winner_orig, winner_norm = pairs[0]
+    for orig, dec in pairs[1:]:
+        tier = compare_tiers(dec.get("tier", "none"), winner_norm.get("tier", "none"))
+        if tier != winner_norm.get("tier", "none"):
+            winner_orig, winner_norm = orig, dec
             continue
-        if dec.get("tier") == winner.get("tier") and dec.get(
+        if dec.get("tier") == winner_norm.get("tier") and dec.get(
             "confidence", 0.0
-        ) > winner.get("confidence", 0.0):
-            winner = dec
+        ) > winner_norm.get("confidence", 0.0):
+            winner_orig, winner_norm = orig, dec
 
     merged_reasons: list[str] = []
-    for dec in normalized:
+    for _, dec in pairs:
         merged_reasons.extend(dec.get("problem_reasons", []))
 
-    result = dict(winner)
+    result = dict(winner_norm)
     result["problem_reasons"] = merged_reasons
-    return normalize_decision(result)
+    result["decision_source"] = winner_orig.get(
+        "decision_source", winner_norm.get("decision_source")
+    )
+    return result
 
 
 def compute_logical_account_key(account_case: AccountCase) -> str:
@@ -177,25 +181,24 @@ def compute_logical_account_key(account_case: AccountCase) -> str:
 
 
 def collect_stageA_problem_accounts(session_id: str) -> list[Mapping[str, Any]]:
-    """Return problem accounts for Stage A using the Case Store only."""
+    """Return problem accounts for Stage A using the Case Store only.
 
-    problems: list[Mapping[str, Any]] = []
-    for acc_id in list_accounts(session_id):  # type: ignore[operator]
-        case = get_account_case(session_id, acc_id)  # type: ignore[operator]
-        art = case.artifacts.get("stageA_detection")
-        if not art:
-            logger.warning(
-                "stageA_artifact_missing session=%s account=%s", session_id, acc_id
-            )
-            continue
-        data = art.model_dump()
+    When ``ONE_CASE_PER_ACCOUNT_ENABLED`` is true this function reads per-bureau
+    Stage-A artifacts (``stageA_detection.EX`` etc). If those artifacts are not
+    present it falls back to the legacy ``stageA_detection`` artifact to preserve
+    backward compatibility.
+    """
+
+    def _row_from_artifact(
+        account_id: str, bureau: str, data: Mapping[str, Any]
+    ) -> Mapping[str, Any] | None:
         tier = str(data.get("tier", "none"))
         source = data.get("decision_source", "rules")
         reasons = data.get("problem_reasons", []) or []
         fields_used = (data.get("debug") or {}).get("fields_used")
         include = False
         if config.ENABLE_AI_ADJUDICATOR:
-            if source == "ai":
+            if source in {"ai", "rules+ai"}:
                 if tier in {"Tier1", "Tier2", "Tier3"}:
                     include = True
             elif reasons:
@@ -204,12 +207,13 @@ def collect_stageA_problem_accounts(session_id: str) -> list[Mapping[str, Any]]:
             include = True
             source = "rules"
             tier = "none"
+            data = dict(data)
             data["primary_issue"] = "unknown"
             data["confidence"] = 0.0
         if include and tier != "Tier4":
             acc: dict[str, Any] = {
-                "account_id": acc_id,
-                "bureau": str(case.bureau.value),
+                "account_id": account_id,
+                "bureau": bureau,
                 "primary_issue": data.get("primary_issue", "unknown"),
                 "tier": tier,
                 "problem_reasons": reasons,
@@ -218,7 +222,61 @@ def collect_stageA_problem_accounts(session_id: str) -> list[Mapping[str, Any]]:
             }
             if fields_used:
                 acc["fields_used"] = fields_used
-            problems.append(acc)
+            return acc
+        return None
+
+    problems: list[Mapping[str, Any]] = []
+    for acc_id in list_accounts(session_id):  # type: ignore[operator]
+        case = get_account_case(session_id, acc_id)  # type: ignore[operator]
+        rows: list[Mapping[str, Any]] = []
+
+        if FLAGS.one_case_per_account_enabled:
+            by_bureau = getattr(case.fields, "by_bureau", {}) or {}
+            bureau_codes = list(by_bureau.keys()) or ["EX", "EQ", "TU"]
+            for code in bureau_codes:
+                art = case.artifacts.get(f"stageA_detection.{code}")
+                if not art:
+                    continue
+                data = art.model_dump()
+                row = _row_from_artifact(acc_id, code, data)
+                if row:
+                    rows.append(row)
+
+            if not rows:
+                art = case.artifacts.get("stageA_detection")
+                if art:
+                    data = art.model_dump()
+                    row = _row_from_artifact(acc_id, str(case.bureau.value), data)
+                    if row:
+                        rows.append(row)
+                else:
+                    logger.warning(
+                        "stageA_artifact_missing session=%s account=%s",
+                        session_id,
+                        acc_id,
+                    )
+        else:
+            art = case.artifacts.get("stageA_detection")
+            if art:
+                data = art.model_dump()
+                row = _row_from_artifact(acc_id, str(case.bureau.value), data)
+                if row:
+                    rows.append(row)
+            else:
+                logger.warning(
+                    "stageA_artifact_missing session=%s account=%s",
+                    session_id,
+                    acc_id,
+                )
+
+        problems.extend(rows)
+        logger.debug(
+            "collectors.per_bureau",
+            session_id=session_id,
+            account_id=acc_id,
+            emitted=len(rows),
+            flag=FLAGS.one_case_per_account_enabled,
+        )
 
     _emit_stageA_orchestrated(session_id, problems)
     return problems

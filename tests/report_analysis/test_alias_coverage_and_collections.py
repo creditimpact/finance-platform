@@ -1,5 +1,3 @@
-import pytest
-
 from backend.core.logic.report_analysis.report_parsing import (
     _assign_std,
     parse_collection_block,
@@ -34,8 +32,8 @@ def test_collection_lines_without_colon_are_parsed():
     tu = res["transunion"]
     filled = sum(1 for v in tu.values() if v is not None)
     assert filled >= 5
-    assert tu["high_balance"] == 23025.0
-    assert tu["date_opened"] == "2018-01-23"
+    assert tu["high_balance"]["normalized"] == 23025.0
+    assert tu["date_opened"]["normalized"] == "2018-01-23"
 
 
 def test_collection_order_carry_forward_without_header():
@@ -45,9 +43,9 @@ def test_collection_order_carry_forward_without_header():
     ]
     order = ["experian", "equifax", "transunion"]
     res = parse_collection_block(lines, bureau_order=order)
-    assert res["experian"]["high_balance"] == 100.0
-    assert res["equifax"]["high_balance"] == 200.0
-    assert res["transunion"]["high_balance"] == 300.0
+    assert res["experian"]["high_balance"]["normalized"] == 100.0
+    assert res["equifax"]["high_balance"]["normalized"] == 200.0
+    assert res["transunion"]["high_balance"]["normalized"] == 300.0
 
 
 def test_currency_and_dates_normalized_in_collections():
@@ -57,5 +55,5 @@ def test_currency_and_dates_normalized_in_collections():
         "Date Opened 1/1/2018 1/1/2018 1/1/2018",
     ]
     res = parse_collection_block(lines)
-    assert res["transunion"]["high_balance"] == 23025.0
-    assert res["transunion"]["date_opened"] == "2018-01-01"
+    assert res["transunion"]["high_balance"]["normalized"] == 23025.0
+    assert res["transunion"]["date_opened"]["normalized"] == "2018-01-01"

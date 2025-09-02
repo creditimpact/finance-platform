@@ -5,7 +5,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Mapping, Sequence, cast, Literal
+from typing import Any, Literal, Mapping, Sequence, cast
 
 logger = logging.getLogger(__name__)
 
@@ -2458,6 +2458,49 @@ def parse_collection_block(
             values[1],
             values[2],
         )
+    # Footer triplet lines (account type / payment frequency / credit limit)
+    pre_scan = 15
+    slice_from = max(0, len(lines) - pre_scan)
+    last_lines = lines[slice_from:]
+    if last_lines:
+        logger.info(
+            "FOOTER: pre-scan last_lines=%d sample_first=%r sample_last=%r",
+            len(last_lines),
+            last_lines[0],
+            last_lines[-1],
+        )
+    else:
+        logger.info(
+            "FOOTER: pre-scan empty (block_len=%d, slice_from=%d, slice_to=%d)",
+            len(lines),
+            slice_from,
+            len(lines),
+        )
+    footer = parse_three_footer_lines(last_lines)
+    for b in BUREAUS:
+        for k in ("account_type", "payment_frequency", "credit_limit"):
+            val = footer.get(b, {}).get(k)
+            if val is None:
+                continue
+            clean = val
+            if isinstance(val, str):
+                clean = _strip_leaked_prefix(k, val)
+                if clean != val:
+                    abbr = {"transunion": "tu", "experian": "ex", "equifax": "eq"}
+                    logger.info(
+                        "VALPREFIX: stripped prefix for key=%s values_before=%s values_after=%s",
+                        k,
+                        {abbr[b]: val},
+                        {abbr[b]: clean},
+                    )
+            _assign_std(
+                maps[b],
+                k,
+                clean,
+                raw_val=val,
+                provenance="footer",
+                bureau=b,
+            )
 
     result = maps
     for b in ("transunion", "experian", "equifax"):

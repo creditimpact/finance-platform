@@ -9,13 +9,15 @@ from backend.core.ai.adjudicator_client import call_adjudicator
 from backend.core.ai.models import AIAdjudicateRequest
 from backend.core.case_store.api import (
     append_artifact,
+    get_account_case,
     get_account_fields,
     list_accounts,
 )
 from backend.core.case_store.redaction import redact_for_ai
 from backend.core.case_store import telemetry
 from backend.core.logic.report_analysis.candidate_logger import log_stageA_candidates
-from backend.core.taxonomy.problem_taxonomy import normalize_decision
+from backend.core.config.flags import FLAGS
+from backend.core.taxonomy.problem_taxonomy import compare_tiers, normalize_decision
 
 logger = logging.getLogger(__name__)
 
@@ -236,7 +238,149 @@ def run_stage_a(
     except Exception:
         logger.warning("stageA_list_accounts_failed session=%s", session_id)
         return
+    
+    if not FLAGS.one_case_per_account_enabled:
+        for acc_id in account_ids:
+            with telemetry.timed(
+                "stageA_casestore_eval",
+                session_id=session_id,
+                account_id=acc_id,
+                used_source="casestore",
+            ):
+                try:
+                    fields = get_account_fields(  # type: ignore[operator]
+                        session_id, acc_id, STAGEA_REQUIRED_FIELDS
+                    )
+                except Exception:
+                    logger.warning(
+                        "stageA_missing_account session=%s account=%s", session_id, acc_id
+                    )
+                    telemetry.emit(
+                        "stageA_missing_account",
+                        session_id=session_id,
+                        account_id=acc_id,
+                    )
+                    continue
 
+                bureau = str(fields.get("bureau") or acc_id.split("_")[-1])
+                if config.ENABLE_CANDIDATE_TOKEN_LOGGER:
+                    try:
+                        log_stageA_candidates(
+                            session_id,
+                            acc_id,
+                            bureau,
+                            "pre",
+                            dict(fields),
+                            decision={},
+                            meta={"source": "stageA"},
+                        )
+                    except Exception:
+                        logger.debug(
+                            "candidate_tokens_log_failed session=%s account=%s phase=pre",
+                            session_id,
+                            acc_id,
+                            exc_info=True,
+                        )
+
+                t0 = time.perf_counter()
+                rules_verdict = evaluate_account_problem(dict(fields))
+                (
+                    ai_verdict,
+                    ai_called,
+                    ai_latency_ms,
+                    fallback_reason,
+                    ai_confidence,
+                ) = evaluate_with_optional_ai(
+                    session_id,
+                    acc_id,
+                    dict(fields),
+                    str(fields.get("doc_fingerprint") or ""),
+                    str(fields.get("account_fingerprint") or ""),
+                )
+                verdict = (
+                    ai_verdict
+                    if ai_verdict.get("decision_source") == "ai"
+                    else rules_verdict
+                )
+                verdict = normalize_decision(verdict)
+                total_latency = (time.perf_counter() - t0) * 1000.0
+                telemetry.emit(
+                    "stageA_eval",
+                    session_id=session_id,
+                    account_id=acc_id,
+                    bureau=bureau,
+                    decision_source=verdict.get("decision_source"),
+                    primary_issue=verdict.get("primary_issue"),
+                    tier=verdict.get("tier"),
+                    confidence=float(verdict.get("confidence", 0.0)),
+                    latency_ms=round(total_latency, 3),
+                    ai_latency_ms=ai_latency_ms if ai_called else None,
+                )
+                if ai_called and verdict.get("decision_source") != "ai":
+                    telemetry.emit(
+                        "stageA_fallback",
+                        session_id=session_id,
+                        account_id=acc_id,
+                        bureau=bureau,
+                        reason=fallback_reason,
+                        ai_confidence=ai_confidence,
+                        latency_ms=ai_latency_ms,
+                    )
+
+                if config.ENABLE_CANDIDATE_TOKEN_LOGGER:
+                    try:
+                        log_stageA_candidates(
+                            session_id,
+                            acc_id,
+                            bureau,
+                            "post",
+                            dict(fields),
+                            verdict,
+                            meta={"source": "stageA"},
+                        )
+                    except Exception:
+                        logger.debug(
+                            "candidate_tokens_log_failed session=%s account=%s phase=post",
+                            session_id,
+                            acc_id,
+                            exc_info=True,
+                        )
+                debug_data = dict(verdict.get("debug", {}))
+                debug_data["source"] = "casestore-stageA"
+                payload = {
+                    "primary_issue": verdict.get("primary_issue", "unknown"),
+                    "issue_types": verdict.get("issue_types", []),
+                    "problem_reasons": verdict.get("problem_reasons", []),
+                    "confidence": verdict.get("confidence", 0.0),
+                    "tier": str(verdict.get("tier", NEUTRAL_TIER)),
+                    "decision_source": verdict.get("decision_source", "rules"),
+                    "debug": debug_data,
+                }
+                try:
+                    append_artifact(  # type: ignore[operator]
+                        session_id,
+                        acc_id,
+                        "stageA_detection",
+                        payload,
+                        attach_provenance={
+                            "module": "problem_detection",
+                            "algo": "rules_v1",
+                        },
+                    )
+                except Exception:
+                    logger.warning(
+                        "stageA_append_failed session=%s account=%s", session_id, acc_id
+                    )
+                    telemetry.emit(
+                        "stageA_append_failed",
+                        session_id=session_id,
+                        account_id=acc_id,
+                    )
+                    continue
+
+        return
+
+    # One-case-per-account enabled: evaluate per bureau
     for acc_id in account_ids:
         with telemetry.timed(
             "stageA_casestore_eval",
@@ -245,9 +389,7 @@ def run_stage_a(
             used_source="casestore",
         ):
             try:
-                fields = get_account_fields(  # type: ignore[operator]
-                    session_id, acc_id, STAGEA_REQUIRED_FIELDS
-                )
+                case = get_account_case(session_id, acc_id)  # type: ignore[operator]
             except Exception:
                 logger.warning(
                     "stageA_missing_account session=%s account=%s", session_id, acc_id
@@ -259,111 +401,214 @@ def run_stage_a(
                 )
                 continue
 
-            bureau = str(fields.get("bureau") or acc_id.split("_")[-1])
-            if config.ENABLE_CANDIDATE_TOKEN_LOGGER:
+            by_bureau = getattr(case.fields, "by_bureau", {}) or {}
+            decisions: List[dict] = []
+            for bureau, bureau_fields in by_bureau.items():
                 try:
-                    log_stageA_candidates(
-                        session_id,
-                        acc_id,
-                        bureau,
-                        "pre",
-                        dict(fields),
-                        decision={},
-                        meta={"source": "stageA"},
+                    telemetry.emit(
+                        "stageA.bureau_evaluations",
+                        session_id=session_id,
+                        account_id=acc_id,
+                        bureau=bureau,
                     )
                 except Exception:
-                    logger.debug(
-                        "candidate_tokens_log_failed session=%s account=%s phase=pre",
+                    pass
+
+                rules_input = {
+                    k: bureau_fields.get(k) for k in STAGEA_REQUIRED_FIELDS
+                }
+
+                if config.ENABLE_CANDIDATE_TOKEN_LOGGER:
+                    try:
+                        log_stageA_candidates(
+                            session_id,
+                            acc_id,
+                            bureau,
+                            "pre",
+                            dict(rules_input),
+                            decision={},
+                            meta={"source": "stageA"},
+                        )
+                    except Exception:
+                        logger.debug(
+                            "candidate_tokens_log_failed session=%s account=%s phase=pre",
+                            session_id,
+                            acc_id,
+                            exc_info=True,
+                        )
+
+                t0 = time.perf_counter()
+                rules_verdict = evaluate_account_problem(dict(rules_input))
+                if config.ENABLE_AI_ADJUDICATOR:
+                    (
+                        ai_verdict,
+                        ai_called,
+                        ai_latency_ms,
+                        fallback_reason,
+                        ai_confidence,
+                    ) = evaluate_with_optional_ai(
                         session_id,
                         acc_id,
-                        exc_info=True,
+                        dict(rules_input),
+                        str(bureau_fields.get("doc_fingerprint") or ""),
+                        str(bureau_fields.get("account_fingerprint") or ""),
                     )
+                else:
+                    (
+                        ai_verdict,
+                        ai_called,
+                        ai_latency_ms,
+                        fallback_reason,
+                        ai_confidence,
+                    ) = (rules_verdict, False, 0, None, None)
 
-            t0 = time.perf_counter()
-            rules_verdict = evaluate_account_problem(dict(fields))
-            (
-                ai_verdict,
-                ai_called,
-                ai_latency_ms,
-                fallback_reason,
-                ai_confidence,
-            ) = evaluate_with_optional_ai(
-                session_id,
-                acc_id,
-                dict(fields),
-                str(fields.get("doc_fingerprint") or ""),
-                str(fields.get("account_fingerprint") or ""),
-            )
-            verdict = (
-                ai_verdict
-                if ai_verdict.get("decision_source") == "ai"
-                else rules_verdict
-            )
-            verdict = normalize_decision(verdict)
-            total_latency = (time.perf_counter() - t0) * 1000.0
-            telemetry.emit(
-                "stageA_eval",
-                session_id=session_id,
-                account_id=acc_id,
-                bureau=bureau,
-                decision_source=verdict.get("decision_source"),
-                primary_issue=verdict.get("primary_issue"),
-                tier=verdict.get("tier"),
-                confidence=float(verdict.get("confidence", 0.0)),
-                latency_ms=round(total_latency, 3),
-                ai_latency_ms=ai_latency_ms if ai_called else None,
-            )
-            if ai_called and verdict.get("decision_source") != "ai":
-                telemetry.emit(
-                    "stageA_fallback",
-                    session_id=session_id,
-                    account_id=acc_id,
-                    bureau=bureau,
-                    reason=fallback_reason,
-                    ai_confidence=ai_confidence,
-                    latency_ms=ai_latency_ms,
+                verdict = (
+                    ai_verdict
+                    if ai_called and ai_verdict.get("decision_source") == "ai"
+                    else rules_verdict
                 )
-
-            if config.ENABLE_CANDIDATE_TOKEN_LOGGER:
+                verdict = normalize_decision(verdict)
+                total_latency = (time.perf_counter() - t0) * 1000.0
                 try:
-                    log_stageA_candidates(
+                    telemetry.emit(
+                        "stageA_eval",
+                        session_id=session_id,
+                        account_id=acc_id,
+                        bureau=bureau,
+                        decision_source=verdict.get("decision_source"),
+                        primary_issue=verdict.get("primary_issue"),
+                        tier=verdict.get("tier"),
+                        confidence=float(verdict.get("confidence", 0.0)),
+                        latency_ms=round(total_latency, 3),
+                        ai_latency_ms=ai_latency_ms if ai_called else None,
+                    )
+                    if ai_called and verdict.get("decision_source") != "ai":
+                        telemetry.emit(
+                            "stageA_fallback",
+                            session_id=session_id,
+                            account_id=acc_id,
+                            bureau=bureau,
+                            reason=fallback_reason,
+                            ai_confidence=ai_confidence,
+                            latency_ms=ai_latency_ms,
+                        )
+                except Exception:
+                    pass
+
+                payload = {
+                    **verdict,
+                    "decision_source": "rules+ai" if ai_called else "rules",
+                    "bureau": bureau,
+                    "debug": {
+                        "stage": "StageA",
+                        "bureau": bureau,
+                        "ai_called": ai_called,
+                    },
+                }
+
+                if config.ENABLE_CANDIDATE_TOKEN_LOGGER:
+                    try:
+                        log_stageA_candidates(
+                            session_id,
+                            acc_id,
+                            bureau,
+                            "post",
+                            dict(rules_input),
+                            verdict,
+                            meta={"source": "stageA"},
+                        )
+                    except Exception:
+                        logger.debug(
+                            "candidate_tokens_log_failed session=%s account=%s phase=post",
+                            session_id,
+                            acc_id,
+                            exc_info=True,
+                        )
+
+                try:
+                    append_artifact(  # type: ignore[operator]
                         session_id,
                         acc_id,
-                        bureau,
-                        "post",
-                        dict(fields),
-                        verdict,
-                        meta={"source": "stageA"},
+                        f"stageA_detection.{bureau}",
+                        payload,
+                        attach_provenance={
+                            "module": "problem_detection",
+                            "algo": "rules_v1",
+                        },
+                    )
+                    try:
+                        telemetry.emit(
+                            "stageA.namespaced_artifact_written",
+                            session_id=session_id,
+                            account_id=acc_id,
+                            bureau=bureau,
+                        )
+                    except Exception:
+                        pass
+                except Exception:
+                    logger.warning(
+                        "stageA_append_failed session=%s account=%s", session_id, acc_id
+                    )
+                    telemetry.emit(
+                        "stageA_append_failed",
+                        session_id=session_id,
+                        account_id=acc_id,
+                    )
+                    continue
+
+                decisions.append(payload)
+                try:
+                    logger.debug(
+                        "stageA.per_bureau",
+                        extra={
+                            "session_id": session_id,
+                            "account_id": acc_id,
+                            "bureau": bureau,
+                            "primary_issue": payload.get("primary_issue"),
+                            "tier": payload.get("tier"),
+                        },
                     )
                 except Exception:
-                    logger.debug(
-                        "candidate_tokens_log_failed session=%s account=%s phase=post",
-                        session_id,
-                        acc_id,
-                        exc_info=True,
-                    )
-            debug_data = dict(verdict.get("debug", {}))
-            debug_data["source"] = "casestore-stageA"
-            payload = {
-                "primary_issue": verdict.get("primary_issue", "unknown"),
-                "issue_types": verdict.get("issue_types", []),
-                "problem_reasons": verdict.get("problem_reasons", []),
-                "confidence": verdict.get("confidence", 0.0),
-                "tier": str(verdict.get("tier", NEUTRAL_TIER)),
-                "decision_source": verdict.get("decision_source", "rules"),
-                "debug": debug_data,
-            }
+                    pass
+
+            if not decisions:
+                continue
+
+            winner = decisions[0]
+            for dec in decisions[1:]:
+                tier = compare_tiers(dec.get("tier", "none"), winner.get("tier", "none"))
+                if tier != winner.get("tier", "none"):
+                    winner = dec
+                    continue
+                if dec.get("tier") == winner.get("tier") and float(
+                    dec.get("confidence", 0.0)
+                ) > float(winner.get("confidence", 0.0)):
+                    winner = dec
+
+            winner_payload = dict(winner)
+            winner_bureau = winner_payload.get("bureau")
+            winner_payload.pop("bureau", None)
+
             try:
                 append_artifact(  # type: ignore[operator]
                     session_id,
                     acc_id,
                     "stageA_detection",
-                    payload,
+                    winner_payload,
                     attach_provenance={
                         "module": "problem_detection",
                         "algo": "rules_v1",
                     },
                 )
+                try:
+                    telemetry.emit(
+                        "stageA.legacy_winner_written",
+                        session_id=session_id,
+                        account_id=acc_id,
+                        bureau=winner_bureau,
+                    )
+                except Exception:
+                    pass
             except Exception:
                 logger.warning(
                     "stageA_append_failed session=%s account=%s", session_id, acc_id
@@ -374,4 +619,3 @@ def run_stage_a(
                     account_id=acc_id,
                 )
                 continue
-

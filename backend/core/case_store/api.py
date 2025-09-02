@@ -8,12 +8,20 @@ from pydantic import ValidationError
 from backend.config import CASESTORE_REDACT_BEFORE_STORE
 from backend.core.config.flags import FLAGS
 
-from .errors import CaseStoreError, NOT_FOUND, VALIDATION_FAILED
+from .errors import (
+    CaseStoreError,
+    CaseWriteConflict,
+    NOT_FOUND,
+    VALIDATION_FAILED,
+    WRITE_CONFLICT,
+)
 from .models import Artifact, AccountCase, AccountFields, Bureau, SessionCase
 from .redaction import redact_account_fields
 from .merge import safe_deep_merge
 from .storage import load_session_case as _load, save_session_case as _save
 from .telemetry import emit, timed
+
+MAX_RETRIES = 3
 
 __all__ = [
     "create_session_case",
@@ -111,37 +119,56 @@ def upsert_account_fields(
     """Upsert account fields, optionally redacting sensitive data."""
 
     bureau_enum = _coerce_bureau(bureau)
+    patch = {**fields}
     with timed(
         "case_store_upsert",
         session_id=session_id,
         account_id=account_id,
         bureau=bureau_enum.value,
     ) as t:
-        case = _load(session_id)
         if CASESTORE_REDACT_BEFORE_STORE:
-            original = fields
-            fields = redact_account_fields(fields)
-            t.base["masked_fields_count"] = _count_masked_fields(original, fields)
+            original = patch
+            patch = redact_account_fields(patch)
+            t.base["masked_fields_count"] = _count_masked_fields(original, patch)
 
-        account = case.accounts.get(account_id)
-        if account is None:
-            account = AccountCase(bureau=bureau_enum)
-            case.accounts[account_id] = account
-        else:
-            account.bureau = bureau_enum
+        last_seen_version = 0
+        for _ in range(MAX_RETRIES):
+            case = _load(session_id)
+            account = case.accounts.get(account_id)
+            if account is None:
+                account = AccountCase(bureau=bureau_enum)
+                case.accounts[account_id] = account
+            else:
+                account.bureau = bureau_enum
 
-        current = account.fields.model_dump()
-        if FLAGS.safe_merge_enabled:
-            merged = safe_deep_merge(current, fields)
-        else:
-            current.update(fields)
-            merged = current
-        try:
-            account.fields = AccountFields(**merged)
-        except ValidationError as exc:
-            raise CaseStoreError(code=VALIDATION_FAILED, message=str(exc)) from exc
+            original_version = account.version
+            current = account.fields.model_dump()
+            if FLAGS.safe_merge_enabled:
+                merged = safe_deep_merge(current, patch)
+            else:
+                merged = {**current, **patch}
+            try:
+                account.fields = AccountFields(**merged)
+            except ValidationError as exc:
+                raise CaseStoreError(code=VALIDATION_FAILED, message=str(exc)) from exc
 
-        save_session_case(case)
+            account.version = original_version + 1
+
+            stored = _load(session_id)
+            stored_account = stored.accounts.get(account_id)
+            last_seen_version = stored_account.version if stored_account else 0
+            if last_seen_version != original_version:
+                continue
+
+            save_session_case(case)
+            return
+
+        raise CaseWriteConflict(
+            code=WRITE_CONFLICT,
+            message="Write conflict for account fields",
+            account_id=account_id,
+            last_seen_version=last_seen_version,
+        )
 
 
 @_emit_on_error
@@ -183,6 +210,16 @@ def append_artifact(
 ) -> None:
     """Add or replace an artifact under a namespace."""
 
+    try:
+        artifact = Artifact(**payload)
+    except ValidationError as exc:
+        raise CaseStoreError(code=VALIDATION_FAILED, message=str(exc)) from exc
+
+    if attach_provenance:
+        debug = artifact.debug or {}
+        debug["provenance"] = attach_provenance
+        artifact.debug = debug
+
     with timed(
         "case_store_artifact_append",
         session_id=session_id,
@@ -190,40 +227,73 @@ def append_artifact(
         namespace=namespace,
         overwrite=overwrite,
     ):
-        case = _load(session_id)
-        account = case.accounts.get(account_id)
-        if account is None:
-            raise CaseStoreError(code=NOT_FOUND, message=f"Account '{account_id}' not found")
+        last_seen_version = 0
+        for _ in range(MAX_RETRIES):
+            case = _load(session_id)
+            account = case.accounts.get(account_id)
+            if account is None:
+                raise CaseStoreError(
+                    code=NOT_FOUND, message=f"Account '{account_id}' not found"
+                )
 
-        existing = account.artifacts.get(namespace)
-        if not overwrite and existing is not None:
-            raise CaseStoreError(code=VALIDATION_FAILED, message="Artifact exists")
+            existing = account.artifacts.get(namespace)
+            if not overwrite and existing is not None:
+                raise CaseStoreError(code=VALIDATION_FAILED, message="Artifact exists")
 
-        try:
-            artifact = Artifact(**payload)
-        except ValidationError as exc:
-            raise CaseStoreError(code=VALIDATION_FAILED, message=str(exc)) from exc
+            original_version = account.version
+            account.artifacts[namespace] = artifact.model_copy(deep=True)
+            account.version = original_version + 1
 
-        if attach_provenance:
-            debug = artifact.debug or {}
-            debug["provenance"] = attach_provenance
-            artifact.debug = debug
+            stored = _load(session_id)
+            stored_account = stored.accounts.get(account_id)
+            last_seen_version = stored_account.version if stored_account else 0
+            if last_seen_version != original_version:
+                continue
 
-        account.artifacts[namespace] = artifact
-        save_session_case(case)
+            save_session_case(case)
+            return
+
+        raise CaseWriteConflict(
+            code=WRITE_CONFLICT,
+            message="Write conflict for artifact append",
+            account_id=account_id,
+            last_seen_version=last_seen_version,
+        )
 
 
 @_emit_on_error
 def set_tags(session_id: str, account_id: str, **tags) -> None:
     """Merge tags into the account."""
 
-    case = _load(session_id)
-    account = case.accounts.get(account_id)
-    if account is None:
-        raise CaseStoreError(code=NOT_FOUND, message=f"Account '{account_id}' not found")
+    patch = {**tags}
+    last_seen_version = 0
+    for _ in range(MAX_RETRIES):
+        case = _load(session_id)
+        account = case.accounts.get(account_id)
+        if account is None:
+            raise CaseStoreError(
+                code=NOT_FOUND, message=f"Account '{account_id}' not found"
+            )
 
-    account.tags.update(tags)
-    save_session_case(case)
+        original_version = account.version
+        account.tags.update(patch)
+        account.version = original_version + 1
+
+        stored = _load(session_id)
+        stored_account = stored.accounts.get(account_id)
+        last_seen_version = stored_account.version if stored_account else 0
+        if last_seen_version != original_version:
+            continue
+
+        save_session_case(case)
+        return
+
+    raise CaseWriteConflict(
+        code=WRITE_CONFLICT,
+        message="Write conflict for tag update",
+        account_id=account_id,
+        last_seen_version=last_seen_version,
+    )
 
 
 @_emit_on_error

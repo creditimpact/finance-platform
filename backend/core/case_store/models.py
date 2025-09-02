@@ -60,6 +60,7 @@ class AccountCase(BaseModel):
     fields: AccountFields = Field(default_factory=AccountFields)
     artifacts: Dict[str, Artifact | None] = Field(default_factory=dict)
     tags: Dict[str, Any] = Field(default_factory=dict)
+    version: int = 0
 
 
 class PersonalInformation(BaseModel):
@@ -99,6 +100,7 @@ class SessionCase(BaseModel):
     report_meta: ReportMeta = Field(default_factory=ReportMeta)
     summary: Summary = Field(default_factory=Summary)
     accounts: Dict[str, AccountCase]
+    version: int = 0
 
 
 __all__ = [

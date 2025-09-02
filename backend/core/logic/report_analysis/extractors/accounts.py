@@ -187,3 +187,12 @@ def extract(
         results.append({"account_id": account_id, "fields": fields})
     emit_session_field_coverage_summary(session_id=session_id)
     return results
+
+
+def build_account_cases(session_id: str) -> None:
+    """Build AccountCase records for ``session_id`` if needed."""
+
+    # The extractor writes directly to Case Store during analysis, so no
+    # additional work is required here. The function exists to provide an
+    # explicit orchestration hook and remains idempotent.
+    return None

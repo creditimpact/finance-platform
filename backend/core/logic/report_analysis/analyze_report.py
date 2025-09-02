@@ -43,6 +43,7 @@ from backend.core.case_store.api import (
     load_session_case,
     save_session_case,
     upsert_account_fields,
+    MAX_RETRIES,
 )
 from backend.core.case_store.errors import CaseStoreError
 from backend.core.case_store.redaction import redact_account_fields
@@ -121,6 +122,61 @@ MIN_ADVISOR_COMMENT_LEN = 60
 
 # Minimum advisor comment length after finalize; used for idempotent fills and QA
 MIN_ADVISOR_COMMENT_LEN = 60
+
+
+def _emit_metric(name: str, **tags: Any) -> None:
+    """Best-effort metric emitter for lightweight counters."""
+    logger.info("metric %s %s", name, tags)
+
+
+def _track_parse_pass(session_id: str | None) -> None:
+    """Increment per-session parse counter and warn on multiple passes."""
+    if not session_id:
+        _emit_metric("stage1.parse_passes", session_id=session_id)
+        return
+
+    passes = 1
+    if ENABLE_CASESTORE_WRITE:
+        for _ in range(MAX_RETRIES):
+            try:
+                case = load_session_case(session_id)
+            except CaseStoreError as err:  # pragma: no cover - best effort
+                logger.warning(
+                    "casestore_session_error session=%s error=%s", session_id, err
+                )
+                break
+
+            current = case.report_meta.raw_source.get("parse_passes", 0)
+            passes = current + 1
+            case.report_meta.raw_source["parse_passes"] = passes
+            original_version = case.version
+            case.version = original_version + 1
+
+            try:
+                stored = load_session_case(session_id)
+            except CaseStoreError as err:  # pragma: no cover - best effort
+                logger.warning(
+                    "casestore_session_error session=%s error=%s", session_id, err
+                )
+                break
+            if stored.version != original_version:
+                continue
+
+            try:
+                save_session_case(case)
+            except CaseStoreError as err:  # pragma: no cover - best effort
+                logger.warning(
+                    "casestore_session_error session=%s error=%s", session_id, err
+                )
+            break
+
+    _emit_metric("stage1.parse_passes", session_id=session_id)
+    logger.info("stage1.parse_pass session=%s pass=%d", session_id, passes)
+    if passes > 1:
+        logger.warning(
+            "stage1.parse_multiple_passes session=%s passes=%d", session_id, passes
+        )
+        _emit_metric("stage1.parse_multiple_passes", session_id=session_id)
 
 # Fallback patterns for unlabeled SmartCredit text blocks
 BUREAU_RE = re.compile(r"^(TransUnion|Experian|Equifax)\b", re.IGNORECASE)
@@ -1032,17 +1088,31 @@ def analyze_credit_report(
 
     if ENABLE_CASESTORE_WRITE and session_id:
         try:
-            meta: dict[str, Any] = {
-                "raw_source": {
-                    "vendor": "SmartCredit",
-                    "version": None,
-                    "doc_fingerprint": doc_fingerprint,
+            try:
+                case = load_session_case(session_id)
+            except CaseStoreError:
+                meta: dict[str, Any] = {
+                    "raw_source": {
+                        "vendor": "SmartCredit",
+                        "version": None,
+                        "doc_fingerprint": doc_fingerprint,
+                    }
                 }
-            }
-            report_date = client_info.get("report_date")
-            if report_date:
-                meta["credit_report_date"] = report_date
-            case = create_session_case(session_id, meta=meta)
+                report_date = client_info.get("report_date")
+                if report_date:
+                    meta["credit_report_date"] = report_date
+                case = create_session_case(session_id, meta=meta)
+            else:
+                case.report_meta.raw_source.update(
+                    {
+                        "vendor": "SmartCredit",
+                        "version": None,
+                        "doc_fingerprint": doc_fingerprint,
+                    }
+                )
+                report_date = client_info.get("report_date")
+                if report_date:
+                    case.report_meta.credit_report_date = report_date
             save_session_case(case)
         except CaseStoreError as err:  # pragma: no cover - best effort
             logger.warning(
@@ -1050,6 +1120,7 @@ def analyze_credit_report(
                 session_id,
                 err,
             )
+    _track_parse_pass(session_id)
     extractor_accounts_total = {}
     if DETERMINISTIC_EXTRACTORS_ENABLED and ENABLE_CASESTORE_WRITE and session_id:
         from .extractors import (

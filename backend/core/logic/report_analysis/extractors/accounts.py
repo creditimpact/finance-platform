@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, List, Tuple
 
-from backend.core.case_store.api import upsert_account_fields
+from backend.core.case_store.api import get_account_case, upsert_account_fields
+from backend.core.config.flags import FLAGS
 from backend.core.metrics.field_coverage import (
     emit_account_field_coverage,
     emit_session_field_coverage_summary,
 )
 
 from .tokens import ACCOUNT_FIELD_MAP, ACCOUNT_RE, parse_amount, parse_date
+
+logger = logging.getLogger(__name__)
 
 
 def _split_blocks(lines: List[str]) -> List[List[str]]:
@@ -84,6 +88,29 @@ def extract(
             bureau=bureau,
             fields=fields,
         )
+        if FLAGS.normalized_overlay_enabled:
+            try:
+                from backend.core.normalize.apply import (
+                    build_normalized,
+                    emit_mapping_coverage_metrics,
+                    load_registry,
+                )
+
+                reg = load_registry()
+                case = get_account_case(session_id, account_id)
+                by_bureau = case.fields.model_dump().get("by_bureau", {})
+                overlay = build_normalized(by_bureau, reg)
+                upsert_account_fields(
+                    session_id=session_id,
+                    account_id=account_id,
+                    bureau=None,
+                    fields={"normalized": overlay},
+                )
+                emit_mapping_coverage_metrics(
+                    session_id, account_id, by_bureau, reg
+                )
+            except Exception:
+                logger.exception("normalized_overlay_failed")
         results.append({"account_id": account_id, "fields": fields})
     emit_session_field_coverage_summary(session_id=session_id)
     return results

@@ -113,18 +113,17 @@ def save_session_case(case: SessionCase) -> None:
 def upsert_account_fields(
     session_id: str,
     account_id: str,
-    bureau: str | Bureau,
+    bureau: str | Bureau | None,
     fields: Dict[str, Any],
 ) -> None:
     """Upsert account fields, optionally redacting sensitive data."""
-
-    bureau_enum = _coerce_bureau(bureau)
+    bureau_enum = _coerce_bureau(bureau) if bureau is not None else None
     patch = {**fields}
     with timed(
         "case_store_upsert",
         session_id=session_id,
         account_id=account_id,
-        bureau=bureau_enum.value,
+        bureau=bureau_enum.value if bureau_enum else "none",
     ) as t:
         if CASESTORE_REDACT_BEFORE_STORE:
             original = patch
@@ -136,10 +135,16 @@ def upsert_account_fields(
             case = _load(session_id)
             account = case.accounts.get(account_id)
             if account is None:
+                if bureau_enum is None:
+                    raise CaseStoreError(
+                        code=VALIDATION_FAILED,
+                        message="Bureau required for new account",
+                    )
                 account = AccountCase(bureau=bureau_enum)
                 case.accounts[account_id] = account
             else:
-                account.bureau = bureau_enum
+                if bureau_enum is not None:
+                    account.bureau = bureau_enum
 
             original_version = account.version
             current = account.fields.model_dump()

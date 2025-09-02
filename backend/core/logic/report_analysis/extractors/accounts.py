@@ -14,8 +14,10 @@ from backend.core.case_store.models import AccountCase, AccountFields, Bureau
 from backend.core.config.flags import FLAGS
 from backend.core.orchestrators import compute_logical_account_key
 from backend.core.metrics.field_coverage import (
+    EXPECTED_FIELDS,
     emit_account_field_coverage,
     emit_session_field_coverage_summary,
+    _is_filled,
 )
 from backend.core.metrics import emit_metric
 
@@ -28,6 +30,11 @@ _BUREAU_CODES = {"TransUnion": "TU", "Experian": "EX", "Equifax": "EQ"}
 
 _mode_emitted: set[str] = set()
 _logical_ids: Dict[Tuple[str, str], str] = {}
+
+
+def _dbg(msg: str, *args: object) -> None:
+    if getattr(FLAGS, "CASEBUILDER_DEBUG", True):
+        logger.debug("CASEBUILDER: " + msg, *args)
 
 
 def _bureau_code(name: str) -> str:
@@ -94,6 +101,9 @@ def extract(
 
     blocks = _split_blocks(lines)
     results: List[Dict[str, object]] = []
+    input_blocks = 0
+    upserted = 0
+    dropped = {"missing_logical_key": 0, "min_fields": 0, "write_error": 0}
 
     if session_id not in _mode_emitted:
         emit_metric(
@@ -104,50 +114,86 @@ def extract(
         _mode_emitted.add(session_id)
 
     for block in blocks:
+        input_blocks += 1
         account_id, fields, number = _parse_block(block)
-        if FLAGS.one_case_per_account_enabled:
-            temp_case = AccountCase(
-                bureau=Bureau.Equifax,
-                fields=AccountFields(
-                    account_number=number,
-                    creditor_type=fields.get("creditor_type"),
-                    account_type=fields.get("account_type"),
-                    date_opened=fields.get("date_opened"),
-                ),
+        issuer = (
+            fields.get("creditor_type") or fields.get("account_type") or ""
+        ).strip()
+        last4 = number[-4:] if number else ""
+        expected = EXPECTED_FIELDS.get(bureau, [])
+        filled_count = sum(1 for f in expected if _is_filled(fields.get(f)))
+        expected_count = len(expected)
+
+        if not any([last4, issuer, fields.get("date_opened")]):
+            dropped["missing_logical_key"] += 1
+            _dbg("drop reason=missing_logical_key issuer=%r last4=%r", issuer, last4)
+            continue
+
+        min_fields_threshold = getattr(FLAGS, "CASEBUILDER_MIN_FIELDS", 0)
+        if min_fields_threshold and filled_count < min_fields_threshold:
+            dropped["min_fields"] += 1
+            _dbg(
+                "drop reason=min_fields issuer=%r filled=%d/%d",
+                issuer,
+                filled_count,
+                expected_count,
             )
-            logical_key = compute_logical_account_key(temp_case)
-            account_id = get_or_create_logical_account_id(session_id, logical_key)
-            previous = _logical_ids.get((session_id, logical_key))
-            if previous and previous != account_id:
-                emit_metric(
-                    "stage1.logical_index.collisions",
-                    1.0,
+            continue
+        try:
+            if FLAGS.one_case_per_account_enabled:
+                temp_case = AccountCase(
+                    bureau=Bureau.Equifax,
+                    fields=AccountFields(
+                        account_number=number,
+                        creditor_type=fields.get("creditor_type"),
+                        account_type=fields.get("account_type"),
+                        date_opened=fields.get("date_opened"),
+                    ),
+                )
+                logical_key = compute_logical_account_key(temp_case)
+                account_id = get_or_create_logical_account_id(session_id, logical_key)
+                previous = _logical_ids.get((session_id, logical_key))
+                if previous and previous != account_id:
+                    emit_metric(
+                        "stage1.logical_index.collisions",
+                        1.0,
+                        session_id=session_id,
+                        logical_key=logical_key,
+                        ids=f"{previous},{account_id}",
+                    )
+                    logger.warning(
+                        "logical_index_collision %s",
+                        {
+                            "session_id": session_id,
+                            "logical_key": logical_key,
+                            "ids": [previous, account_id],
+                        },
+                    )
+                _logical_ids[(session_id, logical_key)] = account_id
+                upsert_account_fields(
                     session_id=session_id,
-                    logical_key=logical_key,
-                    ids=f"{previous},{account_id}",
+                    account_id=account_id,
+                    bureau=bureau,
+                    fields={"by_bureau": {_bureau_code(bureau): fields}},
                 )
-                logger.warning(
-                    "logical_index_collision %s",
-                    {
-                        "session_id": session_id,
-                        "logical_key": logical_key,
-                        "ids": [previous, account_id],
-                    },
+            else:
+                upsert_account_fields(
+                    session_id=session_id,
+                    account_id=account_id,
+                    bureau=bureau,
+                    fields=fields,
                 )
-            _logical_ids[(session_id, logical_key)] = account_id
-            upsert_account_fields(
-                session_id=session_id,
-                account_id=account_id,
-                bureau=bureau,
-                fields={"by_bureau": {_bureau_code(bureau): fields}},
+            upserted += 1
+        except Exception as e:  # pragma: no cover - diagnostic path
+            dropped["write_error"] += 1
+            logger.exception(
+                "CASEBUILDER: write_error issuer=%r last4=%r err=%s",
+                issuer,
+                last4,
+                e,
             )
-        else:
-            upsert_account_fields(
-                session_id=session_id,
-                account_id=account_id,
-                bureau=bureau,
-                fields=fields,
-            )
+            continue
+
         emit_metric(
             "stage1.by_bureau.present",
             1.0,
@@ -179,13 +225,18 @@ def extract(
                     bureau=None,
                     fields={"normalized": overlay},
                 )
-                emit_mapping_coverage_metrics(
-                    session_id, account_id, by_bureau, reg
-                )
+                emit_mapping_coverage_metrics(session_id, account_id, by_bureau, reg)
             except Exception:
                 logger.exception("normalized_overlay_failed")
         results.append({"account_id": account_id, "fields": fields})
     emit_session_field_coverage_summary(session_id=session_id)
+    logger.info(
+        "CASEBUILDER: summary session=%s input=%d upserted=%d dropped=%s",
+        session_id,
+        input_blocks,
+        upserted,
+        dropped,
+    )
     return results
 
 

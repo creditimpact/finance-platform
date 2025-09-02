@@ -13,3 +13,4 @@
 ### Removed
 - Remove deprecated shims and aliases in audit, letter rendering, goodwill letters, instructions, and report analysis modules.
 - Remove unused `logic.copy_documents` module.
+- Retired legacy materializer; Case Store is the sole source of truth.

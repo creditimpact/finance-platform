@@ -39,6 +39,7 @@ from backend.audit.audit import AuditLevel
 from backend.core.case_store.api import get_account_case, list_accounts
 from backend.core.case_store.models import AccountCase
 from backend.core.case_store.telemetry import emit
+from backend.core.config.flags import FLAGS
 from backend.core.email_sender import send_email_with_attachment
 from backend.core.letters.field_population import apply_field_fillers
 from backend.core.logic.compliance.constants import StrategistFailureReason
@@ -75,7 +76,6 @@ from backend.core.telemetry.stageE_summary import emit_stageE_summary
 from backend.core.utils.text_dump import dump_text as _dump_text
 from backend.core.utils.trace_io import write_json_trace, write_text_trace
 from backend.policy.policy_loader import load_rulebook
-from backend.core.config.flags import FLAGS
 from planner import plan_next_step
 
 logger = logging.getLogger(__name__)
@@ -1615,45 +1615,6 @@ def extract_problematic_accounts_from_report(
             session_id,
             len(summaries),
         )
-        # Optional assemble-only materializer behind flag
-        if os.getenv("MATERIALIZER_ENABLE", "").lower() in ("1", "true", "yes"):
-            try:
-                from backend.core.materialize.account_materializer import (
-                    materialize_accounts,
-                )
-                from backend.core.materialize.writer import write_account_full
-
-                # Assemble-only from structured sections (no derivations)
-                probs = [dict(a) for a in ssot_accounts]
-                accounts_full = materialize_accounts(session_id, sections, probs)
-                logger.info(
-                    "materializer_returned session=%s count=%d",
-                    session_id,
-                    len(accounts_full),
-                )
-                out_dir = os.path.join("traces", session_id, "accounts_full")
-                _ensure_dir(out_dir)
-                written = 0
-                for a in accounts_full:
-                    try:
-                        write_account_full(session_id, a)
-                        written += 1
-                    except Exception as _werr:
-                        logger.warning(
-                            "write_account_full_failed session=%s id=%s err=%s",
-                            session_id,
-                            a.get("account_id"),
-                            _werr,
-                        )
-                logger.info(
-                    "session_accounts_full_written session=%s accounts=%d",
-                    session_id,
-                    written,
-                )
-            except Exception as _mwerr:
-                logger.debug(
-                    "materializer_failed session=%s err=%s", session_id, _mwerr
-                )
     except Exception as _exc:
         logger.debug("session_artifacts_failed session=%s err=%s", session_id, _exc)
     for cat in (

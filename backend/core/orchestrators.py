@@ -6,7 +6,6 @@ steps of the credit repair workflow.  All core orchestration lives here;
 ``main.py`` only provides thin CLI wrappers.
 """
 
-import hashlib
 import json
 import logging
 import os
@@ -39,6 +38,9 @@ from backend.audit.audit import AuditLevel
 from backend.core.case_store.api import get_account_case, list_accounts
 from backend.core.case_store.errors import CaseStoreError
 from backend.core.case_store.models import AccountCase
+from backend.core.logic.report_analysis.keys import (
+    compute_logical_account_key as _compute_logical_account_key,
+)
 from backend.core.case_store.telemetry import emit
 from backend.core.config.flags import FLAGS
 from backend.core.email_sender import send_email_with_attachment
@@ -155,30 +157,17 @@ def resolve_cross_bureau(decisions: list[dict]) -> dict:
 
 
 def compute_logical_account_key(account_case: AccountCase) -> str:
-    """Return a stable, PII-safe key for cross-bureau grouping.
+    """Wrapper around the logical key generator for ``AccountCase`` objects."""
 
-    The key is derived from non-PII attributes in priority order:
-    1. Last 4 digits of the account number (hashed)
-    2. Creditor type or account type
-    3. Date opened in ISO format (or empty string)
-
-    These parts are concatenated and hashed using SHA-256. The first 16
-    hexadecimal characters of the resulting digest form the logical
-    account identifier.
-    """
-
-    last4_raw = (account_case.fields.account_number or "")[-4:]
-    last4_hash = (
-        hashlib.sha256(last4_raw.encode("utf-8")).hexdigest() if last4_raw else ""
-    )
-    creditor = (account_case.fields.creditor_type or "") or (
-        account_case.fields.account_type or ""
-    )
-    opened = account_case.fields.date_opened or ""
+    opened = account_case.fields.date_opened
     if isinstance(opened, (datetime, date)):
         opened = opened.isoformat()
-    base = "|".join([last4_hash, str(creditor), str(opened)])
-    return hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
+    return _compute_logical_account_key(
+        account_case.fields.creditor_type,
+        (account_case.fields.account_number or "")[-4:],
+        account_case.fields.account_type,
+        opened,
+    ) or ""
 
 
 def collect_stageA_problem_accounts(session_id: str) -> list[Mapping[str, Any]]:

@@ -10,9 +10,8 @@ from backend.core.case_store.api import (
     get_or_create_logical_account_id,
     upsert_account_fields,
 )
-from backend.core.case_store.models import AccountCase, AccountFields, Bureau
 from backend.core.config.flags import FLAGS
-from backend.core.orchestrators import compute_logical_account_key
+from backend.core.logic.report_analysis.keys import compute_logical_account_key
 from backend.core.metrics.field_coverage import (
     EXPECTED_FIELDS,
     emit_account_field_coverage,
@@ -124,7 +123,13 @@ def extract(
         filled_count = sum(1 for f in expected if _is_filled(fields.get(f)))
         expected_count = len(expected)
 
-        if not any([last4, issuer, fields.get("date_opened")]):
+        lk = compute_logical_account_key(
+            fields.get("creditor_type"),
+            last4 or None,
+            fields.get("account_type"),
+            fields.get("date_opened"),
+        )
+        if not lk:
             dropped["missing_logical_key"] += 1
             _dbg("drop reason=missing_logical_key issuer=%r last4=%r", issuer, last4)
             continue
@@ -141,16 +146,7 @@ def extract(
             continue
         try:
             if FLAGS.one_case_per_account_enabled:
-                temp_case = AccountCase(
-                    bureau=Bureau.Equifax,
-                    fields=AccountFields(
-                        account_number=number,
-                        creditor_type=fields.get("creditor_type"),
-                        account_type=fields.get("account_type"),
-                        date_opened=fields.get("date_opened"),
-                    ),
-                )
-                logical_key = compute_logical_account_key(temp_case)
+                logical_key = lk
                 account_id = get_or_create_logical_account_id(session_id, logical_key)
                 previous = _logical_ids.get((session_id, logical_key))
                 if previous and previous != account_id:

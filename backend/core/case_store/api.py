@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 from functools import wraps
+from uuid import uuid4
 
 from pydantic import ValidationError
 
@@ -33,6 +34,7 @@ __all__ = [
     "append_artifact",
     "set_tags",
     "list_accounts",
+    "get_or_create_logical_account_id",
 ]
 
 
@@ -313,3 +315,37 @@ def list_accounts(
 
     bureau_enum = _coerce_bureau(bureau)
     return [aid for aid, acc in case.accounts.items() if acc.bureau == bureau_enum]
+
+
+@_emit_on_error
+def get_or_create_logical_account_id(session_id: str, logical_key: str) -> str:
+    """Resolve or create an account ID for a logical key within a session."""
+
+    last_seen_version = 0
+    account_id = ""
+    for _ in range(MAX_RETRIES):
+        case = _load(session_id)
+        existing = case.summary.logical_index.get(logical_key)
+        if existing is not None:
+            return existing
+
+        original_version = case.version
+        account_id = uuid4().hex
+        case.accounts[account_id] = AccountCase(bureau=Bureau.Equifax)
+        case.summary.logical_index[logical_key] = account_id
+        case.version = original_version + 1
+
+        stored = _load(session_id)
+        last_seen_version = stored.version
+        if last_seen_version != original_version:
+            continue
+
+        save_session_case(case)
+        return account_id
+
+    raise CaseWriteConflict(
+        code=WRITE_CONFLICT,
+        message="Write conflict for logical index update",
+        account_id=account_id,
+        last_seen_version=last_seen_version,
+    )

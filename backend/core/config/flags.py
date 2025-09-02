@@ -13,6 +13,7 @@ def get_bool_env(name: str, default: bool = False) -> bool:
 SAFE_MERGE_ENABLED = get_bool_env("SAFE_MERGE_ENABLED", False)
 NORMALIZED_OVERLAY_ENABLED = get_bool_env("NORMALIZED_OVERLAY_ENABLED", False)
 CASE_FIRST_BUILD_ENABLED = get_bool_env("CASE_FIRST_BUILD_ENABLED", False)
+ONE_CASE_PER_ACCOUNT_ENABLED = get_bool_env("ONE_CASE_PER_ACCOUNT_ENABLED", False)
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,7 @@ class Flags:
     safe_merge_enabled: bool = SAFE_MERGE_ENABLED
     normalized_overlay_enabled: bool = NORMALIZED_OVERLAY_ENABLED
     case_first_build_enabled: bool = CASE_FIRST_BUILD_ENABLED
+    one_case_per_account_enabled: bool = ONE_CASE_PER_ACCOUNT_ENABLED
 
 
 FLAGS = Flags()

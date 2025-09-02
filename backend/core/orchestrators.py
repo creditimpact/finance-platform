@@ -232,6 +232,10 @@ def collect_stageA_problem_accounts(session_id: str) -> list[Mapping[str, Any]]:
 
         if FLAGS.one_case_per_account_enabled:
             by_bureau = getattr(case.fields, "by_bureau", {}) or {}
+            if not by_bureau:
+                from backend.core.compat.legacy_shim import build_by_bureau_shim
+
+                by_bureau = build_by_bureau_shim(session_id, acc_id)
             bureau_codes = list(by_bureau.keys()) or ["EX", "EQ", "TU"]
             for code in bureau_codes:
                 art = case.artifacts.get(f"stageA_detection.{code}")

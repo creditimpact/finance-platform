@@ -4,12 +4,15 @@ from typing import Any, Dict
 
 from backend.core.case_store.api import get_account_case
 from backend.core.config.flags import FLAGS
+from backend.core.compat.legacy_shim import build_by_bureau_shim
 
 
 def build_account_view(session_id: str, account_id: str) -> dict:
     case = get_account_case(session_id, account_id)
     fields_dict: Dict[str, Any] = case.fields.model_dump()
     by_bureau = fields_dict.get("by_bureau") or {}
+    if FLAGS.one_case_per_account_enabled and not by_bureau:
+        by_bureau = build_by_bureau_shim(session_id, account_id)
 
     view_fields: Dict[str, Any] = {"by_bureau": by_bureau}
     if "normalized" in fields_dict:

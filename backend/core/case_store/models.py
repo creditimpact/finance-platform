@@ -4,7 +4,7 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, confloat, conint
+from pydantic import BaseModel, Field, ConfigDict, confloat, conint
 
 
 class Bureau(str, Enum):
@@ -22,6 +22,8 @@ class Artifact(BaseModel):
     decision_source: Optional[str] = None
     debug: Optional[Dict[str, Any]] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = ConfigDict(extra="allow")
 
 
 class AccountFields(BaseModel):
@@ -49,6 +51,8 @@ class AccountFields(BaseModel):
     credit_limit: Optional[confloat(gt=-1e18, lt=1e18)] = None
     two_year_payment_history: Optional[str | List[str]] = None
     days_late_7y: Optional[str | List[str]] = None
+
+    model_config = ConfigDict(extra="allow")
 
 
 class AccountCase(BaseModel):

@@ -49,7 +49,8 @@ from backend.core.logic.letters.explanations_normalizer import (
 )
 from backend.core import orchestrators as orch
 from backend.core.case_store import api as cs_api
-from backend.core.case_store.errors import CaseStoreError
+from backend.core.case_store.errors import CaseStoreError, NOT_FOUND
+from backend.core.materialize.casestore_view import build_account_view
 import backend.config as config
 
 logger = logging.getLogger(__name__)
@@ -459,6 +460,22 @@ def create_app() -> Flask:
 # ---------------------------------------------------------------------------
 # Accounts API (reads analyzer-produced artifacts)
 # ---------------------------------------------------------------------------
+
+
+@api_bp.route("/api/account/<session_id>/<account_id>", methods=["GET"])
+def account_view_api(session_id: str, account_id: str):
+    if not session_id or not account_id:
+        return jsonify({"error": "invalid_request"}), 400
+    try:
+        view = build_account_view(session_id, account_id)
+    except CaseStoreError as exc:  # pragma: no cover - error path
+        if getattr(exc, "code", "") == NOT_FOUND:
+            return jsonify({"error": "account_not_found"}), 404
+        logger.exception(
+            "account_view_failed session=%s account=%s", session_id, account_id
+        )
+        return jsonify({"error": "internal_error"}), 500
+    return jsonify(view)
 
 
 @api_bp.route("/api/accounts/<session_id>", methods=["GET"])

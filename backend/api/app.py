@@ -44,6 +44,7 @@ from backend.api.tasks import (
 )
 from backend.api.ui_events import ui_event_bp
 from backend.core import orchestrators as orch
+from backend.core.config.flags import FLAGS
 from backend.core.case_store import api as cs_api
 from backend.core.case_store.errors import NOT_FOUND, CaseStoreError
 from backend.core.logic.letters.explanations_normalizer import (
@@ -485,73 +486,19 @@ def account_view_api(session_id: str, account_id: str):
 
 @api_bp.route("/api/accounts/<session_id>", methods=["GET"])
 def list_accounts_api(session_id: str):
-    """Return compact list of problem accounts for a session.
-
-    Prefers reading `sessions/<session_id>.json`. Falls back to
-    `session_manager.get_session(session_id)['result']` when file not found.
-    """
-
-    import json as _json
-    import os as _os
+    """Return compact list of problem accounts built from Case Store artifacts."""
 
     if not session_id:
         return jsonify({"ok": False, "message": "missing session_id"}), 400
 
-    sess_file = _os.path.join("sessions", f"{session_id}.json")
-    if _os.path.exists(sess_file):
-        try:
-            with open(sess_file, "r", encoding="utf-8") as f:
-                data = _json.load(f)
-            return jsonify(
-                {
-                    "ok": True,
-                    "session_id": session_id,
-                    "accounts": data.get("problem_accounts", []),
-                }
-            )
-        except Exception as exc:
-            logger.exception("read_session_summary_failed session=%s", session_id)
-            return jsonify({"ok": False, "message": str(exc)}), 500
+    try:
+        accounts = orch.collect_stageA_logical_accounts(session_id)
+    except CaseStoreError:
+        accounts = []
 
-    # Fallback for older runs: build summaries from session store
-    session = get_session(session_id)
-    if not session:
-        return jsonify({"ok": False, "message": "session not found"}), 404
-    result = session.get("result") or {}
-    problems = result.get("problem_accounts") or []
+    if FLAGS.case_first_build_required and not accounts:
+        return jsonify({"ok": True, "session_id": session_id, "accounts": []})
 
-    def _is_negative_status(s: str) -> bool:
-        t = (s or "").lower()
-        return (
-            "collection" in t
-            or "charge off" in t
-            or "charge-off" in t
-            or "chargeoff" in t
-            or "past due" in t
-            or any(
-                x in t
-                for x in ["late 30", "late 60", "late 90", "late 120", "late 150"]
-            )
-        )
-
-    accounts = []
-    for acc in problems:
-        name = acc.get("name") or acc.get("normalized_name")
-        acc_id = str(
-            acc.get("account_id") or acc.get("account_fingerprint") or (name or "")
-        )
-        ps = acc.get("payment_statuses") or {}
-        neg_bureaus = [str(b).lower() for b, v in ps.items() if _is_negative_status(v)]
-        accounts.append(
-            {
-                "account_id": acc_id,
-                "name": name,
-                "account_number_display": acc.get("account_number_display"),
-                "account_number_last4": acc.get("account_number_last4"),
-                "primary_issue": acc.get("primary_issue") or "unknown",
-                "negative_bureaus": neg_bureaus,
-            }
-        )
     return jsonify({"ok": True, "session_id": session_id, "accounts": accounts})
 
 

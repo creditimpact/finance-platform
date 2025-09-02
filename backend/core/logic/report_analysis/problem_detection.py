@@ -7,16 +7,11 @@ from typing import Any, Dict, List, Mapping
 import backend.config as config
 from backend.core.ai.adjudicator_client import call_adjudicator
 from backend.core.ai.models import AIAdjudicateRequest
-from backend.core.case_store.api import (
-    append_artifact,
-    get_account_case,
-    get_account_fields,
-    list_accounts,
-)
+from backend.core.case_store.api import append_artifact, get_account_case, list_accounts
+from backend.core.case_store.errors import CaseStoreError
 from backend.core.case_store.redaction import redact_for_ai
 from backend.core.case_store import telemetry
 from backend.core.logic.report_analysis.candidate_logger import log_stageA_candidates
-from backend.core.config.flags import FLAGS
 from backend.core.taxonomy.problem_taxonomy import compare_tiers, normalize_decision
 
 logger = logging.getLogger(__name__)
@@ -226,161 +221,15 @@ def run_stage_a(
     session_id: str,
     legacy_accounts: List[Mapping[str, Any]] | None = None,
 ) -> None:
-    legacy_map = {str(a.get("account_id")): dict(a) for a in legacy_accounts or []}
-
-    if not config.ENABLE_CASESTORE_STAGEA:
-        for acc in legacy_accounts or []:
-            evaluate_account_problem(acc)
-        return
-
     try:
         account_ids = list_accounts(session_id)  # type: ignore[operator]
     except Exception:
         logger.warning("stageA_list_accounts_failed session=%s", session_id)
         return
-    
-    if not FLAGS.one_case_per_account_enabled:
-        for acc_id in account_ids:
-            with telemetry.timed(
-                "stageA_casestore_eval",
-                session_id=session_id,
-                account_id=acc_id,
-                used_source="casestore",
-            ):
-                try:
-                    fields = get_account_fields(  # type: ignore[operator]
-                        session_id, acc_id, STAGEA_REQUIRED_FIELDS
-                    )
-                except Exception:
-                    logger.warning(
-                        "stageA_missing_account session=%s account=%s", session_id, acc_id
-                    )
-                    telemetry.emit(
-                        "stageA_missing_account",
-                        session_id=session_id,
-                        account_id=acc_id,
-                    )
-                    continue
 
-                bureau = str(fields.get("bureau") or acc_id.split("_")[-1])
-                if config.ENABLE_CANDIDATE_TOKEN_LOGGER:
-                    try:
-                        log_stageA_candidates(
-                            session_id,
-                            acc_id,
-                            bureau,
-                            "pre",
-                            dict(fields),
-                            decision={},
-                            meta={"source": "stageA"},
-                        )
-                    except Exception:
-                        logger.debug(
-                            "candidate_tokens_log_failed session=%s account=%s phase=pre",
-                            session_id,
-                            acc_id,
-                            exc_info=True,
-                        )
+    if not account_ids:
+        raise CaseStoreError("no_account_cases", "Stage-A requires cases; got 0")
 
-                t0 = time.perf_counter()
-                rules_verdict = evaluate_account_problem(dict(fields))
-                (
-                    ai_verdict,
-                    ai_called,
-                    ai_latency_ms,
-                    fallback_reason,
-                    ai_confidence,
-                ) = evaluate_with_optional_ai(
-                    session_id,
-                    acc_id,
-                    dict(fields),
-                    str(fields.get("doc_fingerprint") or ""),
-                    str(fields.get("account_fingerprint") or ""),
-                )
-                verdict = (
-                    ai_verdict
-                    if ai_verdict.get("decision_source") == "ai"
-                    else rules_verdict
-                )
-                verdict = normalize_decision(verdict)
-                total_latency = (time.perf_counter() - t0) * 1000.0
-                telemetry.emit(
-                    "stageA_eval",
-                    session_id=session_id,
-                    account_id=acc_id,
-                    bureau=bureau,
-                    decision_source=verdict.get("decision_source"),
-                    primary_issue=verdict.get("primary_issue"),
-                    tier=verdict.get("tier"),
-                    confidence=float(verdict.get("confidence", 0.0)),
-                    latency_ms=round(total_latency, 3),
-                    ai_latency_ms=ai_latency_ms if ai_called else None,
-                )
-                if ai_called and verdict.get("decision_source") != "ai":
-                    telemetry.emit(
-                        "stageA_fallback",
-                        session_id=session_id,
-                        account_id=acc_id,
-                        bureau=bureau,
-                        reason=fallback_reason,
-                        ai_confidence=ai_confidence,
-                        latency_ms=ai_latency_ms,
-                    )
-
-                if config.ENABLE_CANDIDATE_TOKEN_LOGGER:
-                    try:
-                        log_stageA_candidates(
-                            session_id,
-                            acc_id,
-                            bureau,
-                            "post",
-                            dict(fields),
-                            verdict,
-                            meta={"source": "stageA"},
-                        )
-                    except Exception:
-                        logger.debug(
-                            "candidate_tokens_log_failed session=%s account=%s phase=post",
-                            session_id,
-                            acc_id,
-                            exc_info=True,
-                        )
-                debug_data = dict(verdict.get("debug", {}))
-                debug_data["source"] = "casestore-stageA"
-                payload = {
-                    "primary_issue": verdict.get("primary_issue", "unknown"),
-                    "issue_types": verdict.get("issue_types", []),
-                    "problem_reasons": verdict.get("problem_reasons", []),
-                    "confidence": verdict.get("confidence", 0.0),
-                    "tier": str(verdict.get("tier", NEUTRAL_TIER)),
-                    "decision_source": verdict.get("decision_source", "rules"),
-                    "debug": debug_data,
-                }
-                try:
-                    append_artifact(  # type: ignore[operator]
-                        session_id,
-                        acc_id,
-                        "stageA_detection",
-                        payload,
-                        attach_provenance={
-                            "module": "problem_detection",
-                            "algo": "rules_v1",
-                        },
-                    )
-                except Exception:
-                    logger.warning(
-                        "stageA_append_failed session=%s account=%s", session_id, acc_id
-                    )
-                    telemetry.emit(
-                        "stageA_append_failed",
-                        session_id=session_id,
-                        account_id=acc_id,
-                    )
-                    continue
-
-        return
-
-    # One-case-per-account enabled: evaluate per bureau
     for acc_id in account_ids:
         with telemetry.timed(
             "stageA_casestore_eval",

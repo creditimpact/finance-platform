@@ -37,6 +37,7 @@ from backend.api.session_manager import update_session
 from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLevel
 from backend.core.case_store.api import get_account_case, list_accounts
+from backend.core.case_store.errors import CaseStoreError
 from backend.core.case_store.models import AccountCase
 from backend.core.case_store.telemetry import emit
 from backend.core.config.flags import FLAGS
@@ -599,6 +600,16 @@ def analyze_credit_report(
         sections.get("session_id"),
         req_id,
     )
+    if FLAGS.case_first_build_required:
+        try:
+            count = len(list_accounts(session_id))  # type: ignore[operator]
+        except Exception:
+            count = 0
+        if count == 0:
+            raise CaseStoreError(
+                "case_build_failed",
+                "No account cases created; aborting Stage-A/UI.",
+            )
     _emit_stageA_events(session_id, sections.get("problem_accounts", []))  # noqa: F821
     if (
         os.getenv("DEFER_ASSIGN_ISSUE_TYPES") == "1"
@@ -1340,6 +1351,16 @@ def extract_problematic_accounts_from_report(
         sections.get("session_id"),
         req_id,
     )
+    if FLAGS.case_first_build_required:
+        try:
+            count = len(list_accounts(session_id))  # type: ignore[operator]
+        except Exception:
+            count = 0
+        if count == 0:
+            raise CaseStoreError(
+                "case_build_failed",
+                "No account cases created; aborting Stage-A/UI.",
+            )
 
     force_parser = os.getenv("ANALYSIS_FORCE_PARSER_ONLY") == "1"
     if force_parser or sections.get("ai_failed"):

@@ -17,6 +17,7 @@ from backend.core.metrics.field_coverage import (
     emit_account_field_coverage,
     emit_session_field_coverage_summary,
 )
+from backend.core.metrics import emit_metric
 
 from .tokens import ACCOUNT_FIELD_MAP, ACCOUNT_RE, parse_amount, parse_date
 
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 
 _BUREAU_CODES = {"TransUnion": "TU", "Experian": "EX", "Equifax": "EQ"}
+
+_mode_emitted: set[str] = set()
+_logical_ids: Dict[Tuple[str, str], str] = {}
 
 
 def _bureau_code(name: str) -> str:
@@ -90,6 +94,15 @@ def extract(
 
     blocks = _split_blocks(lines)
     results: List[Dict[str, object]] = []
+
+    if session_id not in _mode_emitted:
+        emit_metric(
+            "stage1.per_account_mode.enabled",
+            1.0 if FLAGS.one_case_per_account_enabled else 0.0,
+            session_id=session_id,
+        )
+        _mode_emitted.add(session_id)
+
     for block in blocks:
         account_id, fields, number = _parse_block(block)
         if FLAGS.one_case_per_account_enabled:
@@ -104,6 +117,24 @@ def extract(
             )
             logical_key = compute_logical_account_key(temp_case)
             account_id = get_or_create_logical_account_id(session_id, logical_key)
+            previous = _logical_ids.get((session_id, logical_key))
+            if previous and previous != account_id:
+                emit_metric(
+                    "stage1.logical_index.collisions",
+                    1.0,
+                    session_id=session_id,
+                    logical_key=logical_key,
+                    ids=f"{previous},{account_id}",
+                )
+                logger.warning(
+                    "logical_index_collision %s",
+                    {
+                        "session_id": session_id,
+                        "logical_key": logical_key,
+                        "ids": [previous, account_id],
+                    },
+                )
+            _logical_ids[(session_id, logical_key)] = account_id
             upsert_account_fields(
                 session_id=session_id,
                 account_id=account_id,
@@ -117,6 +148,13 @@ def extract(
                 bureau=bureau,
                 fields=fields,
             )
+        emit_metric(
+            "stage1.by_bureau.present",
+            1.0,
+            session_id=session_id,
+            account_id=account_id,
+            bureau=_bureau_code(bureau),
+        )
         emit_account_field_coverage(
             session_id=session_id,
             account_id=account_id,

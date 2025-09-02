@@ -1,6 +1,7 @@
 # Finance Platform
 
 This project ingests a PDF credit report and optional email, analyzes the report, highlights issues with explanations, builds a strategy, and generates guardrail-compliant letters as HTML/PDF alongside audit logs.
+Legacy materializer has been removed; use `/api/account/<session>/<account_id>` for per-account case views.
 
 ## Project Structure
 

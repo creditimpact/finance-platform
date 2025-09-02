@@ -19,17 +19,16 @@ import uuid
 from collections import defaultdict
 from pathlib import Path
 
-from jsonschema import Draft7Validator, ValidationError
-
 from flask import Blueprint, Flask, jsonify, redirect, request, url_for
 from flask_cors import CORS
+from jsonschema import Draft7Validator, ValidationError
 from werkzeug.utils import secure_filename
 
+import backend.config as config
 from backend.analytics.batch_runner import BatchFilters, BatchRunner
 from backend.api.admin import admin_bp
 from backend.api.ai_endpoints import ai_bp
 from backend.api.auth import require_api_key_or_role
-from backend.api.ui_events import ui_event_bp
 from backend.api.config import ENABLE_BATCH_RUNNER, get_app_config
 from backend.api.session_manager import (
     get_session,
@@ -43,15 +42,15 @@ from backend.api.tasks import (
     extract_problematic_accounts,
     smoke_task,
 )
+from backend.api.ui_events import ui_event_bp
+from backend.core import orchestrators as orch
+from backend.core.case_store import api as cs_api
+from backend.core.case_store.errors import NOT_FOUND, CaseStoreError
 from backend.core.logic.letters.explanations_normalizer import (
     extract_structured,
     sanitize,
 )
-from backend.core import orchestrators as orch
-from backend.core.case_store import api as cs_api
-from backend.core.case_store.errors import CaseStoreError, NOT_FOUND
 from backend.core.materialize.casestore_view import build_account_view
-import backend.config as config
 
 logger = logging.getLogger(__name__)
 
@@ -185,26 +184,30 @@ def start_process():
                 valid_accounts.append(acc)
             except ValidationError:
                 logger.warning(
-                    "invalid_problem_account session=%s account=%s", session_id, acc,
+                    "invalid_problem_account session=%s account=%s",
+                    session_id,
+                    acc,
                     exc_info=True,
                 )
         problem_accounts = valid_accounts
         if config.API_INCLUDE_DECISION_META:
             for acc in problem_accounts:
-                meta = orch.get_stageA_decision_meta(session_id, acc.get('account_id'))
+                meta = orch.get_stageA_decision_meta(session_id, acc.get("account_id"))
                 if meta is None:
                     meta = {
-                        'decision_source': acc.get('decision_source', 'rules'),
-                        'confidence': acc.get('confidence', 0.0),
-                        'tier': acc.get('tier', 'none'),
+                        "decision_source": acc.get("decision_source", "rules"),
+                        "confidence": acc.get("confidence", 0.0),
+                        "tier": acc.get("tier", "none"),
                     }
-                    fields_used = acc.get('fields_used')
+                    fields_used = acc.get("fields_used")
                     if fields_used:
-                        meta['fields_used'] = fields_used
-                fields_used = meta.get('fields_used')
+                        meta["fields_used"] = fields_used
+                fields_used = meta.get("fields_used")
                 if fields_used:
-                    meta['fields_used'] = list(fields_used)[: config.API_DECISION_META_MAX_FIELDS_USED]
-                acc['decision_meta'] = meta
+                    meta["fields_used"] = list(fields_used)[
+                        : config.API_DECISION_META_MAX_FIELDS_USED
+                    ]
+                acc["decision_meta"] = meta
 
         legacy = request.args.get("legacy", "").lower() in ("1", "true", "yes")
 
@@ -319,7 +322,9 @@ def api_result():
         return jsonify({"ok": True, "status": status}), 200
     if status == "error":
         return (
-            jsonify({"ok": False, "status": "error", "message": session.get("error") or ""}),
+            jsonify(
+                {"ok": False, "status": "error", "message": session.get("error") or ""}
+            ),
             200,
         )
 
@@ -487,7 +492,6 @@ def list_accounts_api(session_id: str):
     """
 
     import json as _json
-    import glob as _glob
     import os as _os
 
     if not session_id:
@@ -498,7 +502,13 @@ def list_accounts_api(session_id: str):
         try:
             with open(sess_file, "r", encoding="utf-8") as f:
                 data = _json.load(f)
-            return jsonify({"ok": True, "session_id": session_id, "accounts": data.get("problem_accounts", [])})
+            return jsonify(
+                {
+                    "ok": True,
+                    "session_id": session_id,
+                    "accounts": data.get("problem_accounts", []),
+                }
+            )
         except Exception as exc:
             logger.exception("read_session_summary_failed session=%s", session_id)
             return jsonify({"ok": False, "message": str(exc)}), 500
@@ -518,13 +528,18 @@ def list_accounts_api(session_id: str):
             or "charge-off" in t
             or "chargeoff" in t
             or "past due" in t
-            or any(x in t for x in ["late 30", "late 60", "late 90", "late 120", "late 150"])
+            or any(
+                x in t
+                for x in ["late 30", "late 60", "late 90", "late 120", "late 150"]
+            )
         )
 
     accounts = []
     for acc in problems:
         name = acc.get("name") or acc.get("normalized_name")
-        acc_id = str(acc.get("account_id") or acc.get("account_fingerprint") or (name or ""))
+        acc_id = str(
+            acc.get("account_id") or acc.get("account_fingerprint") or (name or "")
+        )
         ps = acc.get("payment_statuses") or {}
         neg_bureaus = [str(b).lower() for b, v in ps.items() if _is_negative_status(v)]
         accounts.append(
@@ -538,64 +553,6 @@ def list_accounts_api(session_id: str):
             }
         )
     return jsonify({"ok": True, "session_id": session_id, "accounts": accounts})
-
-
-@api_bp.route("/api/accounts/<session_id>/<account_id>", methods=["GET"])
-def get_account_api(session_id: str, account_id: str):
-    """Return full account JSON from analyzer artifacts.
-
-    Tries `traces/<session_id>/accounts/<account_id>-*.json`. Falls back to
-    returning thawed/redacted doc from `session['result']['problem_accounts']`.
-    """
-
-    import json as _json
-    import glob as _glob
-    import os as _os
-
-    if not session_id or not account_id:
-        return jsonify({"ok": False, "message": "missing session_id or account_id"}), 400
-
-    # Prefer accounts_full; then legacy accounts dir
-    pattern_full = _os.path.join("traces", session_id, "accounts_full", f"{account_id}-*.json")
-    matches = _glob.glob(pattern_full)
-    if not matches:
-        # Fallback: account_id might be the slug suffix
-        pattern_suffix = _os.path.join("traces", session_id, "accounts_full", f"*-{account_id}.json")
-        matches = _glob.glob(pattern_suffix)
-        if matches:
-            logger.info(
-                "accounts_full_suffix_match session=%s account_id=%s file=%s",
-                session_id,
-                account_id,
-                matches[0],
-            )
-    if not matches:
-        pattern_legacy = _os.path.join("traces", session_id, "accounts", f"{account_id}-*.json")
-        matches = _glob.glob(pattern_legacy)
-    if matches:
-        try:
-            with open(matches[0], "r", encoding="utf-8") as f:
-                acc = _json.load(f)
-            return jsonify({"ok": True, "session_id": session_id, "account_id": account_id, "account": acc})
-        except Exception as exc:
-            logger.exception("read_account_file_failed session=%s id=%s", session_id, account_id)
-            return jsonify({"ok": False, "message": str(exc)}), 500
-
-    # Fallback for older runs
-    session = get_session(session_id)
-    if not session:
-        return jsonify({"ok": False, "message": "session not found"}), 404
-    result = session.get("result") or {}
-    problems = result.get("problem_accounts") or []
-    for acc in problems:
-        if str(acc.get("account_id") or "") == account_id:
-            # Redact raw numbers
-            doc = dict(acc)
-            for k in ("account_number", "account_number_raw", "account_number_masked", "masked_account"):
-                doc.pop(k, None)
-            return jsonify({"ok": True, "session_id": session_id, "account_id": account_id, "account": doc})
-
-    return jsonify({"ok": False, "message": "account not found"}), 404
 
 
 if __name__ == "__main__":  # pragma: no cover - manual execution

@@ -1,0 +1,25 @@
+import os
+from dataclasses import dataclass
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def get_bool_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in _TRUTHY
+
+SAFE_MERGE_ENABLED = get_bool_env("SAFE_MERGE_ENABLED", False)
+NORMALIZED_OVERLAY_ENABLED = get_bool_env("NORMALIZED_OVERLAY_ENABLED", False)
+CASE_FIRST_BUILD_ENABLED = get_bool_env("CASE_FIRST_BUILD_ENABLED", False)
+
+
+@dataclass(frozen=True)
+class Flags:
+    safe_merge_enabled: bool = SAFE_MERGE_ENABLED
+    normalized_overlay_enabled: bool = NORMALIZED_OVERLAY_ENABLED
+    case_first_build_enabled: bool = CASE_FIRST_BUILD_ENABLED
+
+
+FLAGS = Flags()

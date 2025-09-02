@@ -92,6 +92,7 @@ class Summary(BaseModel):
     payments: Optional[confloat(gt=-1e18, lt=1e18)] = None
     public_records: conint(ge=0) = 0
     inquiries_2y: conint(ge=0) = 0
+    logical_index: Dict[str, str] = Field(default_factory=dict)
 
 
 class SessionCase(BaseModel):

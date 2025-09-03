@@ -76,6 +76,7 @@ from backend.core.pdf.extract_text import extract_text as _debug_extract_text
 from backend.core.services.ai_client import AIClient, _StubAIClient, get_ai_client
 from backend.core.taxonomy.problem_taxonomy import compare_tiers, normalize_decision
 from backend.core.telemetry.stageE_summary import emit_stageE_summary
+from backend.core.telemetry import metrics
 from backend.core.utils.text_dump import dump_text as _dump_text
 from backend.core.utils.trace_io import write_json_trace, write_text_trace
 from backend.policy.policy_loader import load_rulebook
@@ -1355,6 +1356,7 @@ def extract_problematic_accounts_from_report(
     except Exception:
         post = -1
     logger.debug("CASEBUILDER: post-count=%s", post)
+    metrics.gauge("casestore.count", post, {"session_id": session_id})
     if post == 0:
         logger.error("CASEBUILDER: produced 0 cases (will abort)")
     if FLAGS.case_first_build_required:

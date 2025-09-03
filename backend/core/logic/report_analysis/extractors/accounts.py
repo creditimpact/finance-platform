@@ -19,6 +19,7 @@ from backend.core.metrics.field_coverage import (
     _is_filled,
 )
 from backend.core.metrics import emit_metric
+from backend.core.telemetry import metrics
 
 from .tokens import ACCOUNT_FIELD_MAP, ACCOUNT_RE, parse_amount, parse_date
 
@@ -114,6 +115,7 @@ def extract(
 
     for block in blocks:
         input_blocks += 1
+        metrics.increment("casebuilder.input_blocks", tags={"session_id": session_id})
         account_id, fields, number = _parse_block(block)
         issuer = (
             fields.get("creditor_type") or fields.get("account_type") or ""
@@ -132,6 +134,10 @@ def extract(
         if not lk:
             dropped["missing_logical_key"] += 1
             _dbg("drop reason=missing_logical_key issuer=%r last4=%r", issuer, last4)
+            metrics.increment(
+                "casebuilder.dropped",
+                tags={"reason": "missing_logical_key", "session_id": session_id},
+            )
             continue
 
         min_fields_threshold = getattr(FLAGS, "CASEBUILDER_MIN_FIELDS", 0)
@@ -142,6 +148,10 @@ def extract(
                 issuer,
                 filled_count,
                 expected_count,
+            )
+            metrics.increment(
+                "casebuilder.dropped",
+                tags={"reason": "min_fields", "session_id": session_id},
             )
             continue
         try:
@@ -164,7 +174,7 @@ def extract(
                             "logical_key": logical_key,
                             "ids": [previous, account_id],
                         },
-                    )
+                )
                 _logical_ids[(session_id, logical_key)] = account_id
                 upsert_account_fields(
                     session_id=session_id,
@@ -180,6 +190,9 @@ def extract(
                     fields=fields,
                 )
             upserted += 1
+            metrics.increment(
+                "casebuilder.upserted", tags={"session_id": session_id}
+            )
         except Exception as e:  # pragma: no cover - diagnostic path
             dropped["write_error"] += 1
             logger.exception(
@@ -187,6 +200,10 @@ def extract(
                 issuer,
                 last4,
                 e,
+            )
+            metrics.increment(
+                "casebuilder.dropped",
+                tags={"reason": "write_error", "session_id": session_id},
             )
             continue
 
@@ -233,6 +250,22 @@ def extract(
         upserted,
         dropped,
     )
+    metrics.gauge(
+        "casebuilder.input_blocks.total",
+        input_blocks,
+        {"session_id": session_id},
+    )
+    metrics.gauge(
+        "casebuilder.upserted.total",
+        upserted,
+        {"session_id": session_id},
+    )
+    for reason, count in dropped.items():
+        metrics.gauge(
+            "casebuilder.dropped.total",
+            count,
+            {"reason": reason, "session_id": session_id},
+        )
     return results
 
 

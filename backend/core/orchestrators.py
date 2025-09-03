@@ -1342,12 +1342,14 @@ def extract_problematic_accounts_from_report(
         sections.get("session_id"),
         req_id,
     )
-    logger.debug("CASEBUILDER: starting session_id=%s", session_id)
+    if FLAGS.casebuilder_debug:
+        logger.debug("CASEBUILDER: starting session_id=%s", session_id)
     try:
         pre = len(list_accounts(session_id))  # type: ignore[operator]
     except Exception:
         pre = -1
-    logger.debug("CASEBUILDER: pre-count=%s", pre)
+    if FLAGS.casebuilder_debug:
+        logger.debug("CASEBUILDER: pre-count=%s", pre)
 
     build_account_cases(session_id)
 
@@ -1355,7 +1357,8 @@ def extract_problematic_accounts_from_report(
         post = len(list_accounts(session_id))  # type: ignore[operator]
     except Exception:
         post = -1
-    logger.debug("CASEBUILDER: post-count=%s", post)
+    if FLAGS.casebuilder_debug:
+        logger.debug("CASEBUILDER: post-count=%s", post)
     metrics.gauge("casestore.count", post, {"session_id": session_id})
     if post == 0:
         logger.error("CASEBUILDER: produced 0 cases (will abort)")

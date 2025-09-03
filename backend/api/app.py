@@ -44,9 +44,9 @@ from backend.api.tasks import (
 )
 from backend.api.ui_events import ui_event_bp
 from backend.core import orchestrators as orch
-from backend.core.config.flags import FLAGS
 from backend.core.case_store import api as cs_api
 from backend.core.case_store.errors import NOT_FOUND, CaseStoreError
+from backend.core.config.flags import FLAGS
 from backend.core.logic.letters.explanations_normalizer import (
     extract_structured,
     sanitize,
@@ -500,6 +500,52 @@ def list_accounts_api(session_id: str):
         return jsonify({"ok": True, "session_id": session_id, "accounts": []})
 
     return jsonify({"ok": True, "session_id": session_id, "accounts": accounts})
+
+
+@api_bp.route("/api/cases/<session_id>", methods=["GET"])
+def api_list_cases(session_id: str):
+    try:
+        session_case = cs_api.load_session_case(session_id)
+    except Exception as e:  # pragma: no cover - debug endpoint
+        return (
+            jsonify({"ok": False, "session_id": session_id, "error": str(e)}),
+            200,
+        )
+
+    accounts = session_case.accounts or {}
+    logical_index = session_case.summary.logical_index or {}
+    reverse_index = {aid: lk for lk, aid in logical_index.items()}
+    items = []
+    for aid, account in accounts.items():
+        issuer = None
+        logical_key = reverse_index.get(aid)
+        try:
+            by_bureau = getattr(account.fields, "by_bureau", {}) or {}
+            for bureau_code in ("EX", "EQ", "TU"):
+                bureau_obj = by_bureau.get(bureau_code) or {}
+                issuer = (
+                    issuer
+                    or bureau_obj.get("issuer")
+                    or bureau_obj.get("creditor_name")
+                )
+        except Exception:
+            pass
+        items.append({"case_id": aid, "issuer": issuer, "logical_key": logical_key})
+
+    return jsonify({"ok": True, "session_id": session_id, "cases": items})
+
+
+@api_bp.route("/api/session/<session_id>/logical_index", methods=["GET"])
+def api_logical_index(session_id: str):
+    try:
+        session_case = cs_api.load_session_case(session_id)
+        idx = session_case.summary.logical_index or {}
+        return jsonify({"ok": True, "session_id": session_id, "logical_index": idx})
+    except Exception as e:  # pragma: no cover - debug endpoint
+        return (
+            jsonify({"ok": False, "session_id": session_id, "error": str(e)}),
+            200,
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover - manual execution

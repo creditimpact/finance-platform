@@ -33,7 +33,7 @@ _logical_ids: Dict[Tuple[str, str], str] = {}
 
 
 def _dbg(msg: str, *args: object) -> None:
-    if getattr(FLAGS, "CASEBUILDER_DEBUG", True):
+    if FLAGS.casebuilder_debug:
         logger.debug("CASEBUILDER: " + msg, *args)
 
 

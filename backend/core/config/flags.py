@@ -16,6 +16,7 @@ CASE_FIRST_BUILD_ENABLED = get_bool_env("CASE_FIRST_BUILD_ENABLED", False)
 ONE_CASE_PER_ACCOUNT_ENABLED = get_bool_env("ONE_CASE_PER_ACCOUNT_ENABLED", False)
 CASE_FIRST_BUILD_REQUIRED = get_bool_env("CASE_FIRST_BUILD_REQUIRED", True)
 DISABLE_PARSER_UI_SUMMARY = get_bool_env("DISABLE_PARSER_UI_SUMMARY", True)
+METRICS_ENABLED = get_bool_env("METRICS_ENABLED", True)
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class Flags:
     one_case_per_account_enabled: bool = ONE_CASE_PER_ACCOUNT_ENABLED
     case_first_build_required: bool = CASE_FIRST_BUILD_REQUIRED
     disable_parser_ui_summary: bool = DISABLE_PARSER_UI_SUMMARY
+    metrics_enabled: bool = METRICS_ENABLED
 
 
 FLAGS = Flags()

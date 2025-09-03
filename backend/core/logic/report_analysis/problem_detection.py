@@ -11,6 +11,7 @@ from backend.core.case_store.api import append_artifact, get_account_case, list_
 from backend.core.case_store.errors import CaseStoreError
 from backend.core.case_store.redaction import redact_for_ai
 from backend.core.case_store import telemetry
+from backend.core.telemetry import metrics
 from backend.core.logic.report_analysis.candidate_logger import log_stageA_candidates
 from backend.core.taxonomy.problem_taxonomy import compare_tiers, normalize_decision
 
@@ -253,6 +254,9 @@ def run_stage_a(
             by_bureau = getattr(case.fields, "by_bureau", {}) or {}
             decisions: List[dict] = []
             for bureau, bureau_fields in by_bureau.items():
+                metrics.increment(
+                    "stageA.run.count", tags={"bureau": bureau}
+                )
                 try:
                     telemetry.emit(
                         "stageA.bureau_evaluations",

@@ -38,16 +38,17 @@ from backend.audit.audit import AuditLevel
 from backend.core.case_store.api import get_account_case, list_accounts
 from backend.core.case_store.errors import CaseStoreError
 from backend.core.case_store.models import AccountCase
-from backend.core.logic.report_analysis.keys import (
-    compute_logical_account_key as _compute_logical_account_key,
-)
 from backend.core.case_store.telemetry import emit
 from backend.core.config.flags import FLAGS
 from backend.core.email_sender import send_email_with_attachment
 from backend.core.letters.field_population import apply_field_fillers
 from backend.core.logic.compliance.constants import StrategistFailureReason
+from backend.core.logic.report_analysis.block_exporter import export_account_blocks
 from backend.core.logic.report_analysis.extract_info import (
     extract_bureau_info_column_refined,
+)
+from backend.core.logic.report_analysis.keys import (
+    compute_logical_account_key as _compute_logical_account_key,
 )
 from backend.core.logic.strategy.normalizer_2_5 import normalize_and_tag
 from backend.core.logic.strategy.summary_classifier import (
@@ -75,8 +76,8 @@ from backend.core.models import (
 from backend.core.pdf.extract_text import extract_text as _debug_extract_text
 from backend.core.services.ai_client import AIClient, _StubAIClient, get_ai_client
 from backend.core.taxonomy.problem_taxonomy import compare_tiers, normalize_decision
-from backend.core.telemetry.stageE_summary import emit_stageE_summary
 from backend.core.telemetry import metrics
+from backend.core.telemetry.stageE_summary import emit_stageE_summary
 from backend.core.utils.text_dump import dump_text as _dump_text
 from backend.core.utils.trace_io import write_json_trace, write_text_trace
 from backend.policy.policy_loader import load_rulebook
@@ -163,12 +164,15 @@ def compute_logical_account_key(account_case: AccountCase) -> str:
     opened = account_case.fields.date_opened
     if isinstance(opened, (datetime, date)):
         opened = opened.isoformat()
-    return _compute_logical_account_key(
-        account_case.fields.creditor_type,
-        (account_case.fields.account_number or "")[-4:],
-        account_case.fields.account_type,
-        opened,
-    ) or ""
+    return (
+        _compute_logical_account_key(
+            account_case.fields.creditor_type,
+            (account_case.fields.account_number or "")[-4:],
+            account_case.fields.account_type,
+            opened,
+        )
+        or ""
+    )
 
 
 def collect_stageA_problem_accounts(session_id: str) -> list[Mapping[str, Any]]:
@@ -565,6 +569,10 @@ def analyze_credit_report(
     update_session(session_id, file_path=str(pdf_path))
     if not is_safe_pdf(pdf_path):
         raise ValueError("Uploaded file failed PDF safety checks.")
+
+    # ייצוא הבלוקים חייב להיות שלב ראשון (fail-fast)
+    export_account_blocks(session_id, pdf_path)
+    os.environ["EXPORT_ACCOUNT_BLOCKS"] = "0"
 
     print("[INFO] Extracting client info from report...")
     client_personal_info = extract_bureau_info_column_refined(
@@ -1158,6 +1166,7 @@ def run_credit_repair_process(
             structured_map, raw_map, client_info, audit, ai_client
         )
         rulebook = load_rulebook()
+        os.environ["EXPORT_ACCOUNT_BLOCKS"] = "0"
         pdf_path, sections, bureau_data, today_folder = analyze_credit_report(
             proofs_files, session_id, client_info, audit, log_messages, ai_client
         )
@@ -1300,7 +1309,9 @@ def extract_problematic_accounts_from_report(
     from backend.core.logic.report_analysis.analyze_report import (
         analyze_credit_report as analyze_report_logic,
     )
-    from backend.core.logic.report_analysis.extractors.accounts import build_account_cases
+    from backend.core.logic.report_analysis.extractors.accounts import (
+        build_account_cases,
+    )
 
     session_id = session_id or "session"
     pdf_path = move_uploaded_file(Path(file_path), session_id)

@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from backend.config import CASESTORE_REDACT_BEFORE_STORE
 from backend.core.config.flags import FLAGS
+from backend.core.telemetry import metrics
 
 from .errors import (
     CaseStoreError,
@@ -320,6 +321,11 @@ def list_accounts(
 @_emit_on_error
 def get_or_create_logical_account_id(session_id: str, logical_key: str) -> str:
     """Resolve or create an account ID for a logical key within a session."""
+    if not FLAGS.one_case_per_account_enabled:
+        metrics.increment(
+            "casebuilder.dedup.disabled_session", tags={"session_id": session_id}
+        )
+        return uuid4().hex
 
     last_seen_version = 0
     account_id = ""

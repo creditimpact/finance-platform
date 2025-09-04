@@ -97,8 +97,28 @@ TIER2_KEYWORDS = _raw_t2 if ENABLE_TIER2_KEYWORDS else {}
 TIER3_KEYWORDS = _raw_t3 if ENABLE_TIER3_KEYWORDS else {}
 
 
+def _default_casestore_dir() -> str:
+    """Determine the Case Store directory.
+
+    Preference is given to explicit environment variables ``CASESTORE_DIR`` or
+    ``CASE_STORE_DIR``.  When neither is provided, we fall back to a
+    project-relative ``.cases`` directory to ensure cross-platform portability.
+    The directory is created on demand.
+    """
+
+    env_dir = os.getenv("CASESTORE_DIR") or os.getenv("CASE_STORE_DIR")
+    if env_dir:
+        base = Path(env_dir)
+    else:
+        # ``config.py`` lives under ``backend/``; its grandparent is the
+        # repository root.
+        base = Path(__file__).resolve().parent.parent / ".cases"
+    base.mkdir(parents=True, exist_ok=True)
+    return base.as_posix()
+
+
 # Case Store configuration
-CASESTORE_DIR = env_str("CASESTORE_DIR", "/var/app/run/cases")
+CASESTORE_DIR = _default_casestore_dir()
 CASESTORE_REDACT_BEFORE_STORE = env_bool("CASESTORE_REDACT_BEFORE_STORE", True)
 CASESTORE_ATOMIC_WRITES = env_bool("CASESTORE_ATOMIC_WRITES", True)
 CASESTORE_VALIDATE_ON_LOAD = env_bool("CASESTORE_VALIDATE_ON_LOAD", True)

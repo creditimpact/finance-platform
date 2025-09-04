@@ -21,7 +21,13 @@ from backend.core.metrics.field_coverage import (
 from backend.core.metrics import emit_metric
 from backend.core.telemetry import metrics
 
-from .tokens import ACCOUNT_FIELD_MAP, ACCOUNT_RE, parse_amount, parse_date
+from .tokens import (
+    ACCOUNT_FIELD_MAP,
+    ACCOUNT_RE,
+    normalize_issuer,
+    parse_amount,
+    parse_date,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,31 +50,47 @@ def _bureau_code(name: str) -> str:
 def _split_blocks(lines: List[str]) -> List[List[str]]:
     blocks: List[List[str]] = []
     current: List[str] = []
+    prev_non_empty = ""
     for line in lines:
         if ACCOUNT_RE.search(line):
             if current:
                 blocks.append(current)
-            current = [line]
+            current = []
+            if prev_non_empty:
+                current.append(f"__ISSUER_HEADING__: {prev_non_empty.strip()}")
+            current.append(line)
         else:
             if line.strip() == "" and current:
                 blocks.append(current)
                 current = []
-            else:
+            elif current:
                 current.append(line)
+        if line.strip():
+            prev_non_empty = line
     if current:
         blocks.append(current)
     return blocks
 
 
 def _parse_block(block: List[str]) -> Tuple[str, Dict[str, object], str]:
-    first = block[0]
-    m = ACCOUNT_RE.search(first)
+    account_idx = 0
+    m = ACCOUNT_RE.search(block[account_idx])
+    if not m and len(block) > 1:
+        account_idx = 1
+        m = ACCOUNT_RE.search(block[account_idx])
     number = m.group(1) if m else ""
     account_id = (
         number[-4:] if number else f"synthetic-{hash(' '.join(block)) & 0xffff:x}"
     )
     fields: Dict[str, object] = {}
-    for line in block[1:]:
+    for idx, line in enumerate(block):
+        if idx == account_idx:
+            continue
+        if line.startswith("__ISSUER_HEADING__:"):
+            value = line.split(":", 1)[1].strip()
+            fields["issuer"] = normalize_issuer(value)
+            _dbg("issuer_captured issuer=\"%s\"", fields["issuer"])
+            continue
         if ":" not in line:
             continue
         label, value = [p.strip() for p in line.split(":", 1)]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from hashlib import sha1
@@ -12,6 +13,7 @@ from backend.core.case_store.api import (
     get_or_create_logical_account_id,
     upsert_account_fields,
 )
+from backend.core.case_store import storage
 from backend.core.config.flags import FLAGS
 from backend.core.logic.report_analysis.keys import compute_logical_account_key
 from backend.core.metrics import emit_metric
@@ -63,6 +65,21 @@ def _dbg(msg: str, *args: object) -> None:
 
 def _bureau_code(name: str) -> str:
     return _BUREAU_CODES.get(name, name[:2].upper())
+
+
+def _redact_key(k: str) -> str:
+    if not k:
+        return ""
+    return ("..." + k[-6:]) if len(k) > 6 else k
+
+
+def _detect_columns(bureau: str) -> Dict[str, bool]:
+    b = bureau.lower()
+    return {
+        "tu": b.startswith("trans"),
+        "xp": b.startswith("exp"),
+        "eq": b.startswith("equ"),
+    }
 
 
 def _digest_first_account_line(block_lines: list[str]) -> str:
@@ -215,6 +232,7 @@ def extract(
         )
         expected = EXPECTED_FIELDS.get(bureau, [])
         filled_count = sum(1 for f in expected if _is_filled(fields.get(f)))
+        fields_present_count = filled_count
 
         lk = compute_logical_account_key(
             fields.get("issuer") or fields.get("creditor_type"),
@@ -267,6 +285,8 @@ def extract(
                 "casebuilder.tag.weak_fields",
                 tags={"session_id": session_id},
             )
+        columns_state = _detect_columns(bureau)
+        persisted = False
         try:
             if FLAGS.one_case_per_account_enabled:
                 logical_key = lk
@@ -287,7 +307,7 @@ def extract(
                             "logical_key": logical_key,
                             "ids": [previous, account_id],
                         },
-                    )
+                )
                 _logical_ids[(session_id, logical_key)] = account_id
                 upsert_account_fields(
                     session_id=session_id,
@@ -304,6 +324,7 @@ def extract(
                 )
             upserted += 1
             metrics.increment("casebuilder.upserted", tags={"session_id": session_id})
+            persisted = True
         except Exception as e:  # pragma: no cover - diagnostic path
             dropped["write_error"] += 1
             logger.exception(
@@ -316,6 +337,29 @@ def extract(
                 "casebuilder.dropped",
                 tags={"reason": "write_error", "session_id": session_id},
             )
+        if FLAGS.casebuilder_debug:
+            session_case_path = f"{storage.CASESTORE_DIR}/{session_id}.json"
+            ledger = {
+                "heading": fields.get("issuer") or fields.get("creditor_type") or "",
+                "key_built": bool(lk),
+                "lk": _redact_key(lk),
+                "fields_present_count": fields_present_count,
+                "columns_detected": {
+                    "tu": bool(columns_state.get("tu")),
+                    "xp": bool(columns_state.get("xp")),
+                    "eq": bool(columns_state.get("eq")),
+                },
+                "weak_fields": bool(fields.get("_weak_fields")),
+                "persisted": bool(persisted),
+                "filename": session_case_path,
+                "block_index": int(block_index),
+                "session_id": session_id or "",
+            }
+            logger.debug(
+                "CASEBUILDER: ledger %s",
+                json.dumps(ledger, ensure_ascii=False, sort_keys=True),
+            )
+        if not persisted:
             continue
 
         emit_metric(

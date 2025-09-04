@@ -14,13 +14,13 @@ from backend.core.case_store.api import (
 )
 from backend.core.config.flags import FLAGS
 from backend.core.logic.report_analysis.keys import compute_logical_account_key
+from backend.core.metrics import emit_metric
 from backend.core.metrics.field_coverage import (
     EXPECTED_FIELDS,
+    _is_filled,
     emit_account_field_coverage,
     emit_session_field_coverage_summary,
-    _is_filled,
 )
-from backend.core.metrics import emit_metric
 from backend.core.telemetry import metrics
 
 from .tokens import (
@@ -29,6 +29,7 @@ from .tokens import (
     normalize_issuer,
     parse_amount,
     parse_date,
+    parse_date_any,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,9 +105,7 @@ def _parse_block(block: List[str]) -> Tuple[str, Dict[str, object], str]:
         account_idx = 1
     account_line = block[account_idx]
     last4 = extract_last4(account_line)
-    account_id = (
-        last4 if last4 else f"synthetic-{hash(' '.join(block)) & 0xffff:x}"
-    )
+    account_id = last4 if last4 else f"synthetic-{hash(' '.join(block)) & 0xffff:x}"
     fields: Dict[str, object] = {}
     for idx, line in enumerate(block):
         if idx == account_idx:
@@ -114,7 +113,7 @@ def _parse_block(block: List[str]) -> Tuple[str, Dict[str, object], str]:
         if line.startswith("__ISSUER_HEADING__:"):
             value = line.split(":", 1)[1].strip()
             fields["issuer"] = normalize_issuer(value)
-            _dbg("issuer_captured issuer=\"%s\"", fields["issuer"])
+            _dbg('issuer_captured issuer="%s"', fields["issuer"])
             continue
         if ":" not in line:
             continue
@@ -130,6 +129,14 @@ def _parse_block(block: List[str]) -> Tuple[str, Dict[str, object], str]:
             "payment_amount",
         }:
             fields[key] = parse_amount(value)
+        elif key == "date_opened":
+            fields[key] = parse_date_any(value) or value.strip()
+            if fields.get("date_opened") and fields["date_opened"] != value.strip():
+                logger.debug(
+                    "CASEBUILDER: date_opened_parsed raw=%r iso=%r",
+                    value,
+                    fields["date_opened"],
+                )
         elif key.endswith("date") or key in {
             "last_verified",
             "last_payment",
@@ -170,7 +177,7 @@ def extract(
         ).strip()
         last4 = extract_last4(account_line)
         logger.debug(
-            'CASEBUILDER: last4_extracted line=%r last4=%r', account_line, last4
+            "CASEBUILDER: last4_extracted line=%r last4=%r", account_line, last4
         )
         expected = EXPECTED_FIELDS.get(bureau, [])
         filled_count = sum(1 for f in expected if _is_filled(fields.get(f)))
@@ -183,7 +190,7 @@ def extract(
             fields.get("date_opened"),
         )
         logger.debug(
-            'CASEBUILDER: logical_key issuer=%r creditor_type=%r last4=%r opened=%r lk=%r',
+            "CASEBUILDER: logical_key issuer=%r creditor_type=%r last4=%r opened=%r lk=%r",
             fields.get("issuer"),
             fields.get("creditor_type"),
             last4,
@@ -194,11 +201,14 @@ def extract(
             fields.get("issuer") or fields.get("creditor_type") or ""
         ).strip()
         first_account_line = _digest_first_account_line(block)
-        surrogate_components = f"{issuer_for_surrogate}|{block_index}|{first_account_line}"
+        surrogate_components = (
+            f"{issuer_for_surrogate}|{block_index}|{first_account_line}"
+        )
         if not lk:
-            lk = "surrogate_" + sha1(
-                surrogate_components.encode("utf-8")
-            ).hexdigest()[:16]
+            lk = (
+                "surrogate_"
+                + sha1(surrogate_components.encode("utf-8")).hexdigest()[:16]
+            )
             logger.debug(
                 "CASEBUILDER: surrogate_key_generated issuer=%r block_index=%r first_line=%r lk=%r",
                 issuer_for_surrogate,
@@ -246,7 +256,7 @@ def extract(
                             "logical_key": logical_key,
                             "ids": [previous, account_id],
                         },
-                )
+                    )
                 _logical_ids[(session_id, logical_key)] = account_id
                 upsert_account_fields(
                     session_id=session_id,
@@ -262,9 +272,7 @@ def extract(
                     fields=fields,
                 )
             upserted += 1
-            metrics.increment(
-                "casebuilder.upserted", tags={"session_id": session_id}
-            )
+            metrics.increment("casebuilder.upserted", tags={"session_id": session_id})
         except Exception as e:  # pragma: no cover - diagnostic path
             dropped["write_error"] += 1
             logger.exception(

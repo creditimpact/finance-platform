@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from hashlib import sha1
 from typing import Dict, List, Tuple
 
 from backend.core.case_store.api import (
@@ -45,6 +46,17 @@ def _dbg(msg: str, *args: object) -> None:
 
 def _bureau_code(name: str) -> str:
     return _BUREAU_CODES.get(name, name[:2].upper())
+
+
+def _digest_first_account_line(block_lines: list[str]) -> str:
+    """Return the first line with an account number or first non-empty line."""
+    for ln in block_lines:
+        if "account" in ln.lower() and "#" in ln:
+            return ln.strip()
+    for ln in block_lines:
+        if ln.strip():
+            return ln.strip()
+    return ""
 
 
 def _split_blocks(lines: List[str]) -> List[List[str]]:
@@ -126,6 +138,7 @@ def extract(
     input_blocks = 0
     upserted = 0
     dropped = {"missing_logical_key": 0, "min_fields": 0, "write_error": 0}
+    surrogate_key_used = 0
 
     if session_id not in _mode_emitted:
         emit_metric(
@@ -135,7 +148,7 @@ def extract(
         )
         _mode_emitted.add(session_id)
 
-    for block in blocks:
+    for block_index, block in enumerate(blocks):
         input_blocks += 1
         metrics.increment("casebuilder.input_blocks", tags={"session_id": session_id})
         account_id, fields, number = _parse_block(block)
@@ -161,14 +174,27 @@ def extract(
             fields.get("date_opened"),
             lk,
         )
+        issuer_for_surrogate = (
+            fields.get("issuer") or fields.get("creditor_type") or ""
+        ).strip()
+        first_account_line = _digest_first_account_line(block)
+        surrogate_components = f"{issuer_for_surrogate}|{block_index}|{first_account_line}"
         if not lk:
-            dropped["missing_logical_key"] += 1
-            _dbg("drop reason=missing_logical_key issuer=%r last4=%r", issuer, last4)
-            metrics.increment(
-                "casebuilder.dropped",
-                tags={"reason": "missing_logical_key", "session_id": session_id},
+            lk = "surrogate_" + sha1(
+                surrogate_components.encode("utf-8")
+            ).hexdigest()[:16]
+            logger.debug(
+                "CASEBUILDER: surrogate_key_generated issuer=%r block_index=%r first_line=%r lk=%r",
+                issuer_for_surrogate,
+                block_index,
+                first_account_line,
+                lk,
             )
-            continue
+            surrogate_key_used += 1
+            metrics.increment(
+                "casebuilder.surrogate_key_used",
+                tags={"session_id": session_id},
+            )
 
         min_fields_threshold = getattr(FLAGS, "CASEBUILDER_MIN_FIELDS", 0)
         if min_fields_threshold and filled_count < min_fields_threshold:
@@ -288,6 +314,11 @@ def extract(
     metrics.gauge(
         "casebuilder.upserted.total",
         upserted,
+        {"session_id": session_id},
+    )
+    metrics.gauge(
+        "casebuilder.surrogate_key_used.total",
+        surrogate_key_used,
         {"session_id": session_id},
     )
     for reason, count in dropped.items():

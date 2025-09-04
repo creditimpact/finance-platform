@@ -64,8 +64,9 @@ Python backend powering ingestion, analysis, strategy generation, letter creatio
 
 ### docs
 Reference materials such as data models, stage guides, and contributing
-instructions. Includes pipeline docs like [Stage 2.5](docs/STAGE_2_5.md)
-and [Stage 3 Hardening](docs/stage3_hardening.md). The mismatch-to-tag
+instructions. Includes pipeline docs like [Stage 2.5](docs/STAGE_2_5.md),
+[Stage 3 Hardening](docs/stage3_hardening.md), and the
+[Case-First Debug Runbook](docs/casefirst-debug.md). The mismatch-to-tag
 rulebook lives in [`docs/rulebook`](docs/rulebook/README.md). No dedicated
 README; browse files within [`docs`](docs) for deeper documentation.
 

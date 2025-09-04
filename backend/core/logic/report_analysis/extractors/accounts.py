@@ -157,7 +157,7 @@ def extract(
     results: List[Dict[str, object]] = []
     input_blocks = 0
     upserted = 0
-    dropped = {"missing_logical_key": 0, "min_fields": 0, "write_error": 0}
+    dropped = {"missing_logical_key": 0, "write_error": 0}
     surrogate_key_used = 0
 
     if session_id not in _mode_emitted:
@@ -181,7 +181,6 @@ def extract(
         )
         expected = EXPECTED_FIELDS.get(bureau, [])
         filled_count = sum(1 for f in expected if _is_filled(fields.get(f)))
-        expected_count = len(expected)
 
         lk = compute_logical_account_key(
             fields.get("issuer") or fields.get("creditor_type"),
@@ -223,19 +222,17 @@ def extract(
             )
 
         min_fields_threshold = getattr(FLAGS, "CASEBUILDER_MIN_FIELDS", 0)
-        if min_fields_threshold and filled_count < min_fields_threshold:
-            dropped["min_fields"] += 1
-            _dbg(
-                "drop reason=min_fields issuer=%r filled=%d/%d",
-                issuer,
+        if min_fields_threshold > 0 and filled_count < min_fields_threshold:
+            fields["_weak_fields"] = True
+            logger.debug(
+                "CASEBUILDER: weak_fields threshold=%d present=%d",
+                min_fields_threshold,
                 filled_count,
-                expected_count,
             )
             metrics.increment(
-                "casebuilder.dropped",
-                tags={"reason": "min_fields", "session_id": session_id},
+                "casebuilder.tag.weak_fields",
+                tags={"session_id": session_id},
             )
-            continue
         try:
             if FLAGS.one_case_per_account_enabled:
                 logical_key = lk

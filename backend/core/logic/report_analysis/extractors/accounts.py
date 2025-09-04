@@ -52,6 +52,8 @@ _BUREAU_CODES = {"TransUnion": "TU", "Experian": "EX", "Equifax": "EQ"}
 
 _mode_emitted: set[str] = set()
 _logical_ids: Dict[Tuple[str, str], str] = {}
+_dedup_disabled_emitted: set[str] = set()
+_used_ids: Dict[str, set[str]] = {}
 
 
 def _dbg(msg: str, *args: object) -> None:
@@ -171,11 +173,24 @@ def extract(
             session_id=session_id,
         )
         _mode_emitted.add(session_id)
+    if not FLAGS.one_case_per_account_enabled and session_id not in _dedup_disabled_emitted:
+        metrics.increment(
+            "casebuilder.dedup.disabled_session", tags={"session_id": session_id}
+        )
+        _dedup_disabled_emitted.add(session_id)
 
     for block_index, block in enumerate(blocks):
         input_blocks += 1
         metrics.increment("casebuilder.input_blocks", tags={"session_id": session_id})
         account_id, fields, account_line = _parse_block(block)
+        if not FLAGS.one_case_per_account_enabled:
+            used = _used_ids.setdefault(session_id, set())
+            base_id = account_id
+            idx = 1
+            while account_id in used:
+                account_id = f"{base_id}_{idx}"
+                idx += 1
+            used.add(account_id)
         raw_block_lines = [
             ln.split(":", 1)[1].strip() if ln.startswith("__ISSUER_HEADING__:") else ln
             for ln in block
@@ -188,6 +203,12 @@ def extract(
         issuer = (
             fields.get("creditor_type") or fields.get("account_type") or ""
         ).strip()
+        _dbg(
+            "block_detected bureau=%s index=%d issuer=%s",
+            bureau,
+            block_index,
+            issuer,
+        )
         last4 = extract_last4(account_line)
         logger.debug(
             "CASEBUILDER: last4_extracted line=%r last4=%r", account_line, last4
@@ -338,10 +359,10 @@ def extract(
         })
     emit_session_field_coverage_summary(session_id=session_id)
     logger.info(
-        "CASEBUILDER: summary session=%s input=%d upserted=%d dropped=%s",
-        session_id,
+        "CASEBUILDER: session_summary blocks_detected=%d cases_written=%d session_id=%s dropped=%s",
         input_blocks,
         upserted,
+        session_id,
         dropped,
     )
     metrics.gauge(

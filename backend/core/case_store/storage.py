@@ -1,6 +1,6 @@
 import json
 import os
-import random
+from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
@@ -18,8 +18,9 @@ from .telemetry import emit, timed
 __all__ = ["load_session_case", "save_session_case"]
 
 
-def _session_path(session_id: str) -> str:
-    return os.path.join(CASESTORE_DIR, f"{session_id}.json")
+def _session_path(session_id: str) -> Path:
+    base = Path(CASESTORE_DIR)
+    return base / f"{session_id}.json"
 
 
 def load_session_case(session_id: str) -> SessionCase:
@@ -48,7 +49,7 @@ def load_session_case(session_id: str) -> SessionCase:
             except (ValidationError, TypeError) as exc:  # pragma: no cover
                 raise CaseStoreError(code=VALIDATION_FAILED, message=str(exc)) from exc
 
-            t.base["file_bytes"] = os.path.getsize(path)
+            t.base["file_bytes"] = path.stat().st_size
             return result
     except CaseStoreError as err:
         emit("case_store_error", session_id=session_id, code=err.code, where="storage")
@@ -63,23 +64,22 @@ def save_session_case(case: SessionCase) -> None:
 
     try:
         with timed("case_store_save", session_id=case.session_id) as t:
+            base = path.parent
             try:
-                os.makedirs(CASESTORE_DIR, exist_ok=True)
+                base.mkdir(parents=True, exist_ok=True)
             except (PermissionError, OSError, IOError) as exc:  # pragma: no cover
                 raise CaseStoreError(code=IO_ERROR, message=str(exc)) from exc
 
             if CASESTORE_ATOMIC_WRITES:
-                tmp_path = f"{path}.tmp.{os.getpid()}.{random.randint(0, 1_000_000)}"
+                tmp = path.with_suffix(path.suffix + ".tmp")
                 try:
-                    with open(tmp_path, "w", encoding="utf-8") as fh:
+                    with open(tmp, "w", encoding="utf-8") as fh:
                         fh.write(payload)
-                        fh.flush()
-                        os.fsync(fh.fileno())
-                    os.replace(tmp_path, path)
+                    os.replace(tmp, path)
                 except (PermissionError, OSError, IOError) as exc:
                     try:
-                        if os.path.exists(tmp_path):
-                            os.remove(tmp_path)
+                        if tmp.exists():
+                            tmp.unlink()
                     finally:  # pragma: no cover
                         raise CaseStoreError(code=IO_ERROR, message=str(exc)) from exc
             else:
@@ -89,7 +89,7 @@ def save_session_case(case: SessionCase) -> None:
                 except (PermissionError, OSError, IOError) as exc:  # pragma: no cover
                     raise CaseStoreError(code=IO_ERROR, message=str(exc)) from exc
 
-            t.base["file_bytes"] = os.path.getsize(path)
+            t.base["file_bytes"] = path.stat().st_size
     except CaseStoreError as err:
         emit("case_store_error", session_id=case.session_id, code=err.code, where="storage")
         raise

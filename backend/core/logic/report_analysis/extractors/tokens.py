@@ -1,10 +1,12 @@
 """Shared regex tokens and helpers for deterministic extractors."""
+
 from __future__ import annotations
 
 import re
 from typing import Optional
 
 AMOUNT_RE = re.compile(r"[-+]?\$?\d{1,3}(?:,\d{3})*(?:\.\d+)?")
+# Original ISO-only matcher retained for compatibility
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 ACCOUNT_RE = re.compile(r"ac(?:count|ct)\s*(?:#|number)?[:\s]*([A-Za-z0-9]+)", re.I)
 
@@ -71,11 +73,41 @@ def parse_amount(text: str) -> Optional[float | int]:
         return None
 
 
-def parse_date(text: str) -> Optional[str]:
-    m = DATE_RE.search(text)
-    if m:
-        return m.group(0)
+DATE_PATTERNS = [
+    # ISO: YYYY-MM-DD
+    (re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b"), ("Y", "M", "D")),
+    # Dots: DD.MM.YYYY or D.M.YYYY
+    (re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b"), ("D", "M", "Y")),
+    # Slashes: M/D/YYYY or MM/DD/YYYY
+    (re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b"), ("M", "D", "Y")),
+]
+
+
+def _to_iso(parts: dict) -> str:
+    Y = int(parts["Y"])
+    M = int(parts["M"])
+    D = int(parts["D"])
+    return f"{Y:04d}-{M:02d}-{D:02d}"
+
+
+def parse_date_any(text: str) -> Optional[str]:
+    """Parse various date formats and normalize to YYYY-MM-DD."""
+    if not text:
+        return None
+    for rx, order in DATE_PATTERNS:
+        m = rx.search(text)
+        if m:
+            parts = {k: m.group(i + 1) for i, k in enumerate(order)}
+            try:
+                return _to_iso(parts)
+            except Exception:
+                continue
     return None
+
+
+def parse_date(text: str) -> Optional[str]:
+    """Backward compatible helper for ISO dates."""
+    return parse_date_any(text)
 
 
 def normalize_issuer(text: str) -> str:

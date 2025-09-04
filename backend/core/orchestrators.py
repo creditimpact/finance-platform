@@ -582,7 +582,7 @@ def analyze_credit_report(
         pdf_path,
         analyzed_json_path,
         client_info,
-        session_id=session_id or req_id,
+        session_id=session_id,
         request_id=req_id,
     )
     logger.info(

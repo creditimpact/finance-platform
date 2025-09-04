@@ -904,7 +904,7 @@ def analyze_credit_report(
     client_info,
     *,
     request_id: str,
-    session_id: str | None = None,
+    session_id: str,
     ai_client: Any | None = None,
     **kwargs,
 ):
@@ -945,6 +945,7 @@ def analyze_credit_report(
     extract_report_meta_ms: int | None = None
     extract_summary_ms: int | None = None
     extractor_accounts_total: dict[str, int] | None = None
+    _finalized_snapshot: list[dict[str, Any]] | None = None
 
     start = time.perf_counter()
     try:
@@ -1102,6 +1103,11 @@ def analyze_credit_report(
                 if report_date:
                     meta["credit_report_date"] = report_date
                 case = create_session_case(session_id, meta=meta)
+                logger.debug(
+                    "CASEBUILDER: create_session_case(session_id=%s, accounts_count=%d)",
+                    session_id,
+                    len(case.accounts),
+                )
             else:
                 case.report_meta.raw_source.update(
                     {
@@ -1114,6 +1120,21 @@ def analyze_credit_report(
                 if report_date:
                     case.report_meta.credit_report_date = report_date
             save_session_case(case)
+            try:
+                from pathlib import Path
+                from backend.config import CASESTORE_DIR
+
+                path = Path(CASESTORE_DIR) / f"{session_id}.json"
+                size = path.stat().st_size if path.exists() else 0
+            except Exception:
+                path = None
+                size = 0
+            logger.debug(
+                "CASEBUILDER: save_session_case(session_id=%s, path=%s, size=%d)",
+                session_id,
+                path,
+                size,
+            )
         except CaseStoreError as err:  # pragma: no cover - best effort
             logger.warning(
                 "casestore_session_error session=%s error=%s",
@@ -2049,6 +2070,21 @@ def analyze_credit_report(
             if not DETERMINISTIC_EXTRACTORS_ENABLED:
                 case.summary.total_accounts = len(result.get("all_accounts") or [])
             save_session_case(case)
+            try:
+                from pathlib import Path
+                from backend.config import CASESTORE_DIR
+
+                path = Path(CASESTORE_DIR) / f"{session_id}.json"
+                size = path.stat().st_size if path.exists() else 0
+            except Exception:
+                path = None
+                size = 0
+            logger.debug(
+                "CASEBUILDER: save_session_case(session_id=%s, path=%s, size=%d)",
+                session_id,
+                path,
+                size,
+            )
         except CaseStoreError as err:  # pragma: no cover - best effort
             logger.warning(
                 "casestore_session_error session=%s error=%s",

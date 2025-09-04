@@ -388,19 +388,19 @@ def extract_pdf_page_texts(pdf_path: str | Path, max_chars: int = 20000) -> list
         import fitz  # type: ignore
     except Exception as exc:  # pragma: no cover - fitz missing
         print(f"[WARN] PyMuPDF unavailable: {exc}")
-        return []
+        fitz = None  # type: ignore
 
-    try:
-        with fitz.open(pdf_path) as doc:
-            pages = []
-            for page in doc:
-                txt = page.get_text()
-                if len(txt) > max_chars:
-                    txt = txt[:max_chars] + "\n[TRUNCATED]"
-                pages.append(txt)
-    except Exception as exc:  # pragma: no cover - runtime PDF issues
-        print(f"[WARN] Failed to extract text from {pdf_path}: {exc}")
-        return []
+    pages: list[str] = []
+    if fitz is not None:
+        try:
+            with fitz.open(pdf_path) as doc:
+                for page in doc:
+                    txt = page.get_text()
+                    if len(txt) > max_chars:
+                        txt = txt[:max_chars] + "\n[TRUNCATED]"
+                    pages.append(txt)
+        except Exception as exc:  # pragma: no cover - runtime PDF issues
+            print(f"[WARN] Failed to extract text from {pdf_path}: {exc}")
     return pages
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from hashlib import sha1
 from typing import Dict, List, Tuple
 
@@ -31,6 +32,19 @@ from .tokens import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def extract_last4(account_line: str) -> str:
+    """Extract the last 4 digits from ``account_line``.
+
+    Returns an empty string if fewer than four digits are present.
+    """
+    if not account_line:
+        return ""
+    digits = re.findall(r"\d", account_line)
+    if len(digits) < 4:
+        return ""
+    return "".join(digits[-4:])
 
 
 _BUREAU_CODES = {"TransUnion": "TU", "Experian": "EX", "Equifax": "EQ"}
@@ -86,13 +100,12 @@ def _split_blocks(lines: List[str]) -> List[List[str]]:
 
 def _parse_block(block: List[str]) -> Tuple[str, Dict[str, object], str]:
     account_idx = 0
-    m = ACCOUNT_RE.search(block[account_idx])
-    if not m and len(block) > 1:
+    if not ACCOUNT_RE.search(block[account_idx]) and len(block) > 1:
         account_idx = 1
-        m = ACCOUNT_RE.search(block[account_idx])
-    number = m.group(1) if m else ""
+    account_line = block[account_idx]
+    last4 = extract_last4(account_line)
     account_id = (
-        number[-4:] if number else f"synthetic-{hash(' '.join(block)) & 0xffff:x}"
+        last4 if last4 else f"synthetic-{hash(' '.join(block)) & 0xffff:x}"
     )
     fields: Dict[str, object] = {}
     for idx, line in enumerate(block):
@@ -125,7 +138,7 @@ def _parse_block(block: List[str]) -> Tuple[str, Dict[str, object], str]:
             fields[key] = parse_date(value) or value.strip()
         else:
             fields[key] = value.strip()
-    return account_id, fields, number
+    return account_id, fields, account_line
 
 
 def extract(
@@ -151,11 +164,14 @@ def extract(
     for block_index, block in enumerate(blocks):
         input_blocks += 1
         metrics.increment("casebuilder.input_blocks", tags={"session_id": session_id})
-        account_id, fields, number = _parse_block(block)
+        account_id, fields, account_line = _parse_block(block)
         issuer = (
             fields.get("creditor_type") or fields.get("account_type") or ""
         ).strip()
-        last4 = number[-4:] if number else ""
+        last4 = extract_last4(account_line)
+        logger.debug(
+            'CASEBUILDER: last4_extracted line=%r last4=%r', account_line, last4
+        )
         expected = EXPECTED_FIELDS.get(bureau, [])
         filled_count = sum(1 for f in expected if _is_filled(fields.get(f)))
         expected_count = len(expected)

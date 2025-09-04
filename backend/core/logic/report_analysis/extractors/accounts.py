@@ -148,10 +148,18 @@ def extract(
         expected_count = len(expected)
 
         lk = compute_logical_account_key(
-            fields.get("creditor_type"),
+            fields.get("issuer") or fields.get("creditor_type"),
             last4 or None,
             fields.get("account_type"),
             fields.get("date_opened"),
+        )
+        logger.debug(
+            'CASEBUILDER: logical_key issuer=%r creditor_type=%r last4=%r opened=%r lk=%r',
+            fields.get("issuer"),
+            fields.get("creditor_type"),
+            last4,
+            fields.get("date_opened"),
+            lk,
         )
         if not lk:
             dropped["missing_logical_key"] += 1

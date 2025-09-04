@@ -64,6 +64,7 @@ from backend.core.logic.utils.text_parsing import (
     extract_late_history_blocks,
 )
 from backend.core.telemetry.parser_metrics import emit_parser_audit
+from backend.core.telemetry import metrics
 
 from .ocr_provider import get_ocr_provider
 from .text_normalization import NormalizationStats, normalize_page
@@ -783,6 +784,9 @@ def _join_heading_map(
         len(accounts or {}),
     )
     if size == 0:
+        logger.debug(
+            "CASEBUILDER: empty_three_column_maps map=%s", field_name or "<none>"
+        )
         return
 
     for key, value in list(mapping.items()):
@@ -1232,6 +1236,9 @@ def analyze_credit_report(
             _col_status_raw,
             detail_map,
         ) = extract_three_column_fields(pdf_path)
+        three_col_header_missing = not (
+            col_payment_map or col_remarks_map or status_text_map or detail_map
+        )
         payment_status_map, _payment_status_raw_map = extract_payment_statuses(text)
         payment_status_map = _normalize_keys(payment_status_map)
         # Normalize bureau keys to lowercase for consistency
@@ -1525,6 +1532,17 @@ def analyze_credit_report(
                     account_number_map.setdefault(acc, {}).setdefault(bureau, val)
         except Exception:
             pass
+        fallback_used = three_col_header_missing and bool(
+            payment_status_map or remarks_map or account_number_map
+        )
+        if three_col_header_missing:
+            metrics.increment("casebuilder.columns.header_missing")
+            if fallback_used:
+                metrics.increment("casebuilder.columns.fallback_used")
+            logger.debug(
+                "CASEBUILDER: three_column_header_missing fallback_used=%s persisted=True",
+                fallback_used,
+            )
         status_text_map = _normalize_keys(status_text_map)
         detail_map = _normalize_keys(detail_map)
 

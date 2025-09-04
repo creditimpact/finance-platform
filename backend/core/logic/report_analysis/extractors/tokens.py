@@ -76,3 +76,10 @@ def parse_date(text: str) -> Optional[str]:
     if m:
         return m.group(0)
     return None
+
+
+def normalize_issuer(text: str) -> str:
+    # strip punctuation at ends, collapse whitespace, uppercase
+    t = re.sub(r"\s+", " ", text.strip())
+    t = t.strip(",:;-–—.()[]{}")
+    return t.upper()

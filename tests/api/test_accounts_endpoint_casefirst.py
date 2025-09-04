@@ -41,7 +41,10 @@ def test_accounts_empty_when_no_cases(client, monkeypatch):
 
     # Avoid calling heavy collectors
     monkeypatch.setattr(
-        "backend.core.orchestrators.collect_stageA_logical_accounts", lambda sid: []
+        "backend.api.app.collect_stageA_problem_accounts", lambda sid: []
+    )
+    monkeypatch.setattr(
+        "backend.api.app.collect_stageA_logical_accounts", lambda sid: []
     )
 
     resp = client.get("/api/accounts/s123")
@@ -61,8 +64,12 @@ def test_accounts_from_collectors_only(client, monkeypatch):
 
     # Collectors return a simple account record
     monkeypatch.setattr(
-        "backend.core.orchestrators.collect_stageA_logical_accounts",
-        lambda sid: [{"account_id": "A1", "primary_issue": "late"}],
+        "backend.api.app.collect_stageA_problem_accounts",
+        lambda sid: [{"account_id": "A1", "bureau": "EX", "primary_issue": "late"}],
+    )
+    monkeypatch.setattr(
+        "backend.api.app.collect_stageA_logical_accounts",
+        lambda sid: [{"account_id": "A1", "bureau": "EX", "primary_issue": "late"}],
     )
 
     resp = client.get("/api/accounts/s123")

@@ -1375,6 +1375,8 @@ def extract_problematic_accounts_from_report(
 
     force_parser = os.getenv("ANALYSIS_FORCE_PARSER_ONLY") == "1"
     if force_parser or sections.get("ai_failed"):
+        if FLAGS.case_first_build_required:
+            raise RuntimeError("parser-first path disabled")
         logger.info("analysis_falling_back_to_parser_only force=%s", force_parser)
         sections = analyze_report_logic(
             pdf_path,
@@ -1462,14 +1464,6 @@ def extract_problematic_accounts_from_report(
         # If immutability tools unavailable, proceed without mutation guard
         pass
     _log_account_snapshot("post_inject_missing_late_accounts")
-
-    from backend.core.logic.utils.names_normalization import normalize_creditor_name
-
-    parser_only = {  # noqa: F841
-        normalize_creditor_name(a.get("name", ""))
-        for a in sections.get("all_accounts", [])
-        if a.get("source_stage") == "parser_aggregated"
-    }
 
     suppress_accounts_without_issue_types = env_bool(  # noqa: F841
         "SUPPRESS_ACCOUNTS_WITHOUT_ISSUE_TYPES", False

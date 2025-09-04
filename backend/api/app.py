@@ -18,6 +18,7 @@ import time
 import uuid
 from collections import defaultdict
 from pathlib import Path
+from typing import Any, Mapping
 
 from flask import Blueprint, Flask, jsonify, redirect, request, url_for
 from flask_cors import CORS
@@ -47,6 +48,10 @@ from backend.core import orchestrators as orch
 from backend.core.case_store import api as cs_api
 from backend.core.case_store.errors import NOT_FOUND, CaseStoreError
 from backend.core.config.flags import FLAGS
+from backend.core.collectors import (
+    collect_stageA_problem_accounts,
+    collect_stageA_logical_accounts,
+)
 from backend.core.logic.letters.explanations_normalizer import (
     extract_structured,
     sanitize,
@@ -65,6 +70,27 @@ with open(SCHEMA_DIR / "problem_account.json") as _f:
 
 _request_counts: dict[str, list[float]] = defaultdict(list)
 
+
+def _merge_collectors(
+    problems: list[Mapping[str, Any]] | None,
+    logical: list[Mapping[str, Any]] | None,
+) -> list[Mapping[str, Any]]:
+    """Merge Stage-A collector outputs while dropping parser artifacts."""
+    merged: dict[tuple[str | None, str | None], dict] = {}
+    for acc in problems or []:
+        key = (acc.get("account_id"), acc.get("bureau"))
+        merged[key] = dict(acc)
+    for acc in logical or []:
+        key = (acc.get("account_id"), acc.get("bureau"))
+        if key in merged:
+            merged[key].update(acc)
+        else:
+            merged[key] = dict(acc)
+    result: list[Mapping[str, Any]] = []
+    for acc in merged.values():
+        acc.pop("source_stage", None)
+        result.append(acc)
+    return result
 
 @api_bp.route("/")
 def index():
@@ -492,14 +518,28 @@ def list_accounts_api(session_id: str):
         return jsonify({"ok": False, "message": "missing session_id"}), 400
 
     try:
-        accounts = orch.collect_stageA_logical_accounts(session_id)
+        probs = collect_stageA_problem_accounts(session_id) or []
     except CaseStoreError:
-        accounts = []
+        probs = []
+    try:
+        logical = collect_stageA_logical_accounts(session_id) or []
+    except CaseStoreError:
+        logical = []
+
+    accounts = _merge_collectors(probs, logical)
 
     if FLAGS.case_first_build_required and not accounts:
         return jsonify({"ok": True, "session_id": session_id, "accounts": []})
 
     return jsonify({"ok": True, "session_id": session_id, "accounts": accounts})
+
+
+@api_bp.route("/api/problem_accounts")
+def api_problem_accounts_legacy():
+    """Legacy parser-first endpoint intentionally disabled."""
+    if FLAGS.disable_parser_ui_summary:
+        return jsonify({"ok": False, "error": "parser_first_disabled"}), 410
+    return jsonify({"ok": False, "error": "parser_first_disabled"}), 410
 
 
 @api_bp.route("/api/cases/<session_id>", methods=["GET"])

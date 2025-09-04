@@ -118,8 +118,12 @@ def _parse_block(block: List[str]) -> Tuple[str, Dict[str, object], str]:
         if ":" not in line:
             continue
         label, value = [p.strip() for p in line.split(":", 1)]
-        key = ACCOUNT_FIELD_MAP.get(label.lower())
+        label_lc = label.lower()
+        key = ACCOUNT_FIELD_MAP.get(label_lc)
         if not key:
+            extra = fields.setdefault("extra_fields", {})
+            extra[label_lc] = value.strip()
+            logger.debug("CASEBUILDER: extra_field label=%r value=%r", label, value)
             continue
         if "amount" in key or key in {
             "high_balance",
@@ -172,6 +176,15 @@ def extract(
         input_blocks += 1
         metrics.increment("casebuilder.input_blocks", tags={"session_id": session_id})
         account_id, fields, account_line = _parse_block(block)
+        raw_block_lines = [
+            ln.split(":", 1)[1].strip() if ln.startswith("__ISSUER_HEADING__:") else ln
+            for ln in block
+        ]
+        raw_block = "\n".join(raw_block_lines)
+        logger.debug(
+            "CASEBUILDER: raw_block_attached lines=%d", len(raw_block_lines)
+        )
+        fields["raw_block"] = raw_block
         issuer = (
             fields.get("creditor_type") or fields.get("account_type") or ""
         ).strip()
@@ -318,7 +331,11 @@ def extract(
                 emit_mapping_coverage_metrics(session_id, account_id, by_bureau, reg)
             except Exception:
                 logger.exception("normalized_overlay_failed")
-        results.append({"account_id": account_id, "fields": fields})
+        results.append({
+            "account_id": account_id,
+            "fields": fields,
+            "raw_block": raw_block,
+        })
     emit_session_field_coverage_summary(session_id=session_id)
     logger.info(
         "CASEBUILDER: summary session=%s input=%d upserted=%d dropped=%s",

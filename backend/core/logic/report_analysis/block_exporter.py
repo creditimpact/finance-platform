@@ -18,9 +18,11 @@ def load_account_blocks(session_id: str) -> List[Dict[str, Any]]:
     """Load previously exported account blocks for ``session_id``.
 
     The blocks are expected under ``traces/blocks/<session_id>/_index.json``.
-    If the directory or index file is missing, or any individual block file
-    cannot be read/parsed, the function fails softly and simply returns an
-    empty list.
+    The index must be a JSON array where each element is a mapping with
+    exactly the keys ``{"i", "heading", "file"}``. If the directory or index
+    file is missing, an entry is malformed, or a referenced block file cannot
+    be read/parsed, the function fails softly and simply returns an empty
+    list.
 
     Parameters
     ----------
@@ -44,9 +46,15 @@ def load_account_blocks(session_id: str) -> List[Dict[str, Any]]:
         return []
 
     blocks: List[Dict[str, Any]] = []
+    expected_keys = {"i", "heading", "file"}
     for entry in idx or []:
+        if not isinstance(entry, dict):
+            continue
+        if set(entry.keys()) != expected_keys:
+            # ignore unexpected/legacy index rows
+            continue
         f = entry.get("file")
-        if not f:
+        if not isinstance(f, str) or not f:
             continue
         try:
             data = json.loads(Path(f).read_text(encoding="utf-8"))
@@ -207,7 +215,7 @@ def export_account_blocks(session_id: str, pdf_path: str | Path) -> List[Dict[st
         jpath = out_dir / f"block_{i:02d}.json"
         with jpath.open("w", encoding="utf-8") as f:
             json.dump(enriched, f, ensure_ascii=False, indent=2)
-        idx_info.append({"i": i, "heading": blk["heading"], "file": str(jpath)})
+        idx_info.append({"i": i, "heading": enriched["heading"], "file": str(jpath)})
 
     with (out_dir / "_index.json").open("w", encoding="utf-8") as f:
         json.dump(idx_info, f, ensure_ascii=False, indent=2)

@@ -1329,6 +1329,22 @@ def extract_problematic_accounts_from_report(
     if not is_safe_pdf(pdf_path):
         raise ValueError("Uploaded file failed PDF safety checks.")
 
+    logger.info(
+        "ORCH: export kickoff (extract_problematic_accounts) sid=%s",
+        session_id,
+    )
+    # --- BLOCKS: export first, fail-fast on empty ---
+    export_account_blocks(session_id, pdf_path)
+
+    # Verify blocks exist on disk (don’t proceed to analyze if missing)
+    _pre = load_account_blocks(session_id)
+    if not _pre:
+        # Log and stop early — nothing should run without blocks
+        logger.error(
+            "BLOCKS_MISSING: no exported blocks for session_id=%s", session_id
+        )
+        raise CaseStoreError("no_blocks", "No account blocks exported")
+
     analyzed_json_path = Path("output/analyzed_report.json")
     req_id = session_id
 
@@ -1363,12 +1379,6 @@ def extract_problematic_accounts_from_report(
         sections.get("session_id"),
         req_id,
     )
-    # Ensure account blocks exist before any case-building
-    sid = session_id
-    blocks = load_account_blocks(sid)
-    if not blocks:
-        logger.error("BLOCKS_MISSING: no exported blocks for session_id=%s", sid)
-        raise CaseStoreError("no_blocks", "No account blocks exported")
     if FLAGS.casebuilder_debug:
         logger.debug("CASEBUILDER: starting session_id=%s", session_id)
     try:

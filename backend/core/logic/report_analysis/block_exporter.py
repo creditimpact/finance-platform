@@ -10,8 +10,8 @@ from typing import Any, Dict, List
 from backend.core.logic.report_analysis.report_parsing import (
     build_block_fuzzy,
     detect_bureau_order,
-    extract_text_from_pdf,
 )
+from backend.core.logic.report_analysis.text_provider import load_cached_text
 from backend.core.logic.utils.text_parsing import extract_account_blocks
 
 
@@ -193,7 +193,10 @@ def export_account_blocks(
         The list of account block dictionaries, each containing ``heading`` and
         ``lines`` keys.
     """
-    text = extract_text_from_pdf(pdf_path)
+    cached = load_cached_text(session_id)
+    if not cached:
+        raise ValueError("no_cached_text_for_session")
+    text = cached["full_text"]
     blocks = extract_account_blocks(text)
 
     fbk_blocks: List[Dict[str, Any]] = []

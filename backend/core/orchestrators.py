@@ -43,7 +43,10 @@ from backend.core.config.flags import FLAGS
 from backend.core.email_sender import send_email_with_attachment
 from backend.core.letters.field_population import apply_field_fillers
 from backend.core.logic.compliance.constants import StrategistFailureReason
-from backend.core.logic.report_analysis.block_exporter import export_account_blocks
+from backend.core.logic.report_analysis.block_exporter import (
+    export_account_blocks,
+    load_account_blocks,
+)
 from backend.core.logic.report_analysis.extract_info import (
     extract_bureau_info_column_refined,
 )
@@ -1168,6 +1171,12 @@ def run_credit_repair_process(
         pdf_path, sections, bureau_data, today_folder = analyze_credit_report(
             proofs_files, session_id, client_info, audit, log_messages, ai_client
         )
+        # Ensure account blocks exist before any case-building
+        sid = session_id
+        blocks = load_account_blocks(sid)
+        if not blocks:
+            logger.error("BLOCKS_MISSING: no exported blocks for session_id=%s", sid)
+            raise CaseStoreError("no_blocks", "No account blocks exported")
         try:
             from services.outcome_ingestion.ingest_report import (
                 ingest_report as ingest_outcome_report,
@@ -1351,6 +1360,12 @@ def extract_problematic_accounts_from_report(
         sections.get("session_id"),
         req_id,
     )
+    # Ensure account blocks exist before any case-building
+    sid = session_id
+    blocks = load_account_blocks(sid)
+    if not blocks:
+        logger.error("BLOCKS_MISSING: no exported blocks for session_id=%s", sid)
+        raise CaseStoreError("no_blocks", "No account blocks exported")
     if FLAGS.casebuilder_debug:
         logger.debug("CASEBUILDER: starting session_id=%s", session_id)
     try:

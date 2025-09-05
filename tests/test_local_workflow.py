@@ -41,8 +41,6 @@ sys.modules.setdefault(
     ),
 )
 sys.modules.setdefault("fpdf", types.SimpleNamespace(FPDF=object))
-sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__: None))
-sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None))
 
 import backend.core.logic.rendering.instructions_generator as instructions_generator  # noqa: E402
 from backend.core.logic.letters.generate_goodwill_letters import (  # noqa: E402

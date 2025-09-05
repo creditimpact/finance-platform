@@ -1,20 +1,17 @@
 from pathlib import Path
-
-import pdfplumber
-
-MIN_TEXT_CHARS = 300
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+from PyPDF2 import PdfReader
 
 MAX_UPLOAD_SIZE_MB = 10
 ALLOWED_EXTENSIONS = {".pdf"}
 
 
 def is_valid_filename(file_path: Path) -> bool:
-    """×'×•×"×§ ×× ×©× ×"×§×•×'×¥ ×œ× ×ž×›×™×œ ×ª×•×•×™× ×-×©×•×"×™×"""
     return file_path.name.replace(" ", "").isalnum() or file_path.name.endswith(".pdf")
 
 
 def contains_suspicious_pdf_elements(file_path: Path) -> bool:
-    """×'×•×"×§ ×× ×™×© ×§×•×" ×-×"×•× ×™ ×'Ö¾PDF (JS, Launch ×•×›×•×³)"""
     try:
         with open(file_path, "rb") as f:
             content = f.read().lower()
@@ -27,70 +24,46 @@ def contains_suspicious_pdf_elements(file_path: Path) -> bool:
             ]
             return any(keyword in content for keyword in suspicious_keywords)
     except Exception as e:
-        print(f"[âš ï¸] Failed to scan for PDF threats: {e}")
+        print(f"[⚠️] Failed to scan for PDF threats: {e}")
         return True
 
 
 def is_safe_pdf(file_path: Path) -> bool:
-    """Validate the PDF for size, basic safety and readable text."""
     print(f"[INFO] Checking PDF: {file_path.name}")
 
     if file_path.suffix.lower() not in ALLOWED_EXTENSIONS:
-        print(f"[âŒ] Blocked: Unsupported file extension {file_path.suffix}")
+        print(f"[✗] Blocked: Unsupported file extension {file_path.suffix}")
         return False
 
     size_mb = file_path.stat().st_size / (1024 * 1024)
     if size_mb > MAX_UPLOAD_SIZE_MB:
-        print(
-            f"[âŒ] Blocked: File size {size_mb:.2f} MB exceeds {MAX_UPLOAD_SIZE_MB} MB"
-        )
+        print(f"[✗] Blocked: File size {size_mb:.2f} MB exceeds {MAX_UPLOAD_SIZE_MB} MB")
         return False
 
     suspicious = contains_suspicious_pdf_elements(file_path)
     print(f"[INFO] Suspicious markers found: {suspicious}")
     if suspicious:
-        print("[âš ï¸] Suspicious PDF markers detected but not blocking")
+        print("[⚠️] Suspicious PDF markers detected but not blocking")
 
     try:
-        with pdfplumber.open(file_path) as pdf:
-            page_count = len(pdf.pages)
-            print(f"[INFO] Pages found: {page_count}")
-            text_parts = []
-            for page in pdf.pages:
-                text_parts.append(page.extract_text() or "")
-            combined_text = "\n".join(text_parts)
-            char_count = len(combined_text)
-            print(f"[INFO] Total extracted characters: {char_count}")
-
-            if char_count == 0:
-                print("[âŒ] Blocked: No readable text detected")
-                return False
-
-            first_page_chars = len(text_parts[0]) if text_parts else 0
-            if char_count < MIN_TEXT_CHARS:
-                print("[âŒ] Blocked: Too little readable text (<300 chars)")
-                return False
-            if first_page_chars < 50 and char_count >= MIN_TEXT_CHARS:
-                print("[INFO] First page short but total text sufficient")
-
+        reader = PdfReader(str(file_path))
+        page_count = len(reader.pages)
+        print(f"[INFO] Pages found: {page_count}")
     except Exception as e:
-        print(f"[âŒ] Failed to open PDF: {e}")
+        print(f"[✗] Failed to open PDF: {e}")
         return False
 
-    print("[âœ...] PDF passed all checks.")
+    print("[✅] PDF passed all checks.")
     return True
 
 
 def move_uploaded_file(uploaded_path: Path, session_id: str) -> Path:
-    """×ž×¢×'×™×¨ ××ª ×"×§×•×'×¥ ×œ×ª×™×§×™×™×" ×™×™×-×•×"×™×ª ×œ×¤×™ session ID + ×©×•×ž×¨ ×'× ×'×©× ×"×ž×§×•×¨×™"""
     safe_folder = Path("uploads") / session_id
     safe_folder.mkdir(parents=True, exist_ok=True)
 
-    # ×©×™×ž×•×¨ ×©× ×ž×§×•×¨×™
     original_name_path = safe_folder / uploaded_path.name
     uploaded_path.replace(original_name_path)
 
-    # ×"×¢×ª×§×" ×›×¤×•×œ×" ×'×©× ××-×™×" ×× ×¨×•×¦×™× ×œ×"×©×ª×ž×© ×'×©× ×§×'×•×¢ ×'× ×'×"×ž×©×š
     standard_path = safe_folder / "smartcredit_report.pdf"
     original_name_path.replace(standard_path)
 

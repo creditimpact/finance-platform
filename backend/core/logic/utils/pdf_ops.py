@@ -5,32 +5,6 @@ from pathlib import Path
 from typing import Any, Iterable, List, Tuple
 
 
-def extract_pdf_text_safe(pdf_path: Path, max_chars: int = 150000) -> str:
-    """Return text from *pdf_path* while avoiding heavy dependencies at import time.
-
-    The function imports :mod:`fitz` (PyMuPDF) lazily so modules that merely
-    reference PDF utilities don't incur the cost of importing the library.  The
-    extracted text is truncated to ``max_chars`` characters to prevent excessive
-    memory usage.  Any exception while loading or parsing the PDF results in an
-    empty string, making the function "safe" for use in end-to-end pipelines.
-    """
-
-    try:
-        import fitz  # type: ignore
-    except Exception as exc:  # pragma: no cover - fitz missing
-        print(f"[WARN] PyMuPDF unavailable: {exc}")
-        return ""
-
-    try:
-        with fitz.open(pdf_path) as doc:
-            text = "\n".join(page.get_text() for page in doc)
-    except Exception as exc:  # pragma: no cover - runtime PDF issues
-        print(f"[WARN] Failed to extract text from {pdf_path}: {exc}")
-        return ""
-
-    if len(text) > max_chars:
-        text = text[:max_chars] + "\n[TRUNCATED]"
-    return text
 
 
 def convert_txts_to_pdfs(folder: Path):

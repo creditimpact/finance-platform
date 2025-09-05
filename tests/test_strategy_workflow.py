@@ -40,8 +40,6 @@ sys.modules.setdefault(
     ),
 )
 sys.modules.setdefault("fpdf", types.SimpleNamespace(FPDF=object))
-sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__: None))
-sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None))
 # -------------------------------------------------------------------
 
 from backend.core.logic.letters.letter_generator import (

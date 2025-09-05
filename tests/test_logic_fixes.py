@@ -36,8 +36,6 @@ class _DummyEnv:
 
 
 sys.modules.setdefault("fpdf", types.SimpleNamespace(FPDF=object))
-sys.modules.setdefault("pdfplumber", types.SimpleNamespace(open=lambda *_, **__: None))
-sys.modules.setdefault("fitz", types.SimpleNamespace(open=lambda *_, **__: None))
 
 import backend.core.logic.rendering.instructions_generator as instructions_generator
 from backend.core.logic.letters.generate_goodwill_letters import (

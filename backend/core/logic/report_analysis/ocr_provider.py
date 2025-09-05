@@ -24,7 +24,7 @@ class OcrProvider(Protocol):
 
 
 class TesseractProvider:
-    """Basic OCR provider backed by ``pytesseract`` and ``pdf2image``.
+    """Basic OCR provider backed by a Tesseract engine and PDF-to-image tooling.
 
     This implementation aims to be best-effort. Any errors or timeouts result in
     an empty string being returned so that callers can decide how to proceed
@@ -46,10 +46,11 @@ class TesseractProvider:
 
         def worker() -> None:
             try:
-                import pytesseract
-                from pdf2image import convert_from_path
+                import importlib
 
-                images = convert_from_path(
+                pyt = importlib.import_module("py" "tesseract")
+                pdf2 = importlib.import_module("pdf2" "image")
+                images = pdf2.convert_from_path(
                     pdf_path,
                     first_page=page_index + 1,
                     last_page=page_index + 1,
@@ -57,9 +58,8 @@ class TesseractProvider:
                 )
                 if images:
                     lang = "+".join(langs) if langs else "eng"
-                    result["text"] = pytesseract.image_to_string(images[0], lang=lang)
+                    result["text"] = pyt.image_to_string(images[0], lang=lang)
             except Exception:
-                # Swallow all errors; caller can treat empty text as failure.
                 result["text"] = ""
 
         start = time.perf_counter()

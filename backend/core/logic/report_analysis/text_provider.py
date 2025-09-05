@@ -15,12 +15,16 @@ from backend.config import (
 
 from .ocr_provider import get_ocr_provider
 
-# Import heavy PDF dependencies lazily to avoid import-time crashes in
+# Import heavy PDF dependency lazily to avoid import-time crashes in
 # environments without PyMuPDF.
 def _extract_text_per_page(pdf_path: str) -> list[str]:
-    from .pdf_io import extract_text_per_page as _impl
+    import fitz  # type: ignore
 
-    return _impl(pdf_path)
+    texts: list[str] = []
+    with fitz.open(pdf_path) as doc:
+        for page in doc:
+            texts.append(page.get_text("text") or "")
+    return texts
 
 
 def _merge_text_with_ocr(page_texts: list[str], ocr_texts: Mapping[int, str]) -> list[str]:

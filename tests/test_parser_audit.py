@@ -9,7 +9,9 @@ from backend import config
 def stub_parsing_dependencies(monkeypatch):
     """Stub heavy parsing helpers so tests can focus on telemetry."""
 
-    monkeypatch.setattr(analyze_report, "extract_text_from_pdf", lambda _: "dummy")
+    monkeypatch.setattr(
+        analyze_report, "load_cached_text", lambda _sid: {"pages": ["dummy"], "full_text": "dummy", "meta": {}}
+    )
     monkeypatch.setattr(analyze_report, "extract_account_headings", lambda _: [])
     monkeypatch.setattr(analyze_report, "_reconcile_account_headings", lambda *a, **k: None)
     monkeypatch.setattr(analyze_report, "extract_inquiries", lambda _: [])
@@ -47,7 +49,12 @@ def _run(tmp_path, **kwargs):
 
 
 def test_all_text_pdf(tmp_path, monkeypatch, capture_events):
-    monkeypatch.setattr(analyze_report, "extract_text_per_page", lambda _: ["x" * 70, "y" * 70])
+    pages = ["x" * 70, "y" * 70]
+    monkeypatch.setattr(
+        analyze_report,
+        "load_cached_text",
+        lambda _sid: {"pages": pages, "full_text": "\n".join(pages), "meta": {}},
+    )
     monkeypatch.setattr(config, "PDF_TEXT_MIN_CHARS_PER_PAGE", 64)
 
     _run(tmp_path)
@@ -63,7 +70,11 @@ def test_all_text_pdf(tmp_path, monkeypatch, capture_events):
 
 def test_mixed_pages(tmp_path, monkeypatch, capture_events):
     pages = ["", "abc", " " * 10, "X" * 80]
-    monkeypatch.setattr(analyze_report, "extract_text_per_page", lambda _: pages)
+    monkeypatch.setattr(
+        analyze_report,
+        "load_cached_text",
+        lambda _sid: {"pages": pages, "full_text": "\n".join(pages), "meta": {}},
+    )
     monkeypatch.setattr(config, "PDF_TEXT_MIN_CHARS_PER_PAGE", 64)
 
     _run(tmp_path)
@@ -75,10 +86,10 @@ def test_mixed_pages(tmp_path, monkeypatch, capture_events):
 
 
 def test_error_path(tmp_path, monkeypatch, capture_events):
-    def boom(_):
+    def boom(_sid):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(analyze_report, "extract_text_per_page", boom)
+    monkeypatch.setattr(analyze_report, "load_cached_text", boom)
 
     _run(tmp_path)
 
@@ -87,7 +98,11 @@ def test_error_path(tmp_path, monkeypatch, capture_events):
 
 
 def test_pii_safety(tmp_path, monkeypatch, capture_events):
-    monkeypatch.setattr(analyze_report, "extract_text_per_page", lambda _: ["secret"])
+    monkeypatch.setattr(
+        analyze_report,
+        "load_cached_text",
+        lambda _sid: {"pages": ["secret"], "full_text": "secret", "meta": {}},
+    )
 
     _run(tmp_path)
 
@@ -98,7 +113,11 @@ def test_pii_safety(tmp_path, monkeypatch, capture_events):
 def test_disabled_flag(tmp_path, monkeypatch, capture_events):
     monkeypatch.setattr(config, "PARSER_AUDIT_ENABLED", False)
     monkeypatch.setattr(analyze_report, "PARSER_AUDIT_ENABLED", False)
-    monkeypatch.setattr(analyze_report, "extract_text_per_page", lambda _: ["x"])
+    monkeypatch.setattr(
+        analyze_report,
+        "load_cached_text",
+        lambda _sid: {"pages": ["x"], "full_text": "x", "meta": {}},
+    )
 
     _run(tmp_path, run_ai=False)
 

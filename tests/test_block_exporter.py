@@ -24,7 +24,9 @@ def _sample_text():
 
 
 def test_export_writes_files(chdir_tmp, monkeypatch):
-    monkeypatch.setattr(be, "extract_text_from_pdf", lambda _p: _sample_text())
+    monkeypatch.setattr(
+        be, "load_cached_text", lambda sid: {"full_text": _sample_text()}
+    )
 
     be.export_account_blocks("sess1", SAMPLE_PDF)
 
@@ -34,7 +36,9 @@ def test_export_writes_files(chdir_tmp, monkeypatch):
 
 
 def test_load_account_blocks_reads_back(chdir_tmp, monkeypatch):
-    monkeypatch.setattr(be, "extract_text_from_pdf", lambda _p: _sample_text())
+    monkeypatch.setattr(
+        be, "load_cached_text", lambda sid: {"full_text": _sample_text()}
+    )
     be.export_account_blocks("sess2", SAMPLE_PDF)
 
     blocks = be.load_account_blocks("sess2")
@@ -46,7 +50,7 @@ def test_load_account_blocks_reads_back(chdir_tmp, monkeypatch):
 
 
 def test_fail_fast_on_empty(chdir_tmp, monkeypatch):
-    monkeypatch.setattr(be, "extract_text_from_pdf", lambda _p: "")
+    monkeypatch.setattr(be, "load_cached_text", lambda sid: {"full_text": ""})
     empty_pdf = chdir_tmp / "empty.pdf"
     empty_pdf.write_bytes(b"")
     with pytest.raises(ValueError, match="No blocks extracted"):

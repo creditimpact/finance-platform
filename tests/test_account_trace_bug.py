@@ -41,6 +41,10 @@ def test_account_trace_bug(monkeypatch, caplog, tmp_path):
     monkeypatch.setattr(rp, "_inject_missing_late_accounts", lambda *args, **kwargs: None)
     monkeypatch.setattr(rp, "enrich_account_metadata", lambda acc: acc)
     monkeypatch.setattr(session_manager, "update_session", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "backend.core.logic.report_analysis.text_provider._extract_text_per_page",
+        lambda p: ["stub"],
+    )
 
     pdf_file = tmp_path / "report.pdf"
     pdf_file.write_text("dummy")
@@ -87,6 +91,10 @@ def test_account_trace_bug_skipped_with_details(monkeypatch, caplog, tmp_path):
     monkeypatch.setattr(rp, "_inject_missing_late_accounts", lambda *args, **kwargs: None)
     monkeypatch.setattr(rp, "enrich_account_metadata", lambda acc: acc)
     monkeypatch.setattr(session_manager, "update_session", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "backend.core.logic.report_analysis.text_provider._extract_text_per_page",
+        lambda p: ["stub"],
+    )
 
     pdf_file = tmp_path / "report.pdf"
     pdf_file.write_text("dummy")

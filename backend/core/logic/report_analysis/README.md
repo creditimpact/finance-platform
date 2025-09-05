@@ -16,13 +16,13 @@ PyMuPDF text → Selective OCR (flag-gated) → Normalization → Deterministic 
   - Internal deps: `.report_parsing`, `.report_prompting`, `.report_postprocessing`, `backend.core.logic.utils.text_parsing`, `backend.core.logic.utils.inquiries`.
 - `extract_info.py`: pull identity columns from the report.
   - Key functions: `extract_clean_name()`, `normalize_name_order()`, `extract_bureau_info_column_refined()`.
-  - Internal deps: `backend.core.logic.utils.names_normalization`, `pdfplumber`.
+  - Internal deps: `backend.core.logic.utils.names_normalization`.
 - `process_accounts.py`: convert analysis output into bureau payloads.
   - Key items: `Account` dataclass; functions `process_analyzed_report()` and `save_bureau_outputs()`; helpers `infer_hardship_reason()`, `infer_personal_impact()`, `infer_recovery_summary()`.
   - Internal deps: `backend.core.logic.utils.names_normalization`, `backend.core.logic.strategy.fallback_manager`, `backend.audit.audit`.
 - `report_parsing.py`: read PDF text and helper for converting dicts.
-  - Key functions: `extract_text_from_pdf()`, `bureau_data_from_dict()`.
-  - Internal deps: `pdfplumber`.
+  - Key functions: `bureau_data_from_dict()`.
+  - Internal deps: none.
 - `report_postprocessing.py`: clean and augment parsed data; may merge Stage A adjudication outputs if enabled.
   - Key functions: `_merge_parser_inquiries()`, `_sanitize_late_counts()`, `_cleanup_unverified_late_text()`, `_inject_missing_late_accounts()`, `validate_analysis_sanity()`.
   - Internal deps: `backend.core.logic.utils` modules.

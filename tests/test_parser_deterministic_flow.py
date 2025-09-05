@@ -17,8 +17,15 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 def setup_env(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "CASESTORE_DIR", tmp_path.as_posix())
-    monkeypatch.setattr(ar, "extract_text_per_page", lambda _: SAMPLE_PAGES)
-    monkeypatch.setattr(ar, "extract_text_from_pdf", lambda _: "\n".join(SAMPLE_PAGES))
+    monkeypatch.setattr(
+        ar,
+        "load_cached_text",
+        lambda _sid: {
+            "pages": SAMPLE_PAGES,
+            "full_text": "\n".join(SAMPLE_PAGES),
+            "meta": {},
+        },
+    )
     monkeypatch.setattr(ar, "extract_account_headings", lambda text: [])
     monkeypatch.setattr(ar, "extract_inquiries", lambda text: [])
     monkeypatch.setattr(ar, "extract_late_history_blocks", lambda *args, **kwargs: ({}, {}, {}))

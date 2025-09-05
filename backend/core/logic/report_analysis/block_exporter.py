@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List
@@ -66,6 +67,9 @@ def load_account_blocks(session_id: str) -> List[Dict[str, Any]]:
 
 
 logger = logging.getLogger(__name__)
+
+
+ENRICH_ENABLED = os.getenv("BLOCK_ENRICH", "1") != "0"
 
 
 FIELD_LABELS: dict[str, str] = {
@@ -217,16 +221,17 @@ def export_account_blocks(
 
     out_dir = Path("traces") / "blocks" / session_id
     out_dir.mkdir(parents=True, exist_ok=True)
+    logger.warning("BLOCK_ENRICH: enabled=%s sid=%s", ENRICH_ENABLED, session_id)
 
-    enriched_blocks: List[Dict[str, Any]] = []
+    out_blocks: List[Dict[str, Any]] = []
     idx_info = []
     for i, blk in enumerate(fbk_blocks, 1):
-        enriched = enrich_block(blk)
-        enriched_blocks.append(enriched)
+        out_blk = enrich_block(blk) if ENRICH_ENABLED else blk
+        out_blocks.append(out_blk)
         jpath = out_dir / f"block_{i:02d}.json"
         with jpath.open("w", encoding="utf-8") as f:
-            json.dump(enriched, f, ensure_ascii=False, indent=2)
-        idx_info.append({"i": i, "heading": enriched["heading"], "file": str(jpath)})
+            json.dump(out_blk, f, ensure_ascii=False, indent=2)
+        idx_info.append({"i": i, "heading": out_blk["heading"], "file": str(jpath)})
 
     with (out_dir / "_index.json").open("w", encoding="utf-8") as f:
         json.dump(idx_info, f, ensure_ascii=False, indent=2)
@@ -235,7 +240,7 @@ def export_account_blocks(
         "ANZ: export blocks sid=%s dir=%s files=%d",
         session_id,
         str(out_dir),
-        len(enriched_blocks),
+        len(out_blocks),
     )
 
-    return enriched_blocks
+    return out_blocks

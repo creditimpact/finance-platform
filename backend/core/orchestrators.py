@@ -53,6 +53,7 @@ from backend.core.logic.report_analysis.extract_info import (
 from backend.core.logic.report_analysis.keys import (
     compute_logical_account_key as _compute_logical_account_key,
 )
+from backend.core.logic.report_analysis.text_provider import extract_and_cache_text
 from backend.core.logic.strategy.normalizer_2_5 import normalize_and_tag
 from backend.core.logic.strategy.summary_classifier import (
     RULES_VERSION,
@@ -81,7 +82,6 @@ from backend.core.taxonomy.problem_taxonomy import compare_tiers, normalize_deci
 from backend.core.telemetry import metrics
 from backend.core.telemetry.stageE_summary import emit_stageE_summary
 from backend.core.utils.trace_io import write_json_trace, write_text_trace
-from backend.core.logic.report_analysis.text_provider import extract_and_cache_text
 from backend.policy.policy_loader import load_rulebook
 from planner import plan_next_step
 
@@ -577,6 +577,19 @@ def analyze_credit_report(
     # ייצוא הבלוקים חייב להיות שלב ראשון (fail-fast)
     logger.info("ANZ: export kickoff sid=%s file=%s", session_id, str(pdf_path))
     export_account_blocks(session_id, pdf_path)
+
+    idx_path = Path("traces") / "blocks" / session_id / "_index.json"
+    try:
+        idx = json.loads(idx_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # file missing or unreadable
+        logger.error(
+            "BLOCKS_MISSING: index error sid=%s path=%s", session_id, str(idx_path)
+        )
+        raise CaseStoreError("no_blocks", "No account blocks exported") from exc
+    if not idx:
+        logger.error("BLOCKS_MISSING: empty index sid=%s", session_id)
+        raise CaseStoreError("no_blocks", "No account blocks exported")
+
     _pre_blocks = load_account_blocks(session_id)
     logger.info("ANZ: blocks ready sid=%s count=%d", session_id, len(_pre_blocks or []))
 
@@ -1343,9 +1356,7 @@ def extract_problematic_accounts_from_report(
     _pre = load_account_blocks(session_id)
     if not _pre:
         # Log and stop early — nothing should run without blocks
-        logger.error(
-            "BLOCKS_MISSING: no exported blocks for session_id=%s", session_id
-        )
+        logger.error("BLOCKS_MISSING: no exported blocks for session_id=%s", session_id)
         raise CaseStoreError("no_blocks", "No account blocks exported")
 
     analyzed_json_path = Path("output/analyzed_report.json")

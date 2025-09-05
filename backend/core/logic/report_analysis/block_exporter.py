@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, List
 
 from backend.core.logic.report_analysis.report_parsing import (
     build_block_fuzzy,
+    detect_bureau_order,
     extract_text_from_pdf,
 )
 from backend.core.logic.utils.text_parsing import extract_account_blocks
@@ -57,6 +59,100 @@ def load_account_blocks(session_id: str) -> List[Dict[str, Any]]:
 logger = logging.getLogger(__name__)
 
 
+FIELD_LABELS: dict[str, str] = {
+    "account #": "account_number_display",
+    "high balance": "high_balance",
+    "last verified": "last_verified",
+    "date of last activity": "date_of_last_activity",
+    "date reported": "date_reported",
+    "date opened": "date_opened",
+    "balance owed": "balance_owed",
+    "closed date": "closed_date",
+    "account rating": "account_rating",
+    "account description": "account_description",
+    "dispute status": "dispute_status",
+    "creditor type": "creditor_type",
+    "account status": "account_status",
+    "payment status": "payment_status",
+    "creditor remarks": "creditor_remarks",
+    "payment amount": "payment_amount",
+    "last payment": "last_payment",
+    "term length": "term_length",
+    "past due amount": "past_due_amount",
+    "account type": "account_type",
+    "payment frequency": "payment_frequency",
+    "credit limit": "credit_limit",
+}
+
+
+def _split_vals(text: str, parts: int) -> list[str]:
+    """Split ``text`` into ``parts`` values using column heuristics."""
+
+    if not text:
+        return [""] * parts
+
+    vals = re.split(r"\s{2,}", text.strip())
+    if len(vals) != parts:
+        tokens = text.strip().split()
+        if len(tokens) >= parts:
+            vals = tokens[: parts - 1] + [" ".join(tokens[parts - 1 :])]
+        else:
+            vals = tokens + [""] * (parts - len(tokens))
+    if len(vals) > parts:
+        vals = vals[: parts - 1] + [" ".join(vals[parts - 1 :])]
+    if len(vals) < parts:
+        vals += [""] * (parts - len(vals))
+    return [v.strip() for v in vals]
+
+
+def enrich_block(blk: dict) -> dict:
+    """Add structured ``fields`` map parsed from ``blk['lines']``."""
+
+    heading = blk.get("heading", "")
+    logger.warning("ENRICH: start heading=%r", heading)
+
+    order = detect_bureau_order(blk.get("lines") or [])
+    if not order:
+        raise ValueError("Block has no bureau columns")
+
+    # initialise fields map with empty strings
+    field_keys = list(FIELD_LABELS.values())
+    fields = {b: {k: "" for k in field_keys} for b in ["transunion", "experian", "equifax"]}
+
+    in_section = False
+    for line in blk.get("lines") or []:
+        clean = line.strip()
+        if not clean:
+            continue
+        if not in_section:
+            norm = re.sub(r"[^a-z]+", " ", clean.lower())
+            if all(b in norm for b in order):
+                in_section = True
+            continue
+
+        norm_line = clean.lower()
+        for label, key in FIELD_LABELS.items():
+            if norm_line.startswith(label):
+                rest = clean[len(label) :].strip()
+                if rest.startswith(":"):
+                    rest = rest[1:].strip()
+                vals = _split_vals(rest, len(order))
+                for idx, bureau in enumerate(order):
+                    v = vals[idx] if idx < len(vals) else ""
+                    v = v if v not in {"--", "-"} else ""
+                    fields[bureau][key] = v
+                break
+
+    tu_count = sum(1 for v in fields["transunion"].values() if v)
+    ex_count = sum(1 for v in fields["experian"].values() if v)
+    eq_count = sum(1 for v in fields["equifax"].values() if v)
+    logger.warning(
+        "ENRICH: fields_done tu=%d ex=%d eq=%d", tu_count, ex_count, eq_count
+    )
+
+    return {**blk, "fields": fields}
+
+
 def export_account_blocks(session_id: str, pdf_path: str | Path) -> List[Dict[str, Any]]:
     """Extract account blocks from ``pdf_path`` and export them to JSON files.
 
@@ -103,11 +199,14 @@ def export_account_blocks(session_id: str, pdf_path: str | Path) -> List[Dict[st
     out_dir = Path("traces") / "blocks" / session_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    enriched_blocks: List[Dict[str, Any]] = []
     idx_info = []
     for i, blk in enumerate(fbk_blocks, 1):
+        enriched = enrich_block(blk)
+        enriched_blocks.append(enriched)
         jpath = out_dir / f"block_{i:02d}.json"
         with jpath.open("w", encoding="utf-8") as f:
-            json.dump(blk, f, ensure_ascii=False, indent=2)
+            json.dump(enriched, f, ensure_ascii=False, indent=2)
         idx_info.append({"i": i, "heading": blk["heading"], "file": str(jpath)})
 
     with (out_dir / "_index.json").open("w", encoding="utf-8") as f:
@@ -117,7 +216,7 @@ def export_account_blocks(session_id: str, pdf_path: str | Path) -> List[Dict[st
         "ANZ: export blocks sid=%s dir=%s files=%d",
         session_id,
         str(out_dir),
-        len(fbk_blocks),
+        len(enriched_blocks),
     )
 
-    return fbk_blocks
+    return enriched_blocks

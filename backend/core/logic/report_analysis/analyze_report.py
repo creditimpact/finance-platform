@@ -67,8 +67,9 @@ from backend.core.logic.utils.text_parsing import (
 from backend.core.telemetry import metrics
 from backend.core.telemetry.parser_metrics import emit_parser_audit
 
-from .ocr_provider import get_ocr_provider
 from .text_normalization import NormalizationStats, normalize_page
+from .ocr_provider import get_ocr_provider  # imported for backward compat
+from .text_provider import load_cached_text
 
 
 # Lazy wrappers to avoid importing PyMuPDF at module import time in environments
@@ -953,53 +954,30 @@ def analyze_credit_report(
     extractor_accounts_total: dict[str, int] | None = None
     _finalized_snapshot: list[dict[str, Any]] | None = None
 
-    start = time.perf_counter()
-    try:
-        texts = extract_text_per_page(pdf_path)
-        extract_text_ms = int((time.perf_counter() - start) * 1000)
-        pages_total = len(texts)
-        counts = [char_count(t) for t in texts]
-        pages_with_text = sum(1 for c in counts if c >= PDF_TEXT_MIN_CHARS_PER_PAGE)
-        pages_empty_text = pages_total - pages_with_text
-        if OCR_ENABLED:
-            provider = get_ocr_provider(OCR_PROVIDER)
-            ocr_texts: dict[int, str] = {}
-            for idx, count in enumerate(counts):
-                if count < PDF_TEXT_MIN_CHARS_PER_PAGE:
-                    pages_ocr += 1
-                    res = provider.ocr_page(
-                        pdf_path,
-                        idx,
-                        timeout_ms=OCR_TIMEOUT_MS,
-                        langs=OCR_LANGS,
-                    )
-                    ocr_latency_ms_total += res.duration_ms
-                    if res.text:
-                        ocr_texts[idx] = res.text
-                    else:
-                        ocr_errors += 1
-            if ocr_texts:
-                texts = merge_text_with_ocr(texts, ocr_texts)
-        if TEXT_NORMALIZE_ENABLED:
-            normalized_pages: list[str] = []
-            for t in texts:
-                normed, s = normalize_page(t)
-                normalized_pages.append(normed)
-                norm_stats.dates_converted += s.dates_converted
-                norm_stats.amounts_converted += s.amounts_converted
-                norm_stats.bidi_stripped += s.bidi_stripped
-                norm_stats.space_reduced_chars += s.space_reduced_chars
-            texts = normalized_pages
-    except Exception:  # pragma: no cover - best effort
-        extract_text_ms = int((time.perf_counter() - start) * 1000)
-        errors = "TextExtractionError"
-        texts = []
-
-    joined = "\n".join(texts)
-    if joined:
-        text = joined
-    else:  # fallback to legacy extractor if per-page failed
-        text = extract_text_from_pdf(pdf_path)
+    cached = load_cached_text(session_id)
+    if not cached:
+        raise ValueError("no_text_extracted")
+    texts = list(cached.get("pages", []))
+    meta = cached.get("meta", {})
+    extract_text_ms = int(meta.get("extract_text_ms", 0))
+    pages_ocr = int(meta.get("pages_ocr", 0))
+    ocr_latency_ms_total = int(meta.get("ocr_latency_ms_total", 0))
+    ocr_errors = int(meta.get("ocr_errors", 0))
+    pages_total = len(texts)
+    counts = [char_count(t) for t in texts]
+    pages_with_text = sum(1 for c in counts if c >= PDF_TEXT_MIN_CHARS_PER_PAGE)
+    pages_empty_text = pages_total - pages_with_text
+    if TEXT_NORMALIZE_ENABLED:
+        normalized_pages: list[str] = []
+        for t in texts:
+            normed, s = normalize_page(t)
+            normalized_pages.append(normed)
+            norm_stats.dates_converted += s.dates_converted
+            norm_stats.amounts_converted += s.amounts_converted
+            norm_stats.bidi_stripped += s.bidi_stripped
+            norm_stats.space_reduced_chars += s.space_reduced_chars
+        texts = normalized_pages
+    text = "\n".join(texts) or cached.get("full", "")
 
     def _emit_audit() -> None:
         if PARSER_AUDIT_ENABLED:
@@ -1027,7 +1005,7 @@ def analyze_credit_report(
             )
 
     if os.getenv("EXPORT_RAW_PAGES", "0") != "0":
-        pages = extract_pdf_page_texts(pdf_path)
+        pages = cached.get("pages", [])
         trace_dir = Path("trace") / request_id
         trace_dir.mkdir(parents=True, exist_ok=True)
         for idx, page in enumerate(pages, start=1):

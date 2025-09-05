@@ -76,13 +76,12 @@ from backend.core.models import (
     ProblemAccount,
     ProofDocuments,
 )
-from backend.core.pdf.extract_text import extract_text as _debug_extract_text
 from backend.core.services.ai_client import AIClient, _StubAIClient, get_ai_client
 from backend.core.taxonomy.problem_taxonomy import compare_tiers, normalize_decision
 from backend.core.telemetry import metrics
 from backend.core.telemetry.stageE_summary import emit_stageE_summary
-from backend.core.utils.text_dump import dump_text as _dump_text
 from backend.core.utils.trace_io import write_json_trace, write_text_trace
+from backend.core.logic.report_analysis.text_provider import extract_and_cache_text
 from backend.policy.policy_loader import load_rulebook
 from planner import plan_next_step
 
@@ -572,6 +571,8 @@ def analyze_credit_report(
     update_session(session_id, file_path=str(pdf_path))
     if not is_safe_pdf(pdf_path):
         raise ValueError("Uploaded file failed PDF safety checks.")
+
+    extract_and_cache_text(session_id, pdf_path, ocr_enabled=config.OCR_ENABLED)
 
     # ייצוא הבלוקים חייב להיות שלב ראשון (fail-fast)
     logger.info("ANZ: export kickoff sid=%s file=%s", session_id, str(pdf_path))
@@ -1329,6 +1330,8 @@ def extract_problematic_accounts_from_report(
     if not is_safe_pdf(pdf_path):
         raise ValueError("Uploaded file failed PDF safety checks.")
 
+    extract_and_cache_text(session_id, pdf_path, ocr_enabled=config.OCR_ENABLED)
+
     logger.info(
         "ORCH: export kickoff (extract_problematic_accounts) sid=%s",
         session_id,
@@ -1350,20 +1353,6 @@ def extract_problematic_accounts_from_report(
 
     ai_client = get_ai_client()
     run_ai = not isinstance(ai_client, _StubAIClient)
-    # Best-effort debug: extract raw text and save a dump for troubleshooting
-    try:
-        prefer_fitz = os.getenv("USE_PYMUPDF_TEXT", "1") != "0"
-        # Prefer structured extractor; fallback to legacy dumper if write fails
-        _raw_text = _debug_extract_text(str(pdf_path), prefer_fitz=prefer_fitz)
-        try:
-            _dump = write_text_trace(
-                _raw_text, session_id=session_id, prefix="extracted"
-            )
-        except Exception:
-            _dump = _dump_text(_raw_text, session_id, prefix="extracted")
-        print(f"[TRACE] main dump saved: {_dump}")
-    except Exception as _exc:  # pragma: no cover - non-fatal
-        logger.debug("text_dump_failed session=%s error=%s", session_id, _exc)
 
     sections = analyze_report_logic(
         pdf_path,

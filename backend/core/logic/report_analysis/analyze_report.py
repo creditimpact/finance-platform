@@ -30,12 +30,7 @@ from backend.config import (
     CASESTORE_REDACT_BEFORE_STORE,
     DETERMINISTIC_EXTRACTORS_ENABLED,
     ENABLE_CASESTORE_WRITE,
-    OCR_ENABLED,
-    OCR_LANGS,
-    OCR_PROVIDER,
-    OCR_TIMEOUT_MS,
     PARSER_AUDIT_ENABLED,
-    PDF_TEXT_MIN_CHARS_PER_PAGE,
     TEXT_NORMALIZE_ENABLED,
 )
 from backend.core.case_store.api import (
@@ -68,28 +63,15 @@ from backend.core.telemetry import metrics
 from backend.core.telemetry.parser_metrics import emit_parser_audit
 
 from .text_normalization import NormalizationStats, normalize_page
-from .ocr_provider import get_ocr_provider  # imported for backward compat
 from .text_provider import load_cached_text
 
 
-# Lazy wrappers to avoid importing PyMuPDF at module import time in environments
-# without the binary. Tests can monkeypatch these names directly.
-def extract_text_per_page(pdf_path):
-    from .pdf_io import extract_text_per_page as _impl
-
-    return _impl(pdf_path)
-
-
+# Lazy wrapper to avoid importing PyMuPDF at module import time in environments
+# without the binary. Tests can monkeypatch this name directly.
 def char_count(s):
     from .pdf_io import char_count as _impl
 
     return _impl(s)
-
-
-def merge_text_with_ocr(page_texts, ocr_texts):
-    from .pdf_io import merge_text_with_ocr as _impl
-
-    return _impl(page_texts, ocr_texts)
 
 
 from .report_parsing import (  # noqa: E402,F401 - kept for test monkeypatching
@@ -98,10 +80,7 @@ from .report_parsing import (  # noqa: E402,F401 - kept for test monkeypatching
     extract_account_numbers,
     extract_creditor_remarks,
     extract_payment_statuses,
-    extract_pdf_page_texts,
-    extract_text_from_pdf,
     extract_three_column_fields,
-    scan_page_markers,
 )
 from .report_postprocessing import (  # noqa: E402
     _assign_issue_types,
@@ -954,30 +933,32 @@ def analyze_credit_report(
     extractor_accounts_total: dict[str, int] | None = None
     _finalized_snapshot: list[dict[str, Any]] | None = None
 
-    cached = load_cached_text(session_id)
+    sid = session_id or request_id
+    cached = load_cached_text(sid)
     if not cached:
-        raise ValueError("no_text_extracted")
-    texts = list(cached.get("pages", []))
+        raise ValueError("no_cached_text_for_session")
+    pages_text = list(cached["pages"])
+    text = cached.get("full_text") or cached.get("full", "")
     meta = cached.get("meta", {})
     extract_text_ms = int(meta.get("extract_text_ms", 0))
     pages_ocr = int(meta.get("pages_ocr", 0))
     ocr_latency_ms_total = int(meta.get("ocr_latency_ms_total", 0))
     ocr_errors = int(meta.get("ocr_errors", 0))
-    pages_total = len(texts)
-    counts = [char_count(t) for t in texts]
-    pages_with_text = sum(1 for c in counts if c >= PDF_TEXT_MIN_CHARS_PER_PAGE)
+    pages_total = len(pages_text)
+    counts = [char_count(t) for t in pages_text]
+    pages_with_text = sum(1 for c in counts if c > 0)
     pages_empty_text = pages_total - pages_with_text
     if TEXT_NORMALIZE_ENABLED:
         normalized_pages: list[str] = []
-        for t in texts:
+        for t in pages_text:
             normed, s = normalize_page(t)
             normalized_pages.append(normed)
             norm_stats.dates_converted += s.dates_converted
             norm_stats.amounts_converted += s.amounts_converted
             norm_stats.bidi_stripped += s.bidi_stripped
             norm_stats.space_reduced_chars += s.space_reduced_chars
-        texts = normalized_pages
-    text = "\n".join(texts) or cached.get("full", "")
+        pages_text = normalized_pages
+        text = "\n".join(pages_text) or text
 
     def _emit_audit() -> None:
         if PARSER_AUDIT_ENABLED:
@@ -1004,22 +985,6 @@ def analyze_credit_report(
                 extractor_accounts_total=extractor_accounts_total,
             )
 
-    if os.getenv("EXPORT_RAW_PAGES", "0") != "0":
-        pages = cached.get("pages", [])
-        trace_dir = Path("trace") / request_id
-        trace_dir.mkdir(parents=True, exist_ok=True)
-        for idx, page in enumerate(pages, start=1):
-            (trace_dir / f"page-{idx:02d}.txt").write_text(page, encoding="utf-8")
-        markers = scan_page_markers(pages)
-        logger.info("text_markers %s", json.dumps(markers, sort_keys=True))
-        if not any(
-            (
-                markers["has_payment_status"],
-                markers["has_creditor_remarks"],
-                markers["has_account_status"],
-            )
-        ):
-            logger.info('extraction_gap="no_marker_strings_found"')
     if not text.strip():
         raise ValueError("[ERROR] No text extracted from PDF")
 
@@ -1116,7 +1081,7 @@ def analyze_credit_report(
         )
 
         _start = time.perf_counter()
-        sec = sec_mod.detect(texts)
+        sec = sec_mod.detect(pages_text)
         extract_sections_ms = int((time.perf_counter() - _start) * 1000)
 
         bureaus = sec.get("bureaus", {})
@@ -1216,49 +1181,8 @@ def analyze_credit_report(
         try:
             full_text = text
             logger.info("FBK: scanning fallback on text len=%d", len(full_text))
-            # Compare blocks before/after PyMuPDF reflow
-            blocks_before = extract_account_blocks(full_text)
-            try:
-                from backend.core.pdf.extract_text import (
-                    extract_text as _reflow_extract,
-                )
-
-                reflowed = _reflow_extract(pdf_path, prefer_fitz=True)
-            except Exception:
-                reflowed = full_text
-            text_norm = normalize_for_regex(reflowed)
+            text_norm = normalize_for_regex(full_text)
             blocks = extract_account_blocks(text_norm)
-            try:
-                logger.info(
-                    "FBK: blocks before reflow=%d after reflow=%d",
-                    len(blocks_before),
-                    len(blocks),
-                )
-                # sample 5 lines before/after
-                blines = (full_text or "").splitlines()
-                alines = (reflowed or "").splitlines()
-                logger.info("FBK: sample pre-reflow lines: %r", blines[:5])
-                logger.info("FBK: sample post-reflow lines: %r", alines[:5])
-            except Exception:
-                pass
-            logger.info("FBK: blocks found=%d", len(blocks))
-            for i, b in enumerate(blocks[:5], 1):
-                try:
-                    has_bureau = (
-                        any(BUREAU_RE.match(line or "") for line in b[1:])
-                        if b
-                        else False
-                    )
-                    logger.info(
-                        "FBK: block[%d] heading=%r lines=%d has_bureau=%s",
-                        i,
-                        (b[0] if b else None),
-                        (len(b) if b else 0),
-                        has_bureau,
-                    )
-                except Exception:
-                    pass
-
             fallback_statuses: dict[str, dict[str, str]] = {}
             fallback_hits_additive: dict = {}
             for block in blocks:
@@ -1944,7 +1868,6 @@ def analyze_credit_report(
         print(f"[WARN] Late history parsing failed: {e}")
 
     # Load previously exported blocks and build fuzzy index without re-exporting
-    sid = session_id or request_id
     fbk_blocks = load_account_blocks(sid)
     logger.info("ANZ: loaded %d pre-exported blocks for sid=%s", len(fbk_blocks), sid)
     result["fbk_blocks"] = fbk_blocks
@@ -1987,8 +1910,7 @@ def analyze_credit_report(
             (acc.get("primary_issue") or "").lower() in relevant
             for acc in result.get("problem_accounts", [])
         )
-        # Prefer reflowed text if available
-        late_terms = detected_late_phrases(reflowed if "reflowed" in locals() else text)
+        late_terms = detected_late_phrases(text)
         if late_terms and not has_relevant:
             msg = "WARN Late payment terms found in text but no accounts marked with issues."
             issues.append(msg)

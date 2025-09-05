@@ -572,7 +572,6 @@ def analyze_credit_report(
 
     # ייצוא הבלוקים חייב להיות שלב ראשון (fail-fast)
     export_account_blocks(session_id, pdf_path)
-    os.environ["EXPORT_ACCOUNT_BLOCKS"] = "0"
 
     print("[INFO] Extracting client info from report...")
     client_personal_info = extract_bureau_info_column_refined(
@@ -1166,7 +1165,6 @@ def run_credit_repair_process(
             structured_map, raw_map, client_info, audit, ai_client
         )
         rulebook = load_rulebook()
-        os.environ["EXPORT_ACCOUNT_BLOCKS"] = "0"
         pdf_path, sections, bureau_data, today_folder = analyze_credit_report(
             proofs_files, session_id, client_info, audit, log_messages, ai_client
         )

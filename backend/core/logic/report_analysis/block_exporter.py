@@ -83,6 +83,14 @@ def export_account_blocks(session_id: str, pdf_path: str | Path) -> List[Dict[st
         heading = (blk[0] or "").strip()
         fbk_blocks.append({"heading": heading, "lines": blk})
 
+    if not fbk_blocks:
+        logger.error(
+            "BLOCKS_FAIL_FAST: 0 blocks extracted sid=%s file=%s",
+            session_id,
+            str(pdf_path),
+        )
+        raise ValueError("No blocks extracted")
+
     blocks_by_account_fuzzy = build_block_fuzzy(fbk_blocks) if fbk_blocks else {}
     logger.warning(
         "ANZ: pre-save fbk=%d fuzzy=%d sid=%s req=%s",

@@ -30,7 +30,6 @@ $env:OPENAI_API_KEY  = "<your-key>"         # או להשאיר ריק ולכב�
 $env:OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 # Parsing
-$env:USE_PYMUPDF_TEXT          = "1"
 $env:RULEBOOK_FALLBACK_ENABLED = "1"
 
 # Case-First strict mode

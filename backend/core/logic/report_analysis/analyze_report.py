@@ -21,7 +21,7 @@ import re
 import time
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Dict, List, Mapping
+from typing import Any, Mapping
 
 from rapidfuzz import fuzz
 
@@ -39,14 +39,15 @@ from backend.config import (
     TEXT_NORMALIZE_ENABLED,
 )
 from backend.core.case_store.api import (
+    MAX_RETRIES,
     create_session_case,
     load_session_case,
     save_session_case,
     upsert_account_fields,
-    MAX_RETRIES,
 )
 from backend.core.case_store.errors import CaseStoreError
 from backend.core.case_store.redaction import redact_account_fields
+from backend.core.logic.report_analysis.block_exporter import load_account_blocks
 from backend.core.logic.report_analysis.candidate_logger import (
     CandidateTokenLogger,
     StageATraceLogger,
@@ -63,9 +64,8 @@ from backend.core.logic.utils.text_parsing import (
     extract_account_headings,
     extract_late_history_blocks,
 )
-from backend.core.telemetry.parser_metrics import emit_parser_audit
 from backend.core.telemetry import metrics
-from backend.core.logic.report_analysis.block_exporter import load_account_blocks
+from backend.core.telemetry.parser_metrics import emit_parser_audit
 
 from .ocr_provider import get_ocr_provider
 from .text_normalization import NormalizationStats, normalize_page
@@ -179,6 +179,7 @@ def _track_parse_pass(session_id: str | None) -> None:
             "stage1.parse_multiple_passes session=%s passes=%d", session_id, passes
         )
         _emit_metric("stage1.parse_multiple_passes", session_id=session_id)
+
 
 # Fallback patterns for unlabeled SmartCredit text blocks
 BUREAU_RE = re.compile(r"^(TransUnion|Experian|Equifax)\b", re.IGNORECASE)
@@ -935,8 +936,6 @@ def analyze_credit_report(
             "run_ai passed to analyze_report.analyze_credit_report but unused; ignoring"
         )
 
-    os.environ["EXPORT_ACCOUNT_BLOCKS"] = "0"
-
     pages_total = 0
     pages_with_text = 0
     pages_empty_text = 0
@@ -1046,27 +1045,6 @@ def analyze_credit_report(
     if not text.strip():
         raise ValueError("[ERROR] No text extracted from PDF")
 
-    # Optional: export account blocks for debugging on text-only traces
-    try:
-        if os.getenv("EXPORT_ACCOUNT_BLOCKS", "0") != "0":
-            out_dir = Path("traces") / "blocks" / (request_id or "no-session")
-            out_dir.mkdir(parents=True, exist_ok=True)
-            blocks = extract_account_blocks(text)
-            count = 0
-            for i, block in enumerate(blocks, start=1):
-                if not block:
-                    continue
-                name = normalize_creditor_name(block[0].strip()) or f"account_{i}"
-                (out_dir / f"{i:02d}-{name}.txt").write_text(
-                    "\n".join(block), encoding="utf-8"
-                )
-                count += 1
-            path_str = str(out_dir).replace("\\", "/").rstrip("/")
-            print(f"[TRACE] account blocks exported: {count} -> {path_str}/")
-    except Exception:
-        # Best effort only
-        pass
-
     headings = extract_account_headings(text)
     heading_map = {normalize_creditor_name(norm): raw for norm, raw in headings}
 
@@ -1129,6 +1107,7 @@ def analyze_credit_report(
             save_session_case(case)
             try:
                 from pathlib import Path
+
                 from backend.config import CASESTORE_DIR
 
                 path = Path(CASESTORE_DIR) / f"{session_id}.json"
@@ -1989,6 +1968,7 @@ def analyze_credit_report(
     # Load previously exported blocks and build fuzzy index without re-exporting
     sid = session_id or request_id
     fbk_blocks = load_account_blocks(sid)
+    logger.info("ANZ: loaded %d pre-exported blocks for sid=%s", len(fbk_blocks), sid)
     result["fbk_blocks"] = fbk_blocks
     result["blocks_by_account_fuzzy"] = (
         build_block_fuzzy(fbk_blocks) if fbk_blocks else {}
@@ -2011,28 +1991,6 @@ def analyze_credit_report(
         result.get("request_id"),
     )
     # --- END: ANZ diagnostics ---
-
-    try:
-        sid = result.get("session_id") or session_id or request_id
-        if sid and os.getenv("EXPORT_ACCOUNT_BLOCKS", "0") != "0":
-            out_dir = Path("traces") / "blocks" / sid
-            out_dir.mkdir(parents=True, exist_ok=True)
-            idx_info = []
-            for i, blk in enumerate(fbk_blocks, 1):
-                jpath = out_dir / f"block_{i:02d}.json"
-                with jpath.open("w", encoding="utf-8") as f:
-                    json.dump(blk, f, ensure_ascii=False, indent=2)
-                idx_info.append({"i": i, "heading": blk["heading"], "file": str(jpath)})
-            with (out_dir / "_index.json").open("w", encoding="utf-8") as f:
-                json.dump(idx_info, f, ensure_ascii=False, indent=2)
-            logger.warning(
-                "ANZ: export blocks sid=%s dir=%s files=%d",
-                sid,
-                str(out_dir),
-                len(fbk_blocks),
-            )
-    except Exception:
-        logger.exception("block_export_failed")
 
     issues = validate_analysis_sanity(result)
     try:
@@ -2082,6 +2040,7 @@ def analyze_credit_report(
             save_session_case(case)
             try:
                 from pathlib import Path
+
                 from backend.config import CASESTORE_DIR
 
                 path = Path(CASESTORE_DIR) / f"{session_id}.json"

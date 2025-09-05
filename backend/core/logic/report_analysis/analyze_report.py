@@ -1160,7 +1160,7 @@ def analyze_credit_report(
             _col_remarks_raw,
             _col_status_raw,
             detail_map,
-        ) = extract_three_column_fields(pdf_path)
+        ) = extract_three_column_fields(pdf_path, session_id=session_id)
         three_col_header_missing = not (
             col_payment_map or col_remarks_map or status_text_map or detail_map
         )

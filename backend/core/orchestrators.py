@@ -582,7 +582,7 @@ def analyze_credit_report(
 
     print("[INFO] Extracting client info from report...")
     client_personal_info = extract_bureau_info_column_refined(
-        pdf_path, ai_client=ai_client
+        pdf_path, ai_client=ai_client, session_id=session_id
     )
     client_info.update(client_personal_info.get("data", {}))
     log_messages.append("[INFO] Personal info extracted.")

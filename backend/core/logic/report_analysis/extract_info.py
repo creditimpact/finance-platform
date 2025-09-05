@@ -3,13 +3,10 @@ import re
 from collections import Counter
 from typing import Any, Dict, List, Mapping
 
-import pdfplumber
-
 from backend.core.logic.utils.json_utils import parse_json
-from backend.core.logic.utils.names_normalization import BUREAUS, normalize_bureau_name
+from backend.core.logic.utils.names_normalization import BUREAUS
 from backend.core.services.ai_client import AIClient
-
-logging.getLogger("pdfplumber.page").setLevel(logging.ERROR)
+from .text_provider import load_cached_text
 
 
 def extract_clean_name(full_name: str) -> str:
@@ -35,94 +32,48 @@ def extract_bureau_info_column_refined(
     ai_client: AIClient,
     client_info: dict | None = None,
     use_ai: bool = False,
+    *,
+    session_id: str | None = None,
 ) -> Mapping[str, Any]:
     bureaus = BUREAUS
     data = {b: {"name": "", "dob": "", "current_address": ""} for b in bureaus}
-    discrepancies = []
+    discrepancies: list[str] = []
 
-    with pdfplumber.open(pdf_path) as pdf:
-        page = pdf.pages[0]
-        words = page.extract_words()
-        raw_text = page.extract_text()
+    cached = load_cached_text(session_id or "") if session_id else None
+    first_page = cached["pages"][0] if cached and cached.get("pages") else ""
+    raw_text = first_page
+    lines = [ln.strip() for ln in first_page.splitlines() if ln.strip()]
 
-    columns: Dict[str, List[Dict[str, Any]]] = {b: [] for b in bureaus}
-    for w in words:
-        x0 = float(w["x0"])
-        if x0 < 200:
-            columns[normalize_bureau_name("TransUnion")].append(w)
-        elif x0 < 400:
-            columns[normalize_bureau_name("Experian")].append(w)
-        else:
-            columns[normalize_bureau_name("Equifax")].append(w)
-
-    noise_words = {
-        "account",
-        "progress",
-        "plan",
-        "reactivate",
-        "score",
-        "alert",
-        "change",
-        "your",
-        "personal",
-        "information",
-        "identity",
-        "elements",
-        "name",
-        "employer",
-        "lowes",
-        "consumer",
-        "statement",
-    }
-
-    def group_words_by_line(words: List[Dict]) -> List[str]:
-        lines = []
-        current_line = []
-        last_top = None
-        for w in sorted(words, key=lambda x: (x["top"], x["x0"])):
-            if last_top is None or abs(w["top"] - last_top) < 3:
-                current_line.append(w["text"])
-                last_top = w["top"]
-            else:
-                lines.append(" ".join(current_line))
-                current_line = [w["text"]]
-                last_top = w["top"]
-        if current_line:
-            lines.append(" ".join(current_line))
-        return lines
-
-    def extract_full_name(lines: List[str]) -> str:
+    def extract_name() -> str:
         for line in lines:
-            line_upper = line.upper()
-            words = line.strip().split()
-            if (
-                2 <= len(words) <= 5
-                and all(len(w) > 1 for w in words)
-                and not any(noise in line_upper.lower() for noise in noise_words)
-            ):
-                if re.fullmatch(r"[A-Z\s\.']{6,}", line_upper):
-                    return extract_clean_name(line.title())
+            if "name" in line.lower():
+                return extract_clean_name(line.split(":", 1)[-1].strip())
         return ""
 
-    def extract_dob(lines: List[str]) -> str:
+    def extract_dob() -> str:
         for line in lines:
-            match = re.search(r"\b(19|20)\d{2}\b", line)
-            if match and match.group(0) != "2025":
-                return match.group(0)
+            if "dob" in line.lower() or "date of birth" in line.lower():
+                m = re.search(r"(19|20)\d{2}", line)
+                if m:
+                    return m.group(0)
         return ""
 
-    def extract_address(lines: List[str]) -> str:
-        for i in range(len(lines) - 1):
-            combined = f"{lines[i]} {lines[i+1]}"
-            if re.search(r"\d{3,5} .+ [A-Z]{2} \d{5}", combined.upper()):
-                return combined.title()
+    def extract_address() -> str:
+        for idx, line in enumerate(lines):
+            if "address" in line.lower():
+                part = line.split(":", 1)[-1].strip()
+                next_line = lines[idx + 1].strip() if idx + 1 < len(lines) else ""
+                return f"{part} {next_line}".strip()
         return ""
 
-    for bureau in bureaus:
-        col_lines = group_words_by_line(columns[bureau])
-        data[bureau]["name"] = extract_full_name(col_lines)
-        data[bureau]["dob"] = extract_dob(col_lines)
-        data[bureau]["current_address"] = extract_address(col_lines)
+    name = extract_name()
+    dob = extract_dob()
+    address = extract_address()
+
+    for b in bureaus:
+        data[b]["name"] = name
+        data[b]["dob"] = dob
+        data[b]["current_address"] = address
 
     for field in ["name", "dob", "current_address"]:
         field_values = [data[b][field] for b in bureaus if data[b][field]]

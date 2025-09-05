@@ -26,7 +26,6 @@ graph TD
 ```mermaid
 graph TD
     logic_analyze_report_analyze_credit_report --> logic_process_accounts_get
-    logic_analyze_report_analyze_credit_report --> logic_report_parsing_extract_text_from_pdf
     logic_analyze_report_analyze_credit_report --> logic_report_postprocessing_validate_analysis_sanity
 logic_analyze_report_analyze_credit_report --> REMOVED (parsing is deterministic)
     logic_analyze_report_analyze_credit_report --> logic_utils_inquiries_extract_inquiries

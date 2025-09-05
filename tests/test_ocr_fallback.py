@@ -1,8 +1,7 @@
 import pytest
 
 # Optional OCR stack: skip cleanly when not available in CI runner
-pytest.importorskip("pdf2image", reason="OCR tests require pdf2image installed")
-pytest.importorskip("pytesseract", reason="OCR tests require pytesseract installed")
+pytest.importorskip("tesseract", reason="OCR tests require OCR stack")
 
 from backend.core.logic.report_analysis import analyze_report, ocr_provider
 from backend.core.telemetry import parser_metrics
@@ -66,7 +65,11 @@ def _run(tmp_path, **kwargs):
 
 def test_no_ocr_when_disabled(tmp_path, monkeypatch, capture_events):
     monkeypatch.setattr(analyze_report, "OCR_ENABLED", False)
-    monkeypatch.setattr(analyze_report, "extract_text_per_page", lambda _: ["page"])
+    monkeypatch.setattr(
+        analyze_report,
+        "load_cached_text",
+        lambda _sid: {"pages": ["page"], "full_text": "page", "meta": {}},
+    )
 
     called = False
 
@@ -86,7 +89,11 @@ def test_no_ocr_when_disabled(tmp_path, monkeypatch, capture_events):
 
 def test_selective_ocr_merge(tmp_path, monkeypatch, capture_events):
     pages = ["", "X" * 10, "Y" * 80]
-    monkeypatch.setattr(analyze_report, "extract_text_per_page", lambda _: pages.copy())
+    monkeypatch.setattr(
+        analyze_report,
+        "load_cached_text",
+        lambda _sid: {"pages": pages.copy(), "full_text": "\n".join(pages), "meta": {}},
+    )
     monkeypatch.setattr(analyze_report, "OCR_ENABLED", True)
     monkeypatch.setattr(analyze_report, "PDF_TEXT_MIN_CHARS_PER_PAGE", 64)
 
@@ -129,7 +136,11 @@ def test_selective_ocr_merge(tmp_path, monkeypatch, capture_events):
 
 def test_ocr_timeout_counts_error(tmp_path, monkeypatch, capture_events):
     pages = ["", "Z" * 80]
-    monkeypatch.setattr(analyze_report, "extract_text_per_page", lambda _: pages.copy())
+    monkeypatch.setattr(
+        analyze_report,
+        "load_cached_text",
+        lambda _sid: {"pages": pages.copy(), "full_text": "\n".join(pages), "meta": {}},
+    )
     monkeypatch.setattr(analyze_report, "OCR_ENABLED", True)
     monkeypatch.setattr(analyze_report, "PDF_TEXT_MIN_CHARS_PER_PAGE", 64)
 

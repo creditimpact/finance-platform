@@ -19,8 +19,11 @@ def setup_env(monkeypatch):
         "Credit Limit: $18,900",
     ]
     text = "\n".join(lines)
-    monkeypatch.setattr(analyze_report, "extract_text_per_page", lambda _: [text])
-    monkeypatch.setattr(analyze_report, "extract_text_from_pdf", lambda _: text)
+    monkeypatch.setattr(
+        analyze_report,
+        "load_cached_text",
+        lambda _sid: {"pages": [text], "full_text": text, "meta": {}},
+    )
     monkeypatch.setattr(analyze_report, "char_count", lambda s: len(s))
     monkeypatch.setattr(analyze_report, "_reconcile_account_headings", lambda *a, **k: None)
     monkeypatch.setattr(analyze_report, "extract_inquiries", lambda t: [])

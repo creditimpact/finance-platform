@@ -34,7 +34,7 @@
 
 - עזרי ניתוח/טקסט:
   - `backend/core/logic/utils/text_parsing.py` — `extract_account_blocks`
-  - `backend/core/logic/report_analysis/report_parsing.py` — `extract_text_from_pdf`, `detect_bureau_order`, `build_block_fuzzy`
+  - `backend/core/logic/report_analysis/report_parsing.py` — `detect_bureau_order`, `build_block_fuzzy`
 
 ---
 

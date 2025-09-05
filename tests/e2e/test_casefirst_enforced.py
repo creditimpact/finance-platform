@@ -36,7 +36,8 @@ def test_orchestrator_fails_when_no_cases(monkeypatch):
         "backend.core.orchestrators.get_ai_client", lambda: _StubAIClient()
     )
     monkeypatch.setattr(
-        "backend.core.orchestrators._debug_extract_text", lambda *a, **k: ""
+        "backend.core.logic.report_analysis.text_provider._extract_text_per_page",
+        lambda p: ["stub"],
     )
     monkeypatch.setattr(
         "backend.core.orchestrators.write_text_trace", lambda *a, **k: ""

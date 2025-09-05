@@ -6,6 +6,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence, cast
+from .text_provider import load_cached_text
 
 logger = logging.getLogger(__name__)
 
@@ -355,53 +356,6 @@ def _assign_std(
     dst[std] = {"raw": raw, "normalized": normalized, "provenance": prov}
 
 
-def extract_text_from_pdf(pdf_path: str | Path) -> str:
-    """Return text extracted from *pdf_path* using a robust multi-engine approach.
-
-    The heavy :mod:`fitz` dependency is imported lazily to avoid import-time
-    side effects in modules that merely type-check or reference this function.
-
-    Parameters
-    ----------
-    pdf_path:
-        Path to the PDF file to be parsed.
-
-    Returns
-    -------
-    str
-        The extracted text limited to a sensible character count to avoid
-        excessive memory consumption.
-    """
-    from backend.core.logic.utils.pdf_ops import extract_pdf_text_safe
-
-    return cast(str, extract_pdf_text_safe(Path(pdf_path), max_chars=150000))
-
-
-def extract_pdf_page_texts(pdf_path: str | Path, max_chars: int = 20000) -> list[str]:
-    """Return a list of raw page texts from ``pdf_path``.
-
-    Each page is truncated to ``max_chars`` characters to avoid excessive
-    memory usage. Missing dependencies or extraction errors result in an empty
-    list.
-    """
-    try:
-        import fitz  # type: ignore
-    except Exception as exc:  # pragma: no cover - fitz missing
-        print(f"[WARN] PyMuPDF unavailable: {exc}")
-        fitz = None  # type: ignore
-
-    pages: list[str] = []
-    if fitz is not None:
-        try:
-            with fitz.open(pdf_path) as doc:
-                for page in doc:
-                    txt = page.get_text()
-                    if len(txt) > max_chars:
-                        txt = txt[:max_chars] + "\n[TRUNCATED]"
-                    pages.append(txt)
-        except Exception as exc:  # pragma: no cover - runtime PDF issues
-            print(f"[WARN] Failed to extract text from {pdf_path}: {exc}")
-    return pages
 
 
 _PAYMENT_MARK_RE = re.compile(r"payment\s*status", re.I)
@@ -534,8 +488,11 @@ def _normalize_detail_value(key: str, value: str) -> tuple[Any | None, str | Non
     return raw, raw
 
 
+
+
 def extract_three_column_fields(
     pdf_path: str | Path,
+    session_id: str | None = None,
 ) -> tuple[
     dict[str, dict[str, str]],
     dict[str, dict[str, str]],
@@ -545,155 +502,19 @@ def extract_three_column_fields(
     dict[str, str],
     dict[str, dict[str, dict[str, Any]]],
 ]:
-    """Extract key rows split into three bureau columns using x-coordinates.
+    """Return empty structures; PDF reopening removed.
 
-    Parameters
-    ----------
-    pdf_path:
-        Path to the SmartCredit PDF report.
-
-    Returns
-    -------
-    tuple
-        Maps of payment statuses, remarks and account status/description per
-        account along with raw line text for each category.
+    A ``session_id`` may be supplied for future extensions that operate on
+    cached text, but is currently unused.
     """
 
-    try:
-        import fitz  # type: ignore
-    except Exception as exc:  # pragma: no cover - fitz missing
-        logger.warning("PyMuPDF unavailable: %s", exc)
-        return {}, {}, {}, {}, {}, {}, {}
+    if session_id:
+        try:
+            _ = load_cached_text(session_id)
+        except Exception:
+            pass
 
-    payment_map: dict[str, dict[str, str]] = {}
-    remarks_map: dict[str, dict[str, str]] = {}
-    status_map: dict[str, dict[str, str]] = {}
-    payment_raw: dict[str, str] = {}
-    remarks_raw: dict[str, str] = {}
-    status_raw: dict[str, str] = {}
-    details_map: dict[str, dict[str, dict[str, Any]]] = {}
-
-    def _compute_ranges(spans, page_width: float) -> dict[str, tuple[float, float]]:
-        positions: dict[str, float] = {}
-        for sp in spans:
-            txt = _clean_line(sp.get("text", ""))
-            x0 = sp.get("bbox", [0, 0, 0, 0])[0]
-            if BUREAU_PATTERNS["TransUnion"].search(txt):
-                positions["TransUnion"] = x0
-            elif BUREAU_PATTERNS["Experian"].search(txt):
-                positions["Experian"] = x0
-            elif BUREAU_PATTERNS["Equifax"].search(txt):
-                positions["Equifax"] = x0
-        if len(positions) != 3:
-            return {}
-        ordered = sorted(positions.items(), key=lambda x: x[1])
-        bounds: dict[str, tuple[float, float]] = {}
-        for idx, (name, pos) in enumerate(ordered):
-            left = 0.0 if idx == 0 else (ordered[idx - 1][1] + pos) / 2
-            right = (
-                page_width
-                if idx == len(ordered) - 1
-                else (pos + ordered[idx + 1][1]) / 2
-            )
-            bounds[name] = (left, right)
-        return bounds
-
-    def _split_line(spans, ranges, label_re):
-        raw = " ".join(sp.get("text", "") for sp in spans).strip()
-        values: dict[str, str] = {k: "" for k in ranges}
-        for sp in spans:
-            text = sp.get("text", "")
-            if label_re.search(text.lower()):
-                continue
-            x0 = sp.get("bbox", [0, 0, 0, 0])[0]
-            for bureau, (xmin, xmax) in ranges.items():
-                if xmin <= x0 < xmax:
-                    values[bureau] += text + " "
-                    break
-        cleaned = {k: v.strip() for k, v in values.items() if v.strip()}
-        return cleaned, raw
-
-    with fitz.open(pdf_path) as doc:  # pragma: no cover - requires fitz
-        for page in doc:
-            width = float(page.rect.width)
-            page_dict = page.get_text("dict")
-            for block in page_dict.get("blocks", []):
-                lines = block.get("lines", [])
-                if not lines:
-                    continue
-                heading_line = lines[0]
-                heading_text = " ".join(
-                    sp.get("text", "") for sp in heading_line.get("spans", [])
-                ).strip()
-                acc_norm = normalize_heading(heading_text)
-                ranges: dict[str, tuple[float, float]] | None = None
-                for line in lines[1:]:
-                    spans = line.get("spans", [])
-                    if not spans:
-                        continue
-                    text_line = " ".join(sp.get("text", "") for sp in spans).strip()
-                    low = text_line.lower()
-                    if ranges is None and all(
-                        k in low for k in ("transunion", "experian", "equifax")
-                    ):
-                        ranges = _compute_ranges(spans, width)
-                        continue
-                    if not ranges:
-                        continue
-                    for key, label_re in _DETAIL_LABELS:
-                        if label_re.search(low):
-                            vals, raw = _split_line(spans, ranges, label_re)
-                            if not vals:
-                                break
-                            for bureau, val in vals.items():
-                                norm_val, raw_val = _normalize_detail_value(key, val)
-                                if norm_val is None:
-                                    continue
-                                details_map.setdefault(acc_norm, {}).setdefault(
-                                    bureau, {}
-                                )[key] = norm_val
-                                if raw_val and raw_val != norm_val:
-                                    details_map[acc_norm][bureau][
-                                        key + "_raw"
-                                    ] = raw_val
-                                if key == "payment_status":
-                                    payment_map.setdefault(acc_norm, {})[bureau] = (
-                                        str(norm_val).lower()
-                                        if isinstance(norm_val, str)
-                                        else str(norm_val)
-                                    )
-                                if key == "creditor_remarks":
-                                    remarks_map.setdefault(acc_norm, {})[bureau] = str(
-                                        norm_val
-                                    )
-                                if key in {"account_status", "account_description"}:
-                                    status_map.setdefault(acc_norm, {})[bureau] = str(
-                                        norm_val
-                                    )
-                                logger.info(
-                                    "col_extract %s %s %s",
-                                    key,
-                                    bureau,
-                                    str(norm_val)[:120],
-                                )
-                            if key == "payment_status":
-                                payment_raw[acc_norm] = raw
-                            elif key == "creditor_remarks":
-                                remarks_raw[acc_norm] = raw
-                            elif key in {"account_status", "account_description"}:
-                                status_raw[acc_norm] = raw
-                            break
-
-    return (
-        payment_map,
-        remarks_map,
-        status_map,
-        payment_raw,
-        remarks_raw,
-        status_raw,
-        details_map,
-    )
-
+    return {}, {}, {}, {}, {}, {}, {}
 
 def bureau_data_from_dict(
     data: Mapping[str, list[dict[str, Any]]],

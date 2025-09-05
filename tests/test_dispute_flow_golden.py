@@ -29,8 +29,6 @@ def test_dispute_flow_golden(monkeypatch):
     import sys
     import types
 
-    sys.modules["fitz"] = types.ModuleType("fitz")
-    sys.modules["pymupdf"] = types.ModuleType("pymupdf")
     from backend.core.logic.compliance.compliance_pipeline import (
         run_compliance_pipeline,
     )

@@ -10,8 +10,11 @@ import backend.core.pdf.extract_text as et
 
 @pytest.fixture(autouse=True)
 def stub_parsing(monkeypatch):
-    monkeypatch.setattr(analyze_report, "extract_text_per_page", lambda _: ["stub"])
-    monkeypatch.setattr(analyze_report, "extract_text_from_pdf", lambda _: "stub")
+    monkeypatch.setattr(
+        analyze_report,
+        "load_cached_text",
+        lambda _sid: {"pages": ["stub"], "full_text": "stub", "meta": {}},
+    )
     monkeypatch.setattr(analyze_report, "char_count", lambda s: len(s))
     monkeypatch.setattr(analyze_report, "extract_account_blocks", lambda *_: [])
     monkeypatch.setattr(analyze_report, "extract_account_headings", lambda _: [])

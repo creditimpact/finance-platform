@@ -25,7 +25,7 @@ Runs alongside strategy and letter generation to ensure recommendations and docu
   - Internal deps: `yaml`.
 - `upload_validator.py`: ensure uploaded PDFs are safe and stored under session folders.
   - Key functions: `is_valid_filename()`, `contains_suspicious_pdf_elements()`, `is_safe_pdf()`, `move_uploaded_file()`.
-  - Internal deps: `pdfplumber`, `pathlib`.
+  - Internal deps: standard library (`pathlib`).
 
 ## Entry points
 - `compliance_pipeline.run_compliance_pipeline`

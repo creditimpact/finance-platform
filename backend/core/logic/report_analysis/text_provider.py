@@ -125,4 +125,4 @@ def load_cached_text(session_id: str) -> Mapping[str, Any] | None:
         pages.append(path.read_text(encoding="utf-8"))
 
     full_text = full_path.read_text(encoding="utf-8")
-    return {"pages": pages, "full": full_text, "meta": meta}
+    return {"pages": pages, "full": full_text, "full_text": full_text, "meta": meta}

@@ -11,6 +11,49 @@ from backend.core.logic.report_analysis.report_parsing import (
 )
 from backend.core.logic.utils.text_parsing import extract_account_blocks
 
+
+def load_account_blocks(session_id: str) -> List[Dict[str, Any]]:
+    """Load previously exported account blocks for ``session_id``.
+
+    The blocks are expected under ``traces/blocks/<session_id>/_index.json``.
+    If the directory or index file is missing, or any individual block file
+    cannot be read/parsed, the function fails softly and simply returns an
+    empty list.
+
+    Parameters
+    ----------
+    session_id:
+        Identifier used for locating ``traces/blocks/<session_id>``.
+
+    Returns
+    -------
+    list[dict]
+        List of block dictionaries of the form ``{"heading": str,
+        "lines": list[str]}``.
+    """
+
+    base = Path("traces") / "blocks" / session_id
+    index_path = base / "_index.json"
+    if not index_path.exists():
+        return []
+    try:
+        idx = json.loads(index_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    blocks: List[Dict[str, Any]] = []
+    for entry in idx or []:
+        f = entry.get("file")
+        if not f:
+            continue
+        try:
+            data = json.loads(Path(f).read_text(encoding="utf-8"))
+            if isinstance(data, dict) and "heading" in data and "lines" in data:
+                blocks.append(data)
+        except Exception:
+            continue
+    return blocks
+
 logger = logging.getLogger(__name__)
 
 

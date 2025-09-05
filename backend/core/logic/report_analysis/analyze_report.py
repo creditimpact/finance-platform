@@ -65,6 +65,7 @@ from backend.core.logic.utils.text_parsing import (
 )
 from backend.core.telemetry.parser_metrics import emit_parser_audit
 from backend.core.telemetry import metrics
+from backend.core.logic.report_analysis.block_exporter import load_account_blocks
 
 from .ocr_provider import get_ocr_provider
 from .text_normalization import NormalizationStats, normalize_page
@@ -933,6 +934,8 @@ def analyze_credit_report(
         logger.debug(
             "run_ai passed to analyze_report.analyze_credit_report but unused; ignoring"
         )
+
+    os.environ["EXPORT_ACCOUNT_BLOCKS"] = "0"
 
     pages_total = 0
     pages_with_text = 0
@@ -1983,24 +1986,13 @@ def analyze_credit_report(
     except Exception as e:
         print(f"[WARN] Late history parsing failed: {e}")
 
-    # Persist raw blocks and build fuzzy index independent of export
-    blocks = extract_account_blocks(text_norm if "text_norm" in locals() else text)
-    fbk_blocks: List[Dict[str, Any]] = []
-    for blk in blocks:
-        if not blk:
-            continue
-        heading = (blk[0] or "").strip()
-        fbk_blocks.append({"heading": heading, "lines": blk})
+    # Load previously exported blocks and build fuzzy index without re-exporting
+    sid = session_id or request_id
+    fbk_blocks = load_account_blocks(sid)
     result["fbk_blocks"] = fbk_blocks
-
-    if fbk_blocks:
-        result["blocks_by_account_fuzzy"] = build_block_fuzzy(fbk_blocks)
-        logger.info(
-            "blocks_by_account_fuzzy size=%d",
-            len(result["blocks_by_account_fuzzy"]),
-        )
-    else:
-        result["blocks_by_account_fuzzy"] = {}
+    result["blocks_by_account_fuzzy"] = (
+        build_block_fuzzy(fbk_blocks) if fbk_blocks else {}
+    )
 
     # --- BEGIN: persist identifiers on analysis result ---
     try:

@@ -64,6 +64,7 @@ def load_account_blocks(session_id: str) -> List[Dict[str, Any]]:
             continue
     return blocks
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -125,7 +126,9 @@ def enrich_block(blk: dict) -> dict:
 
     # initialise fields map with empty strings
     field_keys = list(FIELD_LABELS.values())
-    fields = {b: {k: "" for k in field_keys} for b in ["transunion", "experian", "equifax"]}
+    fields = {
+        b: {k: "" for k in field_keys} for b in ["transunion", "experian", "equifax"]
+    }
 
     in_section = False
     for line in blk.get("lines") or []:
@@ -157,11 +160,20 @@ def enrich_block(blk: dict) -> dict:
     logger.warning(
         "ENRICH: fields_done tu=%d ex=%d eq=%d", tu_count, ex_count, eq_count
     )
+    logger.info(
+        "BLOCK: enrichment_summary heading=%r tu_filled=%d ex_filled=%d eq_filled=%d",
+        heading,
+        tu_count,
+        ex_count,
+        eq_count,
+    )
 
     return {**blk, "fields": fields}
 
 
-def export_account_blocks(session_id: str, pdf_path: str | Path) -> List[Dict[str, Any]]:
+def export_account_blocks(
+    session_id: str, pdf_path: str | Path
+) -> List[Dict[str, Any]]:
     """Extract account blocks from ``pdf_path`` and export them to JSON files.
 
     Parameters
@@ -197,11 +209,10 @@ def export_account_blocks(session_id: str, pdf_path: str | Path) -> List[Dict[st
 
     blocks_by_account_fuzzy = build_block_fuzzy(fbk_blocks) if fbk_blocks else {}
     logger.warning(
-        "ANZ: pre-save fbk=%d fuzzy=%d sid=%s req=%s",
+        "ANZ: pre-save fbk=%d fuzzy=%d sid=%s",
         len(fbk_blocks),
-        len((blocks_by_account_fuzzy or {}).keys()),
+        len(blocks_by_account_fuzzy or {}),
         session_id,
-        None,
     )
 
     out_dir = Path("traces") / "blocks" / session_id

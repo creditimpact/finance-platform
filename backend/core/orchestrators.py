@@ -574,7 +574,10 @@ def analyze_credit_report(
         raise ValueError("Uploaded file failed PDF safety checks.")
 
     # ייצוא הבלוקים חייב להיות שלב ראשון (fail-fast)
+    logger.info("ANZ: export kickoff sid=%s file=%s", session_id, str(pdf_path))
     export_account_blocks(session_id, pdf_path)
+    _pre_blocks = load_account_blocks(session_id)
+    logger.info("ANZ: blocks ready sid=%s count=%d", session_id, len(_pre_blocks or []))
 
     print("[INFO] Extracting client info from report...")
     client_personal_info = extract_bureau_info_column_refined(

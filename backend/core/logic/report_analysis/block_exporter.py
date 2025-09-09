@@ -1,37 +1,34 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
 from pathlib import Path
-import hashlib
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
-from backend.core.text.env_guard import ensure_env_and_paths
+from backend.core.logic.report_analysis.account_packager_coords import (
+    package_block_raw_coords,
+    write_block_raw_coords,
+)
+from backend.core.logic.report_analysis.block_segmenter import segment_account_blocks
+from backend.core.logic.report_analysis.column_reader import detect_bureau_columns
 from backend.core.logic.report_analysis.report_parsing import (
     build_block_fuzzy,
     detect_bureau_order,
 )
 from backend.core.logic.report_analysis.text_provider import load_cached_text
+from backend.core.text.env_guard import ensure_env_and_paths
 from backend.core.text.text_provider import load_text_with_layout
-from backend.core.logic.report_analysis.column_reader import (
-    detect_bureau_columns,
-)
-from backend.core.logic.report_analysis.block_segmenter import segment_account_blocks
-from backend.core.logic.report_analysis.account_packager_coords import (
-    package_block_raw_coords,
-    write_block_raw_coords,
-)
-from backend.core.logic.utils.text_parsing import extract_account_blocks
 
 # Optional G1 infra (label/bureau detection)
 try:  # pragma: no cover - optional import
     from ._bureau_parse_utils import (
         find_label_groups as G1_find_label_groups,
         is_bureau as G1_is_bureau,
-        norm as G1_norm,
     )
+
     _G1_AVAILABLE = True
 except Exception:  # pragma: no cover - best effort
     _G1_AVAILABLE = False
@@ -152,7 +149,10 @@ LABEL_MAP: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^CREDIT\s+LIMIT", re.I), "credit_limit"),
     # Optional sections
     (re.compile(r"^TWO[- ]YEAR\s+PAYMENT\s+HISTORY", re.I), "two_year_payment_history"),
-    (re.compile(r"^DAYS\s+LATE\s*[-–]\s*7\s*YEAR\s*HISTORY", re.I), "seven_year_days_late"),
+    (
+        re.compile(r"^DAYS\s+LATE\s*[-–]\s*7\s*YEAR\s*HISTORY", re.I),
+        "seven_year_days_late",
+    ),
 ]
 
 
@@ -177,7 +177,9 @@ def _find_bureau_header_idx(lines: list[str]) -> tuple[int | None, list[str] | N
         for text in pairs:
             if all(t in text for t in tokens):
                 positions = {t: text.find(t) for t in tokens}
-                order = [k.lower() for k, _ in sorted(positions.items(), key=lambda x: x[1])]
+                order = [
+                    k.lower() for k, _ in sorted(positions.items(), key=lambda x: x[1])
+                ]
                 return i, order
     return None, None
 
@@ -233,7 +235,9 @@ def _find_label_block(lines: list[str], labels: list[str]) -> int | None:
     return None
 
 
-def _collect_values_sequence(lines: list[str], start_idx: int, stop_tokens: set[str], limit: int | None = None) -> list[str]:
+def _collect_values_sequence(
+    lines: list[str], start_idx: int, stop_tokens: set[str], limit: int | None = None
+) -> list[str]:
     vals: list[str] = []
     i = max(0, start_idx)
     while i < len(lines):
@@ -286,7 +290,9 @@ def _zip_values_to_labels(raw_values: list[str], labels: list[str]) -> dict[str,
     return out
 
 
-def _segments_by_bureau(block_lines: list[str], order: list[str]) -> dict[str, dict[str, list[str]]] | None:
+def _segments_by_bureau(
+    block_lines: list[str], order: list[str]
+) -> dict[str, dict[str, list[str]]] | None:
     """Return values per bureau for top/bottom sections when OCR yields stacked segments.
 
     Returns { 'top': {bureau: [..]}, 'bottom': {bureau: [..]} } or None if not matched.
@@ -323,9 +329,25 @@ def _segments_by_bureau(block_lines: list[str], order: list[str]) -> dict[str, d
                 result["top"][b] = []
                 continue
             # Stop at next bureau token or bottom anchor if present
-            next_positions = [idxs.get(ob) for ob in order if idxs.get(ob) and idxs.get(ob) > pos]
-            bound = min([p for p in next_positions if p is not None] + ([bot_anchor] if bot_anchor is not None else []) + [len(block_lines)])
-            vals = _collect_values_sequence(block_lines, pos + 1, tokens.union({_norm_token("Two-Year Payment History"), _norm_token("Days Late - 7 Year History")}), limit=None)
+            next_positions = [
+                idxs.get(ob) for ob in order if idxs.get(ob) and idxs.get(ob) > pos
+            ]
+            bound = min(
+                [p for p in next_positions if p is not None]
+                + ([bot_anchor] if bot_anchor is not None else [])
+                + [len(block_lines)]
+            )
+            vals = _collect_values_sequence(
+                block_lines,
+                pos + 1,
+                tokens.union(
+                    {
+                        _norm_token("Two-Year Payment History"),
+                        _norm_token("Days Late - 7 Year History"),
+                    }
+                ),
+                limit=None,
+            )
             # Trim to within bound window
             # Since _collect_values_sequence ignores stop token but not bound, slice manually
             vals = vals[: max(0, min(len(vals), bound - (pos + 1)))]
@@ -338,7 +360,10 @@ def _segments_by_bureau(block_lines: list[str], order: list[str]) -> dict[str, d
         after = []
         for ln in block_lines[bot_anchor + 1 :]:
             t = _norm_token(ln)
-            if t in { _norm_token("Two-Year Payment History"), _norm_token("Days Late - 7 Year History") }:
+            if t in {
+                _norm_token("Two-Year Payment History"),
+                _norm_token("Days Late - 7 Year History"),
+            }:
                 break
             if _is_noise_line(ln):
                 continue
@@ -362,11 +387,7 @@ def _segments_by_bureau(block_lines: list[str], order: list[str]) -> dict[str, d
 
 # ------------------------------ G2: TOP-only parser ------------------------------
 def _g2_make_label_pattern(label: str) -> re.Pattern[str]:
-    esc = (
-        label.replace("-", "[-–]")
-        .replace("#", r"\s*#")
-        .replace(" ", r"\s+")
-    )
+    esc = label.replace("-", "[-–]").replace("#", r"\s*#").replace(" ", r"\s+")
     return re.compile(rf"^{esc}\s*:?$", re.IGNORECASE)
 
 
@@ -418,7 +439,9 @@ def _g2_detect_order(lines: list[str], start_idx: int) -> list[str]:
     return order
 
 
-def _g2_parse_top_only(lines: list[str]) -> tuple[dict[str, dict[str, Any]] | None, dict[str, int], int]:
+def _g2_parse_top_only(
+    lines: list[str],
+) -> tuple[dict[str, dict[str, Any]] | None, dict[str, int], int]:
     """Parse only the TOP label group into per-bureau fields.
 
     Returns (fields_by_bureau, counts_by_bureau, joined_fragments_count) or (None, {}, 0) if not matched.
@@ -483,7 +506,11 @@ def _g2_parse_top_only(lines: list[str]) -> tuple[dict[str, dict[str, Any]] | No
             fields[b][key_map[lab]] = val
         counts[b] = sum(1 for v in fields[b].values() if v)
         # move to next bureau token if current line was a bureau header consumed implicitly
-        while i < len(lines) and not _g2_is_bureau(lines[i]) and not STOP_PAT.match(lines[i]):
+        while (
+            i < len(lines)
+            and not _g2_is_bureau(lines[i])
+            and not STOP_PAT.match(lines[i])
+        ):
             # Skip residuals until next header; safety hatch
             break
         # if next line is bureau token for next bureau, it will be handled in next loop
@@ -516,7 +543,9 @@ def _g3_find_bottom_group(lines: list[str]) -> tuple[int | None, int | None, lis
     return None, None, []
 
 
-def _g3_parse_bottom_only(lines: list[str]) -> tuple[dict[str, dict[str, Any]] | None, dict[str, int], int]:
+def _g3_parse_bottom_only(
+    lines: list[str],
+) -> tuple[dict[str, dict[str, Any]] | None, dict[str, int], int]:
     start, end, labs = _g3_find_bottom_group(lines)
     if start is None or end is None or not labs:
         return None, {}, 0
@@ -593,7 +622,9 @@ def _g4_clean_money(val: str | None) -> str:
     return s
 
 
-def _g4_apply(fields: dict[str, dict[str, Any]] | None, meta: dict, lines: list[str]) -> tuple[dict[str, dict[str, Any]], dict]:
+def _g4_apply(
+    fields: dict[str, dict[str, Any]] | None, meta: dict, lines: list[str]
+) -> tuple[dict[str, dict[str, Any]], dict]:
     fields = fields or {}
     # Clean values and compute presence
     presence: dict[str, bool] = {}
@@ -613,9 +644,12 @@ def _g4_apply(fields: dict[str, dict[str, Any]] | None, meta: dict, lines: list[
     # Account number tail — if not already present, try to derive from fields
     if not meta.get("account_number_tail"):
         import re as _re
+
         tail_found = None
         for b in BUREAUS:
-            acct = (fields.get(b) or {}).get("account_number_display") or (fields.get(b) or {}).get("account_number")
+            acct = (fields.get(b) or {}).get("account_number_display") or (
+                fields.get(b) or {}
+            ).get("account_number")
             if isinstance(acct, str):
                 m = _re.search(r"\*+(\d{2,4})\b", acct)
                 if m:
@@ -674,7 +708,10 @@ def _g5_enrich_meta(meta: dict, lines: list[str]) -> dict:
                         i += 1
                         continue
                     # stop if next section header
-                    if is_days_hdr(lines[i]) or any(pat.match(lines[i].strip()) for pat, _ in _G2_TOP_PATS + _G3_BOTTOM_PATS):
+                    if is_days_hdr(lines[i]) or any(
+                        pat.match(lines[i].strip())
+                        for pat, _ in _G2_TOP_PATS + _G3_BOTTOM_PATS
+                    ):
                         break
                     if current:
                         val = lines[i].strip()
@@ -691,6 +728,7 @@ def _g5_enrich_meta(meta: dict, lines: list[str]) -> dict:
                 i = start2 + 1
                 current: str | None = None
                 import re as _re
+
                 while i < len(lines):
                     t = _norm_token(lines[i])
                     if t in tokens:
@@ -698,7 +736,10 @@ def _g5_enrich_meta(meta: dict, lines: list[str]) -> dict:
                         dl7.setdefault(current, {"30": "0", "60": "0", "90": "0"})
                         i += 1
                         continue
-                    if any(pat.match(lines[i].strip()) for pat, _ in _G2_TOP_PATS + _G3_BOTTOM_PATS) or is_history_hdr(lines[i]):
+                    if any(
+                        pat.match(lines[i].strip())
+                        for pat, _ in _G2_TOP_PATS + _G3_BOTTOM_PATS
+                    ) or is_history_hdr(lines[i]):
                         break
                     if current:
                         m30 = _re.search(r"30\s*:\s*(\d+)", lines[i])
@@ -800,7 +841,9 @@ def tail_digits_from_lines(lines: list[str]) -> str | None:
         return None
     # Prefer lines that mention account number
     candidates = [
-        ln for ln in lines if isinstance(ln, str) and re.search(r"\b(acc(?:ount)?|acct)\b", ln, re.I)
+        ln
+        for ln in lines
+        if isinstance(ln, str) and re.search(r"\b(acc(?:ount)?|acct)\b", ln, re.I)
     ] or [ln for ln in lines if isinstance(ln, str)]
     for ln in candidates:
         s = str(ln)
@@ -855,9 +898,9 @@ def enrich_block_v2(blk: dict) -> dict:
     if BLOCK_DEBUG and _G1_AVAILABLE:
         try:
             groups = G1_find_label_groups(raw_lines)
-            bureaus_seen = sorted({
-                b for b in (G1_is_bureau(ln) for ln in raw_lines) if b
-            })
+            bureaus_seen = sorted(
+                {b for b in (G1_is_bureau(ln) for ln in raw_lines) if b}
+            )
             logger.info(
                 "ENRICH:G1 label_groups=%s bureaus_seen=%s",
                 json.dumps(groups, ensure_ascii=False),
@@ -930,7 +973,8 @@ def enrich_block_v2(blk: dict) -> dict:
 
         # Fill presence/meta, apply G4 cleaning/derivations, return
         presence = {
-            b: any(v not in (None, "") for v in fields_segm.get(b, {}).values()) for b in ["transunion", "experian", "equifax"]
+            b: any(v not in (None, "") for v in fields_segm.get(b, {}).values())
+            for b in ["transunion", "experian", "equifax"]
         }
         base_meta = dict(blk.get("meta") or {})
         meta = {
@@ -943,11 +987,19 @@ def enrich_block_v2(blk: dict) -> dict:
             meta["account_number_tail"] = tail
         if BLOCK_DEBUG:
             meta.setdefault("debug", {})
-            meta["debug"].update({
-                "top_counts": {b: len(segments.get("top", {}).get(b, [])) for b in order},
-                "bottom_counts": {b: len(segments.get("bottom", {}).get(b, [])) for b in order},
-            })
-        cleaned_fields, cleaned_meta = _g4_apply(fields_segm, {**base_meta, **meta}, raw_lines)
+            meta["debug"].update(
+                {
+                    "top_counts": {
+                        b: len(segments.get("top", {}).get(b, [])) for b in order
+                    },
+                    "bottom_counts": {
+                        b: len(segments.get("bottom", {}).get(b, [])) for b in order
+                    },
+                }
+            )
+        cleaned_fields, cleaned_meta = _g4_apply(
+            fields_segm, {**base_meta, **meta}, raw_lines
+        )
         cleaned_meta = _g5_enrich_meta(cleaned_meta, raw_lines)
         return {**blk, "fields": cleaned_fields, "meta": cleaned_meta}
 
@@ -967,7 +1019,8 @@ def enrich_block_v2(blk: dict) -> dict:
                         if v:
                             src[k] = v
         presence = {
-            b: any(v not in (None, "") for v in fields_top.get(b, {}).values()) for b in ["transunion", "experian", "equifax"]
+            b: any(v not in (None, "") for v in fields_top.get(b, {}).values())
+            for b in ["transunion", "experian", "equifax"]
         }
         base_meta = dict(blk.get("meta") or {})
         meta = {
@@ -994,7 +1047,9 @@ def enrich_block_v2(blk: dict) -> dict:
                     bottom_counts.get("equifax", 0),
                     "True",
                 )
-        cleaned_fields2, cleaned_meta2 = _g4_apply(fields_top, {**base_meta, **meta}, raw_lines)
+        cleaned_fields2, cleaned_meta2 = _g4_apply(
+            fields_top, {**base_meta, **meta}, raw_lines
+        )
         cleaned_meta2 = _g5_enrich_meta(cleaned_meta2, raw_lines)
         return {**blk, "fields": cleaned_fields2, "meta": cleaned_meta2}
 
@@ -1034,7 +1089,9 @@ def enrich_block_v2(blk: dict) -> dict:
         start_row = 0
 
     def _split_three(s: str) -> list[str]:
-        parts = re.split(r"\t+", s.strip()) if "\t" in s else re.split(r"\s{2,}", s.strip())
+        parts = (
+            re.split(r"\t+", s.strip()) if "\t" in s else re.split(r"\s{2,}", s.strip())
+        )
         if len(parts) < 3:
             parts += [""] * (3 - len(parts))
         if len(parts) > 3:
@@ -1064,7 +1121,7 @@ def enrich_block_v2(blk: dict) -> dict:
             if not m:
                 continue
             matched = True
-            rest = row[m.end():].strip()
+            rest = row[m.end() :].strip()
             rest = rest[1:].strip() if rest.startswith(":") else rest
             if key == "two_year_payment_history":
                 block_lines = [row]
@@ -1145,8 +1202,12 @@ def enrich_block_v2(blk: dict) -> dict:
         )
 
     presence = {
-        "transunion": any(v not in (None, "") for v in fields.get("transunion", {}).values()),
-        "experian": any(v not in (None, "") for v in fields.get("experian", {}).values()),
+        "transunion": any(
+            v not in (None, "") for v in fields.get("transunion", {}).values()
+        ),
+        "experian": any(
+            v not in (None, "") for v in fields.get("experian", {}).values()
+        ),
         "equifax": any(v not in (None, "") for v in fields.get("equifax", {}).values()),
     }
     if BLOCK_DEBUG:
@@ -1168,10 +1229,17 @@ def enrich_block_v2(blk: dict) -> dict:
         meta["account_number_tail"] = tail
     if BLOCK_DEBUG:
         meta.setdefault("debug", {})
-        meta["debug"].update({"bureau_header_line": (hdr_idx + 1) if hdr_idx is not None else None, "head_sample": raw_lines[:8]})
+        meta["debug"].update(
+            {
+                "bureau_header_line": (hdr_idx + 1) if hdr_idx is not None else None,
+                "head_sample": raw_lines[:8],
+            }
+        )
     cleaned_fields3, cleaned_meta3 = _g4_apply(fields, {**base_meta, **meta}, raw_lines)
     cleaned_meta3 = _g5_enrich_meta(cleaned_meta3, raw_lines)
     return {**blk, "fields": cleaned_fields3, "meta": cleaned_meta3}
+
+
 def enrich_block(blk: dict) -> dict:
     """Add structured ``fields`` map parsed from ``blk['lines']``."""
 
@@ -1179,9 +1247,7 @@ def enrich_block(blk: dict) -> dict:
     logger.warning("ENRICH: start heading=%r", heading)
 
     # Normalize anomalies in potential bureau header lines
-    lines = [
-        (line or "").replace("®", "").strip() for line in (blk.get("lines") or [])
-    ]
+    lines = [(line or "").replace("®", "").strip() for line in (blk.get("lines") or [])]
     order = detect_bureau_order(lines)
     # Always compute canonical issuer + tail/meta, even if no bureau order found
     canon = normalize_heading(heading)
@@ -1372,7 +1438,9 @@ def export_account_blocks(
                 json.dumps(snap, ensure_ascii=False, indent=2), encoding="utf-8"
             )
         except Exception:
-            logger.exception("BLOCK: failed to write layout_snapshot.json for sid=%s", session_id)
+            logger.exception(
+                "BLOCK: failed to write layout_snapshot.json for sid=%s", session_id
+            )
 
     # Task B: Load existing index map (non-disruptive); used to add index_headline into packages
     index_headlines: dict[int, str] = {}
@@ -1397,7 +1465,16 @@ def export_account_blocks(
             try:
                 dbg_path = out_dir / f"_debug_layout_page{idx:03d}.tsv.json"
                 with dbg_path.open("w", encoding="utf-8") as f:
-                    json.dump({"number": pg.get("number", idx), "width": pg.get("width"), "height": pg.get("height"), "tokens": pg.get("tokens", [])}, f, ensure_ascii=False)
+                    json.dump(
+                        {
+                            "number": pg.get("number", idx),
+                            "width": pg.get("width"),
+                            "height": pg.get("height"),
+                            "tokens": pg.get("tokens", []),
+                        },
+                        f,
+                        ensure_ascii=False,
+                    )
             except Exception:
                 pass
 
@@ -1405,12 +1482,82 @@ def export_account_blocks(
     raw_index_entries: List[Dict[str, Any]] = []
     window_index_entries: List[Dict[str, Any]] = []
     windows_by_block: Dict[str, List[Dict[str, Any]]] = {}
+    page_tokens_map: Dict[int, List[dict]] = {}
+    page_dims: Dict[int, Tuple[float, float]] = {}
+    for pg in layout_pages or []:
+        try:
+            pnum = int(pg.get("number", 0) or 0)
+        except Exception:
+            pnum = 0
+        page_tokens_map[pnum] = list(pg.get("tokens") or [])
+        try:
+            pw = float(pg.get("width") or 0.0)
+        except Exception:
+            pw = 0.0
+        try:
+            ph = float(pg.get("height") or 0.0)
+        except Exception:
+            ph = 0.0
+        page_dims[pnum] = (pw, ph)
+
+    def _window_from_tokens(tokens: List[dict], pnum: int) -> Dict[str, Any] | None:
+        if not tokens:
+            return None
+        try:
+            x0 = min(float(t.get("x0", 0.0) or 0.0) for t in tokens)
+            x1 = max(float(t.get("x1", 0.0) or 0.0) for t in tokens)
+            y0 = min(float(t.get("y0", 0.0) or 0.0) for t in tokens)
+            y1 = max(float(t.get("y1", 0.0) or 0.0) for t in tokens)
+        except Exception:
+            return None
+        pw, ph = page_dims.get(pnum, (0.0, 0.0))
+        pad = 3.0
+        return {
+            "page": int(pnum),
+            "x_min": float(max(0.0, x0 - pad)),
+            "x_max": float(min(pw or (x1 + pad), x1 + pad)),
+            "y_top": float(max(0.0, y0 - pad)),
+            "y_bottom": float(min(ph or (y1 + pad), y1 + pad)),
+        }
+
+    def _fallback_windows_from_layout_window(
+        blk: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        dbg_win = ((blk.get("meta") or {}).get("debug") or {}).get("layout_window")
+        if not isinstance(dbg_win, dict):
+            return []
+        try:
+            pnum = int(dbg_win.get("page", 0) or 0)
+        except Exception:
+            pnum = 0
+        toks_all = page_tokens_map.get(pnum, [])
+        try:
+            x_min = float(dbg_win.get("x_min", 0.0) or 0.0)
+            x_max = float(dbg_win.get("x_max", 0.0) or 0.0)
+            y_top = float(dbg_win.get("y_top", 0.0) or 0.0)
+            y_bottom = float(dbg_win.get("y_bottom", 0.0) or 0.0)
+        except Exception:
+            return []
+        sel: List[dict] = []
+        for t in toks_all:
+            try:
+                mx = (float(t.get("x0", 0.0)) + float(t.get("x1", 0.0))) / 2.0
+                my = (float(t.get("y0", 0.0)) + float(t.get("y1", 0.0))) / 2.0
+            except Exception:
+                continue
+            if x_min <= mx <= x_max and y_top <= my <= y_bottom:
+                sel.append(t)
+        win = _window_from_tokens(sel, pnum)
+        return [win] if win else []
+
     # Track canonical -> variants mapping to summarize at the end
     canon_variants: dict[str, set[str]] = {}
     idx_info = []
     for i, blk in enumerate(fbk_blocks, 1):
         # Log basic block info before enrichment
-        btype = (blk.get("meta") or {}).get("block_type") if isinstance(blk, dict) else None
+        btype = (
+            (blk.get("meta") or {}).get("block_type") if isinstance(blk, dict) else None
+        )
         logger.info(
             "BLOCK: new block i=%d type=%s heading=%r lines=%d",
             i,
@@ -1420,13 +1567,14 @@ def export_account_blocks(
         )
         # RAW mode: do not enrich fields; work off the original block
         out_blk = dict(blk)
+        per_page_windows: List[Dict[str, Any]] = []
 
         # TP3: Column-reader integration to ensure full field sets per bureau
         try:
             # Map block line range to page indices using cached pages line counts
             page_texts = list((cached.get("pages") or []))
             starts: list[int] = []  # 1-based line start per page
-            ends: list[int] = []    # 1-based line end per page (inclusive)
+            ends: list[int] = []  # 1-based line end per page (inclusive)
             acc = 1
             for ptxt in page_texts:
                 n_lines = len(str(ptxt or "").splitlines())
@@ -1453,7 +1601,9 @@ def export_account_blocks(
             layout_window: dict | None = None
             try:
                 # Find bureau header line within the block
-                hdr_idx, _order = _find_bureau_header_idx([str(x or "") for x in (out_blk.get("lines") or [])])
+                hdr_idx, _order = _find_bureau_header_idx(
+                    [str(x or "") for x in (out_blk.get("lines") or [])]
+                )
             except Exception:
                 hdr_idx = None
 
@@ -1467,7 +1617,9 @@ def export_account_blocks(
                         break
 
             # Choose candidate page tokens to search for headers (prefer the header's page)
-            page_candidate_idxs = [header_page_idx] if header_page_idx is not None else list(page_idxs)
+            page_candidate_idxs = (
+                [header_page_idx] if header_page_idx is not None else list(page_idxs)
+            )
             page_candidate_idxs = [i for i in page_candidate_idxs if i is not None]
 
             def _norm_hdr_token(txt: str) -> str:
@@ -1476,14 +1628,16 @@ def export_account_blocks(
 
             def _mid_x(t: dict) -> float:
                 try:
-                    x0 = float(t.get("x0", 0.0)); x1 = float(t.get("x1", x0))
+                    x0 = float(t.get("x0", 0.0))
+                    x1 = float(t.get("x1", x0))
                     return (x0 + x1) / 2.0
                 except Exception:
                     return 0.0
 
             def _mid_y(t: dict) -> float:
                 try:
-                    y0 = float(t.get("y0", 0.0)); y1 = float(t.get("y1", y0))
+                    y0 = float(t.get("y0", 0.0))
+                    y1 = float(t.get("y1", y0))
                     return (y0 + y1) / 2.0
                 except Exception:
                     return 0.0
@@ -1507,7 +1661,11 @@ def export_account_blocks(
                 if not all(heads[k] for k in ("transunion", "experian", "equifax")):
                     continue
                 # Pick first occurrence for each header (top-most)
-                pick = {k: sorted(v, key=lambda z: float(z.get("y0", 0.0)))[0] for k, v in heads.items() if v}
+                pick = {
+                    k: sorted(v, key=lambda z: float(z.get("y0", 0.0)))[0]
+                    for k, v in heads.items()
+                    if v
+                }
                 x_min = min(float(pick[k].get("x0", 0.0)) for k in pick)
                 x_max = max(float(pick[k].get("x1", 0.0)) for k in pick)
                 y_top = min(_mid_y(pick[k]) for k in pick)
@@ -1515,9 +1673,14 @@ def export_account_blocks(
                 y_candidates: list[float] = []
                 for t in toks:
                     norm = _norm_hdr_token(str(t.get("text", "")))
-                    if norm.startswith("twoyearpaymenthistory") or norm.startswith("dayslate7yearhistory"):
+                    if norm.startswith("twoyearpaymenthistory") or norm.startswith(
+                        "dayslate7yearhistory"
+                    ):
                         y_candidates.append(_mid_y(t))
-                y_bottom = min((y for y in y_candidates if y > y_top), default=float(page.get("height") or 1e9))
+                y_bottom = min(
+                    (y for y in y_candidates if y > y_top),
+                    default=float(page.get("height") or 1e9),
+                )
                 # Small safety padding to catch thin headers near window edges
                 try:
                     page_h = float(page.get("height") or 1e9)
@@ -1528,7 +1691,8 @@ def export_account_blocks(
                 # Collect tokens fully within the window by midpoint
                 sel: list[dict] = []
                 for t in toks:
-                    mx = _mid_x(t); my = _mid_y(t)
+                    mx = _mid_x(t)
+                    my = _mid_y(t)
                     if x_min <= mx <= x_max and y_top <= my <= y_bottom:
                         sel.append(t)
                 if not sel and BLOCK_DEBUG:
@@ -1546,7 +1710,12 @@ def export_account_blocks(
                         logger.warning(
                             "RAW_COORDS: empty layout_tokens after window filter page=%s window=%s sample=%s",
                             page.get("number"),
-                            {"x_min": x_min, "x_max": x_max, "y_top": y_top, "y_bottom": y_bottom},
+                            {
+                                "x_min": x_min,
+                                "x_max": x_max,
+                                "y_top": y_top,
+                                "y_bottom": y_bottom,
+                            },
                             sample,
                         )
                     except Exception:
@@ -1566,10 +1735,14 @@ def export_account_blocks(
                         ys_next: list[float] = []
                         for tt in toks_on_page:
                             try:
-                                my = (float(tt.get("y0", 0.0)) + float(tt.get("y1", 0.0))) / 2.0
+                                my = (
+                                    float(tt.get("y0", 0.0)) + float(tt.get("y1", 0.0))
+                                ) / 2.0
                             except Exception:
                                 continue
-                            if isinstance(nxt, dict) and isinstance(nxt.get("heading"), str):
+                            if isinstance(nxt, dict) and isinstance(
+                                nxt.get("heading"), str
+                            ):
                                 txt = str(tt.get("text", "")).strip().lower()
                                 if txt and nxt["heading"].lower() in txt and my > y_top:
                                     ys_next.append(my)
@@ -1597,15 +1770,22 @@ def export_account_blocks(
                 out_blk["mode"] = "raw_coords"
                 # Always embed the computed layout_window for UI/debug ingestion
                 if layout_window:
-                    out_blk.setdefault("meta", {}).setdefault("debug", {})["layout_window"] = layout_window
+                    out_blk.setdefault("meta", {}).setdefault("debug", {})[
+                        "layout_window"
+                    ] = layout_window
 
             # Build and write RAW coordinate package (guarded by RAW_TWO_STAGE)
             if not RAW_TWO_STAGE:
                 layout_tokens2 = out_blk.get("layout_tokens") or []
                 header_tokens = [
-                    t for t in layout_tokens2 if str(t.get("text", "")).strip().lower() in ("transunion", "experian", "equifax")
+                    t
+                    for t in layout_tokens2
+                    if str(t.get("text", "")).strip().lower()
+                    in ("transunion", "experian", "equifax")
                 ]
-                bureau_cols = detect_bureau_columns(header_tokens) if header_tokens else {}
+                bureau_cols = (
+                    detect_bureau_columns(header_tokens) if header_tokens else {}
+                )
                 # Always write RAW, even when bands are missing (empty bands)
                 # Build a minimal package input with explicit window + tokens
                 index_headline = index_headlines.get(i)
@@ -1616,12 +1796,15 @@ def export_account_blocks(
                     "layout_tokens": out_blk.get("layout_tokens", []),
                     "meta": {
                         "debug": {
-                            "layout_window": ((out_blk.get("meta") or {}).get("debug") or {}).get("layout_window")
+                            "layout_window": (
+                                (out_blk.get("meta") or {}).get("debug") or {}
+                            ).get("layout_window")
                         }
                     },
                     # For convenience, also expose heading for packager
                     "heading": out_blk.get("heading"),
                 }
+
                 # Hard-guard: ensure window and tokens exist; reconstruct if needed
                 def _mid(x0, x1):
                     try:
@@ -1629,7 +1812,11 @@ def export_account_blocks(
                     except Exception:
                         return 0.0
 
-                win_obj = (blk_for_pkg.get("meta") or {}).get("debug", {}).get("layout_window")
+                win_obj = (
+                    (blk_for_pkg.get("meta") or {})
+                    .get("debug", {})
+                    .get("layout_window")
+                )
                 if not win_obj:
                     # Reconstruct a minimal window from the first overlapping page
                     sel_page = None
@@ -1667,16 +1854,32 @@ def export_account_blocks(
                     # Filter tokens from selected page by window
                     try:
                         sel_num = int(win_obj.get("page", 1) or 1)
-                        sel_page = next((p for p in (layout_pages or []) if int(p.get("number", 0)) == sel_num), None)
-                        page_tokens_all = list(sel_page.get("tokens") or []) if sel_page else []
+                        sel_page = next(
+                            (
+                                p
+                                for p in (layout_pages or [])
+                                if int(p.get("number", 0)) == sel_num
+                            ),
+                            None,
+                        )
+                        page_tokens_all = (
+                            list(sel_page.get("tokens") or []) if sel_page else []
+                        )
                         x_min = float(win_obj.get("x_min", 0.0) or 0.0)
                         x_max = float(win_obj.get("x_max", 0.0) or 0.0)
                         y_top = float(win_obj.get("y_top", 0.0) or 0.0)
                         y_bottom = float(win_obj.get("y_bottom", 0.0) or 0.0)
                         blk_for_pkg["layout_tokens"] = [
-                            tt for tt in page_tokens_all
-                            if (x_min <= _mid(tt.get("x0", 0), tt.get("x1", 0)) <= x_max)
-                            and (y_top <= _mid(tt.get("y0", 0), tt.get("y1", 0)) <= y_bottom)
+                            tt
+                            for tt in page_tokens_all
+                            if (
+                                x_min <= _mid(tt.get("x0", 0), tt.get("x1", 0)) <= x_max
+                            )
+                            and (
+                                y_top
+                                <= _mid(tt.get("y0", 0), tt.get("y1", 0))
+                                <= y_bottom
+                            )
                         ]
                     except Exception:
                         blk_for_pkg["layout_tokens"] = []
@@ -1689,14 +1892,22 @@ def export_account_blocks(
                     )
                     continue
 
-                raw_pkg = package_block_raw_coords(blk_for_pkg, bureau_cols if bureau_cols else {})
-                raw_path = write_block_raw_coords(session_id, i, raw_pkg, index_headline)
+                raw_pkg = package_block_raw_coords(
+                    blk_for_pkg, bureau_cols if bureau_cols else {}
+                )
+                raw_path = write_block_raw_coords(
+                    session_id, i, raw_pkg, index_headline
+                )
                 out_blk.setdefault("artifacts", {})["raw_coords_path"] = raw_path
                 # Persist stats on block artifacts for indexing
                 try:
                     stats = raw_pkg.get("stats") or {}
-                    out_blk.setdefault("artifacts", {})["raw_row_count"] = int(stats.get("row_count", 0) or 0)
-                    out_blk.setdefault("artifacts", {})["raw_token_count"] = int(stats.get("token_count", 0) or 0)
+                    out_blk.setdefault("artifacts", {})["raw_row_count"] = int(
+                        stats.get("row_count", 0) or 0
+                    )
+                    out_blk.setdefault("artifacts", {})["raw_token_count"] = int(
+                        stats.get("token_count", 0) or 0
+                    )
                 except Exception:
                     pass
                 logger.info(
@@ -1723,14 +1934,16 @@ def export_account_blocks(
             raw_path_idx = artifacts.get("raw_coords_path")
             row_count_idx = int(artifacts.get("raw_row_count") or 0)
             token_count_idx = int(artifacts.get("raw_token_count") or 0)
-            raw_index_entries.append({
-                "block_id": i,
-                "heading": out_blk.get("heading"),
-                "index_headline": index_headlines.get(i),
-                "raw_coords_path": raw_path_idx,
-                "row_count": row_count_idx,
-                "token_count": token_count_idx,
-            })
+            raw_index_entries.append(
+                {
+                    "block_id": i,
+                    "heading": out_blk.get("heading"),
+                    "index_headline": index_headlines.get(i),
+                    "raw_coords_path": raw_path_idx,
+                    "row_count": row_count_idx,
+                    "token_count": token_count_idx,
+                }
+            )
         except Exception:
             pass
         # Remove any residual fields/presence scaffolding before writing the block JSON
@@ -1748,12 +1961,16 @@ def export_account_blocks(
         # Write a lightweight block envelope for UI: heading, lines, artifacts.raw_coords_path, and debug layout_window
         try:
             artifacts = out_blk.get("artifacts") or {}
-            dbg_win = ((out_blk.get("meta") or {}).get("debug") or {}).get("layout_window")
+            dbg_win = ((out_blk.get("meta") or {}).get("debug") or {}).get(
+                "layout_window"
+            )
             light_blk = {
                 "heading": out_blk.get("heading"),
                 "lines": out_blk.get("lines") or [],
                 "artifacts": {
-                    "raw_coords_path": None if RAW_TWO_STAGE else artifacts.get("raw_coords_path")
+                    "raw_coords_path": (
+                        None if RAW_TWO_STAGE else artifacts.get("raw_coords_path")
+                    )
                 },
                 "debug": {"layout_window": dbg_win},
             }
@@ -1761,7 +1978,7 @@ def export_account_blocks(
             if RAW_TWO_STAGE:
                 # Build per-page spans using cached page line ranges and layout tokens
                 spans: List[Dict[str, Any]] = []
-                per_page_windows: List[Dict[str, Any]] = []
+                per_page_windows = []
                 try:
                     # Determine overlapping pages for this block via text line ranges
                     spans_pages = []
@@ -1771,7 +1988,9 @@ def export_account_blocks(
                         if sline <= pe and (eline - 1) >= ps:
                             spans_pages.append(pidx)
                     for pidx in spans_pages:
-                        page_obj = layout_pages[pidx] if pidx < len(layout_pages) else None
+                        page_obj = (
+                            layout_pages[pidx] if pidx < len(layout_pages) else None
+                        )
                         if not page_obj:
                             continue
                         try:
@@ -1827,19 +2046,27 @@ def export_account_blocks(
                             used_fallback = True
                         if toks_used:
                             try:
-                                y_min = min(float(tt.get("y0", 0.0) or 0.0) for tt in toks_used)
+                                y_min = min(
+                                    float(tt.get("y0", 0.0) or 0.0) for tt in toks_used
+                                )
                             except Exception:
                                 y_min = 0.0
                             try:
-                                y_max = max(float(tt.get("y1", 0.0) or 0.0) for tt in toks_used)
+                                y_max = max(
+                                    float(tt.get("y1", 0.0) or 0.0) for tt in toks_used
+                                )
                             except Exception:
                                 y_max = 0.0
                             try:
-                                x_min = min(float(tt.get("x0", 0.0) or 0.0) for tt in toks_used)
+                                x_min = min(
+                                    float(tt.get("x0", 0.0) or 0.0) for tt in toks_used
+                                )
                             except Exception:
                                 x_min = 0.0
                             try:
-                                x_max = max(float(tt.get("x1", 0.0) or 0.0) for tt in toks_used)
+                                x_max = max(
+                                    float(tt.get("x1", 0.0) or 0.0) for tt in toks_used
+                                )
                             except Exception:
                                 x_max = 0.0
                             # Hard boundary rule: snap to midline of first/last lines when available
@@ -1854,7 +2081,10 @@ def export_account_blocks(
                                         ln_i = None
                                     if ln_i is None:
                                         continue
-                                    my = (float(tt.get("y0", 0.0) or 0.0) + float(tt.get("y1", 0.0) or 0.0)) / 2.0
+                                    my = (
+                                        float(tt.get("y0", 0.0) or 0.0)
+                                        + float(tt.get("y1", 0.0) or 0.0)
+                                    ) / 2.0
                                     mids_by_line.setdefault(ln_i, []).append(my)
                                 # If line_min/line_max known, snap to their midlines
                                 if line_min is not None and line_min in mids_by_line:
@@ -1875,15 +2105,26 @@ def export_account_blocks(
                                         ph_local = float(page_obj.get("height") or 0.0)
                                     except Exception:
                                         ph_local = 0.0
-                                    if spans_pages and pidx == max(spans_pages) and ph_local:
+                                    if (
+                                        spans_pages
+                                        and pidx == max(spans_pages)
+                                        and ph_local
+                                    ):
                                         y_max = ph_local
                             except Exception:
                                 pass
                             # Count all tokens on this page whose midY falls within [y_min, y_max]
                             try:
+
                                 def _midy(tt: dict) -> float:
-                                    return (float(tt.get("y0", 0.0) or 0.0) + float(tt.get("y1", 0.0) or 0.0)) / 2.0
-                                token_count_in_span = sum(1 for tt in toks_all if y_min <= _midy(tt) <= y_max)
+                                    return (
+                                        float(tt.get("y0", 0.0) or 0.0)
+                                        + float(tt.get("y1", 0.0) or 0.0)
+                                    ) / 2.0
+
+                                token_count_in_span = sum(
+                                    1 for tt in toks_all if y_min <= _midy(tt) <= y_max
+                                )
                             except Exception:
                                 token_count_in_span = len(toks_used)
 
@@ -1903,7 +2144,9 @@ def export_account_blocks(
                                 "y_max": y_max,
                                 "token_count": len(toks_used),
                                 "token_count_in_span": int(token_count_in_span),
-                                "token_count_assigned": int(0 if used_fallback else len(toks_used)),
+                                "token_count_assigned": int(
+                                    0 if used_fallback else len(toks_used)
+                                ),
                                 "assigned": (not used_fallback),
                                 "x_min": float(x_min_w),
                                 "x_max": float(x_max_w),
@@ -1918,23 +2161,45 @@ def export_account_blocks(
                                 ph = float(page_obj.get("height") or 0.0) or 0.0
                             except Exception:
                                 pw = ph = 0.0
-                            per_page_windows.append({
-                                "page": int(page_number),
-                                "x_min": float(max(0.0, x_min - pad)),
-                                "x_max": float(min(pw or (x_max + pad), x_max + pad)),
-                                "y_top": float(max(0.0, y_min - pad)),
-                                "y_bottom": float(min(ph or (y_max + pad), y_max + pad)),
-                            })
+                            per_page_windows.append(
+                                {
+                                    "page": int(page_number),
+                                    "x_min": float(max(0.0, x_min - pad)),
+                                    "x_max": float(
+                                        min(pw or (x_max + pad), x_max + pad)
+                                    ),
+                                    "y_top": float(max(0.0, y_min - pad)),
+                                    "y_bottom": float(
+                                        min(ph or (y_max + pad), y_max + pad)
+                                    ),
+                                }
+                            )
                 except Exception:
                     spans = []
                     per_page_windows = []
 
                 # Derive pages list and continued flag from per-page windows/spans
                 try:
-                    pages_list = sorted({int(e.get("page")) for e in (per_page_windows or []) if isinstance(e, dict) and e.get("page") is not None})
+                    pages_list = sorted(
+                        {
+                            int(e.get("page"))
+                            for e in (per_page_windows or [])
+                            if isinstance(e, dict) and e.get("page") is not None
+                        }
+                    )
                     if not pages_list and spans:
-                        pages_list = sorted({int(e.get("page")) for e in spans if isinstance(e, dict) and e.get("page") is not None})
-                    if not pages_list and isinstance(dbg_win, dict) and dbg_win.get("page"):
+                        pages_list = sorted(
+                            {
+                                int(e.get("page"))
+                                for e in spans
+                                if isinstance(e, dict) and e.get("page") is not None
+                            }
+                        )
+                    if (
+                        not pages_list
+                        and isinstance(dbg_win, dict)
+                        and dbg_win.get("page")
+                    ):
                         pages_list = [int(dbg_win.get("page"))]
                 except Exception:
                     pages_list = []
@@ -1945,8 +2210,10 @@ def export_account_blocks(
                 tail_anchor = None
                 try:
                     import re as _re
+
                     def _norm_txt2(s: str) -> str:
                         return _re.sub(r"\W+", "", (s or "").lower())
+
                     def _find_anchor(h: str | None):
                         if not h:
                             return None
@@ -1964,7 +2231,10 @@ def export_account_blocks(
                                     except Exception:
                                         pnum = pidx + 1
                                     try:
-                                        y = (float(t.get("y0", 0.0)) + float(t.get("y1", 0.0))) / 2.0
+                                        y = (
+                                            float(t.get("y0", 0.0))
+                                            + float(t.get("y1", 0.0))
+                                        ) / 2.0
                                     except Exception:
                                         y = 0.0
                                     ln = t.get("line")
@@ -1973,16 +2243,26 @@ def export_account_blocks(
                                     except Exception:
                                         ln_i = None
                                     tup = (pidx, pnum, y, ln_i)
-                                    if best is None or (tup[0], tup[2]) < (best[0], best[2]):
+                                    if best is None or (tup[0], tup[2]) < (
+                                        best[0],
+                                        best[2],
+                                    ):
                                         best = tup
                         if best is None:
                             return None
-                        return {"page": int(best[1]), "y": float(best[2]), "line": best[3]}
+                        return {
+                            "page": int(best[1]),
+                            "y": float(best[2]),
+                            "line": best[3],
+                        }
+
                     head_anchor = _find_anchor(str(out_blk.get("heading") or ""))
                     nxt_heading = None
                     if i < len(fbk_blocks):
                         try:
-                            nxt_heading = str((fbk_blocks[i] or {}).get("heading") or "")
+                            nxt_heading = str(
+                                (fbk_blocks[i] or {}).get("heading") or ""
+                            )
                         except Exception:
                             nxt_heading = None
                     nxt = _find_anchor(nxt_heading)
@@ -2000,23 +2280,28 @@ def export_account_blocks(
                                 yb = float(lp.get("height") or 0.0)
                             except Exception:
                                 yb = 0.0
-                            tail_anchor = {"page": int(pnum), "y": float(yb), "line": None}
+                            tail_anchor = {
+                                "page": int(pnum),
+                                "y": float(yb),
+                                "line": None,
+                            }
                 except Exception:
                     head_anchor = head_anchor or None
                     tail_anchor = tail_anchor or None
 
-                window_index_entries.append({
-                    "block_id": i,
-                    "heading": out_blk.get("heading"),
-                    "index_headline": index_headlines.get(i),
-                    "window": dbg_win if dbg_win else None,
-                    "spans": spans,
-                    "pages": pages_list,
-                    "continued": continued_flag,
-                    "head_anchor": head_anchor,
-                    "tail_anchor": tail_anchor,
-                })
-                windows_by_block[str(i)] = per_page_windows
+                window_index_entries.append(
+                    {
+                        "block_id": i,
+                        "heading": out_blk.get("heading"),
+                        "index_headline": index_headlines.get(i),
+                        "window": dbg_win if dbg_win else None,
+                        "spans": spans,
+                        "pages": pages_list,
+                        "continued": continued_flag,
+                        "head_anchor": head_anchor,
+                        "tail_anchor": tail_anchor,
+                    }
+                )
         except Exception:
             light_blk = {
                 "heading": out_blk.get("heading"),
@@ -2025,15 +2310,21 @@ def export_account_blocks(
                 "debug": {"layout_window": None},
             }
             if RAW_TWO_STAGE:
-                window_index_entries.append({
-                    "block_id": i,
-                    "heading": out_blk.get("heading"),
-                    "index_headline": index_headlines.get(i),
-                    "window": None,
-                    "spans": [],
-                    "pages": [],
-                    "continued": False,
-                })
+                window_index_entries.append(
+                    {
+                        "block_id": i,
+                        "heading": out_blk.get("heading"),
+                        "index_headline": index_headlines.get(i),
+                        "window": None,
+                        "spans": [],
+                        "pages": [],
+                        "continued": False,
+                    }
+                )
+        if RAW_TWO_STAGE:
+            if not per_page_windows:
+                per_page_windows = _fallback_windows_from_layout_window(out_blk)
+            windows_by_block[str(i)] = per_page_windows
         with jpath.open("w", encoding="utf-8") as f:
             json.dump(light_blk, f, ensure_ascii=False, indent=2)
         idx_info.append({"i": i, "heading": out_blk["heading"], "file": str(jpath)})
@@ -2067,23 +2358,34 @@ def export_account_blocks(
                 blocks_fixed.append(row)
             # Compute spans checksum for stability tracking
             try:
+
                 def _as_int(v):
                     try:
                         return int(v)
                     except Exception:
                         return 0
+
                 def _as_float(v):
                     try:
                         return float(v)
                     except Exception:
                         return 0.0
+
                 hasher = hashlib.sha1()
-                for row in sorted(blocks_fixed, key=lambda r: _as_int(r.get("block_id", 0))):
+                for row in sorted(
+                    blocks_fixed, key=lambda r: _as_int(r.get("block_id", 0))
+                ):
                     bid = _as_int(row.get("block_id", 0))
-                    spans = list(row.get("spans") or []) if isinstance(row, dict) else []
+                    spans = (
+                        list(row.get("spans") or []) if isinstance(row, dict) else []
+                    )
                     spans_sorted = sorted(
                         spans,
-                        key=lambda s: (_as_int((s or {}).get("page", 0)), _as_float((s or {}).get("y_min", 0.0)), _as_float((s or {}).get("y_max", 0.0))),
+                        key=lambda s: (
+                            _as_int((s or {}).get("page", 0)),
+                            _as_float((s or {}).get("y_min", 0.0)),
+                            _as_float((s or {}).get("y_max", 0.0)),
+                        ),
                     )
                     for sp in spans_sorted:
                         pg = _as_int(sp.get("page", 0))
@@ -2117,7 +2419,7 @@ def export_account_blocks(
                 debug_dir.mkdir(parents=True, exist_ok=True)
                 # Build page number -> tokens map from layout_pages
                 page_tokens_map: Dict[int, List[dict]] = {}
-                for pg in (layout_pages or []):
+                for pg in layout_pages or []:
                     try:
                         pnum = int(pg.get("number", 0) or 0)
                     except Exception:
@@ -2132,10 +2434,14 @@ def export_account_blocks(
                         bid_i = 0
                     if not bid_i:
                         continue
-                    spans = list(row.get("spans") or []) if isinstance(row, dict) else []
+                    spans = (
+                        list(row.get("spans") or []) if isinstance(row, dict) else []
+                    )
                     if not spans:
                         # still create an empty file for consistency
-                        (debug_dir / f"_debug_block_{bid_i}.tsv").write_text("page\tline\ty0\ty1\tx0\tx1\ttext\n", encoding="utf-8")
+                        (debug_dir / f"_debug_block_{bid_i}.tsv").write_text(
+                            "page\tline\ty0\ty1\tx0\tx1\ttext\n", encoding="utf-8"
+                        )
                         continue
                     seen = set()
                     lines_out: List[str] = ["page\tline\ty0\ty1\tx0\tx1\ttext\n"]
@@ -2149,7 +2455,8 @@ def export_account_blocks(
                             y0 = float(sp.get("y_min", 0.0) or 0.0)
                             y1 = float(sp.get("y_max", 0.0) or 0.0)
                         except Exception:
-                            y0 = 0.0; y1 = 0.0
+                            y0 = 0.0
+                            y1 = 0.0
                         try:
                             xs0 = float(sp.get("x_min", 0.0) or 0.0)
                             xs1 = float(sp.get("x_max", 0.0) or 0.0)
@@ -2179,15 +2486,35 @@ def export_account_blocks(
                                 ln_s = str(int(ln)) if ln is not None else ""
                             except Exception:
                                 ln_s = ""
-                            key = (sp_page, ln_s, f"{ty0:.3f}", f"{ty1:.3f}", f"{tx0:.3f}", f"{tx1:.3f}", str(t.get("text", "")))
+                            key = (
+                                sp_page,
+                                ln_s,
+                                f"{ty0:.3f}",
+                                f"{ty1:.3f}",
+                                f"{tx0:.3f}",
+                                f"{tx1:.3f}",
+                                str(t.get("text", "")),
+                            )
                             if key in seen:
                                 continue
                             seen.add(key)
-                            text = str(t.get("text", "")).replace("\t", " ").replace("\n", " ")
-                            lines_out.append(f"{sp_page}\t{ln_s}\t{ty0:.3f}\t{ty1:.3f}\t{tx0:.3f}\t{tx1:.3f}\t{text}\n")
-                    (debug_dir / f"_debug_block_{bid_i}.tsv").write_text("".join(lines_out), encoding="utf-8")
+                            text = (
+                                str(t.get("text", ""))
+                                .replace("\t", " ")
+                                .replace("\n", " ")
+                            )
+                            lines_out.append(
+                                f"{sp_page}\t{ln_s}\t{ty0:.3f}\t{ty1:.3f}\t{tx0:.3f}\t{tx1:.3f}\t{text}\n"
+                            )
+                    (debug_dir / f"_debug_block_{bid_i}.tsv").write_text(
+                        "".join(lines_out), encoding="utf-8"
+                    )
             except Exception:
-                logger.debug("StageA: failed to write per-block debug TSVs (sid=%s)", session_id, exc_info=True)
+                logger.debug(
+                    "StageA: failed to write per-block debug TSVs (sid=%s)",
+                    session_id,
+                    exc_info=True,
+                )
             try:
                 pages_n = len(layout_pages) if isinstance(layout_pages, list) else 0
             except Exception:
@@ -2203,27 +2530,44 @@ def export_account_blocks(
                 blocks_n,
             )
         except Exception:
-            logger.exception("BLOCK: failed to write block_windows.json for sid=%s", session_id)
+            logger.exception(
+                "BLOCK: failed to write block_windows.json for sid=%s", session_id
+            )
     else:
         # Legacy: Write compact RAW index per session
         try:
             raw_dir = out_dir / "accounts_raw"
             raw_dir.mkdir(parents=True, exist_ok=True)
             raw_index = {"session_id": session_id, "blocks": raw_index_entries}
-            (raw_dir / "_raw_index.json").write_text(json.dumps(raw_index, ensure_ascii=False, indent=2), encoding="utf-8")
+            (raw_dir / "_raw_index.json").write_text(
+                json.dumps(raw_index, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
         except Exception:
             pass
 
     # Log canonicalization summary + segmentation summary
     try:
-        summary = {k: len(v) for k, v in sorted(canon_variants.items(), key=lambda x: x[0])}
-        logger.debug("BLOCK: canonicalization_summary %s", json.dumps(summary, ensure_ascii=False, sort_keys=True))
+        summary = {
+            k: len(v) for k, v in sorted(canon_variants.items(), key=lambda x: x[0])
+        }
+        logger.debug(
+            "BLOCK: canonicalization_summary %s",
+            json.dumps(summary, ensure_ascii=False, sort_keys=True),
+        )
     except Exception:
         pass
 
     try:
-        accounts = sum(1 for b in out_blocks if (b.get("meta") or {}).get("block_type") == "account")
-        summaries = sum(1 for b in out_blocks if (b.get("meta") or {}).get("block_type") == "summary")
+        accounts = sum(
+            1
+            for b in out_blocks
+            if (b.get("meta") or {}).get("block_type") == "account"
+        )
+        summaries = sum(
+            1
+            for b in out_blocks
+            if (b.get("meta") or {}).get("block_type") == "summary"
+        )
         logger.info(
             "BLOCK: segmentation summary accounts=%d summaries=%d total=%d",
             accounts,
@@ -2241,6 +2585,7 @@ def export_account_blocks(
     )
 
     return out_blocks
+
 
 # ----------------------------------------------------------------------------
 # H1 override: enrich_block with TOP-group alignment and continuation joining
@@ -2449,7 +2794,11 @@ def enrich_block(blk: dict) -> dict:
                     v = ""
                 fields[b][key] = v
         h1_applied = any(
-            any(fields[b].get(top_key_map[lab], "") for lab in top_labels if lab in top_key_map)
+            any(
+                fields[b].get(top_key_map[lab], "")
+                for lab in top_labels
+                if lab in top_key_map
+            )
             for b in order
         )
 
@@ -2488,7 +2837,9 @@ def enrich_block(blk: dict) -> dict:
             if b2 and b2 not in bureau_idx_bottom:
                 bureau_idx_bottom[b2] = idxb
         if not order_bottom:
-            order_bottom = [b for b, _ in sorted(bureau_idx_bottom.items(), key=lambda x: x[1])]
+            order_bottom = [
+                b for b, _ in sorted(bureau_idx_bottom.items(), key=lambda x: x[1])
+            ]
         if not order_bottom:
             try:
                 order_bottom = detect_bureau_order(lines) or []
@@ -2511,7 +2862,7 @@ def enrich_block(blk: dict) -> dict:
 
     if bottom_start_idx is not None and (order_bottom or bureau_idx_bottom):
         n_needed_bottom = len(bottom_labels)
-        for b in (order_bottom or list(bureau_idx_bottom.keys())):
+        for b in order_bottom or list(bureau_idx_bottom.keys()):
             if b not in bureau_idx_bottom:
                 # No explicit bureau token near bottom; skip to avoid spillover
                 continue
@@ -2530,12 +2881,22 @@ def enrich_block(blk: dict) -> dict:
                     vals_b.append(tline)
                 else:
                     nxt2 = lines[p + 1] if (p + 1) < len(lines) else None
-                    curr_label = bottom_labels[len(vals_b) - 1] if (len(vals_b) - 1) < len(bottom_labels) else None
+                    curr_label = (
+                        bottom_labels[len(vals_b) - 1]
+                        if (len(vals_b) - 1) < len(bottom_labels)
+                        else None
+                    )
                     # For BOTTOM section, only allow joining for Creditor Remarks;
                     # avoid accidental concatenation for status/type fields.
-                    join = _should_join(vals_b[-1], tline, nxt2) if curr_label in {"Creditor Remarks"} else False
+                    join = (
+                        _should_join(vals_b[-1], tline, nxt2)
+                        if curr_label in {"Creditor Remarks"}
+                        else False
+                    )
                     if join:
-                        vals_b[-1] = (vals_b[-1] + " " + tline).strip() if vals_b[-1] else tline
+                        vals_b[-1] = (
+                            (vals_b[-1] + " " + tline).strip() if vals_b[-1] else tline
+                        )
                     else:
                         vals_b.append(tline)
                 p += 1
@@ -2603,16 +2964,22 @@ def enrich_block(blk: dict) -> dict:
             bureau_cols = {}
         if BLOCK_DEBUG:
             try:
-                logger.info("ENRICH: layout header bands detected=%s", bool(bureau_cols))
+                logger.info(
+                    "ENRICH: layout header bands detected=%s", bool(bureau_cols)
+                )
             except Exception:
                 pass
         # Build full 3-bureau table from layout
         try:
-            fields_from_layout = extract_bureau_table({
-                "layout_tokens": layout_tokens,
-                "meta": {"debug": {"bureau_cols": bureau_cols}},
-            })
-            if isinstance(fields_from_layout, dict) and all(b in fields_from_layout for b in ("transunion", "experian", "equifax")):
+            fields_from_layout = extract_bureau_table(
+                {
+                    "layout_tokens": layout_tokens,
+                    "meta": {"debug": {"bureau_cols": bureau_cols}},
+                }
+            )
+            if isinstance(fields_from_layout, dict) and all(
+                b in fields_from_layout for b in ("transunion", "experian", "equifax")
+            ):
                 fields = fields_from_layout
             elif not bureau_cols:
                 # Safe fallback: keep empty fields and log
@@ -2654,10 +3021,14 @@ def enrich_block(blk: dict) -> dict:
             cleaned_meta.setdefault("debug", {})
             # Bureau header line (1-based index in lines)
             try:
-                hdr_idx, _order = _find_bureau_header_idx([str(x or "") for x in (blk.get("lines") or [])])
+                hdr_idx, _order = _find_bureau_header_idx(
+                    [str(x or "") for x in (blk.get("lines") or [])]
+                )
             except Exception:
                 hdr_idx = None
-            cleaned_meta["debug"]["bureau_header_line"] = (hdr_idx + 1) if hdr_idx is not None else None
+            cleaned_meta["debug"]["bureau_header_line"] = (
+                (hdr_idx + 1) if hdr_idx is not None else None
+            )
             # Bureau columns (x bands)
             if layout_tokens:
                 try:
@@ -2666,7 +3037,9 @@ def enrich_block(blk: dict) -> dict:
                     cols = {}
                 cleaned_meta["debug"]["bureau_cols"] = cols
                 # First 8 rows preview
-                cleaned_meta["debug"]["rows"] = build_debug_rows(layout_tokens, cols, 8) if cols else []
+                cleaned_meta["debug"]["rows"] = (
+                    build_debug_rows(layout_tokens, cols, 8) if cols else []
+                )
         except Exception:
             pass
 

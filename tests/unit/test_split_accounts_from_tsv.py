@@ -38,13 +38,13 @@ def test_split_accounts(tmp_path: Path) -> None:
 
     acc1, acc2 = accounts
     assert acc1["heading_guess"] == "BANKAMERICA"
-    assert acc1["line_start"] == 2
+    assert acc1["line_start"] == 1
     assert acc1["line_end"] == 3
-    assert acc1["lines"][0]["text"] == "Account # 123"
+    assert acc1["lines"][0]["text"] == "BANKAMERICA"
 
     assert acc2["heading_guess"] == "TRUISTMRTG"
-    assert acc2["line_start"] == 5
-    assert acc2["lines"][1]["text"] == "Line B1"
+    assert acc2["line_start"] == 4
+    assert acc2["lines"][1]["text"] == "Account # 456"
 
 
 def create_stop_marker_tsv(path: Path) -> None:

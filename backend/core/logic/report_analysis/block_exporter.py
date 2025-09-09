@@ -21,6 +21,8 @@ from backend.core.logic.report_analysis.report_parsing import (
 from backend.core.logic.report_analysis.text_provider import load_cached_text
 from backend.core.text.env_guard import ensure_env_and_paths
 from backend.core.text.text_provider import load_text_with_layout
+from backend.core.utils.trace_io import write_json_trace, write_text_trace
+from scripts.split_accounts_from_tsv import split_accounts as split_accounts_from_tsv
 
 # Optional G1 infra (label/bureau detection)
 try:  # pragma: no cover - optional import
@@ -1345,6 +1347,76 @@ def enrich_block(blk: dict) -> dict:
     return {**blk, "fields": fields, "meta": meta}
 
 
+def _token_sort_key(tok: dict, page: int) -> tuple[float, float, float]:
+    try:
+        line = float(tok.get("line"))
+    except Exception:
+        line = float(tok.get("y0", 0.0))
+    try:
+        x0 = float(tok.get("x0", 0.0))
+    except Exception:
+        x0 = 0.0
+    return page, line, x0
+
+
+def _dump_full_tsv(layout: dict, out_path: Path) -> int:
+    rows: List[Tuple[int, Any, float, float, float, float, str]] = []
+    pages = list(layout.get("pages") or [])
+    for idx, page in enumerate(pages, start=1):
+        tokens = list(page.get("tokens") or [])
+        for tok in tokens:
+            rows.append(
+                (
+                    idx,
+                    tok.get("line"),
+                    float(tok.get("y0", 0.0)),
+                    float(tok.get("y1", 0.0)),
+                    float(tok.get("x0", 0.0)),
+                    float(tok.get("x1", 0.0)),
+                    (tok.get("text") or "").replace("\t", " "),
+                )
+            )
+    rows.sort(key=lambda r: _token_sort_key({"line": r[1], "x0": r[4], "y0": r[2]}, r[0]))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8") as fh:
+        fh.write("page\tline\ty0\ty1\tx0\tx1\ttext\n")
+        for pg, ln, y0, y1, x0, x1, text in rows:
+            ln_str = "" if ln is None else str(ln)
+            fh.write(f"{pg}\t{ln_str}\t{y0}\t{y1}\t{x0}\t{x1}\t{text}\n")
+    return len(rows)
+
+
+def _build_accounts_table(session_id: str, out_dir: Path, layout: dict) -> None:
+    try:
+        accounts_dir = out_dir / "accounts_table"
+        full_tsv = accounts_dir / "_debug_full.tsv"
+        count = _dump_full_tsv(layout, full_tsv)
+
+        json_out = accounts_dir / "accounts_from_full.json"
+        split_accounts_from_tsv(full_tsv, json_out, write_tsv=True)
+
+        try:
+            write_text_trace(
+                full_tsv.read_text(encoding="utf-8"),
+                session_id=session_id,
+                prefix="accounts-full-tsv",
+            )
+        except Exception:
+            pass
+        try:
+            data = json.loads(json_out.read_text(encoding="utf-8"))
+            write_json_trace(
+                data,
+                session_id=session_id,
+                prefix="accounts-from-full",
+            )
+        except Exception:
+            pass
+        logger.info("BLOCK: accounts_table built sid=%s tokens=%d", session_id, count)
+    except Exception:
+        logger.exception("BLOCK: failed to build accounts_table sid=%s", session_id)
+
+
 def export_account_blocks(
     session_id: str, pdf_path: str | Path
 ) -> List[Dict[str, Any]]:
@@ -1437,6 +1509,7 @@ def export_account_blocks(
             (out_dir / "layout_snapshot.json").write_text(
                 json.dumps(snap, ensure_ascii=False, indent=2), encoding="utf-8"
             )
+            _build_accounts_table(session_id, out_dir, snap)
         except Exception:
             logger.exception(
                 "BLOCK: failed to write layout_snapshot.json for sid=%s", session_id

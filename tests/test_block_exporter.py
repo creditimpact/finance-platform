@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import logging
 import pytest
 
 import backend.core.logic.report_analysis.block_exporter as be
@@ -96,11 +97,12 @@ def _sample_text():
     )
 
 
-def test_export_writes_files(chdir_tmp, monkeypatch, stub_layout):
+def test_export_writes_files(chdir_tmp, monkeypatch, stub_layout, caplog):
     monkeypatch.setattr(
         be, "load_cached_text", lambda sid: {"full_text": _sample_text()}
     )
-    be.export_account_blocks("sess1", SAMPLE_PDF)
+    caplog.set_level(logging.INFO)
+    _blocks, meta = be.export_account_blocks("sess1", SAMPLE_PDF)
 
     out_dir = Path("traces") / "blocks" / "sess1"
     assert (out_dir / "_index.json").exists()
@@ -125,8 +127,28 @@ def test_export_writes_files(chdir_tmp, monkeypatch, stub_layout):
     assert paths.get("full_tsv") == str(accounts_dir / "_debug_full.tsv")
     assert paths.get("accounts_from_full") == str(json_path)
 
+    # Metadata dict returned from export_account_blocks
+    assert meta["full_tsv"] == str(accounts_dir / "_debug_full.tsv")
+    assert meta["accounts_json"] == str(json_path)
+
+    # Logs should contain explicit paths
+    assert f"Stage-A: wrote full TSV: {accounts_dir / '_debug_full.tsv'}" in caplog.text
+    assert f"Stage-A: wrote accounts JSON: {json_path}" in caplog.text
+
     assert not Path("_debug_full.tsv").exists()
     assert not Path("accounts_from_full.json").exists()
+
+
+def test_rerun_overwrites_files(chdir_tmp, monkeypatch, stub_layout):
+    monkeypatch.setattr(
+        be, "load_cached_text", lambda sid: {"full_text": _sample_text()}
+    )
+    be.export_account_blocks("sess1", SAMPLE_PDF)
+    be.export_account_blocks("sess1", SAMPLE_PDF)
+    accounts_dir = Path("traces") / "blocks" / "sess1" / "accounts_table"
+    # Ensure only one TSV/JSON exists with stable names
+    assert len(list(accounts_dir.glob("_debug_full*.tsv"))) == 1
+    assert len(list(accounts_dir.glob("accounts_from_full*.json"))) == 1
 
 
 def test_load_account_blocks_reads_back(chdir_tmp, monkeypatch, stub_layout):

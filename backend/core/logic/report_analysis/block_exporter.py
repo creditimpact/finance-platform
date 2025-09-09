@@ -21,7 +21,6 @@ from backend.core.logic.report_analysis.report_parsing import (
 from backend.core.logic.report_analysis.text_provider import load_cached_text
 from backend.core.text.env_guard import ensure_env_and_paths
 from backend.core.text.text_provider import load_text_with_layout
-from backend.core.utils.trace_io import write_json_trace, write_text_trace
 from scripts.split_accounts_from_tsv import split_accounts as split_accounts_from_tsv
 
 # Optional G1 infra (label/bureau detection)
@@ -1395,23 +1394,30 @@ def _build_accounts_table(session_id: str, out_dir: Path, layout: dict) -> None:
         json_out = accounts_dir / "accounts_from_full.json"
         split_accounts_from_tsv(full_tsv, json_out, write_tsv=True)
 
+        # Register artifacts in the accounts table index
+        idx_path = accounts_dir / "_table_index.json"
         try:
-            write_text_trace(
-                full_tsv.read_text(encoding="utf-8"),
-                session_id=session_id,
-                prefix="accounts-full-tsv",
-            )
+            idx_obj = json.loads(idx_path.read_text(encoding="utf-8")) if idx_path.exists() else {}
         except Exception:
-            pass
-        try:
-            data = json.loads(json_out.read_text(encoding="utf-8"))
-            write_json_trace(
-                data,
-                session_id=session_id,
-                prefix="accounts-from-full",
-            )
-        except Exception:
-            pass
+            idx_obj = {}
+
+        idx_obj.setdefault("session_id", session_id)
+
+        extras = [
+            {"type": "full_tsv", "path": str(full_tsv)},
+            {"type": "accounts_from_full", "path": str(json_out)},
+        ]
+
+        existing = idx_obj.get("extras")
+        if isinstance(existing, list):
+            skip = {e.get("type") for e in extras}
+            idx_obj["extras"] = [e for e in existing if isinstance(e, dict) and e.get("type") not in skip]
+            idx_obj["extras"].extend(extras)
+        else:
+            idx_obj["extras"] = extras
+
+        idx_path.write_text(json.dumps(idx_obj, ensure_ascii=False, indent=2), encoding="utf-8")
+
         logger.info("BLOCK: accounts_table built sid=%s tokens=%d", session_id, count)
     except Exception:
         logger.exception("BLOCK: failed to build accounts_table sid=%s", session_id)

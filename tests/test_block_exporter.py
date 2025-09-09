@@ -114,6 +114,18 @@ def test_export_writes_files(chdir_tmp, monkeypatch, stub_layout):
     assert isinstance(data, list) and len(data) == 1
     assert (accounts_dir / "per_account_tsv" / "_debug_account_1.tsv").exists()
 
+    # Ensure index tracks artifacts and no stray copies exist
+    idx_path = accounts_dir / "_table_index.json"
+    assert idx_path.exists()
+    idx = json.loads(idx_path.read_text(encoding="utf-8"))
+    extras = idx.get("extras", [])
+    paths = {e.get("type"): e.get("path") for e in extras}
+    assert paths.get("full_tsv") == str(accounts_dir / "_debug_full.tsv")
+    assert paths.get("accounts_from_full") == str(json_path)
+
+    assert not Path("_debug_full.tsv").exists()
+    assert not Path("accounts_from_full.json").exists()
+
 
 def test_load_account_blocks_reads_back(chdir_tmp, monkeypatch, stub_layout):
     monkeypatch.setattr(

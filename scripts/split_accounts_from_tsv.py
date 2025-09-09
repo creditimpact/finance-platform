@@ -19,6 +19,10 @@ from typing import Any, Dict, Iterable, List, Tuple
 ACCOUNT_RE = re.compile(r"\bAccount\b.*#", re.IGNORECASE)
 STOP_MARKER_NORM = "publicinformation"
 
+# How many lines above the ``Account #`` anchor to consider the heading.
+# If unavailable, the logic falls back to progressively closer lines.
+HEADING_BACK_LINES = 2
+
 
 def _norm(text: str) -> str:
     """Normalize ``text`` by removing spaces/symbols and lowering case."""
@@ -69,12 +73,49 @@ def _read_tokens(
     return tokens_by_line, lines
 
 
-def _guess_heading(lines: List[Dict[str, Any]], idx: int) -> str | None:
-    """Guess the heading for the account starting at ``lines[idx]``."""
-    if idx == 0:
-        return None
-    prev_text = lines[idx - 1]["text"].strip()
-    return prev_text if _is_heading(prev_text) else None
+def _is_meaningful_heading(text: str) -> bool:
+    """Return True if ``text`` looks like a useful heading.
+
+    The line must be ALL-CAPS (per :func:`_is_heading`) and should not contain a
+    colon, which often indicates a label rather than a heading.
+    """
+    return _is_heading(text) and ":" not in text
+
+
+def _find_account_start(
+    lines: List[Dict[str, Any]], anchor_idx: int
+) -> Tuple[int, str | None]:
+    """Return the start index and heading for an account.
+
+    ``anchor_idx`` points to the line containing ``Account #``. The function
+    backtracks ``HEADING_BACK_LINES`` lines on the same page to locate the
+    heading. If that fails, it tries progressively closer lines. As a smart
+    fallback, if the chosen line is not a meaningful heading, search up to six
+    lines back on the same page for one that is.
+    """
+    page = lines[anchor_idx]["page"]
+    candidate = anchor_idx - HEADING_BACK_LINES
+    if candidate < 0 or lines[candidate]["page"] != page:
+        candidate = anchor_idx - 1
+        if candidate < 0 or lines[candidate]["page"] != page:
+            candidate = anchor_idx - 1 if anchor_idx > 0 else anchor_idx
+
+    heading_guess = lines[candidate]["text"].strip() if candidate >= 0 else None
+    if not heading_guess:
+        heading_guess = None
+
+    if not (heading_guess and _is_meaningful_heading(heading_guess)):
+        for back in range(1, 6 + 1):
+            j = anchor_idx - back
+            if j < 0 or lines[j]["page"] != page:
+                break
+            text = lines[j]["text"].strip()
+            if _is_meaningful_heading(text):
+                candidate = j
+                heading_guess = text
+                break
+
+    return max(candidate, 0), heading_guess
 
 
 def _write_account_tsv(
@@ -108,23 +149,21 @@ def split_accounts(
             lines = lines[:i]
             break
 
-    # Precompute which lines look like headings for later boundary adjustments
-    heading_flags = [_is_heading(line["text"]) for line in lines]
-    account_starts = [
-        i for i, line in enumerate(lines) if ACCOUNT_RE.search(line["text"])
-    ]
+    anchors = [i for i, line in enumerate(lines) if ACCOUNT_RE.search(line["text"])]
+
+    account_starts: List[int] = []
+    headings: List[str | None] = []
+    for anchor in anchors:
+        start_idx, heading = _find_account_start(lines, anchor)
+        account_starts.append(start_idx)
+        headings.append(heading)
 
     accounts: List[Dict[str, Any]] = []
     for idx, start_idx in enumerate(account_starts):
         next_start = (
             account_starts[idx + 1] if idx + 1 < len(account_starts) else len(lines)
         )
-        end_idx = next_start - 1
-        # If the line immediately before the next account looks like a heading,
-        # exclude it from the current account.
-        if idx + 1 < len(account_starts) and heading_flags[next_start - 1]:
-            end_idx = next_start - 2
-        account_lines = lines[start_idx : end_idx + 1]
+        account_lines = lines[start_idx:next_start]
         if not account_lines:
             continue
         account_info = {
@@ -133,7 +172,7 @@ def split_accounts(
             "line_start": account_lines[0]["line"],
             "page_end": account_lines[-1]["page"],
             "line_end": account_lines[-1]["line"],
-            "heading_guess": _guess_heading(lines, start_idx),
+            "heading_guess": headings[idx],
             "lines": account_lines,
         }
         accounts.append(account_info)

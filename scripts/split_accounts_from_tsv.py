@@ -15,9 +15,12 @@ import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
+from bisect import bisect_right
 
 ACCOUNT_RE = re.compile(r"\bAccount\b.*#", re.IGNORECASE)
 STOP_MARKER_NORM = "publicinformation"
+SECTION_STARTERS = {"collection"}
+_SECTION_NAME = {"collection": "collections"}
 
 # How many lines above the ``Account #`` anchor to consider the heading.
 # If unavailable, the logic falls back to progressively closer lines.
@@ -27,6 +30,9 @@ HEADING_BACK_LINES = 2
 def _norm(text: str) -> str:
     """Normalize ``text`` by removing spaces/symbols and lowering case."""
     return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+BUREAUS_NORM = _norm("Transunion®Experian®Equifax®")
 
 
 def _is_heading(text: str) -> bool:
@@ -84,8 +90,8 @@ def _is_meaningful_heading(text: str) -> bool:
 
 def _find_account_start(
     lines: List[Dict[str, Any]], anchor_idx: int
-) -> Tuple[int, str | None]:
-    """Return the start index and heading for an account.
+) -> Tuple[int, str | None, str]:
+    """Return the start index, heading and heading_source for an account.
 
     ``anchor_idx`` points to the line containing ``Account #``. The function
     backtracks ``HEADING_BACK_LINES`` lines on the same page to locate the
@@ -101,9 +107,7 @@ def _find_account_start(
             candidate = anchor_idx - 1 if anchor_idx > 0 else anchor_idx
 
     heading_guess = lines[candidate]["text"].strip() if candidate >= 0 else None
-    if not heading_guess:
-        heading_guess = None
-
+    heading_source = "pure_heading"
     if not (heading_guess and _is_meaningful_heading(heading_guess)):
         for back in range(1, 6 + 1):
             j = anchor_idx - back
@@ -113,9 +117,28 @@ def _find_account_start(
             if _is_meaningful_heading(text):
                 candidate = j
                 heading_guess = text
+                heading_source = "backtrack"
                 break
 
-    return max(candidate, 0), heading_guess
+    return max(candidate, 0), heading_guess, heading_source
+
+
+def _find_heading_after_section(
+    lines: List[Dict[str, Any]], section_idx: int
+) -> Tuple[int, str | None]:
+    """Return the index and heading after a section starter line."""
+
+    for j in range(section_idx + 1, min(section_idx + 5, len(lines))):
+        text = lines[j]["text"].strip()
+        if not _is_meaningful_heading(text):
+            continue
+        if _norm(text) == BUREAUS_NORM:
+            continue
+        return j, text
+
+    if section_idx + 1 < len(lines):
+        return section_idx + 1, lines[section_idx + 1]["text"].strip()
+    return section_idx + 1, None
 
 
 def _write_account_tsv(
@@ -153,17 +176,45 @@ def split_accounts(
 
     account_starts: List[int] = []
     headings: List[str | None] = []
+    heading_sources: List[str] = []
     for anchor in anchors:
-        start_idx, heading = _find_account_start(lines, anchor)
+        start_idx, heading, source = _find_account_start(lines, anchor)
         account_starts.append(start_idx)
         headings.append(heading)
+        heading_sources.append(source)
+
+    section_starts = [i for i, line in enumerate(lines) if _norm(line["text"]) in SECTION_STARTERS]
+    section_prefix_flags = [False] * len(account_starts)
+    sections: List[str | None] = [None] * len(account_starts)
+
+    for s_idx in section_starts:
+        next_idx = bisect_right(account_starts, s_idx)
+        if next_idx >= len(account_starts):
+            continue
+        section_prefix_flags[next_idx] = True
+        heading_idx, heading = _find_heading_after_section(lines, s_idx)
+        account_starts[next_idx] = heading_idx
+        headings[next_idx] = heading
+        heading_sources[next_idx] = "section+heading"
+        starter_norm = _norm(lines[s_idx]["text"])
+        sections[next_idx] = _SECTION_NAME.get(starter_norm)
 
     accounts: List[Dict[str, Any]] = []
+    current_section: str | None = None
+    section_ptr = 0
     for idx, start_idx in enumerate(account_starts):
+        if sections[idx] is not None:
+            current_section = sections[idx]
+        sections[idx] = current_section
         next_start = (
             account_starts[idx + 1] if idx + 1 < len(account_starts) else len(lines)
         )
-        account_lines = lines[start_idx:next_start]
+        while section_ptr < len(section_starts) and section_starts[section_ptr] < start_idx:
+            section_ptr += 1
+        cut_end = next_start
+        if section_ptr < len(section_starts) and start_idx <= section_starts[section_ptr] < next_start:
+            cut_end = section_starts[section_ptr]
+        account_lines = lines[start_idx:cut_end]
         if not account_lines:
             continue
         account_info = {
@@ -173,6 +224,9 @@ def split_accounts(
             "page_end": account_lines[-1]["page"],
             "line_end": account_lines[-1]["line"],
             "heading_guess": headings[idx],
+            "heading_source": heading_sources[idx],
+            "section": sections[idx],
+            "section_prefix_seen": section_prefix_flags[idx],
             "lines": account_lines,
         }
         accounts.append(account_info)

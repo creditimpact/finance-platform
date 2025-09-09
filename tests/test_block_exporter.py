@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,78 @@ def chdir_tmp(tmp_path, monkeypatch):
     yield tmp_path
 
 
+@pytest.fixture
+def stub_layout(monkeypatch):
+    layout = {
+        "pages": [
+            {
+                "width": 612,
+                "height": 792,
+                "tokens": [
+                    {
+                        "line": 1,
+                        "x0": 0,
+                        "x1": 10,
+                        "y0": 10,
+                        "y1": 20,
+                        "text": "Sample",
+                    },
+                    {"line": 1, "x0": 11, "x1": 20, "y0": 10, "y1": 20, "text": "Bank"},
+                    {
+                        "line": 2,
+                        "x0": 0,
+                        "x1": 20,
+                        "y0": 30,
+                        "y1": 40,
+                        "text": "TransUnion",
+                    },
+                    {
+                        "line": 2,
+                        "x0": 21,
+                        "x1": 40,
+                        "y0": 30,
+                        "y1": 40,
+                        "text": "Experian",
+                    },
+                    {
+                        "line": 2,
+                        "x0": 41,
+                        "x1": 60,
+                        "y0": 30,
+                        "y1": 40,
+                        "text": "Equifax",
+                    },
+                    {
+                        "line": 3,
+                        "x0": 0,
+                        "x1": 10,
+                        "y0": 50,
+                        "y1": 60,
+                        "text": "Account",
+                    },
+                    {"line": 3, "x0": 11, "x1": 15, "y0": 50, "y1": 60, "text": "#"},
+                    {"line": 3, "x0": 16, "x1": 20, "y0": 50, "y1": 60, "text": "1234"},
+                    {"line": 3, "x0": 21, "x1": 25, "y0": 50, "y1": 60, "text": "1234"},
+                    {"line": 3, "x0": 26, "x1": 30, "y0": 50, "y1": 60, "text": "1234"},
+                    {
+                        "line": 4,
+                        "x0": 0,
+                        "x1": 20,
+                        "y0": 70,
+                        "y1": 80,
+                        "text": "Equifax",
+                    },
+                    {"line": 4, "x0": 21, "x1": 40, "y0": 70, "y1": 80, "text": "30:0"},
+                    {"line": 4, "x0": 41, "x1": 60, "y0": 70, "y1": 80, "text": "60:0"},
+                    {"line": 4, "x0": 61, "x1": 80, "y0": 70, "y1": 80, "text": "90:0"},
+                ],
+            }
+        ]
+    }
+    monkeypatch.setattr(be, "load_text_with_layout", lambda _p: layout)
+    return layout
+
+
 def _sample_text():
     return (
         "Sample Bank\n"
@@ -23,19 +96,26 @@ def _sample_text():
     )
 
 
-def test_export_writes_files(chdir_tmp, monkeypatch):
+def test_export_writes_files(chdir_tmp, monkeypatch, stub_layout):
     monkeypatch.setattr(
         be, "load_cached_text", lambda sid: {"full_text": _sample_text()}
     )
-
     be.export_account_blocks("sess1", SAMPLE_PDF)
 
     out_dir = Path("traces") / "blocks" / "sess1"
     assert (out_dir / "_index.json").exists()
     assert (out_dir / "block_01.json").exists()
 
+    accounts_dir = out_dir / "accounts_table"
+    assert (accounts_dir / "_debug_full.tsv").exists()
+    json_path = accounts_dir / "accounts_from_full.json"
+    assert json_path.exists()
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    assert isinstance(data, list) and len(data) == 1
+    assert (accounts_dir / "per_account_tsv" / "_debug_account_1.tsv").exists()
 
-def test_load_account_blocks_reads_back(chdir_tmp, monkeypatch):
+
+def test_load_account_blocks_reads_back(chdir_tmp, monkeypatch, stub_layout):
     monkeypatch.setattr(
         be, "load_cached_text", lambda sid: {"full_text": _sample_text()}
     )
@@ -49,7 +129,7 @@ def test_load_account_blocks_reads_back(chdir_tmp, monkeypatch):
     assert first["lines"][0] == "Sample Bank"
 
 
-def test_fail_fast_on_empty(chdir_tmp, monkeypatch):
+def test_fail_fast_on_empty(chdir_tmp, monkeypatch, stub_layout):
     monkeypatch.setattr(be, "load_cached_text", lambda sid: {"full_text": ""})
     empty_pdf = chdir_tmp / "empty.pdf"
     empty_pdf.write_bytes(b"")

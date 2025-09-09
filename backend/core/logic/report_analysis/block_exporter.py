@@ -1385,14 +1385,16 @@ def _dump_full_tsv(layout: dict, out_path: Path) -> int:
     return len(rows)
 
 
-def _build_accounts_table(session_id: str, out_dir: Path, layout: dict) -> None:
+def _build_accounts_table(session_id: str, out_dir: Path, layout: dict) -> dict[str, str]:
     try:
         accounts_dir = out_dir / "accounts_table"
         full_tsv = accounts_dir / "_debug_full.tsv"
         count = _dump_full_tsv(layout, full_tsv)
+        logger.info("Stage-A: wrote full TSV: %s", full_tsv)
 
         json_out = accounts_dir / "accounts_from_full.json"
         split_accounts_from_tsv(full_tsv, json_out, write_tsv=True)
+        logger.info("Stage-A: wrote accounts JSON: %s", json_out)
 
         # Register artifacts in the accounts table index
         idx_path = accounts_dir / "_table_index.json"
@@ -1419,13 +1421,15 @@ def _build_accounts_table(session_id: str, out_dir: Path, layout: dict) -> None:
         idx_path.write_text(json.dumps(idx_obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
         logger.info("BLOCK: accounts_table built sid=%s tokens=%d", session_id, count)
+        return {"full_tsv": str(full_tsv), "accounts_json": str(json_out)}
     except Exception:
         logger.exception("BLOCK: failed to build accounts_table sid=%s", session_id)
+        return {}
 
 
 def export_account_blocks(
     session_id: str, pdf_path: str | Path
-) -> List[Dict[str, Any]]:
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """Extract account blocks from ``pdf_path`` and export them to JSON files.
 
     Parameters
@@ -1437,9 +1441,10 @@ def export_account_blocks(
 
     Returns
     -------
-    list[dict]
-        The list of account block dictionaries, each containing ``heading`` and
-        ``lines`` keys.
+    tuple[list[dict], dict]
+        A tuple of the exported account block dictionaries (each with
+        ``heading`` and ``lines`` keys) and a metadata mapping with paths to
+        Stage-A artifacts.
     """
     cached = load_cached_text(session_id)
     if not cached:
@@ -1477,6 +1482,7 @@ def export_account_blocks(
     out_dir = Path("traces") / "blocks" / session_id
     out_dir.mkdir(parents=True, exist_ok=True)
     logger.warning("BLOCK_ENRICH: enabled=%s sid=%s", ENRICH_ENABLED, session_id)
+    stage_a_meta: Dict[str, str] = {}
 
     # Stage A: Write a consolidated layout snapshot with all pages and tokens
     if RAW_TWO_STAGE and layout_pages:
@@ -1515,7 +1521,7 @@ def export_account_blocks(
             (out_dir / "layout_snapshot.json").write_text(
                 json.dumps(snap, ensure_ascii=False, indent=2), encoding="utf-8"
             )
-            _build_accounts_table(session_id, out_dir, snap)
+            stage_a_meta = _build_accounts_table(session_id, out_dir, snap)
         except Exception:
             logger.exception(
                 "BLOCK: failed to write layout_snapshot.json for sid=%s", session_id
@@ -2762,7 +2768,7 @@ def export_account_blocks(
         len(out_blocks),
     )
 
-    return out_blocks
+    return out_blocks, stage_a_meta
 
 
 # ----------------------------------------------------------------------------

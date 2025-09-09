@@ -1,9 +1,0 @@
-Creditor: Verizon
-Account:  na
-Status:   collection
-PastDue:  None
-LateFlags:None
-Opened:   None
-Reported: None
-
-Source markers: n/a

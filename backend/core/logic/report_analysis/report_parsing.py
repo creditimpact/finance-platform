@@ -2745,6 +2745,23 @@ def attach_bureau_meta_tables(sections: Mapping[str, Any]) -> None:
         tu = sum(1 for v in by.get("transunion", {}).values() if v is not None)
         ex = sum(1 for v in by.get("experian", {}).values() if v is not None)
         eq = sum(1 for v in by.get("equifax", {}).values() if v is not None)
+        try:
+            slug = (
+                acc.get("account_id")
+                or acc.get("normalized_name")
+                or acc.get("name")
+                or ""
+            )
+            logger.info(
+                "parser_bureau_fill session=%s account=%s tu=%d/25 ex=%d/25 eq=%d/25",
+                session_id,
+                slug,
+                tu,
+                ex,
+                eq,
+            )
+        except Exception:
+            pass
         logger.info(
             "bureau_meta_coverage name=%s tu_missing=%d ex_missing=%d eq_missing=%d",
             acc.get("normalized_name") or acc.get("name"),

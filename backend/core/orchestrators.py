@@ -84,8 +84,34 @@ from backend.core.telemetry.stageE_summary import emit_stageE_summary
 from backend.core.utils.trace_io import write_json_trace, write_text_trace
 from backend.policy.policy_loader import load_rulebook
 from planner import plan_next_step
+from backend.core.logic.report_analysis.raw_builder import (
+    build_raw_from_snapshot_and_windows,
+)
 
 logger = logging.getLogger(__name__)
+
+
+# --- RAW artifacts guard ---------------------------------------------------
+def _has_raw_artifacts(session_id: str) -> bool:
+    try:
+        raw_idx = Path("traces") / "blocks" / session_id / "accounts_raw" / "_raw_index.json"
+        if not raw_idx.exists():
+            return False
+        data = json.loads(raw_idx.read_text(encoding="utf-8"))
+        blocks = data.get("blocks") or []
+        return any(bool((b or {}).get("raw_coords_path")) for b in blocks)
+    except Exception:
+        return False
+
+
+def _run_stage_b_raw(session_id: str) -> str:
+    """
+    Runs Stage B RAW builder immediately after Stage A finishes.
+    Returns the path to the written _raw_index.json.
+    """
+    raw_index_path = build_raw_from_snapshot_and_windows(session_id)
+    logger.info(f"PIPELINE: Stage B RAW accounts built -> {raw_index_path}")
+    return raw_index_path
 
 
 # --- Helpers ---------------------------------------------------------------
@@ -577,6 +603,24 @@ def analyze_credit_report(
     # ייצוא הבלוקים חייב להיות שלב ראשון (fail-fast)
     logger.info("ANZ: export kickoff sid=%s file=%s", session_id, str(pdf_path))
     export_account_blocks(session_id, pdf_path)
+    # Stage B: build RAW accounts from snapshot + windows (skip when TEMPLATE_FIRST)
+    if config.TEMPLATE_FIRST:
+        try:
+            from backend.core.logic.report_analysis.smartcredit_template_orchestrator import (
+                run_template_first,
+            )
+            result = run_template_first(session_id, Path.cwd())
+            ok = bool((result or {}).get("ok")) if isinstance(result, dict) else bool(result)
+            logger.warning("TEMPLATE_FIRST: finished sid=%s ok=%s", session_id, ok)
+        except Exception:
+            logger.exception("TEMPLATE_FIRST: failed sid=%s", session_id)
+        # Do not run Stage B or further pipeline when TEMPLATE_FIRST is enabled
+        return
+    else:
+        try:
+            _run_stage_b_raw(session_id)
+        except Exception:
+            logger.exception("PIPELINE: Stage B RAW build failed sid=%s", session_id)
 
     idx_path = Path("traces") / "blocks" / session_id / "_index.json"
     try:
@@ -623,10 +667,16 @@ def analyze_credit_report(
         except Exception:
             count = 0
         if count == 0:
-            raise CaseStoreError(
-                "case_build_failed",
-                "No account cases created; aborting Stage-A/UI.",
-            )
+            if _has_raw_artifacts(session_id):
+                logger.warning(
+                    "PIPELINE: 0 mapped accounts; RAW exists and is the source of truth. sid=%s",
+                    session_id,
+                )
+            else:
+                raise CaseStoreError(
+                    "case_build_failed",
+                    "No account cases created; aborting Stage-A/UI.",
+                )
     _emit_stageA_events(session_id, sections.get("problem_accounts", []))  # noqa: F821
     if (
         os.getenv("DEFER_ASSIGN_ISSUE_TYPES") == "1"
@@ -1351,6 +1401,24 @@ def extract_problematic_accounts_from_report(
     )
     # --- BLOCKS: export first, fail-fast on empty ---
     export_account_blocks(session_id, pdf_path)
+    # Stage B: build RAW accounts from snapshot + windows (skip when TEMPLATE_FIRST)
+    if config.TEMPLATE_FIRST:
+        try:
+            from backend.core.logic.report_analysis.smartcredit_template_orchestrator import (
+                run_template_first,
+            )
+            result = run_template_first(session_id, Path.cwd())
+            ok = bool((result or {}).get("ok")) if isinstance(result, dict) else bool(result)
+            logger.warning("TEMPLATE_FIRST: finished sid=%s ok=%s", session_id, ok)
+        except Exception:
+            logger.exception("TEMPLATE_FIRST: failed sid=%s", session_id)
+        # Do not run Stage B or further pipeline when TEMPLATE_FIRST is enabled
+        return
+    else:
+        try:
+            _run_stage_b_raw(session_id)
+        except Exception:
+            logger.exception("PIPELINE: Stage B RAW build failed sid=%s", session_id)
 
     # Verify blocks exist on disk (don’t proceed to analyze if missing)
     _pre = load_account_blocks(session_id)
@@ -1405,10 +1473,16 @@ def extract_problematic_accounts_from_report(
         except Exception:
             count = 0
         if count == 0:
-            raise CaseStoreError(
-                "case_build_failed",
-                "No account cases created; aborting Stage-A/UI.",
-            )
+            if _has_raw_artifacts(session_id):
+                logger.warning(
+                    "PIPELINE: 0 mapped accounts; RAW exists and is the source of truth. sid=%s",
+                    session_id,
+                )
+            else:
+                raise CaseStoreError(
+                    "case_build_failed",
+                    "No account cases created; aborting Stage-A/UI.",
+                )
 
     force_parser = os.getenv("ANALYSIS_FORCE_PARSER_ONLY") == "1"
     if force_parser or sections.get("ai_failed"):

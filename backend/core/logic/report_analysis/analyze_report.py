@@ -1049,8 +1049,6 @@ def analyze_credit_report(
                     case.report_meta.credit_report_date = report_date
             save_session_case(case)
             try:
-                from pathlib import Path
-
                 from backend.config import CASESTORE_DIR
 
                 path = Path(CASESTORE_DIR) / f"{session_id}.json"
@@ -1939,8 +1937,6 @@ def analyze_credit_report(
                 case.summary.total_accounts = len(result.get("all_accounts") or [])
             save_session_case(case)
             try:
-                from pathlib import Path
-
                 from backend.config import CASESTORE_DIR
 
                 path = Path(CASESTORE_DIR) / f"{session_id}.json"

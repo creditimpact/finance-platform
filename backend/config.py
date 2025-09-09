@@ -173,3 +173,22 @@ DETERMINISTIC_EXTRACTORS_ENABLED = env_bool(
 )
 
 EXTRACTOR_STRICT_MODE = env_bool("EXTRACTOR_STRICT_MODE", True)
+
+# Template-first parsing experiment (disables Stage B when enabled)
+# When set, orchestrators will attempt the template detector+parser and will not
+# invoke Stage B RAW builder as a fallback. Intended for isolated testing.
+TEMPLATE_FIRST = env_bool("TEMPLATE_FIRST", False)
+
+# Template-first thresholds
+# Confidence threshold to accept template parse path
+TEMPLATE_CONFIDENCE_THRESHOLD = env_float("TEMPLATE_CONFIDENCE_THRESHOLD", 0.70)
+# Minimum label fields mapped per block to count as "good"
+try:
+    TEMPLATE_LABEL_MIN_PER_BLOCK = int(os.getenv("TEMPLATE_LABEL_MIN_PER_BLOCK", "8"))
+except Exception:
+    TEMPLATE_LABEL_MIN_PER_BLOCK = 8
+# Minimum bureaus detected (TU/EX/EQ) per block to count as "good"
+try:
+    TEMPLATE_MIN_BUREAUS = int(os.getenv("TEMPLATE_MIN_BUREAUS", "2"))
+except Exception:
+    TEMPLATE_MIN_BUREAUS = 2

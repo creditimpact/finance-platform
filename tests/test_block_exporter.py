@@ -111,7 +111,9 @@ def test_export_writes_files(chdir_tmp, monkeypatch, stub_layout):
     json_path = accounts_dir / "accounts_from_full.json"
     assert json_path.exists()
     data = json.loads(json_path.read_text(encoding="utf-8"))
-    assert isinstance(data, list) and len(data) == 1
+    accounts = data["accounts"]
+    assert isinstance(accounts, list) and len(accounts) == 1
+    assert data["stop_marker_seen"] is False
     assert (accounts_dir / "per_account_tsv" / "_debug_account_1.tsv").exists()
 
     # Ensure index tracks artifacts and no stray copies exist

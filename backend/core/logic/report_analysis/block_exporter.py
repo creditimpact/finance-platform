@@ -2356,6 +2356,105 @@ def export_account_blocks(
                         except Exception:
                             win["page"] = 1
                 blocks_fixed.append(row)
+            # QA: per-page overlap/gap checks between consecutive blocks
+            try:
+                EPS_Y = float(os.getenv("OVERLAP_EPS_Y", "0.5"))
+            except Exception:
+                EPS_Y = 0.5
+            qa_map: Dict[int, Dict[str, Any]] = {}
+            page_blocks: Dict[int, List[Tuple[int, float, float, float]]] = {}
+            for row in blocks_fixed:
+                try:
+                    bid = int(row.get("block_id"))
+                except Exception:
+                    continue
+                qa_map[bid] = {
+                    "overlap_with_next": False,
+                    "overlap_pages": set(),
+                    "overlap_delta_max": 0.0,
+                    "gap_to_next_min": None,
+                }
+                head_anchor = row.get("head_anchor") if isinstance(row, dict) else None
+                ha_page = ha_y = None
+                if isinstance(head_anchor, dict):
+                    try:
+                        ha_page = int(head_anchor.get("page"))
+                        ha_y = float(head_anchor.get("y"))
+                    except Exception:
+                        ha_page = ha_y = None
+                processed_pages: set[int] = set()
+                for w in windows_by_block.get(str(bid), []) or []:
+                    try:
+                        p = int(w.get("page"))
+                        y_top = float(w.get("y_top"))
+                        y_bottom = float(w.get("y_bottom"))
+                    except Exception:
+                        continue
+                    sort_y = ha_y if ha_page == p else y_top
+                    page_blocks.setdefault(p, []).append((bid, sort_y, y_top, y_bottom))
+                    processed_pages.add(p)
+                for sp in row.get("spans") or []:
+                    try:
+                        p = int(sp.get("page"))
+                        if p in processed_pages:
+                            continue
+                        y_top = float(sp.get("y_min"))
+                        y_bottom = float(sp.get("y_max"))
+                    except Exception:
+                        continue
+                    sort_y = ha_y if ha_page == p else y_top
+                    page_blocks.setdefault(p, []).append((bid, sort_y, y_top, y_bottom))
+
+            for p, blks in page_blocks.items():
+                blks_sorted = sorted(blks, key=lambda t: t[1])
+                for idx in range(len(blks_sorted) - 1):
+                    bid_a, _, _, yb_a = blks_sorted[idx]
+                    bid_b, _, yt_b, _ = blks_sorted[idx + 1]
+                    delta = yt_b - yb_a
+                    qa = qa_map.get(bid_a)
+                    if qa is None:
+                        continue
+                    if delta < -EPS_Y:
+                        ov = -(delta)
+                        qa["overlap_with_next"] = True
+                        qa["overlap_pages"].add(p)
+                        if ov > qa["overlap_delta_max"]:
+                            qa["overlap_delta_max"] = ov
+                        try:
+                            logger.warning(
+                                "StageA: overlap sid=%s page=%d blockA=%d blockB=%d delta=%.2f",
+                                session_id,
+                                p,
+                                bid_a,
+                                bid_b,
+                                ov,
+                            )
+                        except Exception:
+                            pass
+                    elif delta > EPS_Y:
+                        gap = delta
+                        cur = qa.get("gap_to_next_min")
+                        if cur is None or gap < cur:
+                            qa["gap_to_next_min"] = gap
+
+            qa_map_final: Dict[int, Dict[str, Any]] = {}
+            for bid, qa in qa_map.items():
+                out = {"overlap_with_next": qa.get("overlap_with_next", False)}
+                pages = qa.get("overlap_pages")
+                if pages:
+                    out["overlap_pages"] = sorted(pages)
+                    out["overlap_delta_max"] = qa.get("overlap_delta_max", 0.0)
+                gap_min = qa.get("gap_to_next_min")
+                if gap_min is not None:
+                    out["gap_to_next_min"] = gap_min
+                qa_map_final[bid] = out
+            for row in blocks_fixed:
+                try:
+                    bid = int(row.get("block_id"))
+                except Exception:
+                    continue
+                if bid in qa_map_final:
+                    row["qa"] = qa_map_final[bid]
             # Compute spans checksum for stability tracking
             try:
 

@@ -17,6 +17,12 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
 ACCOUNT_RE = re.compile(r"\bAccount\b.*#", re.IGNORECASE)
+STOP_MARKER_NORM = "publicinformation"
+
+
+def _norm(text: str) -> str:
+    """Normalize ``text`` by removing spaces/symbols and lowering case."""
+    return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
 def _is_heading(text: str) -> bool:
@@ -30,7 +36,9 @@ def _is_heading(text: str) -> bool:
     return candidate.upper() == candidate and re.search(r"[A-Z]", candidate)
 
 
-def _read_tokens(tsv_path: Path) -> Tuple[Dict[Tuple[int, int], List[Dict[str, str]]], List[Dict[str, Any]]]:
+def _read_tokens(
+    tsv_path: Path,
+) -> Tuple[Dict[Tuple[int, int], List[Dict[str, str]]], List[Dict[str, Any]]]:
     """Read tokens from ``tsv_path`` grouped by `(page, line)`.
 
     Returns a tuple of ``(tokens_by_line, lines)`` where ``tokens_by_line`` maps
@@ -55,7 +63,7 @@ def _read_tokens(tsv_path: Path) -> Tuple[Dict[Tuple[int, int], List[Dict[str, s
             tokens_by_line[(page, line)].append(row)
 
     lines: List[Dict[str, Any]] = []
-    for (page, line) in sorted(tokens_by_line.keys()):
+    for page, line in sorted(tokens_by_line.keys()):
         text = "".join(tok.get("text", "") for tok in tokens_by_line[(page, line)])
         lines.append({"page": page, "line": line, "text": text})
     return tokens_by_line, lines
@@ -89,17 +97,28 @@ def _write_account_tsv(
 
 def split_accounts(
     tsv_path: Path, json_out: Path, write_tsv: bool = False
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """Core logic for splitting accounts from the full TSV."""
     tokens_by_line, lines = _read_tokens(tsv_path)
 
+    stop_marker_seen = False
+    for i, line in enumerate(lines):
+        if _norm(line["text"]) == STOP_MARKER_NORM:
+            stop_marker_seen = True
+            lines = lines[:i]
+            break
+
     # Precompute which lines look like headings for later boundary adjustments
     heading_flags = [_is_heading(line["text"]) for line in lines]
-    account_starts = [i for i, line in enumerate(lines) if ACCOUNT_RE.search(line["text"])]
+    account_starts = [
+        i for i, line in enumerate(lines) if ACCOUNT_RE.search(line["text"])
+    ]
 
     accounts: List[Dict[str, Any]] = []
     for idx, start_idx in enumerate(account_starts):
-        next_start = account_starts[idx + 1] if idx + 1 < len(account_starts) else len(lines)
+        next_start = (
+            account_starts[idx + 1] if idx + 1 < len(account_starts) else len(lines)
+        )
         end_idx = next_start - 1
         # If the line immediately before the next account looks like a heading,
         # exclude it from the current account.
@@ -119,16 +138,24 @@ def split_accounts(
         }
         accounts.append(account_info)
         if write_tsv:
-            _write_account_tsv(tsv_path.parent / "per_account_tsv", idx + 1, account_lines, tokens_by_line)
+            _write_account_tsv(
+                tsv_path.parent / "per_account_tsv",
+                idx + 1,
+                account_lines,
+                tokens_by_line,
+            )
 
-    json_out.write_text(json.dumps(accounts, indent=2), encoding="utf-8")
-    return accounts
+    result = {"accounts": accounts, "stop_marker_seen": stop_marker_seen}
+    json_out.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return result
 
 
 def main(argv: List[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Split accounts from the full TSV")
     ap.add_argument("--full", default="_debug_full.tsv", help="Input TSV path")
-    ap.add_argument("--json_out", default="accounts_from_full.json", help="JSON output path")
+    ap.add_argument(
+        "--json_out", default="accounts_from_full.json", help="JSON output path"
+    )
     ap.add_argument(
         "--write-tsv",
         action="store_true",

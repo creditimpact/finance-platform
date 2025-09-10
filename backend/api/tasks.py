@@ -47,7 +47,8 @@ def configure_worker(**_):
         logger.warning("Starting in parser-only mode: %s", exc)
 
 
-logging.basicConfig(level=logging.INFO)
+# Configure logging to emit progress information from Celery workers.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 logger = logging.getLogger(__name__)
 log = logger
 logger.info("OPENAI_API_KEY present=%s", bool(os.getenv("OPENAI_API_KEY")))

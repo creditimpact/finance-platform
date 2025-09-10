@@ -2,8 +2,8 @@ import json
 import logging
 from pathlib import Path
 
-from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
 from backend.core.logic.report_analysis.keys import compute_logical_account_key
+from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
 
 
 def _write_accounts(path: Path, data) -> None:
@@ -14,8 +14,13 @@ def _write_accounts(path: Path, data) -> None:
 def test_build_problem_cases(tmp_path, caplog):
     sid = "S123"
     accounts = [
-        {"account_index": 1, "heading_guess": None, "lines": []},
-        {"account_index": 2, "heading_guess": "OK", "lines": []},
+        {
+            "account_index": 1,
+            "heading_guess": None,
+            "lines": [],
+            "fields": {"past_due_amount": 20},
+        },
+        {"account_index": 2, "heading_guess": "OK", "lines": [], "fields": {}},
     ]
     acc_path = (
         tmp_path
@@ -38,8 +43,8 @@ def test_build_problem_cases(tmp_path, caplog):
         "summaries": [
             {
                 "account_id": "account_1",
-                "problem_tags": ["missing_heading"],
-                "problem_reasons": ["missing heading"],
+                "problem_tags": ["past_due_amount"],
+                "problem_reasons": ["past_due_amount: 20.00"],
             }
         ],
     }
@@ -48,7 +53,8 @@ def test_build_problem_cases(tmp_path, caplog):
     assert case_file.exists()
     case = json.loads(case_file.read_text())
     assert case["sid"] == sid
-    assert case["problem_tags"] == ["missing_heading"]
+    assert case["problem_tags"] == ["past_due_amount"]
+    assert case.get("confidence") == 0.0
 
     index_file = tmp_path / "cases" / sid / "index.json"
     assert index_file.exists()
@@ -63,7 +69,9 @@ def test_build_problem_cases(tmp_path, caplog):
 
 def test_build_problem_cases_top_level_list(tmp_path):
     sid = "S234"
-    accounts = [{"account_index": 1, "heading_guess": None}]
+    accounts = [
+        {"account_index": 1, "heading_guess": None, "fields": {"past_due_amount": 5}}
+    ]
     acc_path = (
         tmp_path
         / "traces"
@@ -93,6 +101,7 @@ def test_account_id_uses_logical_key(tmp_path):
             "account_last4": "1234",
             "account_type": "REVOLVING",
             "opened_date": "2020-01-01",
+            "past_due_amount": 50,
         },
     }
     acc_path = (

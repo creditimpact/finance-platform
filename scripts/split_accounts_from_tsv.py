@@ -36,7 +36,17 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
-BUREAUS_NORM = _norm("Transunion®Experian®Equifax®")
+_BUREAUS_FORMS = {
+    "transunion®experian®equifax®",
+    "transunionexperianequifax",
+    "transunionexperian®equifax®",
+}
+_BUREAUS_NORMS = {_norm(s) for s in _BUREAUS_FORMS}
+
+
+def _is_bureaus_row(s: str) -> bool:
+    """Return True if ``s`` represents the bureaus triple row."""
+    return _norm(s) in _BUREAUS_NORMS
 
 
 def _is_heading(text: str) -> bool:
@@ -44,10 +54,9 @@ def _is_heading(text: str) -> bool:
     candidate = text.strip()
     if not candidate:
         return False
-    # ``str.isupper`` handles alphanumeric with punctuation reasonably well but
-    # fails on strings without alphabetic characters. Ensure at least one A-Z
-    # is present and no lowercase letters appear.
-    return candidate.upper() == candidate and re.search(r"[A-Z]", candidate)
+    if not re.fullmatch(r"[A-Z0-9&'’ ]+", candidate):
+        return False
+    return re.search(r"[A-Z]", candidate) is not None
 
 
 def _read_tokens(
@@ -108,7 +117,7 @@ def _find_account_start(
     def _valid_heading(text: str) -> bool:
         return (
             _is_meaningful_heading(text)
-            and _norm(text) != BUREAUS_NORM
+            and not _is_bureaus_row(text)
             and _norm(text) not in SECTION_STARTERS
         )
 
@@ -119,7 +128,7 @@ def _find_account_start(
             candidate = anchor_idx
 
     heading_guess = lines[candidate]["text"].strip() if candidate >= 0 else None
-    heading_source = "pure_heading"
+    heading_source = "backtrack"
 
     if not (heading_guess and _valid_heading(heading_guess)):
         for back in range(1, 6 + 1):
@@ -127,6 +136,8 @@ def _find_account_start(
             if j < 0 or lines[j]["page"] != page:
                 break
             text = lines[j]["text"].strip()
+            if _is_bureaus_row(text):
+                continue
             if _valid_heading(text):
                 candidate = j
                 heading_guess = text
@@ -144,7 +155,7 @@ def _find_account_start(
             if lines[j]["page"] != page:
                 break
             text = lines[j]["text"].strip()
-            if not _valid_heading(text):
+            if _is_bureaus_row(text) or not _valid_heading(text):
                 continue
             candidate = j
             heading_guess = text
@@ -156,6 +167,23 @@ def _find_account_start(
             heading_guess = lines[anchor_idx]["text"].strip()
             heading_source = "section+anchor"
 
+    # Post-decide correction: avoid returning the bureaus row as heading
+    if heading_guess and _is_bureaus_row(heading_guess):
+        for back in range(1, HEADING_BACK_LINES + 1):
+            j = candidate - back
+            if j < 0 or lines[j]["page"] != page:
+                break
+            text = lines[j]["text"].strip()
+            if _valid_heading(text):
+                candidate = j
+                heading_guess = text
+                heading_source = "corrected_from_bureaus"
+                break
+        else:
+            candidate = anchor_idx
+            heading_guess = lines[anchor_idx]["text"].strip()
+            heading_source = "anchor"
+
     return max(candidate, 0), heading_guess, heading_source
 
 
@@ -166,9 +194,7 @@ def _find_heading_after_section(
 
     for j in range(section_idx + 1, min(section_idx + 5, len(lines))):
         text = lines[j]["text"].strip()
-        if not _is_meaningful_heading(text):
-            continue
-        if _norm(text) == BUREAUS_NORM:
+        if not _is_meaningful_heading(text) or _is_bureaus_row(text):
             continue
         return j, text
 

@@ -268,3 +268,55 @@ def test_noise_lines_skipped(tmp_path: Path) -> None:
     assert "5/28/25, 12:47 PM 3-Bureau Credit Report" not in texts1
     assert acc1["noise_lines_skipped"] == 2
     assert acc2["noise_lines_skipped"] == 0
+
+
+def create_bureaus_headline_tsv(path: Path) -> None:
+    content = (
+        "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+        "1\t1\t0\t0\t0\t0\tCREDITOR XYZ\n"
+        "1\t2\t0\t0\t0\t0\tTransunion®Experian®Equifax®\n"
+        "1\t3\t0\t0\t0\t0\tAccount # 123\n"
+        "1\t4\t0\t0\t0\t0\tLine A1\n"
+    )
+    path.write_text(content, encoding="utf-8")
+
+
+def test_bureaus_never_headline(tmp_path: Path) -> None:
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    create_bureaus_headline_tsv(tsv_path)
+
+    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
+
+    data = json.loads(json_path.read_text())
+    accounts = data["accounts"]
+    assert len(accounts) == 1
+    acc = accounts[0]
+    assert acc["heading_guess"] == "CREDITOR XYZ"
+    assert acc["heading_source"] == "backtrack"
+
+
+def create_two_above_account_hash_tsv(path: Path) -> None:
+    content = (
+        "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+        "1\t1\t0\t0\t0\t0\tCREDITOR ABC\n"
+        "1\t2\t0\t0\t0\t0\tFILLER\n"
+        "1\t3\t0\t0\t0\t0\tAccount # 999\n"
+        "1\t4\t0\t0\t0\t0\tLine A1\n"
+    )
+    path.write_text(content, encoding="utf-8")
+
+
+def test_two_above_account_hash_headline_rule(tmp_path: Path) -> None:
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    create_two_above_account_hash_tsv(tsv_path)
+
+    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
+
+    data = json.loads(json_path.read_text())
+    accounts = data["accounts"]
+    assert len(accounts) == 1
+    acc = accounts[0]
+    assert acc["heading_guess"] == "CREDITOR ABC"
+    assert acc["heading_source"] == "backtrack"

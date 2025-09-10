@@ -49,55 +49,35 @@ def _mock_dependencies(monkeypatch, sections):
 
 
 def test_extract_problematic_accounts_adapter(monkeypatch):
-    import backend.config as config
-    import backend.core.orchestrators as orch
+    import backend.core.logic.report_analysis.extract_problematic_accounts as epa
 
-    monkeypatch.setattr(config, "ENABLE_CASESTORE_STAGEA", True)
-    monkeypatch.setattr(config, "ENABLE_AI_ADJUDICATOR", True)
+    # Pretend a legacy Case Store file exists so the adapter uses Stage‑A data
+    monkeypatch.setattr(epa, "load_session_case", lambda sid: object())
 
-    class Artifact:
-        def __init__(self, data):
-            self._data = data
+    rows = [
+        {
+            "account_id": "rules",
+            "bureau": "Experian",
+            "tier": "none",
+            "primary_issue": "unknown",
+            "problem_reasons": ["r1"],
+            "decision_source": "rules",
+            "fields_used": ["f1"],
+        },
+        {
+            "account_id": "ai_good",
+            "bureau": "TransUnion",
+            "tier": "Tier2",
+            "primary_issue": "late",
+            "confidence": 0.8,
+            "problem_reasons": ["ai"],
+            "decision_source": "ai",
+        }
+    ]
 
-        def model_dump(self):
-            return self._data
+    monkeypatch.setattr(epa, "get_problem_accounts_for_session", lambda sid: rows)
 
-    class Case:
-        def __init__(self, bureau, data):
-            self.bureau = type("Bureau", (), {"value": bureau})
-            self.artifacts = {"stageA_detection": Artifact(data)}
-
-    cases = {
-        "rules": Case(
-            "Experian",
-            {"decision_source": "rules", "tier": "none", "problem_reasons": ["r1"], "debug": {"fields_used": ["f1"]}},
-        ),
-        "ai_good": Case(
-            "TransUnion",
-            {
-                "decision_source": "ai",
-                "tier": "Tier2",
-                "primary_issue": "late",
-                "confidence": 0.8,
-                "problem_reasons": ["ai"],
-            },
-        ),
-        "ai_bad": Case(
-            "Equifax",
-            {
-                "decision_source": "ai",
-                "tier": "Tier4",
-                "primary_issue": "bad",
-                "confidence": 0.9,
-                "problem_reasons": ["bad"],
-            },
-        ),
-    }
-
-    monkeypatch.setattr(orch, "list_accounts", lambda session_id: list(cases.keys()))
-    monkeypatch.setattr(orch, "get_account_case", lambda session_id, acc_id: cases[acc_id])
-
-    result = extract_problematic_accounts("s1")
+    result = epa.extract_problematic_accounts("s1")
 
     assert {r["account_id"] for r in result} == {"rules", "ai_good"}
     rules = next(r for r in result if r["account_id"] == "rules")
@@ -108,6 +88,29 @@ def test_extract_problematic_accounts_adapter(monkeypatch):
     ai_good = next(r for r in result if r["account_id"] == "ai_good")
     assert ai_good["tier"] == "Tier2"
     assert ai_good["confidence"] == 0.8
+
+
+def test_extract_problematic_accounts_builder_fallback(monkeypatch):
+    import backend.core.logic.report_analysis.extract_problematic_accounts as epa
+    from backend.core.case_store.errors import CaseStoreError
+
+    def fake_load(_sid):
+        raise CaseStoreError(code="NOT_FOUND", message="missing")
+
+    monkeypatch.setattr(epa, "load_session_case", fake_load)
+    monkeypatch.setattr(
+        epa,
+        "get_problem_accounts_for_session",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("legacy path")),
+    )
+    monkeypatch.setattr(
+        epa,
+        "build_problem_cases",
+        lambda sid: {"summaries": [{"account_id": "acc1"}]},
+    )
+
+    result = epa.extract_problematic_accounts("s1")
+    assert result == [{"account_id": "acc1"}]
 
 
 def test_extract_problematic_accounts_returns_models(monkeypatch):

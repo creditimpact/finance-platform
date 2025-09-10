@@ -2,18 +2,32 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from backend.core.orchestrators import collect_stageA_problem_accounts as get_problem_accounts_for_session
+from backend.core.case_store.storage import CaseStoreError, load_session_case
+from backend.core.orchestrators import (
+    collect_stageA_problem_accounts as get_problem_accounts_for_session,
+)
+
+from .problem_case_builder import build_problem_cases
 
 
 def extract_problematic_accounts(session_id: str) -> List[Dict[str, Any]]:
-    """Return legacy problem account records for ``session_id``.
+    """Return problematic account summaries for ``session_id``.
 
-    This adapter bridges older callers that expect a simple list of dicts with the
-    new Case Store + Stage A orchestration pipeline.  Filtering logic and schema
-    validation live in :mod:`backend.core.orchestrators`; this function simply
-    reads those results and normalises field names and defaults so the legacy
-    contract remains stable.
+    If a legacy Case Store file exists we reuse the Stage‑A orchestrator results
+    and normalise them into the legacy structure.  When that file is absent we
+    fall back to :func:`build_problem_cases` which writes new problem case
+    artifacts and returns their summaries.  In both situations a list of
+    dictionaries is returned and the function never raises when no accounts are
+    problematic.
     """
+
+    try:
+        load_session_case(session_id)
+    except CaseStoreError:
+        summary = build_problem_cases(session_id)
+        if isinstance(summary, dict):
+            return list(summary.get("summaries") or [])
+        return []
 
     rows = get_problem_accounts_for_session(session_id)
     out: List[Dict[str, Any]] = []

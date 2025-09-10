@@ -3264,3 +3264,24 @@ def enrich_block(blk: dict) -> dict:
             pass
 
     return {**blk, "fields": cleaned_fields, "meta": cleaned_meta}
+
+def export_stage_a(session_id: str) -> dict:
+    """Run Stage A export and return artifact paths."""
+    try:
+        pdf_path = Path("uploads") / session_id / "smartcredit_report.pdf"
+        _, meta = export_account_blocks(session_id, pdf_path)
+        accounts_dir = Path(meta["accounts_json"]).parent
+        artifacts = {
+            "full_tsv": Path(meta["full_tsv"]),
+            "accounts_json": Path(meta["accounts_json"]),
+            "general_info_json": Path(meta["general_info"]),
+        }
+        return {
+            "sid": session_id,
+            "accounts_table_dir": accounts_dir,
+            "artifacts": artifacts,
+            "ok": True,
+        }
+    except Exception as e:
+        logger.exception("export_stage_a_failed", extra={"sid": session_id, "error": str(e)})
+        return {"sid": session_id, "ok": False, "error": str(e)}

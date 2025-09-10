@@ -132,7 +132,17 @@ def cleanup_trace_task(self, sid: str) -> dict:
     Also removes ``traces/texts/<sid>``. Always returns a dict to keep celery chains healthy.
     """
     log.info("TRACE_CLEANUP start sid=%s", sid)
-    summary = purge_after_export(sid=sid, project_root=Path(PROJECT_ROOT))
+    root = Path(PROJECT_ROOT)
+    blocks_dir = root / "traces" / "blocks" / sid
+    acct = blocks_dir / "accounts_table"
+    must_exist = [
+        "_debug_full.tsv",
+        "accounts_from_full.json",
+        "general_info_from_full.json",
+    ]
+    assert blocks_dir.exists(), f"blocks dir not found: {blocks_dir}"
+    assert all((acct / k).exists() for k in must_exist), f"missing artifacts in {acct}"
+    summary = purge_after_export(sid=sid, project_root=root)
     log.info(
         "TRACE_CLEANUP done sid=%s kept=['_debug_full.tsv','accounts_from_full.json','general_info_from_full.json']",
         sid,

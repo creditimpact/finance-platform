@@ -4,8 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from backend.core.logic.report_analysis.trace_cleanup import purge_trace_except_artifacts
-
+from backend.core.logic.report_analysis.trace_cleanup import (
+    purge_trace_except_artifacts,
+)
 
 REQUIRED = {
     "accounts_table/_debug_full.tsv",
@@ -104,7 +105,7 @@ def test_keep_extra(tmp_path: Path) -> None:
 
 def test_delete_texts_sid_dry_run(tmp_path: Path) -> None:
     sid = "sid1"
-    base = _setup(tmp_path, sid)
+    _setup(tmp_path, sid)
     texts_dir = tmp_path / "traces" / "texts" / sid
     (texts_dir / "a" / "b").mkdir(parents=True)
     (texts_dir / "a" / "b" / "file.txt").write_text("1")
@@ -117,7 +118,7 @@ def test_delete_texts_sid_dry_run(tmp_path: Path) -> None:
 
 def test_delete_texts_sid_real(tmp_path: Path) -> None:
     sid = "sid2"
-    base = _setup(tmp_path, sid)
+    _setup(tmp_path, sid)
     texts_dir = tmp_path / "traces" / "texts" / sid
     (texts_dir / "file.txt").parent.mkdir(parents=True, exist_ok=True)
     (texts_dir / "file.txt").write_text("1")
@@ -130,7 +131,7 @@ def test_delete_texts_sid_real(tmp_path: Path) -> None:
 
 def test_keep_texts_flag(tmp_path: Path) -> None:
     sid = "sid3"
-    base = _setup(tmp_path, sid)
+    _setup(tmp_path, sid)
     texts_dir = tmp_path / "traces" / "texts" / sid
     texts_dir.mkdir(parents=True)
 
@@ -140,3 +141,15 @@ def test_keep_texts_flag(tmp_path: Path) -> None:
     assert texts_dir.exists()
     assert res["texts_deleted"] is False
     assert f"texts/{sid}/**" not in res["deleted"]
+
+
+def test_cases_directory_untouched(tmp_path: Path) -> None:
+    """Running cleanup must not remove any files under cases/<sid>."""
+    sid = "case"
+    _setup(tmp_path, sid)
+    cases_file = tmp_path / "cases" / sid / "case.json"
+    cases_file.parent.mkdir(parents=True)
+    cases_file.write_text("1")
+
+    purge_trace_except_artifacts(sid, root=tmp_path, dry_run=False)
+    assert cases_file.exists()

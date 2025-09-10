@@ -4,32 +4,50 @@ from pathlib import Path
 from scripts import split_general_info_from_tsv
 
 
-def create_full_tsv(path: Path) -> None:
-    content = (
-        "page\tline\ty0\ty1\tx0\tx1\ttext\n"
-        "1\t1\t0\t0\t0\t0\tPERSONAL INFORMATION\n"
-        "1\t2\t0\t0\t0\t0\tName: JOHN DOE\n"
-        "1\t3\t0\t0\t0\t0\tSUMMARY\n"
-        "1\t4\t0\t0\t0\t0\tGood credit\n"
-        "1\t5\t0\t0\t0\t0\tACCOUNT HISTORY\n"
-        "1\t6\t0\t0\t0\t0\tAccount 1\n"
-        "1\t7\t0\t0\t0\t0\tCOLLECTION CHARGEOFF\n"
-        "1\t8\t0\t0\t0\t0\tPUBLIC INFORMATION\n"
-        "1\t9\t0\t0\t0\t0\tNone\n"
-        "1\t10\t0\t0\t0\t0\tINQUIRIES\n"
-        "1\t11\t0\t0\t0\t0\tInq1\n"
-        "1\t12\t0\t0\t0\t0\tCREDITOR CONTACTS\n"
-        "1\t13\t0\t0\t0\t0\tContact 1\n"
-        "1\t14\t0\t0\t0\t0\tSMARTCREDIT\n"
-        "1\t15\t0\t0\t0\t0\tAccount # 123\n"
-    )
-    path.write_text(content, encoding="utf-8")
+def write_tsv(path: Path, rows: list[tuple[int, int, int, str]]) -> None:
+    """Helper to write a minimal TSV file for testing.
+
+    ``rows`` is an iterable of ``(page, line, x0, text)`` tuples.
+    Other TSV columns are filled with dummy ``0`` values.
+    """
+
+    header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+    lines = [
+        f"{p}\t{l}\t0\t0\t{x}\t0\t{t}\n" for (p, l, x, t) in rows
+    ]
+    path.write_text(header + "".join(lines), encoding="utf-8")
 
 
-def test_split_sections(tmp_path: Path) -> None:
-    tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "general_info_from_full.json"
-    create_full_tsv(tsv_path)
+def test_split_sections_tokenised_headings(tmp_path: Path) -> None:
+    tsv_path = tmp_path / "full.tsv"
+    json_path = tmp_path / "out.json"
+
+    rows = [
+        (1, 1, 0, "Personal"),
+        (1, 1, 10, "Information"),
+        (1, 2, 0, "Name: JOHN DOE"),
+        (1, 3, 0, "SUMMARY"),
+        (1, 4, 0, "Good credit"),
+        (1, 5, 0, "Public Records:"),  # should not trigger Public Information
+        (1, 6, 0, "ACCOUNT"),
+        (1, 6, 10, "HISTORY"),
+        (1, 7, 0, "Account 1"),
+        (1, 8, 0, "Collection"),
+        (1, 8, 10, "Chargeof"),  # tolerate truncated heading
+        (1, 9, 0, "Debt 1"),
+        (1, 10, 0, "PUBLIC"),
+        (1, 10, 10, "INFORMATION"),
+        (1, 11, 0, "None"),
+        (1, 12, 0, "INQUIRIES"),
+        (1, 13, 0, "Inq1"),
+        (1, 14, 0, "CREDITOR"),
+        (1, 14, 10, "CONTACTS"),
+        (1, 15, 0, "Contact 1"),
+        (1, 16, 0, "smartcredit.com"),  # footer terminator
+        (1, 17, 0, "Account # 123"),
+    ]
+
+    write_tsv(tsv_path, rows)
 
     split_general_info_from_tsv.main(
         ["--full", str(tsv_path), "--json_out", str(json_path)]
@@ -38,39 +56,67 @@ def test_split_sections(tmp_path: Path) -> None:
     data = json.loads(json_path.read_text())
     sections = data["sections"]
 
-    assert len(sections) == 6
+    assert [s["heading"] for s in sections] == [
+        "Personal Information",
+        "Summary",
+        "Account History",
+        "Collection / Chargeoff",
+        "Public Information",
+        "Inquiries",
+        "Creditor Contacts",
+    ]
 
-    expected = {
-        "PERSONAL INFORMATION": ["PERSONAL INFORMATION", "Name: JOHN DOE"],
-        "SUMMARY": ["SUMMARY", "Good credit"],
-        "ACCOUNT HISTORY": [
-            "ACCOUNT HISTORY",
-            "Account 1",
-            "COLLECTION CHARGEOFF",
-        ],
-        "PUBLIC INFORMATION": ["PUBLIC INFORMATION", "None"],
-        "INQUIRIES": ["INQUIRIES", "Inq1"],
-        "CREDITOR CONTACTS": ["CREDITOR CONTACTS", "Contact 1"],
-    }
+    # Account History should include the collections title line
+    account_lines = [ln["text"] for ln in sections[2]["lines"]]
+    assert account_lines[-1].startswith("Collection")
 
-    assert [sec["heading"] for sec in sections] == list(expected.keys())
-    for sec in sections:
-        assert [ln["text"] for ln in sec["lines"]] == expected[sec["heading"]]
+    collection_lines = [ln["text"] for ln in sections[3]["lines"]]
+    assert collection_lines == ["Debt 1"]
 
 
-def create_no_section_tsv(path: Path) -> None:
-    content = (
-        "page\tline\ty0\ty1\tx0\tx1\ttext\n"
-        "1\t1\t0\t0\t0\t0\tName: JOHN DOE\n"
-        "1\t2\t0\t0\t0\t0\tAccount # 123\n"
+def test_missing_collections_and_footer(tmp_path: Path) -> None:
+    tsv_path = tmp_path / "full.tsv"
+    json_path = tmp_path / "out.json"
+
+    rows = [
+        (1, 1, 0, "PERSONAL INFORMATION"),
+        (1, 2, 0, "SUMMARY"),
+        (1, 3, 0, "ACCOUNT HISTORY"),
+        (1, 4, 0, "Account 1"),
+        (1, 5, 0, "PUBLIC INFORMATION"),
+        (1, 6, 0, "INQUIRIES"),
+        (1, 7, 0, "CREDITOR CONTACTS"),
+        (1, 8, 0, "Service Agreement"),  # footer via synonym
+    ]
+
+    write_tsv(tsv_path, rows)
+
+    split_general_info_from_tsv.main(
+        ["--full", str(tsv_path), "--json_out", str(json_path)]
     )
-    path.write_text(content, encoding="utf-8")
+
+    data = json.loads(json_path.read_text())
+    # Collections section is missing; others present until footer
+    assert [s["heading"] for s in data["sections"]] == [
+        "Personal Information",
+        "Summary",
+        "Account History",
+        "Public Information",
+        "Inquiries",
+        "Creditor Contacts",
+    ]
 
 
 def test_no_sections(tmp_path: Path) -> None:
-    tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "general_info_from_full.json"
-    create_no_section_tsv(tsv_path)
+    tsv_path = tmp_path / "full.tsv"
+    json_path = tmp_path / "out.json"
+
+    rows = [
+        (1, 1, 0, "Name: JOHN DOE"),
+        (1, 2, 0, "Account # 123"),
+    ]
+
+    write_tsv(tsv_path, rows)
 
     split_general_info_from_tsv.main(
         ["--full", str(tsv_path), "--json_out", str(json_path)]
@@ -79,41 +125,3 @@ def test_no_sections(tmp_path: Path) -> None:
     data = json.loads(json_path.read_text())
     assert data["sections"] == []
 
-
-def create_missing_creditor_contacts_tsv(path: Path) -> None:
-    content = (
-        "page\tline\ty0\ty1\tx0\tx1\ttext\n"
-        "1\t1\t0\t0\t0\t0\tPERSONAL INFORMATION\n"
-        "1\t2\t0\t0\t0\t0\tName: JOHN DOE\n"
-        "1\t3\t0\t0\t0\t0\tSUMMARY\n"
-        "1\t4\t0\t0\t0\t0\tGood credit\n"
-        "1\t5\t0\t0\t0\t0\tACCOUNT HISTORY\n"
-        "1\t6\t0\t0\t0\t0\tAccount 1\n"
-        "1\t7\t0\t0\t0\t0\tCOLLECTION CHARGEOFF\n"
-        "1\t8\t0\t0\t0\t0\tPUBLIC INFORMATION\n"
-        "1\t9\t0\t0\t0\t0\tNone\n"
-        "1\t10\t0\t0\t0\t0\tINQUIRIES\n"
-        "1\t11\t0\t0\t0\t0\tInq1\n"
-        "1\t12\t0\t0\t0\t0\tSMARTCREDIT\n"
-        "1\t13\t0\t0\t0\t0\tAccount # 123\n"
-    )
-    path.write_text(content, encoding="utf-8")
-
-
-def test_missing_creditor_contacts(tmp_path: Path) -> None:
-    tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "general_info_from_full.json"
-    create_missing_creditor_contacts_tsv(tsv_path)
-
-    split_general_info_from_tsv.main(
-        ["--full", str(tsv_path), "--json_out", str(json_path)]
-    )
-
-    data = json.loads(json_path.read_text())
-    # Inquiries and Creditor Contacts sections should be skipped.
-    assert [sec["heading"] for sec in data["sections"]] == [
-        "PERSONAL INFORMATION",
-        "SUMMARY",
-        "ACCOUNT HISTORY",
-        "PUBLIC INFORMATION",
-    ]

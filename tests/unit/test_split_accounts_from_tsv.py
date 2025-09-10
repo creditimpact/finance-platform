@@ -114,3 +114,30 @@ def test_collection_starts_new_account(tmp_path: Path) -> None:
     assert "Collection" not in texts1
     assert acc2["heading_guess"] == "CREDENCE RM"
     assert acc2["section"] == "collections"
+
+
+def create_section_forward_scan_tsv(path: Path) -> None:
+    content = (
+        "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+        "1\t1\t0\t0\t0\t0\tCollection\n"
+        "1\t2\t0\t0\t0\t0\tTransunion®Experian®Equifax®\n"
+        "1\t3\t0\t0\t0\t0\tCREDENCE RM\n"
+        "1\t4\t0\t0\t0\t0\tAccount # 123\n"
+    )
+    path.write_text(content, encoding="utf-8")
+
+
+def test_heading_from_section_forward_scan(tmp_path: Path) -> None:
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    create_section_forward_scan_tsv(tsv_path)
+
+    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
+
+    data = json.loads(json_path.read_text())
+    accounts = data["accounts"]
+    assert len(accounts) == 1
+    acc = accounts[0]
+    assert acc["heading_guess"] == "CREDENCE RM"
+    assert acc["line_start"] == 3
+    assert acc["heading_source"] == "section+heading"

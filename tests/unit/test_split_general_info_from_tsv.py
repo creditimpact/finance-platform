@@ -37,33 +37,25 @@ def test_split_sections(tmp_path: Path) -> None:
 
     data = json.loads(json_path.read_text())
     sections = data["sections"]
-    assert [sec["heading"] for sec in sections] == [
-        "PERSONAL INFORMATION",
-        "SUMMARY",
-        "ACCOUNT HISTORY",
-        "PUBLIC INFORMATION",
-        "INQUIRIES",
-        "CREDITOR CONTACTS",
-    ]
 
-    # Account History → Collection Chargeoff should include the ending heading.
-    assert [ln["text"] for ln in sections[2]["lines"]] == [
-        "ACCOUNT HISTORY",
-        "Account 1",
-        "COLLECTION CHARGEOFF",
-    ]
+    assert len(sections) == 6
 
-    # Inquiries should stop before Creditor Contacts.
-    assert [ln["text"] for ln in sections[4]["lines"]] == [
-        "INQUIRIES",
-        "Inq1",
-    ]
+    expected = {
+        "PERSONAL INFORMATION": ["PERSONAL INFORMATION", "Name: JOHN DOE"],
+        "SUMMARY": ["SUMMARY", "Good credit"],
+        "ACCOUNT HISTORY": [
+            "ACCOUNT HISTORY",
+            "Account 1",
+            "COLLECTION CHARGEOFF",
+        ],
+        "PUBLIC INFORMATION": ["PUBLIC INFORMATION", "None"],
+        "INQUIRIES": ["INQUIRIES", "Inq1"],
+        "CREDITOR CONTACTS": ["CREDITOR CONTACTS", "Contact 1"],
+    }
 
-    # Creditor Contacts should stop before SmartCredit.
-    assert [ln["text"] for ln in sections[5]["lines"]] == [
-        "CREDITOR CONTACTS",
-        "Contact 1",
-    ]
+    assert [sec["heading"] for sec in sections] == list(expected.keys())
+    for sec in sections:
+        assert [ln["text"] for ln in sec["lines"]] == expected[sec["heading"]]
 
 
 def create_no_section_tsv(path: Path) -> None:

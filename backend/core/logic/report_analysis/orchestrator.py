@@ -46,6 +46,10 @@ def run_stage_a(session_id: str, project_root: Path = Path(".")) -> dict:
         return meta
 
     if CLEANUP_AFTER_EXPORT:
+        log.warning(
+            "CLEANUP_AFTER_EXPORT enabled; duplicate cleanup may occur but is idempotent",
+            extra={"sid": session_id},
+        )
         cleanup_summary = purge_after_export(sid=session_id, project_root=project_root)
         log.info("purge_after_export", extra={"sid": session_id, **cleanup_summary})
         meta["cleanup"] = {"performed": True, "summary": cleanup_summary}

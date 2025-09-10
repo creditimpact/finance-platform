@@ -19,8 +19,8 @@ from bisect import bisect_right
 
 ACCOUNT_RE = re.compile(r"\bAccount\b.*#", re.IGNORECASE)
 STOP_MARKER_NORM = "publicinformation"
-SECTION_STARTERS = {"collection"}
-_SECTION_NAME = {"collection": "collections"}
+SECTION_STARTERS = {"collection", "unknown"}
+_SECTION_NAME = {"collection": "collections", "unknown": "unknown"}
 NOISE_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 NOISE_BANNER_RE = re.compile(
     r"^\d{1,2}/\d{1,2}/\d{2,4}.*(?:Credit\s*Report|SmartCredit)", re.IGNORECASE
@@ -320,7 +320,8 @@ def main(argv: List[str] | None = None) -> None:
         accounts = result.get("accounts") or []
         total = len(accounts)
         collections = sum(1 for a in accounts if a.get("section") == "collections")
-        regular = total - collections
+        unknown = sum(1 for a in accounts if a.get("section") == "unknown")
+        regular = total - collections - unknown
         bad_last = [
             a["account_index"]
             for a in accounts
@@ -328,7 +329,7 @@ def main(argv: List[str] | None = None) -> None:
             and _norm(a["lines"][-1]["text"]) in SECTION_STARTERS
         ]
         print(f"Total accounts: {total}")
-        print(f"collections: {collections} regular: {regular}")
+        print(f"collections: {collections} unknown: {unknown} regular: {regular}")
         if bad_last:
             print(f"Accounts ending with section starter: {bad_last}")
     print(f"Wrote accounts to {json_out}")

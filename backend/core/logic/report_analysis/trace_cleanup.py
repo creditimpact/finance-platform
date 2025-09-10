@@ -116,3 +116,7 @@ def purge_trace_except_artifacts(
         "root": str(base),
         "texts_deleted": texts_deleted,
     }
+
+def purge_after_export(sid: str, project_root: Path | str = Path(".")) -> dict:
+    """Purge trace directories after export, keeping final artifacts."""
+    return purge_trace_except_artifacts(sid=sid, root=Path(project_root), dry_run=False)

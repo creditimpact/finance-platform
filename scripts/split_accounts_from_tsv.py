@@ -244,9 +244,14 @@ def split_accounts(
         while section_ptr < len(section_starts) and section_starts[section_ptr] < start_idx:
             section_ptr += 1
         cut_end = next_start
+        trailing_pruned = False
         if section_ptr < len(section_starts) and start_idx <= section_starts[section_ptr] < next_start:
             cut_end = section_starts[section_ptr]
+            trailing_pruned = True
         account_lines = lines[start_idx:cut_end]
+        if account_lines and _norm(account_lines[-1]["text"]) in SECTION_STARTERS:
+            account_lines.pop()
+            trailing_pruned = True
         if not account_lines:
             continue
         account_info = {
@@ -260,6 +265,7 @@ def split_accounts(
             "section": sections[idx],
             "section_prefix_seen": section_prefix_flags[idx],
             "lines": account_lines,
+            "trailing_section_marker_pruned": trailing_pruned,
         }
         accounts.append(account_info)
         if write_tsv:

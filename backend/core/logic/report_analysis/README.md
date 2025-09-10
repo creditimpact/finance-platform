@@ -54,3 +54,38 @@ instructions pipelines.
 Set the environment variable `ANALYSIS_DISABLE_CACHE=1` to bypass the
 in-memory analysis cache and force a fresh analysis on each run.
 
+## Manual trace cleanup
+
+After Stage A export you can clear intermediate files for a session ID (SID)
+while keeping the final artifacts. Run the helper script:
+
+```bash
+python scripts/cleanup_trace.py --sid <SID> --root .
+```
+
+Example PowerShell usage:
+
+```powershell
+# venv + project root
+& .\.venv\Scripts\Activate.ps1
+$env:PYTHONPATH = (Get-Location).Path
+
+# Set SID
+$SID = 'PUT-YOUR-SID-HERE'
+
+# Run cleanup
+python .\scripts\cleanup_trace.py --sid $SID --root .
+
+# Verify
+$blocks = ".\traces\blocks\$SID"
+$acct   = "$blocks\accounts_table"
+$texts  = ".\traces\texts\$SID"
+
+"Remaining in accounts_table:"
+Get-ChildItem $acct -Force | Format-Table Name,Length -Auto
+"Texts dir exists? " + (Test-Path $texts)
+```
+
+Only `_debug_full.tsv`, `accounts_from_full.json`, and
+`general_info_from_full.json` remain in the `accounts_table` folder and the
+corresponding `texts/<SID>` directory is removed.

@@ -45,6 +45,7 @@ def test_purge_trace_happy_path(tmp_path: Path) -> None:
         "subdir/file.txt",
         "subdir",
     }
+    assert res["texts_deleted"] is False
 
     res2 = purge_trace_except_artifacts(sid, root=tmp_path, dry_run=False)
     assert not (accounts / "extra.txt").exists()
@@ -57,6 +58,7 @@ def test_purge_trace_happy_path(tmp_path: Path) -> None:
         "subdir",
     }
     assert res2["skipped"] == []
+    assert res2["texts_deleted"] is False
 
 
 def test_missing_artifact(tmp_path: Path) -> None:
@@ -97,3 +99,44 @@ def test_keep_extra(tmp_path: Path) -> None:
     assert keep_file.exists()
     assert not remove_file.exists()
     assert "accounts_table/keep.json" in res["kept"]
+    assert res["texts_deleted"] is False
+
+
+def test_delete_texts_sid_dry_run(tmp_path: Path) -> None:
+    sid = "sid1"
+    base = _setup(tmp_path, sid)
+    texts_dir = tmp_path / "traces" / "texts" / sid
+    (texts_dir / "a" / "b").mkdir(parents=True)
+    (texts_dir / "a" / "b" / "file.txt").write_text("1")
+
+    res = purge_trace_except_artifacts(sid, root=tmp_path, dry_run=True)
+    assert texts_dir.exists()
+    assert res["texts_deleted"] is True
+    assert f"texts/{sid}/**" in res["deleted"]
+
+
+def test_delete_texts_sid_real(tmp_path: Path) -> None:
+    sid = "sid2"
+    base = _setup(tmp_path, sid)
+    texts_dir = tmp_path / "traces" / "texts" / sid
+    (texts_dir / "file.txt").parent.mkdir(parents=True, exist_ok=True)
+    (texts_dir / "file.txt").write_text("1")
+
+    res = purge_trace_except_artifacts(sid, root=tmp_path, dry_run=False)
+    assert not texts_dir.exists()
+    assert res["texts_deleted"] is True
+    assert f"texts/{sid}/**" in res["deleted"]
+
+
+def test_keep_texts_flag(tmp_path: Path) -> None:
+    sid = "sid3"
+    base = _setup(tmp_path, sid)
+    texts_dir = tmp_path / "traces" / "texts" / sid
+    texts_dir.mkdir(parents=True)
+
+    res = purge_trace_except_artifacts(
+        sid, root=tmp_path, dry_run=False, delete_texts_sid=False
+    )
+    assert texts_dir.exists()
+    assert res["texts_deleted"] is False
+    assert f"texts/{sid}/**" not in res["deleted"]

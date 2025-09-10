@@ -18,12 +18,18 @@ def main() -> int:
         default=[],
         help="Additional relative paths under the session to keep",
     )
+    parser.add_argument(
+        "--keep-texts",
+        action="store_true",
+        help="Do not delete traces/texts/<SID> directory",
+    )
     args = parser.parse_args()
     summary = purge_trace_except_artifacts(
         sid=args.sid,
         root=Path(args.root),
         keep_extra=args.keep_extra or None,
         dry_run=args.dry_run,
+        delete_texts_sid=not args.keep_texts,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0

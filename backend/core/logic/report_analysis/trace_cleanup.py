@@ -31,6 +31,7 @@ def purge_trace_except_artifacts(
     root: Path | str = Path("."),
     keep_extra: list[str] | None = None,
     dry_run: bool = False,
+    delete_texts_sid: bool = True,
 ) -> dict:
     """
     Deletes everything under traces/blocks/<sid> except the 3 final artifacts listed below.
@@ -61,6 +62,7 @@ def purge_trace_except_artifacts(
     kept = sorted(str(p.relative_to(base)) for p in keep_abs)
     deleted: list[str] = []
     skipped: list[str] = []
+    texts_deleted = False
 
     logger.info(
         "purge_trace_except_artifacts: sid=%s root=%s dry_run=%s", sid, base, dry_run
@@ -87,7 +89,30 @@ def purge_trace_except_artifacts(
             logger.exception("failed to delete %s", path)
             skipped.append(rel)
 
+    if delete_texts_sid:
+        texts_dir = Path(root) / "traces" / "texts" / sid
+        if texts_dir.exists():
+            texts_deleted = True
+            rel = f"texts/{sid}/**"
+            if dry_run:
+                logger.debug("would delete %s", texts_dir)
+                deleted.append(rel)
+            else:
+                try:
+                    shutil.rmtree(texts_dir)
+                    deleted.append(rel)
+                    logger.debug("deleted %s", texts_dir)
+                except Exception:
+                    logger.exception("failed to delete %s", texts_dir)
+                    texts_deleted = False
+
     logger.info(
         "purge complete: kept=%d deleted=%d skipped=%d", len(kept), len(deleted), len(skipped)
     )
-    return {"kept": kept, "deleted": deleted, "skipped": skipped, "root": str(base)}
+    return {
+        "kept": kept,
+        "deleted": deleted,
+        "skipped": skipped,
+        "root": str(base),
+        "texts_deleted": texts_deleted,
+    }

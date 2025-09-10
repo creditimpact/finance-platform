@@ -7,19 +7,22 @@ import uuid
 import warnings
 from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
+
+from backend.core.logic.report_analysis.trace_cleanup import purge_after_export
+from backend.settings import PROJECT_ROOT
 
 # Ensure the project root is always on sys.path so local modules can be
 # imported even when the worker is launched from outside the repository
 # directory.
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 load_dotenv()
 
-from celery import Celery, signals
+from celery import Celery, shared_task, signals
 
 from backend.api.config import get_app_config
 from backend.api.session_manager import update_session
@@ -48,6 +51,7 @@ def configure_worker(**_):
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+log = logger
 logger.info("OPENAI_API_KEY present=%s", bool(os.getenv("OPENAI_API_KEY")))
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message=".*FontBBox.*")
@@ -132,6 +136,25 @@ def extract_problematic_accounts(self, file_path: str, session_id: str | None = 
 def smoke_task(self):
     """Minimal task used for health checks."""
     return {"status": "ok"}
+
+
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def cleanup_trace_task(self, sid: str) -> dict:
+    """Purge parser traces for ``sid`` and keep final artifacts.
+
+    Deletes everything under ``traces/blocks/<sid>`` except:
+      - ``_debug_full.tsv``
+      - ``accounts_from_full.json``
+      - ``general_info_from_full.json``
+    Also removes ``traces/texts/<sid>``. Always returns a dict to keep celery chains healthy.
+    """
+    log.info("TRACE_CLEANUP start sid=%s", sid)
+    summary = purge_after_export(sid=sid, project_root=Path(PROJECT_ROOT))
+    log.info(
+        "TRACE_CLEANUP done sid=%s kept=['_debug_full.tsv','accounts_from_full.json','general_info_from_full.json']",
+        sid,
+    )
+    return {"sid": sid, "cleanup": summary}
 
 
 @app.task(bind=True, name="process_report")

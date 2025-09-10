@@ -5,7 +5,9 @@ import shutil
 from pathlib import Path
 from typing import Iterable
 
-logger = logging.getLogger(__name__)
+# Module-level logger. Named ``log`` to keep call sites concise and to follow
+# the convention used across the cleanup utilities.
+log = logging.getLogger(__name__)
 
 
 _DEFAULT_ARTIFACTS: tuple[str, ...] = (
@@ -64,7 +66,7 @@ def purge_trace_except_artifacts(
     skipped: list[str] = []
     texts_deleted = False
 
-    logger.info(
+    log.info(
         "purge_trace_except_artifacts: sid=%s root=%s dry_run=%s", sid, base, dry_run
     )
 
@@ -72,10 +74,10 @@ def purge_trace_except_artifacts(
     for path in all_paths:
         rel = str(path.relative_to(base))
         if path in keep_abs or path in keep_dirs:
-            logger.debug("keeping %s", path)
+            log.debug("keeping %s", path)
             continue
         if dry_run:
-            logger.debug("would delete %s", path)
+            log.debug("would delete %s", path)
             skipped.append(rel)
             continue
         try:
@@ -84,9 +86,9 @@ def purge_trace_except_artifacts(
             else:
                 path.unlink()
             deleted.append(rel)
-            logger.debug("deleted %s", path)
+            log.debug("deleted %s", path)
         except Exception:
-            logger.exception("failed to delete %s", path)
+            log.exception("failed to delete %s", path)
             skipped.append(rel)
 
     if delete_texts_sid:
@@ -95,19 +97,22 @@ def purge_trace_except_artifacts(
             texts_deleted = True
             rel = f"texts/{sid}/**"
             if dry_run:
-                logger.debug("would delete %s", texts_dir)
+                log.debug("would delete %s", texts_dir)
                 deleted.append(rel)
             else:
                 try:
                     shutil.rmtree(texts_dir)
                     deleted.append(rel)
-                    logger.debug("deleted %s", texts_dir)
+                    log.debug("deleted %s", texts_dir)
                 except Exception:
-                    logger.exception("failed to delete %s", texts_dir)
+                    log.exception("failed to delete %s", texts_dir)
                     texts_deleted = False
 
-    logger.info(
-        "purge complete: kept=%d deleted=%d skipped=%d", len(kept), len(deleted), len(skipped)
+    log.info(
+        "purge complete: kept=%d deleted=%d skipped=%d",
+        len(kept),
+        len(deleted),
+        len(skipped),
     )
     return {
         "kept": kept,
@@ -117,6 +122,10 @@ def purge_trace_except_artifacts(
         "texts_deleted": texts_deleted,
     }
 
+
 def purge_after_export(sid: str, project_root: Path | str = Path(".")) -> dict:
     """Purge trace directories after export, keeping final artifacts."""
+    base = Path(project_root) / "traces" / "blocks" / sid
+    keep = list(_DEFAULT_ARTIFACTS)
+    log.info("Trace cleanup: sid=%s base=%s keep=%s", sid, base, keep)
     return purge_trace_except_artifacts(sid=sid, root=Path(project_root), dry_run=False)

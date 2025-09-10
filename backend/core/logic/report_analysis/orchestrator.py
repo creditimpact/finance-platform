@@ -50,6 +50,9 @@ def run_stage_a(session_id: str, project_root: Path = Path(".")) -> dict:
         log.info("purge_after_export", extra={"sid": session_id, **cleanup_summary})
         meta["cleanup"] = {"performed": True, "summary": cleanup_summary}
     else:
-        meta["cleanup"] = {"performed": False, "reason": "flag_off"}
+        log.debug(
+            "run_stage_a: cleanup delegated to chain", extra={"sid": session_id}
+        )
+        meta["cleanup"] = {"performed": False, "reason": "delegated_to_chain"}
 
     return meta

@@ -85,7 +85,7 @@ def stage_a_task(self, sid: str) -> dict:
     except TypeError as e:  # pragma: no cover - defensive logging
         logger.error("Non-JSON value at tasks.stage_a_task return: %s", e)
         raise
-    log.info("STAGE_A done sid=%s", sid)
+    log.info("STAGE_A end sid=%s", sid)
     return safe_result
 
 
@@ -96,9 +96,10 @@ def extract_problematic_accounts(self, sid: str) -> dict:
     This task is defensive and does not rely on previous task outputs. It always
     returns a JSON-serializable dictionary.
     """
-    log.info("PROBLEM_ACCOUNTS start sid=%s", sid)
+    log.info("PROBLEMATIC start sid=%s", sid)
     try:
         found = extract_problematic_accounts_logic(sid) or []
+        count = len(found)
         result = {"sid": sid, "status": "ok", "found": found}
         safe_result = _json_safe(result)
         try:
@@ -109,9 +110,10 @@ def extract_problematic_accounts(self, sid: str) -> dict:
                 e,
             )
             raise
+        log.info("PROBLEMATIC end sid=%s count=%s", sid, count)
         return safe_result
     except Exception:
-        logger.exception("PROBLEM_ACCOUNTS failed sid=%s", sid)
+        logger.exception("PROBLEMATIC failed sid=%s", sid)
         raise
 
 
@@ -135,18 +137,15 @@ def cleanup_trace_task(self, sid: str) -> dict:
     root = Path(PROJECT_ROOT)
     blocks_dir = root / "traces" / "blocks" / sid
     acct = blocks_dir / "accounts_table"
-    must_exist = [
+    kept = [
         "_debug_full.tsv",
         "accounts_from_full.json",
         "general_info_from_full.json",
     ]
     assert blocks_dir.exists(), f"blocks dir not found: {blocks_dir}"
-    assert all((acct / k).exists() for k in must_exist), f"missing artifacts in {acct}"
+    assert all((acct / k).exists() for k in kept), f"missing artifacts in {acct}"
     summary = purge_after_export(sid=sid, project_root=root)
-    log.info(
-        "TRACE_CLEANUP done sid=%s kept=['_debug_full.tsv','accounts_from_full.json','general_info_from_full.json']",
-        sid,
-    )
+    log.info("TRACE_CLEANUP done sid=%s kept=%s", sid, kept)
     result = {"sid": sid, "cleanup": summary}
     safe_result = _json_safe(result)
     try:

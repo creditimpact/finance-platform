@@ -4,24 +4,23 @@ from pathlib import Path
 from scripts import split_accounts_from_tsv
 
 
-def create_heading_backtrack_tsv(path: Path) -> None:
+def create_all_caps_backtrack_tsv(path: Path) -> None:
     content = (
         "page\tline\ty0\ty1\tx0\tx1\ttext\n"
         "1\t1\t0\t0\t0\t0\tBANKAMERICA\n"
-        "1\t2\t0\t0\t0\t0\tFILLER\n"
-        "1\t3\t0\t0\t0\t0\tAccount # 123\n"
-        "1\t4\t0\t0\t0\t0\tLine A1\n"
-        "1\t5\t0\t0\t0\t0\tTRUISTMRTG\n"
-        "1\t6\t0\t0\t0\t0\tAccount # 456\n"
-        "1\t7\t0\t0\t0\t0\tLine B1\n"
+        "1\t2\t0\t0\t0\t0\tAccount # 123\n"
+        "1\t3\t0\t0\t0\t0\tLine A1\n"
+        "1\t4\t0\t0\t0\t0\tTRUISTMRTG\n"
+        "1\t5\t0\t0\t0\t0\tAccount # 456\n"
+        "1\t6\t0\t0\t0\t0\tLine B1\n"
     )
     path.write_text(content, encoding="utf-8")
 
 
-def test_heading_backtrack(tmp_path: Path) -> None:
+def test_all_caps_backtrack(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
     json_path = tmp_path / "accounts_from_full.json"
-    create_heading_backtrack_tsv(tsv_path)
+    create_all_caps_backtrack_tsv(tsv_path)
 
     split_accounts_from_tsv.main(
         [
@@ -39,11 +38,13 @@ def test_heading_backtrack(tmp_path: Path) -> None:
 
     acc1, acc2 = accounts
     assert acc1["heading_guess"] == "BANKAMERICA"
+    assert acc1["heading_source"] == "backtrack"
     assert acc1["line_start"] == 1
     assert acc1["lines"][0]["text"] == "BANKAMERICA"
 
     assert acc2["heading_guess"] == "TRUISTMRTG"
-    assert acc2["line_start"] == 5
+    assert acc2["heading_source"] == "backtrack"
+    assert acc2["line_start"] == 4
     assert acc2["lines"][1]["text"] == "Account # 456"
 
 
@@ -270,7 +271,7 @@ def test_noise_lines_skipped(tmp_path: Path) -> None:
     assert acc2["noise_lines_skipped"] == 0
 
 
-def create_bureaus_headline_tsv(path: Path) -> None:
+def create_triad_above_tsv(path: Path) -> None:
     content = (
         "page\tline\ty0\ty1\tx0\tx1\ttext\n"
         "1\t1\t0\t0\t0\t0\tCREDITOR XYZ\n"
@@ -281,10 +282,10 @@ def create_bureaus_headline_tsv(path: Path) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def test_bureaus_never_headline(tmp_path: Path) -> None:
+def test_triad_above_selection(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
     json_path = tmp_path / "accounts_from_full.json"
-    create_bureaus_headline_tsv(tsv_path)
+    create_triad_above_tsv(tsv_path)
 
     split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
 
@@ -293,14 +294,14 @@ def test_bureaus_never_headline(tmp_path: Path) -> None:
     assert len(accounts) == 1
     acc = accounts[0]
     assert acc["heading_guess"] == "CREDITOR XYZ"
-    assert acc["heading_source"] == "backtrack"
+    assert acc["heading_source"] == "triad_above"
 
 
 def create_two_above_account_hash_tsv(path: Path) -> None:
     content = (
         "page\tline\ty0\ty1\tx0\tx1\ttext\n"
         "1\t1\t0\t0\t0\t0\tCREDITOR ABC\n"
-        "1\t2\t0\t0\t0\t0\tFILLER\n"
+        "1\t2\t0\t0\t0\t0\tfiller\n"
         "1\t3\t0\t0\t0\t0\tAccount # 999\n"
         "1\t4\t0\t0\t0\t0\tLine A1\n"
     )
@@ -320,3 +321,83 @@ def test_two_above_account_hash_headline_rule(tmp_path: Path) -> None:
     acc = accounts[0]
     assert acc["heading_guess"] == "CREDITOR ABC"
     assert acc["heading_source"] == "backtrack"
+
+
+def create_anchor_only_tsv(path: Path) -> None:
+    content = (
+        "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+        "1\t1\t0\t0\t0\t0\tAccount # 123\n"
+        "1\t2\t0\t0\t0\t0\tLine A1\n"
+    )
+    path.write_text(content, encoding="utf-8")
+
+
+def test_anchor_not_used_as_headline(tmp_path: Path) -> None:
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    create_anchor_only_tsv(tsv_path)
+
+    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
+
+    data = json.loads(json_path.read_text())
+    accounts = data["accounts"]
+    assert len(accounts) == 1
+    acc = accounts[0]
+    assert acc["heading_guess"] is None
+    assert acc["heading_source"] == "anchor_no_heading"
+
+
+def create_plain_account_tsv(path: Path) -> None:
+    content = (
+        "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+        "1\t1\t0\t0\t0\t0\tREAL BANK\n"
+        "1\t2\t0\t0\t0\t0\tAccount Status:\n"
+        "1\t3\t0\t0\t0\t0\tAccount # 123\n"
+        "1\t4\t0\t0\t0\t0\tLine A1\n"
+    )
+    path.write_text(content, encoding="utf-8")
+
+
+def test_plain_account_not_anchor(tmp_path: Path) -> None:
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    create_plain_account_tsv(tsv_path)
+
+    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
+
+    data = json.loads(json_path.read_text())
+    accounts = data["accounts"]
+    assert len(accounts) == 1
+    acc = accounts[0]
+    assert acc["heading_guess"] == "REAL BANK"
+    assert acc["heading_source"] == "backtrack"
+
+
+def create_triad_moved_tsv(path: Path) -> None:
+    content = (
+        "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+        "1\t1\t0\t0\t0\t0\tBANK ONE\n"
+        "1\t2\t0\t0\t0\t0\tAccount # 111\n"
+        "1\t3\t0\t0\t0\t0\tLine A1\n"
+        "1\t4\t0\t0\t0\t0\tTransUnion Experian Equifax\n"
+        "1\t5\t0\t0\t0\t0\tCREDITOR TWO\n"
+        "1\t6\t0\t0\t0\t0\tAccount # 222\n"
+        "1\t7\t0\t0\t0\t0\tLine B1\n"
+    )
+    path.write_text(content, encoding="utf-8")
+
+
+def test_triad_moved_to_next_account(tmp_path: Path) -> None:
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    create_triad_moved_tsv(tsv_path)
+
+    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
+
+    data = json.loads(json_path.read_text())
+    accounts = data["accounts"]
+    assert len(accounts) == 2
+    acc1, acc2 = accounts
+    texts1 = [ln["text"] for ln in acc1["lines"]]
+    assert "TransUnion Experian Equifax" not in texts1
+    assert acc2["lines"][0]["text"] == "TransUnion Experian Equifax"

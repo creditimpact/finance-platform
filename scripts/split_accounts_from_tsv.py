@@ -27,8 +27,8 @@ NOISE_BANNER_RE = re.compile(
 )
 
 # How many lines above the ``Account #`` anchor to consider the heading.
-# If unavailable, the logic falls back to progressively closer lines.
-HEADING_BACK_LINES = 2
+# Per hardening rules we look farther back to find a suitable headline.
+HEADING_BACK_LINES = 8
 
 
 def _norm(text: str) -> str:
@@ -36,27 +36,25 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
-_BUREAUS_FORMS = {
-    "transunion®experian®equifax®",
-    "transunionexperianequifax",
-    "transunionexperian®equifax®",
-}
-_BUREAUS_NORMS = {_norm(s) for s in _BUREAUS_FORMS}
+def _is_triad(text: str) -> bool:
+    """Return True if ``text`` is the TransUnion/Experian/Equifax triad."""
+    return _norm(text) == "transunionexperianequifax"
 
 
-def _is_bureaus_row(s: str) -> bool:
-    """Return True if ``s`` represents the bureaus triple row."""
-    return _norm(s) in _BUREAUS_NORMS
+def _is_anchor(text: str) -> bool:
+    """Return True if ``text`` contains the literal ``Account #`` anchor."""
+    return "account#" in _norm(text)
 
 
-def _is_heading(text: str) -> bool:
-    """Return True if ``text`` appears to be an ALL-CAPS heading."""
-    candidate = text.strip()
-    if not candidate:
+def _looks_like_headline(text: str) -> bool:
+    """Return True if ``text`` is an ALL-CAPS headline candidate."""
+    stripped = re.sub(r"[^A-Za-z0-9/&\- ]", "", text).strip()
+    if ":" in stripped:
         return False
-    if not re.fullmatch(r"[A-Z0-9&'’ ]+", candidate):
+    core = stripped.replace(" ", "")
+    if len(core) < 3:
         return False
-    return re.search(r"[A-Z]", candidate) is not None
+    return core.isupper()
 
 
 def _read_tokens(
@@ -92,99 +90,42 @@ def _read_tokens(
     return tokens_by_line, lines
 
 
-def _is_meaningful_heading(text: str) -> bool:
-    """Return True if ``text`` looks like a useful heading.
-
-    The line must be ALL-CAPS (per :func:`_is_heading`) and should not contain a
-    colon, which often indicates a label rather than a heading.
-    """
-    return _is_heading(text) and ":" not in text
-
-
-def _find_account_start(
-    lines: List[Dict[str, Any]], anchor_idx: int
+def _pick_headline(
+    lines: List[Dict[str, Any]], anchor_idx: int, back: int = HEADING_BACK_LINES
 ) -> Tuple[int, str | None, str]:
-    """Return the start index, heading and heading_source for an account.
+    """Return `(start_idx, heading_guess, heading_source)` for an anchor."""
 
-    ``anchor_idx`` points to the line containing ``Account #``. The function
-    backtracks ``HEADING_BACK_LINES`` lines on the same page to locate the
-    heading. If that fails, it tries progressively closer lines. As a smart
-    fallback, if the chosen line is not a meaningful heading, search up to six
-    lines back on the same page for one that is.
-    """
     page = lines[anchor_idx]["page"]
 
-    def _valid_heading(text: str) -> bool:
-        return (
-            _is_meaningful_heading(text)
-            and not _is_bureaus_row(text)
-            and _norm(text) not in SECTION_STARTERS
-        )
-
-    candidate = anchor_idx - HEADING_BACK_LINES
-    if candidate < 0 or lines[candidate]["page"] != page:
-        candidate = anchor_idx - 1
-        if candidate < 0 or lines[candidate]["page"] != page:
-            candidate = anchor_idx
-
-    heading_guess = lines[candidate]["text"].strip() if candidate >= 0 else None
-    heading_source = "backtrack"
-
-    if not (heading_guess and _valid_heading(heading_guess)):
-        for back in range(1, 6 + 1):
-            j = anchor_idx - back
-            if j < 0 or lines[j]["page"] != page:
-                break
-            text = lines[j]["text"].strip()
-            if _is_bureaus_row(text):
-                continue
-            if _valid_heading(text):
-                candidate = j
-                heading_guess = text
-                heading_source = "backtrack"
-                break
-        else:
-            candidate = anchor_idx
-            heading_guess = lines[anchor_idx]["text"].strip()
-            heading_source = "anchor"
-
-    section_idx = anchor_idx - 1
-    if section_idx >= 0 and _norm(lines[section_idx]["text"]) in SECTION_STARTERS:
-        found = False
-        for j in range(anchor_idx + 1, min(anchor_idx + 4, len(lines))):
+    def _iter_back(start: int):
+        for j in range(start, max(anchor_idx - back, -1), -1):
             if lines[j]["page"] != page:
                 break
-            text = lines[j]["text"].strip()
-            if _is_bureaus_row(text) or not _valid_heading(text):
-                continue
-            candidate = j
-            heading_guess = text
-            heading_source = "section+heading"
-            found = True
+            yield j
+
+    triad_idx: int | None = None
+    for j in _iter_back(anchor_idx - 1):
+        txt = lines[j]["text"]
+        if _is_triad(txt):
+            triad_idx = j
+            if (
+                j - 1 >= 0
+                and lines[j - 1]["page"] == page
+                and not _is_anchor(lines[j - 1]["text"])
+                and _looks_like_headline(lines[j - 1]["text"])
+            ):
+                return j - 1, lines[j - 1]["text"].strip(), "triad_above"
             break
-        if not found:
-            candidate = anchor_idx
-            heading_guess = lines[anchor_idx]["text"].strip()
-            heading_source = "section+anchor"
 
-    # Post-decide correction: avoid returning the bureaus row as heading
-    if heading_guess and _is_bureaus_row(heading_guess):
-        for back in range(1, HEADING_BACK_LINES + 1):
-            j = candidate - back
-            if j < 0 or lines[j]["page"] != page:
-                break
-            text = lines[j]["text"].strip()
-            if _valid_heading(text):
-                candidate = j
-                heading_guess = text
-                heading_source = "corrected_from_bureaus"
-                break
-        else:
-            candidate = anchor_idx
-            heading_guess = lines[anchor_idx]["text"].strip()
-            heading_source = "anchor"
+    for j in _iter_back(anchor_idx - 1):
+        txt = lines[j]["text"]
+        if _is_anchor(txt) or _is_triad(txt):
+            continue
+        if _looks_like_headline(txt):
+            return j, txt.strip(), "backtrack"
 
-    return max(candidate, 0), heading_guess, heading_source
+    start_idx = triad_idx if triad_idx is not None else anchor_idx
+    return start_idx, None, "anchor_no_heading"
 
 
 def _find_heading_after_section(
@@ -194,7 +135,7 @@ def _find_heading_after_section(
 
     for j in range(section_idx + 1, min(section_idx + 5, len(lines))):
         text = lines[j]["text"].strip()
-        if not _is_meaningful_heading(text) or _is_bureaus_row(text):
+        if _is_triad(text) or not _looks_like_headline(text):
             continue
         return j, text
 
@@ -240,7 +181,7 @@ def split_accounts(
     headings: List[str | None] = []
     heading_sources: List[str] = []
     for anchor in anchors:
-        start_idx, heading, source = _find_account_start(lines, anchor)
+        start_idx, heading, source = _pick_headline(lines, anchor)
         account_starts.append(start_idx)
         headings.append(heading)
         heading_sources.append(source)
@@ -264,6 +205,7 @@ def split_accounts(
     accounts: List[Dict[str, Any]] = []
     current_section: str | None = None
     section_ptr = 0
+    carry_over: List[Dict[str, Any]] = []
     for idx, start_idx in enumerate(account_starts):
         if sections[idx] is not None:
             current_section = sections[idx]
@@ -278,7 +220,8 @@ def split_accounts(
         if section_ptr < len(section_starts) and start_idx <= section_starts[section_ptr] < next_start:
             cut_end = section_starts[section_ptr]
             trailing_pruned = True
-        account_lines = lines[start_idx:cut_end]
+        account_lines = carry_over + lines[start_idx:cut_end]
+        carry_over = []
         noise_lines_skipped = 0
         filtered_lines: List[Dict[str, Any]] = []
         for line in account_lines:
@@ -288,8 +231,17 @@ def split_accounts(
                 continue
             filtered_lines.append(line)
         account_lines = filtered_lines
-        if account_lines and _norm(account_lines[-1]["text"]) in SECTION_STARTERS:
-            account_lines.pop()
+
+        def _is_structural_marker(txt: str) -> bool:
+            n = _norm(txt)
+            return (
+                n in SECTION_STARTERS
+                or _is_triad(txt)
+                or _is_anchor(txt)
+            )
+
+        while account_lines and _is_structural_marker(account_lines[-1]["text"]):
+            carry_over.insert(0, account_lines.pop())
             trailing_pruned = True
         if not account_lines:
             continue

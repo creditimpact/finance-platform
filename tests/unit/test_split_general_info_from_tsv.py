@@ -125,3 +125,77 @@ def test_no_sections(tmp_path: Path) -> None:
     data = json.loads(json_path.read_text())
     assert data["sections"] == []
 
+
+def test_general_info_ignores_summary_occurrences_and_splits_late_headings(
+    tmp_path: Path,
+) -> None:
+    tsv_path = tmp_path / "full.tsv"
+    json_path = tmp_path / "out.json"
+
+    rows = [
+        (1, 1, 0, "PERSONAL INFORMATION"),
+        (1, 2, 0, "Name: JOHN DOE"),
+        (1, 3, 0, "SUMMARY"),
+        (1, 4, 0, "Public Information"),  # inside Summary
+        (1, 5, 0, "Inquiries"),  # inside Summary
+        (1, 6, 0, "ACCOUNT HISTORY"),
+        (1, 7, 0, "Account 1"),
+        (1, 8, 0, "PUBLIC INFORMATION"),
+        (1, 9, 0, "Detail"),
+        (1, 10, 0, "INQUIRIES"),
+        (1, 11, 0, "Detail"),
+        (1, 12, 0, "smartcredit.com"),
+    ]
+
+    write_tsv(tsv_path, rows)
+
+    split_general_info_from_tsv.main(
+        ["--full", str(tsv_path), "--json_out", str(json_path)]
+    )
+
+    data = json.loads(json_path.read_text())
+    sections = data["sections"]
+
+    assert [s["heading"] for s in sections] == [
+        "Personal Information",
+        "Summary",
+        "Account History",
+        "Public Information",
+        "Inquiries",
+    ]
+
+    assert sections[3]["line_start"] == 8
+    assert sections[4]["line_start"] == 10
+    assert data["summary_filter_applied"] is True
+
+
+def test_general_info_no_filter_when_anchors_missing(tmp_path: Path) -> None:
+    tsv_path = tmp_path / "full.tsv"
+    json_path = tmp_path / "out.json"
+
+    rows = [
+        (1, 1, 0, "PERSONAL INFORMATION"),
+        (1, 2, 0, "Name: JOHN DOE"),
+        (1, 3, 0, "SUMMARY"),
+        (1, 4, 0, "Public Information"),  # treated as heading
+        (1, 5, 0, "Inquiries"),  # treated as heading
+        (1, 6, 0, "smartcredit.com"),
+    ]
+
+    write_tsv(tsv_path, rows)
+
+    split_general_info_from_tsv.main(
+        ["--full", str(tsv_path), "--json_out", str(json_path)]
+    )
+
+    data = json.loads(json_path.read_text())
+    sections = data["sections"]
+
+    assert [s["heading"] for s in sections] == [
+        "Personal Information",
+        "Summary",
+        "Public Information",
+        "Inquiries",
+    ]
+    assert data["summary_filter_applied"] is False
+

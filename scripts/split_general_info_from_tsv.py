@@ -138,6 +138,10 @@ def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
     current_lines: List[Dict[str, Any]] = []
     pending_start: str | None = None  # used after the collections title
 
+    summary_start: Tuple[int, int] | None = None
+    acct_hist_start: Tuple[int, int] | None = None
+    summary_filter_applied = False
+
     def start_section(key: str, line: Dict[str, Any]) -> None:
         nonlocal current_key, current_heading, current_lines
         current_key = key
@@ -187,14 +191,40 @@ def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
 
         return any(norm == m or m in norm for m in MARKERS[key])
 
+    # ------------------------------------------------------------------
+    # Anchor detection for the Summary range
+    for line in lines:
+        norm = line["text_norm"]
+        if summary_start is None and match("summary", norm):
+            summary_start = (line["page"], line["line"])
+        if acct_hist_start is None and match("account_history", norm):
+            acct_hist_start = (line["page"], line["line"])
+        if summary_start and acct_hist_start:
+            break
+
+    if summary_start and acct_hist_start:
+        summary_filter_applied = True
+
+    def match_filtered(key: str, line: Dict[str, Any]) -> bool:
+        """Match heading ``key`` with optional Summary filtering."""
+
+        norm = line["text_norm"]
+        if not match(key, norm):
+            return False
+        if summary_filter_applied and key in {"public_info", "inquiries"}:
+            pos = (line["page"], line["line"])
+            if summary_start <= pos < acct_hist_start:  # type: ignore[arg-type]
+                return False
+        return True
+
     for line in lines:
         norm = line["text_norm"]
 
         # Start a pending section (used for collections) if needed.
         if current_key is None and pending_start:
-            if match("public_info", norm):
+            if match_filtered("public_info", line):
                 start_section("public_info", line)
-            elif match("inquiries", norm):
+            elif match_filtered("inquiries", line):
                 start_section("inquiries", line)
             elif match("creditor_contacts", norm):
                 start_section("creditor_contacts", line)
@@ -218,10 +248,10 @@ def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
             elif match("account_history", norm):
                 close_section()
                 start_section("account_history", line)
-            elif match("public_info", norm):
+            elif match_filtered("public_info", line):
                 close_section()
                 start_section("public_info", line)
-            elif match("inquiries", norm):
+            elif match_filtered("inquiries", line):
                 close_section()
                 start_section("inquiries", line)
             elif match("creditor_contacts", norm):
@@ -243,10 +273,10 @@ def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
                 current_key = "account_history"
                 current_heading = HEADINGS["account_history"]
                 pending_start = "collections"
-            elif match("public_info", norm):
+            elif match_filtered("public_info", line):
                 close_section()
                 start_section("public_info", line)
-            elif match("inquiries", norm):
+            elif match_filtered("inquiries", line):
                 close_section()
                 start_section("inquiries", line)
             elif match("creditor_contacts", norm):
@@ -262,10 +292,10 @@ def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
                 append_line(line)
                 close_section()
                 pending_start = "collections"
-            elif match("public_info", norm):
+            elif match_filtered("public_info", line):
                 close_section()
                 start_section("public_info", line)
-            elif match("inquiries", norm):
+            elif match_filtered("inquiries", line):
                 close_section()
                 start_section("inquiries", line)
             elif match("creditor_contacts", norm):
@@ -277,10 +307,10 @@ def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
             else:
                 append_line(line)
         elif current_key == "collections":
-            if match("public_info", norm):
+            if match_filtered("public_info", line):
                 close_section()
                 start_section("public_info", line)
-            elif match("inquiries", norm):
+            elif match_filtered("inquiries", line):
                 close_section()
                 start_section("inquiries", line)
             elif match("creditor_contacts", norm):
@@ -292,7 +322,7 @@ def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
             else:
                 append_line(line)
         elif current_key == "public_info":
-            if match("inquiries", norm):
+            if match_filtered("inquiries", line):
                 close_section()
                 start_section("inquiries", line)
             elif match("creditor_contacts", norm):
@@ -323,7 +353,7 @@ def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
     if current_key:
         close_section()
 
-    result = {"sections": sections}
+    result = {"sections": sections, "summary_filter_applied": summary_filter_applied}
     json_out.write_text(json.dumps(result, indent=2), encoding="utf-8")
     logger.info(
         "Wrote general info sections to %s (%d sections)", json_out, len(sections)

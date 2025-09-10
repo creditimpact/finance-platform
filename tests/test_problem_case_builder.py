@@ -63,8 +63,12 @@ def test_build_problem_cases(tmp_path, caplog):
     assert index["problematic"] == 1
     assert index["problematic_accounts"][0]["account_id"] == "account_1"
 
-    assert any("PROBLEM_CASES start" in msg for msg in caplog.messages)
-    assert any("PROBLEM_CASES done" in msg for msg in caplog.messages)
+    out_dir = tmp_path / "cases" / sid
+    assert any(f"PROBLEM_CASES start sid={sid}" in msg for msg in caplog.messages)
+    assert any(
+        f"PROBLEM_CASES done sid={sid} total=2 problematic=1 out={out_dir}" in msg
+        for msg in caplog.messages
+    )
 
 
 def test_build_problem_cases_top_level_list(tmp_path):

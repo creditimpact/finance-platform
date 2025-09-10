@@ -5,14 +5,15 @@ import os
 import sys
 import uuid
 import warnings
-from collections.abc import Mapping
-from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from backend.core.logic.report_analysis.trace_cleanup import purge_after_export
+from backend.core.logic.report_analysis.extract_problematic_accounts import (
+    extract_problematic_accounts as extract_problematic_accounts_logic,
+)
 from backend.core.logic.report_analysis.orchestrator import run_stage_a
+from backend.core.logic.report_analysis.trace_cleanup import purge_after_export
 from backend.settings import PROJECT_ROOT
 
 # Ensure the project root is always on sys.path so local modules can be
@@ -26,12 +27,8 @@ load_dotenv()
 from celery import Celery, shared_task, signals
 
 from backend.api.config import get_app_config
-from backend.api.session_manager import update_session
 from backend.core.models import ClientInfo, ProofDocuments
-from backend.core.orchestrators import (
-    extract_problematic_accounts_from_report,
-    run_credit_repair_process,
-)
+from backend.core.orchestrators import run_credit_repair_process
 from backend.core.utils.json_utils import _json_safe
 
 app = Celery("tasks")
@@ -75,6 +72,7 @@ def _ensure_file(file_path: str) -> None:
         logger.error("File not found: %s. Dir contents: %s", file_path, listing)
         raise FileNotFoundError(f"Required file missing: {file_path}")
 
+
 @app.task(bind=True, name="stage_a")
 def stage_a_task(self, sid: str) -> dict:
     """Run Stage-A export for the given session id."""
@@ -84,39 +82,18 @@ def stage_a_task(self, sid: str) -> dict:
     return result
 
 
-@app.task(bind=True, name="extract_problematic_accounts")
-def extract_problematic_accounts(self, file_path: str, session_id: str | None = None):
-    """Extract problematic accounts from the report.
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def extract_problematic_accounts(self, sid: str) -> dict:
+    """Extract problematic accounts for ``sid``.
 
-    Deprecated: this task returns a plain ``dict`` for backward compatibility.
-    Prefer calling :func:`orchestrators.extract_problematic_accounts_from_report`
-    directly for a typed ``BureauPayload``.
+    This task is defensive and does not rely on previous task outputs. It always
+    returns a JSON-serializable dictionary.
     """
+    log.info("PROBLEM_ACCOUNTS start sid=%s", sid)
     try:
-        logger.info("Extracting accounts from %s", file_path)
-        _ensure_file(file_path)
-        if session_id:
-            try:
-                update_session(session_id, status="processing")
-            except Exception:
-                logger.debug("session_update_processing_failed session=%s", session_id)
-        result = extract_problematic_accounts_from_report(file_path, session_id)
-        if hasattr(result, "to_dict") and callable(result.to_dict):
-            result = result.to_dict()
-        elif hasattr(result, "asdict") and callable(result.asdict):
-            result = result.asdict()
-        elif is_dataclass(result):
-            result = asdict(result)
-        warnings.warn(
-            "extract_problematic_accounts task will return BureauPayload in the future; current dict output is deprecated",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if not isinstance(result, Mapping):
-            result = dict(result)
-        # Make JSON-safe (convert sets/tuples recursively)
+        found = extract_problematic_accounts_logic(sid) or []
+        result = {"sid": sid, "status": "ok", "found": found}
         safe_result = _json_safe(result)
-        # Optional guard: ensure jsonable and log first failure
         try:
             json.dumps(safe_result, ensure_ascii=False)
         except TypeError as e:
@@ -125,20 +102,10 @@ def extract_problematic_accounts(self, file_path: str, session_id: str | None = 
                 e,
             )
             raise
-        if session_id:
-            try:
-                update_session(session_id, status="done", result=safe_result)
-            except Exception:
-                logger.debug("session_update_done_failed session=%s", session_id)
         return safe_result
-    except Exception as exc:
-        logger.exception("[ERROR] Error extracting accounts")
-        if session_id:
-            try:
-                update_session(session_id, status="error", error=str(exc))
-            except Exception:
-                logger.debug("session_update_error_failed session=%s", session_id)
-        raise exc
+    except Exception:
+        logger.exception("PROBLEM_ACCOUNTS failed sid=%s", sid)
+        raise
 
 
 @app.task(bind=True, name="smoke_task")

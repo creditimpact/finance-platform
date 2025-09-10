@@ -74,16 +74,22 @@ def _ensure_file(file_path: str) -> None:
         raise FileNotFoundError(f"Required file missing: {file_path}")
 
 
-@app.task(bind=True, name="stage_a")
+@shared_task(bind=True)
 def stage_a_task(self, sid: str) -> dict:
     """Run Stage-A export for the given session id."""
     log.info("STAGE_A start sid=%s", sid)
-    result = run_stage_a(sid)
+    result = run_stage_a(sid) or {}
+    safe_result = _json_safe(result)
+    try:
+        json.dumps(safe_result, ensure_ascii=False)
+    except TypeError as e:  # pragma: no cover - defensive logging
+        logger.error("Non-JSON value at tasks.stage_a_task return: %s", e)
+        raise
     log.info("STAGE_A done sid=%s", sid)
-    return result
+    return safe_result
 
 
-@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+@shared_task(bind=True)
 def extract_problematic_accounts(self, sid: str) -> dict:
     """Extract problematic accounts for ``sid``.
 
@@ -115,7 +121,7 @@ def smoke_task(self):
     return {"status": "ok"}
 
 
-@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+@shared_task(bind=True)
 def cleanup_trace_task(self, sid: str) -> dict:
     """Purge parser traces for ``sid`` and keep final artifacts.
 
@@ -131,7 +137,14 @@ def cleanup_trace_task(self, sid: str) -> dict:
         "TRACE_CLEANUP done sid=%s kept=['_debug_full.tsv','accounts_from_full.json','general_info_from_full.json']",
         sid,
     )
-    return {"sid": sid, "cleanup": summary}
+    result = {"sid": sid, "cleanup": summary}
+    safe_result = _json_safe(result)
+    try:
+        json.dumps(safe_result, ensure_ascii=False)
+    except TypeError as e:  # pragma: no cover - defensive logging
+        logger.error("Non-JSON value at tasks.cleanup_trace_task return: %s", e)
+        raise
+    return safe_result
 
 
 @app.task(bind=True, name="process_report")

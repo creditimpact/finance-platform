@@ -21,6 +21,10 @@ ACCOUNT_RE = re.compile(r"\bAccount\b.*#", re.IGNORECASE)
 STOP_MARKER_NORM = "publicinformation"
 SECTION_STARTERS = {"collection"}
 _SECTION_NAME = {"collection": "collections"}
+NOISE_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+NOISE_BANNER_RE = re.compile(
+    r"^\d{1,2}/\d{1,2}/\d{2,4}.*(?:Credit\s*Report|SmartCredit)", re.IGNORECASE
+)
 
 # How many lines above the ``Account #`` anchor to consider the heading.
 # If unavailable, the logic falls back to progressively closer lines.
@@ -249,6 +253,15 @@ def split_accounts(
             cut_end = section_starts[section_ptr]
             trailing_pruned = True
         account_lines = lines[start_idx:cut_end]
+        noise_lines_skipped = 0
+        filtered_lines: List[Dict[str, Any]] = []
+        for line in account_lines:
+            text = line["text"].strip()
+            if NOISE_URL_RE.match(text) or NOISE_BANNER_RE.match(text):
+                noise_lines_skipped += 1
+                continue
+            filtered_lines.append(line)
+        account_lines = filtered_lines
         if account_lines and _norm(account_lines[-1]["text"]) in SECTION_STARTERS:
             account_lines.pop()
             trailing_pruned = True
@@ -266,6 +279,7 @@ def split_accounts(
             "section_prefix_seen": section_prefix_flags[idx],
             "lines": account_lines,
             "trailing_section_marker_pruned": trailing_pruned,
+            "noise_lines_skipped": noise_lines_skipped,
         }
         accounts.append(account_info)
         if write_tsv:

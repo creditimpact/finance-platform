@@ -7,19 +7,59 @@ from pathlib import Path
 from typing import Any, Mapping, MutableMapping
 
 from backend.settings import PROJECT_ROOT
+from .keys import compute_logical_account_key
 
 logger = logging.getLogger(__name__)
 
 
 def _make_account_id(account: Mapping[str, Any], idx: int) -> str:
-    """Return a filesystem-friendly account identifier."""
-    raw = str(
-        account.get("account_id")
-        or account.get("id")
-        or account.get("account_index")
-        or idx
+    """Return a filesystem-friendly account identifier.
+
+    Attempts to compute a stable logical key using identifying fields when
+    available.  Falls back to a deterministic surrogate based on the heading
+    slug or account index.
+    """
+
+    fields = account.get("fields") or {}
+
+    issuer = (
+        fields.get("issuer")
+        or fields.get("creditor")
+        or fields.get("name")
+        or account.get("issuer")
+        or account.get("creditor")
+        or account.get("name")
     )
-    return re.sub(r"[^A-Za-z0-9._-]", "_", raw)
+    last4 = (
+        fields.get("account_last4")
+        or fields.get("last4")
+        or account.get("account_last4")
+        or account.get("last4")
+    )
+    account_type = (
+        fields.get("account_type")
+        or fields.get("type")
+        or account.get("account_type")
+        or account.get("type")
+    )
+    opened_date = (
+        fields.get("opened_date")
+        or fields.get("date_opened")
+        or account.get("opened_date")
+        or account.get("date_opened")
+    )
+
+    logical_key = compute_logical_account_key(issuer, last4, account_type, opened_date)
+    if logical_key:
+        return logical_key
+
+    heading = account.get("heading_guess")
+    if heading:
+        raw = heading
+    else:
+        raw = f"account_{idx}"
+
+    return re.sub(r"[^A-Za-z0-9._-]", "_", str(raw))
 
 
 def _derive_problems(

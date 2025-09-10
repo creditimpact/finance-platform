@@ -44,6 +44,11 @@ def purge_trace_except_artifacts(
 
     base = Path(root) / "traces" / "blocks" / sid
     base = base.resolve()
+    # The cleanup routine is intentionally scoped to traces/blocks/<sid>.
+    # ``cases/<sid>`` and other top-level directories must not be touched.
+    assert (
+        base.parent.name == "blocks" and base.parent.parent.name == "traces"
+    ), "cleanup is restricted to traces/blocks/<sid>"
     if not base.exists():
         raise FileNotFoundError(base)
 
@@ -93,6 +98,11 @@ def purge_trace_except_artifacts(
 
     if delete_texts_sid:
         texts_dir = Path(root) / "traces" / "texts" / sid
+        # Guard against accidental traversal outside traces/texts/<sid>
+        assert (
+            texts_dir.parent.name == "texts"
+            and texts_dir.parent.parent.name == "traces"
+        ), "cleanup is restricted to traces/texts/<sid>"
         if texts_dir.exists():
             texts_deleted = True
             rel = f"texts/{sid}/**"

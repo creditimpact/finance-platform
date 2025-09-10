@@ -133,6 +133,9 @@ ENABLE_CASESTORE_STAGEA = env_bool("ENABLE_CASESTORE_STAGEA", True)
 # Stage A detection mode
 PROBLEM_DETECTION_ONLY = env_bool("PROBLEM_DETECTION_ONLY", True)
 
+# Automatic trace cleanup after Stage-A export
+PURGE_TRACE_AFTER_EXPORT = env_bool("PURGE_TRACE_AFTER_EXPORT", False)
+
 # Candidate token logging
 ENABLE_CANDIDATE_TOKEN_LOGGER = env_bool("ENABLE_CANDIDATE_TOKEN_LOGGER", True)
 CANDIDATE_LOG_FORMAT = env_str("CANDIDATE_LOG_FORMAT", "jsonl")

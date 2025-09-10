@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+import backend.config as config
+
 from backend.core.logic.report_analysis.account_packager_coords import (
     package_block_raw_coords,
     write_block_raw_coords,
@@ -2787,6 +2789,17 @@ def export_account_blocks(
         str(out_dir),
         len(out_blocks),
     )
+
+    if stage_a_meta and getattr(config, "PURGE_TRACE_AFTER_EXPORT", False):
+        from .trace_cleanup import purge_trace_except_artifacts
+
+        project_root = Path(__file__).resolve().parents[4]
+        try:
+            purge_trace_except_artifacts(
+                sid=session_id, root=project_root, dry_run=False
+            )
+        except Exception:
+            logger.exception("BLOCK: purge trace failed sid=%s", session_id)
 
     return out_blocks, stage_a_meta
 

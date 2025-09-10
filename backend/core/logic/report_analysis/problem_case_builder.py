@@ -186,10 +186,11 @@ def build_problem_cases(session_id: str, root: Path | None = None) -> dict:
     (out_dir / "index.json").write_text(json.dumps(index, indent=2), encoding="utf-8")
 
     logger.info(
-        "PROBLEM_CASES done sid=%s total=%s problematic=%s",
+        "PROBLEM_CASES done sid=%s total=%s problematic=%s out=%s",
         session_id,
         total,
         len(summaries),
+        out_dir,
     )
 
     return {

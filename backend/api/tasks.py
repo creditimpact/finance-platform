@@ -198,10 +198,42 @@ def cleanup_trace_task(self, sid: str) -> dict:
         "accounts_from_full.json",
         "general_info_from_full.json",
     ]
-    assert blocks_dir.exists(), f"blocks dir not found: {blocks_dir}"
-    assert all((acct / k).exists() for k in kept), f"missing artifacts in {acct}"
+    if not blocks_dir.exists():
+        log.warning("TRACE_CLEANUP skip: missing blocks dir %s", blocks_dir)
+        result = {
+            "sid": sid,
+            "cleanup": {"performed": False, "reason": "blocks_dir_missing"},
+        }
+        safe_result = _json_safe(result)
+        try:
+            json.dumps(safe_result, ensure_ascii=False)
+        except TypeError as e:  # pragma: no cover - defensive logging
+            logger.error("Non-JSON value at tasks.cleanup_trace_task return: %s", e)
+            raise
+        return safe_result
+    missing = [k for k in kept if not (acct / k).exists()]
+    if missing:
+        log.warning("TRACE_CLEANUP skip: missing artifacts %s in %s", missing, acct)
+        result = {
+            "sid": sid,
+            "cleanup": {
+                "performed": False,
+                "reason": "artifacts_missing",
+                "missing": missing,
+            },
+        }
+        safe_result = _json_safe(result)
+        try:
+            json.dumps(safe_result, ensure_ascii=False)
+        except TypeError as e:  # pragma: no cover - defensive logging
+            logger.error("Non-JSON value at tasks.cleanup_trace_task return: %s", e)
+            raise
+        return safe_result
     summary = purge_after_export(sid=sid, project_root=root)
-    log.info("TRACE_CLEANUP done sid=%s kept=%s", sid, kept)
+    log.info(
+        "TRACE_CLEANUP done sid=%s kept=['_debug_full.tsv','accounts_from_full.json','general_info_from_full.json']",
+        sid,
+    )
     result = {"sid": sid, "cleanup": summary}
     safe_result = _json_safe(result)
     try:

@@ -12,6 +12,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from backend.core.logic.report_analysis.trace_cleanup import purge_after_export
+from backend.core.logic.report_analysis.orchestrator import run_stage_a
 from backend.settings import PROJECT_ROOT
 
 # Ensure the project root is always on sys.path so local modules can be
@@ -73,6 +74,14 @@ def _ensure_file(file_path: str) -> None:
         listing = os.listdir(dir_path) if os.path.exists(dir_path) else []
         logger.error("File not found: %s. Dir contents: %s", file_path, listing)
         raise FileNotFoundError(f"Required file missing: {file_path}")
+
+@app.task(bind=True, name="stage_a")
+def stage_a_task(self, sid: str) -> dict:
+    """Run Stage-A export for the given session id."""
+    log.info("STAGE_A start sid=%s", sid)
+    result = run_stage_a(sid)
+    log.info("STAGE_A done sid=%s", sid)
+    return result
 
 
 @app.task(bind=True, name="extract_problematic_accounts")

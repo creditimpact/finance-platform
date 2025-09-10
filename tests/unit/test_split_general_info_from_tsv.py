@@ -18,7 +18,7 @@ def write_tsv(path: Path, rows: list[tuple[int, int, int, str]]) -> None:
     path.write_text(header + "".join(lines), encoding="utf-8")
 
 
-def test_split_sections_tokenised_headings(tmp_path: Path) -> None:
+def test_general_info_does_not_emit_account_history_or_chargeoff(tmp_path: Path) -> None:
     tsv_path = tmp_path / "full.tsv"
     json_path = tmp_path / "out.json"
 
@@ -56,25 +56,19 @@ def test_split_sections_tokenised_headings(tmp_path: Path) -> None:
     data = json.loads(json_path.read_text())
     sections = data["sections"]
 
-    assert [s["heading"] for s in sections] == [
+    headings = [s["heading"] for s in sections]
+    assert headings == [
         "Personal Information",
         "Summary",
-        "Account History",
-        "Collection / Chargeoff",
         "Public Information",
         "Inquiries",
         "Creditor Contacts",
     ]
-
-    # Account History should include the collections title line
-    account_lines = [ln["text"] for ln in sections[2]["lines"]]
-    assert account_lines[-1].startswith("Collection")
-
-    collection_lines = [ln["text"] for ln in sections[3]["lines"]]
-    assert collection_lines == ["Debt 1"]
+    assert "Account History" not in headings
+    assert "Collection / Chargeoff" not in headings
 
 
-def test_missing_collections_and_footer(tmp_path: Path) -> None:
+def test_footer_via_synonym(tmp_path: Path) -> None:
     tsv_path = tmp_path / "full.tsv"
     json_path = tmp_path / "out.json"
 
@@ -96,11 +90,9 @@ def test_missing_collections_and_footer(tmp_path: Path) -> None:
     )
 
     data = json.loads(json_path.read_text())
-    # Collections section is missing; others present until footer
     assert [s["heading"] for s in data["sections"]] == [
         "Personal Information",
         "Summary",
-        "Account History",
         "Public Information",
         "Inquiries",
         "Creditor Contacts",
@@ -126,7 +118,7 @@ def test_no_sections(tmp_path: Path) -> None:
     assert data["sections"] == []
 
 
-def test_general_info_ignores_summary_occurrences_and_splits_late_headings(
+def test_general_info_summary_filter_still_works_without_account_history_section(
     tmp_path: Path,
 ) -> None:
     tsv_path = tmp_path / "full.tsv"
@@ -159,17 +151,16 @@ def test_general_info_ignores_summary_occurrences_and_splits_late_headings(
     assert [s["heading"] for s in sections] == [
         "Personal Information",
         "Summary",
-        "Account History",
         "Public Information",
         "Inquiries",
     ]
 
-    assert sections[3]["line_start"] == 8
-    assert sections[4]["line_start"] == 10
+    assert sections[2]["line_start"] == 8
+    assert sections[3]["line_start"] == 10
     assert data["summary_filter_applied"] is True
 
 
-def test_general_info_no_filter_when_anchors_missing(tmp_path: Path) -> None:
+def test_general_info_missing_account_history_anchor_fallback(tmp_path: Path) -> None:
     tsv_path = tmp_path / "full.tsv"
     json_path = tmp_path / "out.json"
 

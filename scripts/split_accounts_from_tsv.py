@@ -100,25 +100,57 @@ def _find_account_start(
     lines back on the same page for one that is.
     """
     page = lines[anchor_idx]["page"]
+
+    def _valid_heading(text: str) -> bool:
+        return (
+            _is_meaningful_heading(text)
+            and _norm(text) != BUREAUS_NORM
+            and _norm(text) not in SECTION_STARTERS
+        )
+
     candidate = anchor_idx - HEADING_BACK_LINES
     if candidate < 0 or lines[candidate]["page"] != page:
         candidate = anchor_idx - 1
         if candidate < 0 or lines[candidate]["page"] != page:
-            candidate = anchor_idx - 1 if anchor_idx > 0 else anchor_idx
+            candidate = anchor_idx
 
     heading_guess = lines[candidate]["text"].strip() if candidate >= 0 else None
     heading_source = "pure_heading"
-    if not (heading_guess and _is_meaningful_heading(heading_guess)):
+
+    if not (heading_guess and _valid_heading(heading_guess)):
         for back in range(1, 6 + 1):
             j = anchor_idx - back
             if j < 0 or lines[j]["page"] != page:
                 break
             text = lines[j]["text"].strip()
-            if _is_meaningful_heading(text):
+            if _valid_heading(text):
                 candidate = j
                 heading_guess = text
                 heading_source = "backtrack"
                 break
+        else:
+            candidate = anchor_idx
+            heading_guess = lines[anchor_idx]["text"].strip()
+            heading_source = "anchor"
+
+    section_idx = anchor_idx - 1
+    if section_idx >= 0 and _norm(lines[section_idx]["text"]) in SECTION_STARTERS:
+        found = False
+        for j in range(anchor_idx + 1, min(anchor_idx + 4, len(lines))):
+            if lines[j]["page"] != page:
+                break
+            text = lines[j]["text"].strip()
+            if not _valid_heading(text):
+                continue
+            candidate = j
+            heading_guess = text
+            heading_source = "section+heading"
+            found = True
+            break
+        if not found:
+            candidate = anchor_idx
+            heading_guess = lines[anchor_idx]["text"].strip()
+            heading_source = "section+anchor"
 
     return max(candidate, 0), heading_guess, heading_source
 

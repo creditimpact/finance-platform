@@ -9,10 +9,14 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from backend.core.logic.report_analysis.block_exporter import export_stage_a
 from backend.core.logic.report_analysis.extract_problematic_accounts import (
     extract_problematic_accounts as extract_problematic_accounts_logic,
 )
-from backend.core.logic.report_analysis.orchestrator import run_stage_a
+from backend.core.logic.report_analysis.text_provider import (
+    extract_and_cache_text,
+    load_cached_text,
+)
 from backend.core.logic.report_analysis.trace_cleanup import purge_after_export
 from backend.settings import PROJECT_ROOT
 
@@ -78,7 +82,59 @@ def _ensure_file(file_path: str) -> None:
 def stage_a_task(self, sid: str) -> dict:
     """Run Stage-A export for the given session id."""
     log.info("STAGE_A start sid=%s", sid)
-    result = run_stage_a(sid) or {}
+    root = Path(PROJECT_ROOT)
+    uploads = root / "uploads" / sid
+    pdf = uploads / "smartcredit_report.pdf"
+    if not pdf.exists():
+        cands = list(uploads.glob("*.pdf"))
+        if cands:
+            pdf = cands[0]
+    if not pdf.exists():
+        log.error("stage_a_task: PDF missing under %s", uploads)
+        result = {
+            "sid": sid,
+            "ok": False,
+            "where": "stage_a",
+            "reason": "pdf_missing",
+            "uploads_dir": str(uploads),
+        }
+        safe_result = _json_safe(result)
+        try:
+            json.dumps(safe_result, ensure_ascii=False)
+        except TypeError as e:  # pragma: no cover - defensive logging
+            logger.error("Non-JSON value at tasks.stage_a_task return: %s", e)
+            raise
+        log.info("STAGE_A end sid=%s", sid)
+        return safe_result
+    try:
+        cached = load_cached_text(sid)
+        have = bool(cached and cached.get("pages"))
+    except Exception:
+        have = False
+    if not have:
+        ocr_on = os.getenv("OCR_ENABLED", "0") == "1"
+        extract_and_cache_text(session_id=sid, pdf_path=str(pdf), ocr_enabled=ocr_on)
+        log.info("TEXT_CACHE built sid=%s", sid)
+    try:
+        export_stage_a(session_id=sid)
+    except Exception as e:
+        log.exception("export_stage_a_failed")
+        result = {
+            "sid": sid,
+            "ok": False,
+            "where": "stage_a",
+            "reason": "export_failed",
+            "error": str(e),
+        }
+        safe_result = _json_safe(result)
+        try:
+            json.dumps(safe_result, ensure_ascii=False)
+        except TypeError as e2:  # pragma: no cover - defensive logging
+            logger.error("Non-JSON value at tasks.stage_a_task return: %s", e2)
+            raise
+        log.info("STAGE_A end sid=%s", sid)
+        return safe_result
+    result = {"sid": sid, "ok": True, "where": "stage_a"}
     safe_result = _json_safe(result)
     try:
         json.dumps(safe_result, ensure_ascii=False)

@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any, Mapping, MutableMapping
 
 from backend.settings import PROJECT_ROOT
+
 from .keys import compute_logical_account_key
+from .problem_detection import build_problem_reasons, evaluate_account_problem
 
 logger = logging.getLogger(__name__)
 
@@ -67,15 +69,49 @@ def _derive_problems(
 ) -> tuple[list[str], list[str], float | None]:
     """Return problem tags, reasons, and optional confidence for ``account``.
 
-    This basic implementation flags accounts missing a heading.  Future tasks
-    expand on this detection logic.
+    Detection relies on :func:`evaluate_account_problem` which emits ``problem_reasons``
+    and debug ``signals``.  Those signals are normalized into concise tags.  When
+    the detector does not return a decision, we fall back to
+    :func:`build_problem_reasons`.
     """
+
+    fields = (account.get("fields") or {}) if isinstance(account, Mapping) else {}
+
     tags: list[str] = []
     reasons: list[str] = []
     confidence: float | None = None
-    if not account.get("heading_guess"):
-        tags.append("missing_heading")
-        reasons.append("missing heading")
+
+    decision: Mapping[str, Any] | None = None
+    try:
+        decision = evaluate_account_problem(dict(fields))
+    except Exception:
+        decision = None
+
+    if decision:
+        reasons = list(decision.get("problem_reasons") or [])
+        signals = (
+            decision.get("debug", {})
+            if isinstance(decision.get("debug"), Mapping)
+            else {}
+        ).get("signals") or []
+
+        def _norm(s: Any) -> str:
+            return str(s).strip().lower().replace(" ", "_").replace("status_", "")
+
+        tags = [_norm(s) for s in signals]
+
+        if "confidence" in decision:
+            try:
+                confidence = float(decision["confidence"])
+            except Exception:
+                confidence = None
+    else:
+        # Fallback when detector fails or returns nothing
+        try:
+            reasons = build_problem_reasons(dict(fields))
+        except Exception:
+            reasons = []
+
     return tags, reasons, confidence
 
 

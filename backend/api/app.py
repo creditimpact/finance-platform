@@ -23,7 +23,6 @@ from typing import Any, Mapping
 from flask import Blueprint, Flask, jsonify, redirect, request, url_for
 from flask_cors import CORS
 from jsonschema import Draft7Validator, ValidationError
-from werkzeug.utils import secure_filename
 
 import backend.config as config
 from backend.analytics.batch_runner import BatchFilters, BatchRunner
@@ -153,20 +152,20 @@ def start_process():
         os.makedirs(upload_folder, exist_ok=True)
 
         original_name = uploaded_file.filename
-        sanitized = secure_filename(original_name) or "report.pdf"
-        ext = os.path.splitext(sanitized)[1]
-        unique_name = f"{uuid.uuid4().hex}{ext}"
-        local_filename = os.path.join(upload_folder, unique_name)
-        uploaded_file.save(local_filename)
+        pdf_path = Path(upload_folder) / "smartcredit_report.pdf"
+        uploaded_file.save(pdf_path)
 
-        if not os.path.exists(local_filename):
-            logger.error("File failed to save at %s", local_filename)
-            return jsonify({"status": "error", "message": "File upload failed"}), 500
+        if not pdf_path.exists():
+            logger.error("File failed to save at %s", pdf_path)
+            return (
+                jsonify({"status": "error", "message": "File upload failed"}),
+                400,
+            )
 
-        size = os.path.getsize(local_filename)
-        print(f"File saved to {local_filename} ({size} bytes)")
+        size = pdf_path.stat().st_size
+        print(f"File saved to {pdf_path} ({size} bytes)")
 
-        with open(local_filename, "rb") as f:
+        with open(pdf_path, "rb") as f:
             first_bytes = f.read(4)
             print("First bytes of file:", first_bytes)
             if first_bytes != b"%PDF":
@@ -176,11 +175,17 @@ def start_process():
         set_session(
             session_id,
             {
-                "file_path": local_filename,
+                "file_path": str(pdf_path),
                 "original_filename": original_name,
                 "email": email,
             },
         )
+
+        if not pdf_path.exists():
+            return (
+                jsonify({"status": "error", "message": "PDF missing"}),
+                400,
+            )
 
         result = run_full_pipeline(session_id).get(timeout=300)
 
@@ -255,7 +260,7 @@ def start_process():
         payload = {
             "status": "awaiting_user_explanations",
             "session_id": session_id,
-            "filename": unique_name,
+            "filename": pdf_path.name,
             "original_filename": original_name,
             "accounts": accounts,
         }
@@ -288,22 +293,22 @@ def api_upload():
         os.makedirs(upload_folder, exist_ok=True)
 
         original_name = file.filename or "report.pdf"
-        sanitized = secure_filename(original_name) or "report.pdf"
-        ext = os.path.splitext(sanitized)[1] or ".pdf"
-        unique_name = f"{uuid.uuid4().hex}{ext}"
-        local_filename = os.path.join(upload_folder, unique_name)
-        file.save(local_filename)
+        pdf_path = Path(upload_folder) / "smartcredit_report.pdf"
+        file.save(pdf_path)
 
         # Basic PDF validation
-        with open(local_filename, "rb") as f:
+        with open(pdf_path, "rb") as f:
             if f.read(4) != b"%PDF":
                 return jsonify({"ok": False, "message": "Invalid PDF file"}), 400
+
+        if not pdf_path.exists():
+            return jsonify({"ok": False, "message": "File upload failed"}), 400
 
         # Persist initial session state
         set_session(
             session_id,
             {
-                "file_path": local_filename,
+                "file_path": str(pdf_path),
                 "original_filename": original_name,
                 "email": email,
                 "status": "queued",

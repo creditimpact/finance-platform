@@ -53,7 +53,7 @@ MARKERS: Dict[str, set[str]] = {
     "personal_info": {"personalinformation"},
     "summary": {"summary"},
     "account_history": {"accounthistory"},
-    "collections_title": {"collectionchargeoff", "collection", "chargeoff", "chargeof"},
+    "collection_chargeoff": {"collectionchargeoff", "collectionchargeof"},
     "public_info": {"publicinformation"},
     "inquiries": {"inquiries"},
     "creditor_contacts": {"creditorcontacts"},
@@ -68,11 +68,21 @@ MARKERS: Dict[str, set[str]] = {
 }
 
 
+HEADING_ROLES = {
+    "personal_info": "emit",
+    "summary": "emit",
+    "account_history": "anchor_only",
+    "collection_chargeoff": "anchor_only",
+    "public_info": "emit",
+    "inquiries": "emit",
+    "creditor_contacts": "emit",
+    "footer": "stop",
+}
+
+
 HEADINGS = {
     "personal_info": "Personal Information",
     "summary": "Summary",
-    "account_history": "Account History",
-    "collections": "Collection / Chargeoff",
     "public_info": "Public Information",
     "inquiries": "Inquiries",
     "creditor_contacts": "Creditor Contacts",
@@ -136,7 +146,6 @@ def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
     current_key: str | None = None
     current_heading: str | None = None
     current_lines: List[Dict[str, Any]] = []
-    pending_start: str | None = None  # used after the collections title
 
     summary_start: Tuple[int, int] | None = None
     acct_hist_start: Tuple[int, int] | None = None
@@ -205,149 +214,38 @@ def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
     if summary_start and acct_hist_start:
         summary_filter_applied = True
 
-    def match_filtered(key: str, line: Dict[str, Any]) -> bool:
-        """Match heading ``key`` with optional Summary filtering."""
+    def detect_heading(line: Dict[str, Any]) -> str | None:
+        """Return the canonical heading key for ``line`` if it matches."""
 
         norm = line["text_norm"]
-        if not match(key, norm):
-            return False
-        if summary_filter_applied and key in {"public_info", "inquiries"}:
-            pos = (line["page"], line["line"])
-            if summary_start <= pos < acct_hist_start:  # type: ignore[arg-type]
-                return False
-        return True
+        for key, markers in MARKERS.items():
+            if any(norm == m or m in norm for m in markers):
+                if (
+                    summary_filter_applied
+                    and key in {"public_info", "inquiries"}
+                ):
+                    pos = (line["page"], line["line"])
+                    if summary_start <= pos < acct_hist_start:  # type: ignore[arg-type]
+                        return None
+                return key
+        return None
 
     for line in lines:
-        norm = line["text_norm"]
-
-        # Start a pending section (used for collections) if needed.
-        if current_key is None and pending_start:
-            if match_filtered("public_info", line):
-                start_section("public_info", line)
-            elif match_filtered("inquiries", line):
-                start_section("inquiries", line)
-            elif match("creditor_contacts", norm):
-                start_section("creditor_contacts", line)
-            elif match("footer", norm):
-                pending_start = None
+        key = detect_heading(line)
+        if key:
+            role = HEADING_ROLES[key]
+            if role == "emit":
+                close_section()
+                start_section(key, line)
+            elif role == "anchor_only":
+                close_section()
+            elif role == "stop":
+                close_section()
                 break
-            else:
-                start_section("collections", line)
-            pending_start = None
             continue
 
-        if current_key is None:
-            if match("personal_info", norm):
-                start_section("personal_info", line)
-            else:
-                continue
-        elif current_key == "personal_info":
-            if match("summary", norm):
-                close_section()
-                start_section("summary", line)
-            elif match("account_history", norm):
-                close_section()
-                start_section("account_history", line)
-            elif match_filtered("public_info", line):
-                close_section()
-                start_section("public_info", line)
-            elif match_filtered("inquiries", line):
-                close_section()
-                start_section("inquiries", line)
-            elif match("creditor_contacts", norm):
-                close_section()
-                start_section("creditor_contacts", line)
-            elif match("footer", norm):
-                close_section()
-                break
-            else:
-                append_line(line)
-        elif current_key == "summary":
-            if match("account_history", norm):
-                close_section()
-                start_section("account_history", line)
-            elif match("collections_title", norm):
-                # No explicit account history heading but collection title found.
-                close_section()
-                append_line(line)
-                current_key = "account_history"
-                current_heading = HEADINGS["account_history"]
-                pending_start = "collections"
-            elif match_filtered("public_info", line):
-                close_section()
-                start_section("public_info", line)
-            elif match_filtered("inquiries", line):
-                close_section()
-                start_section("inquiries", line)
-            elif match("creditor_contacts", norm):
-                close_section()
-                start_section("creditor_contacts", line)
-            elif match("footer", norm):
-                close_section()
-                break
-            else:
-                append_line(line)
-        elif current_key == "account_history":
-            if match("collections_title", norm):
-                append_line(line)
-                close_section()
-                pending_start = "collections"
-            elif match_filtered("public_info", line):
-                close_section()
-                start_section("public_info", line)
-            elif match_filtered("inquiries", line):
-                close_section()
-                start_section("inquiries", line)
-            elif match("creditor_contacts", norm):
-                close_section()
-                start_section("creditor_contacts", line)
-            elif match("footer", norm):
-                close_section()
-                break
-            else:
-                append_line(line)
-        elif current_key == "collections":
-            if match_filtered("public_info", line):
-                close_section()
-                start_section("public_info", line)
-            elif match_filtered("inquiries", line):
-                close_section()
-                start_section("inquiries", line)
-            elif match("creditor_contacts", norm):
-                close_section()
-                start_section("creditor_contacts", line)
-            elif match("footer", norm):
-                close_section()
-                break
-            else:
-                append_line(line)
-        elif current_key == "public_info":
-            if match_filtered("inquiries", line):
-                close_section()
-                start_section("inquiries", line)
-            elif match("creditor_contacts", norm):
-                close_section()
-                start_section("creditor_contacts", line)
-            elif match("footer", norm):
-                close_section()
-                break
-            else:
-                append_line(line)
-        elif current_key == "inquiries":
-            if match("creditor_contacts", norm):
-                close_section()
-                start_section("creditor_contacts", line)
-            elif match("footer", norm):
-                close_section()
-                break
-            else:
-                append_line(line)
-        elif current_key == "creditor_contacts":
-            if match("footer", norm):
-                close_section()
-                break
-            else:
-                append_line(line)
+        if current_key:
+            append_line(line)
 
     # Close any trailing section if we reach EOF without an end marker.
     if current_key:

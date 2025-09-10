@@ -1,13 +1,13 @@
 import io
 import json
 
+import backend.config as config
+import backend.core.orchestrators as orch
 from backend.api import app as app_module
 from backend.api.app import create_app
 from backend.core.logic.report_analysis.report_postprocessing import _assign_issue_types
-import backend.core.orchestrators as orch
 from backend.core.orchestrators import extract_problematic_accounts_from_report
 from tests.test_extract_problematic_accounts import _mock_dependencies
-import backend.config as config
 
 
 class DummyResult:
@@ -16,11 +16,7 @@ class DummyResult:
 
 
 def test_start_process_success(monkeypatch, tmp_path):
-    class DummyTask:
-        def delay(self, *a, **k):
-            return DummyResult()
-
-    monkeypatch.setattr(app_module, "extract_problematic_accounts", DummyTask())
+    monkeypatch.setattr(app_module, "run_full_pipeline", lambda sid: DummyResult())
     monkeypatch.setattr(app_module.cs_api, "load_session_case", lambda sid: None)
     monkeypatch.setattr(orch, "collect_stageA_logical_accounts", lambda sid: [])
     called = {}
@@ -76,11 +72,7 @@ def test_start_process_emits_enriched_fields(monkeypatch, tmp_path):
         def get(self, timeout=None):
             return {"problem_accounts": [sample]}
 
-    class DummyTask:
-        def delay(self, *a, **k):
-            return DummyResult()
-
-    monkeypatch.setattr(app_module, "extract_problematic_accounts", DummyTask())
+    monkeypatch.setattr(app_module, "run_full_pipeline", lambda sid: DummyResult())
     monkeypatch.setattr(app_module, "run_credit_repair_process", lambda *a, **k: None)
     monkeypatch.setattr(app_module, "set_session", lambda *a, **k: None)
     monkeypatch.setattr(app_module.cs_api, "load_session_case", lambda sid: None)

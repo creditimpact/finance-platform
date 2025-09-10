@@ -5,12 +5,12 @@ import uuid
 import pytest
 
 import backend.config as config
-from backend.api.app import create_app
 from backend.api import app as app_module
+from backend.api.app import create_app
+from backend.core import orchestrators as orch
 from backend.core.ai.models import AIAdjudicateResponse
 from backend.core.case_store import api as cs_api, telemetry
 from backend.core.logic.report_analysis import problem_detection as pd
-from backend.core import orchestrators as orch
 
 
 class DummyResult:
@@ -18,17 +18,12 @@ class DummyResult:
         return {}
 
 
-class DummyTask:
-    def delay(self, *a, **k):
-        return DummyResult()
-
-
 def _setup_cross_bureau_case(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "CASESTORE_DIR", str(tmp_path))
     monkeypatch.setattr(config, "ENABLE_CASESTORE_STAGEA", True)
     monkeypatch.setattr(config, "ENABLE_AI_ADJUDICATOR", True)
     monkeypatch.setattr(config, "API_INCLUDE_DECISION_META", False)
-    monkeypatch.setattr(app_module, "extract_problematic_accounts", DummyTask())
+    monkeypatch.setattr(app_module, "run_full_pipeline", lambda sid: DummyResult())
     monkeypatch.setattr(app_module, "set_session", lambda *a, **k: None)
 
     session_id = "sess1"
@@ -103,7 +98,7 @@ def test_start_process_problem_accounts_filtered(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "ENABLE_AI_ADJUDICATOR", True)
     monkeypatch.setattr(config, "API_INCLUDE_DECISION_META", False)
 
-    monkeypatch.setattr(app_module, "extract_problematic_accounts", DummyTask())
+    monkeypatch.setattr(app_module, "run_full_pipeline", lambda sid: DummyResult())
     monkeypatch.setattr(app_module, "set_session", lambda *a, **k: None)
 
     session_id = "sess1"
@@ -127,11 +122,20 @@ def test_start_process_problem_accounts_filtered(monkeypatch, tmp_path):
         "two_year_payment_history": "",
         "days_late_7y": "",
     }
-    cs_api.upsert_account_fields(session_id, "acc_ai", "Experian", dict(base, past_due_amount=0.0))
-    cs_api.upsert_account_fields(session_id, "acc_rules", "Experian", dict(base, past_due_amount=125.0))
-    cs_api.upsert_account_fields(session_id, "acc_clean", "Experian", dict(base, past_due_amount=0.0))
     cs_api.upsert_account_fields(
-        session_id, "acc_t4", "Experian", dict(base, past_due_amount=0.0, balance_owed=0.0)
+        session_id, "acc_ai", "Experian", dict(base, past_due_amount=0.0)
+    )
+    cs_api.upsert_account_fields(
+        session_id, "acc_rules", "Experian", dict(base, past_due_amount=125.0)
+    )
+    cs_api.upsert_account_fields(
+        session_id, "acc_clean", "Experian", dict(base, past_due_amount=0.0)
+    )
+    cs_api.upsert_account_fields(
+        session_id,
+        "acc_t4",
+        "Experian",
+        dict(base, past_due_amount=0.0, balance_owed=0.0),
     )
 
     responses = [
@@ -169,7 +173,9 @@ def test_start_process_problem_accounts_filtered(monkeypatch, tmp_path):
     test_app = create_app()
     client = test_app.test_client()
     data = {"email": "a@example.com", "file": (io.BytesIO(b"%PDF-1.4"), "test.pdf")}
-    resp = client.post("/api/start-process", data=data, content_type="multipart/form-data")
+    resp = client.post(
+        "/api/start-process", data=data, content_type="multipart/form-data"
+    )
     assert resp.status_code == 200
     payload = json.loads(resp.data)
     accounts = payload["accounts"]["problem_accounts"]
@@ -201,13 +207,15 @@ def test_start_process_problem_accounts_filtered(monkeypatch, tmp_path):
 
 
 def test_start_process_cross_bureau_flag_off(monkeypatch, tmp_path):
-    session_id = _setup_cross_bureau_case(monkeypatch, tmp_path)
+    _setup_cross_bureau_case(monkeypatch, tmp_path)
     monkeypatch.setattr(config, "ENABLE_CROSS_BUREAU_RESOLUTION", False)
 
     test_app = create_app()
     client = test_app.test_client()
     data = {"email": "a@example.com", "file": (io.BytesIO(b"%PDF-1.4"), "test.pdf")}
-    resp = client.post("/api/start-process", data=data, content_type="multipart/form-data")
+    resp = client.post(
+        "/api/start-process", data=data, content_type="multipart/form-data"
+    )
     assert resp.status_code == 200
     payload = json.loads(resp.data)
     accounts = payload["accounts"]["problem_accounts"]
@@ -217,7 +225,7 @@ def test_start_process_cross_bureau_flag_off(monkeypatch, tmp_path):
 
 
 def test_start_process_cross_bureau_flag_on(monkeypatch, tmp_path):
-    session_id = _setup_cross_bureau_case(monkeypatch, tmp_path)
+    _setup_cross_bureau_case(monkeypatch, tmp_path)
     monkeypatch.setattr(config, "ENABLE_CROSS_BUREAU_RESOLUTION", True)
     monkeypatch.setattr(config, "API_AGGREGATION_ID_STRATEGY", "winner")
     monkeypatch.setattr(config, "API_INCLUDE_AGG_MEMBERS_META", False)
@@ -227,7 +235,9 @@ def test_start_process_cross_bureau_flag_on(monkeypatch, tmp_path):
     test_app = create_app()
     client = test_app.test_client()
     data = {"email": "a@example.com", "file": (io.BytesIO(b"%PDF-1.4"), "test.pdf")}
-    resp = client.post("/api/start-process", data=data, content_type="multipart/form-data")
+    resp = client.post(
+        "/api/start-process", data=data, content_type="multipart/form-data"
+    )
     telemetry.set_emitter(None)
     assert resp.status_code == 200
     payload = json.loads(resp.data)
@@ -255,7 +265,9 @@ def test_start_process_cross_bureau_logical_strategy(monkeypatch, tmp_path):
     test_app = create_app()
     client = test_app.test_client()
     data = {"email": "a@example.com", "file": (io.BytesIO(b"%PDF-1.4"), "test.pdf")}
-    resp = client.post("/api/start-process", data=data, content_type="multipart/form-data")
+    resp = client.post(
+        "/api/start-process", data=data, content_type="multipart/form-data"
+    )
     telemetry.set_emitter(None)
     assert resp.status_code == 200
     payload = json.loads(resp.data)
@@ -272,4 +284,3 @@ def test_start_process_cross_bureau_logical_strategy(monkeypatch, tmp_path):
     members = {m["account_id"] for m in meta["members"]}
     assert members == {"acc_exp", "acc_tu"}
     assert any(e == "stageA_cross_bureau_aggregated" for e, _ in events)
-

@@ -155,8 +155,7 @@ def extract_problematic_accounts(self, sid: str) -> dict:
     log.info("PROBLEMATIC start sid=%s", sid)
     try:
         found = extract_problematic_accounts_logic(sid) or []
-        count = len(found)
-        result = {"sid": sid, "status": "ok", "found": found}
+        result = {"sid": sid, "found": found}
         safe_result = _json_safe(result)
         try:
             json.dumps(safe_result, ensure_ascii=False)
@@ -166,7 +165,7 @@ def extract_problematic_accounts(self, sid: str) -> dict:
                 e,
             )
             raise
-        log.info("PROBLEMATIC end sid=%s count=%s", sid, count)
+        log.info("PROBLEMATIC done sid=%s found=%s", sid, len(found))
         return safe_result
     except Exception:
         logger.exception("PROBLEMATIC failed sid=%s", sid)

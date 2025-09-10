@@ -2796,7 +2796,10 @@ def export_account_blocks(
         project_root = Path(__file__).resolve().parents[4]
         try:
             purge_trace_except_artifacts(
-                sid=session_id, root=project_root, dry_run=False
+                sid=session_id,
+                root=project_root,
+                dry_run=False,
+                delete_texts_sid=not getattr(config, "PURGE_TRACE_KEEP_TEXTS", False),
             )
         except Exception:
             logger.exception("BLOCK: purge trace failed sid=%s", session_id)

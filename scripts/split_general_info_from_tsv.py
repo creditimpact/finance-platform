@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """Split general information sections from a full token TSV dump.
 
-The original implementation in this repository used a heuristic
-``_looks_like_headline`` that treated any all–caps line as a section
-heading.  For the credit report ``general info`` tables we only want to
-split on a small set of *pre‑defined* headings (``PERSONAL INFORMATION``,
-``PUBLIC INFORMATION`` …) and ignore other shouty lines.  This module now
-uses an explicit allow‑list which mirrors the logic used by the backend
-block segmenter.  Each detected section is exported together with its
-start/end coordinates and an incrementing ``section_index`` so consumers
-can reference the blocks deterministically.
+This helper is used when working with raw token TSV dumps of full credit
+reports.  The general‑information area at the start of the report is made up
+of a handful of well known sections ("Personal Information", "Summary", ...).
+Rather than relying on heuristics we use explicit start/end boundaries for
+those headings so the resulting JSON is deterministic and mirrors the logic
+used by the backend segmenter.
 """
 from __future__ import annotations
 
@@ -41,34 +38,23 @@ def _norm(text: str) -> str:
     return text.upper()
 
 
-# Known general-information section headings.  The list intentionally mirrors
-# ``SUMMARY_TITLES`` from :mod:`backend.core.logic.report_analysis.block_segmenter`
-# so that both components stay in sync if additional headings are supported in
-# the future.
-SECTION_HEADINGS = {
-    "TOTAL ACCOUNTS",
-    "CLOSED OR PAID ACCOUNT/ZERO",
-    "INQUIRIES",
-    "PUBLIC INFORMATION",
-    "COLLECTIONS",
-    "PERSONAL INFORMATION",
-    "SCORE FACTORS",
-    "CREDIT SUMMARY",
-    "ALERTS",
-    "EMPLOYMENT DATA",
-}
-
-
 def _is_anchor(text: str) -> bool:
     """Return ``True`` if ``text`` contains the literal ``Account #`` anchor."""
 
     return bool(re.search(r"account\s*#", text, re.IGNORECASE))
 
 
-def _is_section_heading(text: str) -> bool:
-    """Return ``True`` if ``text`` matches one of ``SECTION_HEADINGS``."""
-
-    return _norm(text) in SECTION_HEADINGS
+# Ordered list of section boundaries.  Each tuple contains
+# ``(start_heading, end_heading, include_end)``.  ``include_end`` controls
+# whether the line containing ``end_heading`` should be part of the section.
+SECTION_RULES: List[Tuple[str, str, bool]] = [
+    ("PERSONAL INFORMATION", "SUMMARY", False),
+    ("SUMMARY", "ACCOUNT HISTORY", False),
+    ("ACCOUNT HISTORY", "COLLECTION CHARGEOFF", True),
+    ("PUBLIC INFORMATION", "INQUIRIES", False),
+    ("INQUIRIES", "CREDITOR CONTACTS", False),
+    ("CREDITOR CONTACTS", "SMARTCREDIT", False),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -103,40 +89,52 @@ def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
     """Split general information blocks from ``tsv_path`` and write JSON."""
 
     lines = _read_lines(tsv_path)
-    sections: List[Dict[str, Any]] = []
-    current: Dict[str, Any] | None = None
-    index = 1
 
-    for line in lines:
-        text = line["text"]
-        if _is_anchor(text):
+    # Stop processing once the account anchor is reached; the general info
+    # section always precedes the accounts table.
+    for idx, line in enumerate(lines):
+        if _is_anchor(line["text"]):
+            lines = lines[:idx]
             break
-        if _is_section_heading(text):
-            if current:
-                last = current["lines"][-1]
-                current["page_end"] = last["page"]
-                current["line_end"] = last["line"]
-                sections.append(current)
-                index += 1
-            current = {
+
+    norm_lines = [_norm(ln["text"]) for ln in lines]
+
+    sections: List[Dict[str, Any]] = []
+    index = 1
+    for start, end, include_end in SECTION_RULES:
+        start_norm = _norm(start)
+        end_norm = _norm(end)
+        try:
+            start_idx = norm_lines.index(start_norm)
+            end_idx = norm_lines.index(end_norm, start_idx + 1)
+        except ValueError:
+            # Missing start or end heading; skip this section silently.
+            continue
+
+        slice_end = end_idx + 1 if include_end else end_idx
+        section_lines = lines[start_idx:slice_end]
+        if not section_lines:
+            continue
+        last = section_lines[-1]
+        sections.append(
+            {
                 "section_index": index,
-                "heading": text.strip(),
-                "page_start": line["page"],
-                "line_start": line["line"],
+                "heading": section_lines[0]["text"].strip(),
+                "page_start": section_lines[0]["page"],
+                "line_start": section_lines[0]["line"],
+                "page_end": last["page"],
+                "line_end": last["line"],
                 "lines": [
-                    {"page": line["page"], "line": line["line"], "text": text}
+                    {
+                        "page": ln["page"],
+                        "line": ln["line"],
+                        "text": ln["text"],
+                    }
+                    for ln in section_lines
                 ],
             }
-        elif current:
-            current["lines"].append(
-                {"page": line["page"], "line": line["line"], "text": text}
-            )
-
-    if current and current.get("lines"):
-        last = current["lines"][-1]
-        current["page_end"] = last["page"]
-        current["line_end"] = last["line"]
-        sections.append(current)
+        )
+        index += 1
 
     result = {"sections": sections}
     json_out.write_text(json.dumps(result, indent=2), encoding="utf-8")

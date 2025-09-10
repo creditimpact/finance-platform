@@ -4,22 +4,32 @@ from pathlib import Path
 from scripts import split_general_info_from_tsv
 
 
-def create_basic_tsv(path: Path) -> None:
+def create_full_tsv(path: Path) -> None:
     content = (
         "page\tline\ty0\ty1\tx0\tx1\ttext\n"
         "1\t1\t0\t0\t0\t0\tPERSONAL INFORMATION\n"
         "1\t2\t0\t0\t0\t0\tName: JOHN DOE\n"
-        "1\t3\t0\t0\t0\t0\tPUBLIC INFORMATION\n"
-        "1\t4\t0\t0\t0\t0\tBankruptcy: None\n"
-        "1\t5\t0\t0\t0\t0\tAccount # 123\n"
+        "1\t3\t0\t0\t0\t0\tSUMMARY\n"
+        "1\t4\t0\t0\t0\t0\tGood credit\n"
+        "1\t5\t0\t0\t0\t0\tACCOUNT HISTORY\n"
+        "1\t6\t0\t0\t0\t0\tAccount 1\n"
+        "1\t7\t0\t0\t0\t0\tCOLLECTION CHARGEOFF\n"
+        "1\t8\t0\t0\t0\t0\tPUBLIC INFORMATION\n"
+        "1\t9\t0\t0\t0\t0\tNone\n"
+        "1\t10\t0\t0\t0\t0\tINQUIRIES\n"
+        "1\t11\t0\t0\t0\t0\tInq1\n"
+        "1\t12\t0\t0\t0\t0\tCREDITOR CONTACTS\n"
+        "1\t13\t0\t0\t0\t0\tContact 1\n"
+        "1\t14\t0\t0\t0\t0\tSMARTCREDIT\n"
+        "1\t15\t0\t0\t0\t0\tAccount # 123\n"
     )
     path.write_text(content, encoding="utf-8")
 
 
-def test_basic_split(tmp_path: Path) -> None:
+def test_split_sections(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
     json_path = tmp_path / "general_info_from_full.json"
-    create_basic_tsv(tsv_path)
+    create_full_tsv(tsv_path)
 
     split_general_info_from_tsv.main(
         ["--full", str(tsv_path), "--json_out", str(json_path)]
@@ -27,18 +37,20 @@ def test_basic_split(tmp_path: Path) -> None:
 
     data = json.loads(json_path.read_text())
     sections = data["sections"]
-    assert len(sections) == 2
-
-    sec1, sec2 = sections
-    assert sec1["heading"] == "PERSONAL INFORMATION"
-    assert [ln["text"] for ln in sec1["lines"]] == [
+    assert [sec["heading"] for sec in sections] == [
         "PERSONAL INFORMATION",
-        "Name: JOHN DOE",
-    ]
-    assert sec2["heading"] == "PUBLIC INFORMATION"
-    assert [ln["text"] for ln in sec2["lines"]] == [
+        "SUMMARY",
+        "ACCOUNT HISTORY",
         "PUBLIC INFORMATION",
-        "Bankruptcy: None",
+        "INQUIRIES",
+        "CREDITOR CONTACTS",
+    ]
+
+    # Account History → Collection Chargeoff should include the ending heading.
+    assert [ln["text"] for ln in sections[2]["lines"]] == [
+        "ACCOUNT HISTORY",
+        "Account 1",
+        "COLLECTION CHARGEOFF",
     ]
 
 

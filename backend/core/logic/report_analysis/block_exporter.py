@@ -1393,8 +1393,16 @@ def _build_accounts_table(session_id: str, out_dir: Path, layout: dict) -> dict[
         logger.info("Stage-A: wrote full TSV: %s", full_tsv)
 
         json_out = accounts_dir / "accounts_from_full.json"
-        split_accounts_from_tsv(full_tsv, json_out, write_tsv=True)
+        result = split_accounts_from_tsv(full_tsv, json_out, write_tsv=True)
         logger.info("Stage-A: wrote accounts JSON: %s", json_out)
+        accounts = result.get("accounts") or []
+        collections = sum(1 for a in accounts if a.get("section") == "collections")
+        logger.info(
+            "Stage-A: accounts summary: total=%d collections=%d stop_marker_seen=%s",
+            len(accounts),
+            collections,
+            result.get("stop_marker_seen"),
+        )
 
         # Register artifacts in the accounts table index
         idx_path = accounts_dir / "_table_index.json"

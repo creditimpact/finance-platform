@@ -306,11 +306,31 @@ def main(argv: List[str] | None = None) -> None:
         action="store_true",
         help="Write per-account TSVs to per_account_tsv/",
     )
+    ap.add_argument(
+        "--print-summary",
+        action="store_true",
+        help="Print a summary of accounts per section",
+    )
     args = ap.parse_args(argv)
 
     tsv_path = Path(args.full)
     json_out = Path(args.json_out)
-    split_accounts(tsv_path, json_out, write_tsv=args.write_tsv)
+    result = split_accounts(tsv_path, json_out, write_tsv=args.write_tsv)
+    if args.print_summary:
+        accounts = result.get("accounts") or []
+        total = len(accounts)
+        collections = sum(1 for a in accounts if a.get("section") == "collections")
+        regular = total - collections
+        bad_last = [
+            a["account_index"]
+            for a in accounts
+            if a.get("lines")
+            and _norm(a["lines"][-1]["text"]) in SECTION_STARTERS
+        ]
+        print(f"Total accounts: {total}")
+        print(f"collections: {collections} regular: {regular}")
+        if bad_last:
+            print(f"Accounts ending with section starter: {bad_last}")
     print(f"Wrote accounts to {json_out}")
 
 

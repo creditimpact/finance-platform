@@ -112,6 +112,7 @@ def test_export_writes_files(chdir_tmp, monkeypatch, stub_layout, caplog):
     assert (accounts_dir / "_debug_full.tsv").exists()
     json_path = accounts_dir / "accounts_from_full.json"
     assert json_path.exists()
+    assert json_path.parent == accounts_dir
     data = json.loads(json_path.read_text(encoding="utf-8"))
     accounts = data["accounts"]
     assert isinstance(accounts, list) and len(accounts) == 1
@@ -134,6 +135,10 @@ def test_export_writes_files(chdir_tmp, monkeypatch, stub_layout, caplog):
     # Logs should contain explicit paths
     assert f"Stage-A: wrote full TSV: {accounts_dir / '_debug_full.tsv'}" in caplog.text
     assert f"Stage-A: wrote accounts JSON: {json_path}" in caplog.text
+    assert (
+        "Stage-A: accounts summary: total=1 collections=0 stop_marker_seen=False"
+        in caplog.text
+    )
 
     assert not Path("_debug_full.tsv").exists()
     assert not Path("accounts_from_full.json").exists()

@@ -1,68 +1,91 @@
-#!/usr/bin/env python3
-"""Split general information sections from a full token TSV dump.
+"""Extract general information sections from a full token TSV dump.
 
-This helper is used when working with raw token TSV dumps of full credit
-reports.  The general‑information area at the start of the report is made up
-of a handful of well known sections ("Personal Information", "Summary", ...).
-Rather than relying on heuristics we use explicit start/end boundaries for
-those headings so the resulting JSON is deterministic and mirrors the logic
-used by the backend segmenter.
+This script reads a TSV file produced from a PDF token stream
+(``_debug_full.tsv``) and emits a JSON file with the well known
+"general information" sections that appear before the accounts table of a
+credit report.  Section boundaries are detected purely from heading text and
+*not* from fixed line numbers so the splitter works across differently
+formatted reports.
+
+The splitter reconstructs logical lines from individual tokens, normalises
+them and then walks through them with a small finite state machine.  The
+resulting JSON mirrors what the backend expects for further processing.
 """
+
 from __future__ import annotations
 
 import argparse
 import csv
 import json
+import logging
 import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+logger = logging.getLogger(__name__)
+
+
 # ---------------------------------------------------------------------------
-# Utility helpers copied from ``block_segmenter`` for consistency.  These
-# helpers mirror the normalisation used throughout the backend so the
-# heading matching behaves identically.
+# Normalisation helpers
 
 
-def _norm(text: str) -> str:
-    """Return an uppercase representation with symbols stripped.
+def norm_line(s: str) -> str:
+    """Return a normalised representation of ``s`` suitable for matching.
 
-    - Replace NBSP/registration marks
-    - Collapse spaces
-    - Keep only ``A-Z0-9/&-`` and spaces
+    The normalisation is intentionally strict: lowercase, remove common
+    symbols and punctuation and collapse all whitespace.  Only ``a-z``
+    characters are retained which makes the matching robust against spacing
+    or tokenisation differences.
     """
 
-    text = (text or "").replace("\u00A0", " ").replace("®", " ")
-    text = re.sub(r"\s+", " ", text.strip())
-    text = re.sub(r"[^A-Za-z0-9/&\- ]+", "", text)
-    return text.upper()
+    s = s.lower()
+    s = s.replace("®", "")
+    s = re.sub(r"\s+", "", s)
+    s = re.sub(r"[^a-z]", "", s)
+    return s
 
 
-def _is_anchor(text: str) -> bool:
-    """Return ``True`` if ``text`` contains the literal ``Account #`` anchor."""
+# Normalised marker strings for detecting section boundaries.  Multiple
+# candidates are provided for robustness (e.g. "chargeof" covers truncated
+# headings).
+MARKERS: Dict[str, set[str]] = {
+    "personal_info": {"personalinformation"},
+    "summary": {"summary"},
+    "account_history": {"accounthistory"},
+    "collections_title": {"collectionchargeoff", "collection", "chargeoff", "chargeof"},
+    "public_info": {"publicinformation"},
+    "inquiries": {"inquiries"},
+    "creditor_contacts": {"creditorcontacts"},
+    # footer markers – match both the domain and the typical legal links
+    "footer": {
+        "smartcreditcom",
+        "smartcredit",
+        "serviceagreement",
+        "privacypolicy",
+        "termsofuse",
+    },
+}
 
-    return bool(re.search(r"account\s*#", text, re.IGNORECASE))
 
-
-# Ordered list of section boundaries.  Each tuple contains
-# ``(start_heading, end_heading, include_end)``.  ``include_end`` controls
-# whether the line containing ``end_heading`` should be part of the section.
-SECTION_RULES: List[Tuple[str, str, bool]] = [
-    ("PERSONAL INFORMATION", "SUMMARY", False),
-    ("SUMMARY", "ACCOUNT HISTORY", False),
-    ("ACCOUNT HISTORY", "COLLECTION CHARGEOFF", True),
-    ("PUBLIC INFORMATION", "INQUIRIES", False),
-    ("INQUIRIES", "CREDITOR CONTACTS", False),
-    ("CREDITOR CONTACTS", "SMARTCREDIT", False),
-]
+HEADINGS = {
+    "personal_info": "Personal Information",
+    "summary": "Summary",
+    "account_history": "Account History",
+    "collections": "Collection / Chargeoff",
+    "public_info": "Public Information",
+    "inquiries": "Inquiries",
+    "creditor_contacts": "Creditor Contacts",
+}
 
 
 # ---------------------------------------------------------------------------
-# TSV reading and section splitting
+# TSV reading
 
 
-def _read_lines(tsv_path: Path) -> List[Dict[str, Any]]:
-    """Read tokens from ``tsv_path`` grouped into consolidated lines."""
+def read_logical_lines(tsv_path: Path) -> List[Dict[str, Any]]:
+    """Reconstruct logical lines from the token TSV ``tsv_path``."""
+
     tokens_by_line: Dict[Tuple[int, int], List[Dict[str, str]]] = defaultdict(list)
     with tsv_path.open("r", encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
@@ -78,66 +101,233 @@ def _read_lines(tsv_path: Path) -> List[Dict[str, Any]]:
                 continue
             tokens_by_line[(page, line)].append(row)
 
-    lines: List[Dict[str, Any]] = []
-    for page, line in sorted(tokens_by_line.keys()):
-        text = "".join(tok.get("text", "") for tok in tokens_by_line[(page, line)])
-        lines.append({"page": page, "line": line, "text": text})
-    return lines
+    logical_lines: List[Dict[str, Any]] = []
+    for (page, line), tokens in sorted(tokens_by_line.items()):
+        try:
+            tokens_sorted = sorted(tokens, key=lambda t: float(t.get("x0") or 0.0))
+        except Exception:  # pragma: no cover - very defensive
+            tokens_sorted = tokens
+        text = " ".join(tok.get("text", "") for tok in tokens_sorted)
+        text_norm = norm_line(text)
+        if not text_norm:
+            continue
+        logical_lines.append({
+            "page": page,
+            "line": line,
+            "text": text,
+            "text_norm": text_norm,
+        })
+
+    # Ensure deterministic ordering
+    logical_lines.sort(key=lambda d: (d["page"], d["line"]))
+    return logical_lines
+
+
+# ---------------------------------------------------------------------------
+# Section splitter
 
 
 def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
-    """Split general information blocks from ``tsv_path`` and write JSON."""
+    """Split general information sections from ``tsv_path`` and write JSON."""
 
-    lines = _read_lines(tsv_path)
-
-    # Stop processing once the account anchor is reached; the general info
-    # section always precedes the accounts table.
-    for idx, line in enumerate(lines):
-        if _is_anchor(line["text"]):
-            lines = lines[:idx]
-            break
-
-    norm_lines = [_norm(ln["text"]) for ln in lines]
+    lines = read_logical_lines(tsv_path)
 
     sections: List[Dict[str, Any]] = []
-    index = 1
-    for start, end, include_end in SECTION_RULES:
-        start_norm = _norm(start)
-        end_norm = _norm(end)
-        try:
-            start_idx = norm_lines.index(start_norm)
-            end_idx = norm_lines.index(end_norm, start_idx + 1)
-        except ValueError:
-            # Missing start or end heading; skip this section silently.
-            continue
+    current_key: str | None = None
+    current_heading: str | None = None
+    current_lines: List[Dict[str, Any]] = []
+    pending_start: str | None = None  # used after the collections title
 
-        slice_end = end_idx + 1 if include_end else end_idx
-        section_lines = lines[start_idx:slice_end]
-        if not section_lines:
-            continue
-        last = section_lines[-1]
+    def start_section(key: str, line: Dict[str, Any]) -> None:
+        nonlocal current_key, current_heading, current_lines
+        current_key = key
+        current_heading = HEADINGS[key]
+        current_lines = [{"page": line["page"], "line": line["line"], "text": line["text"]}]
+        logger.info(
+            "Detected start of %s at (page=%s,line=%s)",
+            current_heading,
+            line["page"],
+            line["line"],
+        )
+
+    def append_line(line: Dict[str, Any]) -> None:
+        current_lines.append({"page": line["page"], "line": line["line"], "text": line["text"]})
+
+    def close_section() -> None:
+        nonlocal current_key, current_heading, current_lines
+        if not current_key or not current_lines:
+            current_key = None
+            current_heading = None
+            current_lines = []
+            return
+        last = current_lines[-1]
         sections.append(
             {
-                "section_index": index,
-                "heading": section_lines[0]["text"].strip(),
-                "page_start": section_lines[0]["page"],
-                "line_start": section_lines[0]["line"],
+                "section_index": len(sections),
+                "heading": current_heading,
+                "page_start": current_lines[0]["page"],
+                "line_start": current_lines[0]["line"],
                 "page_end": last["page"],
                 "line_end": last["line"],
-                "lines": [
-                    {
-                        "page": ln["page"],
-                        "line": ln["line"],
-                        "text": ln["text"],
-                    }
-                    for ln in section_lines
-                ],
+                "lines": current_lines.copy(),
             }
         )
-        index += 1
+        logger.info(
+            "Closed %s at (page=%s,line=%s)",
+            current_heading,
+            last["page"],
+            last["line"],
+        )
+        current_key = None
+        current_heading = None
+        current_lines = []
+
+    def match(key: str, norm: str) -> bool:
+        """Return True if ``norm`` matches any marker for ``key``."""
+
+        return any(norm == m or m in norm for m in MARKERS[key])
+
+    for line in lines:
+        norm = line["text_norm"]
+
+        # Start a pending section (used for collections) if needed.
+        if current_key is None and pending_start:
+            if match("public_info", norm):
+                start_section("public_info", line)
+            elif match("inquiries", norm):
+                start_section("inquiries", line)
+            elif match("creditor_contacts", norm):
+                start_section("creditor_contacts", line)
+            elif match("footer", norm):
+                pending_start = None
+                break
+            else:
+                start_section("collections", line)
+            pending_start = None
+            continue
+
+        if current_key is None:
+            if match("personal_info", norm):
+                start_section("personal_info", line)
+            else:
+                continue
+        elif current_key == "personal_info":
+            if match("summary", norm):
+                close_section()
+                start_section("summary", line)
+            elif match("account_history", norm):
+                close_section()
+                start_section("account_history", line)
+            elif match("public_info", norm):
+                close_section()
+                start_section("public_info", line)
+            elif match("inquiries", norm):
+                close_section()
+                start_section("inquiries", line)
+            elif match("creditor_contacts", norm):
+                close_section()
+                start_section("creditor_contacts", line)
+            elif match("footer", norm):
+                close_section()
+                break
+            else:
+                append_line(line)
+        elif current_key == "summary":
+            if match("account_history", norm):
+                close_section()
+                start_section("account_history", line)
+            elif match("collections_title", norm):
+                # No explicit account history heading but collection title found.
+                close_section()
+                append_line(line)
+                current_key = "account_history"
+                current_heading = HEADINGS["account_history"]
+                pending_start = "collections"
+            elif match("public_info", norm):
+                close_section()
+                start_section("public_info", line)
+            elif match("inquiries", norm):
+                close_section()
+                start_section("inquiries", line)
+            elif match("creditor_contacts", norm):
+                close_section()
+                start_section("creditor_contacts", line)
+            elif match("footer", norm):
+                close_section()
+                break
+            else:
+                append_line(line)
+        elif current_key == "account_history":
+            if match("collections_title", norm):
+                append_line(line)
+                close_section()
+                pending_start = "collections"
+            elif match("public_info", norm):
+                close_section()
+                start_section("public_info", line)
+            elif match("inquiries", norm):
+                close_section()
+                start_section("inquiries", line)
+            elif match("creditor_contacts", norm):
+                close_section()
+                start_section("creditor_contacts", line)
+            elif match("footer", norm):
+                close_section()
+                break
+            else:
+                append_line(line)
+        elif current_key == "collections":
+            if match("public_info", norm):
+                close_section()
+                start_section("public_info", line)
+            elif match("inquiries", norm):
+                close_section()
+                start_section("inquiries", line)
+            elif match("creditor_contacts", norm):
+                close_section()
+                start_section("creditor_contacts", line)
+            elif match("footer", norm):
+                close_section()
+                break
+            else:
+                append_line(line)
+        elif current_key == "public_info":
+            if match("inquiries", norm):
+                close_section()
+                start_section("inquiries", line)
+            elif match("creditor_contacts", norm):
+                close_section()
+                start_section("creditor_contacts", line)
+            elif match("footer", norm):
+                close_section()
+                break
+            else:
+                append_line(line)
+        elif current_key == "inquiries":
+            if match("creditor_contacts", norm):
+                close_section()
+                start_section("creditor_contacts", line)
+            elif match("footer", norm):
+                close_section()
+                break
+            else:
+                append_line(line)
+        elif current_key == "creditor_contacts":
+            if match("footer", norm):
+                close_section()
+                break
+            else:
+                append_line(line)
+
+    # Close any trailing section if we reach EOF without an end marker.
+    if current_key:
+        close_section()
 
     result = {"sections": sections}
     json_out.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    logger.info(
+        "Wrote general info sections to %s (%d sections)", json_out, len(sections)
+    )
     return result
 
 
@@ -149,17 +339,18 @@ def main(argv: List[str] | None = None) -> None:
     ap = argparse.ArgumentParser(
         description="Split general information sections from the full TSV"
     )
-    ap.add_argument("--full", default="_debug_full.tsv", help="Input TSV path")
+    ap.add_argument("--full", required=True, help="Path to _debug_full.tsv")
     ap.add_argument(
-        "--json_out", default="general_info_from_full.json", help="JSON output path"
+        "--json_out", required=True, help="Path to write general_info_from_full.json"
     )
     args = ap.parse_args(argv)
 
     tsv_path = Path(args.full)
     json_out = Path(args.json_out)
     split_general_info(tsv_path, json_out)
-    print(f"Wrote general info sections to {json_out}")
 
 
 if __name__ == "__main__":  # pragma: no cover
+    logging.basicConfig(level=logging.INFO)
     main()
+

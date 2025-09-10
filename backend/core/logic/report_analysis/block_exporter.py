@@ -22,6 +22,9 @@ from backend.core.logic.report_analysis.text_provider import load_cached_text
 from backend.core.text.env_guard import ensure_env_and_paths
 from backend.core.text.text_provider import load_text_with_layout
 from scripts.split_accounts_from_tsv import split_accounts as split_accounts_from_tsv
+from scripts.split_general_info_from_tsv import (
+    split_general_info,
+)
 
 # Optional G1 infra (label/bureau detection)
 try:  # pragma: no cover - optional import
@@ -1392,6 +1395,10 @@ def _build_accounts_table(session_id: str, out_dir: Path, layout: dict) -> dict[
         count = _dump_full_tsv(layout, full_tsv)
         logger.info("Stage-A: wrote full TSV: %s", full_tsv)
 
+        general_json = accounts_dir / "general_info_from_full.json"
+        split_general_info(full_tsv, general_json)
+        logger.info("Stage-A: wrote general info JSON: %s", general_json)
+
         json_out = accounts_dir / "accounts_from_full.json"
         result = split_accounts_from_tsv(full_tsv, json_out, write_tsv=True)
         logger.info("Stage-A: wrote accounts JSON: %s", json_out)
@@ -1412,6 +1419,7 @@ def _build_accounts_table(session_id: str, out_dir: Path, layout: dict) -> dict[
             idx_obj = {}
 
         idx_obj.setdefault("session_id", session_id)
+        idx_obj["general_info"] = str(general_json)
 
         extras = [
             {"type": "full_tsv", "path": str(full_tsv)},
@@ -1429,7 +1437,11 @@ def _build_accounts_table(session_id: str, out_dir: Path, layout: dict) -> dict[
         idx_path.write_text(json.dumps(idx_obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
         logger.info("BLOCK: accounts_table built sid=%s tokens=%d", session_id, count)
-        return {"full_tsv": str(full_tsv), "accounts_json": str(json_out)}
+        return {
+            "full_tsv": str(full_tsv),
+            "accounts_json": str(json_out),
+            "general_info": str(general_json),
+        }
     except Exception:
         logger.exception("BLOCK: failed to build accounts_table sid=%s", session_id)
         return {}

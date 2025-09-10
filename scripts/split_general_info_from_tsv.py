@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Split general information sections from a full token TSV dump.
 
-The script groups tokens by ``(page, line)`` to form lines of text.  It scans
-for ALL-CAPS headline style lines before the first ``Account #`` anchor and
-splits the content into blocks based on those headers.  The resulting blocks
-are written to a JSON file for downstream processing or debugging.
+The original implementation in this repository used a heuristic
+``_looks_like_headline`` that treated any all–caps line as a section
+heading.  For the credit report ``general info`` tables we only want to
+split on a small set of *pre‑defined* headings (``PERSONAL INFORMATION``,
+``PUBLIC INFORMATION`` …) and ignore other shouty lines.  This module now
+uses an explicit allow‑list which mirrors the logic used by the backend
+block segmenter.  Each detected section is exported together with its
+start/end coordinates and an incrementing ``section_index`` so consumers
+can reference the blocks deterministically.
 """
 from __future__ import annotations
 
@@ -17,28 +22,53 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 # ---------------------------------------------------------------------------
-# Utility helpers copied from ``split_accounts_from_tsv`` for consistency.
+# Utility helpers copied from ``block_segmenter`` for consistency.  These
+# helpers mirror the normalisation used throughout the backend so the
+# heading matching behaves identically.
 
 
 def _norm(text: str) -> str:
-    """Normalize ``text`` by removing spaces/symbols and lowering case."""
-    return re.sub(r"[^a-z0-9]", "", text.lower())
+    """Return an uppercase representation with symbols stripped.
+
+    - Replace NBSP/registration marks
+    - Collapse spaces
+    - Keep only ``A-Z0-9/&-`` and spaces
+    """
+
+    text = (text or "").replace("\u00A0", " ").replace("®", " ")
+    text = re.sub(r"\s+", " ", text.strip())
+    text = re.sub(r"[^A-Za-z0-9/&\- ]+", "", text)
+    return text.upper()
+
+
+# Known general-information section headings.  The list intentionally mirrors
+# ``SUMMARY_TITLES`` from :mod:`backend.core.logic.report_analysis.block_segmenter`
+# so that both components stay in sync if additional headings are supported in
+# the future.
+SECTION_HEADINGS = {
+    "TOTAL ACCOUNTS",
+    "CLOSED OR PAID ACCOUNT/ZERO",
+    "INQUIRIES",
+    "PUBLIC INFORMATION",
+    "COLLECTIONS",
+    "PERSONAL INFORMATION",
+    "SCORE FACTORS",
+    "CREDIT SUMMARY",
+    "ALERTS",
+    "EMPLOYMENT DATA",
+}
 
 
 def _is_anchor(text: str) -> bool:
-    """Return True if ``text`` contains the literal ``Account #`` anchor."""
+    """Return ``True`` if ``text`` contains the literal ``Account #`` anchor."""
+
     return bool(re.search(r"account\s*#", text, re.IGNORECASE))
 
 
-def _looks_like_headline(text: str) -> bool:
-    """Return True if ``text`` is an ALL-CAPS headline candidate."""
-    stripped = re.sub(r"[^A-Za-z0-9/&\- ]", "", text).strip()
-    if ":" in stripped:
-        return False
-    core = stripped.replace(" ", "")
-    if len(core) < 3:
-        return False
-    return core.isupper()
+def _is_section_heading(text: str) -> bool:
+    """Return ``True`` if ``text`` matches one of ``SECTION_HEADINGS``."""
+
+    return _norm(text) in SECTION_HEADINGS
 
 
 # ---------------------------------------------------------------------------
@@ -71,28 +101,36 @@ def _read_lines(tsv_path: Path) -> List[Dict[str, Any]]:
 
 def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
     """Split general information blocks from ``tsv_path`` and write JSON."""
+
     lines = _read_lines(tsv_path)
     sections: List[Dict[str, Any]] = []
     current: Dict[str, Any] | None = None
+    index = 1
 
     for line in lines:
         text = line["text"]
         if _is_anchor(text):
             break
-        if _looks_like_headline(text):
+        if _is_section_heading(text):
             if current:
                 last = current["lines"][-1]
                 current["page_end"] = last["page"]
                 current["line_end"] = last["line"]
                 sections.append(current)
+                index += 1
             current = {
+                "section_index": index,
                 "heading": text.strip(),
                 "page_start": line["page"],
                 "line_start": line["line"],
-                "lines": [line],
+                "lines": [
+                    {"page": line["page"], "line": line["line"], "text": text}
+                ],
             }
         elif current:
-            current["lines"].append(line)
+            current["lines"].append(
+                {"page": line["page"], "line": line["line"], "text": text}
+            )
 
     if current and current.get("lines"):
         last = current["lines"][-1]

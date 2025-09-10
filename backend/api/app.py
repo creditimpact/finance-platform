@@ -31,6 +31,7 @@ from backend.api.admin import admin_bp
 from backend.api.ai_endpoints import ai_bp
 from backend.api.auth import require_api_key_or_role
 from backend.api.config import ENABLE_BATCH_RUNNER, get_app_config
+from backend.api.pipeline import run_full_pipeline
 from backend.api.session_manager import (
     get_session,
     set_session,
@@ -38,20 +39,16 @@ from backend.api.session_manager import (
     update_session,
 )
 from backend.api.tasks import run_credit_repair_process  # noqa: F401
-from backend.api.tasks import (
-    app as celery_app,
-    extract_problematic_accounts,
-    smoke_task,
-)
+from backend.api.tasks import app as celery_app, smoke_task
 from backend.api.ui_events import ui_event_bp
 from backend.core import orchestrators as orch
 from backend.core.case_store import api as cs_api
 from backend.core.case_store.errors import NOT_FOUND, CaseStoreError
-from backend.core.config.flags import FLAGS
 from backend.core.collectors import (
-    collect_stageA_problem_accounts,
     collect_stageA_logical_accounts,
+    collect_stageA_problem_accounts,
 )
+from backend.core.config.flags import FLAGS
 from backend.core.logic.letters.explanations_normalizer import (
     extract_structured,
     sanitize,
@@ -91,6 +88,7 @@ def _merge_collectors(
         acc.pop("source_stage", None)
         result.append(acc)
     return result
+
 
 @api_bp.route("/")
 def index():
@@ -183,9 +181,7 @@ def start_process():
             },
         )
 
-        result = extract_problematic_accounts.delay(local_filename, session_id).get(
-            timeout=300
-        )
+        result = run_full_pipeline(session_id).get(timeout=300)
 
         try:
             cs_api.load_session_case(session_id)
@@ -314,7 +310,7 @@ def api_upload():
         )
 
         # Queue background extraction (non-blocking)
-        task = extract_problematic_accounts.delay(local_filename, session_id)
+        task = run_full_pipeline(session_id)
         update_session(session_id, task_id=task.id, status="queued")
 
         # Return explicit async contract (frontend polls /api/result)

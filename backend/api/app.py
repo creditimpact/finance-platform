@@ -40,6 +40,7 @@ from backend.api.session_manager import (
 )
 from backend.api.tasks import run_credit_repair_process  # noqa: F401
 from backend.api.tasks import app as celery_app, smoke_task
+from backend.api.routes_smoke import bp as smoke_bp
 from backend.api.ui_events import ui_event_bp
 from backend.core import orchestrators as orch
 from backend.core.case_store import api as cs_api
@@ -444,6 +445,7 @@ def create_app() -> Flask:
     app.register_blueprint(api_bp)
     app.register_blueprint(ai_bp)
     app.register_blueprint(ui_event_bp)
+    app.register_blueprint(smoke_bp, url_prefix="/smoke")
 
     @app.before_request
     def _load_config() -> None:

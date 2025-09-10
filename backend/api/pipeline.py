@@ -8,10 +8,10 @@ from backend.api.tasks import (
 
 
 def run_full_pipeline(sid: str):
-    """Run Stage-A export, cleanup traces, and extract accounts for ``sid``.
+    """Run the full "Stage-A → Cleanup → Problematic" pipeline for ``sid``.
 
-    Each task receives ``sid`` explicitly via ``.si`` to avoid relying on the
-    previous task's return value.
+    The tasks are chained in the above order using immutable signatures so each
+    step receives ``sid`` directly rather than the previous task's result.
     """
     return chain(
         stage_a_task.si(sid),

@@ -383,13 +383,11 @@ def split_accounts(
                 if label_txt and (
                     label_txt.endswith(":") or label_txt.endswith("#") or is_account_num
                 ):
-                    label_core = label_txt.rstrip(":#").strip()
-                    key = LABEL_MAP.get(label_txt.rstrip(":")) or LABEL_MAP.get(
-                        label_core
-                    )
+                    label = label_txt.rstrip(":")
+                    key = LABEL_MAP.get(label)
                     row = {
                         "triad_row": True,
-                        "label": label_core,
+                        "label": label,
                         "key": key,
                         "values": {
                             "transunion": tu_val,

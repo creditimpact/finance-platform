@@ -7,14 +7,11 @@ from backend.core.logic.report_analysis.triad_layout import (
 )
 
 
-def test_detect_triads_with_punctuation(caplog):
+def test_detect_triads_with_trademark(caplog):
     tokens = [
-        {"text": "Transunion", "x0": 160, "x1": 240},
-        {"text": "\u00ae", "x0": 241, "x1": 242},
-        {"text": "Experian", "x0": 300, "x1": 400},
-        {"text": "\u00ae", "x0": 401, "x1": 402},
-        {"text": "Equifax", "x0": 460, "x1": 540},
-        {"text": "\u00ae", "x0": 541, "x1": 542},
+        {"text": "Transunion\u00ae", "x0": 160, "x1": 240},
+        {"text": "Experian\u00ae", "x0": 300, "x1": 400},
+        {"text": "Equifax\u00ae", "x0": 460, "x1": 540},
     ]
     tokens_by_line = {(1, 1): tokens}
     with caplog.at_level(logging.INFO):

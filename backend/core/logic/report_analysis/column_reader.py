@@ -257,19 +257,7 @@ def extract_bureau_table(block: dict) -> Dict[str, Dict[str, str]]:
 
 import math
 
-
-def _norm_bureau_header(text: str) -> str:
-    """Normalize a header token text to one of {transunion, experian, equifax}.
-
-    - Lowercase
-    - Strip non-letters (e.g., spaces, punctuation, registered marks)
-    - Return the canonical bureau key if matched; otherwise "".
-    """
-    s = (text or "").lower()
-    s = re.sub(r"[^a-z]", "", s)
-    if s in {"transunion", "experian", "equifax"}:
-        return s
-    return ""
+from .header_utils import normalize_bureau_header
 
 
 def detect_bureau_columns(header_tokens: list[dict]) -> dict[str, tuple[float, float]]:
@@ -292,8 +280,8 @@ def detect_bureau_columns(header_tokens: list[dict]) -> dict[str, tuple[float, f
     # Collect mid-x values per bureau
     per_bureau: dict[str, list[float]] = {"transunion": [], "experian": [], "equifax": []}
     for t in header_tokens or []:
-        name = _norm_bureau_header(str(t.get("text", "")))
-        if not name:
+        name = normalize_bureau_header(str(t.get("text", "")))
+        if name not in {"transunion", "experian", "equifax"}:
             continue
         try:
             x0 = float(t.get("x0", 0.0))

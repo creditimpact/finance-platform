@@ -346,16 +346,17 @@ def split_accounts(
                     xp_val,
                     eq_val,
                 )
-                plain = _norm(joined_line_text)
-                if plain == "twoyearpaymenthistory" or plain in {
+                plain_line = _norm(joined_line_text)
+                plain_label = _norm(label_txt)
+                if plain_label == "twoyearpaymenthistory" or plain_line in {
                     "transunion",
                     "experian",
                     "equifax",
                 }:
                     reason = (
                         "two_year_payment_history"
-                        if plain == "twoyearpaymenthistory"
-                        else f"bare_{plain}"
+                        if plain_label == "twoyearpaymenthistory"
+                        else f"bare_{plain_line}"
                     )
                     triad_log(
                         "TRIAD_STOP reason=%s page=%s line=%s",

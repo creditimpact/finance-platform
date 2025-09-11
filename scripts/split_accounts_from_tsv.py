@@ -275,7 +275,12 @@ def split_accounts(
                 key = (line["page"], line["line"])
                 toks = tokens_by_line.get(key, [])
                 texts = [t.get("text", "") for t in toks]
-                log("TRIAD_SCAN page=%s line=%s texts=%r", line["page"], line["line"], texts)
+                log(
+                    "TRIAD_SCAN page=%s line=%s texts=%r",
+                    line["page"],
+                    line["line"],
+                    texts,
+                )
                 layout = layouts.get(line["page"])
                 band_tokens: Dict[str, List[dict]] = {
                     "label": [],
@@ -318,6 +323,11 @@ def split_accounts(
                 ):
                     label_core = label_txt.rstrip(":#").strip()
                     if _norm(label_core) == "twoyearpaymenthistory":
+                        log(
+                            "TRIAD_STOP reason=two_year_payment_history page=%s line=%s",
+                            line["page"],
+                            line["line"],
+                        )
                         open_row = None
                         break
                     key = LABEL_MAP.get(label_txt.rstrip(":")) or LABEL_MAP.get(

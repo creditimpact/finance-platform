@@ -22,7 +22,11 @@ from backend.config import RAW_JOIN_TOKENS_WITH_SPACE, RAW_TRIAD_FROM_X
 from backend.core.logic.report_analysis.block_exporter import join_tokens_with_space
 from backend.core.logic.report_analysis.canonical_labels import LABEL_MAP
 from backend.core.logic.report_analysis.normalize_fields import ensure_all_keys
-from backend.core.logic.report_analysis.triad_layout import assign_band, detect_triads
+from backend.core.logic.report_analysis.triad_layout import (
+    TriadLayout,
+    assign_band,
+    detect_triads,
+)
 
 logger = logging.getLogger(__name__)
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
@@ -272,6 +276,9 @@ def split_accounts(
         }
         if RAW_TRIAD_FROM_X:
             open_row: Dict[str, Any] | None = None
+            triad_active: bool = False
+            current_layout: TriadLayout | None = None
+            current_layout_page: int | None = None
             for line in account_lines:
                 key = (line["page"], line["line"])
                 toks = tokens_by_line.get(key, [])
@@ -282,7 +289,25 @@ def split_accounts(
                     line["line"],
                     texts,
                 )
+
                 layout = layouts.get(line["page"])
+                if layout:
+                    if current_layout_page != line["page"]:
+                        triad_log("TRIAD_CARRY start page=%s", line["page"])
+                    triad_active = True
+                    current_layout = layout
+                    current_layout_page = line["page"]
+                elif triad_active and current_layout:
+                    if current_layout_page != line["page"]:
+                        triad_log(
+                            "TRIAD_CARRY reuse from_page=%s to_page=%s",
+                            current_layout_page,
+                            line["page"],
+                        )
+                        current_layout_page = line["page"]
+                    layout = current_layout
+                else:
+                    layout = None
                 band_tokens: Dict[str, List[dict]] = {
                     "label": [],
                     "tu": [],
@@ -329,6 +354,9 @@ def split_accounts(
                             line["page"],
                             line["line"],
                         )
+                        triad_active = False
+                        current_layout = None
+                        current_layout_page = None
                         open_row = None
                         break
                     key = LABEL_MAP.get(label_txt.rstrip(":")) or LABEL_MAP.get(

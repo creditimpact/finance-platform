@@ -283,6 +283,7 @@ def split_accounts(
                 key = (line["page"], line["line"])
                 toks = tokens_by_line.get(key, [])
                 texts = [t.get("text", "") for t in toks]
+                joined_line_text = join_tokens_with_space(texts)
                 triad_log(
                     "TRIAD_SCAN page=%s line=%s texts=%r",
                     line["page"],
@@ -340,6 +341,28 @@ def split_accounts(
                     xp_val,
                     eq_val,
                 )
+                plain = _norm(joined_line_text)
+                if plain == "twoyearpaymenthistory" or plain in {
+                    "transunion",
+                    "experian",
+                    "equifax",
+                }:
+                    reason = (
+                        "two_year_payment_history"
+                        if plain == "twoyearpaymenthistory"
+                        else f"bare_{plain}"
+                    )
+                    triad_log(
+                        "TRIAD_STOP reason=%s page=%s line=%s",
+                        reason,
+                        line["page"],
+                        line["line"],
+                    )
+                    triad_active = False
+                    current_layout = None
+                    current_layout_page = None
+                    open_row = None
+                    continue
                 if not layout:
                     continue
                 label_clean = " ".join(label_txt.split())
@@ -348,17 +371,6 @@ def split_accounts(
                     label_txt.endswith(":") or label_txt.endswith("#") or is_account_num
                 ):
                     label_core = label_txt.rstrip(":#").strip()
-                    if _norm(label_core) == "twoyearpaymenthistory":
-                        triad_log(
-                            "TRIAD_STOP reason=two_year_payment_history page=%s line=%s",
-                            line["page"],
-                            line["line"],
-                        )
-                        triad_active = False
-                        current_layout = None
-                        current_layout_page = None
-                        open_row = None
-                        break
                     key = LABEL_MAP.get(label_txt.rstrip(":")) or LABEL_MAP.get(
                         label_core
                     )

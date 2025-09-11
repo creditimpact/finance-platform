@@ -8,6 +8,7 @@ from typing import Dict, List, Literal, Tuple
 from backend.config import RAW_TRIAD_FROM_X
 
 logger = logging.getLogger(__name__)
+triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
 
 # Small buffer on the right edge of each band used when assigning tokens. This
 # guards against tiny OCR or rounding errors around column boundaries.
@@ -104,17 +105,16 @@ def detect_triads(
             eq_band=eq_band,
         )
         layouts[page] = layout
-        if RAW_TRIAD_FROM_X:
-            logger.info(
-                "TRIAD_LAYOUT page=%s label=(%.1f,%.1f) tu=(%.1f,%.1f) xp=(%.1f,%.1f) eq=(%.1f,%.1f)",
-                page,
-                label_band[0],
-                label_band[1],
-                tu_band[0],
-                tu_band[1],
-                xp_band[0],
-                xp_band[1],
-                eq_band[0],
-                eq_band[1],
-            )
+        triad_log(
+            "TRIAD_LAYOUT page=%s label=(%.1f,%.1f) tu=(%.1f,%.1f) xp=(%.1f,%.1f) eq=(%.1f,%.1f)",
+            page,
+            label_band[0],
+            label_band[1],
+            tu_band[0],
+            tu_band[1],
+            xp_band[0],
+            xp_band[1],
+            eq_band[0],
+            eq_band[1],
+        )
     return layouts

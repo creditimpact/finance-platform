@@ -24,7 +24,8 @@ from backend.core.logic.report_analysis.canonical_labels import LABEL_MAP
 from backend.core.logic.report_analysis.normalize_fields import ensure_all_keys
 from backend.core.logic.report_analysis.triad_layout import assign_band, detect_triads
 
-log = logging.getLogger(__name__).info
+logger = logging.getLogger(__name__)
+triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
 
 ACCOUNT_RE = re.compile(r"\bAccount\b.*#", re.IGNORECASE)
 STOP_MARKER_NORM = "publicinformation"
@@ -275,7 +276,7 @@ def split_accounts(
                 key = (line["page"], line["line"])
                 toks = tokens_by_line.get(key, [])
                 texts = [t.get("text", "") for t in toks]
-                log(
+                triad_log(
                     "TRIAD_SCAN page=%s line=%s texts=%r",
                     line["page"],
                     line["line"],
@@ -305,7 +306,7 @@ def split_accounts(
                 eq_val = join_tokens_with_space(
                     [t.get("text", "") for t in band_tokens["eq"]]
                 ).strip()
-                log(
+                triad_log(
                     "TRIAD_BANDS page=%s line=%s label=%r TU=%r XP=%r EQ=%r",
                     line["page"],
                     line["line"],
@@ -323,7 +324,7 @@ def split_accounts(
                 ):
                     label_core = label_txt.rstrip(":#").strip()
                     if _norm(label_core) == "twoyearpaymenthistory":
-                        log(
+                        triad_log(
                             "TRIAD_STOP reason=two_year_payment_history page=%s line=%s",
                             line["page"],
                             line["line"],
@@ -348,14 +349,13 @@ def split_accounts(
                         triad_maps["transunion"][key] = tu_val
                         triad_maps["experian"][key] = xp_val
                         triad_maps["equifax"][key] = eq_val
-                    if RAW_TRIAD_FROM_X:
-                        log(
-                            "TRIAD_ROW key=%s TU=%r XP=%r EQ=%r",
-                            key,
-                            tu_val,
-                            xp_val,
-                            eq_val,
-                        )
+                    triad_log(
+                        "TRIAD_ROW key=%s TU=%r XP=%r EQ=%r",
+                        key,
+                        tu_val,
+                        xp_val,
+                        eq_val,
+                    )
                     open_row = row
                 else:
                     if open_row:
@@ -383,25 +383,24 @@ def split_accounts(
                                 triad_maps["equifax"][open_row["key"]] = open_row[
                                     "values"
                                 ]["equifax"]
-                        if RAW_TRIAD_FROM_X:
-                            if tu_val:
-                                log(
-                                    "TRIAD_CONT key=%s TU+=%r",
-                                    open_row["key"],
-                                    tu_val,
-                                )
-                            if xp_val:
-                                log(
-                                    "TRIAD_CONT key=%s XP+=%r",
-                                    open_row["key"],
-                                    xp_val,
-                                )
-                            if eq_val:
-                                log(
-                                    "TRIAD_CONT key=%s EQ+=%r",
-                                    open_row["key"],
-                                    eq_val,
-                                )
+                        if tu_val:
+                            triad_log(
+                                "TRIAD_CONT key=%s TU+=%r",
+                                open_row["key"],
+                                tu_val,
+                            )
+                        if xp_val:
+                            triad_log(
+                                "TRIAD_CONT key=%s XP+=%r",
+                                open_row["key"],
+                                xp_val,
+                            )
+                        if eq_val:
+                            triad_log(
+                                "TRIAD_CONT key=%s EQ+=%r",
+                                open_row["key"],
+                                eq_val,
+                            )
         account_info = {
             "account_index": idx + 1,
             "page_start": account_lines[0]["page"],

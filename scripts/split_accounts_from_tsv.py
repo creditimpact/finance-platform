@@ -11,15 +11,20 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import re
+from bisect import bisect_right
 from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Tuple
-from bisect import bisect_right
-from backend.config import RAW_JOIN_TOKENS_WITH_SPACE
+from typing import Any, Dict, Iterable, List, Tuple
 
-if TYPE_CHECKING:  # pragma: no cover
-    from backend.core.logic.report_analysis.block_exporter import join_tokens_with_space
+from backend.config import RAW_JOIN_TOKENS_WITH_SPACE, RAW_TRIAD_FROM_X
+from backend.core.logic.report_analysis.triad_layout import detect_triads, assign_band
+from backend.core.logic.report_analysis.canonical_labels import LABEL_MAP
+from backend.core.logic.report_analysis.block_exporter import join_tokens_with_space
+from backend.core.logic.report_analysis.normalize_fields import ensure_all_keys
+
+log = logging.getLogger(__name__).info
 
 ACCOUNT_RE = re.compile(r"\bAccount\b.*#", re.IGNORECASE)
 STOP_MARKER_NORM = "publicinformation"
@@ -91,9 +96,6 @@ def _read_tokens(
     for page, line in sorted(tokens_by_line.keys()):
         tokens = [tok.get("text", "") for tok in tokens_by_line[(page, line)]]
         if RAW_JOIN_TOKENS_WITH_SPACE:
-            from backend.core.logic.report_analysis.block_exporter import (
-                join_tokens_with_space,
-            )
             text = join_tokens_with_space(tokens)
         else:
             text = "".join(tokens)
@@ -178,6 +180,7 @@ def split_accounts(
 ) -> Dict[str, Any]:
     """Core logic for splitting accounts from the full TSV."""
     tokens_by_line, lines = _read_tokens(tsv_path)
+    layouts = detect_triads(tokens_by_line) if RAW_TRIAD_FROM_X else {}
 
     stop_marker_seen = False
     for i, line in enumerate(lines):
@@ -197,7 +200,9 @@ def split_accounts(
         headings.append(heading)
         heading_sources.append(source)
 
-    section_starts = [i for i, line in enumerate(lines) if _norm(line["text"]) in SECTION_STARTERS]
+    section_starts = [
+        i for i, line in enumerate(lines) if _norm(line["text"]) in SECTION_STARTERS
+    ]
     section_prefix_flags = [False] * len(account_starts)
     sections: List[str | None] = [None] * len(account_starts)
 
@@ -224,11 +229,17 @@ def split_accounts(
         next_start = (
             account_starts[idx + 1] if idx + 1 < len(account_starts) else len(lines)
         )
-        while section_ptr < len(section_starts) and section_starts[section_ptr] < start_idx:
+        while (
+            section_ptr < len(section_starts)
+            and section_starts[section_ptr] < start_idx
+        ):
             section_ptr += 1
         cut_end = next_start
         trailing_pruned = False
-        if section_ptr < len(section_starts) and start_idx <= section_starts[section_ptr] < next_start:
+        if (
+            section_ptr < len(section_starts)
+            and start_idx <= section_starts[section_ptr] < next_start
+        ):
             cut_end = section_starts[section_ptr]
             trailing_pruned = True
         account_lines = carry_over + lines[start_idx:cut_end]
@@ -245,17 +256,122 @@ def split_accounts(
 
         def _is_structural_marker(txt: str) -> bool:
             n = _norm(txt)
-            return (
-                n in SECTION_STARTERS
-                or _is_triad(txt)
-                or _is_anchor(txt)
-            )
+            return n in SECTION_STARTERS or _is_triad(txt) or _is_anchor(txt)
 
         while account_lines and _is_structural_marker(account_lines[-1]["text"]):
             carry_over.insert(0, account_lines.pop())
             trailing_pruned = True
         if not account_lines:
             continue
+        triad_rows: List[Dict[str, Any]] = []
+        triad_maps: Dict[str, Dict[str, str]] = {
+            "transunion": {},
+            "experian": {},
+            "equifax": {},
+        }
+        if RAW_TRIAD_FROM_X:
+            groups: Dict[Tuple[int, float], List[Dict[str, str]]] = defaultdict(list)
+            for line in account_lines:
+                key = (line["page"], line["line"])
+                for tok in tokens_by_line.get(key, []):
+                    try:
+                        y0 = float(tok.get("y0", 0.0))
+                        y1 = float(tok.get("y1", y0))
+                        y_mid = (y0 + y1) / 2.0
+                    except Exception:
+                        y_mid = 0.0
+                    groups[(line["page"], round(y_mid, 1))].append(tok)
+            open_row: Dict[str, Any] | None = None
+            for (page, y), toks in sorted(groups.items()):
+                layout = layouts.get(page)
+                if not layout:
+                    continue
+                band_tokens: Dict[str, List[dict]] = {
+                    "label": [],
+                    "tu": [],
+                    "xp": [],
+                    "eq": [],
+                }
+                for t in toks:
+                    band = assign_band(t, layout)
+                    if band in band_tokens:
+                        band_tokens[band].append(t)
+                label_txt = join_tokens_with_space(
+                    [t.get("text", "") for t in band_tokens["label"]]
+                ).strip()
+                tu_val = join_tokens_with_space(
+                    [t.get("text", "") for t in band_tokens["tu"]]
+                ).strip()
+                xp_val = join_tokens_with_space(
+                    [t.get("text", "") for t in band_tokens["xp"]]
+                ).strip()
+                eq_val = join_tokens_with_space(
+                    [t.get("text", "") for t in band_tokens["eq"]]
+                ).strip()
+                label_clean = " ".join(label_txt.split())
+                is_account_num = label_clean == "Account #"
+                if label_txt and (label_txt.endswith(":") or is_account_num):
+                    label_core = label_txt.rstrip(":")
+                    if _norm(label_core) == "twoyearpaymenthistory":
+                        open_row = None
+                        break
+                    key = LABEL_MAP.get(label_core)
+                    row = {
+                        "triad_row": True,
+                        "label": label_core,
+                        "key": key,
+                        "values": {
+                            "transunion": tu_val,
+                            "experian": xp_val,
+                            "equifax": eq_val,
+                        },
+                    }
+                    triad_rows.append(row)
+                    if key:
+                        triad_maps["transunion"][key] = tu_val
+                        triad_maps["experian"][key] = xp_val
+                        triad_maps["equifax"][key] = eq_val
+                    log(
+                        "TRIAD_ROW key=%s TU=%r XP=%r EQ=%r",
+                        key,
+                        tu_val,
+                        xp_val,
+                        eq_val,
+                    )
+                    open_row = row
+                else:
+                    if open_row:
+                        if tu_val:
+                            open_row["values"][
+                                "transunion"
+                            ] = f"{open_row['values']['transunion']} {tu_val}".strip()
+                            if open_row["key"]:
+                                triad_maps["transunion"][open_row["key"]] = open_row[
+                                    "values"
+                                ]["transunion"]
+                        if xp_val:
+                            open_row["values"][
+                                "experian"
+                            ] = f"{open_row['values']['experian']} {xp_val}".strip()
+                            if open_row["key"]:
+                                triad_maps["experian"][open_row["key"]] = open_row[
+                                    "values"
+                                ]["experian"]
+                        if eq_val:
+                            open_row["values"][
+                                "equifax"
+                            ] = f"{open_row['values']['equifax']} {eq_val}".strip()
+                            if open_row["key"]:
+                                triad_maps["equifax"][open_row["key"]] = open_row[
+                                    "values"
+                                ]["equifax"]
+                        log(
+                            "TRIAD_CONT key=%s TU+=%r/XP+=%r/EQ+=%r",
+                            open_row["key"],
+                            tu_val,
+                            xp_val,
+                            eq_val,
+                        )
         account_info = {
             "account_index": idx + 1,
             "page_start": account_lines[0]["page"],
@@ -270,6 +386,17 @@ def split_accounts(
             "trailing_section_marker_pruned": trailing_pruned,
             "noise_lines_skipped": noise_lines_skipped,
         }
+        if RAW_TRIAD_FROM_X:
+            account_info["triad"] = {
+                "enabled": True,
+                "order": ["transunion", "experian", "equifax"],
+            }
+            account_info["triad_fields"] = {
+                "transunion": ensure_all_keys(triad_maps["transunion"]),
+                "experian": ensure_all_keys(triad_maps["experian"]),
+                "equifax": ensure_all_keys(triad_maps["equifax"]),
+            }
+            account_info["triad_rows"] = triad_rows
         accounts.append(account_info)
         if write_tsv:
             _write_account_tsv(
@@ -314,8 +441,7 @@ def main(argv: List[str] | None = None) -> None:
         bad_last = [
             a["account_index"]
             for a in accounts
-            if a.get("lines")
-            and _norm(a["lines"][-1]["text"]) in SECTION_STARTERS
+            if a.get("lines") and _norm(a["lines"][-1]["text"]) in SECTION_STARTERS
         ]
         print(f"Total accounts: {total}")
         print(f"collections: {collections} unknown: {unknown} regular: {regular}")

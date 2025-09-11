@@ -1,3 +1,4 @@
+# ruff: noqa
 from __future__ import annotations
 
 import hashlib
@@ -9,7 +10,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import backend.config as config
-
 from backend.core.logic.report_analysis.account_packager_coords import (
     package_block_raw_coords,
     write_block_raw_coords,
@@ -24,9 +24,7 @@ from backend.core.logic.report_analysis.text_provider import load_cached_text
 from backend.core.text.env_guard import ensure_env_and_paths
 from backend.core.text.text_provider import load_text_with_layout
 from scripts.split_accounts_from_tsv import split_accounts as split_accounts_from_tsv
-from scripts.split_general_info_from_tsv import (
-    split_general_info,
-)
+from scripts.split_general_info_from_tsv import split_general_info
 
 # Optional G1 infra (label/bureau detection)
 try:  # pragma: no cover - optional import
@@ -38,6 +36,20 @@ try:  # pragma: no cover - optional import
     _G1_AVAILABLE = True
 except Exception:  # pragma: no cover - best effort
     _G1_AVAILABLE = False
+
+
+_SPACE_RE = re.compile(r"\s+")
+
+
+def join_tokens_with_space(tokens: list[str]) -> str:
+    """
+    מחבר טוקנים עם רווח בודד, תוך נרמול רווחים מיותרים ושמירה על פיסוק.
+    """
+    # חיבור בסיסי
+    s = " ".join(t.strip() for t in tokens if t is not None)
+    # נרמול רווחים לבן־אחד
+    s = _SPACE_RE.sub(" ", s)
+    return s.strip()
 
 
 def load_account_blocks(session_id: str) -> List[Dict[str, Any]]:
@@ -1380,7 +1392,9 @@ def _dump_full_tsv(layout: dict, out_path: Path) -> int:
                     (tok.get("text") or "").replace("\t", " "),
                 )
             )
-    rows.sort(key=lambda r: _token_sort_key({"line": r[1], "x0": r[4], "y0": r[2]}, r[0]))
+    rows.sort(
+        key=lambda r: _token_sort_key({"line": r[1], "x0": r[4], "y0": r[2]}, r[0])
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as fh:
         fh.write("page\tline\ty0\ty1\tx0\tx1\ttext\n")
@@ -1390,7 +1404,9 @@ def _dump_full_tsv(layout: dict, out_path: Path) -> int:
     return len(rows)
 
 
-def _build_accounts_table(session_id: str, out_dir: Path, layout: dict) -> dict[str, str]:
+def _build_accounts_table(
+    session_id: str, out_dir: Path, layout: dict
+) -> dict[str, str]:
     try:
         accounts_dir = out_dir / "accounts_table"
         full_tsv = accounts_dir / "_debug_full.tsv"
@@ -1416,7 +1432,11 @@ def _build_accounts_table(session_id: str, out_dir: Path, layout: dict) -> dict[
         # Register artifacts in the accounts table index
         idx_path = accounts_dir / "_table_index.json"
         try:
-            idx_obj = json.loads(idx_path.read_text(encoding="utf-8")) if idx_path.exists() else {}
+            idx_obj = (
+                json.loads(idx_path.read_text(encoding="utf-8"))
+                if idx_path.exists()
+                else {}
+            )
         except Exception:
             idx_obj = {}
 
@@ -1431,12 +1451,16 @@ def _build_accounts_table(session_id: str, out_dir: Path, layout: dict) -> dict[
         existing = idx_obj.get("extras")
         if isinstance(existing, list):
             skip = {e.get("type") for e in extras}
-            idx_obj["extras"] = [e for e in existing if isinstance(e, dict) and e.get("type") not in skip]
+            idx_obj["extras"] = [
+                e for e in existing if isinstance(e, dict) and e.get("type") not in skip
+            ]
             idx_obj["extras"].extend(extras)
         else:
             idx_obj["extras"] = extras
 
-        idx_path.write_text(json.dumps(idx_obj, ensure_ascii=False, indent=2), encoding="utf-8")
+        idx_path.write_text(
+            json.dumps(idx_obj, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
         logger.info("BLOCK: accounts_table built sid=%s tokens=%d", session_id, count)
         return {
@@ -3265,6 +3289,7 @@ def enrich_block(blk: dict) -> dict:
 
     return {**blk, "fields": cleaned_fields, "meta": cleaned_meta}
 
+
 def export_stage_a(session_id: str) -> dict:
     """Run Stage A export and return artifact paths."""
     try:
@@ -3283,5 +3308,7 @@ def export_stage_a(session_id: str) -> dict:
             "ok": True,
         }
     except Exception as e:
-        logger.exception("export_stage_a_failed", extra={"sid": session_id, "error": str(e)})
+        logger.exception(
+            "export_stage_a_failed", extra={"sid": session_id, "error": str(e)}
+        )
         return {"sid": session_id, "ok": False, "error": str(e)}

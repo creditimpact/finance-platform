@@ -3,6 +3,11 @@ import os
 from pathlib import Path
 from typing import Any, Tuple
 
+from environs import Env
+
+env = Env()
+env.read_env()
+
 
 def env_bool(name: str, default: bool = False) -> bool:
     """Parse a boolean environment variable."""
@@ -166,15 +171,11 @@ TEXT_NORMALIZE_ENABLED = env_bool("TEXT_NORMALIZE_ENABLED", True)
 TEXT_NORMALIZE_COLLAPSE_SPACES = env_bool("TEXT_NORMALIZE_COLLAPSE_SPACES", True)
 TEXT_NORMALIZE_BIDI_STRIP = env_bool("TEXT_NORMALIZE_BIDI_STRIP", True)
 TEXT_NORMALIZE_DATE_ISO = env_bool("TEXT_NORMALIZE_DATE_ISO", True)
-TEXT_NORMALIZE_AMOUNT_CANONICAL = env_bool(
-    "TEXT_NORMALIZE_AMOUNT_CANONICAL", True
-)
+TEXT_NORMALIZE_AMOUNT_CANONICAL = env_bool("TEXT_NORMALIZE_AMOUNT_CANONICAL", True)
 
 # Deterministic SmartCredit extractors (final/primary path)
 # Leave this flag enabled by default; downstream may hard-code in future.
-DETERMINISTIC_EXTRACTORS_ENABLED = env_bool(
-    "DETERMINISTIC_EXTRACTORS_ENABLED", True
-)
+DETERMINISTIC_EXTRACTORS_ENABLED = env_bool("DETERMINISTIC_EXTRACTORS_ENABLED", True)
 
 EXTRACTOR_STRICT_MODE = env_bool("EXTRACTOR_STRICT_MODE", True)
 
@@ -196,3 +197,6 @@ try:
     TEMPLATE_MIN_BUREAUS = int(os.getenv("TEMPLATE_MIN_BUREAUS", "2"))
 except Exception:
     TEMPLATE_MIN_BUREAUS = 2
+
+
+RAW_JOIN_TOKENS_WITH_SPACE = env.bool("RAW_JOIN_TOKENS_WITH_SPACE", True)

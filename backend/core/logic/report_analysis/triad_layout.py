@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Tuple
+
+from .header_utils import normalize_bureau_header
 
 from backend.config import RAW_TRIAD_FROM_X
 
@@ -54,15 +55,6 @@ def assign_band(
     return "none"
 
 
-def norm(s: str) -> str:
-    return " ".join((s or "").lower().split())
-
-
-def norm_loose(s: str) -> str:
-    s = re.sub(r"[\W_]+", " ", (s or "").lower())
-    return " ".join(s.split())
-
-
 def detect_triads(
     tokens_by_line: Dict[Tuple[int, int], List[dict]]
 ) -> Dict[int, TriadLayout]:
@@ -77,11 +69,8 @@ def detect_triads(
         for line_no, toks in sorted(lines.items()):
             found: Dict[str, dict] = {}
             for t in toks:
-                tnorm = norm_loose(str(t.get("text", "")))
-                if (
-                    tnorm in {"transunion", "experian", "equifax"}
-                    and tnorm not in found
-                ):
+                tnorm = normalize_bureau_header(str(t.get("text", "")))
+                if tnorm in {"transunion", "experian", "equifax"} and tnorm not in found:
                     found[tnorm] = t
             if len(found) == 3:
                 mids = {k: mid_x(v) for k, v in found.items()}

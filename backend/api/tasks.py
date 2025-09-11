@@ -10,8 +10,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from backend.core.logic.report_analysis.block_exporter import export_stage_a
-from backend.core.logic.report_analysis.problem_extractor import detect_problem_accounts
-from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
+from backend.core.logic.report_analysis.extract_problematic_accounts import (
+    extract_problematic_accounts as orchestrate_problem_accounts,
+)
 from backend.core.logic.report_analysis.text_provider import (
     extract_and_cache_text,
     load_cached_text,
@@ -147,10 +148,10 @@ def stage_a_task(self, sid: str) -> dict:
 @shared_task(bind=True, autoretry_for=(), retry_backoff=False)
 def extract_problematic_accounts(self, sid: str) -> dict:
     log.info("PROBLEMATIC start sid=%s", sid)
-    candidates = detect_problem_accounts(sid)
-    summary = build_problem_cases(sid, candidates)
-    log.info("PROBLEMATIC done sid=%s found=%d", sid, len(candidates))
-    return {"sid": sid, "found": candidates, "summary": summary}
+    result = orchestrate_problem_accounts(sid)
+    found = result.get("found") or []
+    log.info("PROBLEMATIC done sid=%s found=%d", sid, len(found))
+    return {"sid": sid, **result}
 
 
 @app.task(bind=True, name="smoke_task")

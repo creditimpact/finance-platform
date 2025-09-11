@@ -65,12 +65,8 @@ def _make_account_id(account: Mapping[str, Any], idx: int) -> str:
     )
 
     logical_key = compute_logical_account_key(issuer, last4, account_type, opened_date)
-    if logical_key:
-        return logical_key
-
-    heading = account.get("heading_guess")
-    raw = heading if heading else f"account_{idx}"
-    return re.sub(r"[^A-Za-z0-9._-]", "_", str(raw))
+    acc_id = logical_key or f"idx-{idx:03d}"
+    return re.sub(r"[^a-z0-9_-]", "_", str(acc_id).lower())
 
 
 def _load_accounts(path: Path) -> List[Mapping[str, Any]]:
@@ -118,7 +114,7 @@ def _build_account_lookup(accounts: Iterable[Mapping[str, Any]]) -> Dict[str, Ma
 
 
 def build_problem_cases(
-    sid: str, candidates: List[Dict[str, Any]], root: Path | None = None
+    sid: str, candidates: List[Dict[str, Any]] | None = None, root: Path | None = None
 ) -> Dict[str, Any]:
     """Materialise problem case files for ``sid``.
 
@@ -127,9 +123,9 @@ def build_problem_cases(
     sid:
         Session identifier used to locate trace artefacts.
     candidates:
-        List of dictionaries describing problematic accounts.  Each item must
-        include ``account_id`` and may optionally include ``account_index`` and
-        ``confidence``.
+        Optional list describing problematic accounts.  Each item must include
+        ``account_id`` and may optionally include ``account_index`` and
+        ``confidence``.  If omitted, an empty list is assumed.
     root:
         Repository root; defaults to :data:`backend.settings.PROJECT_ROOT`.
     """
@@ -155,7 +151,7 @@ def build_problem_cases(
     out_dir.mkdir(parents=True, exist_ok=True)
     accounts_dir.mkdir(parents=True, exist_ok=True)
 
-    for cand in candidates:
+    for cand in candidates or []:
         if not isinstance(cand, Mapping):
             continue
 
@@ -183,11 +179,12 @@ def build_problem_cases(
             json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
+    cand_list = list(candidates or [])
     index_data = {
         "sid": sid,
         "total": total,
-        "problematic": len(candidates),
-        "problematic_accounts": [c.get("account_id") for c in candidates],
+        "problematic": len(cand_list),
+        "problematic_accounts": [c.get("account_id") for c in cand_list],
     }
     (out_dir / "index.json").write_text(
         json.dumps(index_data, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -197,11 +194,11 @@ def build_problem_cases(
         "PROBLEM_CASES done sid=%s total=%s problematic=%s out=%s",
         sid,
         total,
-        len(candidates),
+        len(cand_list),
         out_dir,
     )
 
-    return {"sid": sid, "total": total, "problematic": len(candidates), "out": str(out_dir)}
+    return {"sid": sid, "total": total, "problematic": len(cand_list), "out": str(out_dir)}
 
 
 __all__ = ["build_problem_cases"]

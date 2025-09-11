@@ -31,12 +31,8 @@ def _make_account_id(account: Mapping[str, Any], idx: int) -> str:
     account_type = _get_field(account, "account_type", "type")
     opened_date = _get_field(account, "opened_date", "date_opened")
     key = compute_logical_account_key(issuer, last4, account_type, opened_date)
-    if key:
-        return key
-    heading = _get_field(account, "heading_guess")
-    if heading:
-        return re.sub(r"[^A-Za-z0-9._-]", "_", str(heading))
-    return f"idx-{idx:03d}"
+    acc_id = key or f"idx-{idx:03d}"
+    return re.sub(r"[^a-z0-9_-]", "_", acc_id.lower())
 
 
 def _normalize_signal(sig: Any) -> List[str]:
@@ -69,7 +65,7 @@ def detect_problem_accounts(sid: str, root: Path | None = None) -> List[Dict[str
             accounts = []
     total = len(accounts)
     results: List[Dict[str, Any]] = []
-    for i, account in enumerate(accounts):
+    for i, account in enumerate(accounts, start=1):
         if not isinstance(account, Mapping):
             continue
         account_id = _make_account_id(account, i)

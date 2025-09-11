@@ -1,47 +1,49 @@
+"""Orchestrate extraction and case building for problematic accounts.
+
+This module provides a thin wrapper that wires together the problem
+extraction and case building steps.  It intentionally contains *no*
+problem detection logic or file writing beyond delegating to the
+specialised modules.  This keeps responsibilities clear:
+
+``problem_extractor``  -> decides which accounts are problematic
+``problem_case_builder`` -> persists per-account case files
+``extract_problematic_accounts`` -> orchestrates the two steps
+"""
+
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List
 
-from backend.core.case_store.storage import CaseStoreError, load_session_case
-from backend.core.orchestrators import (
-    collect_stageA_problem_accounts as get_problem_accounts_for_session,
-)
-
 from .problem_case_builder import build_problem_cases
+from .problem_extractor import detect_problem_accounts
 
 
-def extract_problematic_accounts(session_id: str) -> List[Dict[str, Any]]:
-    """Return problematic account summaries for ``session_id``.
+def extract_problematic_accounts(
+    session_id: str, *, root: Path | None = None
+) -> Dict[str, Any]:
+    """Run problem extraction then build case artifacts.
 
-    If a legacy Case Store file exists we reuse the Stage‑A orchestrator results
-    and normalise them into the legacy structure.  When that file is absent we
-    fall back to :func:`build_problem_cases` which writes new problem case
-    artifacts and returns their summaries.  In both situations a list of
-    dictionaries is returned and the function never raises when no accounts are
-    problematic.
+    Parameters
+    ----------
+    session_id:
+        Identifier of the current session whose accounts should be
+        analysed.
+    root:
+        Optional repository root used for locating artefacts.  When not
+        supplied the defaults from the underlying modules are used.
+
+    Returns
+    -------
+    dict
+        Dictionary containing the list of problematic accounts under the
+        ``found`` key and the builder summary under ``summary``.
     """
 
-    try:
-        load_session_case(session_id)
-    except CaseStoreError:
-        summary = build_problem_cases(session_id)
-        if isinstance(summary, dict):
-            return list(summary.get("summaries") or [])
-        return []
+    candidates: List[Dict[str, Any]] = detect_problem_accounts(session_id, root=root)
+    summary = build_problem_cases(session_id, candidates, root=root)
+    return {"found": candidates, "summary": summary}
 
-    rows = get_problem_accounts_for_session(session_id)
-    out: List[Dict[str, Any]] = []
-    for r in rows:
-        out.append(
-            {
-                "account_id": r["account_id"],
-                "bureau": r["bureau"],
-                "primary_issue": r["primary_issue"],
-                "tier": r["tier"],
-                "problem_reasons": r.get("problem_reasons", []),
-                "decision_source": r.get("decision_source", "rules"),
-                "confidence": float(r.get("confidence", 0.0)),
-                "fields_used": r.get("fields_used", []),
-            }
-        )
-    return out
+
+__all__ = ["extract_problematic_accounts"]
+

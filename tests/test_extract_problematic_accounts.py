@@ -46,71 +46,39 @@ def _mock_dependencies(monkeypatch, sections):
         "backend.core.logic.report_analysis.analyze_report.analyze_credit_report",
         lambda *a, **k: sections,
     )
+def test_extract_problematic_accounts_orchestrates(tmp_path, monkeypatch):
+    """The public helper orchestrates extraction then case building."""
+    sid = "S321"
 
-
-def test_extract_problematic_accounts_adapter(monkeypatch):
-    import backend.core.logic.report_analysis.extract_problematic_accounts as epa
-
-    # Pretend a legacy Case Store file exists so the adapter uses Stage‑A data
-    monkeypatch.setattr(epa, "load_session_case", lambda sid: object())
-
-    rows = [
-        {
-            "account_id": "rules",
-            "bureau": "Experian",
-            "tier": "none",
-            "primary_issue": "unknown",
-            "problem_reasons": ["r1"],
-            "decision_source": "rules",
-            "fields_used": ["f1"],
-        },
-        {
-            "account_id": "ai_good",
-            "bureau": "TransUnion",
-            "tier": "Tier2",
-            "primary_issue": "late",
-            "confidence": 0.8,
-            "problem_reasons": ["ai"],
-            "decision_source": "ai",
-        }
-    ]
-
-    monkeypatch.setattr(epa, "get_problem_accounts_for_session", lambda sid: rows)
-
-    result = epa.extract_problematic_accounts("s1")
-
-    assert {r["account_id"] for r in result} == {"rules", "ai_good"}
-    rules = next(r for r in result if r["account_id"] == "rules")
-    assert rules["tier"] == "none"
-    assert rules["primary_issue"] == "unknown"
-    assert rules["confidence"] == 0.0
-
-    ai_good = next(r for r in result if r["account_id"] == "ai_good")
-    assert ai_good["tier"] == "Tier2"
-    assert ai_good["confidence"] == 0.8
-
-
-def test_extract_problematic_accounts_builder_fallback(monkeypatch):
-    import backend.core.logic.report_analysis.extract_problematic_accounts as epa
-    from backend.core.case_store.errors import CaseStoreError
-
-    def fake_load(_sid):
-        raise CaseStoreError(code="NOT_FOUND", message="missing")
-
-    monkeypatch.setattr(epa, "load_session_case", fake_load)
-    monkeypatch.setattr(
-        epa,
-        "get_problem_accounts_for_session",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("legacy path")),
-    )
-    monkeypatch.setattr(
-        epa,
-        "build_problem_cases",
-        lambda sid: {"summaries": [{"account_id": "acc1"}]},
+    from backend.core.logic.report_analysis import (
+        problem_case_builder,
+        problem_extractor,
     )
 
-    result = epa.extract_problematic_accounts("s1")
-    assert result == [{"account_id": "acc1"}]
+    # Redirect project root for submodules
+    monkeypatch.setattr(problem_extractor, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(problem_case_builder, "PROJECT_ROOT", tmp_path)
+
+    # Create minimal accounts file
+    acc_path = (
+        tmp_path
+        / "traces"
+        / "blocks"
+        / sid
+        / "accounts_table"
+        / "accounts_from_full.json"
+    )
+    acc_path.parent.mkdir(parents=True, exist_ok=True)
+    acc_path.write_text(
+        "{\"accounts\":[{\"account_index\":1,\"fields\":{\"past_due_amount\":50}}]}"
+    )
+
+    result = extract_problematic_accounts(sid, root=tmp_path)
+
+    assert len(result["found"]) == 1
+    cand_id = result["found"][0]["account_id"]
+    assert (tmp_path / "cases" / sid / "accounts" / f"{cand_id}.json").exists()
+    assert result["summary"]["problematic"] == 1
 
 
 def test_extract_problematic_accounts_returns_models(monkeypatch):

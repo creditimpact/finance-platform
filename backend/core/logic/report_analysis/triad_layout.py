@@ -4,6 +4,8 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Tuple
 
+from backend.config import RAW_TRIAD_FROM_X
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,12 +93,13 @@ def detect_triads(
             eq_band=eq_band,
         )
         layouts[page] = layout
-        logger.info(
-            "TRIAD_LAYOUT page=%s label=%s tu=%s xp=%s eq=%s",
-            page,
-            layout.label_band,
-            layout.tu_band,
-            layout.xp_band,
-            layout.eq_band,
-        )
+        if RAW_TRIAD_FROM_X:
+            logger.info(
+                "TRIAD_LAYOUT page=%s label=%s tu=%s xp=%s eq=%s",
+                page,
+                layout.label_band,
+                layout.tu_band,
+                layout.xp_band,
+                layout.eq_band,
+            )
     return layouts

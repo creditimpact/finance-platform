@@ -98,7 +98,9 @@ def _load_accounts(path: Path) -> List[Mapping[str, Any]]:
     return out
 
 
-def _build_account_lookup(accounts: Iterable[Mapping[str, Any]]) -> Dict[str, Mapping[str, Any]]:
+def _build_account_lookup(
+    accounts: Iterable[Mapping[str, Any]]
+) -> Dict[str, Mapping[str, Any]]:
     """Build a mapping of possible identifiers to account records."""
 
     by_key: Dict[str, Mapping[str, Any]] = {}
@@ -130,8 +132,6 @@ def build_problem_cases(
         Repository root; defaults to :data:`backend.settings.PROJECT_ROOT`.
     """
 
-    logger.info("PROBLEM_CASES start sid=%s", sid)
-
     root_path = Path(root or PROJECT_ROOT)
     acc_path = (
         root_path
@@ -150,6 +150,8 @@ def build_problem_cases(
     accounts_dir = out_dir / "accounts"
     out_dir.mkdir(parents=True, exist_ok=True)
     accounts_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info("PROBLEM_CASES start sid=%s total=%s out=%s", sid, total, out_dir)
 
     for cand in candidates or []:
         if not isinstance(cand, Mapping):
@@ -198,8 +200,12 @@ def build_problem_cases(
         out_dir,
     )
 
-    return {"sid": sid, "total": total, "problematic": len(cand_list), "out": str(out_dir)}
+    return {
+        "sid": sid,
+        "total": total,
+        "problematic": len(cand_list),
+        "out": str(out_dir),
+    }
 
 
 __all__ = ["build_problem_cases"]
-

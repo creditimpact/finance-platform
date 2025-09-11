@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 
 def _get_field(account: Mapping[str, Any], *names: str) -> Any:
     """Return the first non-null field matching ``names`` from account or its fields."""
-    fields = account.get("fields") if isinstance(account.get("fields"), Mapping) else None
+    fields = (
+        account.get("fields") if isinstance(account.get("fields"), Mapping) else None
+    )
     for name in names:
         if fields and fields.get(name) is not None:
             return fields.get(name)
@@ -52,9 +54,13 @@ def detect_problem_accounts(sid: str, root: Path | None = None) -> List[Dict[str
     """Return problematic accounts for ``sid`` based on rule evaluation."""
     base = Path(root or PROJECT_ROOT)
     logger.info("PROBLEM_EXTRACT start sid=%s", sid)
-    acc_path = base / "traces" / "blocks" / sid / "accounts_table" / "accounts_from_full.json"
+    acc_path = (
+        base / "traces" / "blocks" / sid / "accounts_table" / "accounts_from_full.json"
+    )
     accounts: List[Mapping[str, Any]] = []
-    if acc_path.exists():
+    if not acc_path.exists():
+        logger.error("accounts_from_full.json missing sid=%s path=%s", sid, acc_path)
+    else:
         try:
             data = json.loads(acc_path.read_text(encoding="utf-8"))
             if isinstance(data, Mapping):
@@ -62,6 +68,9 @@ def detect_problem_accounts(sid: str, root: Path | None = None) -> List[Dict[str
             elif isinstance(data, list):
                 accounts = list(data)
         except Exception:
+            logger.error(
+                "failed to read accounts_from_full.json sid=%s path=%s", sid, acc_path
+            )
             accounts = []
     total = len(accounts)
     results: List[Dict[str, Any]] = []
@@ -69,10 +78,18 @@ def detect_problem_accounts(sid: str, root: Path | None = None) -> List[Dict[str
         if not isinstance(account, Mapping):
             continue
         account_id = _make_account_id(account, i)
-        fields = account.get("fields") if isinstance(account.get("fields"), Mapping) else account
+        fields = (
+            account.get("fields")
+            if isinstance(account.get("fields"), Mapping)
+            else account
+        )
         decision = evaluate_account_problem(dict(fields))
         problem_reasons = list(decision.get("problem_reasons") or [])
-        signals = (decision.get("debug", {}) if isinstance(decision.get("debug"), Mapping) else {}).get("signals") or []
+        signals = (
+            decision.get("debug", {})
+            if isinstance(decision.get("debug"), Mapping)
+            else {}
+        ).get("signals") or []
         tags: List[str] = []
         for sig in signals:
             for t in _normalize_signal(sig):

@@ -1,25 +1,38 @@
+"""Materialise per-account problem case files.
+
+This module exposes :func:`build_problem_cases` which, given a list of
+candidate accounts, writes one JSON file per account under
+``cases/<sid>/accounts`` and creates a summary ``index.json`` for the
+session.  The builder is intentionally dumb – it does not attempt to
+determine which accounts are problematic; that decision must be supplied
+via ``candidates``.
+
+The function returns a small summary dictionary describing the work
+performed so callers can easily log or inspect the results.
+"""
+
 from __future__ import annotations
 
 import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Mapping, MutableMapping
+from typing import Any, Dict, Iterable, List, Mapping
 
 from backend.settings import PROJECT_ROOT
 
 from .keys import compute_logical_account_key
-from .problem_detection import build_problem_reasons, evaluate_account_problem
 
 logger = logging.getLogger(__name__)
 
 
 def _make_account_id(account: Mapping[str, Any], idx: int) -> str:
-    """Return a filesystem-friendly account identifier.
+    """Return a filesystem‑friendly identifier for ``account``.
 
-    Attempts to compute a stable logical key using identifying fields when
-    available.  Falls back to a deterministic surrogate based on the heading
-    slug or account index.
+    The builder needs a way to match candidate ``account_id`` values with
+    the accounts loaded from ``accounts_from_full.json``.  When possible we
+    compute a logical key using identifying fields; otherwise a deterministic
+    surrogate based on the heading or list position is used.
     """
 
     fields = account.get("fields") or {}
@@ -56,147 +69,140 @@ def _make_account_id(account: Mapping[str, Any], idx: int) -> str:
         return logical_key
 
     heading = account.get("heading_guess")
-    if heading:
-        raw = heading
-    else:
-        raw = f"account_{idx}"
-
+    raw = heading if heading else f"account_{idx}"
     return re.sub(r"[^A-Za-z0-9._-]", "_", str(raw))
 
 
-def _derive_problems(
-    account: Mapping[str, Any]
-) -> tuple[list[str], list[str], float | None]:
-    """Return problem tags, reasons, and optional confidence for ``account``.
+def _load_accounts(path: Path) -> List[Mapping[str, Any]]:
+    """Return account dictionaries from ``accounts_from_full.json``.
 
-    Detection relies on :func:`evaluate_account_problem` which emits ``problem_reasons``
-    and debug ``signals``.  Those signals are normalized into concise tags.  When
-    the detector does not return a decision, we fall back to
-    :func:`build_problem_reasons`.
+    The file can either contain a JSON object with an ``accounts`` key or a
+    bare list.  Errors are swallowed and result in an empty list.
     """
 
-    fields = (account.get("fields") or {}) if isinstance(account, Mapping) else {}
+    if not path.exists():
+        return []
 
-    tags: list[str] = []
-    reasons: list[str] = []
-    confidence: float | None = None
-
-    decision: Mapping[str, Any] | None = None
     try:
-        decision = evaluate_account_problem(dict(fields))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        decision = None
+        return []
 
-    if decision:
-        reasons = list(decision.get("problem_reasons") or [])
-        signals = (
-            decision.get("debug", {})
-            if isinstance(decision.get("debug"), Mapping)
-            else {}
-        ).get("signals") or []
-
-        def _norm(s: Any) -> str:
-            return str(s).strip().lower().replace(" ", "_").replace("status_", "")
-
-        tags = [_norm(s) for s in signals]
-
-        if "confidence" in decision:
-            try:
-                confidence = float(decision["confidence"])
-            except Exception:
-                confidence = None
+    if isinstance(data, Mapping):
+        accounts = data.get("accounts") or []
+    elif isinstance(data, list):
+        accounts = data
     else:
-        # Fallback when detector fails or returns nothing
-        try:
-            reasons = build_problem_reasons(dict(fields))
-        except Exception:
-            reasons = []
+        accounts = []
 
-    return tags, reasons, confidence
+    out: List[Mapping[str, Any]] = []
+    for acc in accounts:
+        if isinstance(acc, Mapping):
+            out.append(acc)
+    return out
 
 
-def build_problem_cases(session_id: str, root: Path | None = None) -> dict:
-    """Detect problematic accounts from ``accounts_from_full.json``.
+def _build_account_lookup(accounts: Iterable[Mapping[str, Any]]) -> Dict[str, Mapping[str, Any]]:
+    """Build a mapping of possible identifiers to account records."""
+
+    by_key: Dict[str, Mapping[str, Any]] = {}
+    for idx, acc in enumerate(accounts, start=1):
+        account_index = acc.get("account_index")
+        if isinstance(account_index, int):
+            by_key[str(account_index)] = acc
+
+        acc_id = _make_account_id(acc, idx)
+        by_key[acc_id] = acc
+
+    return by_key
+
+
+def build_problem_cases(
+    sid: str, candidates: List[Dict[str, Any]], root: Path | None = None
+) -> Dict[str, Any]:
+    """Materialise problem case files for ``sid``.
 
     Parameters
     ----------
-    session_id:
-        Identifier used to locate ``traces/blocks/<sid>``.
+    sid:
+        Session identifier used to locate trace artefacts.
+    candidates:
+        List of dictionaries describing problematic accounts.  Each item must
+        include ``account_id`` and may optionally include ``account_index`` and
+        ``confidence``.
     root:
-        Repository root; defaults to :data:`~backend.settings.PROJECT_ROOT`.
+        Repository root; defaults to :data:`backend.settings.PROJECT_ROOT`.
     """
 
-    logger.info("PROBLEM_CASES start sid=%s", session_id)
+    logger.info("PROBLEM_CASES start sid=%s", sid)
 
-    base = (root or PROJECT_ROOT) / "traces" / "blocks" / session_id / "accounts_table"
-    acc_path = base / "accounts_from_full.json"
-    accounts: list[MutableMapping[str, Any]] = []
-    if acc_path.exists():
-        try:
-            data = json.loads(acc_path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                accounts = list(data.get("accounts") or [])
-            elif isinstance(data, list):
-                accounts = list(data)
-        except Exception:
-            accounts = []
+    root_path = Path(root or PROJECT_ROOT)
+    acc_path = (
+        root_path
+        / "traces"
+        / "blocks"
+        / sid
+        / "accounts_table"
+        / "accounts_from_full.json"
+    )
 
+    accounts = _load_accounts(acc_path)
     total = len(accounts)
+    lookup = _build_account_lookup(accounts)
 
-    out_dir = (root or PROJECT_ROOT) / "cases" / session_id
-    accounts_out = out_dir / "accounts"
-    accounts_out.mkdir(parents=True, exist_ok=True)
-
-    summaries: list[dict[str, Any]] = []
-    for idx, acc in enumerate(accounts, start=1):
-        if not isinstance(acc, Mapping):
-            continue
-        account_id = _make_account_id(acc, idx)
-        tags, reasons, confidence = _derive_problems(acc)
-        if not tags and not reasons:
-            continue
-        case = {
-            "sid": session_id,
-            "account_id": account_id,
-            "source": "accounts_from_full",
-            "account": acc,
-            "problem_tags": tags,
-            "problem_reasons": reasons,
-        }
-        if confidence is not None:
-            case["confidence"] = confidence
-        (accounts_out / f"{account_id}.json").write_text(
-            json.dumps(case, indent=2), encoding="utf-8"
-        )
-        summaries.append(
-            {
-                "account_id": account_id,
-                "problem_tags": tags,
-                "problem_reasons": reasons,
-            }
-        )
-
-    index = {
-        "sid": session_id,
-        "total": total,
-        "problematic": len(summaries),
-        "problematic_accounts": summaries,
-    }
+    out_dir = root_path / "cases" / sid
+    accounts_dir = out_dir / "accounts"
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "index.json").write_text(json.dumps(index, indent=2), encoding="utf-8")
+    accounts_dir.mkdir(parents=True, exist_ok=True)
+
+    for cand in candidates:
+        if not isinstance(cand, Mapping):
+            continue
+
+        account_id = cand.get("account_id")
+        if account_id is None:
+            continue
+
+        # Locate full account record either by provided index or account_id
+        full_acc: Mapping[str, Any] | None = None
+        if isinstance(cand.get("account_index"), int):
+            full_acc = lookup.get(str(cand["account_index"]))
+        if full_acc is None:
+            full_acc = lookup.get(str(account_id), {})
+
+        payload = {
+            "sid": sid,
+            "account_id": account_id,
+            "problem_tags": cand.get("problem_tags") or [],
+            "problem_reasons": cand.get("problem_reasons") or [],
+            "confidence": cand.get("confidence"),
+            "account": full_acc or {},
+        }
+
+        (accounts_dir / f"{account_id}.json").write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+    index_data = {
+        "sid": sid,
+        "total": total,
+        "problematic": len(candidates),
+        "problematic_accounts": [c.get("account_id") for c in candidates],
+    }
+    (out_dir / "index.json").write_text(
+        json.dumps(index_data, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
     logger.info(
         "PROBLEM_CASES done sid=%s total=%s problematic=%s out=%s",
-        session_id,
+        sid,
         total,
-        len(summaries),
+        len(candidates),
         out_dir,
     )
 
-    return {
-        "sid": session_id,
-        "total": total,
-        "problematic": len(summaries),
-        "out_dir": str(out_dir),
-        "summaries": summaries,
-    }
+    return {"sid": sid, "total": total, "problematic": len(candidates), "out": str(out_dir)}
+
+
+__all__ = ["build_problem_cases"]
+

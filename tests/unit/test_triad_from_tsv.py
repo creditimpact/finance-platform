@@ -330,3 +330,28 @@ def test_triad_guard_skip(tmp_path: Path, caplog) -> None:
     acc = data["accounts"][0]
     assert acc["triad_fields"]["equifax"]["creditor_remarks"] == "Fannie"
     assert "TRIAD_GUARD_SKIP" in caplog.text
+
+
+def test_triad_guard_skip_flag_off(tmp_path: Path, caplog) -> None:
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    create_triad_tsv_guard_skip(tsv_path)
+
+    os.environ["RAW_TRIAD_FROM_X"] = "0"
+    os.environ["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
+    os.environ["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    sys.argv = [
+        "split_accounts_from_tsv.py",
+        "--full",
+        str(tsv_path),
+        "--json_out",
+        str(json_path),
+    ]
+    logging.basicConfig(level=logging.INFO)
+    sys.modules.pop("backend.config", None)
+    sys.modules.pop("scripts.split_accounts_from_tsv", None)
+    with caplog.at_level(logging.INFO):
+        runpy.run_module("scripts.split_accounts_from_tsv", run_name="__main__")
+
+    assert json_path.exists()
+    assert "TRIAD_GUARD_SKIP" not in caplog.text

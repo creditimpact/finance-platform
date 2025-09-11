@@ -1,6 +1,9 @@
 import json
+import logging
 import os
+import runpy
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -58,6 +61,82 @@ def create_triad_tsv(path: Path) -> None:
         "2\t5\t50\t51\t60\t80\tX\n",
         "2\t5\t50\t51\t160\t180\tY\n",
         "2\t5\t50\t51\t260\t280\tZ\n",
+    ]
+    path.write_text(header + "".join(rows), encoding="utf-8")
+
+
+def create_triad_tsv_cross_page(path: Path) -> None:
+    header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+    rows = [
+        # page 1 header row
+        "1\t1\t10\t11\t50\t100\tTransUnion\n",
+        "1\t1\t10\t11\t150\t200\tExperian\n",
+        "1\t1\t10\t11\t250\t300\tEquifax\n",
+        # account number row on page 1
+        "1\t2\t20\t21\t0\t20\tAccount #\n",
+        "1\t2\t20\t21\t60\t80\tTU999\n",
+        "1\t2\t20\t21\t160\t180\tXP999\n",
+        "1\t2\t20\t21\t260\t280\tEQ999\n",
+        # page 2 field without header
+        "2\t1\t30\t31\t0\t20\tHigh Balance:\n",
+        "2\t1\t30\t31\t60\t80\t1000\n",
+        "2\t1\t30\t31\t160\t180\t2000\n",
+        "2\t1\t30\t31\t260\t280\t3000\n",
+        # bare sentinel line should stop triad
+        "2\t2\t40\t41\t0\t40\tTwo-Year Payment History\n",
+        # row after sentinel should be ignored
+        "2\t3\t50\t51\t0\t20\tPayment Status:\n",
+        "2\t3\t50\t51\t60\t80\tCurrent\n",
+        "2\t3\t50\t51\t160\t180\tCurrent\n",
+        "2\t3\t50\t51\t260\t280\tCurrent\n",
+    ]
+    path.write_text(header + "".join(rows), encoding="utf-8")
+
+
+def create_triad_tsv_bare_header(path: Path) -> None:
+    header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+    rows = [
+        # page 1 header row
+        "1\t1\t10\t11\t50\t100\tTransUnion\n",
+        "1\t1\t10\t11\t150\t200\tExperian\n",
+        "1\t1\t10\t11\t250\t300\tEquifax\n",
+        # account and balance rows on page 1
+        "1\t2\t20\t21\t0\t20\tAccount #\n",
+        "1\t2\t20\t21\t60\t80\tTU111\n",
+        "1\t2\t20\t21\t160\t180\tXP111\n",
+        "1\t2\t20\t21\t260\t280\tEQ111\n",
+        "1\t3\t30\t31\t0\t20\tHigh Balance:\n",
+        "1\t3\t30\t31\t60\t80\t1000\n",
+        "1\t3\t30\t31\t160\t180\t2000\n",
+        "1\t3\t30\t31\t260\t280\t3000\n",
+        # standalone bureau name on new page should stop triad
+        "2\t1\t10\t11\t50\t100\tTransunion\n",
+        # row after sentinel should be ignored
+        "2\t2\t20\t21\t0\t20\tAccount Type:\n",
+        "2\t2\t20\t21\t60\t80\tMortgage\n",
+        "2\t2\t20\t21\t160\t180\tMortgage\n",
+        "2\t2\t20\t21\t260\t280\tMortgage\n",
+    ]
+    path.write_text(header + "".join(rows), encoding="utf-8")
+
+
+def create_triad_tsv_guard_skip(path: Path) -> None:
+    header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+    rows = [
+        # header row
+        "1\t1\t10\t11\t50\t100\tTransUnion\n",
+        "1\t1\t10\t11\t150\t200\tExperian\n",
+        "1\t1\t10\t11\t250\t300\tEquifax\n",
+        # account anchor
+        "1\t2\t20\t21\t0\t20\tAccount #\n",
+        "1\t2\t20\t21\t60\t80\tTU111\n",
+        "1\t2\t20\t21\t160\t180\tXP111\n",
+        "1\t2\t20\t21\t260\t280\tEQ111\n",
+        # creditor remarks with EQ value
+        "1\t3\t30\t31\t0\t20\tCreditor Remarks:\n",
+        "1\t3\t30\t31\t260\t280\tFannie\n",
+        # continuation token outside all bands
+        "1\t4\t40\t41\t400\t420\tMae\n",
     ]
     path.write_text(header + "".join(rows), encoding="utf-8")
 
@@ -124,8 +203,11 @@ def test_triad_from_tsv(tmp_path: Path) -> None:
     data = json.loads(json_path.read_text())
     acc = data["accounts"][0]
     assert acc["triad_fields"]["transunion"]["account_number_display"]
-    assert acc["triad_fields"]["equifax"]["creditor_remarks"].endswith("Fannie Mae account")
+    assert acc["triad_fields"]["equifax"]["creditor_remarks"].endswith(
+        "Fannie Mae account"
+    )
     labels = [r["label"].lower() for r in acc["triad_rows"]]
+    assert acc["triad_rows"][0]["label"] == "Account #"
     assert "two-year payment history" not in labels
 
 
@@ -159,3 +241,92 @@ def test_triad_from_tsv_with_punctuation(tmp_path: Path) -> None:
     assert acc["triad_fields"]["equifax"]["creditor_remarks"].endswith(
         "balance / Fannie Mae account"
     )
+
+
+def test_cross_page_carry_and_sentinel(tmp_path: Path) -> None:
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    create_triad_tsv_cross_page(tsv_path)
+
+    env = os.environ.copy()
+    env["RAW_TRIAD_FROM_X"] = "1"
+    env["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    subprocess.run(
+        [
+            "python",
+            "scripts/split_accounts_from_tsv.py",
+            "--full",
+            str(tsv_path),
+            "--json_out",
+            str(json_path),
+        ],
+        check=True,
+        env=env,
+        cwd=Path(__file__).resolve().parents[2],
+    )
+
+    data = json.loads(json_path.read_text())
+    acc = data["accounts"][0]
+    assert acc["triad_fields"]["transunion"]["high_balance"] == "1000"
+    assert acc["triad_fields"]["experian"]["high_balance"] == "2000"
+    assert acc["triad_fields"]["equifax"]["account_number_display"] == "EQ999"
+    labels = [r["label"] for r in acc["triad_rows"]]
+    assert labels[0] == "Account #"
+    assert "Two-Year Payment History" not in labels
+    assert "Payment Status" not in labels
+
+
+def test_standalone_bureau_header_stops(tmp_path: Path) -> None:
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    create_triad_tsv_bare_header(tsv_path)
+
+    env = os.environ.copy()
+    env["RAW_TRIAD_FROM_X"] = "1"
+    env["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    subprocess.run(
+        [
+            "python",
+            "scripts/split_accounts_from_tsv.py",
+            "--full",
+            str(tsv_path),
+            "--json_out",
+            str(json_path),
+        ],
+        check=True,
+        env=env,
+        cwd=Path(__file__).resolve().parents[2],
+    )
+
+    data = json.loads(json_path.read_text())
+    acc = data["accounts"][0]
+    labels = [r["label"] for r in acc["triad_rows"]]
+    assert "Account Type" not in labels
+    assert acc["triad_fields"]["equifax"].get("account_type") == ""
+
+
+def test_triad_guard_skip(tmp_path: Path, caplog) -> None:
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    create_triad_tsv_guard_skip(tsv_path)
+
+    os.environ["RAW_TRIAD_FROM_X"] = "1"
+    os.environ["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
+    os.environ["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    sys.argv = [
+        "split_accounts_from_tsv.py",
+        "--full",
+        str(tsv_path),
+        "--json_out",
+        str(json_path),
+    ]
+    logging.basicConfig(level=logging.INFO)
+    with caplog.at_level(logging.INFO):
+        runpy.run_module("scripts.split_accounts_from_tsv", run_name="__main__")
+
+    data = json.loads(json_path.read_text())
+    acc = data["accounts"][0]
+    assert acc["triad_fields"]["equifax"]["creditor_remarks"] == "Fannie"
+    assert "TRIAD_GUARD_SKIP" in caplog.text

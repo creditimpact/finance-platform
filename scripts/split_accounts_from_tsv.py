@@ -313,12 +313,16 @@ def split_accounts(
                     continue
                 label_clean = " ".join(label_txt.split())
                 is_account_num = label_clean == "Account #"
-                if label_txt and (label_txt.endswith(":") or is_account_num):
-                    label_core = label_txt.rstrip(":")
+                if label_txt and (
+                    label_txt.endswith(":") or label_txt.endswith("#") or is_account_num
+                ):
+                    label_core = label_txt.rstrip(":#").strip()
                     if _norm(label_core) == "twoyearpaymenthistory":
                         open_row = None
                         break
-                    key = LABEL_MAP.get(label_core)
+                    key = LABEL_MAP.get(label_txt.rstrip(":")) or LABEL_MAP.get(
+                        label_core
+                    )
                     row = {
                         "triad_row": True,
                         "label": label_core,

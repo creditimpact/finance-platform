@@ -14,8 +14,12 @@ import json
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Tuple
 from bisect import bisect_right
+from backend.config import RAW_JOIN_TOKENS_WITH_SPACE
+
+if TYPE_CHECKING:  # pragma: no cover
+    from backend.core.logic.report_analysis.block_exporter import join_tokens_with_space
 
 ACCOUNT_RE = re.compile(r"\bAccount\b.*#", re.IGNORECASE)
 STOP_MARKER_NORM = "publicinformation"
@@ -85,7 +89,14 @@ def _read_tokens(
 
     lines: List[Dict[str, Any]] = []
     for page, line in sorted(tokens_by_line.keys()):
-        text = "".join(tok.get("text", "") for tok in tokens_by_line[(page, line)])
+        tokens = [tok.get("text", "") for tok in tokens_by_line[(page, line)]]
+        if RAW_JOIN_TOKENS_WITH_SPACE:
+            from backend.core.logic.report_analysis.block_exporter import (
+                join_tokens_with_space,
+            )
+            text = join_tokens_with_space(tokens)
+        else:
+            text = "".join(tokens)
         lines.append({"page": page, "line": line, "text": text})
     return tokens_by_line, lines
 

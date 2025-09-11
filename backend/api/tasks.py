@@ -10,9 +10,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from backend.core.logic.report_analysis.block_exporter import export_stage_a
-from backend.core.logic.report_analysis.extract_problematic_accounts import (
-    extract_problematic_accounts as extract_problematic_accounts_logic,
-)
+from backend.core.logic.report_analysis.problem_extractor import detect_problem_accounts
+from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
 from backend.core.logic.report_analysis.text_provider import (
     extract_and_cache_text,
     load_cached_text,
@@ -145,31 +144,13 @@ def stage_a_task(self, sid: str) -> dict:
     return safe_result
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
 def extract_problematic_accounts(self, sid: str) -> dict:
-    """Extract problematic accounts for ``sid``.
-
-    This task is defensive and does not rely on previous task outputs. It always
-    returns a JSON-serializable dictionary.
-    """
     log.info("PROBLEMATIC start sid=%s", sid)
-    try:
-        found = extract_problematic_accounts_logic(sid) or []
-        result = {"sid": sid, "found": found}
-        safe_result = _json_safe(result)
-        try:
-            json.dumps(safe_result, ensure_ascii=False)
-        except TypeError as e:
-            logger.error(
-                "Non-JSON value at tasks.extract_problematic_accounts return: %s",
-                e,
-            )
-            raise
-        log.info("PROBLEMATIC done sid=%s found=%s", sid, len(found))
-        return safe_result
-    except Exception:
-        logger.exception("PROBLEMATIC failed sid=%s", sid)
-        raise
+    candidates = detect_problem_accounts(sid)
+    summary = build_problem_cases(sid, candidates)
+    log.info("PROBLEMATIC done sid=%s found=%d", sid, len(candidates))
+    return {"sid": sid, "found": candidates, "summary": summary}
 
 
 @app.task(bind=True, name="smoke_task")

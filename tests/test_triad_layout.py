@@ -1,0 +1,28 @@
+import logging
+
+from backend.core.logic.report_analysis.triad_layout import detect_triads
+
+
+def test_detect_triads_with_punctuation(caplog):
+    tokens = [
+        {"text": "Transunion", "x0": 160, "x1": 240},
+        {"text": "\u00ae", "x0": 241, "x1": 242},
+        {"text": "Experian", "x0": 300, "x1": 400},
+        {"text": "\u00ae", "x0": 401, "x1": 402},
+        {"text": "Equifax", "x0": 460, "x1": 540},
+        {"text": "\u00ae", "x0": 541, "x1": 542},
+    ]
+    tokens_by_line = {(1, 1): tokens}
+    with caplog.at_level(logging.INFO):
+        layouts = detect_triads(tokens_by_line)
+    assert 1 in layouts
+    layout = layouts[1]
+    assert layout.label_band == (0.0, 125.0)
+    assert layout.tu_band == (125.0, 275.0)
+    assert layout.xp_band == (275.0, 425.0)
+    assert layout.eq_band == (425.0, 575.0)
+    assert any(
+        rec.message
+        == "TRIAD_LAYOUT page=1 label=(0.0,125.0) tu=(125.0,275.0) xp=(275.0,425.0) eq=(425.0,575.0)"
+        for rec in caplog.records
+    )

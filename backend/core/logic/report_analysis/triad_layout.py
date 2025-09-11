@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Tuple
 
@@ -46,6 +47,11 @@ def norm(s: str) -> str:
     return " ".join((s or "").lower().split())
 
 
+def norm_loose(s: str) -> str:
+    s = re.sub(r"[\W_]+", " ", (s or "").lower())
+    return " ".join(s.split())
+
+
 def detect_triads(
     tokens_by_line: Dict[Tuple[int, int], List[dict]]
 ) -> Dict[int, TriadLayout]:
@@ -56,29 +62,24 @@ def detect_triads(
 
     layouts: Dict[int, TriadLayout] = {}
     for page, lines in by_page.items():
-        header: List[dict] | None = None
+        mids: Dict[str, float] | None = None
         for line_no, toks in sorted(lines.items()):
-            text = " ".join(t.get("text", "") for t in toks)
-            if norm(text) == "transunion experian equifax":
-                header = toks
+            found: Dict[str, dict] = {}
+            for t in toks:
+                tnorm = norm_loose(str(t.get("text", "")))
+                if (
+                    tnorm in {"transunion", "experian", "equifax"}
+                    and tnorm not in found
+                ):
+                    found[tnorm] = t
+            if len(found) == 3:
+                mids = {k: mid_x(v) for k, v in found.items()}
                 break
-        if not header:
+        if not mids or len(mids) != 3:
             continue
-
-        mids: Dict[str, float] = {}
-        for t in header:
-            tnorm = norm(str(t.get("text", "")))
-            if tnorm == "transunion":
-                mids["tu"] = mid_x(t)
-            elif tnorm == "experian":
-                mids["xp"] = mid_x(t)
-            elif tnorm == "equifax":
-                mids["eq"] = mid_x(t)
-        if len(mids) != 3:
-            continue
-        tu = mids["tu"]
-        xp = mids["xp"]
-        eq = mids["eq"]
+        tu = mids["transunion"]
+        xp = mids["experian"]
+        eq = mids["equifax"]
         d12 = xp - tu
         d23 = eq - xp
         label_band = (0.0, tu - d12 / 2.0)
@@ -95,11 +96,15 @@ def detect_triads(
         layouts[page] = layout
         if RAW_TRIAD_FROM_X:
             logger.info(
-                "TRIAD_LAYOUT page=%s label=%s tu=%s xp=%s eq=%s",
+                "TRIAD_LAYOUT page=%s label=(%.1f,%.1f) tu=(%.1f,%.1f) xp=(%.1f,%.1f) eq=(%.1f,%.1f)",
                 page,
-                layout.label_band,
-                layout.tu_band,
-                layout.xp_band,
-                layout.eq_band,
+                label_band[0],
+                label_band[1],
+                tu_band[0],
+                tu_band[1],
+                xp_band[0],
+                xp_band[1],
+                eq_band[0],
+                eq_band[1],
             )
     return layouts

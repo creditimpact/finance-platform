@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, Tuple, List
 import logging
+from dataclasses import dataclass
+from typing import Dict, List, Literal, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +25,28 @@ def mid_x(tok: dict) -> float:
         return 0.0
 
 
+def assign_band(
+    token: dict, layout: TriadLayout
+) -> Literal["label", "tu", "xp", "eq", "none"]:
+    x = mid_x(token)
+    for name, (_, R) in [
+        ("label", layout.label_band),
+        ("tu", layout.tu_band),
+        ("xp", layout.xp_band),
+        ("eq", layout.eq_band),
+    ]:
+        if x <= R + 0.1:  # small right-edge tolerance
+            return name
+    return "none"
+
+
 def norm(s: str) -> str:
     return " ".join((s or "").lower().split())
 
 
-def detect_triads(tokens_by_line: Dict[Tuple[int, int], List[dict]]) -> Dict[int, TriadLayout]:
+def detect_triads(
+    tokens_by_line: Dict[Tuple[int, int], List[dict]]
+) -> Dict[int, TriadLayout]:
     """Detect per-page triad layouts from token lines."""
     by_page: Dict[int, Dict[int, List[dict]]] = {}
     for (page, line), toks in tokens_by_line.items():
@@ -66,7 +83,13 @@ def detect_triads(tokens_by_line: Dict[Tuple[int, int], List[dict]]) -> Dict[int
         tu_band = (tu - d12 / 2.0, tu + d12 / 2.0)
         xp_band = (tu + d12 / 2.0, xp + d23 / 2.0)
         eq_band = (xp + d23 / 2.0, eq + d23 / 2.0)
-        layout = TriadLayout(page=page, label_band=label_band, tu_band=tu_band, xp_band=xp_band, eq_band=eq_band)
+        layout = TriadLayout(
+            page=page,
+            label_band=label_band,
+            tu_band=tu_band,
+            xp_band=xp_band,
+            eq_band=eq_band,
+        )
         layouts[page] = layout
         logger.info(
             "TRIAD_LAYOUT page=%s label=%s tu=%s xp=%s eq=%s",

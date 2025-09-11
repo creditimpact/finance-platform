@@ -49,6 +49,35 @@ NON_COLON_LABELS = {
 
 _BUREAU_HDRS = {"transunion", "experian", "equifax"}
 
+# Canonical label -> normalized field name
+LABEL_MAP = {
+    "Account #": "account_number",  # treat as field label even though it ends with '#'
+    "High Balance": "high_balance",
+    "Last Verified": "last_verified",
+    "Date of Last Activity": "date_of_last_activity",
+    "Date Reported": "date_reported",
+    "Date Opened": "date_opened",
+    "Balance Owed": "balance_owed",
+    "Closed Date": "closed_date",
+    "Account Rating": "account_rating",
+    "Account Description": "account_description",
+    "Dispute Status": "dispute_status",
+    "Creditor Type": "creditor_type",
+    "Account Status": "account_status",
+    "Payment Status": "payment_status",
+    "Creditor Remarks": "creditor_remarks",
+    "Payment Amount": "payment_amount",
+    "Last Payment": "last_payment",
+    "Term Length": "term_length",
+    "Past Due Amount": "past_due_amount",
+    "Account Type": "account_type",
+    "Payment Frequency": "payment_frequency",
+    "Credit Limit": "credit_limit",
+    # "Two-Year Payment History": intentionally NOT mapped now
+}
+
+__all__ = ["LABEL_MAP"]
+
 # Canonical label -> expected value type
 LABEL_SCHEMA = {
     "Account #": "id",

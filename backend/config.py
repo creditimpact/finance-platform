@@ -199,4 +199,5 @@ except Exception:
     TEMPLATE_MIN_BUREAUS = 2
 
 
+RAW_TRIAD_FROM_X = env_bool("RAW_TRIAD_FROM_X", True)
 RAW_JOIN_TOKENS_WITH_SPACE = env.bool("RAW_JOIN_TOKENS_WITH_SPACE", True)

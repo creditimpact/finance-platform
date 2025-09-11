@@ -270,32 +270,24 @@ def split_accounts(
             "equifax": {},
         }
         if RAW_TRIAD_FROM_X:
-            groups: Dict[Tuple[int, float], List[Dict[str, str]]] = defaultdict(list)
+            open_row: Dict[str, Any] | None = None
             for line in account_lines:
                 key = (line["page"], line["line"])
-                for tok in tokens_by_line.get(key, []):
-                    try:
-                        y0 = float(tok.get("y0", 0.0))
-                        y1 = float(tok.get("y1", y0))
-                        y_mid = (y0 + y1) / 2.0
-                    except Exception:
-                        y_mid = 0.0
-                    groups[(line["page"], round(y_mid, 1))].append(tok)
-            open_row: Dict[str, Any] | None = None
-            for (page, y), toks in sorted(groups.items()):
-                layout = layouts.get(page)
-                if not layout:
-                    continue
+                toks = tokens_by_line.get(key, [])
+                texts = [t.get("text", "") for t in toks]
+                log("TRIAD_SCAN page=%s line=%s texts=%r", line["page"], line["line"], texts)
+                layout = layouts.get(line["page"])
                 band_tokens: Dict[str, List[dict]] = {
                     "label": [],
                     "tu": [],
                     "xp": [],
                     "eq": [],
                 }
-                for t in toks:
-                    band = assign_band(t, layout)
-                    if band in band_tokens:
-                        band_tokens[band].append(t)
+                if layout:
+                    for t in toks:
+                        band = assign_band(t, layout)
+                        if band in band_tokens:
+                            band_tokens[band].append(t)
                 label_txt = join_tokens_with_space(
                     [t.get("text", "") for t in band_tokens["label"]]
                 ).strip()
@@ -308,6 +300,17 @@ def split_accounts(
                 eq_val = join_tokens_with_space(
                     [t.get("text", "") for t in band_tokens["eq"]]
                 ).strip()
+                log(
+                    "TRIAD_BANDS page=%s line=%s label=%r TU=%r XP=%r EQ=%r",
+                    line["page"],
+                    line["line"],
+                    label_txt,
+                    tu_val,
+                    xp_val,
+                    eq_val,
+                )
+                if not layout:
+                    continue
                 label_clean = " ".join(label_txt.split())
                 is_account_num = label_clean == "Account #"
                 if label_txt and (label_txt.endswith(":") or is_account_num):

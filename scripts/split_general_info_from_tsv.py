@@ -21,7 +21,14 @@ import logging
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+
+from backend.config import RAW_JOIN_TOKENS_WITH_SPACE
+
+if TYPE_CHECKING:  # pragma: no cover
+    from backend.core.logic.report_analysis.block_exporter import (
+        join_tokens_with_space as join_tokens_with_space,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -117,16 +124,26 @@ def read_logical_lines(tsv_path: Path) -> List[Dict[str, Any]]:
             tokens_sorted = sorted(tokens, key=lambda t: float(t.get("x0") or 0.0))
         except Exception:  # pragma: no cover - very defensive
             tokens_sorted = tokens
-        text = " ".join(tok.get("text", "") for tok in tokens_sorted)
+        tokens_list = [tok.get("text", "") for tok in tokens_sorted]
+        if RAW_JOIN_TOKENS_WITH_SPACE:
+            from backend.core.logic.report_analysis.block_exporter import (
+                join_tokens_with_space,
+            )
+
+            text = join_tokens_with_space(tokens_list)
+        else:
+            text = "".join(tokens_list)
         text_norm = norm_line(text)
         if not text_norm:
             continue
-        logical_lines.append({
-            "page": page,
-            "line": line,
-            "text": text,
-            "text_norm": text_norm,
-        })
+        logical_lines.append(
+            {
+                "page": page,
+                "line": line,
+                "text": text,
+                "text_norm": text_norm,
+            }
+        )
 
     # Ensure deterministic ordering
     logical_lines.sort(key=lambda d: (d["page"], d["line"]))
@@ -155,7 +172,9 @@ def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
         nonlocal current_key, current_heading, current_lines
         current_key = key
         current_heading = HEADINGS[key]
-        current_lines = [{"page": line["page"], "line": line["line"], "text": line["text"]}]
+        current_lines = [
+            {"page": line["page"], "line": line["line"], "text": line["text"]}
+        ]
         logger.info(
             "Detected start of %s at (page=%s,line=%s)",
             current_heading,
@@ -164,7 +183,9 @@ def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
         )
 
     def append_line(line: Dict[str, Any]) -> None:
-        current_lines.append({"page": line["page"], "line": line["line"], "text": line["text"]})
+        current_lines.append(
+            {"page": line["page"], "line": line["line"], "text": line["text"]}
+        )
 
     def close_section() -> None:
         nonlocal current_key, current_heading, current_lines
@@ -220,10 +241,7 @@ def split_general_info(tsv_path: Path, json_out: Path) -> Dict[str, Any]:
         norm = line["text_norm"]
         for key, markers in MARKERS.items():
             if any(norm == m or m in norm for m in markers):
-                if (
-                    summary_filter_applied
-                    and key in {"public_info", "inquiries"}
-                ):
+                if summary_filter_applied and key in {"public_info", "inquiries"}:
                     pos = (line["page"], line["line"])
                     if summary_start <= pos < acct_hist_start:  # type: ignore[arg-type]
                         return None
@@ -281,4 +299,3 @@ def main(argv: List[str] | None = None) -> None:
 if __name__ == "__main__":  # pragma: no cover
     logging.basicConfig(level=logging.INFO)
     main()
-

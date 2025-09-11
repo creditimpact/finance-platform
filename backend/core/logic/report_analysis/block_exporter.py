@@ -25,7 +25,6 @@ from backend.core.logic.report_analysis.report_parsing import (
 from backend.core.logic.report_analysis.text_provider import load_cached_text
 from backend.core.text.env_guard import ensure_env_and_paths
 from backend.core.text.text_provider import load_text_with_layout
-from scripts.split_accounts_from_tsv import split_accounts as split_accounts_from_tsv
 from scripts.split_general_info_from_tsv import split_general_info
 
 # Optional G1 infra (label/bureau detection)
@@ -52,6 +51,9 @@ def join_tokens_with_space(tokens: list[str]) -> str:
     # נרמול רווחים לבן־אחד
     s = _SPACE_RE.sub(" ", s)
     return s.strip()
+
+
+from scripts.split_accounts_from_tsv import split_accounts as split_accounts_from_tsv
 
 
 def _log_join_sample(sid: str, raw_tokens: list[str], target_file: str) -> None:
@@ -1463,6 +1465,30 @@ def _build_accounts_table(
         result = split_accounts_from_tsv(full_tsv, json_out, write_tsv=True)
         logger.info("Stage-A: wrote accounts JSON: %s", json_out)
         _log_join_sample(session_id, sample_tokens, str(json_out))
+
+        enriched_json = None
+        try:
+            stem = json_out.stem
+            for suffix in ("enriched", "normalized"):
+                candidate = json_out.with_name(f"{stem}.{suffix}.json")
+                if candidate.exists():
+                    enriched_json = candidate
+                    logger.info(
+                        "Stage-A: found enriched accounts JSON: %s", candidate
+                    )
+                    break
+            if enriched_json is None:
+                extra_candidates = [
+                    p for p in accounts_dir.glob(f"{stem}.*.json") if p != json_out
+                ]
+                if len(extra_candidates) == 1:
+                    enriched_json = extra_candidates[0]
+                    logger.info(
+                        "Stage-A: found enriched accounts JSON: %s", enriched_json
+                    )
+        except Exception:
+            enriched_json = None
+
         accounts = result.get("accounts") or []
         collections = sum(1 for a in accounts if a.get("section") == "collections")
         logger.info(
@@ -1490,6 +1516,10 @@ def _build_accounts_table(
             {"type": "full_tsv", "path": str(full_tsv)},
             {"type": "accounts_from_full", "path": str(json_out)},
         ]
+        if enriched_json is not None:
+            extras.append(
+                {"type": "accounts_from_full_enriched", "path": str(enriched_json)}
+            )
 
         existing = idx_obj.get("extras")
         if isinstance(existing, list):

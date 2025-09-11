@@ -1,6 +1,7 @@
 # ruff: noqa
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import logging
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import backend.config as config
+from backend.config import RAW_JOIN_TOKENS_WITH_SPACE
 from backend.core.logic.report_analysis.account_packager_coords import (
     package_block_raw_coords,
     write_block_raw_coords,
@@ -50,6 +52,44 @@ def join_tokens_with_space(tokens: list[str]) -> str:
     # נרמול רווחים לבן־אחד
     s = _SPACE_RE.sub(" ", s)
     return s.strip()
+
+
+def _log_join_sample(sid: str, raw_tokens: list[str], target_file: str) -> None:
+    try:
+        joined = join_tokens_with_space(raw_tokens)
+        raw_preview = "".join(raw_tokens)[:120]
+        joined_preview = joined[:120]
+        logger.info(
+            "RAW_JOIN: using space joiner=%s sid=%s file=%s",
+            RAW_JOIN_TOKENS_WITH_SPACE,
+            sid,
+            target_file,
+        )
+        logger.info("RAW_JOIN sample before=%r after=%r", raw_preview, joined_preview)
+    except Exception:  # pragma: no cover - best effort
+        logger.exception(
+            "RAW_JOIN: failed to log sample sid=%s file=%s", sid, target_file
+        )
+
+
+def _first_line_tokens(tsv_path: Path) -> list[str]:
+    try:
+        with tsv_path.open("r", encoding="utf-8", newline="") as fh:
+            reader = csv.DictReader(fh, delimiter="\t")
+            first = next(reader, None)
+            if not first:
+                return []
+            page = first.get("page")
+            line = first.get("line")
+            tokens = [first.get("text", "")]
+            for row in reader:
+                if row.get("page") == page and row.get("line") == line:
+                    tokens.append(row.get("text", ""))
+                else:
+                    break
+            return tokens
+    except Exception:  # pragma: no cover - best effort
+        return []
 
 
 def load_account_blocks(session_id: str) -> List[Dict[str, Any]]:
@@ -1412,14 +1452,17 @@ def _build_accounts_table(
         full_tsv = accounts_dir / "_debug_full.tsv"
         count = _dump_full_tsv(layout, full_tsv)
         logger.info("Stage-A: wrote full TSV: %s", full_tsv)
+        sample_tokens = _first_line_tokens(full_tsv)
 
         general_json = accounts_dir / "general_info_from_full.json"
         split_general_info(full_tsv, general_json)
         logger.info("Stage-A: wrote general info JSON: %s", general_json)
+        _log_join_sample(session_id, sample_tokens, str(general_json))
 
         json_out = accounts_dir / "accounts_from_full.json"
         result = split_accounts_from_tsv(full_tsv, json_out, write_tsv=True)
         logger.info("Stage-A: wrote accounts JSON: %s", json_out)
+        _log_join_sample(session_id, sample_tokens, str(json_out))
         accounts = result.get("accounts") or []
         collections = sum(1 for a in accounts if a.get("section") == "collections")
         logger.info(

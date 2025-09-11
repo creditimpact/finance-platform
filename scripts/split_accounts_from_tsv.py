@@ -315,11 +315,16 @@ def split_accounts(
                     "xp": [],
                     "eq": [],
                 }
+                invalid_band = False
                 if layout:
                     for t in toks:
                         band = assign_band(t, layout)
                         if band in band_tokens:
                             band_tokens[band].append(t)
+                        else:
+                            invalid_band = True
+                else:
+                    invalid_band = True
                 label_txt = join_tokens_with_space(
                     [t.get("text", "") for t in band_tokens["label"]]
                 ).strip()
@@ -364,6 +369,14 @@ def split_accounts(
                     open_row = None
                     continue
                 if not layout:
+                    if open_row:
+                        triad_log(
+                            "TRIAD_GUARD_SKIP page=%s line=%s reason=%s",
+                            line["page"],
+                            line["line"],
+                            "no_layout",
+                        )
+                        open_row = None
                     continue
                 label_clean = " ".join(label_txt.split())
                 is_account_num = label_clean == "Account #"
@@ -399,6 +412,15 @@ def split_accounts(
                     open_row = row
                 else:
                     if open_row:
+                        if invalid_band:
+                            triad_log(
+                                "TRIAD_GUARD_SKIP page=%s line=%s reason=%s",
+                                line["page"],
+                                line["line"],
+                                "band_none",
+                            )
+                            open_row = None
+                            continue
                         if tu_val:
                             open_row["values"][
                                 "transunion"

@@ -51,7 +51,7 @@ _BUREAU_HDRS = {"transunion", "experian", "equifax"}
 
 # Canonical label -> normalized field name
 LABEL_MAP = {
-    "Account #": "account_number",  # treat as field label even though it ends with '#'
+    "Account #": "account_number_display",  # treat as field label even though it ends with '#'
     "High Balance": "high_balance",
     "Last Verified": "last_verified",
     "Date of Last Activity": "date_of_last_activity",

@@ -279,17 +279,12 @@ def split_accounts(
             triad_active: bool = False
             current_layout: TriadLayout | None = None
             current_layout_page: int | None = None
+            scan_page: int | None = None
             for line in account_lines:
                 key = (line["page"], line["line"])
                 toks = tokens_by_line.get(key, [])
                 texts = [t.get("text", "") for t in toks]
                 joined_line_text = join_tokens_with_space(texts)
-                triad_log(
-                    "TRIAD_SCAN page=%s line=%s texts=%r",
-                    line["page"],
-                    line["line"],
-                    texts,
-                )
 
                 layout = layouts.get(line["page"])
                 if layout:
@@ -304,6 +299,11 @@ def split_accounts(
                             "TRIAD_CARRY reuse from_page=%s to_page=%s",
                             current_layout_page,
                             line["page"],
+                        )
+                        triad_log(
+                            "TRIAD_SCAN_CROSS page=%s from_layout_page=%s",
+                            line["page"],
+                            current_layout_page,
                         )
                         current_layout_page = line["page"]
                     layout = current_layout
@@ -337,6 +337,14 @@ def split_accounts(
                 eq_val = join_tokens_with_space(
                     [t.get("text", "") for t in band_tokens["eq"]]
                 ).strip()
+                if triad_active and scan_page != line["page"]:
+                    triad_log(
+                        "TRIAD_SCAN page=%s line=%s label=%r",
+                        line["page"],
+                        line["line"],
+                        label_txt,
+                    )
+                    scan_page = line["page"]
                 triad_log(
                     "TRIAD_BANDS page=%s line=%s label=%r TU=%r XP=%r EQ=%r",
                     line["page"],
@@ -367,6 +375,7 @@ def split_accounts(
                     triad_active = False
                     current_layout = None
                     current_layout_page = None
+                    scan_page = None
                     open_row = None
                     continue
                 if not layout:

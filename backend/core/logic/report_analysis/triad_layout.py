@@ -9,6 +9,10 @@ from backend.config import RAW_TRIAD_FROM_X
 
 logger = logging.getLogger(__name__)
 
+# Small buffer on the right edge of each band used when assigning tokens. This
+# guards against tiny OCR or rounding errors around column boundaries.
+R_EDGE_TOLERANCE = 0.1
+
 
 @dataclass
 class TriadLayout:
@@ -31,6 +35,12 @@ def mid_x(tok: dict) -> float:
 def assign_band(
     token: dict, layout: TriadLayout
 ) -> Literal["label", "tu", "xp", "eq", "none"]:
+    """Assign a token to one of the triad bands.
+
+    We scan the bands from left to right (label → TU → XP → EQ) and assign the
+    token based on the x midpoint. A small right-edge tolerance is applied to
+    each band to reduce misclassification due to floating point or OCR noise.
+    """
     x = mid_x(token)
     for name, (_, R) in [
         ("label", layout.label_band),
@@ -38,7 +48,7 @@ def assign_band(
         ("xp", layout.xp_band),
         ("eq", layout.eq_band),
     ]:
-        if x <= R + 0.1:  # small right-edge tolerance
+        if x <= R + R_EDGE_TOLERANCE:
             return name
     return "none"
 

@@ -408,9 +408,10 @@ def split_accounts(
                     and current_layout_page is not None
                     and line["page"] != current_layout_page
                 ):
+                    prev_page = current_layout_page
                     triad_log(
                         "TRIAD_CARRY_PAGE from=%s to=%s",
-                        current_layout_page,
+                        prev_page,
                         line["page"],
                     )
                     current_layout_page = line["page"]

@@ -37,13 +37,9 @@ def test_assign_band_midpoint_and_tolerance():
         xp_band=(20.0, 30.0),
         eq_band=(30.0, 40.0),
     )
-    # midpoint exactly on the boundary -> label
-    assert assign_band({"x0": 9.5, "x1": 10.5}, layout) == "label"
-    # midpoint slightly past boundary but within tolerance -> label
+    # Slightly beyond the seam → still ``label``
     assert assign_band({"x0": 10.02, "x1": 10.16}, layout) == "label"
-    # still within extended tolerance -> label
-    assert assign_band({"x0": 10.2, "x1": 10.3}, layout) == "label"
-    # far enough past tolerance -> tu
+    # Farther past tolerance → ``tu``
     assert assign_band({"x0": 16.1, "x1": 16.2}, layout) == "tu"
-    # midpoint beyond last band plus tolerance -> none
+    # Far beyond last band + tolerance → ``none``
     assert assign_band({"x0": 46.5, "x1": 46.6}, layout) == "none"

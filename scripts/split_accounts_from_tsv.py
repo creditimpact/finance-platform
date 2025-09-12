@@ -298,6 +298,25 @@ def split_accounts(
                 texts = [t.get("text", "") for t in toks]
                 joined_line_text = join_tokens_with_space(texts)
 
+                if (
+                    open_row
+                    and current_layout_page is not None
+                    and line["page"] != current_layout_page
+                    and not layouts.get(line["page"])
+                ):
+                    if RAW_TRIAD_FROM_X:
+                        triad_log(
+                            "TRIAD_GUARD_SKIP page=%s line=%s reason=%s",
+                            line["page"],
+                            line["line"],
+                            "triad_inactive",
+                        )
+                    open_row = None
+                    triad_active = False
+                    current_layout = None
+                    current_layout_page = None
+                    scan_page = None
+
                 s = _norm(joined_line_text)
                 if (
                     s in {"twoyearpaymenthistory", "transunion", "experian", "equifax"}
@@ -443,6 +462,16 @@ def split_accounts(
                     open_row = row
                 else:
                     if open_row:
+                        if not (triad_active and current_layout):
+                            if RAW_TRIAD_FROM_X:
+                                triad_log(
+                                    "TRIAD_GUARD_SKIP page=%s line=%s reason=%s",
+                                    line["page"],
+                                    line["line"],
+                                    "triad_inactive",
+                                )
+                            open_row = None
+                            continue
                         if not (tu_val or xp_val or eq_val):
                             if RAW_TRIAD_FROM_X:
                                 triad_log(

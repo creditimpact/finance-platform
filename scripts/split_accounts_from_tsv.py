@@ -549,6 +549,9 @@ def split_accounts(
                 eq_val = join_tokens_with_space(
                     [t.get("text", "") for t in band_tokens["eq"]]
                 ).strip()
+                has_tu = bool(tu_val)
+                has_xp = bool(xp_val)
+                has_eq = bool(eq_val)
 
                 if not layout:
                     if open_row:
@@ -614,7 +617,7 @@ def split_accounts(
                             )
                             open_row = None
                             continue
-                        if not (tu_val or xp_val or eq_val):
+                        if not (has_tu or has_xp or has_eq):
                             triad_log(
                                 "TRIAD_GUARD_SKIP page=%s line=%s reason=no_banded_tokens",
                                 line["page"],
@@ -622,7 +625,7 @@ def split_accounts(
                             )
                             open_row = None
                             continue
-                        if tu_val:
+                        if has_tu:
                             open_row["values"][
                                 "transunion"
                             ] = f"{open_row['values']['transunion']} {tu_val}".strip()
@@ -630,7 +633,7 @@ def split_accounts(
                                 triad_maps["transunion"][open_row["key"]] = open_row[
                                     "values"
                                 ]["transunion"]
-                        if xp_val:
+                        if has_xp:
                             open_row["values"][
                                 "experian"
                             ] = f"{open_row['values']['experian']} {xp_val}".strip()
@@ -638,7 +641,7 @@ def split_accounts(
                                 triad_maps["experian"][open_row["key"]] = open_row[
                                     "values"
                                 ]["experian"]
-                        if eq_val:
+                        if has_eq:
                             open_row["values"][
                                 "equifax"
                             ] = f"{open_row['values']['equifax']} {eq_val}".strip()
@@ -650,9 +653,9 @@ def split_accounts(
                             "TRIAD_CONT_PARTIAL page=%s line=%s tu=%s xp=%s eq=%s",
                             line["page"],
                             line["line"],
-                            bool(tu_val),
-                            bool(xp_val),
-                            bool(eq_val),
+                            has_tu,
+                            has_xp,
+                            has_eq,
                         )
         account_info = {
             "account_index": idx + 1,

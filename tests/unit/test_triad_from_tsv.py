@@ -141,6 +141,28 @@ def create_triad_tsv_guard_skip(path: Path) -> None:
     path.write_text(header + "".join(rows), encoding="utf-8")
 
 
+def create_triad_tsv_partial_append(path: Path) -> None:
+    header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+    rows = [
+        # header row
+        "1\t1\t10\t11\t50\t100\tTransUnion\n",
+        "1\t1\t10\t11\t150\t200\tExperian\n",
+        "1\t1\t10\t11\t250\t300\tEquifax\n",
+        # account anchor
+        "1\t2\t20\t21\t0\t20\tAccount #\n",
+        "1\t2\t20\t21\t60\t80\tTU111\n",
+        "1\t2\t20\t21\t160\t180\tXP111\n",
+        "1\t2\t20\t21\t260\t280\tEQ111\n",
+        # creditor remarks with EQ value
+        "1\t3\t30\t31\t0\t20\tCreditor Remarks:\n",
+        "1\t3\t30\t31\t260\t280\tFannie\n",
+        # continuation line with one unbanded token
+        "1\t4\t40\t41\t260\t280\tMae\n",
+        "1\t4\t40\t41\t400\t420\tnoise\n",
+    ]
+    path.write_text(header + "".join(rows), encoding="utf-8")
+
+
 def create_triad_tsv_with_punct(path: Path) -> None:
     header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
     rows = [
@@ -323,6 +345,8 @@ def test_triad_guard_skip(tmp_path: Path, caplog) -> None:
         str(json_path),
     ]
     logging.basicConfig(level=logging.INFO)
+    sys.modules.pop("backend.config", None)
+    sys.modules.pop("scripts.split_accounts_from_tsv", None)
     with caplog.at_level(logging.INFO):
         runpy.run_module("scripts.split_accounts_from_tsv", run_name="__main__")
 
@@ -355,3 +379,31 @@ def test_triad_guard_skip_flag_off(tmp_path: Path, caplog) -> None:
 
     assert json_path.exists()
     assert "TRIAD_GUARD_SKIP" not in caplog.text
+
+
+def test_triad_partial_continuation(tmp_path: Path, caplog) -> None:
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    create_triad_tsv_partial_append(tsv_path)
+
+    os.environ["RAW_TRIAD_FROM_X"] = "1"
+    os.environ["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
+    os.environ["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    sys.argv = [
+        "split_accounts_from_tsv.py",
+        "--full",
+        str(tsv_path),
+        "--json_out",
+        str(json_path),
+    ]
+    logging.basicConfig(level=logging.INFO)
+    sys.modules.pop("backend.config", None)
+    sys.modules.pop("scripts.split_accounts_from_tsv", None)
+    with caplog.at_level(logging.INFO):
+        runpy.run_module("scripts.split_accounts_from_tsv", run_name="__main__")
+
+    data = json.loads(json_path.read_text())
+    acc = data["accounts"][0]
+    assert acc["triad_fields"]["equifax"]["creditor_remarks"] == "Fannie Mae"
+    assert "TRIAD_GUARD_SKIP" not in caplog.text
+    assert "TRIAD_CONT_PARTIAL" in caplog.text

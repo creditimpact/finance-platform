@@ -362,6 +362,21 @@ def split_accounts(
                 joined_line_text = join_tokens_with_space(texts)
 
                 s = _norm(joined_line_text)
+                if (
+                    triad_active
+                    and current_layout
+                    and current_layout_page is not None
+                    and line["page"] != current_layout_page
+                ):
+                    triad_log(
+                        "TRIAD_CARRY_PAGE from=%s to=%s",
+                        current_layout_page,
+                        line["page"],
+                    )
+                    current_layout_page = line["page"]
+                    if s in {"transunion", "experian", "equifax"}:
+                        continue
+
                 if s in {
                     "twoyearpaymenthistory",
                     "transunion",
@@ -412,13 +427,6 @@ def split_accounts(
                         current_layout_page = line["page"]
                 elif triad_active and current_layout:
                     layout = current_layout
-                    if current_layout_page != line["page"]:
-                        triad_log(
-                            "TRIAD_CARRY reuse from_page=%s page=%s",
-                            current_layout_page,
-                            line["page"],
-                        )
-                        current_layout_page = line["page"]
                 band_tokens: Dict[str, List[dict]] = {
                     "label": [],
                     "tu": [],

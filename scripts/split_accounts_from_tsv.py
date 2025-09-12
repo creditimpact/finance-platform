@@ -31,6 +31,7 @@ from backend.core.logic.report_analysis.triad_layout import (
 )
 
 logger = logging.getLogger(__name__)
+# Enable with RAW_TRIAD_FROM_X=1 for verbose triad logs
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
 
 ACCOUNT_RE = re.compile(r"\bAccount\b.*#", re.IGNORECASE)
@@ -676,4 +677,5 @@ def main(argv: List[str] | None = None) -> None:
 
 
 if __name__ == "__main__":  # pragma: no cover
+    logging.basicConfig(level=logging.INFO)
     main()

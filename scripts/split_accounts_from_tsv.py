@@ -298,6 +298,25 @@ def split_accounts(
                 texts = [t.get("text", "") for t in toks]
                 joined_line_text = join_tokens_with_space(texts)
 
+                s = _norm(joined_line_text)
+                if (
+                    s in {"twoyearpaymenthistory", "transunion", "experian", "equifax"}
+                    or s.startswith("dayslate7yearhistory")
+                ):
+                    if triad_active and RAW_TRIAD_FROM_X:
+                        triad_log(
+                            "TRIAD_STOP reason=%s page=%s line=%s",
+                            s,
+                            line["page"],
+                            line["line"],
+                        )
+                    triad_active = False
+                    current_layout = None
+                    current_layout_page = None
+                    scan_page = None
+                    open_row = None
+                    continue
+
                 is_header = _is_triad(joined_line_text)
                 layout: TriadLayout | None = None
                 if is_header:
@@ -367,20 +386,11 @@ def split_accounts(
                 )
                 plain_line = _norm(joined_line_text)
                 plain_label = _norm(label_txt)
-                if plain_label == "twoyearpaymenthistory" or plain_line in {
-                    "transunion",
-                    "experian",
-                    "equifax",
-                }:
-                    reason = (
-                        "two_year_payment_history"
-                        if plain_label == "twoyearpaymenthistory"
-                        else f"bare_{plain_line}"
-                    )
+                if plain_label == "twoyearpaymenthistory":
                     if RAW_TRIAD_FROM_X:
                         triad_log(
                             "TRIAD_STOP reason=%s page=%s line=%s",
-                            reason,
+                            "two_year_payment_history",
                             line["page"],
                             line["line"],
                         )

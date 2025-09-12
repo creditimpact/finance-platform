@@ -71,12 +71,12 @@ def detect_triads(
         for line_no, toks in sorted(lines.items()):
             found: Dict[str, dict] = {}
             for t in toks:
-                tnorm = normalize_bureau_header(str(t.get("text", "")))
-                if (
-                    tnorm in {"transunion", "experian", "equifax"}
-                    and tnorm not in found
-                ):
-                    found[tnorm] = t
+                raw_text = str(t.get("text", ""))
+                tnorm = normalize_bureau_header(raw_text)
+                if tnorm in {"transunion", "experian", "equifax"}:
+                    triad_log("TRIAD_HEADER_MATCH raw=%r norm=%r", raw_text, tnorm)
+                    if tnorm not in found:
+                        found[tnorm] = t
             if len(found) == 3:
                 mids = {k: mid_x(v) for k, v in found.items()}
                 break

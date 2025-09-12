@@ -11,9 +11,10 @@ from .header_utils import normalize_bureau_header
 logger = logging.getLogger(__name__)
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
 
-# Tolerance applied to both sides of each band when assigning tokens. This
-# guards against OCR jitter around column boundaries so tokens landing slightly
-# outside the band are still classified correctly.
+# Symmetric tolerance (in PDF points) applied around bureau midpoints when
+# computing band edges. This guards against OCR jitter around column
+# boundaries so tokens landing slightly outside a column are still classified
+# correctly.
 EDGE_EPS = 6.0
 
 
@@ -27,15 +28,13 @@ class TriadLayout:
 
 
 def bands_from_header_tokens(tokens: List[dict]) -> TriadLayout:
-    """Compute a ``TriadLayout`` from three bureau header tokens.
+    """Compute a :class:`TriadLayout` from three bureau header tokens.
 
-    ``tokens`` must contain the ``transunion``, ``experian`` and ``equifax``
-    headers from the same line (in any order). Their horizontal midpoints are
-    computed and sorted left-to-right to establish band boundaries. The
-    ``label`` band spans from ``0`` to the leftmost midpoint. Each bureau band
-    then covers ``[mid_i, mid_{i+1})`` where the final band extends to
-    ``+inf``. ``assign_band`` applies the symmetric :data:`EDGE_EPS` tolerance
-    when classifying tokens against these bands.
+    ``tokens`` must contain exactly the ``transunion``, ``experian`` and
+    ``equifax`` headers from the same line (in any order). Their horizontal
+    midpoints are computed and used to derive column bands with a symmetric
+    :data:`EDGE_EPS` tolerance. The label band spans from ``0`` to ``tu_mid -
+    EDGE_EPS`` so tokens near the TransUnion seam are not misclassified.
     """
 
     mids: List[Tuple[float, str]] = []
@@ -53,20 +52,33 @@ def bands_from_header_tokens(tokens: List[dict]) -> TriadLayout:
     if len(mids) != 3:
         raise ValueError("expected three bureau header tokens")
 
+    # Order the tokens left→right and extract midpoints for each bureau
     mids.sort(key=lambda kv: kv[0])
-    label_band = (0.0, mids[0][0])
+    order = [name for _x, name in mids]
+    xs = [x for x, _name in mids]
 
-    bands: Dict[str, Tuple[float, float]] = {}
-    for idx, (mid, name) in enumerate(mids):
-        right = mids[idx + 1][0] if idx + 1 < len(mids) else float("inf")
-        bands[name] = (mid, right)
+    tu_mid = xs[order.index("transunion")]
+    xp_mid = xs[order.index("experian")]
+    eq_mid = xs[order.index("equifax")]
+
+    # Clamp label band so it does not swallow the TU column
+    label_L, label_R = 0.0, max(0.0, tu_mid - EDGE_EPS)
+
+    def band_around(mid_left: float, mid_right: float | None) -> Tuple[float, float]:
+        L = mid_left - EDGE_EPS
+        R = (mid_right + EDGE_EPS) if mid_right is not None else float("inf")
+        return (L, R)
+
+    tu = band_around(tu_mid, xp_mid)
+    xp = band_around(xp_mid, eq_mid)
+    eq = band_around(eq_mid, None)
 
     return TriadLayout(
         page=page,
-        label_band=label_band,
-        tu_band=bands["transunion"],
-        xp_band=bands["experian"],
-        eq_band=bands["equifax"],
+        label_band=(label_L, label_R),
+        tu_band=tu,
+        xp_band=xp,
+        eq_band=eq,
     )
 
 
@@ -84,9 +96,10 @@ def assign_band(
 ) -> Literal["label", "tu", "xp", "eq", "none"]:
     """Assign a token to one of the triad bands.
 
-    Tokens are classified by comparing their midpoint against each band's left
-    and right edges with a small symmetric tolerance. This avoids spurious
-    ``none`` classifications for tokens that land on the seam between columns.
+    Tokens are classified by comparing their midpoint against the precomputed
+    band edges which already include the symmetric :data:`EDGE_EPS` tolerance.
+    This avoids spurious ``none`` classifications for tokens that land on the
+    seam between columns.
     """
     x = mid_x(token)
     bands = {
@@ -96,7 +109,7 @@ def assign_band(
         "eq": layout.eq_band,
     }
     for name, (L, R) in bands.items():
-        if L - EDGE_EPS <= x <= R + EDGE_EPS:
+        if L <= x <= R:
             return name
     return "none"
 

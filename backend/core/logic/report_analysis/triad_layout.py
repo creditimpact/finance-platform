@@ -26,6 +26,50 @@ class TriadLayout:
     eq_band: Tuple[float, float]
 
 
+def bands_from_header_tokens(tokens: List[dict]) -> TriadLayout:
+    """Compute a ``TriadLayout`` from three bureau header tokens.
+
+    ``tokens`` must contain the ``transunion``, ``experian`` and ``equifax``
+    headers from the same line (in any order). Their horizontal midpoints are
+    computed and sorted left-to-right to establish band boundaries. The
+    ``label`` band spans from ``0`` to the leftmost midpoint. Each bureau band
+    then covers ``[mid_i, mid_{i+1})`` where the final band extends to
+    ``+inf``. ``assign_band`` applies the symmetric :data:`EDGE_EPS` tolerance
+    when classifying tokens against these bands.
+    """
+
+    mids: List[Tuple[float, str]] = []
+    page = 0
+    for t in tokens:
+        name = normalize_bureau_header(str(t.get("text", "")))
+        if name not in {"transunion", "experian", "equifax"}:
+            continue
+        mids.append((mid_x(t), name))
+        if not page:
+            try:
+                page = int(float(t.get("page", 0)))
+            except Exception:
+                page = 0
+    if len(mids) != 3:
+        raise ValueError("expected three bureau header tokens")
+
+    mids.sort(key=lambda kv: kv[0])
+    label_band = (0.0, mids[0][0])
+
+    bands: Dict[str, Tuple[float, float]] = {}
+    for idx, (mid, name) in enumerate(mids):
+        right = mids[idx + 1][0] if idx + 1 < len(mids) else float("inf")
+        bands[name] = (mid, right)
+
+    return TriadLayout(
+        page=page,
+        label_band=label_band,
+        tu_band=bands["transunion"],
+        xp_band=bands["experian"],
+        eq_band=bands["equifax"],
+    )
+
+
 def mid_x(tok: dict) -> float:
     try:
         x0 = float(tok.get("x0", 0.0))
@@ -67,8 +111,8 @@ def detect_triads(
 
     layouts: Dict[int, TriadLayout] = {}
     for page, lines in by_page.items():
-        mids: Dict[str, float] | None = None
-        for line_no, toks in sorted(lines.items()):
+        layout: TriadLayout | None = None
+        for _line_no, toks in sorted(lines.items()):
             found: Dict[str, dict] = {}
             for t in toks:
                 raw_text = str(t.get("text", ""))
@@ -78,37 +122,22 @@ def detect_triads(
                     if tnorm not in found:
                         found[tnorm] = t
             if len(found) == 3:
-                mids = {k: mid_x(v) for k, v in found.items()}
+                layout = bands_from_header_tokens(list(found.values()))
+                layout.page = page
                 break
-        if not mids or len(mids) != 3:
+        if not layout:
             continue
-        tu = mids["transunion"]
-        xp = mids["experian"]
-        eq = mids["equifax"]
-        d12 = xp - tu
-        d23 = eq - xp
-        label_band = (0.0, tu - d12 / 2.0)
-        tu_band = (tu - d12 / 2.0, tu + d12 / 2.0)
-        xp_band = (tu + d12 / 2.0, xp + d23 / 2.0)
-        eq_band = (xp + d23 / 2.0, eq + d23 / 2.0)
-        layout = TriadLayout(
-            page=page,
-            label_band=label_band,
-            tu_band=tu_band,
-            xp_band=xp_band,
-            eq_band=eq_band,
-        )
         layouts[page] = layout
         triad_log(
             "TRIAD_LAYOUT page=%s label=(%.1f,%.1f) tu=(%.1f,%.1f) xp=(%.1f,%.1f) eq=(%.1f,%.1f)",
-            page,
-            label_band[0],
-            label_band[1],
-            tu_band[0],
-            tu_band[1],
-            xp_band[0],
-            xp_band[1],
-            eq_band[0],
-            eq_band[1],
+            layout.page,
+            layout.label_band[0],
+            layout.label_band[1],
+            layout.tu_band[0],
+            layout.tu_band[1],
+            layout.xp_band[0],
+            layout.xp_band[1],
+            layout.eq_band[0],
+            layout.eq_band[1],
         )
     return layouts

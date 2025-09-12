@@ -45,8 +45,8 @@ leave gaps.
 ### Environment Flags
 
 ```
-RAW_TRIAD_FROM_X=1
-RAW_JOIN_TOKENS_WITH_SPACE=1
+RAW_TRIAD_FROM_X=True
+RAW_JOIN_TOKENS_WITH_SPACE=True
 ```
 
 `RAW_TRIAD_FROM_X` enables X-based triad parsing and adds extra debug output.
@@ -77,3 +77,23 @@ neighboring tokens.
   ]
 }
 ```
+
+### Quick Verify
+
+1. Run Stage-A with the environment flags above.
+2. Check the Stage-A log for triad markers:
+
+   ```bash
+   grep TRIAD_HEADER_MATCH traces/blocks/<sid>/*.log
+   grep TRIAD_CARRY traces/blocks/<sid>/*.log
+   grep TRIAD_STOP traces/blocks/<sid>/*.log
+   ```
+
+   Hits confirm that triad parsing matched the header, carried lines, or stopped.
+3. Inspect the parsed accounts output:
+
+   ```bash
+   cat traces/blocks/<sid>/accounts_table/accounts_from_full.json
+   ```
+
+   This JSON lists the extracted accounts and persists after `TRACE_CLEANUP`.

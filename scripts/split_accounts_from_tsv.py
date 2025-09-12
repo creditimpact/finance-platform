@@ -51,8 +51,20 @@ def _norm(text: str) -> str:
 
 
 def _is_triad(text: str) -> bool:
-    """Return True if ``text`` is the TransUnion/Experian/Equifax triad."""
-    return _norm(text) == "transunionexperianequifax"
+    """Return True if ``text`` is the TransUnion/Experian/Equifax triad.
+
+    The match is flexible and ignores punctuation such as ®, commas or
+    colons. The three bureau names may appear in any order. When a match is
+    detected a debug log is emitted for traceability.
+    """
+    s = (text or "").lower()
+    s = s.replace("\u00ae", "")
+    s = s.replace(",", " ").replace(":", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+    hit = all(name in s for name in ("transunion", "experian", "equifax"))
+    if hit:
+        triad_log("TRIAD_HEADER_MATCH raw=%r norm=%r", text, s)
+    return hit
 
 
 def _is_anchor(text: str) -> bool:
@@ -317,16 +329,11 @@ def split_accounts(
                     "xp": [],
                     "eq": [],
                 }
-                invalid_band = False
                 if layout:
                     for t in toks:
                         band = assign_band(t, layout)
                         if band in band_tokens:
                             band_tokens[band].append(t)
-                        else:
-                            invalid_band = True
-                else:
-                    invalid_band = True
                 label_txt = join_tokens_with_space(
                     [t.get("text", "") for t in band_tokens["label"]]
                 ).strip()
@@ -425,13 +432,13 @@ def split_accounts(
                     open_row = row
                 else:
                     if open_row:
-                        if invalid_band:
+                        if not (tu_val or xp_val or eq_val):
                             if RAW_TRIAD_FROM_X:
                                 triad_log(
                                     "TRIAD_GUARD_SKIP page=%s line=%s reason=%s",
                                     line["page"],
                                     line["line"],
-                                    "band_none",
+                                    "no_banded_tokens",
                                 )
                             open_row = None
                             continue
@@ -459,24 +466,14 @@ def split_accounts(
                                 triad_maps["equifax"][open_row["key"]] = open_row[
                                     "values"
                                 ]["equifax"]
-                        if tu_val:
-                            triad_log(
-                                "TRIAD_CONT key=%s TU+=%r",
-                                open_row["key"],
-                                tu_val,
-                            )
-                        if xp_val:
-                            triad_log(
-                                "TRIAD_CONT key=%s XP+=%r",
-                                open_row["key"],
-                                xp_val,
-                            )
-                        if eq_val:
-                            triad_log(
-                                "TRIAD_CONT key=%s EQ+=%r",
-                                open_row["key"],
-                                eq_val,
-                            )
+                        triad_log(
+                            "TRIAD_CONT_PARTIAL page=%s line=%s tu=%s xp=%s eq=%s",
+                            line["page"],
+                            line["line"],
+                            bool(tu_val),
+                            bool(xp_val),
+                            bool(eq_val),
+                        )
         account_info = {
             "account_index": idx + 1,
             "page_start": account_lines[0]["page"],

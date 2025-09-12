@@ -4,16 +4,17 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Tuple
 
-from .header_utils import normalize_bureau_header
-
 from backend.config import RAW_TRIAD_FROM_X
+
+from .header_utils import normalize_bureau_header
 
 logger = logging.getLogger(__name__)
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
 
-# Small buffer on the right edge of each band used when assigning tokens. This
-# guards against tiny OCR or rounding errors around column boundaries.
-R_EDGE_TOLERANCE = 0.1
+# Tolerance applied to both sides of each band when assigning tokens. This
+# guards against OCR jitter around column boundaries so tokens landing slightly
+# outside the band are still classified correctly.
+EDGE_EPS = 6.0
 
 
 @dataclass
@@ -39,18 +40,19 @@ def assign_band(
 ) -> Literal["label", "tu", "xp", "eq", "none"]:
     """Assign a token to one of the triad bands.
 
-    We scan the bands from left to right (label → TU → XP → EQ) and assign the
-    token based on the x midpoint. A small right-edge tolerance is applied to
-    each band to reduce misclassification due to floating point or OCR noise.
+    Tokens are classified by comparing their midpoint against each band's left
+    and right edges with a small symmetric tolerance. This avoids spurious
+    ``none`` classifications for tokens that land on the seam between columns.
     """
     x = mid_x(token)
-    for name, (_, R) in [
-        ("label", layout.label_band),
-        ("tu", layout.tu_band),
-        ("xp", layout.xp_band),
-        ("eq", layout.eq_band),
-    ]:
-        if x <= R + R_EDGE_TOLERANCE:
+    bands = {
+        "label": layout.label_band,
+        "tu": layout.tu_band,
+        "xp": layout.xp_band,
+        "eq": layout.eq_band,
+    }
+    for name, (L, R) in bands.items():
+        if L - EDGE_EPS <= x <= R + EDGE_EPS:
             return name
     return "none"
 
@@ -70,7 +72,10 @@ def detect_triads(
             found: Dict[str, dict] = {}
             for t in toks:
                 tnorm = normalize_bureau_header(str(t.get("text", "")))
-                if tnorm in {"transunion", "experian", "equifax"} and tnorm not in found:
+                if (
+                    tnorm in {"transunion", "experian", "equifax"}
+                    and tnorm not in found
+                ):
                     found[tnorm] = t
             if len(found) == 3:
                 mids = {k: mid_x(v) for k, v in found.items()}

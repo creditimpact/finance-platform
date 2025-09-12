@@ -89,3 +89,10 @@ Get-ChildItem $acct -Force | Format-Table Name,Length -Auto
 Only `_debug_full.tsv`, `accounts_from_full.json`, and
 `general_info_from_full.json` remain in the `accounts_table` folder and the
 corresponding `texts/<SID>` directory is removed.
+
+### Preserving per-account TSVs
+
+By default the cleanup routine removes the per-account TSVs under
+`accounts_table/per_account_tsv`. Set `KEEP_PER_ACCOUNT_TSV=1` in the
+environment to whitelist this directory and retain the TSVs for debugging
+purposes.

@@ -9,6 +9,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+load_dotenv()
+
 from backend.core.logic.report_analysis.block_exporter import export_stage_a
 from backend.core.logic.report_analysis.extract_problematic_accounts import (
     extract_problematic_accounts as orchestrate_problem_accounts,
@@ -25,8 +27,6 @@ from backend.settings import PROJECT_ROOT
 # directory.
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-load_dotenv()
 
 from celery import Celery, shared_task, signals
 

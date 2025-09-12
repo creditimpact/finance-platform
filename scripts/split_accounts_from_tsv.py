@@ -298,15 +298,19 @@ def split_accounts(
                 texts = [t.get("text", "") for t in toks]
                 joined_line_text = join_tokens_with_space(texts)
 
-                layout = layouts.get(line["page"])
-                if layout:
-                    if current_layout_page != line["page"]:
-                        if RAW_TRIAD_FROM_X:
-                            triad_log("TRIAD_CARRY start page=%s", line["page"])
-                    triad_active = True
-                    current_layout = layout
-                    current_layout_page = line["page"]
+                is_header = _is_triad(joined_line_text)
+                layout: TriadLayout | None = None
+                if is_header:
+                    layout = layouts.get(line["page"])
+                    if layout:
+                        triad_active = True
+                        current_layout = layout
+                        if current_layout_page != line["page"]:
+                            if RAW_TRIAD_FROM_X:
+                                triad_log("TRIAD_CARRY start page=%s", line["page"])
+                        current_layout_page = line["page"]
                 elif triad_active and current_layout:
+                    layout = current_layout
                     if current_layout_page != line["page"]:
                         if RAW_TRIAD_FROM_X:
                             triad_log(
@@ -320,9 +324,6 @@ def split_accounts(
                                 current_layout_page,
                             )
                         current_layout_page = line["page"]
-                    layout = current_layout
-                else:
-                    layout = None
                 band_tokens: Dict[str, List[dict]] = {
                     "label": [],
                     "tu": [],

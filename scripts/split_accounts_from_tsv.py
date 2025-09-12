@@ -295,31 +295,11 @@ def split_accounts(
             triad_active: bool = False
             current_layout: TriadLayout | None = None
             current_layout_page: int | None = None
-            scan_page: int | None = None
             for line in account_lines:
                 key = (line["page"], line["line"])
                 toks = tokens_by_line.get(key, [])
                 texts = [t.get("text", "") for t in toks]
                 joined_line_text = join_tokens_with_space(texts)
-
-                if (
-                    open_row
-                    and current_layout_page is not None
-                    and line["page"] != current_layout_page
-                    and not layouts.get(line["page"])
-                ):
-                    if RAW_TRIAD_FROM_X:
-                        triad_log(
-                            "TRIAD_GUARD_SKIP page=%s line=%s reason=%s",
-                            line["page"],
-                            line["line"],
-                            "triad_inactive",
-                        )
-                    open_row = None
-                    triad_active = False
-                    current_layout = None
-                    current_layout_page = None
-                    scan_page = None
 
                 s = _norm(joined_line_text)
                 if s in {
@@ -328,7 +308,7 @@ def split_accounts(
                     "experian",
                     "equifax",
                 } or s.startswith("dayslate7yearhistory"):
-                    if triad_active and RAW_TRIAD_FROM_X:
+                    if triad_active:
                         triad_log(
                             "TRIAD_STOP reason=%s page=%s line=%s",
                             s,
@@ -338,7 +318,6 @@ def split_accounts(
                     triad_active = False
                     current_layout = None
                     current_layout_page = None
-                    scan_page = None
                     open_row = None
                     continue
 
@@ -350,23 +329,16 @@ def split_accounts(
                         triad_active = True
                         current_layout = layout
                         if current_layout_page != line["page"]:
-                            if RAW_TRIAD_FROM_X:
-                                triad_log("TRIAD_CARRY start page=%s", line["page"])
+                            triad_log("TRIAD_CARRY start page=%s", line["page"])
                         current_layout_page = line["page"]
                 elif triad_active and current_layout:
                     layout = current_layout
                     if current_layout_page != line["page"]:
-                        if RAW_TRIAD_FROM_X:
-                            triad_log(
-                                "TRIAD_CARRY reuse from_page=%s to_page=%s",
-                                current_layout_page,
-                                line["page"],
-                            )
-                            triad_log(
-                                "TRIAD_SCAN_CROSS page=%s from_layout_page=%s",
-                                line["page"],
-                                current_layout_page,
-                            )
+                        triad_log(
+                            "TRIAD_CARRY reuse from_page=%s page=%s",
+                            current_layout_page,
+                            line["page"],
+                        )
                         current_layout_page = line["page"]
                 band_tokens: Dict[str, List[dict]] = {
                     "label": [],
@@ -391,48 +363,28 @@ def split_accounts(
                 eq_val = join_tokens_with_space(
                     [t.get("text", "") for t in band_tokens["eq"]]
                 ).strip()
-                if triad_active and scan_page != line["page"]:
-                    if RAW_TRIAD_FROM_X:
-                        triad_log(
-                            "TRIAD_SCAN page=%s line=%s label=%r",
-                            line["page"],
-                            line["line"],
-                            label_txt,
-                        )
-                    scan_page = line["page"]
-                triad_log(
-                    "TRIAD_BANDS page=%s line=%s label=%r TU=%r XP=%r EQ=%r",
-                    line["page"],
-                    line["line"],
-                    label_txt,
-                    tu_val,
-                    xp_val,
-                    eq_val,
-                )
+                
                 plain_label = _norm(label_txt)
                 if plain_label == "twoyearpaymenthistory":
-                    if RAW_TRIAD_FROM_X:
-                        triad_log(
-                            "TRIAD_STOP reason=%s page=%s line=%s",
-                            "two_year_payment_history",
-                            line["page"],
-                            line["line"],
-                        )
+                    triad_log(
+                        "TRIAD_STOP reason=%s page=%s line=%s",
+                        "two_year_payment_history",
+                        line["page"],
+                        line["line"],
+                    )
                     triad_active = False
                     current_layout = None
                     current_layout_page = None
-                    scan_page = None
                     open_row = None
                     continue
                 if not layout:
                     if open_row:
-                        if RAW_TRIAD_FROM_X:
-                            triad_log(
-                                "TRIAD_GUARD_SKIP page=%s line=%s reason=%s",
-                                line["page"],
-                                line["line"],
-                                "no_layout",
-                            )
+                        triad_log(
+                            "TRIAD_GUARD_SKIP page=%s line=%s reason=%s",
+                            line["page"],
+                            line["line"],
+                            "no_layout",
+                        )
                         open_row = None
                     continue
                 is_account_num_alias = plain_label in ACCOUNT_NUMBER_ALIAS_NORMS
@@ -472,23 +424,21 @@ def split_accounts(
                 else:
                     if open_row:
                         if not (triad_active and current_layout):
-                            if RAW_TRIAD_FROM_X:
-                                triad_log(
-                                    "TRIAD_GUARD_SKIP page=%s line=%s reason=%s",
-                                    line["page"],
-                                    line["line"],
-                                    "triad_inactive",
-                                )
+                            triad_log(
+                                "TRIAD_GUARD_SKIP page=%s line=%s reason=%s",
+                                line["page"],
+                                line["line"],
+                                "triad_inactive",
+                            )
                             open_row = None
                             continue
                         if not (tu_val or xp_val or eq_val):
-                            if RAW_TRIAD_FROM_X:
-                                triad_log(
-                                    "TRIAD_GUARD_SKIP page=%s line=%s reason=%s",
-                                    line["page"],
-                                    line["line"],
-                                    "no_banded_tokens",
-                                )
+                            triad_log(
+                                "TRIAD_GUARD_SKIP page=%s line=%s reason=%s",
+                                line["page"],
+                                line["line"],
+                                "no_banded_tokens",
+                            )
                             open_row = None
                             continue
                         if tu_val:

@@ -21,6 +21,7 @@ from typing import Any, Dict, Iterable, List, Tuple
 from backend.config import RAW_JOIN_TOKENS_WITH_SPACE, RAW_TRIAD_FROM_X
 from backend.core.logic.report_analysis.block_exporter import join_tokens_with_space
 from backend.core.logic.report_analysis.canonical_labels import LABEL_MAP
+from backend.core.logic.report_analysis.header_utils import normalize_bureau_header
 from backend.core.logic.report_analysis.normalize_fields import ensure_all_keys
 from backend.core.logic.report_analysis.report_parsing import ACCOUNT_NUMBER_ALIASES
 from backend.core.logic.report_analysis.triad_layout import (
@@ -29,7 +30,6 @@ from backend.core.logic.report_analysis.triad_layout import (
     detect_triads,
     mid_x,
 )
-from backend.core.logic.report_analysis.header_utils import normalize_bureau_header
 
 logger = logging.getLogger(__name__)
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
@@ -131,31 +131,58 @@ def _read_tokens(
     return tokens_by_line, lines
 
 
-def _find_header_tokens_above_anchor(
+def find_header_above(
     tokens_by_line: Dict[Tuple[int, int], List[Dict[str, str]]],
     page: int,
     line: int,
-) -> Dict[str, dict]:
-    """Return header tokens above an anchor by scanning current and previous page."""
+) -> List[dict] | None:
+    """Return header tokens (transunion/experian/equifax) on nearest line above.
 
-    found: Dict[str, dict] = {}
+    The search first checks ``(page, line-1)``. If that line is missing or does
+    not contain the three bureau names, the last line of ``page-1`` is checked.
+    Token text is normalized by stripping the registered mark, commas and
+    colons, collapsing spaces and lowercasing. When a header is found a log
+    entry ``TRIAD_HEADER_ABOVE`` is emitted, otherwise ``TRIAD_NO_HEADER_ABOVE_ANCHOR``
+    is logged.
+    """
 
-    def _scan(p: int, start_line: int | None = None) -> None:
-        lines_on_page = [ln for pg, ln in tokens_by_line.keys() if pg == p]
-        for ln in sorted(lines_on_page, reverse=True):
-            if start_line is not None and ln >= start_line:
-                continue
-            for tok in tokens_by_line[(p, ln)]:
-                tnorm = normalize_bureau_header(tok.get("text", ""))
-                if tnorm in {"transunion", "experian", "equifax"} and tnorm not in found:
-                    found[tnorm] = tok
-            if len(found) == 3:
-                return
+    def _norm_header(text: str) -> str:
+        s = (text or "").lower()
+        s = s.replace("\u00ae", "").replace(",", " ").replace(":", " ")
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
 
-    _scan(page, line)
-    if len(found) < 3 and page - 1 > 0:
-        _scan(page - 1, None)
-    return found
+    def _extract_if_header(
+        p: int, line_no: int
+    ) -> Tuple[List[dict] | None, str | None]:
+        toks = tokens_by_line.get((p, line_no))
+        if not toks:
+            return None, None
+        joined = join_tokens_with_space([t.get("text", "") for t in toks])
+        norm = _norm_header(joined)
+        if all(name in norm for name in ("transunion", "experian", "equifax")):
+            result: List[dict] = []
+            for t in toks:
+                tnorm = _norm_header(t.get("text", ""))
+                if tnorm in {"transunion", "experian", "equifax"}:
+                    result.append(t)
+            if len(result) == 3:
+                return result, norm
+        return None, None
+
+    header, norm = _extract_if_header(page, line - 1)
+    if not header and page > 1:
+        prev_lines = [ln for (pg, ln) in tokens_by_line.keys() if pg == page - 1]
+        if prev_lines:
+            last_line = max(prev_lines)
+            header, norm = _extract_if_header(page - 1, last_line)
+
+    if header:
+        triad_log("TRIAD_HEADER_ABOVE page=%s line=%s norm=%r", page, line, norm)
+        return header
+
+    triad_log("TRIAD_NO_HEADER_ABOVE_ANCHOR page=%s line=%s", page, line)
+    return None
 
 
 def _pick_headline(
@@ -362,13 +389,17 @@ def split_accounts(
                         line["page"],
                         line["line"],
                     )
-                    header_toks = _find_header_tokens_above_anchor(
+                    header_toks = find_header_above(
                         tokens_by_line, line["page"], line["line"]
                     )
-                    if len(header_toks) == 3:
-                        tu = mid_x(header_toks["transunion"])
-                        xp = mid_x(header_toks["experian"])
-                        eq = mid_x(header_toks["equifax"])
+                    if header_toks:
+                        header_map = {
+                            normalize_bureau_header(t.get("text", "")): t
+                            for t in header_toks
+                        }
+                        tu = mid_x(header_map["transunion"])
+                        xp = mid_x(header_map["experian"])
+                        eq = mid_x(header_map["equifax"])
                         triad_log(
                             "TRIAD_HEADER_XMIDS tu=%.1f xp=%.1f eq=%.1f",
                             tu,
@@ -391,12 +422,6 @@ def split_accounts(
                         triad_active = True
                         current_layout = layout
                         current_layout_page = line["page"]
-                    else:
-                        triad_log(
-                            "TRIAD_NO_HEADER_ABOVE_ANCHOR page=%s line=%s",
-                            line["page"],
-                            line["line"],
-                        )
                 elif _is_triad(joined_line_text):
                     layout = layouts.get(line["page"])
                     if layout:
@@ -437,7 +462,7 @@ def split_accounts(
                 eq_val = join_tokens_with_space(
                     [t.get("text", "") for t in band_tokens["eq"]]
                 ).strip()
-                
+
                 plain_label = _norm(label_txt)
                 if plain_label == "twoyearpaymenthistory":
                     triad_log(

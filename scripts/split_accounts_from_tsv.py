@@ -27,7 +27,9 @@ from backend.core.logic.report_analysis.triad_layout import (
     TriadLayout,
     assign_band,
     detect_triads,
+    mid_x,
 )
+from backend.core.logic.report_analysis.header_utils import normalize_bureau_header
 
 logger = logging.getLogger(__name__)
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
@@ -76,6 +78,11 @@ def _is_anchor(text: str) -> bool:
     return "account#" in _norm(text)
 
 
+def is_account_anchor(text: str) -> bool:
+    """Return True if ``text`` matches the ``Account #`` anchor exactly."""
+    return text.strip() == "Account #"
+
+
 def _looks_like_headline(text: str) -> bool:
     """Return True if ``text`` is an ALL-CAPS headline candidate."""
     stripped = re.sub(r"[^A-Za-z0-9/&\- ]", "", text).strip()
@@ -122,6 +129,33 @@ def _read_tokens(
             text = "".join(tokens)
         lines.append({"page": page, "line": line, "text": text})
     return tokens_by_line, lines
+
+
+def _find_header_tokens_above_anchor(
+    tokens_by_line: Dict[Tuple[int, int], List[Dict[str, str]]],
+    page: int,
+    line: int,
+) -> Dict[str, dict]:
+    """Return header tokens above an anchor by scanning current and previous page."""
+
+    found: Dict[str, dict] = {}
+
+    def _scan(p: int, start_line: int | None = None) -> None:
+        lines_on_page = [ln for pg, ln in tokens_by_line.keys() if pg == p]
+        for ln in sorted(lines_on_page, reverse=True):
+            if start_line is not None and ln >= start_line:
+                continue
+            for tok in tokens_by_line[(p, ln)]:
+                tnorm = normalize_bureau_header(tok.get("text", ""))
+                if tnorm in {"transunion", "experian", "equifax"} and tnorm not in found:
+                    found[tnorm] = tok
+            if len(found) == 3:
+                return
+
+    _scan(page, line)
+    if len(found) < 3 and page - 1 > 0:
+        _scan(page - 1, None)
+    return found
 
 
 def _pick_headline(
@@ -321,9 +355,49 @@ def split_accounts(
                     open_row = None
                     continue
 
-                is_header = _is_triad(joined_line_text)
                 layout: TriadLayout | None = None
-                if is_header:
+                if is_account_anchor(joined_line_text):
+                    triad_log(
+                        "TRIAD_ANCHOR_AT page=%s line=%s",
+                        line["page"],
+                        line["line"],
+                    )
+                    header_toks = _find_header_tokens_above_anchor(
+                        tokens_by_line, line["page"], line["line"]
+                    )
+                    if len(header_toks) == 3:
+                        tu = mid_x(header_toks["transunion"])
+                        xp = mid_x(header_toks["experian"])
+                        eq = mid_x(header_toks["equifax"])
+                        triad_log(
+                            "TRIAD_HEADER_XMIDS tu=%.1f xp=%.1f eq=%.1f",
+                            tu,
+                            xp,
+                            eq,
+                        )
+                        d12 = xp - tu
+                        d23 = eq - xp
+                        label_band = (0.0, tu - d12 / 2.0)
+                        tu_band = (tu - d12 / 2.0, tu + d12 / 2.0)
+                        xp_band = (tu + d12 / 2.0, xp + d23 / 2.0)
+                        eq_band = (xp + d23 / 2.0, eq + d23 / 2.0)
+                        layout = TriadLayout(
+                            page=line["page"],
+                            label_band=label_band,
+                            tu_band=tu_band,
+                            xp_band=xp_band,
+                            eq_band=eq_band,
+                        )
+                        triad_active = True
+                        current_layout = layout
+                        current_layout_page = line["page"]
+                    else:
+                        triad_log(
+                            "TRIAD_NO_HEADER_ABOVE_ANCHOR page=%s line=%s",
+                            line["page"],
+                            line["line"],
+                        )
+                elif _is_triad(joined_line_text):
                     layout = layouts.get(line["page"])
                     if layout:
                         triad_active = True

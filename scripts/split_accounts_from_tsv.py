@@ -22,6 +22,7 @@ from backend.config import RAW_JOIN_TOKENS_WITH_SPACE, RAW_TRIAD_FROM_X
 from backend.core.logic.report_analysis.block_exporter import join_tokens_with_space
 from backend.core.logic.report_analysis.canonical_labels import LABEL_MAP
 from backend.core.logic.report_analysis.normalize_fields import ensure_all_keys
+from backend.core.logic.report_analysis.report_parsing import ACCOUNT_NUMBER_ALIASES
 from backend.core.logic.report_analysis.triad_layout import (
     TriadLayout,
     assign_band,
@@ -48,6 +49,9 @@ HEADING_BACK_LINES = 8
 def _norm(text: str) -> str:
     """Normalize ``text`` by removing spaces/symbols and lowering case."""
     return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+ACCOUNT_NUMBER_ALIAS_NORMS = {_norm(a) for a in ACCOUNT_NUMBER_ALIASES}
 
 
 def _is_triad(text: str) -> bool:
@@ -318,10 +322,12 @@ def split_accounts(
                     scan_page = None
 
                 s = _norm(joined_line_text)
-                if (
-                    s in {"twoyearpaymenthistory", "transunion", "experian", "equifax"}
-                    or s.startswith("dayslate7yearhistory")
-                ):
+                if s in {
+                    "twoyearpaymenthistory",
+                    "transunion",
+                    "experian",
+                    "equifax",
+                } or s.startswith("dayslate7yearhistory"):
                     if triad_active and RAW_TRIAD_FROM_X:
                         triad_log(
                             "TRIAD_STOP reason=%s page=%s line=%s",
@@ -403,7 +409,6 @@ def split_accounts(
                     xp_val,
                     eq_val,
                 )
-                plain_line = _norm(joined_line_text)
                 plain_label = _norm(label_txt)
                 if plain_label == "twoyearpaymenthistory":
                     if RAW_TRIAD_FROM_X:
@@ -430,13 +435,17 @@ def split_accounts(
                             )
                         open_row = None
                     continue
-                label_clean = " ".join(label_txt.split())
-                is_account_num = label_clean == "Account #"
+                is_account_num_alias = plain_label in ACCOUNT_NUMBER_ALIAS_NORMS
                 if label_txt and (
-                    label_txt.endswith(":") or label_txt.endswith("#") or is_account_num
+                    label_txt.endswith(":")
+                    or label_txt.endswith("#")
+                    or is_account_num_alias
                 ):
                     label = label_txt.rstrip(":")
                     key = LABEL_MAP.get(label)
+                    if is_account_num_alias or key == "account_number_display":
+                        key = "account_number_display"
+                        label = "Account #"
                     row = {
                         "triad_row": True,
                         "label": label,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Iterable
@@ -9,12 +10,23 @@ from typing import Iterable
 # the convention used across the cleanup utilities.
 log = logging.getLogger(__name__)
 
-
-_DEFAULT_ARTIFACTS: tuple[str, ...] = (
+# Artifacts that are always required after export. These are verified to
+# exist before any deletion occurs.
+_REQUIRED_ARTIFACTS: tuple[str, ...] = (
     "accounts_table/_debug_full.tsv",
     "accounts_table/accounts_from_full.json",
     "accounts_table/general_info_from_full.json",
 )
+
+# Base list of artifacts to keep. Additional paths may be appended based on
+# environment flags.
+DEFAULT_ARTIFACTS: list[str] = list(_REQUIRED_ARTIFACTS)
+
+# When debugging, it is useful to keep the per-account TSVs generated during
+# analysis. Setting ``KEEP_PER_ACCOUNT_TSV=1`` in the environment preserves
+# these files by whitelisting their directory.
+if os.environ.get("KEEP_PER_ACCOUNT_TSV") == "1":
+    DEFAULT_ARTIFACTS.extend(["accounts_table/per_account_tsv/**"])
 
 
 def _expand_dirs(paths: Iterable[Path], base: Path) -> set[Path]:
@@ -52,14 +64,14 @@ def purge_trace_except_artifacts(
     if not base.exists():
         raise FileNotFoundError(base)
 
-    keep_rel = list(_DEFAULT_ARTIFACTS)
+    keep_rel = list(DEFAULT_ARTIFACTS)
     if keep_extra:
         keep_rel.extend(keep_extra)
 
     keep_abs = {base / Path(p) for p in keep_rel}
 
-    # Verify required artifacts exist (first three of _DEFAULT_ARTIFACTS)
-    for req in _DEFAULT_ARTIFACTS:
+    # Verify required artifacts exist
+    for req in _REQUIRED_ARTIFACTS:
         req_path = base / req
         if not req_path.exists():
             raise RuntimeError(f"required artifact missing: {req}")
@@ -136,6 +148,6 @@ def purge_trace_except_artifacts(
 def purge_after_export(sid: str, project_root: Path | str = Path(".")) -> dict:
     """Purge trace directories after export, keeping final artifacts."""
     base = Path(project_root) / "traces" / "blocks" / sid
-    keep = list(_DEFAULT_ARTIFACTS)
+    keep = list(DEFAULT_ARTIFACTS)
     log.info("Trace cleanup: sid=%s base=%s keep=%s", sid, base, keep)
     return purge_trace_except_artifacts(sid=sid, root=Path(project_root), dry_run=False)

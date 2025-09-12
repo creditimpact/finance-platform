@@ -58,6 +58,13 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
+def _norm_text(s: str) -> str:
+    """Normalize text for guard checks by collapsing whitespace and punctuation."""
+    s = s.replace("\u00ae", " ")
+    s = s.replace(",", " ").replace(":", " ")
+    return " ".join(s.split()).lower()
+
+
 def _is_triad(text: str) -> bool:
     """Return True if ``text`` is the TransUnion/Experian/Equifax triad.
 
@@ -154,12 +161,6 @@ def find_header_above(
     Header must contain exactly {'transunion','experian','equifax'} (any order),
     and nothing else after normalization.
     """
-
-    def _norm_text(s: str) -> str:
-        s = s.replace("\u00ae", " ")
-        s = s.replace(",", " ").replace(":", " ")
-        s = " ".join(s.split()).lower()
-        return s
 
     def _is_pure_triad_header(joined: str) -> bool:
         s = _norm_text(joined)
@@ -395,13 +396,21 @@ def split_accounts(
             triad_active: bool = False
             current_layout: TriadLayout | None = None
             current_layout_page: int | None = None
+
+            def reset() -> None:
+                nonlocal triad_active, current_layout, current_layout_page, open_row
+                triad_active = False
+                current_layout = None
+                current_layout_page = None
+                open_row = None
+
             for line_idx, line in enumerate(account_lines):
                 key = (line["page"], line["line"])
                 toks = tokens_by_line.get(key, [])
                 texts = [t.get("text", "") for t in toks]
                 joined_line_text = join_tokens_with_space(texts)
 
-                s = _norm(joined_line_text)
+                s = _norm_text(joined_line_text)
                 if (
                     triad_active
                     and current_layout
@@ -416,28 +425,41 @@ def split_accounts(
                     )
                     current_layout_page = line["page"]
 
+                is_heading_line_without_values = (
+                    triad_active
+                    and current_layout is not None
+                    and not any(
+                        assign_band(t, current_layout) in {"tu", "xp", "eq"}
+                        for t in toks
+                    )
+                )
                 if triad_active:
-                    if s == "twoyearpaymenthistory":
+                    if s in {"two year payment history"}:
                         triad_log(
                             "TRIAD_STOP reason=two_year_history page=%s line=%s",
                             line["page"],
                             line["line"],
                         )
-                        triad_active = False
-                        current_layout = None
-                        current_layout_page = None
-                        open_row = None
+                        reset()
                         continue
-                    if s in {"transunion", "experian", "equifax"}:
+                    if s.startswith("days late - 7 year history"):
+                        triad_log(
+                            "TRIAD_STOP reason=days_late page=%s line=%s",
+                            line["page"],
+                            line["line"],
+                        )
+                        reset()
+                        continue
+                    if (
+                        s in {"transunion", "experian", "equifax"}
+                        and is_heading_line_without_values
+                    ):
                         triad_log(
                             "TRIAD_STOP reason=bare_bureau_header page=%s line=%s",
                             line["page"],
                             line["line"],
                         )
-                        triad_active = False
-                        current_layout = None
-                        current_layout_page = None
-                        open_row = None
+                        reset()
                         continue
                     if is_account_anchor(joined_line_text):
                         triad_log(
@@ -447,23 +469,9 @@ def split_accounts(
                         )
                         carry_over = account_lines[line_idx:]
                         account_lines = account_lines[:line_idx]
-                        triad_active = False
-                        current_layout = None
-                        current_layout_page = None
-                        open_row = None
+                        reset()
                         trailing_pruned = True
                         break
-                    if s.startswith("dayslate7yearhistory"):
-                        triad_log(
-                            "TRIAD_STOP reason=dayslate7yearhistory page=%s line=%s",
-                            line["page"],
-                            line["line"],
-                        )
-                        triad_active = False
-                        current_layout = None
-                        current_layout_page = None
-                        open_row = None
-                        continue
 
                 layout: TriadLayout | None = None
                 if not triad_active and is_account_anchor(joined_line_text):

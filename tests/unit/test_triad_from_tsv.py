@@ -93,6 +93,28 @@ def create_triad_tsv_cross_page(path: Path) -> None:
     path.write_text(header + "".join(rows), encoding="utf-8")
 
 
+def create_triad_tsv_prev_page_header(path: Path) -> None:
+    header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+    rows = [
+        # header row at end of page 1
+        "1\t1\t10\t11\t50\t100\tTransUnion\n",
+        "1\t1\t10\t11\t150\t200\tExperian\n",
+        "1\t1\t10\t11\t250\t300\tEquifax\n",
+        # account anchor on page 2
+        "2\t1\t20\t21\t0\t20\tAccount #\n",
+        # continuation with numbers
+        "2\t2\t20\t21\t60\t80\tTU123\n",
+        "2\t2\t20\t21\t160\t180\tXP123\n",
+        "2\t2\t20\t21\t260\t280\tEQ123\n",
+        # high balance row on page 2
+        "2\t3\t30\t31\t0\t20\tHigh Balance:\n",
+        "2\t3\t30\t31\t60\t80\t1000\n",
+        "2\t3\t30\t31\t160\t180\t2000\n",
+        "2\t3\t30\t31\t260\t280\t3000\n",
+    ]
+    path.write_text(header + "".join(rows), encoding="utf-8")
+
+
 def create_triad_tsv_bare_header(path: Path) -> None:
     header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
     rows = [
@@ -357,6 +379,36 @@ def test_cross_page_carry_and_sentinel(tmp_path: Path) -> None:
     assert labels[0] == "Account #"
     assert "Two-Year Payment History" not in labels
     assert "Payment Status" not in labels
+
+
+def test_header_on_prev_page(tmp_path: Path) -> None:
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    create_triad_tsv_prev_page_header(tsv_path)
+
+    env = os.environ.copy()
+    env["RAW_TRIAD_FROM_X"] = "1"
+    env["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    subprocess.run(
+        [
+            "python",
+            "scripts/split_accounts_from_tsv.py",
+            "--full",
+            str(tsv_path),
+            "--json_out",
+            str(json_path),
+        ],
+        check=True,
+        env=env,
+        cwd=Path(__file__).resolve().parents[2],
+    )
+
+    data = json.loads(json_path.read_text())
+    acc = data["accounts"][0]
+    assert acc["triad_fields"]["transunion"]["high_balance"] == "1000"
+    assert acc["triad_fields"]["experian"]["high_balance"] == "2000"
+    assert acc["triad_fields"]["equifax"]["account_number_display"] == "EQ123"
 
 
 def test_standalone_bureau_header_stops(tmp_path: Path) -> None:

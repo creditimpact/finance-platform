@@ -481,28 +481,35 @@ def split_accounts(
                     or is_account_num_alias
                 ):
                     label = label_txt.rstrip(":")
-                    key = LABEL_MAP.get(label)
-                    if is_account_num_alias or key == "account_number_display":
-                        key = "account_number_display"
-                        label = "Account #"
+                    canonical_key = LABEL_MAP.get(label)
+                    if is_account_num_alias or canonical_key == "account_number_display":
+                        canonical_key = "account_number_display"
                     row = {
                         "triad_row": True,
                         "label": label,
-                        "key": key,
+                        "key": canonical_key,
                         "values": {
-                            "transunion": tu_val,
-                            "experian": xp_val,
-                            "equifax": eq_val,
+                            "transunion": "",
+                            "experian": "",
+                            "equifax": "",
                         },
                     }
                     triad_rows.append(row)
-                    if key:
-                        triad_maps["transunion"][key] = tu_val
-                        triad_maps["experian"][key] = xp_val
-                        triad_maps["equifax"][key] = eq_val
+                    if tu_val:
+                        row["values"]["transunion"] = tu_val
+                        if canonical_key:
+                            triad_maps["transunion"][canonical_key] = tu_val
+                    if xp_val:
+                        row["values"]["experian"] = xp_val
+                        if canonical_key:
+                            triad_maps["experian"][canonical_key] = xp_val
+                    if eq_val:
+                        row["values"]["equifax"] = eq_val
+                        if canonical_key:
+                            triad_maps["equifax"][canonical_key] = eq_val
                     triad_log(
                         "TRIAD_ROW key=%s TU=%r XP=%r EQ=%r",
-                        key,
+                        canonical_key,
                         tu_val,
                         xp_val,
                         eq_val,

@@ -19,10 +19,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
 from backend.config import RAW_JOIN_TOKENS_WITH_SPACE, RAW_TRIAD_FROM_X
-from backend.core.logic.report_analysis.block_exporter import join_tokens_with_space
 from backend.core.logic.report_analysis.canonical_labels import LABEL_MAP
 from backend.core.logic.report_analysis.normalize_fields import ensure_all_keys
-from backend.core.logic.report_analysis.report_parsing import ACCOUNT_NUMBER_ALIASES
 from backend.core.logic.report_analysis.triad_layout import (
     EDGE_EPS,
     TriadLayout,
@@ -46,12 +44,18 @@ NOISE_BANNER_RE = re.compile(
 HEADING_BACK_LINES = 8
 
 
+_SPACE_RE = re.compile(r"\s+")
+
+
+def join_tokens_with_space(tokens: Iterable[str]) -> str:
+    """Join tokens with a single space, normalizing whitespace."""
+    s = " ".join(t.strip() for t in tokens if t is not None)
+    return _SPACE_RE.sub(" ", s).strip()
+
+
 def _norm(text: str) -> str:
     """Normalize ``text`` by removing spaces/symbols and lowering case."""
     return re.sub(r"[^a-z0-9]", "", text.lower())
-
-
-ACCOUNT_NUMBER_ALIAS_NORMS = {_norm(a) for a in ACCOUNT_NUMBER_ALIASES}
 
 
 def _is_triad(text: str) -> bool:
@@ -79,7 +83,7 @@ def _is_anchor(text: str) -> bool:
 def is_account_anchor(joined_text: str) -> bool:
     """Return True if ``joined_text`` matches the exact ``Account #`` anchor."""
     # "Account" without the trailing ``#`` must not trigger activation
-    return joined_text.strip() == "Account #"
+    return joined_text.strip().startswith("Account #")
 
 
 def _looks_like_headline(text: str) -> bool:
@@ -490,9 +494,8 @@ def split_accounts(
                             b = assign_band(t, layout)
                             if b in band_tokens_anchor:
                                 band_tokens_anchor[b].append(t)
-                        if (
-                            band_tokens_anchor["label"]
-                            and all(len(band_tokens_anchor[b]) == 1 for b in ("tu", "xp", "eq"))
+                        if band_tokens_anchor["label"] and all(
+                            len(band_tokens_anchor[b]) == 1 for b in ("tu", "xp", "eq")
                         ):
                             triad_active = True
                             current_layout = layout
@@ -557,23 +560,21 @@ def split_accounts(
                         )
                         open_row = None
                     continue
-                plain_label = _norm(label_txt)
-                is_account_num_alias = plain_label in ACCOUNT_NUMBER_ALIAS_NORMS
-                if label_txt and (
-                    label_txt.endswith(":")
-                    or label_txt.endswith("#")
-                    or is_account_num_alias
-                ):
-                    label = label_txt.rstrip(":")
-                    canonical_key = LABEL_MAP.get(label)
-                    if (
-                        is_account_num_alias
-                        or canonical_key == "account_number_display"
-                    ):
-                        canonical_key = "account_number_display"
+                if label_txt and (label_txt.endswith(":") or label_txt.endswith("#")):
+                    visual = label_txt.rstrip(":").strip()
+                    canonical_key = LABEL_MAP.get(visual)
+                    if canonical_key is None and visual != "Account #":
+                        triad_log(
+                            "TRIAD_GUARD_SKIP page=%s line=%s reason=unknown_label label=%r",
+                            line["page"],
+                            line["line"],
+                            visual,
+                        )
+                        open_row = None
+                        continue
                     row = {
                         "triad_row": True,
-                        "label": label,
+                        "label": visual,
                         "key": canonical_key,
                         "values": {
                             "transunion": "",

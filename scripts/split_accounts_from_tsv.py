@@ -21,14 +21,13 @@ from typing import Any, Dict, Iterable, List, Tuple
 from backend.config import RAW_JOIN_TOKENS_WITH_SPACE, RAW_TRIAD_FROM_X
 from backend.core.logic.report_analysis.block_exporter import join_tokens_with_space
 from backend.core.logic.report_analysis.canonical_labels import LABEL_MAP
-from backend.core.logic.report_analysis.header_utils import normalize_bureau_header
 from backend.core.logic.report_analysis.normalize_fields import ensure_all_keys
 from backend.core.logic.report_analysis.report_parsing import ACCOUNT_NUMBER_ALIASES
 from backend.core.logic.report_analysis.triad_layout import (
     TriadLayout,
     assign_band,
+    bands_from_header_tokens,
     detect_triads,
-    mid_x,
 )
 
 logger = logging.getLogger(__name__)
@@ -393,31 +392,12 @@ def split_accounts(
                         tokens_by_line, line["page"], line["line"]
                     )
                     if header_toks:
-                        header_map = {
-                            normalize_bureau_header(t.get("text", "")): t
-                            for t in header_toks
-                        }
-                        tu = mid_x(header_map["transunion"])
-                        xp = mid_x(header_map["experian"])
-                        eq = mid_x(header_map["equifax"])
+                        layout = bands_from_header_tokens(header_toks)
                         triad_log(
                             "TRIAD_HEADER_XMIDS tu=%.1f xp=%.1f eq=%.1f",
-                            tu,
-                            xp,
-                            eq,
-                        )
-                        d12 = xp - tu
-                        d23 = eq - xp
-                        label_band = (0.0, tu - d12 / 2.0)
-                        tu_band = (tu - d12 / 2.0, tu + d12 / 2.0)
-                        xp_band = (tu + d12 / 2.0, xp + d23 / 2.0)
-                        eq_band = (xp + d23 / 2.0, eq + d23 / 2.0)
-                        layout = TriadLayout(
-                            page=line["page"],
-                            label_band=label_band,
-                            tu_band=tu_band,
-                            xp_band=xp_band,
-                            eq_band=eq_band,
+                            layout.tu_band[0],
+                            layout.xp_band[0],
+                            layout.eq_band[0],
                         )
                         triad_active = True
                         current_layout = layout

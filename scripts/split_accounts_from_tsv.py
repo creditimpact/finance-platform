@@ -94,6 +94,16 @@ def _looks_like_headline(text: str) -> bool:
     return core.isupper()
 
 
+def _mid_y(t: dict) -> float:
+    """Return the vertical midpoint of token ``t``."""
+    try:
+        y0 = float(t.get("y0", 0.0))
+        y1 = float(t.get("y1", y0))
+        return (y0 + y1) / 2.0
+    except Exception:
+        return 0.0
+
+
 def _read_tokens(
     tsv_path: Path,
 ) -> Tuple[Dict[Tuple[int, int], List[Dict[str, str]]], List[Dict[str, Any]]]:
@@ -133,55 +143,80 @@ def _read_tokens(
 
 def find_header_above(
     tokens_by_line: Dict[Tuple[int, int], List[Dict[str, str]]],
-    page: int,
-    line: int,
+    anchor_page: int,
+    anchor_line: int,
+    anchor_y: float,
 ) -> List[dict] | None:
-    """Return header tokens (transunion/experian/equifax) on nearest line above.
-
-    The search first checks ``(page, line-1)``. If that line is missing or does
-    not contain the three bureau names, the last line of ``page-1`` is checked.
-    Token text is normalized by stripping the registered mark, commas and
-    colons, collapsing spaces and lowercasing. When a header is found a log
-    entry ``TRIAD_HEADER_ABOVE`` is emitted, otherwise ``TRIAD_NO_HEADER_ABOVE_ANCHOR``
-    is logged.
+    """Return tokens for the nearest header line strictly above the anchor.
+    Header must contain exactly {'transunion','experian','equifax'} (any order),
+    and nothing else after normalization.
     """
 
-    def _norm_header(text: str) -> str:
-        s = (text or "").lower()
-        s = s.replace("\u00ae", "").replace(",", " ").replace(":", " ")
-        s = re.sub(r"\s+", " ", s).strip()
+    def _norm_text(s: str) -> str:
+        s = s.replace("\u00ae", " ")
+        s = s.replace(",", " ").replace(":", " ")
+        s = " ".join(s.split()).lower()
         return s
 
-    def _extract_if_header(
-        p: int, line_no: int
-    ) -> Tuple[List[dict] | None, str | None]:
-        toks = tokens_by_line.get((p, line_no))
+    def _is_pure_triad_header(joined: str) -> bool:
+        s = _norm_text(joined)
+        parts = s.split()
+        names = {"transunion", "experian", "equifax"}
+        return len(parts) == 3 and set(parts) == names  # exactly three tokens, no extras
+
+    def _line_header(p: int, ln: int) -> Tuple[List[dict] | None, str | None]:
+        toks = tokens_by_line.get((p, ln))
         if not toks:
             return None, None
+        # ensure all tokens are above anchor_y
+        if any(_mid_y(t) >= anchor_y for t in toks):
+            return None, None
         joined = join_tokens_with_space([t.get("text", "") for t in toks])
-        norm = _norm_header(joined)
-        if all(name in norm for name in ("transunion", "experian", "equifax")):
-            result: List[dict] = []
-            for t in toks:
-                tnorm = _norm_header(t.get("text", ""))
-                if tnorm in {"transunion", "experian", "equifax"}:
-                    result.append(t)
-            if len(result) == 3:
-                return result, norm
-        return None, None
+        if not _is_pure_triad_header(joined):
+            return None, None
+        return toks, _norm_text(joined)
 
-    header, norm = _extract_if_header(page, line - 1)
-    if not header and page > 1:
-        prev_lines = [ln for (pg, ln) in tokens_by_line.keys() if pg == page - 1]
-        if prev_lines:
-            last_line = max(prev_lines)
-            header, norm = _extract_if_header(page - 1, last_line)
+    # scan upwards on same page
+    for ln in range(anchor_line - 1, 0, -1):
+        header, norm = _line_header(anchor_page, ln)
+        if header:
+            ys = sorted(_mid_y(t) for t in header)
+            yval = ys[len(ys) // 2] if ys else 0.0
+            triad_log(
+                "TRIAD_HEADER_ABOVE page=%s line=%s y=%.1f norm=%r",
+                anchor_page,
+                ln,
+                yval,
+                norm,
+            )
+            return header
 
-    if header:
-        triad_log("TRIAD_HEADER_ABOVE page=%s line=%s norm=%r", page, line, norm)
-        return header
+    # check previous page from last line upwards
+    prev_page = anchor_page - 1
+    if prev_page >= 1:
+        prev_lines = [ln for (pg, ln) in tokens_by_line.keys() if pg == prev_page]
+        for ln in sorted(prev_lines, reverse=True):
+            toks = tokens_by_line.get((prev_page, ln))
+            if not toks:
+                continue
+            joined = join_tokens_with_space([t.get("text", "") for t in toks])
+            if _is_pure_triad_header(joined):
+                ys = sorted(_mid_y(t) for t in toks)
+                yval = ys[len(ys) // 2] if ys else 0.0
+                triad_log(
+                    "TRIAD_HEADER_ABOVE page=%s line=%s y=%.1f norm=%r",
+                    prev_page,
+                    ln,
+                    yval,
+                    _norm_text(joined),
+                )
+                return toks
 
-    triad_log("TRIAD_NO_HEADER_ABOVE_ANCHOR page=%s line=%s", page, line)
+    triad_log(
+        "TRIAD_NO_HEADER_ABOVE_ANCHOR page=%s line=%s",
+        anchor_page,
+        anchor_line,
+    )
     return None
 
 
@@ -427,13 +462,22 @@ def split_accounts(
 
                 layout: TriadLayout | None = None
                 if not triad_active and is_account_anchor(joined_line_text):
+                    toks_anchor = tokens_by_line.get(
+                        (line["page"], line["line"]), []
+                    )
+                    ys = sorted(_mid_y(t) for t in toks_anchor)
+                    anchor_y = ys[len(ys) // 2] if ys else 0.0
                     triad_log(
-                        "TRIAD_ANCHOR_AT page=%s line=%s",
+                        "TRIAD_ANCHOR_AT page=%s line=%s y=%.1f",
                         line["page"],
                         line["line"],
+                        anchor_y,
                     )
                     header_toks = find_header_above(
-                        tokens_by_line, line["page"], line["line"]
+                        tokens_by_line,
+                        line["page"],
+                        line["line"],
+                        anchor_y,
                     )
                     if header_toks:
                         layout = bands_from_header_tokens(header_toks)

@@ -28,7 +28,6 @@ from backend.core.logic.report_analysis.triad_layout import (
     TriadLayout,
     assign_band,
     bands_from_header_tokens,
-    detect_triads,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,9 +76,10 @@ def _is_anchor(text: str) -> bool:
     return "account#" in _norm(text)
 
 
-def is_account_anchor(text: str) -> bool:
-    """Return True if ``text`` matches the ``Account #`` anchor exactly."""
-    return text.strip() == "Account #"
+def is_account_anchor(joined_text: str) -> bool:
+    """Return True if ``joined_text`` matches the exact ``Account #`` anchor."""
+    # "Account" without the trailing ``#`` must not trigger activation
+    return joined_text.strip() == "Account #"
 
 
 def _looks_like_headline(text: str) -> bool:
@@ -298,7 +298,6 @@ def split_accounts(
 ) -> Dict[str, Any]:
     """Core logic for splitting accounts from the full TSV."""
     tokens_by_line, lines = _read_tokens(tsv_path)
-    layouts = detect_triads(tokens_by_line) if RAW_TRIAD_FROM_X else {}
 
     stop_marker_seen = False
     for i, line in enumerate(lines):
@@ -486,17 +485,27 @@ def split_accounts(
                             layout.xp_band[0] + EDGE_EPS,
                             layout.eq_band[0] + EDGE_EPS,
                         )
-                        triad_active = True
-                        current_layout = layout
-                        current_layout_page = line["page"]
-                elif _is_triad(joined_line_text):
-                    layout = layouts.get(line["page"])
-                    if layout:
-                        triad_active = True
-                        current_layout = layout
-                        if current_layout_page != line["page"]:
-                            triad_log("TRIAD_CARRY start page=%s", line["page"])
-                        current_layout_page = line["page"]
+                        band_tokens_anchor = {"label": [], "tu": [], "xp": [], "eq": []}
+                        for t in toks_anchor:
+                            b = assign_band(t, layout)
+                            if b in band_tokens_anchor:
+                                band_tokens_anchor[b].append(t)
+                        if (
+                            band_tokens_anchor["label"]
+                            and all(len(band_tokens_anchor[b]) == 1 for b in ("tu", "xp", "eq"))
+                        ):
+                            triad_active = True
+                            current_layout = layout
+                            current_layout_page = line["page"]
+                        else:
+                            triad_log(
+                                "TRIAD_STOP reason=layout_mismatch page=%s line=%s",
+                                line["page"],
+                                line["line"],
+                            )
+                            triad_active = False
+                            current_layout = None
+                            current_layout_page = None
                 elif triad_active and current_layout:
                     layout = current_layout
                 band_tokens: Dict[str, List[dict]] = {

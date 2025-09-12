@@ -199,6 +199,66 @@ def create_triad_tsv_with_punct(path: Path) -> None:
     path.write_text(header + "".join(rows), encoding="utf-8")
 
 
+def create_triad_tsv_cross_page_carry(path: Path) -> None:
+    header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+    rows = [
+        # page 2 header row
+        "2\t1\t10\t11\t50\t100\tTransUnion\n",
+        "2\t1\t10\t11\t150\t200\tExperian\n",
+        "2\t1\t10\t11\t250\t300\tEquifax\n",
+        # account number and balance on page 2
+        "2\t2\t20\t21\t0\t20\tAccount #\n",
+        "2\t2\t20\t21\t60\t80\tTU222\n",
+        "2\t2\t20\t21\t160\t180\tXP222\n",
+        "2\t2\t20\t21\t260\t280\tEQ222\n",
+        "2\t3\t30\t31\t0\t20\tHigh Balance:\n",
+        "2\t3\t30\t31\t60\t80\t1000\n",
+        "2\t3\t30\t31\t160\t180\t2000\n",
+        "2\t3\t30\t31\t260\t280\t3000\n",
+        # page 3 rows without header reuse previous layout
+        "3\t1\t10\t11\t0\t20\tAccount Type:\n",
+        "3\t1\t10\t11\t60\t80\tMortgage\n",
+        "3\t1\t10\t11\t160\t180\tAuto\n",
+        "3\t1\t10\t11\t260\t280\tCard\n",
+        "3\t2\t20\t21\t0\t20\tPayment Frequency:\n",
+        "3\t2\t20\t21\t60\t80\tMonthly\n",
+        "3\t2\t20\t21\t160\t180\tWeekly\n",
+        "3\t2\t20\t21\t260\t280\tBiweekly\n",
+        "3\t3\t30\t31\t0\t20\tCredit Limit:\n",
+        "3\t3\t30\t31\t60\t80\t5000\n",
+        "3\t3\t30\t31\t160\t180\t4000\n",
+        "3\t3\t30\t31\t260\t280\t3000\n",
+    ]
+    path.write_text(header + "".join(rows), encoding="utf-8")
+
+
+def create_triad_tsv_unlabeled_sentinel(path: Path) -> None:
+    header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+    rows = [
+        # header and valid triad rows
+        "1\t1\t10\t11\t50\t100\tTransUnion\n",
+        "1\t1\t10\t11\t150\t200\tExperian\n",
+        "1\t1\t10\t11\t250\t300\tEquifax\n",
+        "1\t2\t20\t21\t0\t20\tAccount #\n",
+        "1\t2\t20\t21\t60\t80\tTU123\n",
+        "1\t2\t20\t21\t160\t180\tXP123\n",
+        "1\t2\t20\t21\t260\t280\tEQ123\n",
+        "1\t3\t30\t31\t0\t20\tCreditor Remarks:\n",
+        "1\t3\t30\t31\t260\t280\tFannie\n",
+        # unlabeled sentinel line
+        "1\t4\t40\t41\t0\t40\tTwo-Year Payment History\n",
+        # new header after sentinel
+        "1\t5\t50\t51\t50\t100\tTransUnion\n",
+        "1\t5\t50\t51\t150\t200\tExperian\n",
+        "1\t5\t50\t51\t250\t300\tEquifax\n",
+        # row that should not be appended to prior field
+        "1\t6\t60\t61\t60\t80\tOK\n",
+        "1\t6\t60\t61\t160\t180\tOK\n",
+        "1\t6\t60\t61\t260\t280\tOK\n",
+    ]
+    path.write_text(header + "".join(rows), encoding="utf-8")
+
+
 def test_triad_from_tsv(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
     json_path = tmp_path / "accounts_from_full.json"
@@ -407,3 +467,61 @@ def test_triad_partial_continuation(tmp_path: Path, caplog) -> None:
     assert acc["triad_fields"]["equifax"]["creditor_remarks"] == "Fannie Mae"
     assert "TRIAD_GUARD_SKIP" not in caplog.text
     assert "TRIAD_CONT_PARTIAL" in caplog.text
+
+
+def test_triad_cross_page_carry(tmp_path: Path, caplog) -> None:
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    create_triad_tsv_cross_page_carry(tsv_path)
+
+    os.environ["RAW_TRIAD_FROM_X"] = "1"
+    os.environ["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
+    os.environ["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    sys.argv = [
+        "split_accounts_from_tsv.py",
+        "--full",
+        str(tsv_path),
+        "--json_out",
+        str(json_path),
+    ]
+    logging.basicConfig(level=logging.INFO)
+    sys.modules.pop("backend.config", None)
+    sys.modules.pop("scripts.split_accounts_from_tsv", None)
+    with caplog.at_level(logging.INFO):
+        runpy.run_module("scripts.split_accounts_from_tsv", run_name="__main__")
+
+    data = json.loads(json_path.read_text())
+    acc = data["accounts"][0]
+    triad_fields = acc["triad_fields"]
+    assert triad_fields["transunion"]["account_type"] == "Mortgage"
+    assert triad_fields["experian"]["payment_frequency"] == "Weekly"
+    assert triad_fields["equifax"]["credit_limit"] == "3000"
+    assert "TRIAD_CARRY reuse" in caplog.text
+
+
+def test_triad_stop_on_unlabeled_sentinels(tmp_path: Path, caplog) -> None:
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    create_triad_tsv_unlabeled_sentinel(tsv_path)
+
+    os.environ["RAW_TRIAD_FROM_X"] = "1"
+    os.environ["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
+    os.environ["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    sys.argv = [
+        "split_accounts_from_tsv.py",
+        "--full",
+        str(tsv_path),
+        "--json_out",
+        str(json_path),
+    ]
+    logging.basicConfig(level=logging.INFO)
+    sys.modules.pop("backend.config", None)
+    sys.modules.pop("scripts.split_accounts_from_tsv", None)
+    with caplog.at_level(logging.INFO):
+        runpy.run_module("scripts.split_accounts_from_tsv", run_name="__main__")
+
+    data = json.loads(json_path.read_text())
+    acc = data["accounts"][0]
+    assert acc["triad_fields"]["equifax"]["creditor_remarks"] == "Fannie"
+    assert caplog.text.count("TRIAD_STOP") == 1
+    assert "TRIAD_STOP reason=twoyearpaymenthistory page=1 line=4" in caplog.text

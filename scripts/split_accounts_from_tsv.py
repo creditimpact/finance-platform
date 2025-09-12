@@ -2,9 +2,9 @@
 """Split accounts from a full token TSV dump.
 
 This script groups tokens by `(page, line)` to form lines of text. It detects
-account boundaries based on lines that contain the phrase ``Account`` followed
-by a ``#`` on the same line. Each account is emitted to a structured JSON file
-and, optionally, into individual TSV files for debugging.
+account boundaries based on lines that contain the exact string ``Account #``.
+Each account is emitted to a structured JSON file and, optionally, into
+individual TSV files for debugging.
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from backend.core.logic.report_analysis.canonical_labels import LABEL_MAP
 from backend.core.logic.report_analysis.normalize_fields import ensure_all_keys
 from backend.core.logic.report_analysis.report_parsing import ACCOUNT_NUMBER_ALIASES
 from backend.core.logic.report_analysis.triad_layout import (
+    EDGE_EPS,
     TriadLayout,
     assign_band,
     bands_from_header_tokens,
@@ -33,8 +34,6 @@ from backend.core.logic.report_analysis.triad_layout import (
 logger = logging.getLogger(__name__)
 # Enable with RAW_TRIAD_FROM_X=1 for verbose triad logs
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
-
-ACCOUNT_RE = re.compile(r"\bAccount\b.*#", re.IGNORECASE)
 STOP_MARKER_NORM = "publicinformation"
 SECTION_STARTERS = {"collection", "unknown"}
 _SECTION_NAME = {"collection": "collections", "unknown": "unknown"}
@@ -162,7 +161,9 @@ def find_header_above(
         s = _norm_text(joined)
         parts = s.split()
         names = {"transunion", "experian", "equifax"}
-        return len(parts) == 3 and set(parts) == names  # exactly three tokens, no extras
+        return (
+            len(parts) == 3 and set(parts) == names
+        )  # exactly three tokens, no extras
 
     def _line_header(p: int, ln: int) -> Tuple[List[dict] | None, str | None]:
         toks = tokens_by_line.get((p, ln))
@@ -306,7 +307,7 @@ def split_accounts(
             lines = lines[:i]
             break
 
-    anchors = [i for i, line in enumerate(lines) if ACCOUNT_RE.search(line["text"])]
+    anchors = [i for i, line in enumerate(lines) if is_account_anchor(line["text"])]
 
     account_starts: List[int] = []
     headings: List[str | None] = []
@@ -462,9 +463,7 @@ def split_accounts(
 
                 layout: TriadLayout | None = None
                 if not triad_active and is_account_anchor(joined_line_text):
-                    toks_anchor = tokens_by_line.get(
-                        (line["page"], line["line"]), []
-                    )
+                    toks_anchor = tokens_by_line.get((line["page"], line["line"]), [])
                     ys = sorted(_mid_y(t) for t in toks_anchor)
                     anchor_y = ys[len(ys) // 2] if ys else 0.0
                     triad_log(
@@ -483,9 +482,9 @@ def split_accounts(
                         layout = bands_from_header_tokens(header_toks)
                         triad_log(
                             "TRIAD_HEADER_XMIDS tu=%.1f xp=%.1f eq=%.1f",
-                            layout.tu_band[0],
-                            layout.xp_band[0],
-                            layout.eq_band[0],
+                            layout.tu_band[0] + EDGE_EPS,
+                            layout.xp_band[0] + EDGE_EPS,
+                            layout.eq_band[0] + EDGE_EPS,
                         )
                         triad_active = True
                         current_layout = layout
@@ -558,7 +557,10 @@ def split_accounts(
                 ):
                     label = label_txt.rstrip(":")
                     canonical_key = LABEL_MAP.get(label)
-                    if is_account_num_alias or canonical_key == "account_number_display":
+                    if (
+                        is_account_num_alias
+                        or canonical_key == "account_number_display"
+                    ):
                         canonical_key = "account_number_display"
                     row = {
                         "triad_row": True,

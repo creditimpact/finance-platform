@@ -114,6 +114,37 @@ def _mid_y(t: dict) -> float:
         return 0.0
 
 
+def _has_label_suffix(text: str) -> bool:
+    """Return True if ``text`` ends with a label marker like ':' or '#'."""
+    text = (text or "").strip()
+    return text.endswith(":") or text.endswith("#")
+
+
+def in_label_band(token: dict, layout: TriadLayout) -> bool:
+    """Return True if ``token`` lies within the label band of ``layout``."""
+    return assign_band(token, layout) == "label"
+
+
+def verify_anchor_row(tokens: List[dict], layout: TriadLayout) -> bool:
+    """Return True if ``tokens`` form a valid anchor row for ``layout``."""
+    bands: Dict[str, List[dict]] = {"label": [], "tu": [], "xp": [], "eq": []}
+    for t in tokens:
+        b = assign_band(t, layout)
+        if b in bands:
+            bands[b].append(t)
+    if not bands["label"] or not all(len(bands[b]) == 1 for b in ("tu", "xp", "eq")):
+        return False
+    label_norms = [_norm_text(t.get("text", "")) for t in bands["label"]]
+    if not any("account" in n for n in label_norms):
+        return False
+    names = {"tu": "transunion", "xp": "experian", "eq": "equifax"}
+    for band, name in names.items():
+        txt = _norm_text(bands[band][0].get("text", ""))
+        if name not in txt:
+            return False
+    return True
+
+
 def _read_tokens(
     tsv_path: Path,
 ) -> Tuple[Dict[Tuple[int, int], List[Dict[str, str]]], List[Dict[str, Any]]]:
@@ -498,14 +529,7 @@ def split_accounts(
                             layout.xp_band[0] + EDGE_EPS,
                             layout.eq_band[0] + EDGE_EPS,
                         )
-                        band_tokens_anchor = {"label": [], "tu": [], "xp": [], "eq": []}
-                        for t in toks_anchor:
-                            b = assign_band(t, layout)
-                            if b in band_tokens_anchor:
-                                band_tokens_anchor[b].append(t)
-                        if band_tokens_anchor["label"] and all(
-                            len(band_tokens_anchor[b]) == 1 for b in ("tu", "xp", "eq")
-                        ):
+                        if verify_anchor_row(toks_anchor, layout):
                             triad_active = True
                             current_layout = layout
                             current_layout_page = line["page"]
@@ -526,11 +550,14 @@ def split_accounts(
                     "xp": [],
                     "eq": [],
                 }
+                label_token = None
                 if layout:
                     for t in toks:
                         band = assign_band(t, layout)
                         if band in band_tokens:
                             band_tokens[band].append(t)
+                        if label_token is None and _has_label_suffix(t.get("text", "")):
+                            label_token = t
                     if (
                         triad_active
                         and ":" in joined_line_text
@@ -545,6 +572,19 @@ def split_accounts(
                         current_layout = None
                         current_layout_page = None
                         open_row = None
+                        continue
+                    if (
+                        triad_active
+                        and open_row is None
+                        and label_token
+                        and not in_label_band(label_token, layout)
+                    ):
+                        triad_log(
+                            "TRIAD_STOP reason=layout_mismatch page=%s line=%s",
+                            line["page"],
+                            line["line"],
+                        )
+                        reset()
                         continue
                 label_txt = join_tokens_with_space(
                     [t.get("text", "") for t in band_tokens["label"]]

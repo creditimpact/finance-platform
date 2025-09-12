@@ -528,10 +528,9 @@ def split_accounts(
                             continue
                         if not (tu_val or xp_val or eq_val):
                             triad_log(
-                                "TRIAD_GUARD_SKIP page=%s line=%s reason=%s",
+                                "TRIAD_GUARD_SKIP page=%s line=%s reason=no_banded_tokens",
                                 line["page"],
                                 line["line"],
-                                "no_banded_tokens",
                             )
                             open_row = None
                             continue

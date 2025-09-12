@@ -355,7 +355,7 @@ def split_accounts(
             triad_active: bool = False
             current_layout: TriadLayout | None = None
             current_layout_page: int | None = None
-            for line in account_lines:
+            for line_idx, line in enumerate(account_lines):
                 key = (line["page"], line["line"])
                 toks = tokens_by_line.get(key, [])
                 texts = [t.get("text", "") for t in toks]
@@ -374,30 +374,58 @@ def split_accounts(
                         line["page"],
                     )
                     current_layout_page = line["page"]
-                    if s in {"transunion", "experian", "equifax"}:
-                        continue
 
-                if s in {
-                    "twoyearpaymenthistory",
-                    "transunion",
-                    "experian",
-                    "equifax",
-                } or s.startswith("dayslate7yearhistory"):
-                    if triad_active:
+                if triad_active:
+                    if s == "twoyearpaymenthistory":
                         triad_log(
-                            "TRIAD_STOP reason=%s page=%s line=%s",
-                            s,
+                            "TRIAD_STOP reason=two_year_history page=%s line=%s",
                             line["page"],
                             line["line"],
                         )
-                    triad_active = False
-                    current_layout = None
-                    current_layout_page = None
-                    open_row = None
-                    continue
+                        triad_active = False
+                        current_layout = None
+                        current_layout_page = None
+                        open_row = None
+                        continue
+                    if s in {"transunion", "experian", "equifax"}:
+                        triad_log(
+                            "TRIAD_STOP reason=bare_bureau_header page=%s line=%s",
+                            line["page"],
+                            line["line"],
+                        )
+                        triad_active = False
+                        current_layout = None
+                        current_layout_page = None
+                        open_row = None
+                        continue
+                    if is_account_anchor(joined_line_text):
+                        triad_log(
+                            "TRIAD_RESET_ON_ANCHOR page=%s line=%s",
+                            line["page"],
+                            line["line"],
+                        )
+                        carry_over = account_lines[line_idx:]
+                        account_lines = account_lines[:line_idx]
+                        triad_active = False
+                        current_layout = None
+                        current_layout_page = None
+                        open_row = None
+                        trailing_pruned = True
+                        break
+                    if s.startswith("dayslate7yearhistory"):
+                        triad_log(
+                            "TRIAD_STOP reason=dayslate7yearhistory page=%s line=%s",
+                            line["page"],
+                            line["line"],
+                        )
+                        triad_active = False
+                        current_layout = None
+                        current_layout_page = None
+                        open_row = None
+                        continue
 
                 layout: TriadLayout | None = None
-                if is_account_anchor(joined_line_text):
+                if not triad_active and is_account_anchor(joined_line_text):
                     triad_log(
                         "TRIAD_ANCHOR_AT page=%s line=%s",
                         line["page"],
@@ -438,6 +466,21 @@ def split_accounts(
                         band = assign_band(t, layout)
                         if band in band_tokens:
                             band_tokens[band].append(t)
+                    if (
+                        triad_active
+                        and ":" in joined_line_text
+                        and not band_tokens["label"]
+                    ):
+                        triad_log(
+                            "TRIAD_STOP reason=layout_mismatch page=%s line=%s",
+                            line["page"],
+                            line["line"],
+                        )
+                        triad_active = False
+                        current_layout = None
+                        current_layout_page = None
+                        open_row = None
+                        continue
                 label_txt = join_tokens_with_space(
                     [t.get("text", "") for t in band_tokens["label"]]
                 ).strip()
@@ -451,19 +494,6 @@ def split_accounts(
                     [t.get("text", "") for t in band_tokens["eq"]]
                 ).strip()
 
-                plain_label = _norm(label_txt)
-                if plain_label == "twoyearpaymenthistory":
-                    triad_log(
-                        "TRIAD_STOP reason=%s page=%s line=%s",
-                        "two_year_payment_history",
-                        line["page"],
-                        line["line"],
-                    )
-                    triad_active = False
-                    current_layout = None
-                    current_layout_page = None
-                    open_row = None
-                    continue
                 if not layout:
                     if open_row:
                         triad_log(
@@ -474,6 +504,7 @@ def split_accounts(
                         )
                         open_row = None
                     continue
+                plain_label = _norm(label_txt)
                 is_account_num_alias = plain_label in ACCOUNT_NUMBER_ALIAS_NORMS
                 if label_txt and (
                     label_txt.endswith(":")

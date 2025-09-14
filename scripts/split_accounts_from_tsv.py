@@ -260,7 +260,8 @@ H2Y_PAT = re.compile(r"\bTwo[-\s]?Year\b.*\bPayment\b.*\bHistory\b", re.I)
 H2Y_STATUS_RE = re.compile(r"^(?:ok|co|[0-9]{2,3})$", re.I)
 H7Y_TITLE_PAT = re.compile(r"(Days\s*Late|7\s*Year\s*History)", re.I)
 H7Y_BUREAUS = ("Transunion", "Experian", "Equifax")
-LATE_KEY_PAT = re.compile(r"^\s*(30|60|90)\s*:\s*(\d+)?\s*$")
+# Accept "30:" and also merged "30:0" (second group optional)
+LATE_KEY_PAT = re.compile(r"^\s*(30|60|90)\s*:\s*(\d+)?\s*$", re.I)
 INT_PAT = re.compile(r"^\d+$")
 H7Y_EPS = 6.0
 
@@ -1297,6 +1298,30 @@ def split_accounts(
                             acc_seven_year["eq"]["late60"],
                             acc_seven_year["eq"]["late90"],
                         )
+                        _history_trace(
+                            page=line["page"],
+                            line=line["line"],
+                            phase="history7y",
+                            bureau="tu",
+                            kind="summary",
+                            text=f"30:{acc_seven_year['tu']['late30']} 60:{acc_seven_year['tu']['late60']} 90:{acc_seven_year['tu']['late90']}",
+                        )
+                        _history_trace(
+                            page=line["page"],
+                            line=line["line"],
+                            phase="history7y",
+                            bureau="xp",
+                            kind="summary",
+                            text=f"30:{acc_seven_year['xp']['late30']} 60:{acc_seven_year['xp']['late60']} 90:{acc_seven_year['xp']['late90']}",
+                        )
+                        _history_trace(
+                            page=line["page"],
+                            line=line["line"],
+                            phase="history7y",
+                            bureau="eq",
+                            kind="summary",
+                            text=f"30:{acc_seven_year['eq']['late30']} 60:{acc_seven_year['eq']['late60']} 90:{acc_seven_year['eq']['late90']}",
+                        )
                         in_h7y = False
                         h7y_slabs = None
                         _flush_history(history_out, acc_two_year, acc_seven_year)
@@ -1351,19 +1376,17 @@ def split_accounts(
                             if m:
                                 key = m.group(1)
                                 inline_val = m.group(2)
-                                last_key[b] = key
+                                last_key[b] = f"late{key}"
                                 logger.info(
                                     "H7Y_KEY bureau=%s key=%s", b.upper(), key
                                 )
                                 _history_trace(
                                     line["page"],
                                     line["line"],
-                                    bureau=b,
                                     phase="history7y",
-                                    kind="key",
-                                    text=f"{key}:",
-                                    x0=t.get("x0"),
-                                    x1=t.get("x1"),
+                                    bureau=b,
+                                    kind=f"late{key}",
+                                    text="KEY",
                                 )
                                 if inline_val is not None:
                                     v = int(inline_val)
@@ -1377,31 +1400,29 @@ def split_accounts(
                                     _history_trace(
                                         line["page"],
                                         line["line"],
-                                        bureau=b,
                                         phase="history7y",
+                                        bureau=b,
                                         kind=f"late{key}",
                                         value=v,
-                                        x0=t.get("x0"),
-                                        x1=t.get("x1"),
                                     )
                                     last_key[b] = None
                                 continue
                             if last_key[b] and INT_PAT.match(txt):
-                                key = last_key[b]
+                                k = last_key[b][-2:]
                                 v = int(txt)
-                                acc_seven_year[b][f"late{key}"] = v
+                                acc_seven_year[b][f"late{k}"] = v
                                 logger.info(
                                     "H7Y_VALUE bureau=%s kind=late%s value=%d",
                                     b.upper(),
-                                    key,
+                                    k,
                                     v,
                                 )
                                 _history_trace(
-                                    line["page"],
-                                    line["line"],
-                                    bureau=b,
+                                    t.get("page"),
+                                    t.get("line"),
                                     phase="history7y",
-                                    kind=f"late{key}",
+                                    bureau=b,
+                                    kind=last_key[b],
                                     value=v,
                                     x0=t.get("x0"),
                                     x1=t.get("x1"),
@@ -2025,6 +2046,30 @@ def split_accounts(
                 acc_seven_year["eq"]["late30"],
                 acc_seven_year["eq"]["late60"],
                 acc_seven_year["eq"]["late90"],
+            )
+            _history_trace(
+                page=account_lines[-1]["page"],
+                line=account_lines[-1]["line"],
+                phase="history7y",
+                bureau="tu",
+                kind="summary",
+                text=f"30:{acc_seven_year['tu']['late30']} 60:{acc_seven_year['tu']['late60']} 90:{acc_seven_year['tu']['late90']}",
+            )
+            _history_trace(
+                page=account_lines[-1]["page"],
+                line=account_lines[-1]["line"],
+                phase="history7y",
+                bureau="xp",
+                kind="summary",
+                text=f"30:{acc_seven_year['xp']['late30']} 60:{acc_seven_year['xp']['late60']} 90:{acc_seven_year['xp']['late90']}",
+            )
+            _history_trace(
+                page=account_lines[-1]["page"],
+                line=account_lines[-1]["line"],
+                phase="history7y",
+                bureau="eq",
+                kind="summary",
+                text=f"30:{acc_seven_year['eq']['late30']} 60:{acc_seven_year['eq']['late60']} 90:{acc_seven_year['eq']['late90']}",
             )
             in_h7y = False
             h7y_slabs = None

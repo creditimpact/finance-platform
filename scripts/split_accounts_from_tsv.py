@@ -785,10 +785,13 @@ def process_triad_labeled_line(
     # If TU is empty but XP/EQ have values, look for label-band tokens near the TU seam that look like values.
     def _looks_like_tu_value(s: str) -> bool:
         z = (s or "").strip()
+        # treat dash placeholders as legitimate values
         if z in {"--", "—", "–"}:
             return True
+        # treat dollar amounts as legitimate values
         if z.startswith("$"):
             return True
+        # plain integers / with commas / with decimal
         return bool(re.match(r"^[0-9][0-9,]*(?:\.[0-9]+)?$", z))
 
     if (
@@ -819,10 +822,11 @@ def process_triad_labeled_line(
         if candidates:
             candidates.sort(key=lambda x: x[0])
             _, picked_text, picked_x = candidates[0]
-            z = picked_text.strip()
-            vals["transunion"].append(z)
-            if z in dash_tokens:
-                saw_dash_for["transunion"] = True
+            if _looks_like_tu_value(picked_text):
+                vals["transunion"].append(picked_text)
+                if picked_text.strip() in {"--", "—", "–"}:
+                    saw_dash_for["transunion"] = True
+                    logger.info("TU_DASH_RESCUE text=%r", picked_text)
             logger.info(
                 "TRIAD_TU_RESCUE key=%s took=%r from=label near_x=%.1f",
                 canonical,
@@ -837,12 +841,12 @@ def process_triad_labeled_line(
             if _token_band(t, layout) != "label":
                 continue
             txt = str(t.get("text", ""))
-            z = txt.strip()
             if not _looks_like_tu_value(txt):
                 continue
-            vals["transunion"].append(z)
-            if z in dash_tokens:
+            vals["transunion"].append(txt)
+            if txt.strip() in {"--", "—", "–"}:
                 saw_dash_for["transunion"] = True
+                logger.info("TU_DASH_RESCUE text=%r", txt)
             try:
                 mx = _triad_mid_x(t)
             except Exception:
@@ -850,20 +854,19 @@ def process_triad_labeled_line(
             logger.info(
                 "TRIAD_TU_RESCUE_LABEL key=%s took=%r from=label near_x=%.1f",
                 canonical,
-                z,
+                txt,
                 mx,
             )
             break
 
     # 3) Append joined values into fields (no content heuristics)
     for bureau in triad_order:
-        s = " ".join(vals[bureau]).strip()
+        s = _clean_value(" ".join(vals[bureau]).strip())
+        prior = triad_fields[bureau].get(canonical or "", "") if canonical else ""
+        # ensure we persist "--" if the column contained only dashes
         if not s and saw_dash_for[bureau]:
             s = "--"
-        if s or saw_dash_for[bureau]:
-            s = _clean_value(s)
-            prior = triad_fields[bureau].get(canonical or "", "") if canonical else ""
-            triad_fields[bureau][canonical] = (f"{prior} {s}" if prior else s).strip()
+        triad_fields[bureau][canonical] = (f"{prior} {s}" if prior else s).strip()
 
     # If we expected values on the next line but actually appended values on this line,
     # clear the expectation flag before returning the row state.

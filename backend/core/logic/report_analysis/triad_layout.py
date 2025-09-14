@@ -11,9 +11,9 @@ from .header_utils import normalize_bureau_header
 logger = logging.getLogger(__name__)
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
 
-# Symmetric tolerance (in PDF points) applied around bureau midpoints when
-# computing band edges. This guards against OCR jitter around column
-# boundaries so tokens landing slightly outside a column are still classified
+# Tolerance (in PDF points) applied around the TransUnion midpoint when
+# computing the label/TU boundary. This guards against OCR jitter around the
+# left edge so tokens landing slightly outside the column are still classified
 # correctly.
 EDGE_EPS = 6.0
 
@@ -32,9 +32,10 @@ def bands_from_header_tokens(tokens: List[dict]) -> TriadLayout:
 
     ``tokens`` must contain exactly the ``transunion``, ``experian`` and
     ``equifax`` headers from the same line (in any order). Their horizontal
-    midpoints are computed and used to derive column bands with a symmetric
-    :data:`EDGE_EPS` tolerance. The label band spans from ``0`` to ``tu_mid -
-    EDGE_EPS`` so tokens near the TransUnion seam are not misclassified.
+    midpoints are computed and non-overlapping bands are derived by splitting at
+    midpoints between bureaus. The left label band spans from ``0`` to
+    ``tu_mid - EDGE_EPS`` so tokens near the TransUnion seam are not
+    misclassified.
     """
 
     mids: List[Tuple[float, str]] = []
@@ -52,33 +53,32 @@ def bands_from_header_tokens(tokens: List[dict]) -> TriadLayout:
     if len(mids) != 3:
         raise ValueError("expected three bureau header tokens")
 
-    # Order the tokens left→right and extract midpoints for each bureau
+    # Order the tokens left→right and extract midpoints
     mids.sort(key=lambda kv: kv[0])
-    order = [name for _x, name in mids]
-    xs = [x for x, _name in mids]
+    m0, m1, m2 = mids[0][0], mids[1][0], mids[2][0]
 
-    tu_mid = xs[order.index("transunion")]
-    xp_mid = xs[order.index("experian")]
-    eq_mid = xs[order.index("equifax")]
+    # Boundaries halfway between midpoints
+    b1 = (m0 + m1) / 2.0
+    b2 = (m1 + m2) / 2.0
 
-    # Clamp label band so it does not swallow the TU column
-    label_L, label_R = 0.0, max(0.0, tu_mid - EDGE_EPS)
+    label_left = 0.0
+    label_right = max(0.0, m0 - EDGE_EPS)
 
-    def band_around(mid_left: float, mid_right: float | None) -> Tuple[float, float]:
-        L = mid_left - EDGE_EPS
-        R = (mid_right + EDGE_EPS) if mid_right is not None else float("inf")
-        return (L, R)
+    tu_left = max(label_right, m0 - EDGE_EPS)
+    tu_right = b1
 
-    tu = band_around(tu_mid, xp_mid)
-    xp = band_around(xp_mid, eq_mid)
-    eq = band_around(eq_mid, None)
+    xp_left = b1
+    xp_right = b2
+
+    eq_left = b2
+    eq_right = float("inf")
 
     return TriadLayout(
         page=page,
-        label_band=(label_L, label_R),
-        tu_band=tu,
-        xp_band=xp,
-        eq_band=eq,
+        label_band=(label_left, label_right),
+        tu_band=(tu_left, tu_right),
+        xp_band=(xp_left, xp_right),
+        eq_band=(eq_left, eq_right),
     )
 
 
@@ -97,20 +97,19 @@ def assign_band(
     """Assign a token to one of the triad bands.
 
     Tokens are classified by comparing their midpoint against the precomputed
-    band edges which already include the symmetric :data:`EDGE_EPS` tolerance.
-    This avoids spurious ``none`` classifications for tokens that land on the
-    seam between columns.
+    band edges. Bands do not overlap, so simple range checks are sufficient and
+    avoid priority ordering bugs.
     """
     x = mid_x(token)
-    bands = {
-        "label": layout.label_band,
-        "tu": layout.tu_band,
-        "xp": layout.xp_band,
-        "eq": layout.eq_band,
-    }
-    for name, (L, R) in bands.items():
-        if L <= x <= R:
-            return name
+
+    if layout.label_band[0] <= x < layout.label_band[1]:
+        return "label"
+    if layout.tu_band[0] <= x < layout.tu_band[1]:
+        return "tu"
+    if layout.xp_band[0] <= x < layout.xp_band[1]:
+        return "xp"
+    if layout.eq_band[0] <= x:
+        return "eq"
     return "none"
 
 

@@ -82,6 +82,33 @@ def _csv_rows(path: Path) -> list[list[str]]:
         return list(csv.reader(fh))
 
 
+def _write_no_label_anchor_with_h2y(tsv_path: Path) -> None:
+    header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+    rows = [
+        # Triad header
+        "1\t1\t10\t11\t60\t100\tTransUnion\n",
+        "1\t1\t10\t11\t160\t200\tExperian\n",
+        "1\t1\t10\t11\t260\t300\tEquifax\n",
+        # Anchor with label token placed in TU band to trigger fallback
+        "1\t2\t20\t21\t72\t100\tAccount #\n",
+        "1\t2\t20\t21\t100\t120\tTUANCH\n",
+        "1\t2\t20\t21\t160\t200\tXPANCH\n",
+        "1\t2\t20\t21\t260\t300\tEQANCH\n",
+        # Labeled row
+        "1\t3\t30\t31\t0\t20\tHigh Balance:\n",
+        "1\t3\t30\t31\t60\t100\t5000\n",
+        "1\t3\t30\t31\t160\t200\t6000\n",
+        "1\t3\t30\t31\t260\t300\t7000\n",
+        # Two-year payment history section
+        "1\t4\t40\t41\t0\t50\tTwo Year Payment History\n",
+        "1\t5\t40\t41\t160\t200\tExperian\n",
+        "1\t6\t40\t41\t160\t170\tOK\n",
+        "1\t6\t40\t41\t170\t180\t30\n",
+        "1\t6\t40\t41\t180\t190\t60\n",
+    ]
+    tsv_path.write_text(header + "".join(rows), encoding="utf-8")
+
+
 def _write_x0_anchor_and_header(tsv_path: Path,
                                 tu_left: float,
                                 xp_left: float,
@@ -538,3 +565,27 @@ def test_creditor_type_left_tokens_rescued(tmp_path: Path, caplog):
     assert fields["transunion"]["creditor_type"] == "Bank"
     assert fields["experian"]["creditor_type"] == "Finance"
     assert fields["equifax"]["creditor_type"] == "Mortgage"
+
+
+def test_triad_x0_fallback_and_h2y_bureau_line(tmp_path: Path, caplog):
+    os.environ["TRIAD_BAND_BY_X0"] = "1"
+    os.environ["TRIAD_TRACE_CSV"] = "1"
+    os.environ["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    _write_no_label_anchor_with_h2y(tsv_path)
+    _run_split(tsv_path, json_path, caplog)
+    data = json.loads(json_path.read_text())
+    acc = data["accounts"][0]
+    fields = acc["triad_fields"]
+    assert fields["experian"]["high_balance"] == "6000"
+    assert acc["two_year_payment_history"]["experian"] == ["OK", "30", "60"]
+    assert "TRIAD_X0_FALLBACK_OK" in caplog.text
+    assert "layout_mismatch_anchor" not in caplog.text
+    trace = tsv_path.parent / "per_account_tsv" / "_trace_account_1.csv"
+    rows = _csv_rows(trace)
+    header = rows[0]
+    phase_idx = header.index("phase")
+    band_idx = header.index("band")
+    assert any(r[phase_idx] == "labeled" for r in rows[1:])
+    assert any(r[phase_idx] == "history2y" and r[band_idx] == "XP" for r in rows[1:])

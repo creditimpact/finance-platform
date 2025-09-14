@@ -33,12 +33,15 @@ logger = logging.getLogger(__name__)
 # Enable with RAW_TRIAD_FROM_X=1 for verbose triad logs
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
 TRIAD_BAND_BY_X0 = os.environ.get("TRIAD_BAND_BY_X0") == "1"
+
+
 # Tunables for x0 mode
 def _get_float_env(name: str, default: float) -> float:
     try:
         return float(os.environ.get(name, str(default)))
     except Exception:
         return default
+
 
 TRIAD_X0_TOL: float = _get_float_env("TRIAD_X0_TOL", 0.5)
 TRIAD_CONT_NEAREST_MAXDX: float = _get_float_env("TRIAD_CONT_NEAREST_MAXDX", 30.0)
@@ -90,21 +93,24 @@ def _trace(page, line, t, band, action):
             mid = (float(t.get("x0", 0)) + float(t.get("x1", 0))) / 2.0
         except Exception:
             mid = 0.0
-        _trace_wr.writerow([
-            page,
-            line,
-            "",
-            t.get("text"),
-            t.get("x0"),
-            t.get("x1"),
-            mid,
-            band,
-            action,
-            "",
-            ("x0" if TRIAD_BAND_BY_X0 else "mid"),
-            "",
-            "",
-        ])
+        _trace_wr.writerow(
+            [
+                page,
+                line,
+                "",
+                t.get("text"),
+                t.get("x0"),
+                t.get("x1"),
+                mid,
+                band,
+                action,
+                "",
+                ("x0" if TRIAD_BAND_BY_X0 else "mid"),
+                "",
+                "",
+            ]
+        )
+
 
 def _trace_token(
     page,
@@ -122,21 +128,75 @@ def _trace_token(
             mid = (float(t.get("x0", 0)) + float(t.get("x1", 0))) / 2.0
         except Exception:
             mid = 0.0
-        _trace_wr.writerow([
-            page,
-            line,
-            token_index,
-            t.get("text"),
-            t.get("x0"),
-            t.get("x1"),
-            mid,
-            band,
-            phase,
-            label_key or "",
-            ("x0" if TRIAD_BAND_BY_X0 else "mid"),
-            reassigned_from,
-            wrap_affinity,
-        ])
+        _trace_wr.writerow(
+            [
+                page,
+                line,
+                token_index,
+                t.get("text"),
+                t.get("x0"),
+                t.get("x1"),
+                mid,
+                band,
+                phase,
+                label_key or "",
+                ("x0" if TRIAD_BAND_BY_X0 else "mid"),
+                reassigned_from,
+                wrap_affinity,
+            ]
+        )
+
+
+def _trace_history2y(page, line, t, bureau):
+    if _trace_wr:
+        try:
+            mid = (float(t.get("x0", 0)) + float(t.get("x1", 0))) / 2.0
+        except Exception:
+            mid = 0.0
+        _trace_wr.writerow(
+            [
+                page,
+                line,
+                "",
+                t.get("text"),
+                t.get("x0"),
+                t.get("x1"),
+                mid,
+                bureau,
+                "history2y",
+                "",
+                ("x0" if TRIAD_BAND_BY_X0 else "mid"),
+                "",
+                "",
+            ]
+        )
+
+
+def _trace_history7y(page, line, t, bureau, kind, value):
+    if _trace_wr:
+        try:
+            mid = (float(t.get("x0", 0)) + float(t.get("x1", 0))) / 2.0
+        except Exception:
+            mid = 0.0
+        _trace_wr.writerow(
+            [
+                page,
+                line,
+                "",
+                str(value),
+                t.get("x0"),
+                t.get("x1"),
+                mid,
+                bureau,
+                "history7y",
+                kind,
+                ("x0" if TRIAD_BAND_BY_X0 else "mid"),
+                "",
+                "",
+            ]
+        )
+
+
 STOP_MARKER_NORM = "publicinformation"
 SECTION_STARTERS = {"collection", "unknown"}
 _SECTION_NAME = {"collection": "collections", "unknown": "unknown"}
@@ -176,6 +236,12 @@ def _bare_bureau_norm(s: str) -> str:
 
 
 BARE_BUREAUS = {"transunion", "experian", "equifax"}
+
+H2Y_PAT = re.compile(r"\bTwo[-\s]?Year\b.*\bPayment\b.*\bHistory\b", re.I)
+H7Y_BUREAUS = ("Transunion", "Experian", "Equifax")
+LATE_KEY_PAT = re.compile(r"^\s*(30|60|90)\s*:\s*$")
+INT_PAT = re.compile(r"^\d+$")
+H7Y_EPS = 6.0
 
 
 def _is_triad(text: str) -> bool:
@@ -337,15 +403,23 @@ def _validate_anchor_row(anchor_tokens: List[dict], layout: TriadLayout) -> bool
             continue
         b = _token_band(t, layout)
         _trace(t.get("page"), t.get("line"), t, b, "validate_anchor_row_relaxed")
-        _trace_token(t.get("page"), t.get("line"), idx, t, b, "anchor", "account_number_display")
+        _trace_token(
+            t.get("page"), t.get("line"), idx, t, b, "anchor", "account_number_display"
+        )
         if b in by_band:
             by_band[b] += 1
 
     # Label must have a trailing marker and be in the label band.
     # Snap tolerance: if first token sits within 2*EDGE_EPS left of TU mid,
     # accept it as a label even if it barely crosses the seam.
-    label_texts = [str(t.get("text", "")) for t in anchor_tokens if _token_band(t, layout) == "label"]
-    has_label = any(s.strip().endswith(("#",) + UNICODE_COLONS_TUP) for s in label_texts)
+    label_texts = [
+        str(t.get("text", ""))
+        for t in anchor_tokens
+        if _token_band(t, layout) == "label"
+    ]
+    has_label = any(
+        s.strip().endswith(("#",) + UNICODE_COLONS_TUP) for s in label_texts
+    )
 
     if not has_label and anchor_tokens:
         first = anchor_tokens[0]
@@ -399,6 +473,7 @@ def _strip_colon_only(txt: str) -> str:
             return s[:-1].rstrip()
     return s
 
+
 def normalize_label_text(s: str) -> str:
     """Normalize visual label text for canonical LABEL_MAP lookup.
 
@@ -408,7 +483,13 @@ def normalize_label_text(s: str) -> str:
     - Strip trailing colon variants only (keep '#')
     - Collapse internal whitespace
     """
-    s0 = (s or "").replace("\u00A0", " ").replace("\u2009", " ").replace("\u202F", " ").strip()
+    s0 = (
+        (s or "")
+        .replace("\u00A0", " ")
+        .replace("\u2009", " ")
+        .replace("\u202F", " ")
+        .strip()
+    )
     s0 = s0.replace("–", "-").replace("—", "-")
     # Manually strip unicode colons, but keep '#'
     for ch in UNICODE_COLONS_TUP:
@@ -416,6 +497,7 @@ def normalize_label_text(s: str) -> str:
             s0 = s0[: -len(ch)].rstrip()
             break
     return " ".join(s0.split())
+
 
 def process_triad_labeled_line(
     tokens: List[dict],
@@ -467,7 +549,11 @@ def process_triad_labeled_line(
             if tu_left_x0 and (x0 + TRIAD_X0_TOL) >= tu_left_x0:
                 if label_span:
                     suffix_idx = i - 1
-                logger.info("TRIAD_LABEL_STOP reason=hit_tu_left_x0 x0=%.1f tu_left_x0=%.1f", x0, tu_left_x0)
+                logger.info(
+                    "TRIAD_LABEL_STOP reason=hit_tu_left_x0 x0=%.1f tu_left_x0=%.1f",
+                    x0,
+                    tu_left_x0,
+                )
                 break
         if _looks_like_value_text(txt):
             # set suffix position to last label token collected so far
@@ -492,10 +578,14 @@ def process_triad_labeled_line(
         except ValueError:
             suffix_idx = 0
 
-    visu_label = " ".join((str(t.get("text", "")) or "").strip() for t in label_span).strip()
+    visu_label = " ".join(
+        (str(t.get("text", "")) or "").strip() for t in label_span
+    ).strip()
     canon_label = normalize_label_text(visu_label)
     canonical = label_map.get(canon_label)
-    logger.info("TRIAD_LABEL_BUILT visu=%r canon=%r key=%r", visu_label, canon_label, canonical)
+    logger.info(
+        "TRIAD_LABEL_BUILT visu=%r canon=%r key=%r", visu_label, canon_label, canonical
+    )
 
     # Task 5: Strict line-break rule — if no suffix captured and the last label token
     # is still left of TU's left x0 cutoff, expect values to start on the next line.
@@ -512,7 +602,10 @@ def process_triad_labeled_line(
         # Only expect continuation if the last label token is clearly left of TU cutoff
         if tu_left_x0 and ((last_x0 + TRIAD_X0_TOL) < tu_left_x0):
             expect_values_on_next_line = True
-            logger.info("TRIAD_LABEL_LINEBREAK key=%s -> expecting values on next line", canonical)
+            logger.info(
+                "TRIAD_LABEL_LINEBREAK key=%s -> expecting values on next line",
+                canonical,
+            )
 
     if canonical is None and canon_label != "Account #":
         logger.info("TRIAD_GUARD_SKIP reason=unknown_label label=%r", canon_label)
@@ -524,7 +617,9 @@ def process_triad_labeled_line(
 
     # Trace label tokens with the resolved key
     for j, lt in enumerate(label_span):
-        _trace_token(lt.get("page"), lt.get("line"), j, lt, "label", "labeled", canonical or "")
+        _trace_token(
+            lt.get("page"), lt.get("line"), j, lt, "label", "labeled", canonical or ""
+        )
 
     # 2) Collect values after label suffix, banded by X only
     vals = {"transunion": [], "experian": [], "equifax": []}
@@ -549,7 +644,11 @@ def process_triad_labeled_line(
         # dollar amounts or plain numbers with commas
         return bool(re.match(r"^\$?[0-9][0-9,]*(?:\.[0-9]+)?$", z))
 
-    if (not TRIAD_BAND_BY_X0) and not vals["transunion"] and (vals["experian"] or vals["equifax"]):
+    if (
+        (not TRIAD_BAND_BY_X0)
+        and not vals["transunion"]
+        and (vals["experian"] or vals["equifax"])
+    ):
         tu_left = float(getattr(layout, "tu_band")[0])
         win_lo = tu_left - 10.0
         win_hi = tu_left + 2.0
@@ -607,7 +706,9 @@ def process_triad_labeled_line(
 
     # If we expected values on the next line but actually appended values on this line,
     # clear the expectation flag before returning the row state.
-    if expect_values_on_next_line and (vals["transunion"] or vals["experian"] or vals["equifax"]):
+    if expect_values_on_next_line and (
+        vals["transunion"] or vals["experian"] or vals["equifax"]
+    ):
         expect_values_on_next_line = False
 
     # Track last bureau that received text on this row, used for wrap affinity
@@ -866,7 +967,9 @@ def split_accounts(
     carry_over: List[Dict[str, Any]] = []
     for idx, start_idx in enumerate(account_starts):
         if TRIAD_TRACE_CSV:
-            _trace_open(tsv_path.parent / "per_account_tsv" / f"_trace_account_{idx + 1}.csv")
+            _trace_open(
+                tsv_path.parent / "per_account_tsv" / f"_trace_account_{idx + 1}.csv"
+            )
         if sections[idx] is not None:
             current_section = sections[idx]
         sections[idx] = current_section
@@ -913,6 +1016,17 @@ def split_accounts(
             "experian": {},
             "equifax": {},
         }
+        in_h2y = False
+        in_h7y = False
+        current_bureau: str | None = None
+        last_key = {"tu": None, "xp": None, "eq": None}
+        h7y_slabs = None
+        acc_two_year = {"tu": [], "xp": [], "eq": []}
+        acc_seven_year = {
+            "tu": {"late30": 0, "late60": 0, "late90": 0},
+            "xp": {"late30": 0, "late60": 0, "late90": 0},
+            "eq": {"late30": 0, "late60": 0, "late90": 0},
+        }
         if RAW_TRIAD_FROM_X:
             open_row: Dict[str, Any] | None = None
             triad_active: bool = False
@@ -931,8 +1045,161 @@ def split_accounts(
                 toks = tokens_by_line.get(key, [])
                 texts = [t.get("text", "") for t in toks]
                 joined_line_text = join_tokens_with_space(texts)
+                bare = _bare_bureau_norm(joined_line_text)
+                s = _norm_text(joined_line_text)
+                n_simple = _norm(joined_line_text)
 
-                if _bare_bureau_norm(joined_line_text) in BARE_BUREAUS:
+                if in_h2y:
+                    stop = (
+                        _is_triad(joined_line_text)
+                        or is_account_anchor(joined_line_text)
+                        or bare in BARE_BUREAUS
+                        or n_simple in SECTION_STARTERS
+                        or s.startswith("days late - 7 year history")
+                    )
+                    if stop:
+                        logger.info(
+                            "H2Y_END page=%s line=%s",
+                            line["page"],
+                            line["line"],
+                        )
+                        in_h2y = False
+                        current_bureau = None
+                    else:
+                        for t in toks:
+                            txt = str(t.get("text", ""))
+                            low = txt.lower().replace("\u00ae", "")
+                            if low.startswith("transunion"):
+                                current_bureau = "tu"
+                                logger.info("H2Y_SET_BUREAU bureau=TU")
+                            elif low.startswith("experian"):
+                                current_bureau = "xp"
+                                logger.info("H2Y_SET_BUREAU bureau=XP")
+                            elif low.startswith("equifax"):
+                                current_bureau = "eq"
+                                logger.info("H2Y_SET_BUREAU bureau=EQ")
+                            elif current_bureau:
+                                acc_two_year[current_bureau].append(txt)
+                                try:
+                                    x0 = float(t.get("x0", 0.0))
+                                except Exception:
+                                    x0 = 0.0
+                                logger.info(
+                                    "H2Y_TOKEN bureau=%s text=%r x0=%.1f",
+                                    current_bureau.upper(),
+                                    txt,
+                                    x0,
+                                )
+                                _trace_history2y(
+                                    line["page"],
+                                    line["line"],
+                                    t,
+                                    current_bureau.upper(),
+                                )
+                        continue
+
+                if in_h7y:
+                    stop = (
+                        _is_triad(joined_line_text)
+                        or is_account_anchor(joined_line_text)
+                        or bare in BARE_BUREAUS
+                        or n_simple in SECTION_STARTERS
+                        or H2Y_PAT.search(joined_line_text)
+                    )
+                    if stop:
+                        logger.info(
+                            "H7Y_SUMMARY TU=30:%d 60:%d 90:%d XP=30:%d 60:%d 90:%d EQ=30:%d 60:%d 90:%d",
+                            acc_seven_year["tu"]["late30"],
+                            acc_seven_year["tu"]["late60"],
+                            acc_seven_year["tu"]["late90"],
+                            acc_seven_year["xp"]["late30"],
+                            acc_seven_year["xp"]["late60"],
+                            acc_seven_year["xp"]["late90"],
+                            acc_seven_year["eq"]["late30"],
+                            acc_seven_year["eq"]["late60"],
+                            acc_seven_year["eq"]["late90"],
+                        )
+                        in_h7y = False
+                        h7y_slabs = None
+                        last_key = {"tu": None, "xp": None, "eq": None}
+                    else:
+                        if h7y_slabs:
+                            tu_left, xp_left, eq_left = h7y_slabs
+                        else:
+                            tu_left = xp_left = eq_left = 0.0
+                        for t in toks:
+                            try:
+                                mid = _triad_mid_x(t)
+                            except Exception:
+                                mid = 0.0
+                            if mid < tu_left:
+                                continue
+                            if mid < xp_left:
+                                b = "tu"
+                            elif mid < eq_left:
+                                b = "xp"
+                            else:
+                                b = "eq"
+                            txt = str(t.get("text", ""))
+                            m = LATE_KEY_PAT.match(txt)
+                            if m:
+                                last_key[b] = "late" + m.group(1)
+                                continue
+                            if INT_PAT.match(txt) and last_key[b]:
+                                val = int(txt)
+                                acc_seven_year[b][last_key[b]] = val
+                                logger.info(
+                                    "H7Y_VALUE bureau=%s kind=%s value=%d",
+                                    b.upper(),
+                                    last_key[b],
+                                    val,
+                                )
+                                _trace_history7y(
+                                    line["page"],
+                                    line["line"],
+                                    t,
+                                    b.upper(),
+                                    last_key[b],
+                                    val,
+                                )
+                                last_key[b] = None
+                        continue
+
+                if H2Y_PAT.search(joined_line_text):
+                    logger.info("H2Y_START page=%s line=%s", line["page"], line["line"])
+                    in_h2y = True
+                    current_bureau = None
+                    continue
+
+                contains_all_bureaus = all(
+                    name.lower() in s for name in ("transunion", "experian", "equifax")
+                )
+                if contains_all_bureaus:
+                    mids = {}
+                    for t in toks:
+                        txt = str(t.get("text", ""))
+                        low = txt.lower().replace("\u00ae", "")
+                        if low.startswith("transunion"):
+                            mids["tu"] = _triad_mid_x(t) - H7Y_EPS
+                        elif low.startswith("experian"):
+                            mids["xp"] = _triad_mid_x(t) - H7Y_EPS
+                        elif low.startswith("equifax"):
+                            mids["eq"] = _triad_mid_x(t) - H7Y_EPS
+                    if len(mids) == 3:
+                        h7y_slabs = (mids["tu"], mids["xp"], mids["eq"])
+                        logger.info(
+                            "H7Y_SLABS tu=[%.1f,%.1f) xp=[%.1f,%.1f) eq=[%.1f,inf)",
+                            h7y_slabs[0],
+                            h7y_slabs[1],
+                            h7y_slabs[1],
+                            h7y_slabs[2],
+                            h7y_slabs[2],
+                        )
+                        in_h7y = True
+                        last_key = {"tu": None, "xp": None, "eq": None}
+                        continue
+
+                if bare in BARE_BUREAUS:
                     triad_log(
                         "TRIAD_STOP reason=bare_bureau_header page=%s line=%s",
                         line["page"],
@@ -940,8 +1207,6 @@ def split_accounts(
                     )
                     reset()
                     continue
-
-                s = _norm_text(joined_line_text)
                 if (
                     triad_active
                     and current_layout
@@ -1046,11 +1311,13 @@ def split_accounts(
                                     first_xp = ta
                                 elif b == "eq" and first_eq is None:
                                     first_eq = ta
+
                             def _x0(tok):
                                 try:
                                     return float(tok.get("x0", 0.0)) if tok else 0.0
                                 except Exception:
                                     return 0.0
+
                             layout.tu_left_x0 = _x0(first_tu)
                             layout.xp_left_x0 = _x0(first_xp)
                             layout.eq_left_x0 = _x0(first_eq)
@@ -1104,15 +1371,27 @@ def split_accounts(
                         if label_token is None and _has_label_suffix(t.get("text", "")):
                             label_token = t
                     # Detect label-only line (no suffix) before any wrap moves
-                    pre_label_tokens = list(band_tokens["label"]) if band_tokens.get("label") else []
-                    pre_label_txt = join_tokens_with_space([t.get("text", "") for t in pre_label_tokens]).strip()
+                    pre_label_tokens = (
+                        list(band_tokens["label"]) if band_tokens.get("label") else []
+                    )
+                    pre_label_txt = join_tokens_with_space(
+                        [t.get("text", "") for t in pre_label_tokens]
+                    ).strip()
                     if TRIAD_BAND_BY_X0 and label_token is None and pre_label_txt:
                         visu_label = pre_label_txt
                         canon_label = normalize_label_text(visu_label)
                         canonical = LABEL_MAP.get(canon_label)
                         if canonical is not None:
                             for j, lt in enumerate(pre_label_tokens):
-                                _trace_token(line["page"], line["line"], j, lt, "label", "labeled", canonical)
+                                _trace_token(
+                                    line["page"],
+                                    line["line"],
+                                    j,
+                                    lt,
+                                    "label",
+                                    "labeled",
+                                    canonical,
+                                )
                             logger.info(
                                 "TRIAD_LABEL_LINEBREAK key=%s -> expecting values on next line",
                                 canonical,
@@ -1121,7 +1400,11 @@ def split_accounts(
                                 "triad_row": True,
                                 "label": _strip_colon_only(visu_label),
                                 "key": canonical,
-                                "values": {"transunion": "", "experian": "", "equifax": ""},
+                                "values": {
+                                    "transunion": "",
+                                    "experian": "",
+                                    "equifax": "",
+                                },
                                 "last_bureau_with_text": None,
                                 "expect_values_on_next_line": True,
                             }
@@ -1129,13 +1412,25 @@ def split_accounts(
                             open_row = row_state
                             continue
                     # Continuations: in x0 mode with no label on this line, do not keep tokens in 'label' band.
-                    if TRIAD_BAND_BY_X0 and label_token is None and band_tokens["label"]:
+                    if (
+                        TRIAD_BAND_BY_X0
+                        and label_token is None
+                        and band_tokens["label"]
+                    ):
+
                         def _nearest_band_from_x0(x0v: float, lay: TriadLayout) -> str:
-                            anchors = [(lay.tu_left_x0 or 0.0, "tu"), (lay.xp_left_x0 or 0.0, "xp"), (lay.eq_left_x0 or 0.0, "eq")]
+                            anchors = [
+                                (lay.tu_left_x0 or 0.0, "tu"),
+                                (lay.xp_left_x0 or 0.0, "xp"),
+                                (lay.eq_left_x0 or 0.0, "eq"),
+                            ]
                             anchors = [(ax, name) for ax, name in anchors if ax > 0.0]
                             if not anchors:
                                 return "tu"
-                            return min(((abs(x0v - ax), name) for ax, name in anchors), key=lambda z: z[0])[1]
+                            return min(
+                                ((abs(x0v - ax), name) for ax, name in anchors),
+                                key=lambda z: z[0],
+                            )[1]
 
                         moved = {"tu": [], "xp": [], "eq": []}
                         moved_map: Dict[int, str] = {}
@@ -1144,7 +1439,11 @@ def split_accounts(
                                 x0v = float(lt.get("x0", 0.0))
                             except Exception:
                                 x0v = 0.0
-                            last_bureau = open_row.get("last_bureau_with_text") if open_row else None
+                            last_bureau = (
+                                open_row.get("last_bureau_with_text")
+                                if open_row
+                                else None
+                            )
                             # Choose nearest band, but cap by TRIAD_CONT_NEAREST_MAXDX tolerance.
                             anchors = [
                                 (layout.tu_left_x0 or 0.0, "tu"),
@@ -1153,14 +1452,21 @@ def split_accounts(
                             ]
                             anchors = [(ax, name) for ax, name in anchors if ax > 0.0]
                             if anchors:
-                                dmin, nmin = min(((abs(x0v - ax), name) for ax, name in anchors), key=lambda z: z[0])
+                                dmin, nmin = min(
+                                    ((abs(x0v - ax), name) for ax, name in anchors),
+                                    key=lambda z: z[0],
+                                )
                             else:
                                 dmin, nmin = (0.0, "tu")
                             if dmin <= TRIAD_CONT_NEAREST_MAXDX:
                                 nb = nmin
                                 cause = "nearest"
                             elif last_bureau in {"transunion", "experian", "equifax"}:
-                                nb = {"transunion": "tu", "experian": "xp", "equifax": "eq"}[last_bureau]
+                                nb = {
+                                    "transunion": "tu",
+                                    "experian": "xp",
+                                    "equifax": "eq",
+                                }[last_bureau]
                                 cause = "carry_forward"
                             else:
                                 nb = nmin
@@ -1227,8 +1533,11 @@ def split_accounts(
                         )
                         reset()
                         continue
+
                 # Drop far-right outliers per band to avoid swallowing trailing noise tokens
-                def _filter_band_tokens(btks: List[dict], left_edge: float, window: float = 120.0) -> List[dict]:
+                def _filter_band_tokens(
+                    btks: List[dict], left_edge: float, window: float = 120.0
+                ) -> List[dict]:
                     out: List[dict] = []
                     for _t in btks:
                         try:
@@ -1240,14 +1549,28 @@ def split_accounts(
                     return out
 
                 if layout:
-                    band_tokens["tu"] = _filter_band_tokens(band_tokens["tu"], layout.tu_band[0])
-                    band_tokens["xp"] = _filter_band_tokens(band_tokens["xp"], layout.xp_band[0])
-                    band_tokens["eq"] = _filter_band_tokens(band_tokens["eq"], layout.eq_band[0])
+                    band_tokens["tu"] = _filter_band_tokens(
+                        band_tokens["tu"], layout.tu_band[0]
+                    )
+                    band_tokens["xp"] = _filter_band_tokens(
+                        band_tokens["xp"], layout.xp_band[0]
+                    )
+                    band_tokens["eq"] = _filter_band_tokens(
+                        band_tokens["eq"], layout.eq_band[0]
+                    )
 
-                label_txt = join_tokens_with_space([t.get("text", "") for t in band_tokens["label"]]).strip()
-                tu_val = join_tokens_with_space([t.get("text", "") for t in band_tokens["tu"]]).strip()
-                xp_val = join_tokens_with_space([t.get("text", "") for t in band_tokens["xp"]]).strip()
-                eq_val = join_tokens_with_space([t.get("text", "") for t in band_tokens["eq"]]).strip()
+                label_txt = join_tokens_with_space(
+                    [t.get("text", "") for t in band_tokens["label"]]
+                ).strip()
+                tu_val = join_tokens_with_space(
+                    [t.get("text", "") for t in band_tokens["tu"]]
+                ).strip()
+                xp_val = join_tokens_with_space(
+                    [t.get("text", "") for t in band_tokens["xp"]]
+                ).strip()
+                eq_val = join_tokens_with_space(
+                    [t.get("text", "") for t in band_tokens["eq"]]
+                ).strip()
                 has_tu = bool(tu_val)
                 has_xp = bool(xp_val)
                 has_eq = bool(eq_val)
@@ -1271,18 +1594,22 @@ def split_accounts(
                     reset()
                     continue
                 # Label-only line without suffix: open a new row keyed by label and expect values on next line
-                if (
-                    TRIAD_BAND_BY_X0
-                    and label_token is None
-                    and label_txt
-                ):
+                if TRIAD_BAND_BY_X0 and label_token is None and label_txt:
                     visu_label = label_txt
                     canon_label = normalize_label_text(visu_label)
                     canonical = LABEL_MAP.get(canon_label)
                     if canonical is not None:
                         # Trace label tokens
                         for j, lt in enumerate(band_tokens["label"]):
-                            _trace_token(line["page"], line["line"], j, lt, "label", "labeled", canonical)
+                            _trace_token(
+                                line["page"],
+                                line["line"],
+                                j,
+                                lt,
+                                "label",
+                                "labeled",
+                                canonical,
+                            )
                         logger.info(
                             "TRIAD_LABEL_LINEBREAK key=%s -> expecting values on next line",
                             canonical,
@@ -1298,7 +1625,9 @@ def split_accounts(
                         triad_rows.append(row_state)
                         open_row = row_state
                         continue
-                if label_token and _is_label_token_text(str(label_token.get("text", ""))):
+                if label_token and _is_label_token_text(
+                    str(label_token.get("text", ""))
+                ):
                     row_or_state = process_triad_labeled_line(
                         toks,
                         layout,
@@ -1339,10 +1668,20 @@ def split_accounts(
                         # Note: do not blanket-skip all single-token lines; see refined guard below
                         # Guard: skip a single short token continuation (likely stray)
                         banded_total = (
-                            len(band_tokens["tu"]) + len(band_tokens["xp"]) + len(band_tokens["eq"])
+                            len(band_tokens["tu"])
+                            + len(band_tokens["xp"])
+                            + len(band_tokens["eq"])
                         )
-                        if banded_total == 1 and len(toks) == 1 and not moved_from_label_on_continuation:
-                            only = band_tokens["tu"] or band_tokens["xp"] or band_tokens["eq"]
+                        if (
+                            banded_total == 1
+                            and len(toks) == 1
+                            and not moved_from_label_on_continuation
+                        ):
+                            only = (
+                                band_tokens["tu"]
+                                or band_tokens["xp"]
+                                or band_tokens["eq"]
+                            )
                             if only and len(str(only[0].get("text", "")).strip()) <= 3:
                                 triad_log(
                                     "TRIAD_GUARD_SKIP page=%s line=%s reason=short_single_token_continuation",
@@ -1353,16 +1692,18 @@ def split_accounts(
                                 continue
                         # Trace continuation tokens assignment per band
 
-
-
-
-
                         # Trace continuation tokens assignment per band
                         if current_layout:
                             for ti, tt in enumerate(toks):
                                 # In x0 continuation-wrap mode, prefer the reassigned band if present
-                                if TRIAD_BAND_BY_X0 and label_token is None and 'moved_map' in locals():
-                                    bb = moved_map.get(id(tt), assign_band(tt, current_layout))
+                                if (
+                                    TRIAD_BAND_BY_X0
+                                    and label_token is None
+                                    and "moved_map" in locals()
+                                ):
+                                    bb = moved_map.get(
+                                        id(tt), assign_band(tt, current_layout)
+                                    )
                                 else:
                                     bb = assign_band(tt, current_layout)
                                 _trace_token(
@@ -1417,6 +1758,30 @@ def split_accounts(
                             has_xp,
                             has_eq,
                         )
+        if in_h2y:
+            logger.info(
+                "H2Y_END page=%s line=%s",
+                account_lines[-1]["page"],
+                account_lines[-1]["line"],
+            )
+            in_h2y = False
+            current_bureau = None
+        if in_h7y:
+            logger.info(
+                "H7Y_SUMMARY TU=30:%d 60:%d 90:%d XP=30:%d 60:%d 90:%d EQ=30:%d 60:%d 90:%d",
+                acc_seven_year["tu"]["late30"],
+                acc_seven_year["tu"]["late60"],
+                acc_seven_year["tu"]["late90"],
+                acc_seven_year["xp"]["late30"],
+                acc_seven_year["xp"]["late60"],
+                acc_seven_year["xp"]["late90"],
+                acc_seven_year["eq"]["late30"],
+                acc_seven_year["eq"]["late60"],
+                acc_seven_year["eq"]["late90"],
+            )
+            in_h7y = False
+            h7y_slabs = None
+
         account_info = {
             "account_index": idx + 1,
             "page_start": account_lines[0]["page"],
@@ -1430,6 +1795,16 @@ def split_accounts(
             "lines": account_lines,
             "trailing_section_marker_pruned": trailing_pruned,
             "noise_lines_skipped": noise_lines_skipped,
+            "two_year_payment_history": {
+                "transunion": acc_two_year["tu"],
+                "experian": acc_two_year["xp"],
+                "equifax": acc_two_year["eq"],
+            },
+            "seven_year_history": {
+                "transunion": acc_seven_year["tu"],
+                "experian": acc_seven_year["xp"],
+                "equifax": acc_seven_year["eq"],
+            },
         }
         if RAW_TRIAD_FROM_X:
             account_info["triad"] = {

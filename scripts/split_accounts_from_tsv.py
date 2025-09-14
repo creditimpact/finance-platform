@@ -180,6 +180,25 @@ def verify_anchor_row(tokens: List[dict], layout: TriadLayout) -> bool:
     return True
 
 
+def _validate_anchor_row(anchor_line_tokens, layout) -> bool:
+    """Quick geometry sanity check for the anchor row.
+
+    Ensures we see one token in the label band and at least one token in each of
+    the bureau bands. This validation uses only token positions and ignores
+    their textual content, serving as a lightweight guard before parsing
+    forward.
+    """
+
+    # Expect 1 label token in label band and one value in each TU/XP/EQ
+    label_hit = any(
+        assign_band(t, layout) == "label" for t in anchor_line_tokens[:1]
+    )
+    tu_hit = any(assign_band(t, layout) == "tu" for t in anchor_line_tokens)
+    xp_hit = any(assign_band(t, layout) == "xp" for t in anchor_line_tokens)
+    eq_hit = any(assign_band(t, layout) == "eq" for t in anchor_line_tokens)
+    return label_hit and tu_hit and xp_hit and eq_hit
+
+
 def _read_tokens(
     tsv_path: Path,
 ) -> Tuple[Dict[Tuple[int, int], List[Dict[str, str]]], List[Dict[str, Any]]]:
@@ -577,6 +596,17 @@ def split_accounts(
                             triad_active = True
                             current_layout = layout
                             current_layout_page = line["page"]
+                            if not _validate_anchor_row(toks_anchor, current_layout):
+                                triad_log(
+                                    "TRIAD_STOP reason=layout_mismatch page=%s line=%s",
+                                    line["page"],
+                                    line["line"],
+                                )
+                                triad_active = False
+                                current_layout = None
+                                current_layout_page = None
+                                open_row = None
+                                continue
                         else:
                             triad_log(
                                 "TRIAD_STOP reason=layout_mismatch page=%s line=%s",

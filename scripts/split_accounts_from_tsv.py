@@ -17,7 +17,7 @@ import re
 from bisect import bisect_right
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from backend.config import RAW_JOIN_TOKENS_WITH_SPACE, RAW_TRIAD_FROM_X
 from backend.core.logic.report_analysis.canonical_labels import LABEL_MAP
@@ -239,10 +239,92 @@ BARE_BUREAUS = {"transunion", "experian", "equifax"}
 
 H2Y_PAT = re.compile(r"\bTwo[-\s]?Year\b.*\bPayment\b.*\bHistory\b", re.I)
 H2Y_STATUS_RE = re.compile(r"^(?:ok|co|[0-9]{2,3})$", re.I)
+H7Y_TITLE_PAT = re.compile(r"(Days\s*Late|7\s*Year\s*History)", re.I)
 H7Y_BUREAUS = ("Transunion", "Experian", "Equifax")
 LATE_KEY_PAT = re.compile(r"^\s*(30|60|90)\s*:\s*$")
 INT_PAT = re.compile(r"^\d+$")
 H7Y_EPS = 6.0
+
+
+def _header_norm(s: str) -> str:
+    """Normalize header text: drop \N{REGISTERED SIGN}, collapse whitespace."""
+    return re.sub(r"\s+", " ", s.replace("\u00ae", "")).strip()
+
+
+def _bureau_key(text_norm: str) -> Optional[str]:
+    """Return compact bureau key (tu/xp/eq) for ``text_norm`` if matched."""
+    t = text_norm.casefold()
+    if t.startswith("transunion"):
+        return "tu"
+    if t.startswith("experian"):
+        return "xp"
+    if t.startswith("equifax"):
+        return "eq"
+    return None
+
+
+def _slab_of(
+    x: float | None, slabs: Optional[Dict[str, Tuple[float, float]]]
+) -> Optional[str]:
+    """Return bureau key whose slab contains ``x``."""
+    if slabs is None or x is None:
+        return None
+    for k, (a, b) in slabs.items():
+        if a <= x < b:
+            return k
+    return None
+
+
+def _flush_history(account: Optional[dict], acc_two_year, acc_seven_year) -> None:
+    """Attach buffered history to ``account`` if provided."""
+    if account is None:
+        return
+    account["two_year_payment_history"] = {
+        "transunion": acc_two_year.get("tu", []),
+        "experian": acc_two_year.get("xp", []),
+        "equifax": acc_two_year.get("eq", []),
+    }
+    account["seven_year_history"] = {
+        "transunion": acc_seven_year.get("tu", {}),
+        "experian": acc_seven_year.get("xp", {}),
+        "equifax": acc_seven_year.get("eq", {}),
+    }
+
+
+def _trace_write(
+    *,
+    phase: str,
+    bureau: str,
+    page: int,
+    line: int,
+    text: str = "",
+    kind: str = "",
+    value: int | None = None,
+    x0: float | None = None,
+    x1: float | None = None,
+    mid_x: float | None = None,
+) -> None:
+    """Generic trace writer for history observers."""
+    if not _trace_wr:
+        return
+    txt = text if text else ("" if value is None else str(value))
+    _trace_wr.writerow(
+        [
+            page,
+            line,
+            "",
+            txt,
+            x0,
+            x1,
+            mid_x,
+            bureau.upper(),
+            phase,
+            kind,
+            ("x0" if TRIAD_BAND_BY_X0 else "mid"),
+            "",
+            "",
+        ]
+    )
 
 
 def _is_triad(text: str) -> bool:
@@ -294,7 +376,7 @@ def _mid_y(t: dict) -> float:
         return 0.0
 
 
-UNICODE_COLONS = "\u003A\uFF1A\uFE55\uFE13"  # ":" ， "：" ， "﹕" ， "︓"
+UNICODE_COLONS = "\u003a\uff1a\ufe55\ufe13"  # ":" ， "：" ， "﹕" ， "︓"
 
 
 GRID_TOKENS = {"ok", "0", "30", "60", "90"}
@@ -388,7 +470,9 @@ def _token_band(t: dict, layout: TriadLayout) -> str:
     return _assign_band_any(t, layout)
 
 
-def _validate_anchor_row(anchor_tokens: List[dict], layout: TriadLayout) -> tuple[bool, Dict[str, int]]:
+def _validate_anchor_row(
+    anchor_tokens: List[dict], layout: TriadLayout
+) -> tuple[bool, Dict[str, int]]:
     """Relaxed Account # anchor validator.
 
     Returns a tuple ``(has_label, counts)`` where ``counts`` maps each band to
@@ -487,9 +571,9 @@ def normalize_label_text(s: str) -> str:
     """
     s0 = (
         (s or "")
-        .replace("\u00A0", " ")
+        .replace("\u00a0", " ")
         .replace("\u2009", " ")
-        .replace("\u202F", " ")
+        .replace("\u202f", " ")
         .strip()
     )
     s0 = s0.replace("–", "-").replace("—", "-")
@@ -1018,11 +1102,12 @@ def split_accounts(
             "experian": {},
             "equifax": {},
         }
-        in_h2y = False
-        in_h7y = False
-        current_bureau: str | None = None
+        in_h2y: bool = False
+        in_h7y: bool = False
+        current_bureau: Optional[str] = None
+        h7y_title_seen: bool = False
+        h7y_slabs: Optional[Dict[str, Tuple[float, float]]] = None
         last_key = {"tu": None, "xp": None, "eq": None}
-        h7y_slabs = None
         acc_two_year = {"tu": [], "xp": [], "eq": []}
         acc_seven_year = {
             "tu": {"late30": 0, "late60": 0, "late90": 0},
@@ -1051,13 +1136,58 @@ def split_accounts(
                 s = _norm_text(joined_line_text)
                 n_simple = _norm(joined_line_text)
 
+                line_text_norm = _header_norm(joined_line_text)
+
+                # --- 7Y gate: require the title first; only then accept the bureau header line ---
+                if not in_h7y:
+                    if H7Y_TITLE_PAT.search(line_text_norm):
+                        h7y_title_seen = True
+                    elif h7y_title_seen and all(
+                        b in line_text_norm for b in H7Y_BUREAUS
+                    ):
+                        mids: Dict[str, float] = {}
+                        for t in toks:
+                            txt_norm = _header_norm(str(t.get("text", "")))
+                            low = txt_norm.casefold()
+                            if low.startswith("transunion"):
+                                mids["tu"] = _triad_mid_x(t) - H7Y_EPS
+                            elif low.startswith("experian"):
+                                mids["xp"] = _triad_mid_x(t) - H7Y_EPS
+                            elif low.startswith("equifax"):
+                                mids["eq"] = _triad_mid_x(t) - H7Y_EPS
+                        if len(mids) == 3:
+                            h7y_slabs = {
+                                "tu": (mids["tu"], mids["xp"]),
+                                "xp": (mids["xp"], mids["eq"]),
+                                "eq": (mids["eq"], float("inf")),
+                            }
+                            in_h7y = True
+                            h7y_title_seen = False
+                            logger.info(
+                                "H7Y_SLABS tu=[%.1f,%.1f) xp=[%.1f,%.1f) eq=[%.1f,inf)",
+                                h7y_slabs["tu"][0],
+                                h7y_slabs["tu"][1],
+                                h7y_slabs["xp"][0],
+                                h7y_slabs["xp"][1],
+                                h7y_slabs["eq"][0],
+                            )
+                            last_key = {"tu": None, "xp": None, "eq": None}
+
+                # --- 2Y enter condition (full-line regex over normalized text) ---
+                if not in_h2y and H2Y_PAT.search(line_text_norm):
+                    in_h2y = True
+                    current_bureau = None
+                    logger.info("H2Y_START page=%s line=%s", line["page"], line["line"])
+
+                # --- line-level stop checks for active history blocks ---
                 if in_h2y:
-                    line_is_bureau = n_simple in BARE_BUREAUS
                     stop = (
                         _is_triad(joined_line_text)
                         or is_account_anchor(joined_line_text)
                         or n_simple in SECTION_STARTERS
-                        or s.startswith("days late - 7 year history")
+                        or line_text_norm.lower().startswith(
+                            "days late - 7 year history"
+                        )
                     )
                     if stop:
                         logger.info(
@@ -1067,48 +1197,7 @@ def split_accounts(
                         )
                         in_h2y = False
                         current_bureau = None
-                    elif line_is_bureau:
-                        current_bureau = {
-                            "transunion": "tu",
-                            "experian": "xp",
-                            "equifax": "eq",
-                        }[n_simple]
-                        logger.info(
-                            "H2Y_SET_BUREAU bureau=%s", current_bureau.upper()
-                        )
-                    else:
-                        for t in toks:
-                            txt = str(t.get("text", ""))
-                            low = txt.casefold().replace("\u00ae", "")
-                            if low.replace(" ", "").startswith("transunion"):
-                                current_bureau = "tu"
-                                logger.info("H2Y_SET_BUREAU bureau=TU")
-                            elif low.replace(" ", "").startswith("experian"):
-                                current_bureau = "xp"
-                                logger.info("H2Y_SET_BUREAU bureau=XP")
-                            elif low.replace(" ", "").startswith("equifax"):
-                                current_bureau = "eq"
-                                logger.info("H2Y_SET_BUREAU bureau=EQ")
-                            elif current_bureau:
-                                if H2Y_STATUS_RE.match(low):
-                                    acc_two_year[current_bureau].append(txt)
-                                    try:
-                                        x0 = float(t.get("x0", 0.0))
-                                    except Exception:
-                                        x0 = 0.0
-                                    logger.info(
-                                        "H2Y_TOKEN bureau=%s text=%r x0=%.1f",
-                                        current_bureau.upper(),
-                                        txt,
-                                        x0,
-                                    )
-                                    _trace_history2y(
-                                        line["page"],
-                                        line["line"],
-                                        t,
-                                        current_bureau.upper(),
-                                    )
-                    continue
+                        _flush_history(None, acc_two_year, acc_seven_year)
 
                 if in_h7y:
                     stop = (
@@ -1116,7 +1205,7 @@ def split_accounts(
                         or is_account_anchor(joined_line_text)
                         or bare in BARE_BUREAUS
                         or n_simple in SECTION_STARTERS
-                        or H2Y_PAT.search(joined_line_text)
+                        or H2Y_PAT.search(line_text_norm)
                     )
                     if stop:
                         logger.info(
@@ -1133,83 +1222,80 @@ def split_accounts(
                         )
                         in_h7y = False
                         h7y_slabs = None
-                        last_key = {"tu": None, "xp": None, "eq": None}
-                    else:
-                        if h7y_slabs:
-                            tu_left, xp_left, eq_left = h7y_slabs
-                        else:
-                            tu_left = xp_left = eq_left = 0.0
-                        for t in toks:
+                        _flush_history(None, acc_two_year, acc_seven_year)
+
+                # --- per-token history processing (observer, no continue) ---
+                for t in toks:
+                    txt = str(t.get("text", ""))
+                    txt_norm = _header_norm(txt)
+
+                    if in_h2y:
+                        b = _bureau_key(txt_norm)
+                        if b:
+                            current_bureau = b
+                            logger.info("H2Y_SET_BUREAU bureau=%s", b.upper())
+                        elif current_bureau and H2Y_STATUS_RE.match(
+                            txt.strip().casefold()
+                        ):
+                            acc_two_year[current_bureau].append(txt)
                             try:
-                                mid = _triad_mid_x(t)
+                                x0 = float(t.get("x0", 0.0))
                             except Exception:
-                                mid = 0.0
-                            if mid < tu_left:
-                                continue
-                            if mid < xp_left:
-                                b = "tu"
-                            elif mid < eq_left:
-                                b = "xp"
-                            else:
-                                b = "eq"
-                            txt = str(t.get("text", ""))
-                            m = LATE_KEY_PAT.match(txt)
+                                x0 = 0.0
+                            logger.info(
+                                "H2Y_TOKEN bureau=%s text=%r x0=%.1f",
+                                current_bureau.upper(),
+                                txt,
+                                x0,
+                            )
+                            _trace_write(
+                                phase="history2y",
+                                bureau=current_bureau,
+                                page=line["page"],
+                                line=line["line"],
+                                text=txt,
+                                x0=t.get("x0"),
+                                x1=t.get("x1"),
+                                mid_x=_triad_mid_x(t),
+                            )
+
+                    if in_h7y and h7y_slabs:
+                        xuse = t.get("x0")
+                        if xuse is None:
+                            try:
+                                xuse = _triad_mid_x(t)
+                            except Exception:
+                                xuse = None
+                        b = _slab_of(xuse, h7y_slabs)
+                        if b:
+                            m = LATE_KEY_PAT.match(txt_norm)
                             if m:
                                 last_key[b] = "late" + m.group(1)
-                                continue
-                            if INT_PAT.match(txt) and last_key[b]:
-                                val = int(txt)
-                                acc_seven_year[b][last_key[b]] = val
-                                logger.info(
-                                    "H7Y_VALUE bureau=%s kind=%s value=%d",
-                                    b.upper(),
-                                    last_key[b],
-                                    val,
-                                )
-                                _trace_history7y(
-                                    line["page"],
-                                    line["line"],
-                                    t,
-                                    b.upper(),
-                                    last_key[b],
-                                    val,
-                                )
-                                last_key[b] = None
-                        continue
-
-                if H2Y_PAT.search(joined_line_text):
-                    logger.info("H2Y_START page=%s line=%s", line["page"], line["line"])
-                    in_h2y = True
-                    current_bureau = None
-                    continue
-
-                contains_all_bureaus = all(
-                    name.lower() in s for name in ("transunion", "experian", "equifax")
-                )
-                if contains_all_bureaus:
-                    mids = {}
-                    for t in toks:
-                        txt = str(t.get("text", ""))
-                        low = txt.lower().replace("\u00ae", "")
-                        if low.startswith("transunion"):
-                            mids["tu"] = _triad_mid_x(t) - H7Y_EPS
-                        elif low.startswith("experian"):
-                            mids["xp"] = _triad_mid_x(t) - H7Y_EPS
-                        elif low.startswith("equifax"):
-                            mids["eq"] = _triad_mid_x(t) - H7Y_EPS
-                    if len(mids) == 3:
-                        h7y_slabs = (mids["tu"], mids["xp"], mids["eq"])
-                        logger.info(
-                            "H7Y_SLABS tu=[%.1f,%.1f) xp=[%.1f,%.1f) eq=[%.1f,inf)",
-                            h7y_slabs[0],
-                            h7y_slabs[1],
-                            h7y_slabs[1],
-                            h7y_slabs[2],
-                            h7y_slabs[2],
-                        )
-                        in_h7y = True
-                        last_key = {"tu": None, "xp": None, "eq": None}
-                        continue
+                            elif INT_PAT.match(txt_norm) and last_key[b]:
+                                try:
+                                    v = int(txt_norm)
+                                except Exception:
+                                    v = None
+                                if v is not None:
+                                    acc_seven_year[b][last_key[b]] = v
+                                    logger.info(
+                                        "H7Y_VALUE bureau=%s kind=%s value=%d",
+                                        b.upper(),
+                                        last_key[b],
+                                        v,
+                                    )
+                                    _trace_write(
+                                        phase="history7y",
+                                        bureau=b,
+                                        kind=last_key[b],
+                                        value=v,
+                                        page=line["page"],
+                                        line=line["line"],
+                                        x0=t.get("x0"),
+                                        x1=t.get("x1"),
+                                        mid_x=_triad_mid_x(t),
+                                    )
+                                    last_key[b] = None
 
                 if bare in BARE_BUREAUS:
                     triad_log(
@@ -1825,17 +1911,8 @@ def split_accounts(
             "lines": account_lines,
             "trailing_section_marker_pruned": trailing_pruned,
             "noise_lines_skipped": noise_lines_skipped,
-            "two_year_payment_history": {
-                "transunion": acc_two_year["tu"],
-                "experian": acc_two_year["xp"],
-                "equifax": acc_two_year["eq"],
-            },
-            "seven_year_history": {
-                "transunion": acc_seven_year["tu"],
-                "experian": acc_seven_year["xp"],
-                "equifax": acc_seven_year["eq"],
-            },
         }
+        _flush_history(account_info, acc_two_year, acc_seven_year)
         if RAW_TRIAD_FROM_X:
             account_info["triad"] = {
                 "enabled": True,

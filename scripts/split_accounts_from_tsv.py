@@ -236,6 +236,13 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", s.replace("\u00ae", "")).strip()
 
 
+def _clean_value(txt: str) -> str:
+    s = _norm(txt)
+    if s in {"—", "–"} or re.fullmatch(r"[—–-]\s*[—–-]", s):
+        return "--"
+    return s
+
+
 def _norm_text(s: str) -> str:
     """Normalize text for guard checks by collapsing whitespace and punctuation."""
     s = s.replace("\u00ae", " ")
@@ -802,7 +809,7 @@ def process_triad_labeled_line(
     # 3) Append joined values into fields (no content heuristics)
     for bureau in triad_order:
         if vals[bureau]:
-            s = " ".join(vals[bureau]).strip()
+            s = _clean_value(" ".join(vals[bureau]).strip())
             prior = triad_fields[bureau].get(canonical or "", "") if canonical else ""
             triad_fields[bureau][canonical] = (f"{prior} {s}" if prior else s).strip()
 
@@ -822,9 +829,9 @@ def process_triad_labeled_line(
     logger.info(
         "TRIAD_ROW_LABELED key=%s TU=%r XP=%r EQ=%r",
         canonical,
-        " ".join(vals["transunion"]).strip(),
-        " ".join(vals["experian"]).strip(),
-        " ".join(vals["equifax"]).strip(),
+        _clean_value(" ".join(vals["transunion"]).strip()),
+        _clean_value(" ".join(vals["experian"]).strip()),
+        _clean_value(" ".join(vals["equifax"]).strip()),
     )
 
     return {
@@ -1245,16 +1252,16 @@ def split_accounts(
 
                 # --- per-token history processing (observer, no continue) ---
                 for t in toks:
-                    txt = str(t.get("text", ""))
-                    txt_norm = _norm(txt)
+                    txt_raw = str(t.get("text", ""))
+                    txt = _norm(txt_raw)
 
                     if in_h2y:
-                        b = _bureau_key(txt_norm)
-                        if b and txt_norm.casefold() in {"transunion", "experian", "equifax"}:
+                        b = _bureau_key(txt)
+                        if b and txt.casefold() in {"transunion", "experian", "equifax"}:
                             current_bureau = b
                             logger.info("H2Y_SET_BUREAU bureau=%s", b.upper())
-                        elif current_bureau and H2Y_STATUS_RE.match(txt_norm.casefold()):
-                            acc_two_year[current_bureau].append(txt)
+                        elif current_bureau and H2Y_STATUS_RE.match(txt.casefold()):
+                            acc_two_year[current_bureau].append(txt_raw)
                             try:
                                 x0 = float(t.get("x0", 0.0))
                             except Exception:
@@ -1262,7 +1269,7 @@ def split_accounts(
                             logger.info(
                                 "H2Y_TOKEN bureau=%s text=%r x0=%.1f",
                                 current_bureau.upper(),
-                                txt,
+                                txt_raw,
                                 x0,
                             )
                             _trace_write(
@@ -1270,49 +1277,57 @@ def split_accounts(
                                 bureau=current_bureau,
                                 page=line["page"],
                                 line=line["line"],
-                                text=txt,
+                                text=txt_raw,
                                 x0=t.get("x0"),
                                 x1=t.get("x1"),
                                 mid_x=_triad_mid_x(t),
                             )
 
                     if in_h7y and h7y_slabs:
-                        xuse = t.get("x0")
-                        if xuse is None:
+                        mx = None
+                        try:
+                            mx = _triad_mid_x(t)
+                        except Exception:
+                            mx = None
+                        if mx is None:
                             try:
-                                xuse = _triad_mid_x(t)
+                                mx = float(t.get("x0"))
                             except Exception:
-                                xuse = None
-                        b = _slab_of(xuse, h7y_slabs)
+                                mx = None
+                        b = _slab_of(mx, h7y_slabs)
                         if b:
-                            m = LATE_KEY_PAT.match(txt_norm)
+                            m = LATE_KEY_PAT.match(txt)
                             if m:
                                 last_key[b] = "late" + m.group(1)
-                            elif INT_PAT.match(txt_norm) and last_key[b]:
-                                try:
-                                    v = int(txt_norm)
-                                except Exception:
-                                    v = None
-                                if v is not None:
-                                    acc_seven_year[b][last_key[b]] = v
-                                    logger.info(
-                                        "H7Y_VALUE bureau=%s kind=%s value=%d",
-                                        b.upper(),
-                                        last_key[b],
-                                        v,
-                                    )
-                                    _trace_write(
-                                        phase="history7y",
-                                        bureau=b,
-                                        kind=last_key[b],
-                                        value=v,
-                                        page=line["page"],
-                                        line=line["line"],
-                                        x0=t.get("x0"),
-                                        x1=t.get("x1"),
-                                        mid_x=_triad_mid_x(t),
-                                    )
-                                    last_key[b] = None
+                                logger.info(
+                                    "H7Y_KEY bureau=%s key=%s", b.upper(), last_key[b]
+                                )
+                            else:
+                                if last_key[b] and INT_PAT.match(txt):
+                                    try:
+                                        v = int(txt)
+                                    except Exception:
+                                        v = None
+                                    if v is not None:
+                                        acc_seven_year[b][last_key[b]] = v
+                                        logger.info(
+                                            "H7Y_VALUE bureau=%s kind=%s value=%d",
+                                            b.upper(),
+                                            last_key[b],
+                                            v,
+                                        )
+                                        _trace_write(
+                                            phase="history7y",
+                                            bureau=b,
+                                            kind=last_key[b],
+                                            value=v,
+                                            page=line["page"],
+                                            line=line["line"],
+                                            x0=t.get("x0"),
+                                            x1=t.get("x1"),
+                                            mid_x=mx,
+                                        )
+                                        last_key[b] = None
 
                 if bare in BARE_BUREAUS:
                     triad_log(
@@ -1714,15 +1729,15 @@ def split_accounts(
                 label_txt = join_tokens_with_space(
                     [t.get("text", "") for t in band_tokens["label"]]
                 ).strip()
-                tu_val = join_tokens_with_space(
-                    [t.get("text", "") for t in band_tokens["tu"]]
-                ).strip()
-                xp_val = join_tokens_with_space(
-                    [t.get("text", "") for t in band_tokens["xp"]]
-                ).strip()
-                eq_val = join_tokens_with_space(
-                    [t.get("text", "") for t in band_tokens["eq"]]
-                ).strip()
+                tu_val = _clean_value(
+                    join_tokens_with_space([t.get("text", "") for t in band_tokens["tu"]]).strip()
+                )
+                xp_val = _clean_value(
+                    join_tokens_with_space([t.get("text", "") for t in band_tokens["xp"]]).strip()
+                )
+                eq_val = _clean_value(
+                    join_tokens_with_space([t.get("text", "") for t in band_tokens["eq"]]).strip()
+                )
                 has_tu = bool(tu_val)
                 has_xp = bool(xp_val)
                 has_eq = bool(eq_val)

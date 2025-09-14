@@ -731,15 +731,25 @@ def process_triad_labeled_line(
         )
 
     # 2) Collect values after label suffix, banded by X only
+    dash_tokens = {"--", "—", "–"}
     vals = {"transunion": [], "experian": [], "equifax": []}
+    saw_dash_for = {"transunion": False, "experian": False, "equifax": False}
     for j, t in enumerate(tokens[suffix_idx + 1 :], start=suffix_idx + 1):
         b = _token_band(t, layout)
+        txt = str(t.get("text", ""))
+        z = txt.strip()
         if b == "tu":
-            vals["transunion"].append(str(t.get("text", "")))
+            vals["transunion"].append(txt)
+            if z in dash_tokens:
+                saw_dash_for["transunion"] = True
         elif b == "xp":
-            vals["experian"].append(str(t.get("text", "")))
+            vals["experian"].append(txt)
+            if z in dash_tokens:
+                saw_dash_for["experian"] = True
         elif b == "eq":
-            vals["equifax"].append(str(t.get("text", "")))
+            vals["equifax"].append(txt)
+            if z in dash_tokens:
+                saw_dash_for["equifax"] = True
         _trace_token(t.get("page"), t.get("line"), j, t, b, "labeled", canonical or "")
 
     # 2b) TU rescue: sometimes TU values are mis-banded into label due to compression/misalignment.
@@ -808,8 +818,11 @@ def process_triad_labeled_line(
 
     # 3) Append joined values into fields (no content heuristics)
     for bureau in triad_order:
-        if vals[bureau]:
-            s = _clean_value(" ".join(vals[bureau]).strip())
+        s = " ".join(vals[bureau]).strip()
+        if not s and saw_dash_for[bureau]:
+            s = "--"
+        if s or saw_dash_for[bureau]:
+            s = _clean_value(s)
             prior = triad_fields[bureau].get(canonical or "", "") if canonical else ""
             triad_fields[bureau][canonical] = (f"{prior} {s}" if prior else s).strip()
 
@@ -1304,30 +1317,26 @@ def split_accounts(
                                 )
                             else:
                                 if last_key[b] and INT_PAT.match(txt):
-                                    try:
-                                        v = int(txt)
-                                    except Exception:
-                                        v = None
-                                    if v is not None:
-                                        acc_seven_year[b][last_key[b]] = v
-                                        logger.info(
-                                            "H7Y_VALUE bureau=%s kind=%s value=%d",
-                                            b.upper(),
-                                            last_key[b],
-                                            v,
-                                        )
-                                        _trace_write(
-                                            phase="history7y",
-                                            bureau=b,
-                                            kind=last_key[b],
-                                            value=v,
-                                            page=line["page"],
-                                            line=line["line"],
-                                            x0=t.get("x0"),
-                                            x1=t.get("x1"),
-                                            mid_x=mx,
-                                        )
-                                        last_key[b] = None
+                                    val = int(txt)
+                                    acc_seven_year[b][last_key[b]] = val
+                                    logger.info(
+                                        "H7Y_VALUE bureau=%s kind=%s value=%d",
+                                        b.upper(),
+                                        last_key[b],
+                                        val,
+                                    )
+                                    _trace_write(
+                                        phase="history7y",
+                                        bureau=b,
+                                        kind=last_key[b],
+                                        value=val,
+                                        page=line["page"],
+                                        line=line["line"],
+                                        x0=t.get("x0"),
+                                        x1=t.get("x1"),
+                                        mid_x=mx,
+                                    )
+                                    last_key[b] = None
 
                 if bare in BARE_BUREAUS:
                     triad_log(

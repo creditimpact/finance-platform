@@ -12,6 +12,7 @@ import argparse
 import csv
 import json
 import logging
+import os
 import re
 from bisect import bisect_right
 from collections import defaultdict
@@ -31,6 +32,38 @@ from backend.core.logic.report_analysis.triad_layout import (
 logger = logging.getLogger(__name__)
 # Enable with RAW_TRIAD_FROM_X=1 for verbose triad logs
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
+
+TRIAD_TRACE_CSV = os.environ.get("TRIAD_TRACE_CSV") == "1"
+_trace_fp = None
+_trace_wr = None
+
+
+def _trace_open(path: str) -> None:
+    global _trace_fp, _trace_wr
+    if TRIAD_TRACE_CSV and _trace_fp is None:
+        _trace_fp = open(path, "w", newline="", encoding="utf-8")
+        _trace_wr = csv.writer(_trace_fp)
+        _trace_wr.writerow(
+            ["page", "line", "text", "x0", "x1", "mid_x", "band", "action"]
+        )
+
+
+def _trace(page, line, t, band, action):
+    if _trace_wr:
+        try:
+            mid = (float(t.get("x0", 0)) + float(t.get("x1", 0))) / 2.0
+        except Exception:
+            mid = 0.0
+        _trace_wr.writerow([
+            page,
+            line,
+            t.get("text"),
+            t.get("x0"),
+            t.get("x1"),
+            mid,
+            band,
+            action,
+        ])
 STOP_MARKER_NORM = "publicinformation"
 SECTION_STARTERS = {"collection", "unknown"}
 _SECTION_NAME = {"collection": "collections", "unknown": "unknown"}
@@ -157,7 +190,9 @@ def _has_label_suffix(tok: str) -> bool:
 
 def in_label_band(token: dict, layout: TriadLayout) -> bool:
     """Return True if ``token`` lies within the label band of ``layout``."""
-    return assign_band(token, layout) == "label"
+    band = assign_band(token, layout)
+    _trace(token.get("page"), token.get("line"), token, band, "in_label_band")
+    return band == "label"
 
 
 def verify_anchor_row(tokens: List[dict], layout: TriadLayout) -> bool:
@@ -165,6 +200,7 @@ def verify_anchor_row(tokens: List[dict], layout: TriadLayout) -> bool:
     bands: Dict[str, List[dict]] = {"label": [], "tu": [], "xp": [], "eq": []}
     for t in tokens:
         b = assign_band(t, layout)
+        _trace(t.get("page"), t.get("line"), t, b, "verify_anchor_row")
         if b in bands:
             bands[b].append(t)
     if not bands["label"] or not all(len(bands[b]) == 1 for b in ("tu", "xp", "eq")):
@@ -190,12 +226,21 @@ def _validate_anchor_row(anchor_line_tokens, layout) -> bool:
     """
 
     # Expect 1 label token in label band and one value in each TU/XP/EQ
-    label_hit = any(
-        assign_band(t, layout) == "label" for t in anchor_line_tokens[:1]
-    )
-    tu_hit = any(assign_band(t, layout) == "tu" for t in anchor_line_tokens)
-    xp_hit = any(assign_band(t, layout) == "xp" for t in anchor_line_tokens)
-    eq_hit = any(assign_band(t, layout) == "eq" for t in anchor_line_tokens)
+    label_hit = False
+    tu_hit = False
+    xp_hit = False
+    eq_hit = False
+    for idx, t in enumerate(anchor_line_tokens):
+        b = assign_band(t, layout)
+        _trace(t.get("page"), t.get("line"), t, b, "validate_anchor_row")
+        if idx == 0 and b == "label":
+            label_hit = True
+        if b == "tu":
+            tu_hit = True
+        elif b == "xp":
+            xp_hit = True
+        elif b == "eq":
+            eq_hit = True
     return label_hit and tu_hit and xp_hit and eq_hit
 
 
@@ -430,6 +475,7 @@ def split_accounts(
     section_ptr = 0
     carry_over: List[Dict[str, Any]] = []
     for idx, start_idx in enumerate(account_starts):
+        _trace_open(f"{os.getenv('SID', 'trace')}_triad_trace.csv")
         if sections[idx] is not None:
             current_section = sections[idx]
         sections[idx] = current_section
@@ -519,14 +565,15 @@ def split_accounts(
                     )
                     current_layout_page = line["page"]
 
-                is_heading_line_without_values = (
-                    triad_active
-                    and current_layout is not None
-                    and not any(
-                        assign_band(t, current_layout) in {"tu", "xp", "eq"}
-                        for t in toks
-                    )
-                )
+                is_heading_line_without_values = False
+                if triad_active and current_layout is not None:
+                    is_heading_line_without_values = True
+                    for t in toks:
+                        b = assign_band(t, current_layout)
+                        _trace(line["page"], line["line"], t, b, "heading_check")
+                        if b in {"tu", "xp", "eq"}:
+                            is_heading_line_without_values = False
+                            break
                 if triad_active:
                     if s in {"two year payment history"}:
                         triad_log(
@@ -628,6 +675,7 @@ def split_accounts(
                 if layout:
                     for t in toks:
                         band = assign_band(t, layout)
+                        _trace(line["page"], line["line"], t, band, "band")
                         if band in band_tokens:
                             band_tokens[band].append(t)
                         if label_token is None and _has_label_suffix(t.get("text", "")):
@@ -824,6 +872,11 @@ def split_accounts(
 
     result = {"accounts": accounts, "stop_marker_seen": stop_marker_seen}
     json_out.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    global _trace_fp, _trace_wr
+    if _trace_fp:
+        _trace_fp.close()
+        _trace_fp = None
+        _trace_wr = None
     return result
 
 

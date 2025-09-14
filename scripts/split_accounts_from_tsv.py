@@ -784,12 +784,11 @@ def process_triad_labeled_line(
     # If TU is empty but XP/EQ have values, look for label-band tokens near the TU seam that look like values.
     def _looks_like_tu_value(s: str) -> bool:
         z = (s or "").strip()
-        if not z:
-            return False
         if z in {"--", "—", "–"}:
             return True
-        # dollar amounts or plain numbers with commas
-        return bool(re.match(r"^\$?[0-9][0-9,]*(?:\.[0-9]+)?$", z))
+        if z.startswith("$"):
+            return True
+        return bool(re.match(r"^[0-9][0-9,]*(?:\.[0-9]+)?$", z))
 
     if (
         not vals["transunion"]
@@ -819,7 +818,10 @@ def process_triad_labeled_line(
         if candidates:
             candidates.sort(key=lambda x: x[0])
             _, picked_text, picked_x = candidates[0]
-            vals["transunion"].append(picked_text.strip())
+            z = picked_text.strip()
+            vals["transunion"].append(z)
+            if z in dash_tokens:
+                saw_dash_for["transunion"] = True
             logger.info(
                 "TRIAD_TU_RESCUE key=%s took=%r from=label near_x=%.1f",
                 canonical,
@@ -828,25 +830,29 @@ def process_triad_labeled_line(
             )
 
     # 2c) Special rule: if TU still empty, pick the first label-band token
-    # that starts with '$' immediately after the label.
-    if (not TRIAD_BAND_BY_X0) and not vals["transunion"]:
+    # that looks like a TU value immediately after the label.
+    if not vals["transunion"]:
         for j, t in enumerate(tokens[suffix_idx + 1 :], start=suffix_idx + 1):
             if _token_band(t, layout) != "label":
                 continue
-            txt = str(t.get("text", "")).strip()
-            if txt.startswith("$"):
-                vals["transunion"].append(txt)
-                try:
-                    mx = _triad_mid_x(t)
-                except Exception:
-                    mx = 0.0
-                logger.info(
-                    "TRIAD_TU_RESCUE_DOLLAR key=%s took=%r from=label near_x=%.1f",
-                    canonical,
-                    txt,
-                    mx,
-                )
-                break
+            txt = str(t.get("text", ""))
+            z = txt.strip()
+            if not _looks_like_tu_value(txt):
+                continue
+            vals["transunion"].append(z)
+            if z in dash_tokens:
+                saw_dash_for["transunion"] = True
+            try:
+                mx = _triad_mid_x(t)
+            except Exception:
+                mx = 0.0
+            logger.info(
+                "TRIAD_TU_RESCUE_LABEL key=%s took=%r from=label near_x=%.1f",
+                canonical,
+                z,
+                mx,
+            )
+            break
 
     # 3) Append joined values into fields (no content heuristics)
     for bureau in triad_order:

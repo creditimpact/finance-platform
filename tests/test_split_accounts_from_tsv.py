@@ -178,6 +178,24 @@ def test_term_length_tu_360_by_x0(tmp_path: Path, caplog):
     assert fields["transunion"]["term_length"] == "360"
 
 
+def test_tu_dash_rescue_by_x0(tmp_path: Path, caplog):
+    os.environ["TRIAD_BAND_BY_X0"] = "1"
+    os.environ["TRIAD_TRACE_CSV"] = "1"
+    tsv_path = tmp_path / "_debug_full.tsv"
+    json_path = tmp_path / "accounts_from_full.json"
+    tu_left, xp_left, eq_left = 172.875, 309.0, 445.125
+    extra = [
+        "1\t3\t30\t31\t0\t10\tHigh Balance:\n",
+        f"1\t3\t30\t31\t{tu_left - 1.0}\t{tu_left - 0.5}\t--\n",
+    ]
+    _write_x0_anchor_and_header(tsv_path, tu_left, xp_left, eq_left, extra)
+    _run_split(tsv_path, json_path, caplog)
+    data = json.loads(json_path.read_text())
+    fields = data["accounts"][0]["triad_fields"]
+    assert fields["transunion"]["high_balance"] == "--"
+    assert "TRIAD_TU_RESCUE" in caplog.text
+
+
 def test_wrapped_equifax_remarks_left_margin(tmp_path: Path, caplog):
     os.environ["TRIAD_BAND_BY_X0"] = "1"
     os.environ["TRIAD_TRACE_CSV"] = "1"

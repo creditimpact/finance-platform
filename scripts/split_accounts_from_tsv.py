@@ -260,7 +260,7 @@ H2Y_PAT = re.compile(r"\bTwo[-\s]?Year\b.*\bPayment\b.*\bHistory\b", re.I)
 H2Y_STATUS_RE = re.compile(r"^(?:ok|co|[0-9]{2,3})$", re.I)
 H7Y_TITLE_PAT = re.compile(r"(Days\s*Late|7\s*Year\s*History)", re.I)
 H7Y_BUREAUS = ("Transunion", "Experian", "Equifax")
-LATE_KEY_PAT = re.compile(r"^\s*(30|60|90)\s*:\s*$")
+LATE_KEY_PAT = re.compile(r"^\s*(30|60|90)\s*:\s*(\d+)?\s*$")
 INT_PAT = re.compile(r"^\d+$")
 H7Y_EPS = 6.0
 
@@ -347,6 +347,34 @@ def _trace_write(
             "",
             "",
         ]
+    )
+
+
+def _history_trace(
+    page,
+    line,
+    *,
+    bureau,
+    phase,
+    kind: str = "",
+    text: str = "",
+    value: int | None = None,
+    x0: float | None = None,
+    x1: float | None = None,
+    mid_x: float | None = None,
+) -> None:
+    """Write history trace via ``_trace_write`` if tracing is active."""
+    _trace_write(
+        phase=phase,
+        bureau=bureau,
+        page=page,
+        line=line,
+        text=text,
+        kind=kind,
+        value=value,
+        x0=x0,
+        x1=x1,
+        mid_x=mid_x,
     )
 
 
@@ -764,8 +792,7 @@ def process_triad_labeled_line(
         return bool(re.match(r"^\$?[0-9][0-9,]*(?:\.[0-9]+)?$", z))
 
     if (
-        (not TRIAD_BAND_BY_X0)
-        and not vals["transunion"]
+        not vals["transunion"]
         and (vals["experian"] or vals["equifax"])
     ):
         tu_left = float(getattr(layout, "tu_band")[0])
@@ -776,8 +803,13 @@ def process_triad_labeled_line(
             if _token_band(t, layout) != "label":
                 continue
             txt = str(t.get("text", ""))
-            if not _looks_like_tu_value(txt):
-                continue
+            z = txt.strip()
+            if TRIAD_BAND_BY_X0:
+                if z not in dash_tokens:
+                    continue
+            else:
+                if not _looks_like_tu_value(txt):
+                    continue
             try:
                 midx = _triad_mid_x(t)
             except Exception:
@@ -1311,32 +1343,65 @@ def split_accounts(
                         if b:
                             m = LATE_KEY_PAT.match(txt)
                             if m:
-                                last_key[b] = "late" + m.group(1)
+                                key = m.group(1)
+                                inline_val = m.group(2)
+                                last_key[b] = key
                                 logger.info(
-                                    "H7Y_KEY bureau=%s key=%s", b.upper(), last_key[b]
+                                    "H7Y_KEY bureau=%s key=%s", b.upper(), key
                                 )
-                            else:
-                                if last_key[b] and INT_PAT.match(txt):
-                                    val = int(txt)
-                                    acc_seven_year[b][last_key[b]] = val
+                                _history_trace(
+                                    line["page"],
+                                    line["line"],
+                                    bureau=b,
+                                    phase="history7y",
+                                    kind="key",
+                                    text=f"{key}:",
+                                    x0=t.get("x0"),
+                                    x1=t.get("x1"),
+                                )
+                                if inline_val is not None:
+                                    v = int(inline_val)
+                                    acc_seven_year[b][f"late{key}"] = v
                                     logger.info(
-                                        "H7Y_VALUE bureau=%s kind=%s value=%d",
+                                        "H7Y_VALUE bureau=%s kind=late%s value=%d",
                                         b.upper(),
-                                        last_key[b],
-                                        val,
+                                        key,
+                                        v,
                                     )
-                                    _trace_write(
-                                        phase="history7y",
+                                    _history_trace(
+                                        line["page"],
+                                        line["line"],
                                         bureau=b,
-                                        kind=last_key[b],
-                                        value=val,
-                                        page=line["page"],
-                                        line=line["line"],
+                                        phase="history7y",
+                                        kind=f"late{key}",
+                                        value=v,
                                         x0=t.get("x0"),
                                         x1=t.get("x1"),
-                                        mid_x=mx,
                                     )
                                     last_key[b] = None
+                                continue
+                            if last_key[b] and INT_PAT.match(txt):
+                                key = last_key[b]
+                                v = int(txt)
+                                acc_seven_year[b][f"late{key}"] = v
+                                logger.info(
+                                    "H7Y_VALUE bureau=%s kind=late%s value=%d",
+                                    b.upper(),
+                                    key,
+                                    v,
+                                )
+                                _history_trace(
+                                    line["page"],
+                                    line["line"],
+                                    bureau=b,
+                                    phase="history7y",
+                                    kind=f"late{key}",
+                                    value=v,
+                                    x0=t.get("x0"),
+                                    x1=t.get("x1"),
+                                )
+                                last_key[b] = None
+                                continue
 
                 if bare in BARE_BUREAUS:
                     triad_log(

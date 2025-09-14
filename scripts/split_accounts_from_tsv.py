@@ -65,6 +65,13 @@ def _norm_text(s: str) -> str:
     return " ".join(s.split()).lower()
 
 
+def _bare_bureau_norm(s: str) -> str:
+    return " ".join(s.lower().replace("\u00ae", "").split())
+
+
+BARE_BUREAUS = {"transunion", "experian", "equifax"}
+
+
 def _is_triad(text: str) -> bool:
     """Return True if ``text`` is the TransUnion/Experian/Equifax triad.
 
@@ -448,6 +455,15 @@ def split_accounts(
                 toks = tokens_by_line.get(key, [])
                 texts = [t.get("text", "") for t in toks]
                 joined_line_text = join_tokens_with_space(texts)
+
+                if _bare_bureau_norm(joined_line_text) in BARE_BUREAUS:
+                    triad_log(
+                        "TRIAD_STOP reason=bare_bureau_header page=%s line=%s",
+                        line["page"],
+                        line["line"],
+                    )
+                    reset()
+                    continue
 
                 s = _norm_text(joined_line_text)
                 if (

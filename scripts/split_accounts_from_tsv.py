@@ -114,10 +114,18 @@ def _mid_y(t: dict) -> float:
         return 0.0
 
 
-def _has_label_suffix(text: str) -> bool:
-    """Return True if ``text`` ends with a label marker like ':' or '#'."""
-    text = (text or "").strip()
-    return text.endswith(":") or text.endswith("#")
+UNICODE_COLONS = "\u003A\uFF1A\uFE55\uFE13"  # ":" ， "：" ， "﹕" ， "︓"
+
+
+def _has_label_suffix(tok: str) -> bool:
+    """Return True if ``tok`` ends with a label marker like ':' or '#'."""
+    # Strip trailing spaces
+    s = (tok or "").rstrip()
+    # Account anchor is the only '#' label
+    if s.endswith('#'):
+        return True
+    # Accept ASCII and Unicode colons
+    return len(s) > 1 and s[-1] in UNICODE_COLONS
 
 
 def in_label_band(token: dict, layout: TriadLayout) -> bool:
@@ -612,8 +620,8 @@ def split_accounts(
                         )
                         open_row = None
                     continue
-                if label_txt and (label_txt.endswith(":") or label_txt.endswith("#")):
-                    visual = label_txt.rstrip(":").strip()
+                if label_txt and _has_label_suffix(label_txt):
+                    visual = label_txt.rstrip(UNICODE_COLONS).strip()
                     canonical_key = LABEL_MAP.get(visual)
                     if canonical_key is None and visual != "Account #":
                         triad_log(

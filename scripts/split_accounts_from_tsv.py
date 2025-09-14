@@ -124,6 +124,26 @@ def _mid_y(t: dict) -> float:
 UNICODE_COLONS = "\u003A\uFF1A\uFE55\uFE13"  # ":" ， "：" ， "﹕" ， "︓"
 
 
+GRID_TOKENS = {"ok", "0", "30", "60", "90"}
+
+
+def _is_history_grid_line(banded_tokens: Dict[str, List[dict]]) -> bool:
+    """Return True if tokens across all bureaus form a payment history grid."""
+
+    def _col_val(toks: List[dict]) -> str | None:
+        if not toks:
+            return None
+        s = "".join(t.get("text", "") for t in toks)
+        s = re.sub(r"\s+", "", s).lower()
+        return s
+
+    return (
+        _col_val(banded_tokens.get("tu", [])) in GRID_TOKENS
+        and _col_val(banded_tokens.get("xp", [])) in GRID_TOKENS
+        and _col_val(banded_tokens.get("eq", [])) in GRID_TOKENS
+    )
+
+
 def _has_label_suffix(tok: str) -> bool:
     """Return True if ``tok`` ends with a label marker like ':' or '#'."""
     # Strip trailing spaces
@@ -635,6 +655,14 @@ def split_accounts(
                             "no_layout",
                         )
                         open_row = None
+                    continue
+                if not label_txt and _is_history_grid_line(band_tokens):
+                    triad_log(
+                        "TRIAD_STOP reason=grid_line page=%s line=%s",
+                        line["page"],
+                        line["line"],
+                    )
+                    reset()
                     continue
                 if label_txt and _has_label_suffix(label_txt):
                     visual = label_txt.rstrip(UNICODE_COLONS).strip()

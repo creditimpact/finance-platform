@@ -46,26 +46,28 @@ def _get_float_env(name: str, default: float) -> float:
 TRIAD_X0_TOL: float = _get_float_env("TRIAD_X0_TOL", 0.5)
 TRIAD_CONT_NEAREST_MAXDX: float = _get_float_env("TRIAD_CONT_NEAREST_MAXDX", 30.0)
 
-TRIAD_TRACE_CSV = os.environ.get("TRIAD_TRACE_CSV") == "1"
+TRACE_ON = (
+    os.getenv("TRIAD_TRACE_CSV", "0") == "1"
+    and os.getenv("KEEP_PER_ACCOUNT_TSV", "0") == "1"
+)
+trace_dir: Path | None = None
 _trace_fp = None
 _trace_wr = None
 
 
-def _trace_open(path: Path) -> None:
-    """Open a per-account trace CSV at ``path`` with required header.
-
-    If another trace is already open, close it first.
-    """
+def _trace_open(path: Path | str) -> None:
+    """Open a per-account trace CSV under ``trace_dir`` with required header."""
     global _trace_fp, _trace_wr
-    if not TRIAD_TRACE_CSV:
+    if not TRACE_ON or trace_dir is None:
         return
     try:
         if _trace_fp:
             _trace_fp.close()
     except Exception:
         pass
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _trace_fp = open(path, "w", newline="", encoding="utf-8")
+    p = trace_dir / Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    _trace_fp = open(p, "w", newline="", encoding="utf-8")
     _trace_wr = csv.writer(_trace_fp)
     _trace_wr.writerow(
         [
@@ -197,6 +199,8 @@ def _trace_history7y(page, line, t, bureau, kind, value):
         )
 
 
+_triad_x0_fallback_logged: set[int] = set()
+
 STOP_MARKER_NORM = "publicinformation"
 SECTION_STARTERS = {"collection", "unknown"}
 _SECTION_NAME = {"collection": "collections", "unknown": "unknown"}
@@ -219,9 +223,17 @@ def join_tokens_with_space(tokens: Iterable[str]) -> str:
     return _SPACE_RE.sub(" ", s).strip()
 
 
-def _norm(text: str) -> str:
-    """Normalize ``text`` by removing spaces/symbols and casefolding."""
+def _norm_simple(text: str) -> str:
+    """Legacy normalization used for structural guards.
+
+    Removes non-alphanumeric characters and casefolds the result.
+    """
     return re.sub(r"[^a-z0-9]", "", text.casefold())
+
+
+def _norm(s: str) -> str:
+    """Normalize ``s`` by dropping ``\N{REGISTERED SIGN}`` and collapsing whitespace."""
+    return re.sub(r"\s+", " ", s.replace("\u00ae", "")).strip()
 
 
 def _norm_text(s: str) -> str:
@@ -284,10 +296,14 @@ def _flush_history(account: Optional[dict], acc_two_year, acc_seven_year) -> Non
         "experian": acc_two_year.get("xp", []),
         "equifax": acc_two_year.get("eq", []),
     }
+    def _seven(b: str) -> Dict[str, int]:
+        src = acc_seven_year.get(b, {})
+        return {k: int(src.get(k, 0)) for k in ("late30", "late60", "late90")}
+
     account["seven_year_history"] = {
-        "transunion": acc_seven_year.get("tu", {}),
-        "experian": acc_seven_year.get("xp", {}),
-        "equifax": acc_seven_year.get("eq", {}),
+        "transunion": _seven("tu"),
+        "experian": _seven("xp"),
+        "equifax": _seven("eq"),
     }
 
 
@@ -305,7 +321,7 @@ def _trace_write(
     mid_x: float | None = None,
 ) -> None:
     """Generic trace writer for history observers."""
-    if not _trace_wr:
+    if not TRACE_ON or not _trace_wr:
         return
     txt = text if text else ("" if value is None else str(value))
     _trace_wr.writerow(
@@ -346,7 +362,7 @@ def _is_triad(text: str) -> bool:
 
 def _is_anchor(text: str) -> bool:
     """Return True if ``text`` contains the literal ``Account #`` anchor."""
-    return "account#" in _norm(text)
+    return "account#" in _norm_simple(text)
 
 
 def is_account_anchor(joined_text: str) -> bool:
@@ -1010,10 +1026,15 @@ def split_accounts(
 ) -> Dict[str, Any]:
     """Core logic for splitting accounts from the full TSV."""
     tokens_by_line, lines = _read_tokens(tsv_path)
+    global trace_dir
+    if TRACE_ON:
+        trace_dir = Path(os.getenv("TRACE_DIR") or (tsv_path.parent / "per_account_tsv"))
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("TRACE_DIR=%s", trace_dir.resolve())
 
     stop_marker_seen = False
     for i, line in enumerate(lines):
-        if _norm(line["text"]) == STOP_MARKER_NORM:
+        if _norm_simple(line["text"]) == STOP_MARKER_NORM:
             stop_marker_seen = True
             lines = lines[:i]
             break
@@ -1030,7 +1051,7 @@ def split_accounts(
         heading_sources.append(source)
 
     section_starts = [
-        i for i, line in enumerate(lines) if _norm(line["text"]) in SECTION_STARTERS
+        i for i, line in enumerate(lines) if _norm_simple(line["text"]) in SECTION_STARTERS
     ]
     section_prefix_flags = [False] * len(account_starts)
     sections: List[str | None] = [None] * len(account_starts)
@@ -1044,7 +1065,7 @@ def split_accounts(
         account_starts[next_idx] = heading_idx
         headings[next_idx] = heading
         heading_sources[next_idx] = "section+heading"
-        starter_norm = _norm(lines[s_idx]["text"])
+        starter_norm = _norm_simple(lines[s_idx]["text"])
         sections[next_idx] = _SECTION_NAME.get(starter_norm)
 
     accounts: List[Dict[str, Any]] = []
@@ -1052,10 +1073,8 @@ def split_accounts(
     section_ptr = 0
     carry_over: List[Dict[str, Any]] = []
     for idx, start_idx in enumerate(account_starts):
-        if TRIAD_TRACE_CSV:
-            _trace_open(
-                tsv_path.parent / "per_account_tsv" / f"_trace_account_{idx + 1}.csv"
-            )
+        if TRACE_ON:
+            _trace_open(f"_trace_account_{idx + 1}.csv")
         if sections[idx] is not None:
             current_section = sections[idx]
         sections[idx] = current_section
@@ -1086,9 +1105,10 @@ def split_accounts(
                 continue
             filtered_lines.append(line)
         account_lines = filtered_lines
+        history_out: Dict[str, Any] = {}
 
         def _is_structural_marker(txt: str) -> bool:
-            n = _norm(txt)
+            n = _norm_simple(txt)
             return n in SECTION_STARTERS or _is_triad(txt) or _is_anchor(txt)
 
         while account_lines and _is_structural_marker(account_lines[-1]["text"]):
@@ -1134,26 +1154,25 @@ def split_accounts(
                 joined_line_text = join_tokens_with_space(texts)
                 bare = _bare_bureau_norm(joined_line_text)
                 s = _norm_text(joined_line_text)
-                n_simple = _norm(joined_line_text)
+                n_simple = _norm_simple(joined_line_text)
 
-                line_text_norm = _header_norm(joined_line_text)
+                line_text_norm = _norm(joined_line_text)
 
                 # --- 7Y gate: require the title first; only then accept the bureau header line ---
                 if not in_h7y:
                     if H7Y_TITLE_PAT.search(line_text_norm):
                         h7y_title_seen = True
                     elif h7y_title_seen and all(
-                        b in line_text_norm for b in H7Y_BUREAUS
+                        b.lower() in line_text_norm.casefold() for b in H7Y_BUREAUS
                     ):
                         mids: Dict[str, float] = {}
                         for t in toks:
-                            txt_norm = _header_norm(str(t.get("text", "")))
-                            low = txt_norm.casefold()
-                            if low.startswith("transunion"):
+                            txt_norm = _norm(str(t.get("text", ""))).casefold()
+                            if txt_norm.startswith("transunion"):
                                 mids["tu"] = _triad_mid_x(t) - H7Y_EPS
-                            elif low.startswith("experian"):
+                            elif txt_norm.startswith("experian"):
                                 mids["xp"] = _triad_mid_x(t) - H7Y_EPS
-                            elif low.startswith("equifax"):
+                            elif txt_norm.startswith("equifax"):
                                 mids["eq"] = _triad_mid_x(t) - H7Y_EPS
                         if len(mids) == 3:
                             h7y_slabs = {
@@ -1197,7 +1216,7 @@ def split_accounts(
                         )
                         in_h2y = False
                         current_bureau = None
-                        _flush_history(None, acc_two_year, acc_seven_year)
+                        _flush_history(history_out, acc_two_year, acc_seven_year)
 
                 if in_h7y:
                     stop = (
@@ -1222,21 +1241,19 @@ def split_accounts(
                         )
                         in_h7y = False
                         h7y_slabs = None
-                        _flush_history(None, acc_two_year, acc_seven_year)
+                        _flush_history(history_out, acc_two_year, acc_seven_year)
 
                 # --- per-token history processing (observer, no continue) ---
                 for t in toks:
                     txt = str(t.get("text", ""))
-                    txt_norm = _header_norm(txt)
+                    txt_norm = _norm(txt)
 
                     if in_h2y:
                         b = _bureau_key(txt_norm)
-                        if b:
+                        if b and txt_norm.casefold() in {"transunion", "experian", "equifax"}:
                             current_bureau = b
                             logger.info("H2Y_SET_BUREAU bureau=%s", b.upper())
-                        elif current_bureau and H2Y_STATUS_RE.match(
-                            txt.strip().casefold()
-                        ):
+                        elif current_bureau and H2Y_STATUS_RE.match(txt_norm.casefold()):
                             acc_two_year[current_bureau].append(txt)
                             try:
                                 x0 = float(t.get("x0", 0.0))
@@ -1443,19 +1460,38 @@ def split_accounts(
                         )
                         if not is_valid:
                             if (
-                                anchor_counts["label"] == 0
+                                header_toks
+                                and anchor_counts["label"] == 0
                                 and anchor_counts["tu"] >= 1
                                 and anchor_counts["xp"] >= 1
                                 and anchor_counts["eq"] >= 1
                             ):
-                                logger.info(
-                                    "TRIAD_X0_FALLBACK_OK page=%s line=%s",
-                                    line["page"],
-                                    line["line"],
-                                )
+                                mids: Dict[str, float] = {}
+                                for ht in header_toks:
+                                    bkey = _bureau_key(_norm(str(ht.get("text", ""))))
+                                    if bkey:
+                                        mids[bkey] = _triad_mid_x(ht)
+                                if len(mids) == 3:
+                                    layout.label_band = (0.0, mids["tu"])
+                                    layout.tu_band = (mids["tu"], mids["xp"])
+                                    layout.xp_band = (mids["xp"], mids["eq"])
+                                    layout.eq_band = (mids["eq"], float("inf"))
+                                    if TRIAD_BAND_BY_X0:
+                                        if not layout.tu_left_x0:
+                                            layout.tu_left_x0 = mids["tu"]
+                                        if not layout.xp_left_x0:
+                                            layout.xp_left_x0 = mids["xp"]
+                                        if not layout.eq_left_x0:
+                                            layout.eq_left_x0 = mids["eq"]
+                                        if not layout.label_right_x0:
+                                            layout.label_right_x0 = layout.tu_left_x0
+                                page = line["page"]
+                                if page not in _triad_x0_fallback_logged:
+                                    logger.info("TRIAD_X0_FALLBACK_OK page=%s", page)
+                                    _triad_x0_fallback_logged.add(page)
                                 triad_active = True
                                 current_layout = layout
-                                current_layout_page = line["page"]
+                                current_layout_page = page
                                 continue
                             logger.info(
                                 "TRIAD_STOP reason=layout_mismatch_anchor page=%s line=%s",
@@ -1898,6 +1934,8 @@ def split_accounts(
             in_h7y = False
             h7y_slabs = None
 
+        _flush_history(history_out, acc_two_year, acc_seven_year)
+
         account_info = {
             "account_index": idx + 1,
             "page_start": account_lines[0]["page"],
@@ -1912,7 +1950,7 @@ def split_accounts(
             "trailing_section_marker_pruned": trailing_pruned,
             "noise_lines_skipped": noise_lines_skipped,
         }
-        _flush_history(account_info, acc_two_year, acc_seven_year)
+        account_info.update(history_out)
         if RAW_TRIAD_FROM_X:
             account_info["triad"] = {
                 "enabled": True,
@@ -1973,7 +2011,7 @@ def main(argv: List[str] | None = None) -> None:
         bad_last = [
             a["account_index"]
             for a in accounts
-            if a.get("lines") and _norm(a["lines"][-1]["text"]) in SECTION_STARTERS
+            if a.get("lines") and _norm_simple(a["lines"][-1]["text"]) in SECTION_STARTERS
         ]
         print(f"Total accounts: {total}")
         print(f"collections: {collections} unknown: {unknown} regular: {regular}")

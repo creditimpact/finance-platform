@@ -32,23 +32,59 @@ from backend.core.logic.report_analysis.triad_layout import (
 logger = logging.getLogger(__name__)
 # Enable with RAW_TRIAD_FROM_X=1 for verbose triad logs
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
+TRIAD_BAND_BY_X0 = os.environ.get("TRIAD_BAND_BY_X0") == "1"
+# Tunables for x0 mode
+def _get_float_env(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except Exception:
+        return default
+
+TRIAD_X0_TOL: float = _get_float_env("TRIAD_X0_TOL", 0.5)
+TRIAD_CONT_NEAREST_MAXDX: float = _get_float_env("TRIAD_CONT_NEAREST_MAXDX", 30.0)
 
 TRIAD_TRACE_CSV = os.environ.get("TRIAD_TRACE_CSV") == "1"
 _trace_fp = None
 _trace_wr = None
 
 
-def _trace_open(path: str) -> None:
+def _trace_open(path: Path) -> None:
+    """Open a per-account trace CSV at ``path`` with required header.
+
+    If another trace is already open, close it first.
+    """
     global _trace_fp, _trace_wr
-    if TRIAD_TRACE_CSV and _trace_fp is None:
-        _trace_fp = open(path, "w", newline="", encoding="utf-8")
-        _trace_wr = csv.writer(_trace_fp)
-        _trace_wr.writerow(
-            ["page", "line", "text", "x0", "x1", "mid_x", "band", "action"]
-        )
+    if not TRIAD_TRACE_CSV:
+        return
+    try:
+        if _trace_fp:
+            _trace_fp.close()
+    except Exception:
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _trace_fp = open(path, "w", newline="", encoding="utf-8")
+    _trace_wr = csv.writer(_trace_fp)
+    _trace_wr.writerow(
+        [
+            "page",
+            "line",
+            "token",
+            "text",
+            "x0",
+            "x1",
+            "mid_x",
+            "band",
+            "phase",
+            "label_key",
+            "used_axis",
+            "reassigned_from",
+            "wrap_affinity",
+        ]
+    )
 
 
 def _trace(page, line, t, band, action):
+    """Legacy trace writer (kept for compatibility)."""
     if _trace_wr:
         try:
             mid = (float(t.get("x0", 0)) + float(t.get("x1", 0))) / 2.0
@@ -57,12 +93,49 @@ def _trace(page, line, t, band, action):
         _trace_wr.writerow([
             page,
             line,
+            "",
             t.get("text"),
             t.get("x0"),
             t.get("x1"),
             mid,
             band,
             action,
+            "",
+            ("x0" if TRIAD_BAND_BY_X0 else "mid"),
+            "",
+            "",
+        ])
+
+def _trace_token(
+    page,
+    line,
+    token_index,
+    t,
+    band,
+    phase,
+    label_key: str | None = None,
+    reassigned_from: str = "",
+    wrap_affinity: str = "",
+):
+    if _trace_wr:
+        try:
+            mid = (float(t.get("x0", 0)) + float(t.get("x1", 0))) / 2.0
+        except Exception:
+            mid = 0.0
+        _trace_wr.writerow([
+            page,
+            line,
+            token_index,
+            t.get("text"),
+            t.get("x0"),
+            t.get("x1"),
+            mid,
+            band,
+            phase,
+            label_key or "",
+            ("x0" if TRIAD_BAND_BY_X0 else "mid"),
+            reassigned_from,
+            wrap_affinity,
         ])
 STOP_MARKER_NORM = "publicinformation"
 SECTION_STARTERS = {"collection", "unknown"}
@@ -177,29 +250,43 @@ def _is_history_grid_line(banded_tokens: Dict[str, List[dict]]) -> bool:
     )
 
 
-def _has_label_suffix(tok: str) -> bool:
-    """Return True if ``tok`` ends with a label marker like ':' or '#'."""
-    # Strip trailing spaces
-    s = (tok or "").rstrip()
-    # Account anchor is the only '#' label
-    if s.endswith('#'):
-        return True
-    # Accept ASCII and Unicode colons
-    return len(s) > 1 and s[-1] in UNICODE_COLONS
+def _has_label_suffix(txt: str) -> bool:
+    s = (txt or "").strip()
+    return s.endswith(("#",) + UNICODE_COLONS_TUP)
+
+
+def _assign_band_any(token: dict, layout: TriadLayout) -> str:
+    if TRIAD_BAND_BY_X0:
+        try:
+            x0 = float(token.get("x0", 0.0))
+        except Exception:
+            x0 = 0.0
+        # Apply tolerance around cutoffs in x0-mode comparisons
+        if x0 + TRIAD_X0_TOL < (layout.tu_left_x0 or 0.0):
+            return "label"
+        if x0 + TRIAD_X0_TOL < (layout.xp_left_x0 or 0.0):
+            return "tu"
+        if x0 + TRIAD_X0_TOL < (layout.eq_left_x0 or 0.0):
+            return "xp"
+        return "eq"
+    return assign_band(token, layout)
 
 
 def in_label_band(token: dict, layout: TriadLayout) -> bool:
     """Return True if ``token`` lies within the label band of ``layout``."""
-    band = assign_band(token, layout)
+    band = _assign_band_any(token, layout)
     _trace(token.get("page"), token.get("line"), token, band, "in_label_band")
     return band == "label"
 
 
 def verify_anchor_row(tokens: List[dict], layout: TriadLayout) -> bool:
-    """Return True if ``tokens`` form a valid anchor row for ``layout``."""
+    """Legacy strict validator for anchor rows (kept for compatibility).
+
+    Note: Triad activation now uses the relaxed `_validate_anchor_row` below.
+    """
     bands: Dict[str, List[dict]] = {"label": [], "tu": [], "xp": [], "eq": []}
     for t in tokens:
-        b = assign_band(t, layout)
+        b = _assign_band_any(t, layout)
         _trace(t.get("page"), t.get("line"), t, b, "verify_anchor_row")
         if b in bands:
             bands[b].append(t)
@@ -216,32 +303,335 @@ def verify_anchor_row(tokens: List[dict], layout: TriadLayout) -> bool:
     return True
 
 
-def _validate_anchor_row(anchor_line_tokens, layout) -> bool:
-    """Quick geometry sanity check for the anchor row.
+# --- Anchor validation: accept >=1 token per bureau ---
+NOISE_TOKENS = {"-", "—", "–", "|"}
 
-    Ensures we see one token in the label band and at least one token in each of
-    the bureau bands. This validation uses only token positions and ignores
-    their textual content, serving as a lightweight guard before parsing
-    forward.
+
+def _triad_mid_x(t: dict) -> float:
+    try:
+        x0 = float(t.get("x0", 0.0))
+        x1 = float(t.get("x1", x0))
+        return (x0 + x1) / 2.0
+    except Exception:
+        return 0.0
+
+
+def _token_band(t: dict, layout: TriadLayout) -> str:
+    # Use local helper; assign by geometry only
+    return _assign_band_any(t, layout)
+
+
+def _validate_anchor_row(anchor_tokens: List[dict], layout: TriadLayout) -> bool:
+    """Relaxed Account # anchor validator.
+
+    Accept if there is at least one non-noise token in each TU/XP/EQ band and
+    a label token exists in the label band (ending with '#', ':' or Unicode
+    colon variants). Purely geometry-based; ignores content heuristics.
+    Also logs band counts for diagnostics.
     """
 
-    # Expect 1 label token in label band and one value in each TU/XP/EQ
-    label_hit = False
-    tu_hit = False
-    xp_hit = False
-    eq_hit = False
-    for idx, t in enumerate(anchor_line_tokens):
-        b = assign_band(t, layout)
-        _trace(t.get("page"), t.get("line"), t, b, "validate_anchor_row")
-        if idx == 0 and b == "label":
-            label_hit = True
+    by_band = {"label": 0, "tu": 0, "xp": 0, "eq": 0}
+    for idx, t in enumerate(anchor_tokens):
+        txt = str(t.get("text", "")).strip()
+        if txt in NOISE_TOKENS:
+            continue
+        b = _token_band(t, layout)
+        _trace(t.get("page"), t.get("line"), t, b, "validate_anchor_row_relaxed")
+        _trace_token(t.get("page"), t.get("line"), idx, t, b, "anchor", "account_number_display")
+        if b in by_band:
+            by_band[b] += 1
+
+    # Label must have a trailing marker and be in the label band.
+    # Snap tolerance: if first token sits within 2*EDGE_EPS left of TU mid,
+    # accept it as a label even if it barely crosses the seam.
+    label_texts = [str(t.get("text", "")) for t in anchor_tokens if _token_band(t, layout) == "label"]
+    has_label = any(s.strip().endswith(("#",) + UNICODE_COLONS_TUP) for s in label_texts)
+
+    if not has_label and anchor_tokens:
+        first = anchor_tokens[0]
+        try:
+            x0 = float(first.get("x0", 0.0))
+            x1 = float(first.get("x1", x0))
+            mid = (x0 + x1) / 2.0
+        except Exception:
+            mid = 0.0
+        # Estimate TU midpoint from layout: tu_left ~ tu_mid - EDGE_EPS
+        tu_mid_est = layout.tu_band[0] + EDGE_EPS
+        if (tu_mid_est - 2 * EDGE_EPS) <= mid < tu_mid_est:
+            if str(first.get("text", "")).strip().endswith(("#",) + UNICODE_COLONS_TUP):
+                has_label = True
+
+    logger.info(
+        "TRIAD_ANCHOR_COUNTS label=%d tu=%d xp=%d eq=%d",
+        by_band["label"],
+        by_band["tu"],
+        by_band["xp"],
+        by_band["eq"],
+    )
+
+    # Accept anchors with a label even if bureau tokens are on the next line
+    return has_label
+
+
+# --- Labeled row processing: split label, then band values per bureau ---
+UNICODE_COLONS_TUP = (":", "：", "﹕", "︓")
+
+
+def _is_label_token_text(txt: str) -> bool:
+    s = (txt or "").strip()
+    return s.endswith(("#",) + UNICODE_COLONS_TUP)
+
+
+def _strip_label_suffix(txt: str) -> str:
+    s = (txt or "").rstrip()
+    for ch in UNICODE_COLONS_TUP:
+        if s.endswith(ch):
+            return s[:-1].rstrip()
+    if s.endswith("#"):
+        return s[:-1].rstrip()
+    return s
+
+
+def _strip_colon_only(txt: str) -> str:
+    s = (txt or "").rstrip()
+    for ch in UNICODE_COLONS_TUP:
+        if s.endswith(ch):
+            return s[:-1].rstrip()
+    return s
+
+def normalize_label_text(s: str) -> str:
+    """Normalize visual label text for canonical LABEL_MAP lookup.
+
+    - Preserve '#'
+    - Normalize NBSP/thin spaces to regular spaces
+    - Normalize en/em dashes to '-'
+    - Strip trailing colon variants only (keep '#')
+    - Collapse internal whitespace
+    """
+    s0 = (s or "").replace("\u00A0", " ").replace("\u2009", " ").replace("\u202F", " ").strip()
+    s0 = s0.replace("–", "-").replace("—", "-")
+    # Manually strip unicode colons, but keep '#'
+    for ch in UNICODE_COLONS_TUP:
+        if s0.endswith(ch):
+            s0 = s0[: -len(ch)].rstrip()
+            break
+    return " ".join(s0.split())
+
+def process_triad_labeled_line(
+    tokens: List[dict],
+    layout: TriadLayout,
+    label_map: Dict[str, str],
+    open_row: Dict[str, Any] | None,
+    triad_fields: Dict[str, Dict[str, str]],
+    triad_order: List[str],
+):
+    """
+    Process a labeled triad line using geometry-only banding.
+
+    Returns None to indicate a layout mismatch that should stop triad;
+    otherwise returns the new/open row dict to persist.
+    """
+    # 1) Build label from multiple tokens: collect label-band tokens from start
+    # up to and including the first suffix token (one of '#', ASCII/Unicode colons)
+    suffixes = ("#",) + UNICODE_COLONS_TUP
+    label_span: List[dict] = []
+    suffix_idx: int | None = None
+    suffix_was_captured: bool = False
+
+    def _looks_like_value_text(s: str) -> bool:
+        z = (s or "").strip()
+        if not z:
+            return False
+        if z.startswith("$"):
+            return True
+        if z in {"--", "—", "–"}:
+            return True
+        return bool(re.match(r"^[0-9][0-9,]*(?:\.[0-9]+)?$", z))
+
+    for i, t in enumerate(tokens):
+        if _token_band(t, layout) != "label":
+            continue
+        txt = str(t.get("text", ""))
+        # Stop collecting once a value-looking token is seen; don't swallow values into label
+        # In x0 mode: stop before TU left edge to avoid swallowing values
+        if TRIAD_BAND_BY_X0:
+            try:
+                x0 = float(t.get("x0", 0.0))
+            except Exception:
+                x0 = 0.0
+            try:
+                tu_left_x0 = float(getattr(layout, "tu_left_x0", 0.0))
+            except Exception:
+                tu_left_x0 = 0.0
+            # Stop label collection once a label-band token reaches the TU cutoff (with tolerance)
+            if tu_left_x0 and (x0 + TRIAD_X0_TOL) >= tu_left_x0:
+                if label_span:
+                    suffix_idx = i - 1
+                logger.info("TRIAD_LABEL_STOP reason=hit_tu_left_x0 x0=%.1f tu_left_x0=%.1f", x0, tu_left_x0)
+                break
+        if _looks_like_value_text(txt):
+            # set suffix position to last label token collected so far
+            if label_span:
+                suffix_idx = i - 1
+            logger.info("TRIAD_LABEL_STOP reason=value_token token=%r", txt)
+        label_span.append(t)
+        if txt.strip().endswith(suffixes):
+            suffix_idx = i
+            suffix_was_captured = True
+            break
+
+    if not label_span:
+        logger.info("TRIAD_STOP reason=layout_mismatch_label_band")
+        return None
+    # If no explicit suffix token found, treat the last collected label token as the split point
+    if suffix_idx is None:
+        # suffix_idx should point at the last label token index in the original tokens list
+        last = label_span[-1]
+        try:
+            suffix_idx = tokens.index(last)
+        except ValueError:
+            suffix_idx = 0
+
+    visu_label = " ".join((str(t.get("text", "")) or "").strip() for t in label_span).strip()
+    canon_label = normalize_label_text(visu_label)
+    canonical = label_map.get(canon_label)
+    logger.info("TRIAD_LABEL_BUILT visu=%r canon=%r key=%r", visu_label, canon_label, canonical)
+
+    # Task 5: Strict line-break rule — if no suffix captured and the last label token
+    # is still left of TU's left x0 cutoff, expect values to start on the next line.
+    expect_values_on_next_line = False
+    if TRIAD_BAND_BY_X0 and (not suffix_was_captured):
+        try:
+            last_x0 = float(label_span[-1].get("x0", 0.0))
+        except Exception:
+            last_x0 = 0.0
+        try:
+            tu_left_x0 = float(getattr(layout, "tu_left_x0", 0.0))
+        except Exception:
+            tu_left_x0 = 0.0
+        # Only expect continuation if the last label token is clearly left of TU cutoff
+        if tu_left_x0 and ((last_x0 + TRIAD_X0_TOL) < tu_left_x0):
+            expect_values_on_next_line = True
+            logger.info("TRIAD_LABEL_LINEBREAK key=%s -> expecting values on next line", canonical)
+
+    if canonical is None and canon_label != "Account #":
+        logger.info("TRIAD_GUARD_SKIP reason=unknown_label label=%r", canon_label)
+        # Trace label tokens with empty key since it's unknown
+        for j, lt in enumerate(label_span):
+            _trace_token(lt.get("page"), lt.get("line"), j, lt, "label", "labeled", "")
+        # Close any open row to avoid appending future values to the wrong field
+        return "CLOSE_OPEN_ROW"
+
+    # Trace label tokens with the resolved key
+    for j, lt in enumerate(label_span):
+        _trace_token(lt.get("page"), lt.get("line"), j, lt, "label", "labeled", canonical or "")
+
+    # 2) Collect values after label suffix, banded by X only
+    vals = {"transunion": [], "experian": [], "equifax": []}
+    for j, t in enumerate(tokens[suffix_idx + 1 :], start=suffix_idx + 1):
+        b = _token_band(t, layout)
         if b == "tu":
-            tu_hit = True
+            vals["transunion"].append(str(t.get("text", "")))
         elif b == "xp":
-            xp_hit = True
+            vals["experian"].append(str(t.get("text", "")))
         elif b == "eq":
-            eq_hit = True
-    return label_hit and tu_hit and xp_hit and eq_hit
+            vals["equifax"].append(str(t.get("text", "")))
+        _trace_token(t.get("page"), t.get("line"), j, t, b, "labeled", canonical or "")
+
+    # 2b) TU rescue: sometimes TU values are mis-banded into label due to compression/misalignment.
+    # If TU is empty but XP/EQ have values, look for label-band tokens near the TU seam that look like values.
+    def _looks_like_tu_value(s: str) -> bool:
+        z = (s or "").strip()
+        if not z:
+            return False
+        if z in {"--", "—", "–"}:
+            return True
+        # dollar amounts or plain numbers with commas
+        return bool(re.match(r"^\$?[0-9][0-9,]*(?:\.[0-9]+)?$", z))
+
+    if (not TRIAD_BAND_BY_X0) and not vals["transunion"] and (vals["experian"] or vals["equifax"]):
+        tu_left = float(getattr(layout, "tu_band")[0])
+        win_lo = tu_left - 10.0
+        win_hi = tu_left + 2.0
+        candidates: list[tuple[float, str]] = []
+        for j, t in enumerate(tokens[suffix_idx + 1 :], start=suffix_idx + 1):
+            if _token_band(t, layout) != "label":
+                continue
+            txt = str(t.get("text", ""))
+            if not _looks_like_tu_value(txt):
+                continue
+            try:
+                midx = _triad_mid_x(t)
+            except Exception:
+                midx = 0.0
+            if win_lo <= midx <= win_hi:
+                candidates.append((abs(midx - tu_left), txt, midx))
+        if candidates:
+            candidates.sort(key=lambda x: x[0])
+            _, picked_text, picked_x = candidates[0]
+            vals["transunion"].append(picked_text.strip())
+            logger.info(
+                "TRIAD_TU_RESCUE key=%s took=%r from=label near_x=%.1f",
+                canonical,
+                picked_text,
+                picked_x,
+            )
+
+    # 2c) Special rule: if TU still empty, pick the first label-band token
+    # that starts with '$' immediately after the label.
+    if (not TRIAD_BAND_BY_X0) and not vals["transunion"]:
+        for j, t in enumerate(tokens[suffix_idx + 1 :], start=suffix_idx + 1):
+            if _token_band(t, layout) != "label":
+                continue
+            txt = str(t.get("text", "")).strip()
+            if txt.startswith("$"):
+                vals["transunion"].append(txt)
+                try:
+                    mx = _triad_mid_x(t)
+                except Exception:
+                    mx = 0.0
+                logger.info(
+                    "TRIAD_TU_RESCUE_DOLLAR key=%s took=%r from=label near_x=%.1f",
+                    canonical,
+                    txt,
+                    mx,
+                )
+                break
+
+    # 3) Append joined values into fields (no content heuristics)
+    for bureau in triad_order:
+        if vals[bureau]:
+            s = " ".join(vals[bureau]).strip()
+            prior = triad_fields[bureau].get(canonical or "", "") if canonical else ""
+            triad_fields[bureau][canonical] = (f"{prior} {s}" if prior else s).strip()
+
+    # If we expected values on the next line but actually appended values on this line,
+    # clear the expectation flag before returning the row state.
+    if expect_values_on_next_line and (vals["transunion"] or vals["experian"] or vals["equifax"]):
+        expect_values_on_next_line = False
+
+    # Track last bureau that received text on this row, used for wrap affinity
+    last_bureau_with_text = None
+    for b in ("transunion", "experian", "equifax"):
+        if vals[b]:
+            last_bureau_with_text = b
+
+    logger.info(
+        "TRIAD_ROW_LABELED key=%s TU=%r XP=%r EQ=%r",
+        canonical,
+        " ".join(vals["transunion"]).strip(),
+        " ".join(vals["experian"]).strip(),
+        " ".join(vals["equifax"]).strip(),
+    )
+
+    return {
+        "triad_row": True,
+        "label": _strip_colon_only(visu_label),
+        "key": canonical,
+        "values": {k: " ".join(v).strip() for k, v in vals.items()},
+        "last_bureau_with_text": last_bureau_with_text,
+        "expect_values_on_next_line": expect_values_on_next_line,
+    }
 
 
 def _read_tokens(
@@ -475,7 +865,8 @@ def split_accounts(
     section_ptr = 0
     carry_over: List[Dict[str, Any]] = []
     for idx, start_idx in enumerate(account_starts):
-        _trace_open(f"{os.getenv('SID', 'trace')}_triad_trace.csv")
+        if TRIAD_TRACE_CSV:
+            _trace_open(tsv_path.parent / "per_account_tsv" / f"_trace_account_{idx + 1}.csv")
         if sections[idx] is not None:
             current_section = sections[idx]
         sections[idx] = current_section
@@ -575,9 +966,9 @@ def split_accounts(
                             is_heading_line_without_values = False
                             break
                 if triad_active:
-                    if s in {"two year payment history"}:
+                    if s.replace("-", " ") in {"two year payment history"}:
                         triad_log(
-                            "TRIAD_STOP reason=two_year_history page=%s line=%s",
+                            "TRIAD_STOP reason=twoyearpaymenthistory page=%s line=%s",
                             line["page"],
                             line["line"],
                         )
@@ -639,32 +1030,63 @@ def split_accounts(
                             layout.xp_band[0] + EDGE_EPS,
                             layout.eq_band[0] + EDGE_EPS,
                         )
-                        if verify_anchor_row(toks_anchor, layout):
-                            triad_active = True
-                            current_layout = layout
-                            current_layout_page = line["page"]
-                            if not _validate_anchor_row(toks_anchor, current_layout):
-                                triad_log(
-                                    "TRIAD_STOP reason=layout_mismatch page=%s line=%s",
-                                    line["page"],
-                                    line["line"],
-                                )
-                                triad_active = False
-                                current_layout = None
-                                current_layout_page = None
-                                open_row = None
-                                continue
-                        else:
-                            triad_log(
-                                "TRIAD_STOP reason=layout_mismatch page=%s line=%s",
+                        # When banding by x0, derive left cutoffs from the anchor line's first TU/XP/EQ tokens
+                        if TRIAD_BAND_BY_X0:
+                            # Find first token in each band after the label
+                            first_tu = first_xp = first_eq = None
+                            # Use midpoint bands to identify which tokens are TU/XP/EQ on the anchor line
+                            seen_label = True
+                            for ta in toks_anchor:
+                                b = assign_band(ta, layout)
+                                if b == "label":
+                                    continue
+                                if b == "tu" and first_tu is None:
+                                    first_tu = ta
+                                elif b == "xp" and first_xp is None:
+                                    first_xp = ta
+                                elif b == "eq" and first_eq is None:
+                                    first_eq = ta
+                            def _x0(tok):
+                                try:
+                                    return float(tok.get("x0", 0.0)) if tok else 0.0
+                                except Exception:
+                                    return 0.0
+                            layout.tu_left_x0 = _x0(first_tu)
+                            layout.xp_left_x0 = _x0(first_xp)
+                            layout.eq_left_x0 = _x0(first_eq)
+                            layout.label_right_x0 = layout.tu_left_x0
+                            logger.info(
+                                "TRIAD_LAYOUT_BOUNDS_X0 label=[0, %.1f) tu=[%.1f, %.1f) xp=[%.1f, %.1f) eq=[%.1f, inf)",
+                                layout.label_right_x0,
+                                layout.tu_left_x0,
+                                layout.xp_left_x0,
+                                layout.xp_left_x0,
+                                layout.eq_left_x0,
+                                layout.eq_left_x0,
+                            )
+                        logger.info(
+                            "TRIAD_LAYOUT_BOUNDS label=[0, %.1f) tu=[%.1f, %.1f) xp=[%.1f, %.1f) eq=[%.1f, inf)",
+                            layout.label_band[1],
+                            layout.tu_band[0],
+                            layout.tu_band[1],
+                            layout.xp_band[0],
+                            layout.xp_band[1],
+                            layout.eq_band[0],
+                        )
+                        if not _validate_anchor_row(toks_anchor, layout):
+                            logger.info(
+                                "TRIAD_STOP reason=layout_mismatch_anchor page=%s line=%s",
                                 line["page"],
                                 line["line"],
                             )
-                            triad_active = False
-                            current_layout = None
-                            current_layout_page = None
+                            reset()
+                            continue
+                        triad_active = True
+                        current_layout = layout
+                        current_layout_page = line["page"]
                 elif triad_active and current_layout:
                     layout = current_layout
+                    triad_log("TRIAD_CARRY reuse")
                 band_tokens: Dict[str, List[dict]] = {
                     "label": [],
                     "tu": [],
@@ -672,6 +1094,7 @@ def split_accounts(
                     "eq": [],
                 }
                 label_token = None
+                moved_from_label_on_continuation = False
                 if layout:
                     for t in toks:
                         band = assign_band(t, layout)
@@ -680,6 +1103,102 @@ def split_accounts(
                             band_tokens[band].append(t)
                         if label_token is None and _has_label_suffix(t.get("text", "")):
                             label_token = t
+                    # Detect label-only line (no suffix) before any wrap moves
+                    pre_label_tokens = list(band_tokens["label"]) if band_tokens.get("label") else []
+                    pre_label_txt = join_tokens_with_space([t.get("text", "") for t in pre_label_tokens]).strip()
+                    if TRIAD_BAND_BY_X0 and label_token is None and pre_label_txt:
+                        visu_label = pre_label_txt
+                        canon_label = normalize_label_text(visu_label)
+                        canonical = LABEL_MAP.get(canon_label)
+                        if canonical is not None:
+                            for j, lt in enumerate(pre_label_tokens):
+                                _trace_token(line["page"], line["line"], j, lt, "label", "labeled", canonical)
+                            logger.info(
+                                "TRIAD_LABEL_LINEBREAK key=%s -> expecting values on next line",
+                                canonical,
+                            )
+                            row_state = {
+                                "triad_row": True,
+                                "label": _strip_colon_only(visu_label),
+                                "key": canonical,
+                                "values": {"transunion": "", "experian": "", "equifax": ""},
+                                "last_bureau_with_text": None,
+                                "expect_values_on_next_line": True,
+                            }
+                            triad_rows.append(row_state)
+                            open_row = row_state
+                            continue
+                    # Continuations: in x0 mode with no label on this line, do not keep tokens in 'label' band.
+                    if TRIAD_BAND_BY_X0 and label_token is None and band_tokens["label"]:
+                        def _nearest_band_from_x0(x0v: float, lay: TriadLayout) -> str:
+                            anchors = [(lay.tu_left_x0 or 0.0, "tu"), (lay.xp_left_x0 or 0.0, "xp"), (lay.eq_left_x0 or 0.0, "eq")]
+                            anchors = [(ax, name) for ax, name in anchors if ax > 0.0]
+                            if not anchors:
+                                return "tu"
+                            return min(((abs(x0v - ax), name) for ax, name in anchors), key=lambda z: z[0])[1]
+
+                        moved = {"tu": [], "xp": [], "eq": []}
+                        moved_map: Dict[int, str] = {}
+                        for lt in list(band_tokens["label"]):
+                            try:
+                                x0v = float(lt.get("x0", 0.0))
+                            except Exception:
+                                x0v = 0.0
+                            last_bureau = open_row.get("last_bureau_with_text") if open_row else None
+                            # Choose nearest band, but cap by TRIAD_CONT_NEAREST_MAXDX tolerance.
+                            anchors = [
+                                (layout.tu_left_x0 or 0.0, "tu"),
+                                (layout.xp_left_x0 or 0.0, "xp"),
+                                (layout.eq_left_x0 or 0.0, "eq"),
+                            ]
+                            anchors = [(ax, name) for ax, name in anchors if ax > 0.0]
+                            if anchors:
+                                dmin, nmin = min(((abs(x0v - ax), name) for ax, name in anchors), key=lambda z: z[0])
+                            else:
+                                dmin, nmin = (0.0, "tu")
+                            if dmin <= TRIAD_CONT_NEAREST_MAXDX:
+                                nb = nmin
+                                cause = "nearest"
+                            elif last_bureau in {"transunion", "experian", "equifax"}:
+                                nb = {"transunion": "tu", "experian": "xp", "equifax": "eq"}[last_bureau]
+                                cause = "carry_forward"
+                            else:
+                                nb = nmin
+                                cause = "nearest"
+                            moved[nb].append(lt)
+                            moved_map[id(lt)] = nb
+                            logger.info(
+                                "TRIAD_WRAP_AFFINITY key=%s token=%r -> %s cause=%s",
+                                (open_row.get("key") if open_row else None),
+                                lt.get("text", ""),
+                                nb,
+                                cause,
+                            )
+                            _trace_token(
+                                line["page"],
+                                line["line"],
+                                0,
+                                lt,
+                                nb,
+                                "cont",
+                                open_row.get("key") if open_row else "",
+                                reassigned_from="label",
+                                wrap_affinity=cause,
+                            )
+                        for k in ("tu", "xp", "eq"):
+                            if moved[k]:
+                                band_tokens[k].extend(moved[k])
+                                moved_from_label_on_continuation = True
+                        band_tokens["label"] = []
+                        # Summary log for continuation wrap reassignment
+                        triad_log(
+                            "TRIAD_CONT_WRAP page=%s line=%s tu=%d xp=%d eq=%d",
+                            line["page"],
+                            line["line"],
+                            len(moved["tu"]),
+                            len(moved["xp"]),
+                            len(moved["eq"]),
+                        )
                     if (
                         triad_active
                         and ":" in joined_line_text
@@ -708,18 +1227,27 @@ def split_accounts(
                         )
                         reset()
                         continue
-                label_txt = join_tokens_with_space(
-                    [t.get("text", "") for t in band_tokens["label"]]
-                ).strip()
-                tu_val = join_tokens_with_space(
-                    [t.get("text", "") for t in band_tokens["tu"]]
-                ).strip()
-                xp_val = join_tokens_with_space(
-                    [t.get("text", "") for t in band_tokens["xp"]]
-                ).strip()
-                eq_val = join_tokens_with_space(
-                    [t.get("text", "") for t in band_tokens["eq"]]
-                ).strip()
+                # Drop far-right outliers per band to avoid swallowing trailing noise tokens
+                def _filter_band_tokens(btks: List[dict], left_edge: float, window: float = 120.0) -> List[dict]:
+                    out: List[dict] = []
+                    for _t in btks:
+                        try:
+                            mx = _triad_mid_x(_t)
+                        except Exception:
+                            mx = left_edge
+                        if mx <= left_edge + window:
+                            out.append(_t)
+                    return out
+
+                if layout:
+                    band_tokens["tu"] = _filter_band_tokens(band_tokens["tu"], layout.tu_band[0])
+                    band_tokens["xp"] = _filter_band_tokens(band_tokens["xp"], layout.xp_band[0])
+                    band_tokens["eq"] = _filter_band_tokens(band_tokens["eq"], layout.eq_band[0])
+
+                label_txt = join_tokens_with_space([t.get("text", "") for t in band_tokens["label"]]).strip()
+                tu_val = join_tokens_with_space([t.get("text", "") for t in band_tokens["tu"]]).strip()
+                xp_val = join_tokens_with_space([t.get("text", "") for t in band_tokens["xp"]]).strip()
+                eq_val = join_tokens_with_space([t.get("text", "") for t in band_tokens["eq"]]).strip()
                 has_tu = bool(tu_val)
                 has_xp = bool(xp_val)
                 has_eq = bool(eq_val)
@@ -742,49 +1270,53 @@ def split_accounts(
                     )
                     reset()
                     continue
-                if label_txt and _has_label_suffix(label_txt):
-                    visual = label_txt.rstrip(UNICODE_COLONS).strip()
-                    canonical_key = LABEL_MAP.get(visual)
-                    if canonical_key is None and visual != "Account #":
-                        triad_log(
-                            "TRIAD_GUARD_SKIP page=%s line=%s reason=unknown_label label=%r",
-                            line["page"],
-                            line["line"],
-                            visual,
+                # Label-only line without suffix: open a new row keyed by label and expect values on next line
+                if (
+                    TRIAD_BAND_BY_X0
+                    and label_token is None
+                    and label_txt
+                ):
+                    visu_label = label_txt
+                    canon_label = normalize_label_text(visu_label)
+                    canonical = LABEL_MAP.get(canon_label)
+                    if canonical is not None:
+                        # Trace label tokens
+                        for j, lt in enumerate(band_tokens["label"]):
+                            _trace_token(line["page"], line["line"], j, lt, "label", "labeled", canonical)
+                        logger.info(
+                            "TRIAD_LABEL_LINEBREAK key=%s -> expecting values on next line",
+                            canonical,
                         )
+                        row_state = {
+                            "triad_row": True,
+                            "label": _strip_colon_only(visu_label),
+                            "key": canonical,
+                            "values": {"transunion": "", "experian": "", "equifax": ""},
+                            "last_bureau_with_text": None,
+                            "expect_values_on_next_line": True,
+                        }
+                        triad_rows.append(row_state)
+                        open_row = row_state
+                        continue
+                if label_token and _is_label_token_text(str(label_token.get("text", ""))):
+                    row_or_state = process_triad_labeled_line(
+                        toks,
+                        layout,
+                        LABEL_MAP,
+                        open_row,
+                        triad_maps,
+                        ["transunion", "experian", "equifax"],
+                    )
+                    if row_or_state is None:
+                        reset()
+                        continue
+                    elif row_or_state == "CLOSE_OPEN_ROW":
                         open_row = None
                         continue
-                    row = {
-                        "triad_row": True,
-                        "label": visual,
-                        "key": canonical_key,
-                        "values": {
-                            "transunion": "",
-                            "experian": "",
-                            "equifax": "",
-                        },
-                    }
-                    triad_rows.append(row)
-                    if tu_val:
-                        row["values"]["transunion"] = tu_val
-                        if canonical_key:
-                            triad_maps["transunion"][canonical_key] = tu_val
-                    if xp_val:
-                        row["values"]["experian"] = xp_val
-                        if canonical_key:
-                            triad_maps["experian"][canonical_key] = xp_val
-                    if eq_val:
-                        row["values"]["equifax"] = eq_val
-                        if canonical_key:
-                            triad_maps["equifax"][canonical_key] = eq_val
-                    triad_log(
-                        "TRIAD_ROW key=%s TU=%r XP=%r EQ=%r",
-                        canonical_key,
-                        tu_val,
-                        xp_val,
-                        eq_val,
-                    )
-                    open_row = row
+                    else:
+                        triad_rows.append(row_or_state)
+                        open_row = row_or_state
+                        continue
                 else:
                     if open_row:
                         if not (triad_active and current_layout):
@@ -804,6 +1336,45 @@ def split_accounts(
                             )
                             open_row = None
                             continue
+                        # Note: do not blanket-skip all single-token lines; see refined guard below
+                        # Guard: skip a single short token continuation (likely stray)
+                        banded_total = (
+                            len(band_tokens["tu"]) + len(band_tokens["xp"]) + len(band_tokens["eq"])
+                        )
+                        if banded_total == 1 and len(toks) == 1 and not moved_from_label_on_continuation:
+                            only = band_tokens["tu"] or band_tokens["xp"] or band_tokens["eq"]
+                            if only and len(str(only[0].get("text", "")).strip()) <= 3:
+                                triad_log(
+                                    "TRIAD_GUARD_SKIP page=%s line=%s reason=short_single_token_continuation",
+                                    line["page"],
+                                    line["line"],
+                                )
+                                open_row = None
+                                continue
+                        # Trace continuation tokens assignment per band
+
+
+
+
+
+                        # Trace continuation tokens assignment per band
+                        if current_layout:
+                            for ti, tt in enumerate(toks):
+                                # In x0 continuation-wrap mode, prefer the reassigned band if present
+                                if TRIAD_BAND_BY_X0 and label_token is None and 'moved_map' in locals():
+                                    bb = moved_map.get(id(tt), assign_band(tt, current_layout))
+                                else:
+                                    bb = assign_band(tt, current_layout)
+                                _trace_token(
+                                    line["page"],
+                                    line["line"],
+                                    ti,
+                                    tt,
+                                    bb,
+                                    "cont",
+                                    open_row.get("key") if open_row else "",
+                                )
+                        appended_any = False
                         if has_tu:
                             open_row["values"][
                                 "transunion"
@@ -812,6 +1383,8 @@ def split_accounts(
                                 triad_maps["transunion"][open_row["key"]] = open_row[
                                     "values"
                                 ]["transunion"]
+                            open_row["last_bureau_with_text"] = "transunion"
+                            appended_any = True
                         if has_xp:
                             open_row["values"][
                                 "experian"
@@ -820,6 +1393,8 @@ def split_accounts(
                                 triad_maps["experian"][open_row["key"]] = open_row[
                                     "values"
                                 ]["experian"]
+                            open_row["last_bureau_with_text"] = "experian"
+                            appended_any = True
                         if has_eq:
                             open_row["values"][
                                 "equifax"
@@ -828,6 +1403,12 @@ def split_accounts(
                                 triad_maps["equifax"][open_row["key"]] = open_row[
                                     "values"
                                 ]["equifax"]
+                            open_row["last_bureau_with_text"] = "equifax"
+                            appended_any = True
+                        # Task 5: once we've appended any values on the continuation line,
+                        # clear the expectation flag for future lines.
+                        if appended_any and open_row.get("expect_values_on_next_line"):
+                            open_row["expect_values_on_next_line"] = False
                         triad_log(
                             "TRIAD_CONT_PARTIAL page=%s line=%s tu=%s xp=%s eq=%s",
                             line["page"],

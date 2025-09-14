@@ -24,9 +24,14 @@ DEFAULT_ARTIFACTS: list[str] = list(_REQUIRED_ARTIFACTS)
 
 # When debugging, it is useful to keep the per-account TSVs generated during
 # analysis. Setting ``KEEP_PER_ACCOUNT_TSV=1`` in the environment preserves
-# these files by whitelisting their directory.
-if os.environ.get("KEEP_PER_ACCOUNT_TSV") == "1":
-    DEFAULT_ARTIFACTS.extend(["accounts_table/per_account_tsv/**"])
+# these files. Note: The purge routine below skips any paths under the
+# per_account_tsv subtree when this flag is set; extending DEFAULT_ARTIFACTS
+# with a glob is insufficient because DEFAULT_ARTIFACTS matches only exact
+# paths. We still extend here to keep the keep-list visible in logs, but the
+# enforcement happens in the main loop.
+KEEP_PER_ACCOUNT_TSV = os.environ.get("KEEP_PER_ACCOUNT_TSV") == "1"
+if KEEP_PER_ACCOUNT_TSV:
+    DEFAULT_ARTIFACTS.extend(["accounts_table/per_account_tsv/"])
 
 
 def _expand_dirs(paths: Iterable[Path], base: Path) -> set[Path]:
@@ -78,7 +83,10 @@ def purge_trace_except_artifacts(
 
     keep_dirs = _expand_dirs(keep_abs, base)
 
-    kept = sorted(str(p.relative_to(base)) for p in keep_abs)
+    def _norm_rel(p: Path) -> str:
+        return str(p).replace("\\", "/")
+
+    kept = sorted(_norm_rel(p.relative_to(base)) for p in keep_abs)
     deleted: list[str] = []
     skipped: list[str] = []
     texts_deleted = False
@@ -90,23 +98,32 @@ def purge_trace_except_artifacts(
     all_paths = sorted(base.rglob("*"), key=lambda p: len(p.parts), reverse=True)
     for path in all_paths:
         rel = str(path.relative_to(base))
+        # Honor KEEP_PER_ACCOUNT_TSV by preserving the entire subtree, including
+        # the per-token trace CSVs (e.g. *_trace_*.csv) emitted during parsing.
+        if KEEP_PER_ACCOUNT_TSV:
+            if rel == "accounts_table/per_account_tsv" or rel.startswith("accounts_table/per_account_tsv/"):
+                log.debug("keeping (per-account TSV subtree) %s", path)
+                continue
+            if path.is_file() and "_trace_" in path.name:
+                log.debug("keeping (trace csv) %s", path)
+                continue
         if path in keep_abs or path in keep_dirs:
             log.debug("keeping %s", path)
             continue
         if dry_run:
             log.debug("would delete %s", path)
-            skipped.append(rel)
+            skipped.append(rel.replace("\\", "/"))
             continue
         try:
             if path.is_dir():
                 shutil.rmtree(path)
             else:
                 path.unlink()
-            deleted.append(rel)
+            deleted.append(rel.replace("\\", "/"))
             log.debug("deleted %s", path)
         except Exception:
             log.exception("failed to delete %s", path)
-            skipped.append(rel)
+            skipped.append(rel.replace("\\", "/"))
 
     if delete_texts_sid:
         texts_dir = Path(root) / "traces" / "texts" / sid

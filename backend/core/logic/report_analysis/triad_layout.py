@@ -16,6 +16,7 @@ triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
 # left edge so tokens landing slightly outside the column are still classified
 # correctly.
 EDGE_EPS = 6.0
+EDGE_EPS_LABEL = 9.0
 
 
 @dataclass
@@ -25,6 +26,11 @@ class TriadLayout:
     tu_band: Tuple[float, float]
     xp_band: Tuple[float, float]
     eq_band: Tuple[float, float]
+    # Optional x0-based cutoffs (used when TRIAD_BAND_BY_X0=1)
+    label_right_x0: float = 0.0
+    tu_left_x0: float = 0.0
+    xp_left_x0: float = 0.0
+    eq_left_x0: float = 0.0
 
 
 def bands_from_header_tokens(tokens: List[dict]) -> TriadLayout:
@@ -57,14 +63,14 @@ def bands_from_header_tokens(tokens: List[dict]) -> TriadLayout:
     mids.sort(key=lambda kv: kv[0])
     m0, m1, m2 = mids[0][0], mids[1][0], mids[2][0]
 
-    # Boundaries halfway between midpoints
+    # Boundaries halfway between midpoints (non-overlapping bands)
     b1 = (m0 + m1) / 2.0
     b2 = (m1 + m2) / 2.0
 
     label_left = 0.0
-    label_right = max(0.0, m0 - EDGE_EPS)
+    label_right = max(0.0, m0 - EDGE_EPS_LABEL)
 
-    tu_left = max(label_right, m0 - EDGE_EPS)
+    tu_left = label_right
     tu_right = b1
 
     xp_left = b1
@@ -73,13 +79,25 @@ def bands_from_header_tokens(tokens: List[dict]) -> TriadLayout:
     eq_left = b2
     eq_right = float("inf")
 
-    return TriadLayout(
+    layout = TriadLayout(
         page=page,
         label_band=(label_left, label_right),
         tu_band=(tu_left, tu_right),
         xp_band=(xp_left, xp_right),
         eq_band=(eq_left, eq_right),
     )
+
+    # Explicit bounds log for debugging seam placement and label width
+    triad_log(
+        "TRIAD_LAYOUT_BOUNDS label=[0, %.1f) tu=[%.1f, %.1f) xp=[%.1f, %.1f) eq=[%.1f, inf)",
+        layout.label_band[1],
+        layout.tu_band[0],
+        layout.tu_band[1],
+        layout.xp_band[0],
+        layout.xp_band[1],
+        layout.eq_band[0],
+    )
+    return layout
 
 
 def mid_x(tok: dict) -> float:
@@ -102,6 +120,7 @@ def assign_band(
     """
     x = mid_x(token)
 
+    # Right-side tie-break: if x is exactly on a boundary, assign to the band on the right
     if layout.label_band[0] <= x < layout.label_band[1]:
         return "label"
     if layout.tu_band[0] <= x < layout.tu_band[1]:
@@ -153,3 +172,5 @@ def detect_triads(
             layout.eq_band[1],
         )
     return layouts
+
+

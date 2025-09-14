@@ -220,24 +220,25 @@ def join_tokens_with_space(tokens: Iterable[str]) -> str:
 
 
 def _norm(text: str) -> str:
-    """Normalize ``text`` by removing spaces/symbols and lowering case."""
-    return re.sub(r"[^a-z0-9]", "", text.lower())
+    """Normalize ``text`` by removing spaces/symbols and casefolding."""
+    return re.sub(r"[^a-z0-9]", "", text.casefold())
 
 
 def _norm_text(s: str) -> str:
     """Normalize text for guard checks by collapsing whitespace and punctuation."""
     s = s.replace("\u00ae", " ")
     s = s.replace(",", " ").replace(":", " ")
-    return " ".join(s.split()).lower()
+    return " ".join(s.split()).casefold()
 
 
 def _bare_bureau_norm(s: str) -> str:
-    return " ".join(s.lower().replace("\u00ae", "").split())
+    return "".join(s.casefold().replace("\u00ae", "").split())
 
 
 BARE_BUREAUS = {"transunion", "experian", "equifax"}
 
 H2Y_PAT = re.compile(r"\bTwo[-\s]?Year\b.*\bPayment\b.*\bHistory\b", re.I)
+H2Y_STATUS_RE = re.compile(r"^(?:ok|co|[0-9]{2,3})$", re.I)
 H7Y_BUREAUS = ("Transunion", "Experian", "Equifax")
 LATE_KEY_PAT = re.compile(r"^\s*(30|60|90)\s*:\s*$")
 INT_PAT = re.compile(r"^\d+$")
@@ -387,16 +388,17 @@ def _token_band(t: dict, layout: TriadLayout) -> str:
     return _assign_band_any(t, layout)
 
 
-def _validate_anchor_row(anchor_tokens: List[dict], layout: TriadLayout) -> bool:
+def _validate_anchor_row(anchor_tokens: List[dict], layout: TriadLayout) -> tuple[bool, Dict[str, int]]:
     """Relaxed Account # anchor validator.
 
-    Accept if there is at least one non-noise token in each TU/XP/EQ band and
-    a label token exists in the label band (ending with '#', ':' or Unicode
-    colon variants). Purely geometry-based; ignores content heuristics.
-    Also logs band counts for diagnostics.
+    Returns a tuple ``(has_label, counts)`` where ``counts`` maps each band to
+    the number of non-noise tokens observed. A valid anchor must have a label
+    token in the label band (ending with '#', ':' or Unicode colon variants).
+    Purely geometry-based; ignores content heuristics. Also logs band counts for
+    diagnostics.
     """
 
-    by_band = {"label": 0, "tu": 0, "xp": 0, "eq": 0}
+    by_band: Dict[str, int] = {"label": 0, "tu": 0, "xp": 0, "eq": 0}
     for idx, t in enumerate(anchor_tokens):
         txt = str(t.get("text", "")).strip()
         if txt in NOISE_TOKENS:
@@ -444,7 +446,7 @@ def _validate_anchor_row(anchor_tokens: List[dict], layout: TriadLayout) -> bool
     )
 
     # Accept anchors with a label even if bureau tokens are on the next line
-    return has_label
+    return has_label, by_band
 
 
 # --- Labeled row processing: split label, then band values per bureau ---
@@ -1050,10 +1052,10 @@ def split_accounts(
                 n_simple = _norm(joined_line_text)
 
                 if in_h2y:
+                    line_is_bureau = n_simple in BARE_BUREAUS
                     stop = (
                         _is_triad(joined_line_text)
                         or is_account_anchor(joined_line_text)
-                        or bare in BARE_BUREAUS
                         or n_simple in SECTION_STARTERS
                         or s.startswith("days late - 7 year history")
                     )
@@ -1065,38 +1067,48 @@ def split_accounts(
                         )
                         in_h2y = False
                         current_bureau = None
+                    elif line_is_bureau:
+                        current_bureau = {
+                            "transunion": "tu",
+                            "experian": "xp",
+                            "equifax": "eq",
+                        }[n_simple]
+                        logger.info(
+                            "H2Y_SET_BUREAU bureau=%s", current_bureau.upper()
+                        )
                     else:
                         for t in toks:
                             txt = str(t.get("text", ""))
-                            low = txt.lower().replace("\u00ae", "")
-                            if low.startswith("transunion"):
+                            low = txt.casefold().replace("\u00ae", "")
+                            if low.replace(" ", "").startswith("transunion"):
                                 current_bureau = "tu"
                                 logger.info("H2Y_SET_BUREAU bureau=TU")
-                            elif low.startswith("experian"):
+                            elif low.replace(" ", "").startswith("experian"):
                                 current_bureau = "xp"
                                 logger.info("H2Y_SET_BUREAU bureau=XP")
-                            elif low.startswith("equifax"):
+                            elif low.replace(" ", "").startswith("equifax"):
                                 current_bureau = "eq"
                                 logger.info("H2Y_SET_BUREAU bureau=EQ")
                             elif current_bureau:
-                                acc_two_year[current_bureau].append(txt)
-                                try:
-                                    x0 = float(t.get("x0", 0.0))
-                                except Exception:
-                                    x0 = 0.0
-                                logger.info(
-                                    "H2Y_TOKEN bureau=%s text=%r x0=%.1f",
-                                    current_bureau.upper(),
-                                    txt,
-                                    x0,
-                                )
-                                _trace_history2y(
-                                    line["page"],
-                                    line["line"],
-                                    t,
-                                    current_bureau.upper(),
-                                )
-                        continue
+                                if H2Y_STATUS_RE.match(low):
+                                    acc_two_year[current_bureau].append(txt)
+                                    try:
+                                        x0 = float(t.get("x0", 0.0))
+                                    except Exception:
+                                        x0 = 0.0
+                                    logger.info(
+                                        "H2Y_TOKEN bureau=%s text=%r x0=%.1f",
+                                        current_bureau.upper(),
+                                        txt,
+                                        x0,
+                                    )
+                                    _trace_history2y(
+                                        line["page"],
+                                        line["line"],
+                                        t,
+                                        current_bureau.upper(),
+                                    )
+                    continue
 
                 if in_h7y:
                     stop = (
@@ -1340,7 +1352,25 @@ def split_accounts(
                             layout.xp_band[1],
                             layout.eq_band[0],
                         )
-                        if not _validate_anchor_row(toks_anchor, layout):
+                        is_valid, anchor_counts = _validate_anchor_row(
+                            toks_anchor, layout
+                        )
+                        if not is_valid:
+                            if (
+                                anchor_counts["label"] == 0
+                                and anchor_counts["tu"] >= 1
+                                and anchor_counts["xp"] >= 1
+                                and anchor_counts["eq"] >= 1
+                            ):
+                                logger.info(
+                                    "TRIAD_X0_FALLBACK_OK page=%s line=%s",
+                                    line["page"],
+                                    line["line"],
+                                )
+                                triad_active = True
+                                current_layout = layout
+                                current_layout_page = line["page"]
+                                continue
                             logger.info(
                                 "TRIAD_STOP reason=layout_mismatch_anchor page=%s line=%s",
                                 line["page"],

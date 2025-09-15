@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import json, os, glob, shutil
 
 RUNS_ROOT_ENV = "RUNS_ROOT"                 # optional override
@@ -12,7 +12,8 @@ def _runs_root() -> Path:
     return Path(rr) if rr else Path("runs")
 
 def _utc_now():
-    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    # timezone-aware UTC to avoid deprecation; normalize suffix to 'Z'
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 @dataclass
 class RunManifest:

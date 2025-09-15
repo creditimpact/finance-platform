@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from backend.pipeline.runs import RunManifest
 
 from backend.core.config import CLEANUP_AFTER_EXPORT
 from backend.core.logic.report_analysis import block_exporter
@@ -27,7 +28,12 @@ def run_stage_a(session_id: str, project_root: Path = Path(".")) -> dict:
         Metadata including artifact paths and cleanup details.
     """
 
-    stage_a = block_exporter.export_stage_a(session_id)
+    # Prefer canonical runs/<SID> paths via manifest
+    m = RunManifest.for_sid(session_id)
+    traces_dir = m.ensure_run_subdir("traces_dir", "traces")
+    accounts_dir = (traces_dir / "accounts_table").resolve()
+    accounts_dir.mkdir(parents=True, exist_ok=True)
+    stage_a = block_exporter.export_stage_a(session_id, accounts_out_dir=accounts_dir)
     if not stage_a.get("ok"):
         return {"sid": session_id, "ok": False, "where": "stage_a"}
 
@@ -38,7 +44,7 @@ def run_stage_a(session_id: str, project_root: Path = Path(".")) -> dict:
     accounts_json = Path(artifacts.get("accounts_json", ""))
     general_json = Path(artifacts.get("general_info_json", ""))
 
-    blocks_dir = project_root / "traces" / "blocks" / session_id
+    blocks_dir = m.ensure_run_subdir("traces_blocks_dir", "traces/blocks")
     assert blocks_dir.exists(), f"blocks dir not found: {blocks_dir}"
 
     if not (full_tsv.exists() and accounts_json.exists() and general_json.exists()):

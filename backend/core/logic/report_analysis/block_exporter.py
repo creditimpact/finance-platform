@@ -24,6 +24,7 @@ from backend.core.logic.report_analysis.report_parsing import (
 )
 from backend.core.logic.report_analysis.text_provider import load_cached_text
 from backend.core.text.env_guard import ensure_env_and_paths
+from backend.pipeline.runs import RunManifest
 from backend.core.text.text_provider import load_text_with_layout
 from scripts.split_general_info_from_tsv import split_general_info
 
@@ -116,7 +117,12 @@ def load_account_blocks(session_id: str) -> List[Dict[str, Any]]:
         "lines": list[str]}``.
     """
 
-    base = Path("traces") / "blocks" / session_id
+    # Prefer manifest-provided blocks dir under runs/<SID>/traces/blocks
+    try:
+        m = RunManifest.for_sid(session_id)
+        base = m.ensure_run_subdir("traces_blocks_dir", "traces/blocks")
+    except Exception:
+        base = Path("traces") / "blocks" / session_id
     index_path = base / "_index.json"
     if not index_path.exists():
         return []
@@ -1447,10 +1453,16 @@ def _dump_full_tsv(layout: dict, out_path: Path) -> int:
 
 
 def _build_accounts_table(
-    session_id: str, out_dir: Path, layout: dict
+    session_id: str, accounts_dir: Path, layout: dict
 ) -> dict[str, str]:
     try:
-        accounts_dir = out_dir / "accounts_table"
+        # Safety: ensure accounts_dir points to canonical runs/<sid>/traces/accounts_table
+        try:
+            resolved_dir = accounts_dir.resolve()
+            assert "runs" in str(resolved_dir), "Stage-A out_dir must live under runs/<SID>"
+        except Exception:
+            pass
+
         full_tsv = accounts_dir / "_debug_full.tsv"
         count = _dump_full_tsv(layout, full_tsv)
         logger.info("Stage-A: wrote full TSV: %s", full_tsv)
@@ -1547,7 +1559,7 @@ def _build_accounts_table(
 
 
 def export_account_blocks(
-    session_id: str, pdf_path: str | Path
+    session_id: str, pdf_path: str | Path, *, accounts_out_dir: Path | None = None
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """Extract account blocks from ``pdf_path`` and export them to JSON files.
 
@@ -1598,8 +1610,23 @@ def export_account_blocks(
         session_id,
     )
 
-    out_dir = Path("traces") / "blocks" / session_id
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # Determine canonical accounts_table directory and base output dir
+    if accounts_out_dir is not None:
+        accounts_dir = accounts_out_dir.resolve()
+        # Guardrail: ensure caller provided a canonical runs path
+        assert "runs" in str(accounts_dir), "Stage-A out_dir must live under runs/<SID>"
+        # Place block exports under runs/<SID>/traces/blocks via RunManifest
+        m = RunManifest.for_sid(session_id)
+        out_dir = m.ensure_run_subdir("traces_blocks_dir", "traces/blocks").resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # Guardrail for blocks export dir as well
+        low = str(out_dir.resolve()).lower()
+        assert ("/runs/" in low) or ("\\runs\\" in low), "Stage-A out_dir must live under runs/<SID>"
+    else:
+        # Fallback legacy base (kept for non-integrated usages)
+        out_dir = (Path("traces") / "blocks" / session_id).resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        accounts_dir = (out_dir / "accounts_table").resolve()
     logger.warning("BLOCK_ENRICH: enabled=%s sid=%s", ENRICH_ENABLED, session_id)
     stage_a_meta: Dict[str, str] = {}
 
@@ -1640,7 +1667,7 @@ def export_account_blocks(
             (out_dir / "layout_snapshot.json").write_text(
                 json.dumps(snap, ensure_ascii=False, indent=2), encoding="utf-8"
             )
-            stage_a_meta = _build_accounts_table(session_id, out_dir, snap)
+            stage_a_meta = _build_accounts_table(session_id, accounts_dir, snap)
         except Exception:
             logger.exception(
                 "BLOCK: failed to write layout_snapshot.json for sid=%s", session_id
@@ -2718,7 +2745,7 @@ def export_account_blocks(
             )
             # Write per-block debug TSVs with tokens filtered by spans (page-aware)
             try:
-                debug_dir = out_dir / "accounts_table"
+                debug_dir = accounts_dir
                 debug_dir.mkdir(parents=True, exist_ok=True)
                 # Build page number -> tokens map from layout_pages
                 page_tokens_map: Dict[int, List[dict]] = {}
@@ -2886,6 +2913,13 @@ def export_account_blocks(
         str(out_dir),
         len(out_blocks),
     )
+    try:
+        # Register export blocks dir in manifest for discoverability
+        m = RunManifest.for_sid(session_id)
+        m.set_base_dir("traces_blocks_dir", out_dir)
+        m.set_artifact("traces.blocks", "export_dir", out_dir)
+    except Exception:
+        pass
 
     if stage_a_meta and getattr(config, "PURGE_TRACE_AFTER_EXPORT", False):
         from .trace_cleanup import purge_trace_except_artifacts
@@ -3363,11 +3397,11 @@ def enrich_block(blk: dict) -> dict:
     return {**blk, "fields": cleaned_fields, "meta": cleaned_meta}
 
 
-def export_stage_a(session_id: str) -> dict:
+def export_stage_a(session_id: str, *, accounts_out_dir: Path | None = None) -> dict:
     """Run Stage A export and return artifact paths."""
     try:
         pdf_path = Path("uploads") / session_id / "smartcredit_report.pdf"
-        _, meta = export_account_blocks(session_id, pdf_path)
+        _, meta = export_account_blocks(session_id, pdf_path, accounts_out_dir=accounts_out_dir)
         accounts_dir = Path(meta["accounts_json"]).parent
         artifacts = {
             "full_tsv": Path(meta["full_tsv"]),
@@ -3385,3 +3419,14 @@ def export_stage_a(session_id: str) -> dict:
             "export_stage_a_failed", extra={"sid": session_id, "error": str(e)}
         )
         return {"sid": session_id, "ok": False, "error": str(e)}
+
+
+def run_stage_a(*, sid: str, accounts_out_dir: Path) -> dict:
+    """
+    Canonical entry point: write Stage-A artifacts strictly under ``accounts_out_dir``.
+
+    All artifacts (TSV/JSON) are emitted under this directory. No legacy
+    ``traces/blocks`` derivation is performed.
+    """
+    assert "runs" in str(accounts_out_dir.resolve()), "Stage-A out_dir must live under runs/<SID>"
+    return export_stage_a(session_id=sid, accounts_out_dir=accounts_out_dir)

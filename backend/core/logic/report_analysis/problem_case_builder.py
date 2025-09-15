@@ -134,14 +134,19 @@ def build_problem_cases(
     """
 
     root_path = Path(root or PROJECT_ROOT)
-    acc_path = (
-        root_path
-        / "traces"
-        / "blocks"
-        / sid
-        / "accounts_table"
-        / "accounts_from_full.json"
-    )
+    # Prefer manifest accounts_json if available; fallback to legacy path
+    try:
+        m_probe = RunManifest.for_sid(sid)
+        acc_path = Path(m_probe.get("traces.accounts_table", "accounts_json"))
+    except Exception:
+        acc_path = (
+            root_path
+            / "traces"
+            / "blocks"
+            / sid
+            / "accounts_table"
+            / "accounts_from_full.json"
+        )
 
     accounts = _load_accounts(acc_path)
     total = len(accounts)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from backend.pipeline.runs import RunManifest
 from typing import Any, Dict, List, Tuple
 
 import backend.config as config
@@ -31,7 +32,11 @@ def _read_json(path: Path) -> dict | None:
 
 
 def _load_stageA(session_id: str, root: Path) -> Tuple[dict, dict] | None:
-    base = root / "traces" / "blocks" / session_id
+    try:
+        m = RunManifest.for_sid(session_id)
+        base = m.ensure_run_subdir("traces_blocks_dir", "traces/blocks")
+    except Exception:
+        base = root / "traces" / "blocks" / session_id
     layout_path = base / "layout_snapshot.json"
     windows_path = base / "block_windows.json"
     layout = _read_json(layout_path)
@@ -85,7 +90,7 @@ def _bands_to_codes(bands: Dict[str, Tuple[float, float]]) -> List[str]:
 def parse(session_id: str, root: Path | None = None) -> dict:
     """
     Returns: {"ok": bool, "accounts_count": int, "accounts_path": str, "confidence": float}
-    Writes: traces/blocks/<SID>/accounts_template/accounts_template.json
+    Writes: runs/<SID>/traces/blocks/accounts_template/accounts_template.json
     """
 
     try:
@@ -181,7 +186,14 @@ def parse(session_id: str, root: Path | None = None) -> dict:
         # Overall confidence: share of accounts meeting minimum quality
         confidence = (good_accounts / checked_accounts) if checked_accounts else 0.0
 
-        out_dir = base_root / "traces" / "blocks" / session_id / "accounts_template"
+        try:
+            m = RunManifest.for_sid(session_id)
+            out_blocks = m.ensure_run_subdir("traces_blocks_dir", "traces/blocks")
+        except Exception:
+            out_blocks = base_root / "traces" / "blocks" / session_id
+        low = str(out_blocks.resolve()).lower()
+        assert ("/runs/" in low) or ("\\runs\\" in low), "Template out_dir must live under runs/<SID>"
+        out_dir = out_blocks / "accounts_template"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "accounts_template.json"
         output = {

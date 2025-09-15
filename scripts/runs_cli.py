@@ -29,9 +29,13 @@ def main(argv: list[str] | None = None) -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     g = sub.add_parser("get", help="Get an artifact path")
-    g.add_argument("sid")
-    g.add_argument("group")
-    g.add_argument("key")
+    # Support both positional and flagged usage for convenience
+    g.add_argument("sid", nargs="?")
+    g.add_argument("group", nargs="?")
+    g.add_argument("key", nargs="?")
+    g.add_argument("--sid", dest="sid_flag")
+    g.add_argument("--group", dest="group_flag")
+    g.add_argument("--key", dest="key_flag")
 
     sa = sub.add_parser("set-artifact", help="Set an artifact path")
     sa.add_argument("sid")
@@ -50,8 +54,13 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
 
     if args.cmd == "get":
-        m = RunManifest.for_sid(args.sid)
-        print(m.get(args.group, args.key))
+        sid = args.sid_flag or args.sid
+        group = args.group_flag or args.group
+        key = args.key_flag or args.key
+        if not (sid and group and key):
+            raise SystemExit("Usage: runs_cli.py get <sid> <group> <key> or --sid --group --key")
+        m = RunManifest.for_sid(sid)
+        print(m.get(group, key))
     elif args.cmd == "set-artifact":
         m = RunManifest.for_sid(args.sid)
         m.set_artifact(args.group, args.key, Path(args.value))

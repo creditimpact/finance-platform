@@ -47,6 +47,23 @@ triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
 TRIAD_BAND_BY_X0 = os.environ.get("TRIAD_BAND_BY_X0") == "1"
 
 
+def _dbg_path(label: str, p: Path | str | None):
+    """Best-effort path resolver debug helper.
+
+    Logs a PATH_RESOLVE line that shows which code path supplied a value and
+    what it resolves to on disk. Returns the resolved/printed string.
+    """
+    try:
+        rp = str(Path(p).resolve()) if p is not None else "<None>"
+    except Exception:
+        try:
+            rp = str(p)  # type: ignore[arg-type]
+        except Exception:
+            rp = "<unprintable>"
+    logger.info("PATH_RESOLVE %s=%s", label, rp)
+    return rp
+
+
 # Tunables for x0 mode
 def _get_float_env(name: str, default: float) -> float:
     try:
@@ -2204,6 +2221,13 @@ def main(argv: List[str] | None = None) -> None:
     args = ap.parse_args(argv)
     json_out_default = ap.get_default("json_out")
 
+    # Args and env introspection for path resolution transparency
+    _dbg_path("ARG_JSON_OUT", getattr(args, "json_out", None))
+    _dbg_path("ARG_GENERAL_OUT", getattr(args, "general_out", None))
+    _dbg_path("ARG_FULL_TSV", getattr(args, "full", None))
+    logger.info("ENV TRIAD_TRACE_CSV=%s", os.getenv("TRIAD_TRACE_CSV"))
+    logger.info("ENV KEEP_PER_ACCOUNT_TSV=%s", os.getenv("KEEP_PER_ACCOUNT_TSV"))
+
     def _sid_from(path_str: str | None) -> str | None:
         if not path_str:
             return None
@@ -2224,6 +2248,7 @@ def main(argv: List[str] | None = None) -> None:
         raise ValueError(
             "Unable to determine SID; pass --sid or provide recognizable paths"
         )
+    logger.info("RUN_SID %s", sid)
 
     manifest = RunManifest.for_sid(sid)
     manifest_path_arg = Path(args.manifest).resolve() if args.manifest else None
@@ -2235,6 +2260,12 @@ def main(argv: List[str] | None = None) -> None:
     traces_dir = manifest.ensure_run_subdir("traces_dir", "traces")
     accounts_dir = (traces_dir / "accounts_table").resolve()
     accounts_dir.mkdir(parents=True, exist_ok=True)
+    low_acct = str(accounts_dir).lower()
+    assert ("/runs/" in low_acct) or ("\\runs\\" in low_acct), "Stage-A out_dir must live under runs/<SID>"
+
+    # Finalized base locations for outputs
+    _dbg_path("RUN_traces_dir", traces_dir)
+    _dbg_path("FINAL_accounts_dir", accounts_dir)
 
     accounts_json = accounts_dir / "accounts_from_full.json"
     general_json = accounts_dir / "general_info_from_full.json"
@@ -2242,13 +2273,23 @@ def main(argv: List[str] | None = None) -> None:
     per_acc_dir = (accounts_dir / "per_account_tsv").resolve()
     per_acc_dir.mkdir(parents=True, exist_ok=True)
 
+    _dbg_path("DEST_accounts_json", accounts_json)
+    _dbg_path("DEST_general_json", general_json)
+    _dbg_path("DEST_debug_full_tsv", debug_tsv)
+    _dbg_path("DEST_per_account_tsv_dir", per_acc_dir)
+
     source_tsv = Path(args.full).resolve()
     if source_tsv != debug_tsv:
+        _dbg_path("SRC_full_tsv", source_tsv)
+        _dbg_path("DEST_debug_full_tsv", debug_tsv)
         debug_tsv.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_tsv, debug_tsv)
 
     tsv_path = debug_tsv
     json_out = accounts_json
+    # Log exact parameters to split_accounts
+    _dbg_path("CALL_split_accounts.tsv_path", tsv_path)
+    _dbg_path("CALL_split_accounts.json_out", json_out)
     result = split_accounts(tsv_path, json_out, write_tsv=args.write_tsv)
     if args.print_summary:
         accounts = result.get("accounts") or []
@@ -2271,26 +2312,28 @@ def main(argv: List[str] | None = None) -> None:
     if not general_json.exists():
         general_json.parent.mkdir(parents=True, exist_ok=True)
         from scripts.split_general_info_from_tsv import split_general_info
-
+        _dbg_path("DEST_general_json", general_json)
         split_general_info(tsv_path, general_json)
 
+    # Enforce canonical outputs under runs/<SID>/traces/accounts_table only.
+    # Legacy output args are ignored to avoid duplicating artifacts elsewhere.
     if json_out_specified:
-        requested_json_out = Path(args.json_out)
-        if requested_json_out.resolve() != accounts_json.resolve():
-            requested_json_out.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(accounts_json, requested_json_out)
-
-    if args.general_out:
-        general_out_path = Path(args.general_out)
-        if general_out_path.resolve() != general_json.resolve():
-            general_out_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(general_json, general_out_path)
+        _dbg_path("IGNORED_ARG_JSON_OUT", getattr(args, "json_out", None))
+    if getattr(args, "general_out", None):
+        _dbg_path("IGNORED_ARG_GENERAL_OUT", getattr(args, "general_out", None))
 
     accounts_json_path = accounts_json.resolve()
     general_json_path = general_json.resolve()
     debug_full_tsv_path = tsv_path.resolve()
     base_dir = accounts_dir
-    per_account_dir = Path(trace_dir).resolve() if trace_dir is not None else per_acc_dir
+    # Always register the canonical per-account TSV dir under acct_dir
+    per_account_dir = per_acc_dir
+
+    # Log final resolved artifact locations registered to the manifest
+    _dbg_path("DEST_accounts_json", accounts_json_path)
+    _dbg_path("DEST_general_json", general_json_path)
+    _dbg_path("DEST_debug_full_tsv", debug_full_tsv_path)
+    _dbg_path("DEST_per_account_tsv_dir", per_account_dir)
 
     manifest.set_base_dir("traces_accounts_table", base_dir)
     manifest.snapshot_env(
@@ -2307,6 +2350,14 @@ def main(argv: List[str] | None = None) -> None:
     manifest.set_artifact(
         "traces.accounts_table", "per_account_tsv_dir", per_account_dir
     )
+
+    # Optional compatibility breadcrumb: if legacy path already exists, drop a .manifest only.
+    try:
+        legacy_dir = Path("traces") / "blocks" / sid / "accounts_table"
+        if legacy_dir.exists():
+            write_breadcrumb(manifest.path, legacy_dir / ".manifest")
+    except Exception:
+        pass
 
     write_breadcrumb(manifest.path, base_dir / ".manifest")
 

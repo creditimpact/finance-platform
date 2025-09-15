@@ -5,6 +5,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from backend.pipeline.runs import RunManifest
 from typing import Any, Dict, List
 
 from backend.core.logic.report_analysis.account_packager_coords import (
@@ -39,11 +40,14 @@ def _mid(a: Any, b: Any) -> float:
 
 def build_raw_from_windows(sid: str, root: Path) -> None:
     """
-    Read layout_snapshot.json + block_windows.json under traces/blocks/<sid>/,
+    Read layout_snapshot.json + block_windows.json under runs/<sid>/traces/blocks/,
     build one RAW JSON per block into accounts_raw/, and write _raw_index.json.
     """
-
-    base = root / "traces" / "blocks" / sid
+    m = RunManifest.for_sid(sid)
+    base = m.ensure_run_subdir("traces_blocks_dir", "traces/blocks")
+    # Guardrail: ensure canonical runs path
+    low = str(base.resolve()).lower()
+    assert ("/runs/" in low) or ("\\runs\\" in low), "RAW builder base must live under runs/<SID>"
     layout_path = base / "layout_snapshot.json"
     windows_path = base / "block_windows.json"
 
@@ -218,11 +222,12 @@ def build_raw_from_snapshot_and_windows(session_id: str) -> str:
 
     Returns the path to the written _raw_index.json as a string.
     """
-    root = Path.cwd()
+    # Canonical path via manifest
+    m = RunManifest.for_sid(session_id)
+    base = m.ensure_run_subdir("traces_blocks_dir", "traces/blocks")
     # Reuse the main implementation
-    build_raw_from_windows(session_id, root)
-    base = root / "traces" / "blocks" / session_id / "accounts_raw" / "_raw_index.json"
-    return str(base)
+    build_raw_from_windows(session_id, Path("."))
+    return str(base / "accounts_raw" / "_raw_index.json")
 
 
 __all__ = ["build_raw_from_windows", "build_raw_from_snapshot_and_windows"]

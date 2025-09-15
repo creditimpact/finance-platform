@@ -1,5 +1,6 @@
 # ruff: noqa: E402
 import json
+import shutil
 import logging
 import os
 import sys
@@ -11,7 +12,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from backend.core.logic.report_analysis.block_exporter import export_stage_a
+from backend.core.logic.report_analysis.block_exporter import export_stage_a, run_stage_a
+from backend.pipeline.runs import RunManifest
 from backend.core.logic.report_analysis.extract_problematic_accounts import (
     extract_problematic_accounts as orchestrate_problem_accounts,
 )
@@ -116,7 +118,23 @@ def stage_a_task(self, sid: str) -> dict:
         extract_and_cache_text(session_id=sid, pdf_path=str(pdf), ocr_enabled=ocr_on)
         log.info("TEXT_CACHE built sid=%s", sid)
     try:
-        export_stage_a(session_id=sid)
+        # Enforce canonical Stage-A output dir under runs/<SID>/traces/accounts_table
+        m = RunManifest.for_sid(sid)
+        traces_dir = m.ensure_run_subdir("traces_dir", "traces")
+        accounts_out_dir = (traces_dir / "accounts_table").resolve()
+        accounts_out_dir.mkdir(parents=True, exist_ok=True)
+        # Record canonical accounts_table base dir in manifest
+        m.set_base_dir("traces_accounts_table", accounts_out_dir)
+        # Guardrail: ensure we never write to legacy traces/blocks
+        assert "runs" in str(accounts_out_dir), "Stage-A out_dir must live under runs/<SID>"
+        logger.info("STAGE_A_CANONICAL_OUT sid=%s dir=%s", sid, accounts_out_dir); run_stage_a(sid=sid, accounts_out_dir=accounts_out_dir); m.set_artifact("traces.accounts_table","accounts_json", accounts_out_dir / "accounts_from_full.json"); m.set_artifact("traces.accounts_table","general_json", accounts_out_dir / "general_info_from_full.json"); m.set_artifact("traces.accounts_table","debug_full_tsv", accounts_out_dir / "_debug_full.tsv"); m.set_artifact("traces.accounts_table","per_account_tsv_dir", accounts_out_dir / "per_account_tsv")
+        # Defensive: auto-sync any legacy traces into the canonical runs/<SID>
+        try:
+            from scripts.sync_traces_into_runs import sync_one as _sync_legacy
+
+            _sync_legacy(sid, move=True)
+        except Exception as e_sync:
+            logger.warning("SYNC_LEGACY_TRACES_FAILED sid=%s err=%s", sid, e_sync)
     except Exception as e:
         log.exception("export_stage_a_failed")
         result = {
@@ -145,6 +163,26 @@ def stage_a_task(self, sid: str) -> dict:
     return safe_result
 
 
+def _manifest_keep_set(m: RunManifest) -> set[Path]:
+    # Build allow-list of files to keep from manifest
+    keep: set[Path] = set()
+    acct_json = Path(m.get("traces.accounts_table", "accounts_json")).resolve()
+    gen_json = Path(m.get("traces.accounts_table", "general_json")).resolve()
+    debug_tsv = Path(m.get("traces.accounts_table", "debug_full_tsv")).resolve()
+    per_dir = Path(m.get("traces.accounts_table", "per_account_tsv_dir")).resolve()
+
+    keep.update({acct_json, gen_json, debug_tsv})
+    if per_dir.exists():
+        if per_dir.is_dir():
+            for p in per_dir.rglob("*"):
+                if p.is_file():
+                    keep.add(p.resolve())
+            keep.add(per_dir.resolve())
+        else:
+            keep.add(per_dir.resolve())
+
+    return keep
+
 @shared_task(bind=True, autoretry_for=(), retry_backoff=False)
 def extract_problematic_accounts(self, sid: str) -> dict:
     log.info("PROBLEMATIC start sid=%s", sid)
@@ -162,67 +200,91 @@ def smoke_task(self):
 
 @shared_task(bind=True)
 def cleanup_trace_task(self, sid: str) -> dict:
-    """Purge parser traces for ``sid`` and keep final artifacts.
+    """Canonical cleanup using manifest allow-list under runs/<SID>/traces.
 
-    Deletes everything under ``traces/blocks/<sid>`` except:
-      - ``_debug_full.tsv``
-      - ``accounts_from_full.json``
-      - ``general_info_from_full.json``
-    Also removes ``traces/texts/<sid>``. Always returns a dict to keep celery chains healthy.
+    - Operates under runs/<SID>/traces
+    - Keeps only manifest-listed Stage-A artifacts (incl. per_account_tsv/*)
+    - Optionally removes legacy traces/blocks/<SID> if canonical artifacts exist
     """
-    log.info("TRACE_CLEANUP start sid=%s", sid)
-    root = Path(PROJECT_ROOT)
-    blocks_dir = root / "traces" / "blocks" / sid
-    acct = blocks_dir / "accounts_table"
-    kept = [
-        "_debug_full.tsv",
-        "accounts_from_full.json",
-        "general_info_from_full.json",
-    ]
-    if not blocks_dir.exists():
-        log.warning("TRACE_CLEANUP skip: missing blocks dir %s", blocks_dir)
-        result = {
-            "sid": sid,
-            "cleanup": {"performed": False, "reason": "blocks_dir_missing"},
-        }
-        safe_result = _json_safe(result)
-        try:
-            json.dumps(safe_result, ensure_ascii=False)
-        except TypeError as e:  # pragma: no cover - defensive logging
-            logger.error("Non-JSON value at tasks.cleanup_trace_task return: %s", e)
-            raise
-        return safe_result
-    missing = [k for k in kept if not (acct / k).exists()]
-    if missing:
-        log.warning("TRACE_CLEANUP skip: missing artifacts %s in %s", missing, acct)
-        result = {
-            "sid": sid,
-            "cleanup": {
-                "performed": False,
-                "reason": "artifacts_missing",
-                "missing": missing,
-            },
-        }
-        safe_result = _json_safe(result)
-        try:
-            json.dumps(safe_result, ensure_ascii=False)
-        except TypeError as e:  # pragma: no cover - defensive logging
-            logger.error("Non-JSON value at tasks.cleanup_trace_task return: %s", e)
-            raise
-        return safe_result
-    summary = purge_after_export(sid=sid, project_root=root)
-    log.info(
-        "TRACE_CLEANUP done sid=%s kept=['_debug_full.tsv','accounts_from_full.json','general_info_from_full.json']",
-        sid,
-    )
-    result = {"sid": sid, "cleanup": summary}
-    safe_result = _json_safe(result)
+    m = RunManifest.for_sid(sid)
+    traces_dir = m.ensure_run_subdir("traces_dir", "traces").resolve()
+    accounts_dir = (traces_dir / "accounts_table").resolve()
+
+    log.info("TRACE_CLEANUP_CANONICAL sid=%s base=%s", sid, traces_dir)
+
+    # Build allow-list
     try:
-        json.dumps(safe_result, ensure_ascii=False)
-    except TypeError as e:  # pragma: no cover - defensive logging
-        logger.error("Non-JSON value at tasks.cleanup_trace_task return: %s", e)
-        raise
-    return safe_result
+        keep = _manifest_keep_set(m)
+    except Exception as e:
+        log.warning(
+            "TRACE_CLEANUP_SKIP sid=%s reason=manifest_missing_keys err=%s", sid, e
+        )
+        return {"sid": sid, "cleanup": {"performed": False, "reason": "manifest_missing_keys"}}
+
+    # Collect all files under runs/<SID>/traces
+    all_files = [p.resolve() for p in traces_dir.rglob("*") if p.is_file()]
+
+    # Compute delete candidates = files not in keep
+    to_delete = [p for p in all_files if p not in keep]
+
+    # Delete files
+    deleted: list[str] = []
+    for p in to_delete:
+        try:
+            p.unlink()
+            deleted.append(str(p))
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            log.warning("TRACE_CLEANUP_DELETE_FAIL sid=%s file=%s err=%s", sid, p, e)
+
+    # Best-effort prune of empty directories (avoid removing accounts_dir and base traces_dir)
+    to_check_dirs = sorted({p.parent for p in to_delete}, key=lambda x: len(str(x)), reverse=True)
+    for d in to_check_dirs:
+        if d == accounts_dir or d == traces_dir:
+            continue
+        try:
+            if d.exists() and d.is_dir() and not any(d.iterdir()):
+                d.rmdir()
+        except Exception:
+            pass
+
+    # Optionally remove legacy traces/blocks/<SID> if canonical artifacts exist
+    legacy = Path("traces") / "blocks" / sid
+    legacy_removed = False
+    required = [
+        accounts_dir / "_debug_full.tsv",
+        accounts_dir / "accounts_from_full.json",
+        accounts_dir / "general_info_from_full.json",
+    ]
+    if legacy.exists() and all(p.exists() for p in required):
+        try:
+            shutil.rmtree(legacy)
+            legacy_removed = True
+        except Exception as e:
+            log.warning(
+                "TRACE_CLEANUP_LEGACY_REMOVE_FAIL sid=%s dir=%s err=%s", sid, legacy, e
+            )
+
+    kept_list = [str(p) for p in keep if p.exists()]
+    log.info(
+        "TRACE_CLEANUP_DONE sid=%s kept=%d deleted=%d legacy_removed=%s",
+        sid,
+        len(kept_list),
+        len(deleted),
+        legacy_removed,
+    )
+
+    return {
+        "sid": sid,
+        "cleanup": {
+            "performed": True,
+            "canonical_base": str(traces_dir),
+            "kept": kept_list,
+            "deleted": deleted,
+            "legacy_removed": legacy_removed,
+        },
+    }
 
 
 @app.task(bind=True, name="process_report")

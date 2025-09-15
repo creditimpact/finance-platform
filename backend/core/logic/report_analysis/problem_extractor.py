@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping
 
 from backend.settings import PROJECT_ROOT
+from backend.pipeline.runs import RunManifest
 
 from .keys import compute_logical_account_key
 from .problem_detection import evaluate_account_problem
@@ -54,9 +55,16 @@ def detect_problem_accounts(sid: str, root: Path | None = None) -> List[Dict[str
     """Return problematic accounts for ``sid`` based on rule evaluation."""
     base = Path(root or PROJECT_ROOT)
     logger.info("PROBLEM_EXTRACT start sid=%s", sid)
-    acc_path = (
-        base / "traces" / "blocks" / sid / "accounts_table" / "accounts_from_full.json"
-    )
+    # Prefer manifest-discovered accounts_json if available; fallback to legacy path
+    acc_path: Path
+    try:
+        m = RunManifest.for_sid(sid)
+        p = m.get("traces.accounts_table", "accounts_json")
+        acc_path = Path(p)
+    except Exception:
+        acc_path = (
+            base / "traces" / "blocks" / sid / "accounts_table" / "accounts_from_full.json"
+        )
     accounts: List[Mapping[str, Any]] = []
     if not acc_path.exists():
         logger.error("accounts_from_full.json missing sid=%s path=%s", sid, acc_path)

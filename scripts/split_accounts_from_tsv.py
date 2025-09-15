@@ -1179,24 +1179,26 @@ def split_accounts(
                 if not in_h7y:
                     if H7Y_TITLE_PAT.search(line_text_norm):
                         h7y_title_seen = True
-                    elif h7y_title_seen and _is_triad(joined_line_text):
+                    elif h7y_title_seen and all(
+                        b.lower() in s for b in H7Y_BUREAUS
+                    ):
                         mids: Dict[str, float] = {}
                         for t in toks:
                             txt_norm = _norm(str(t.get("text", ""))).casefold()
                             if txt_norm.startswith("transunion"):
-                                mids["tu"] = _triad_mid_x(t) - H7Y_EPS
+                                mids["tu"] = _triad_mid_x(t)
                             elif txt_norm.startswith("experian"):
-                                mids["xp"] = _triad_mid_x(t) - H7Y_EPS
+                                mids["xp"] = _triad_mid_x(t)
                             elif txt_norm.startswith("equifax"):
-                                mids["eq"] = _triad_mid_x(t) - H7Y_EPS
+                                mids["eq"] = _triad_mid_x(t)
                         if len(mids) == 3:
                             h7y_slabs = {
-                                "tu": (mids["tu"], mids["xp"]),
+                                "tu": (0.0, mids["xp"]),
                                 "xp": (mids["xp"], mids["eq"]),
                                 "eq": (mids["eq"], float("inf")),
                             }
                             in_h7y = True
-                            h7y_title_seen = False
+                            last_key = {"tu": None, "xp": None, "eq": None}
                             logger.info(
                                 "H7Y_SLABS tu=[%.1f,%.1f) xp=[%.1f,%.1f) eq=[%.1f,inf)",
                                 h7y_slabs["tu"][0],
@@ -1205,8 +1207,12 @@ def split_accounts(
                                 h7y_slabs["xp"][1],
                                 h7y_slabs["eq"][0],
                             )
-                            last_key = {"tu": None, "xp": None, "eq": None}
+                            h7y_title_seen = False
                             continue
+                        else:
+                            # header not clean → do not enter in_h7y
+                            h7y_title_seen = False
+                            h7y_slabs = None
 
                 # --- 2Y enter condition (full-line regex over normalized text) ---
                 if not in_h2y and H2Y_PAT.search(line_text_norm):

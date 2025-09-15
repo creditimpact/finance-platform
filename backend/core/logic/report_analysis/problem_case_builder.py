@@ -19,6 +19,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping
 
+from backend.pipeline.runs import RunManifest, write_breadcrumb
 from backend.settings import PROJECT_ROOT
 
 from .keys import compute_logical_account_key
@@ -150,6 +151,12 @@ def build_problem_cases(
     accounts_dir = out_dir / "accounts"
     out_dir.mkdir(parents=True, exist_ok=True)
     accounts_dir.mkdir(parents=True, exist_ok=True)
+
+    # register directory in global run manifest and leave breadcrumb
+    m = RunManifest.for_sid(sid)
+    m.set_base_dir("cases_dir", out_dir)
+    m.set_artifact("cases", "case_dir", out_dir)
+    write_breadcrumb(m.path, out_dir / ".manifest")
 
     logger.info("PROBLEM_CASES start sid=%s total=%s out=%s", sid, total, out_dir)
 

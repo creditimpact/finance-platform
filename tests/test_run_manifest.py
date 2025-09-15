@@ -40,6 +40,19 @@ def test_run_manifest_basic(tmp_path, monkeypatch):
     assert m.data["base_dirs"]["traces_accounts_table"] == str(base_dir.resolve())
 
 
+def test_run_manifest_ensure_run_subdir(tmp_path, monkeypatch):
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+    m = RunManifest.for_sid("sid123")
+
+    traces_dir = m.ensure_run_subdir("traces_dir", "traces")
+
+    expected = (runs_root / "sid123" / "traces").resolve()
+    assert traces_dir == expected
+    assert traces_dir.exists()
+    assert m.data["base_dirs"]["traces_dir"] == str(expected)
+
+
 def test_run_manifest_from_env_or_latest(tmp_path, monkeypatch):
     runs_root = tmp_path / "runs"
     monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))

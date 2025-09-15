@@ -28,16 +28,33 @@ def test_split_accounts_registers_manifest(tmp_path, monkeypatch):
     tsv_path = accounts_dir / "_debug_full.tsv"
     _write_tsv(tsv_path)
 
-    general_json = accounts_dir / "general_info_from_full.json"
-    general_json.write_text("{}", encoding="utf-8")
     accounts_json = accounts_dir / "accounts_from_full.json"
 
-    split_accounts_main(["--full", str(tsv_path), "--json_out", str(accounts_json)])
-
     manifest_path = runs_root / "sid123" / "manifest.json"
+    general_json = accounts_dir / "general_info_from_full.json"
+
+    split_accounts_main(
+        [
+            "--full",
+            str(tsv_path),
+            "--json_out",
+            str(accounts_json),
+            "--sid",
+            "sid123",
+            "--manifest",
+            str(manifest_path),
+            "--general_out",
+            str(general_json),
+        ]
+    )
+
     data = json.loads(manifest_path.read_text())
     assert data["base_dirs"]["traces_accounts_table"] == str(accounts_dir.resolve())
     art = data["artifacts"]["traces"]["accounts_table"]
     assert art["accounts_json"] == str(accounts_json.resolve())
     assert art["general_json"] == str(general_json.resolve())
+    assert art["debug_full_tsv"] == str(tsv_path.resolve())
+    expected_per_acc = accounts_dir / "per_account_tsv"
+    assert art["per_account_tsv_dir"] == str(expected_per_acc.resolve())
     assert (accounts_dir / ".manifest").read_text() == str(manifest_path.resolve())
+    assert general_json.exists()

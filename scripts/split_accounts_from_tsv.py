@@ -149,54 +149,6 @@ def _trace_token(
         )
 
 
-def _trace_history2y(page, line, t, bureau):
-    if _trace_wr:
-        try:
-            mid = (float(t.get("x0", 0)) + float(t.get("x1", 0))) / 2.0
-        except Exception:
-            mid = 0.0
-        _trace_wr.writerow(
-            [
-                page,
-                line,
-                "",
-                t.get("text"),
-                t.get("x0"),
-                t.get("x1"),
-                mid,
-                bureau,
-                "history2y",
-                "",
-                ("x0" if TRIAD_BAND_BY_X0 else "mid"),
-                "",
-                "",
-            ]
-        )
-
-
-def _trace_history7y(page, line, t, bureau, kind, value):
-    if _trace_wr:
-        try:
-            mid = (float(t.get("x0", 0)) + float(t.get("x1", 0))) / 2.0
-        except Exception:
-            mid = 0.0
-        _trace_wr.writerow(
-            [
-                page,
-                line,
-                "",
-                str(value),
-                t.get("x0"),
-                t.get("x1"),
-                mid,
-                bureau,
-                "history7y",
-                kind,
-                ("x0" if TRIAD_BAND_BY_X0 else "mid"),
-                "",
-                "",
-            ]
-        )
 
 
 _triad_x0_fallback_logged: set[int] = set()
@@ -356,31 +308,30 @@ def _trace_write(
 
 
 def _history_trace(
-    page,
-    line,
-    *,
-    bureau,
-    phase,
-    kind: str = "",
+    page: int,
+    line: int,
+    phase: str,
     text: str = "",
+    kind: str = "",
     value: int | None = None,
     x0: float | None = None,
     x1: float | None = None,
-    mid_x: float | None = None,
 ) -> None:
-    """Write history trace via ``_trace_write`` if tracing is active."""
-    _trace_write(
-        phase=phase,
-        bureau=bureau,
-        page=page,
-        line=line,
-        text=text,
-        kind=kind,
-        value=value,
-        x0=x0,
-        x1=x1,
-        mid_x=mid_x,
-    )
+    """Generic trace row for history observers (2Y/7Y)."""
+    if not TRACE_ON or not _trace_wr:
+        return
+    txt = text if text else ("" if value is None else str(value))
+    _trace_wr.writerow([
+        page,
+        line,
+        "",
+        txt,
+        x0,
+        x1,
+        phase,
+        kind,
+        "",
+    ])
 
 
 def _is_triad(text: str) -> bool:
@@ -1228,9 +1179,7 @@ def split_accounts(
                 if not in_h7y:
                     if H7Y_TITLE_PAT.search(line_text_norm):
                         h7y_title_seen = True
-                    elif h7y_title_seen and all(
-                        b.lower() in line_text_norm.casefold() for b in H7Y_BUREAUS
-                    ):
+                    elif h7y_title_seen and _is_triad(joined_line_text):
                         mids: Dict[str, float] = {}
                         for t in toks:
                             txt_norm = _norm(str(t.get("text", ""))).casefold()
@@ -1257,6 +1206,7 @@ def split_accounts(
                                 h7y_slabs["eq"][0],
                             )
                             last_key = {"tu": None, "xp": None, "eq": None}
+                            continue
 
                 # --- 2Y enter condition (full-line regex over normalized text) ---
                 if not in_h2y and H2Y_PAT.search(line_text_norm):
@@ -1306,27 +1256,24 @@ def split_accounts(
                             acc_seven_year["eq"]["late90"],
                         )
                         _history_trace(
-                            page=line["page"],
-                            line=line["line"],
+                            line["page"],
+                            line["line"],
                             phase="history7y",
-                            bureau="tu",
-                            kind="summary",
+                            kind="tu_summary",
                             text=f"30:{acc_seven_year['tu']['late30']} 60:{acc_seven_year['tu']['late60']} 90:{acc_seven_year['tu']['late90']}",
                         )
                         _history_trace(
-                            page=line["page"],
-                            line=line["line"],
+                            line["page"],
+                            line["line"],
                             phase="history7y",
-                            bureau="xp",
-                            kind="summary",
+                            kind="xp_summary",
                             text=f"30:{acc_seven_year['xp']['late30']} 60:{acc_seven_year['xp']['late60']} 90:{acc_seven_year['xp']['late90']}",
                         )
                         _history_trace(
-                            page=line["page"],
-                            line=line["line"],
+                            line["page"],
+                            line["line"],
                             phase="history7y",
-                            bureau="eq",
-                            kind="summary",
+                            kind="eq_summary",
                             text=f"30:{acc_seven_year['eq']['late30']} 60:{acc_seven_year['eq']['late60']} 90:{acc_seven_year['eq']['late90']}",
                         )
                         in_h7y = False
@@ -1401,8 +1348,7 @@ def split_accounts(
                                     line["page"],
                                     line["line"],
                                     phase="history7y",
-                                    bureau=b,
-                                    kind=f"late{key}",
+                                    kind=f"{b}_late{key}",
                                     text="KEY",
                                 )
                                 if inline_val is not None or (
@@ -1421,8 +1367,7 @@ def split_accounts(
                                         line["page"],
                                         line["line"],
                                         phase="history7y",
-                                        bureau=b,
-                                        kind=f"late{key}",
+                                        kind=f"{b}_late{key}",
                                         value=v,
                                     )
                                     last_key[b] = None
@@ -1442,8 +1387,7 @@ def split_accounts(
                                         t.get("page"),
                                         t.get("line"),
                                         phase="history7y",
-                                        bureau=b,
-                                        kind=last_key[b],
+                                        kind=f"{b}_{last_key[b]}",
                                         value=v,
                                         x0=t.get("x0"),
                                         x1=t.get("x1"),
@@ -2069,27 +2013,24 @@ def split_accounts(
                 acc_seven_year["eq"]["late90"],
             )
             _history_trace(
-                page=account_lines[-1]["page"],
-                line=account_lines[-1]["line"],
+                account_lines[-1]["page"],
+                account_lines[-1]["line"],
                 phase="history7y",
-                bureau="tu",
-                kind="summary",
+                kind="tu_summary",
                 text=f"30:{acc_seven_year['tu']['late30']} 60:{acc_seven_year['tu']['late60']} 90:{acc_seven_year['tu']['late90']}",
             )
             _history_trace(
-                page=account_lines[-1]["page"],
-                line=account_lines[-1]["line"],
+                account_lines[-1]["page"],
+                account_lines[-1]["line"],
                 phase="history7y",
-                bureau="xp",
-                kind="summary",
+                kind="xp_summary",
                 text=f"30:{acc_seven_year['xp']['late30']} 60:{acc_seven_year['xp']['late60']} 90:{acc_seven_year['xp']['late90']}",
             )
             _history_trace(
-                page=account_lines[-1]["page"],
-                line=account_lines[-1]["line"],
+                account_lines[-1]["page"],
+                account_lines[-1]["line"],
                 phase="history7y",
-                bureau="eq",
-                kind="summary",
+                kind="eq_summary",
                 text=f"30:{acc_seven_year['eq']['late30']} 60:{acc_seven_year['eq']['late60']} 90:{acc_seven_year['eq']['late90']}",
             )
             in_h7y = False

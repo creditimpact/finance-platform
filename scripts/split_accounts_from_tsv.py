@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from bisect import bisect_right
 from collections import defaultdict
 from pathlib import Path
@@ -2201,9 +2202,53 @@ def main(argv: List[str] | None = None) -> None:
     ap.add_argument("--manifest", help="Path to runs/<SID>/manifest.json")
     ap.add_argument("--general_out", help="Path for general_info_from_full.json")
     args = ap.parse_args(argv)
+    json_out_default = ap.get_default("json_out")
 
-    tsv_path = Path(args.full)
-    json_out = Path(args.json_out)
+    def _sid_from(path_str: str | None) -> str | None:
+        if not path_str:
+            return None
+        try:
+            name = Path(path_str).resolve().parent.name
+        except Exception:
+            return None
+        return name or None
+
+    json_out_specified = args.json_out != json_out_default
+    sid = (
+        args.sid
+        or _sid_from(args.manifest)
+        or (_sid_from(args.json_out) if json_out_specified else None)
+        or _sid_from(args.full)
+    )
+    if not sid:
+        raise ValueError(
+            "Unable to determine SID; pass --sid or provide recognizable paths"
+        )
+
+    manifest = RunManifest.for_sid(sid)
+    manifest_path_arg = Path(args.manifest).resolve() if args.manifest else None
+    if manifest_path_arg and manifest_path_arg != manifest.path.resolve():
+        raise ValueError(
+            f"Manifest path {manifest_path_arg} does not match runs/{sid} manifest"
+        )
+
+    traces_dir = manifest.ensure_run_subdir("traces_dir", "traces")
+    accounts_dir = (traces_dir / "accounts_table").resolve()
+    accounts_dir.mkdir(parents=True, exist_ok=True)
+
+    accounts_json = accounts_dir / "accounts_from_full.json"
+    general_json = accounts_dir / "general_info_from_full.json"
+    debug_tsv = accounts_dir / "_debug_full.tsv"
+    per_acc_dir = (accounts_dir / "per_account_tsv").resolve()
+    per_acc_dir.mkdir(parents=True, exist_ok=True)
+
+    source_tsv = Path(args.full).resolve()
+    if source_tsv != debug_tsv:
+        debug_tsv.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_tsv, debug_tsv)
+
+    tsv_path = debug_tsv
+    json_out = accounts_json
     result = split_accounts(tsv_path, json_out, write_tsv=args.write_tsv)
     if args.print_summary:
         accounts = result.get("accounts") or []
@@ -2223,44 +2268,32 @@ def main(argv: List[str] | None = None) -> None:
             print(f"Accounts ending with section starter: {bad_last}")
     print(f"Wrote accounts to {json_out}")
 
-    # --- RunManifest wiring ---
-    general_json_candidate = (
-        Path(args.general_out)
-        if args.general_out
-        else json_out.with_name("general_info_from_full.json")
-    )
-    if not general_json_candidate.exists():
-        general_json_candidate.parent.mkdir(parents=True, exist_ok=True)
+    if not general_json.exists():
+        general_json.parent.mkdir(parents=True, exist_ok=True)
         from scripts.split_general_info_from_tsv import split_general_info
 
-        split_general_info(tsv_path, general_json_candidate)
+        split_general_info(tsv_path, general_json)
 
-    accounts_json_path = json_out.resolve()
-    general_json_path = general_json_candidate.resolve()
+    if json_out_specified:
+        requested_json_out = Path(args.json_out)
+        if requested_json_out.resolve() != accounts_json.resolve():
+            requested_json_out.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(accounts_json, requested_json_out)
+
+    if args.general_out:
+        general_out_path = Path(args.general_out)
+        if general_out_path.resolve() != general_json.resolve():
+            general_out_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(general_json, general_out_path)
+
+    accounts_json_path = accounts_json.resolve()
+    general_json_path = general_json.resolve()
     debug_full_tsv_path = tsv_path.resolve()
-    base_dir = accounts_json_path.parent.resolve()
-    per_account_target = trace_dir if trace_dir is not None else base_dir / "per_account_tsv"
-    per_account_dir = Path(per_account_target).resolve()
+    base_dir = accounts_dir
+    per_account_dir = Path(trace_dir).resolve() if trace_dir is not None else per_acc_dir
 
-    sid = args.sid or base_dir.parent.name
-    if not sid:
-        raise ValueError(
-            "Unable to determine SID; pass --sid or use a standard accounts_table path"
-        )
-
-    if args.manifest:
-        manifest_path = Path(args.manifest)
-        rm = RunManifest.load_or_create(manifest_path, sid=sid)
-    else:
-        if args.sid:
-            rm = RunManifest.for_sid(sid)
-        else:
-            try:
-                rm = RunManifest.from_env_or_latest()
-            except FileNotFoundError:
-                rm = RunManifest.for_sid(sid)
-
-    rm.snapshot_env(
+    manifest.set_base_dir("traces_accounts_table", base_dir)
+    manifest.snapshot_env(
         [
             "RAW_TRIAD_FROM_X",
             "USE_LAYOUT_TEXT",
@@ -2268,17 +2301,16 @@ def main(argv: List[str] | None = None) -> None:
             "KEEP_PER_ACCOUNT_TSV",
         ]
     )
-    rm.set_base_dir("traces_accounts_table", base_dir)
-    rm.set_artifact("traces.accounts_table", "accounts_json", accounts_json_path)
-    rm.set_artifact("traces.accounts_table", "general_json", general_json_path)
-    rm.set_artifact("traces.accounts_table", "debug_full_tsv", debug_full_tsv_path)
-    rm.set_artifact(
+    manifest.set_artifact("traces.accounts_table", "accounts_json", accounts_json_path)
+    manifest.set_artifact("traces.accounts_table", "general_json", general_json_path)
+    manifest.set_artifact("traces.accounts_table", "debug_full_tsv", debug_full_tsv_path)
+    manifest.set_artifact(
         "traces.accounts_table", "per_account_tsv_dir", per_account_dir
     )
 
-    write_breadcrumb(rm.path, base_dir / ".manifest")
+    write_breadcrumb(manifest.path, base_dir / ".manifest")
 
-    logger.info("RUN_MANIFEST_READY sid=%s manifest=%s", rm.sid, rm.path)
+    logger.info("RUN_MANIFEST_READY sid=%s manifest=%s", manifest.sid, manifest.path)
 
 
 if __name__ == "__main__":  # pragma: no cover

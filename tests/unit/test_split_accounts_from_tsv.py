@@ -1,7 +1,30 @@
 import json
+import os
+import uuid
 from pathlib import Path
 
+import pytest
+
+from backend.pipeline.runs import RUNS_ROOT_ENV
 from scripts import split_accounts_from_tsv
+
+
+@pytest.fixture(autouse=True)
+def _set_runs_root(tmp_path, monkeypatch):
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+
+
+def _run_split(tsv_path: Path, sid: str | None = None):
+    args = ["--full", str(tsv_path)]
+    use_sid = sid or f"sid-{uuid.uuid4().hex}"
+    args.extend(["--sid", use_sid])
+    split_accounts_from_tsv.main(args)
+    runs_root = Path(os.environ[RUNS_ROOT_ENV])
+    accounts_dir = runs_root / use_sid / "traces" / "accounts_table"
+    accounts_json = accounts_dir / "accounts_from_full.json"
+    data = json.loads(accounts_json.read_text())
+    return data, accounts_dir, use_sid
 
 
 def create_all_caps_backtrack_tsv(path: Path) -> None:
@@ -19,19 +42,9 @@ def create_all_caps_backtrack_tsv(path: Path) -> None:
 
 def test_all_caps_backtrack(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     create_all_caps_backtrack_tsv(tsv_path)
 
-    split_accounts_from_tsv.main(
-        [
-            "--full",
-            str(tsv_path),
-            "--json_out",
-            str(json_path),
-        ]
-    )
-
-    data = json.loads(json_path.read_text())
+    data, _, _ = _run_split(tsv_path)
     accounts = data["accounts"]
     assert len(accounts) == 2
     assert data["stop_marker_seen"] is False
@@ -62,19 +75,9 @@ def create_stop_marker_tsv(path: Path) -> None:
 
 def test_stop_marker(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     create_stop_marker_tsv(tsv_path)
 
-    split_accounts_from_tsv.main(
-        [
-            "--full",
-            str(tsv_path),
-            "--json_out",
-            str(json_path),
-        ]
-    )
-
-    data = json.loads(json_path.read_text())
+    data, _, _ = _run_split(tsv_path)
     accounts = data["accounts"]
     assert data["stop_marker_seen"] is True
     assert len(accounts) == 1
@@ -100,14 +103,9 @@ def create_collection_tsv(path: Path) -> None:
 
 def test_collection_starts_new_account(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     create_collection_tsv(tsv_path)
 
-    split_accounts_from_tsv.main(
-        ["--full", str(tsv_path), "--json_out", str(json_path)]
-    )
-
-    data = json.loads(json_path.read_text())
+    data, _, _ = _run_split(tsv_path)
     accounts = data["accounts"]
     assert len(accounts) == 2
     acc1, acc2 = accounts
@@ -133,12 +131,9 @@ def create_unknown_tsv(path: Path) -> None:
 
 def test_unknown_starts_new_account(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     create_unknown_tsv(tsv_path)
 
-    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
-
-    data = json.loads(json_path.read_text())
+    data, _, _ = _run_split(tsv_path)
     accounts = data["accounts"]
     assert len(accounts) == 2
     acc1, acc2 = accounts
@@ -162,12 +157,9 @@ def create_section_forward_scan_tsv(path: Path) -> None:
 
 def test_heading_from_section_forward_scan(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     create_section_forward_scan_tsv(tsv_path)
 
-    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
-
-    data = json.loads(json_path.read_text())
+    data, _, _ = _run_split(tsv_path)
     accounts = data["accounts"]
     assert len(accounts) == 1
     acc = accounts[0]
@@ -189,12 +181,9 @@ def create_trailing_collection_tsv(path: Path) -> None:
 
 def test_trailing_section_marker_never_in_account(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     create_trailing_collection_tsv(tsv_path)
 
-    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
-
-    data = json.loads(json_path.read_text())
+    data, _, _ = _run_split(tsv_path)
     accounts = data["accounts"]
     assert len(accounts) == 1
     acc = accounts[0]
@@ -220,12 +209,9 @@ def create_section_prefix_end_tsv(path: Path) -> None:
 
 def test_no_account_ends_with_section_prefix(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     create_section_prefix_end_tsv(tsv_path)
 
-    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
-
-    data = json.loads(json_path.read_text())
+    data, _, _ = _run_split(tsv_path)
     accounts = data["accounts"]
     assert len(accounts) == 2
     for acc in accounts:
@@ -255,12 +241,9 @@ def create_noise_between_accounts_tsv(path: Path) -> None:
 
 def test_noise_lines_skipped(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     create_noise_between_accounts_tsv(tsv_path)
 
-    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
-
-    data = json.loads(json_path.read_text())
+    data, _, _ = _run_split(tsv_path)
     accounts = data["accounts"]
     assert len(accounts) == 2
     acc1, acc2 = accounts
@@ -284,12 +267,9 @@ def create_triad_above_tsv(path: Path) -> None:
 
 def test_triad_above_selection(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     create_triad_above_tsv(tsv_path)
 
-    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
-
-    data = json.loads(json_path.read_text())
+    data, _, _ = _run_split(tsv_path)
     accounts = data["accounts"]
     assert len(accounts) == 1
     acc = accounts[0]
@@ -310,12 +290,9 @@ def create_two_above_account_hash_tsv(path: Path) -> None:
 
 def test_two_above_account_hash_headline_rule(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     create_two_above_account_hash_tsv(tsv_path)
 
-    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
-
-    data = json.loads(json_path.read_text())
+    data, _, _ = _run_split(tsv_path)
     accounts = data["accounts"]
     assert len(accounts) == 1
     acc = accounts[0]
@@ -334,12 +311,9 @@ def create_anchor_only_tsv(path: Path) -> None:
 
 def test_anchor_not_used_as_headline(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     create_anchor_only_tsv(tsv_path)
 
-    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
-
-    data = json.loads(json_path.read_text())
+    data, _, _ = _run_split(tsv_path)
     accounts = data["accounts"]
     assert len(accounts) == 1
     acc = accounts[0]
@@ -360,12 +334,9 @@ def create_plain_account_tsv(path: Path) -> None:
 
 def test_plain_account_not_anchor(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     create_plain_account_tsv(tsv_path)
 
-    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
-
-    data = json.loads(json_path.read_text())
+    data, _, _ = _run_split(tsv_path)
     accounts = data["accounts"]
     assert len(accounts) == 1
     acc = accounts[0]
@@ -389,12 +360,9 @@ def create_triad_moved_tsv(path: Path) -> None:
 
 def test_triad_moved_to_next_account(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     create_triad_moved_tsv(tsv_path)
 
-    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
-
-    data = json.loads(json_path.read_text())
+    data, _, _ = _run_split(tsv_path)
     accounts = data["accounts"]
     assert len(accounts) == 2
     acc1, acc2 = accounts
@@ -433,12 +401,9 @@ def create_h7y_tsv(path: Path) -> None:
 
 def test_seven_year_history_parsing(tmp_path: Path) -> None:
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     create_h7y_tsv(tsv_path)
 
-    split_accounts_from_tsv.main(["--full", str(tsv_path), "--json_out", str(json_path)])
-
-    data = json.loads(json_path.read_text())
+    data, _, _ = _run_split(tsv_path)
     accounts = data["accounts"]
     assert len(accounts) == 1
     sev = accounts[0]["seven_year_history"]

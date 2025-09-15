@@ -2,9 +2,10 @@ import json
 import logging
 
 from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
+from backend.pipeline.runs import RUNS_ROOT_ENV, RunManifest
 
 
-def test_problem_case_builder(tmp_path, caplog):
+def test_problem_case_builder(tmp_path, caplog, monkeypatch):
     """Smoke test for :func:`build_problem_cases`.
 
     The builder should read a sample ``accounts_from_full.json`` file and
@@ -34,6 +35,10 @@ def test_problem_case_builder(tmp_path, caplog):
     )
     acc_path.parent.mkdir(parents=True, exist_ok=True)
     acc_path.write_text(json.dumps({"accounts": accounts}), encoding="utf-8")
+
+    # configure runs root for manifest
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
 
     # Run the builder
     caplog.set_level(logging.INFO)
@@ -76,9 +81,19 @@ def test_problem_case_builder(tmp_path, caplog):
         for m in caplog.messages
     )
 
+    # Run manifest registration and breadcrumb
+    m = RunManifest.for_sid(sid)
+    assert m.data["base_dirs"]["cases_dir"] == str(out_dir.resolve())
+    assert m.get("cases", "case_dir") == str(out_dir.resolve())
+    breadcrumb = out_dir / ".manifest"
+    assert breadcrumb.read_text() == str(m.path.resolve())
 
-def test_problem_case_builder_missing_accounts(tmp_path, caplog):
+
+def test_problem_case_builder_missing_accounts(tmp_path, caplog, monkeypatch):
     sid = "S999"
+
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
 
     caplog.set_level(logging.INFO)
     summary = build_problem_cases(sid, root=tmp_path)
@@ -99,3 +114,10 @@ def test_problem_case_builder_missing_accounts(tmp_path, caplog):
         f"PROBLEM_CASES done sid={sid} total=0 problematic=0 out={out_dir}" in m
         for m in caplog.messages
     )
+
+    # manifest and breadcrumb should still be written
+    m = RunManifest.for_sid(sid)
+    assert m.data["base_dirs"]["cases_dir"] == str(out_dir.resolve())
+    assert m.get("cases", "case_dir") == str(out_dir.resolve())
+    breadcrumb = out_dir / ".manifest"
+    assert breadcrumb.read_text() == str(m.path.resolve())

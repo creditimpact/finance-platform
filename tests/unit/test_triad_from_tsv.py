@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from backend.pipeline.runs import RUNS_ROOT_ENV
+
 
 def create_triad_tsv(path: Path) -> None:
     header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
@@ -290,6 +292,9 @@ def test_triad_from_tsv(tmp_path: Path) -> None:
     env["RAW_TRIAD_FROM_X"] = "1"
     env["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    runs_root = tmp_path / "runs"
+    env[RUNS_ROOT_ENV] = str(runs_root)
+    sid = "sid-subprocess"
     subprocess.run(
         [
             "python",
@@ -298,6 +303,8 @@ def test_triad_from_tsv(tmp_path: Path) -> None:
             str(tsv_path),
             "--json_out",
             str(json_path),
+            "--sid",
+            sid,
         ],
         check=True,
         env=env,
@@ -324,6 +331,8 @@ def test_triad_from_tsv_with_punctuation(tmp_path: Path) -> None:
     env["RAW_TRIAD_FROM_X"] = "1"
     env["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    env[RUNS_ROOT_ENV] = str(tmp_path / "runs")
+    sid = "sid-subprocess"
     subprocess.run(
         [
             "python",
@@ -332,6 +341,8 @@ def test_triad_from_tsv_with_punctuation(tmp_path: Path) -> None:
             str(tsv_path),
             "--json_out",
             str(json_path),
+            "--sid",
+            sid,
         ],
         check=True,
         env=env,
@@ -356,6 +367,8 @@ def test_cross_page_carry_and_sentinel(tmp_path: Path) -> None:
     env["RAW_TRIAD_FROM_X"] = "1"
     env["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    env[RUNS_ROOT_ENV] = str(tmp_path / "runs")
+    sid = "sid-subprocess"
     subprocess.run(
         [
             "python",
@@ -364,6 +377,8 @@ def test_cross_page_carry_and_sentinel(tmp_path: Path) -> None:
             str(tsv_path),
             "--json_out",
             str(json_path),
+            "--sid",
+            sid,
         ],
         check=True,
         env=env,
@@ -390,6 +405,8 @@ def test_header_on_prev_page(tmp_path: Path) -> None:
     env["RAW_TRIAD_FROM_X"] = "1"
     env["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    env[RUNS_ROOT_ENV] = str(tmp_path / "runs")
+    env["TRIAD_BAND_BY_X0"] = "0"
     subprocess.run(
         [
             "python",
@@ -398,6 +415,8 @@ def test_header_on_prev_page(tmp_path: Path) -> None:
             str(tsv_path),
             "--json_out",
             str(json_path),
+            "--sid",
+            "sid-subprocess",
         ],
         check=True,
         env=env,
@@ -420,6 +439,7 @@ def test_standalone_bureau_header_stops(tmp_path: Path) -> None:
     env["RAW_TRIAD_FROM_X"] = "1"
     env["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    env[RUNS_ROOT_ENV] = str(tmp_path / "runs")
     subprocess.run(
         [
             "python",
@@ -428,6 +448,8 @@ def test_standalone_bureau_header_stops(tmp_path: Path) -> None:
             str(tsv_path),
             "--json_out",
             str(json_path),
+            "--sid",
+            "sid-subprocess",
         ],
         check=True,
         env=env,
@@ -449,12 +471,15 @@ def test_triad_guard_skip(tmp_path: Path, caplog) -> None:
     os.environ["RAW_TRIAD_FROM_X"] = "1"
     os.environ["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
     os.environ["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    os.environ[RUNS_ROOT_ENV] = str(tmp_path / "runs")
     sys.argv = [
         "split_accounts_from_tsv.py",
         "--full",
         str(tsv_path),
         "--json_out",
         str(json_path),
+        "--sid",
+        "sid-runpy",
     ]
     logging.basicConfig(level=logging.INFO)
     sys.modules.pop("backend.config", None)
@@ -476,12 +501,15 @@ def test_triad_guard_skip_flag_off(tmp_path: Path, caplog) -> None:
     os.environ["RAW_TRIAD_FROM_X"] = "0"
     os.environ["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
     os.environ["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    os.environ[RUNS_ROOT_ENV] = str(tmp_path / "runs")
     sys.argv = [
         "split_accounts_from_tsv.py",
         "--full",
         str(tsv_path),
         "--json_out",
         str(json_path),
+        "--sid",
+        "sid-runpy",
     ]
     logging.basicConfig(level=logging.INFO)
     sys.modules.pop("backend.config", None)
@@ -501,12 +529,15 @@ def test_triad_partial_continuation(tmp_path: Path, caplog) -> None:
     os.environ["RAW_TRIAD_FROM_X"] = "1"
     os.environ["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
     os.environ["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    os.environ[RUNS_ROOT_ENV] = str(tmp_path / "runs")
     sys.argv = [
         "split_accounts_from_tsv.py",
         "--full",
         str(tsv_path),
         "--json_out",
         str(json_path),
+        "--sid",
+        "sid-runpy",
     ]
     logging.basicConfig(level=logging.INFO)
     sys.modules.pop("backend.config", None)
@@ -529,12 +560,15 @@ def test_triad_cross_page_carry(tmp_path: Path, caplog) -> None:
     os.environ["RAW_TRIAD_FROM_X"] = "1"
     os.environ["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
     os.environ["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    os.environ[RUNS_ROOT_ENV] = str(tmp_path / "runs")
     sys.argv = [
         "split_accounts_from_tsv.py",
         "--full",
         str(tsv_path),
         "--json_out",
         str(json_path),
+        "--sid",
+        "sid-runpy",
     ]
     logging.basicConfig(level=logging.INFO)
     sys.modules.pop("backend.config", None)
@@ -559,12 +593,15 @@ def test_triad_stop_on_unlabeled_sentinels(tmp_path: Path, caplog) -> None:
     os.environ["RAW_TRIAD_FROM_X"] = "1"
     os.environ["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
     os.environ["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    os.environ[RUNS_ROOT_ENV] = str(tmp_path / "runs")
     sys.argv = [
         "split_accounts_from_tsv.py",
         "--full",
         str(tsv_path),
         "--json_out",
         str(json_path),
+        "--sid",
+        "sid-runpy",
     ]
     logging.basicConfig(level=logging.INFO)
     sys.modules.pop("backend.config", None)

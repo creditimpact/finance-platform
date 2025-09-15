@@ -2,7 +2,12 @@ import json
 import logging
 import os
 import runpy
+import uuid
 from pathlib import Path
+
+import pytest
+
+from backend.pipeline.runs import RUNS_ROOT_ENV
 
 
 def _write_tsv(path: Path) -> None:
@@ -31,7 +36,6 @@ def _write_tsv(path: Path) -> None:
 
 def test_anchor_with_multi_token_bureau_and_unicode_colon(tmp_path: Path, caplog):
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     _write_tsv(tsv_path)
 
     # Configure environment to enable triad-from-x and space-joining
@@ -39,12 +43,7 @@ def test_anchor_with_multi_token_bureau_and_unicode_colon(tmp_path: Path, caplog
     os.environ["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
     os.environ["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
 
-    # Run the script's main under caplog to capture diagnostic output
-    import scripts.split_accounts_from_tsv as mod  # type: ignore
-    with caplog.at_level(logging.INFO):
-        mod.main(["--full", str(tsv_path), "--json_out", str(json_path)])
-
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     acc = data["accounts"][0]
 
     # Assert no layout_mismatch stop on the anchor line
@@ -68,12 +67,46 @@ def test_anchor_with_multi_token_bureau_and_unicode_colon(tmp_path: Path, caplog
     assert "TRIAD_ANCHOR_COUNTS label=1" in caplog.text
 
 
-def _run_split(full: Path, out_json: Path, caplog):
-    import scripts.split_accounts_from_tsv as mod  # type: ignore
+@pytest.fixture(autouse=True)
+def _runs_root(tmp_path, monkeypatch):
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+
+
+def _run_split(full: Path, caplog, *, sid: str | None = None, extra_args: list[str] | None = None):
+    keys = [
+        "RAW_TRIAD_FROM_X",
+        "RAW_JOIN_TOKENS_WITH_SPACE",
+        "KEEP_PER_ACCOUNT_TSV",
+        "TRIAD_BAND_BY_X0",
+    ]
+    orig_env = {k: os.environ.get(k) for k in keys}
     os.environ["RAW_TRIAD_FROM_X"] = "1"
     os.environ["RAW_JOIN_TOKENS_WITH_SPACE"] = "1"
-    with caplog.at_level(logging.INFO):
-        mod.main(["--full", str(full), "--json_out", str(out_json)])
+    os.environ.setdefault("TRIAD_BAND_BY_X0", orig_env.get("TRIAD_BAND_BY_X0") or "0")
+    os.environ["KEEP_PER_ACCOUNT_TSV"] = "1"
+    import importlib
+
+    mod = importlib.import_module("scripts.split_accounts_from_tsv")
+    mod = importlib.reload(mod)
+    use_sid = sid or f"sid-{uuid.uuid4().hex}"
+    args = ["--full", str(full), "--sid", use_sid]
+    if extra_args:
+        args.extend(extra_args)
+    try:
+        with caplog.at_level(logging.INFO):
+            mod.main(args)
+    finally:
+        for key, value in orig_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    runs_root = Path(os.environ[RUNS_ROOT_ENV])
+    accounts_dir = runs_root / use_sid / "traces" / "accounts_table"
+    accounts_json = accounts_dir / "accounts_from_full.json"
+    data = json.loads(accounts_json.read_text())
+    return data, accounts_dir, use_sid
 
 
 def _csv_rows(path: Path) -> list[list[str]]:
@@ -133,7 +166,6 @@ def test_band_by_x0_three_values_single_line(tmp_path: Path, caplog):
     os.environ["TRIAD_BAND_BY_X0"] = "1"
     os.environ["TRIAD_TRACE_CSV"] = "1"
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     tu_left, xp_left, eq_left = 172.875, 309.0, 445.125
     extra = [
         # Labeled row values almost at the left cutoffs
@@ -143,8 +175,7 @@ def test_band_by_x0_three_values_single_line(tmp_path: Path, caplog):
         "1\t3\t30\t31\t445.1\t452\t$149,500\n",
     ]
     _write_x0_anchor_and_header(tsv_path, tu_left, xp_left, eq_left, extra)
-    _run_split(tsv_path, json_path, caplog)
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     fields = data["accounts"][0]["triad_fields"]
     assert fields["transunion"]["high_balance"] == "$149,500"
     assert fields["experian"]["high_balance"] == "$149,500"
@@ -152,7 +183,7 @@ def test_band_by_x0_three_values_single_line(tmp_path: Path, caplog):
     # no TU rescue logs
     assert "TRIAD_TU_RESCUE" not in caplog.text
     # trace used_axis should be x0
-    trace = tsv_path.parent / "per_account_tsv" / "_trace_account_1.csv"
+    trace = accounts_dir / "per_account_tsv" / "_trace_account_1.csv"
     rows = _csv_rows(trace)
     header = rows[0]
     used_axis_idx = header.index("used_axis")
@@ -163,7 +194,6 @@ def test_term_length_tu_360_by_x0(tmp_path: Path, caplog):
     os.environ["TRIAD_BAND_BY_X0"] = "1"
     os.environ["TRIAD_TRACE_CSV"] = "1"
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     tu_left, xp_left, eq_left = 172.875, 309.0, 445.125
     extra = [
         "1\t3\t30\t31\t0\t10\tTerm Length:\n",
@@ -172,8 +202,7 @@ def test_term_length_tu_360_by_x0(tmp_path: Path, caplog):
         "1\t3\t30\t31\t445.1\t452\t360\n",
     ]
     _write_x0_anchor_and_header(tsv_path, tu_left, xp_left, eq_left, extra)
-    _run_split(tsv_path, json_path, caplog)
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     fields = data["accounts"][0]["triad_fields"]
     assert fields["transunion"]["term_length"] == "360"
 
@@ -182,15 +211,13 @@ def test_tu_dash_rescue_by_x0(tmp_path: Path, caplog):
     os.environ["TRIAD_BAND_BY_X0"] = "1"
     os.environ["TRIAD_TRACE_CSV"] = "1"
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     tu_left, xp_left, eq_left = 172.875, 309.0, 445.125
     extra = [
         "1\t3\t30\t31\t0\t10\tHigh Balance:\n",
         f"1\t3\t30\t31\t{tu_left - 1.0}\t{tu_left - 0.5}\t--\n",
     ]
     _write_x0_anchor_and_header(tsv_path, tu_left, xp_left, eq_left, extra)
-    _run_split(tsv_path, json_path, caplog)
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     fields = data["accounts"][0]["triad_fields"]
     assert fields["transunion"]["high_balance"] == "--"
     assert "TRIAD_TU_RESCUE" in caplog.text
@@ -200,7 +227,6 @@ def test_wrapped_equifax_remarks_left_margin(tmp_path: Path, caplog):
     os.environ["TRIAD_BAND_BY_X0"] = "1"
     os.environ["TRIAD_TRACE_CSV"] = "1"
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     tu_left, xp_left, eq_left = 172.875, 309.0, 445.125
     extra = [
         # Line 1 values: only Equifax gets text
@@ -215,13 +241,12 @@ def test_wrapped_equifax_remarks_left_margin(tmp_path: Path, caplog):
         "1\t4\t40\t41\t40.0\t55\taccount\n",
     ]
     _write_x0_anchor_and_header(tsv_path, tu_left, xp_left, eq_left, extra)
-    _run_split(tsv_path, json_path, caplog)
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     fields = data["accounts"][0]["triad_fields"]
     val = fields["equifax"]["creditor_remarks"]
     assert val.endswith("Fannie Mae account")
     # Ensure no label-band tokens remain on continuation
-    trace = tsv_path.parent / "per_account_tsv" / "_trace_account_1.csv"
+    trace = accounts_dir / "per_account_tsv" / "_trace_account_1.csv"
     rows = _csv_rows(trace)
     header = rows[0]
     band_idx = header.index("band")
@@ -234,7 +259,6 @@ def test_label_break_then_values_on_next_line(tmp_path: Path, caplog):
     os.environ["TRIAD_BAND_BY_X0"] = "1"
     os.environ["TRIAD_TRACE_CSV"] = "1"
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     tu_left, xp_left, eq_left = 172.875, 309.0, 445.125
     extra = [
         # Label without suffix, ends before reaching TU x0
@@ -245,8 +269,7 @@ def test_label_break_then_values_on_next_line(tmp_path: Path, caplog):
         "1\t4\t40\t41\t445.2\t455\t$3000\n",
     ]
     _write_x0_anchor_and_header(tsv_path, tu_left, xp_left, eq_left, extra)
-    _run_split(tsv_path, json_path, caplog)
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     fields = data["accounts"][0]["triad_fields"]
     assert fields["transunion"]["high_balance"] == "$1000"
     assert fields["experian"]["high_balance"] == "$2000"
@@ -259,7 +282,6 @@ def test_balance_owed_wrap_tu_left_short_token(tmp_path: Path, caplog):
     os.environ["TRIAD_BAND_BY_X0"] = "1"
     os.environ["TRIAD_TRACE_CSV"] = "1"
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     tu_left, xp_left, eq_left = 172.875, 309.0, 445.125
     extra = [
         # Line 1: TU has value; XP/EQ empty makes last_bureau TU
@@ -269,12 +291,11 @@ def test_balance_owed_wrap_tu_left_short_token(tmp_path: Path, caplog):
         "1\t4\t40\t41\t10.0\t15\t$0\n",
     ]
     _write_x0_anchor_and_header(tsv_path, tu_left, xp_left, eq_left, extra)
-    _run_split(tsv_path, json_path, caplog)
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     fields = data["accounts"][0]["triad_fields"]
     assert fields["transunion"]["balance_owed"].endswith("$0")
     # Continuation should not leave band=label entries
-    trace = tsv_path.parent / "per_account_tsv" / "_trace_account_1.csv"
+    trace = accounts_dir / "per_account_tsv" / "_trace_account_1.csv"
     rows = _csv_rows(trace)
     header = rows[0]
     band_idx = header.index("band")
@@ -284,7 +305,6 @@ def test_balance_owed_wrap_tu_left_short_token(tmp_path: Path, caplog):
 
 def test_label_indented_in_label_band(tmp_path: Path, caplog):
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
     rows = [
         # Header with mids ~80/180/280
@@ -303,9 +323,7 @@ def test_label_indented_in_label_band(tmp_path: Path, caplog):
         "1\t3\t30\t31\t260\t300\t7000\n",
     ]
     tsv_path.write_text(header + "".join(rows), encoding="utf-8")
-    _run_split(tsv_path, json_path, caplog)
-
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     fields = data["accounts"][0]["triad_fields"]
     assert fields["transunion"]["high_balance"] == "5000"
     assert fields["experian"]["high_balance"] == "6000"
@@ -314,7 +332,7 @@ def test_label_indented_in_label_band(tmp_path: Path, caplog):
 
 def test_seam_tie_break_right_to_xp(tmp_path: Path, caplog):
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
+    os.environ["TRIAD_BAND_BY_X0"] = "0"
     header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
     rows = [
         # Header with TU mid 80, XP mid 180 -> b1 = 130
@@ -331,9 +349,7 @@ def test_seam_tie_break_right_to_xp(tmp_path: Path, caplog):
         "1\t3\t30\t31\t125\t135\tSEAM\n",
     ]
     tsv_path.write_text(header + "".join(rows), encoding="utf-8")
-    _run_split(tsv_path, json_path, caplog)
-
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     fields = data["accounts"][0]["triad_fields"]
     assert fields["transunion"].get("high_balance", "") in {"", None}
     assert fields["experian"]["high_balance"] == "SEAM"
@@ -342,7 +358,6 @@ def test_seam_tie_break_right_to_xp(tmp_path: Path, caplog):
 
 def test_unknown_label_skipped_then_next_known_parsed(tmp_path: Path, caplog):
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
     rows = [
         # Header with mids ~80/180/280
@@ -364,9 +379,7 @@ def test_unknown_label_skipped_then_next_known_parsed(tmp_path: Path, caplog):
         "1\t4\t40\t41\t260\t300\t7000\n",
     ]
     tsv_path.write_text(header + "".join(rows), encoding="utf-8")
-    _run_split(tsv_path, json_path, caplog)
-
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     fields = data["accounts"][0]["triad_fields"]
     assert fields["transunion"]["high_balance"] == "5000"
     assert fields["experian"]["high_balance"] == "6000"
@@ -375,8 +388,6 @@ def test_unknown_label_skipped_then_next_known_parsed(tmp_path: Path, caplog):
 
 def test_multitoken_high_balance_label_builds_and_maps(tmp_path: Path, caplog):
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
-    trace_dir = tmp_path / "per_account_tsv"
     os.environ["TRIAD_TRACE_CSV"] = "1"
 
     header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
@@ -399,15 +410,13 @@ def test_multitoken_high_balance_label_builds_and_maps(tmp_path: Path, caplog):
         "1\t3\t30\t31\t260\t300\t7000\n",
     ]
     tsv_path.write_text(header + "".join(rows), encoding="utf-8")
-    _run_split(tsv_path, json_path, caplog)
-
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     fields = data["accounts"][0]["triad_fields"]
     assert fields["transunion"]["high_balance"] == "5000"
     assert fields["experian"]["high_balance"] == "6000"
     assert fields["equifax"]["high_balance"] == "7000"
     # Trace: ensure label_key is resolved for labeled tokens
-    trace_files = list(trace_dir.glob("_trace_account_*.csv"))
+    trace_files = list((accounts_dir / "per_account_tsv").glob("_trace_account_*.csv"))
     assert trace_files, "trace CSV not found"
     import csv as _csv
     with trace_files[0].open("r", encoding="utf-8", newline="") as fh:
@@ -420,8 +429,6 @@ def test_multitoken_high_balance_label_builds_and_maps(tmp_path: Path, caplog):
 
 def test_multitoken_account_hash_label_builds_and_maps(tmp_path: Path, caplog):
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
-    trace_dir = tmp_path / "per_account_tsv"
     os.environ["TRIAD_TRACE_CSV"] = "1"
 
     header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
@@ -439,16 +446,14 @@ def test_multitoken_account_hash_label_builds_and_maps(tmp_path: Path, caplog):
         "1\t2\t20\t21\t260\t300\tEQ999\n",
     ]
     tsv_path.write_text(header + "".join(rows), encoding="utf-8")
-    _run_split(tsv_path, json_path, caplog)
-
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     fields = data["accounts"][0]["triad_fields"]
     assert fields["transunion"]["account_number_display"] == "TU999"
     assert fields["experian"]["account_number_display"] == "XP999"
     assert fields["equifax"]["account_number_display"] == "EQ999"
     # Trace
     import csv as _csv
-    trace_files = list(trace_dir.glob("_trace_account_*.csv"))
+    trace_files = list((accounts_dir / "per_account_tsv").glob("_trace_account_*.csv"))
     assert trace_files, "trace CSV not found"
     with trace_files[0].open("r", encoding="utf-8", newline="") as fh:
         rd = _csv.DictReader(fh)
@@ -458,7 +463,6 @@ def test_multitoken_account_hash_label_builds_and_maps(tmp_path: Path, caplog):
 
 def test_labeled_row_missing_bureau_value_is_kept(tmp_path: Path, caplog):
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
 
     header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
     rows = [
@@ -477,9 +481,7 @@ def test_labeled_row_missing_bureau_value_is_kept(tmp_path: Path, caplog):
         "1\t3\t30\t31\t260\t300\t7000\n",
     ]
     tsv_path.write_text(header + "".join(rows), encoding="utf-8")
-    _run_split(tsv_path, json_path, caplog)
-
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     acc = data["accounts"][0]
     fields = acc["triad_fields"]
     # triad_fields updated where present
@@ -494,7 +496,6 @@ def test_labeled_row_missing_bureau_value_is_kept(tmp_path: Path, caplog):
 
 def test_tu_value_near_label_rescued_high_balance(tmp_path: Path, caplog):
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
 
     header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
     rows = [
@@ -514,9 +515,7 @@ def test_tu_value_near_label_rescued_high_balance(tmp_path: Path, caplog):
         "1\t3\t30\t31\t260\t300\t$7000\n",
     ]
     tsv_path.write_text(header + "".join(rows), encoding="utf-8")
-    _run_split(tsv_path, json_path, caplog)
-
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     fields = data["accounts"][0]["triad_fields"]
     assert fields["transunion"]["high_balance"] == "$5000"
     assert fields["experian"]["high_balance"] == "$6000"
@@ -525,7 +524,6 @@ def test_tu_value_near_label_rescued_high_balance(tmp_path: Path, caplog):
 
 def test_tu_360_near_label_rescued_term_length(tmp_path: Path, caplog):
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
 
     header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
     rows = [
@@ -545,9 +543,7 @@ def test_tu_360_near_label_rescued_term_length(tmp_path: Path, caplog):
         "1\t3\t30\t31\t260\t280\t540\n",
     ]
     tsv_path.write_text(header + "".join(rows), encoding="utf-8")
-    _run_split(tsv_path, json_path, caplog)
-
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     fields = data["accounts"][0]["triad_fields"]
     assert fields["transunion"]["term_length"] == "360"
     assert fields["experian"]["term_length"] == "720"
@@ -556,7 +552,6 @@ def test_tu_360_near_label_rescued_term_length(tmp_path: Path, caplog):
 
 def test_creditor_type_left_tokens_rescued(tmp_path: Path, caplog):
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
 
     header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
     rows = [
@@ -576,9 +571,7 @@ def test_creditor_type_left_tokens_rescued(tmp_path: Path, caplog):
         "1\t3\t30\t31\t260\t300\tMortgage\n",
     ]
     tsv_path.write_text(header + "".join(rows), encoding="utf-8")
-    _run_split(tsv_path, json_path, caplog)
-
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     fields = data["accounts"][0]["triad_fields"]
     assert fields["transunion"]["creditor_type"] == "Bank"
     assert fields["experian"]["creditor_type"] == "Finance"
@@ -590,17 +583,15 @@ def test_triad_x0_fallback_and_h2y_bureau_line(tmp_path: Path, caplog):
     os.environ["TRIAD_TRACE_CSV"] = "1"
     os.environ["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
     tsv_path = tmp_path / "_debug_full.tsv"
-    json_path = tmp_path / "accounts_from_full.json"
     _write_no_label_anchor_with_h2y(tsv_path)
-    _run_split(tsv_path, json_path, caplog)
-    data = json.loads(json_path.read_text())
+    data, accounts_dir, _ = _run_split(tsv_path, caplog)
     acc = data["accounts"][0]
     fields = acc["triad_fields"]
     assert fields["experian"]["high_balance"] == "6000"
     assert acc["two_year_payment_history"]["experian"] == ["OK", "30", "60"]
     assert "TRIAD_X0_FALLBACK_OK" in caplog.text
     assert "layout_mismatch_anchor" not in caplog.text
-    trace = tsv_path.parent / "per_account_tsv" / "_trace_account_1.csv"
+    trace = accounts_dir / "per_account_tsv" / "_trace_account_1.csv"
     rows = _csv_rows(trace)
     header = rows[0]
     phase_idx = header.index("phase")

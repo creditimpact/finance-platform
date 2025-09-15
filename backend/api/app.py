@@ -18,6 +18,7 @@ import time
 import uuid
 from collections import defaultdict
 from pathlib import Path
+from shutil import copy2
 from typing import Any, Mapping
 
 from flask import Blueprint, Flask, jsonify, redirect, request, url_for
@@ -39,6 +40,7 @@ from backend.api.session_manager import (
 )
 from backend.api.tasks import run_credit_repair_process  # noqa: F401
 from backend.api.tasks import app as celery_app, smoke_task
+from backend.pipeline.runs import RunManifest
 from backend.api.routes_smoke import bp as smoke_bp
 from backend.api.ui_events import ui_event_bp
 from backend.core import orchestrators as orch
@@ -151,7 +153,7 @@ def start_process():
         upload_folder = os.path.join("uploads", session_id)
         os.makedirs(upload_folder, exist_ok=True)
 
-        original_name = uploaded_file.filename
+        original_name = uploaded_file.filename or "report.pdf"
         pdf_path = Path(upload_folder) / "smartcredit_report.pdf"
         uploaded_file.save(pdf_path)
 
@@ -172,10 +174,17 @@ def start_process():
                 print("File is not a valid PDF")
                 return jsonify({"status": "error", "message": "Invalid PDF file"}), 400
 
+        manifest = RunManifest.for_sid(session_id)
+        uploads_dir = manifest.ensure_run_subdir("uploads_dir", "uploads")
+        dst = (uploads_dir / pdf_path.name).resolve()
+        if pdf_path.resolve() != dst:
+            copy2(pdf_path, dst)
+        manifest.set_artifact("uploads", "smartcredit_report", dst)
+
         set_session(
             session_id,
             {
-                "file_path": str(pdf_path),
+                "file_path": str(dst),
                 "original_filename": original_name,
                 "email": email,
             },
@@ -304,11 +313,18 @@ def api_upload():
         if not pdf_path.exists():
             return jsonify({"ok": False, "message": "File upload failed"}), 400
 
+        manifest = RunManifest.for_sid(session_id)
+        uploads_dir = manifest.ensure_run_subdir("uploads_dir", "uploads")
+        dst = (uploads_dir / pdf_path.name).resolve()
+        if pdf_path.resolve() != dst:
+            copy2(pdf_path, dst)
+        manifest.set_artifact("uploads", "smartcredit_report", dst)
+
         # Persist initial session state
         set_session(
             session_id,
             {
-                "file_path": str(pdf_path),
+                "file_path": str(dst),
                 "original_filename": original_name,
                 "email": email,
                 "status": "queued",

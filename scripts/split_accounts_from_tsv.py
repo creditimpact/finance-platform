@@ -149,8 +149,6 @@ def _trace_token(
         )
 
 
-
-
 _triad_x0_fallback_logged: set[int] = set()
 
 STOP_MARKER_NORM = "publicinformation"
@@ -260,6 +258,7 @@ def _flush_history(account: Optional[dict], acc_two_year, acc_seven_year) -> Non
         "experian": acc_two_year.get("xp", []),
         "equifax": acc_two_year.get("eq", []),
     }
+
     def _seven(b: str) -> Dict[str, int]:
         src = acc_seven_year.get(b, {})
         return {k: int(src.get(k, 0)) for k in ("late30", "late60", "late90")}
@@ -321,17 +320,19 @@ def _history_trace(
     if not TRACE_ON or not _trace_wr:
         return
     txt = text if text else ("" if value is None else str(value))
-    _trace_wr.writerow([
-        page,
-        line,
-        "",
-        txt,
-        x0,
-        x1,
-        phase,
-        kind,
-        "",
-    ])
+    _trace_wr.writerow(
+        [
+            page,
+            line,
+            "",
+            txt,
+            x0,
+            x1,
+            phase,
+            kind,
+            "",
+        ]
+    )
 
 
 def _is_triad(text: str) -> bool:
@@ -749,10 +750,7 @@ def process_triad_labeled_line(
         # plain integers / with commas / with decimal
         return bool(re.match(r"^[0-9][0-9,]*(?:\.[0-9]+)?$", z))
 
-    if (
-        not vals["transunion"]
-        and (vals["experian"] or vals["equifax"])
-    ):
+    if not vals["transunion"] and (vals["experian"] or vals["equifax"]):
         tu_left = float(getattr(layout, "tu_band")[0])
         win_lo = tu_left - 10.0
         win_hi = tu_left + 2.0
@@ -1045,7 +1043,9 @@ def split_accounts(
     tokens_by_line, lines = _read_tokens(tsv_path)
     global trace_dir
     if TRACE_ON:
-        trace_dir = Path(os.getenv("TRACE_DIR") or (tsv_path.parent / "per_account_tsv"))
+        trace_dir = Path(
+            os.getenv("TRACE_DIR") or (tsv_path.parent / "per_account_tsv")
+        )
         trace_dir.mkdir(parents=True, exist_ok=True)
         logger.info("TRACE_DIR=%s", trace_dir.resolve())
 
@@ -1068,7 +1068,9 @@ def split_accounts(
         heading_sources.append(source)
 
     section_starts = [
-        i for i, line in enumerate(lines) if _norm_simple(line["text"]) in SECTION_STARTERS
+        i
+        for i, line in enumerate(lines)
+        if _norm_simple(line["text"]) in SECTION_STARTERS
     ]
     section_prefix_flags = [False] * len(account_starts)
     sections: List[str | None] = [None] * len(account_starts)
@@ -1179,9 +1181,7 @@ def split_accounts(
                 if not in_h7y:
                     if H7Y_TITLE_PAT.search(line_text_norm):
                         h7y_title_seen = True
-                    elif h7y_title_seen and all(
-                        b.lower() in s for b in H7Y_BUREAUS
-                    ):
+                    elif h7y_title_seen and all(b.lower() in s for b in H7Y_BUREAUS):
                         mids: Dict[str, float] = {}
                         for t in toks:
                             txt_norm = _norm(str(t.get("text", ""))).casefold()
@@ -1284,6 +1284,7 @@ def split_accounts(
                         )
                         in_h7y = False
                         h7y_slabs = None
+                        last_key = {"tu": None, "xp": None, "eq": None}
                         _flush_history(history_out, acc_two_year, acc_seven_year)
 
                 # --- per-token history processing (observer, no continue) ---
@@ -1293,7 +1294,11 @@ def split_accounts(
 
                     if in_h2y:
                         b = _bureau_key(txt)
-                        if b and txt.casefold() in {"transunion", "experian", "equifax"}:
+                        if b and txt.casefold() in {
+                            "transunion",
+                            "experian",
+                            "equifax",
+                        }:
                             current_bureau = b
                             logger.info("H2Y_SET_BUREAU bureau=%s", b.upper())
                         elif current_bureau and H2Y_STATUS_RE.match(txt.casefold()):
@@ -1816,13 +1821,19 @@ def split_accounts(
                     [t.get("text", "") for t in band_tokens["label"]]
                 ).strip()
                 tu_val = _clean_value(
-                    join_tokens_with_space([t.get("text", "") for t in band_tokens["tu"]]).strip()
+                    join_tokens_with_space(
+                        [t.get("text", "") for t in band_tokens["tu"]]
+                    ).strip()
                 )
                 xp_val = _clean_value(
-                    join_tokens_with_space([t.get("text", "") for t in band_tokens["xp"]]).strip()
+                    join_tokens_with_space(
+                        [t.get("text", "") for t in band_tokens["xp"]]
+                    ).strip()
                 )
                 eq_val = _clean_value(
-                    join_tokens_with_space([t.get("text", "") for t in band_tokens["eq"]]).strip()
+                    join_tokens_with_space(
+                        [t.get("text", "") for t in band_tokens["eq"]]
+                    ).strip()
                 )
                 has_tu = bool(tu_val)
                 has_xp = bool(xp_val)
@@ -2055,6 +2066,7 @@ def split_accounts(
             )
             in_h7y = False
             h7y_slabs = None
+            last_key = {"tu": None, "xp": None, "eq": None}
 
         _flush_history(history_out, acc_two_year, acc_seven_year)
 
@@ -2133,7 +2145,8 @@ def main(argv: List[str] | None = None) -> None:
         bad_last = [
             a["account_index"]
             for a in accounts
-            if a.get("lines") and _norm_simple(a["lines"][-1]["text"]) in SECTION_STARTERS
+            if a.get("lines")
+            and _norm_simple(a["lines"][-1]["text"]) in SECTION_STARTERS
         ]
         print(f"Total accounts: {total}")
         print(f"collections: {collections} unknown: {unknown} regular: {regular}")

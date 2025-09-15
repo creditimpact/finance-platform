@@ -1319,8 +1319,10 @@ def split_accounts(
                                 mid_x=_triad_mid_x(t),
                             )
 
-                    if in_h7y and h7y_slabs:
-                        mx = None
+                if in_h7y and h7y_slabs:
+                    for t in toks:
+                        raw = str(t.get("text", "")).strip()
+                        mx: float | None = None
                         try:
                             mx = _triad_mid_x(t)
                         except Exception:
@@ -1331,75 +1333,87 @@ def split_accounts(
                             except Exception:
                                 mx = None
                         b = _slab_of(mx, h7y_slabs)
-                        if b:
-                            _trace_write(
+                        if not b:
+                            continue
+
+                        m = LATE_KEY_PAT.match(raw)
+                        if m:
+                            key = m.group(1)
+                            inline_val = m.group(2)
+                            _history_trace(
+                                t.get("page"),
+                                t.get("line"),
                                 phase="history7y",
-                                bureau=b,
-                                page=line["page"],
-                                line=line["line"],
-                                text=txt_raw,
+                                text=raw,
+                                kind=f"key:{key}",
                                 x0=t.get("x0"),
                                 x1=t.get("x1"),
-                                mid_x=mx,
                             )
-                            m = LATE_KEY_PAT.match(txt_raw)
-                            if m:
-                                key = m.group(1)
-                                inline_val = m.group(2)
-                                last_key[b] = f"late{key}"
-                                logger.info(
-                                    "H7Y_KEY bureau=%s key=%s", b.upper(), key
-                                )
+                            logger.info("H7Y_KEY bureau=%s key=%s", b.upper(), key)
+
+                            if inline_val is not None:
+                                v = int(inline_val)
+                                acc_seven_year[b][f"late{key}"] = v
                                 _history_trace(
-                                    line["page"],
-                                    line["line"],
+                                    t.get("page"),
+                                    t.get("line"),
                                     phase="history7y",
-                                    kind=f"{b}_late{key}",
-                                    text="KEY",
+                                    kind=f"late{key}",
+                                    value=v,
+                                    x0=t.get("x0"),
+                                    x1=t.get("x1"),
                                 )
-                                if inline_val is not None or (
-                                    ":" in txt_raw
-                                    and DASH_PAT.match(txt_raw.split(":", 1)[1].strip())
-                                ):
-                                    v = int(inline_val) if inline_val is not None else 0
-                                    acc_seven_year[b][f"late{key}"] = v
-                                    logger.info(
-                                        "H7Y_VALUE bureau=%s kind=late%s value=%d",
-                                        b.upper(),
-                                        key,
-                                        v,
-                                    )
-                                    _history_trace(
-                                        line["page"],
-                                        line["line"],
-                                        phase="history7y",
-                                        kind=f"{b}_late{key}",
-                                        value=v,
-                                    )
-                                    last_key[b] = None
+                                logger.info(
+                                    "H7Y_VALUE bureau=%s kind=late%s value=%d",
+                                    b.upper(),
+                                    key,
+                                    v,
+                                )
+                                last_key[b] = None
+                            else:
+                                last_key[b] = key
+                            continue
+
+                        if last_key[b]:
+                            if INT_PAT.match(raw):
+                                v = int(raw)
+                                acc_seven_year[b][f"late{last_key[b]}"] = v
+                                _history_trace(
+                                    t.get("page"),
+                                    t.get("line"),
+                                    phase="history7y",
+                                    kind=f"late{last_key[b]}",
+                                    value=v,
+                                    x0=t.get("x0"),
+                                    x1=t.get("x1"),
+                                )
+                                logger.info(
+                                    "H7Y_VALUE bureau=%s kind=late%s value=%d",
+                                    b.upper(),
+                                    last_key[b],
+                                    v,
+                                )
+                                last_key[b] = None
                                 continue
-                            if last_key[b]:
-                                if INT_PAT.match(txt_raw) or DASH_PAT.match(txt_raw):
-                                    k = last_key[b][-2:]
-                                    v = int(txt_raw) if INT_PAT.match(txt_raw) else 0
-                                    acc_seven_year[b][f"late{k}"] = v
-                                    logger.info(
-                                        "H7Y_VALUE bureau=%s kind=late%s value=%d",
-                                        b.upper(),
-                                        k,
-                                        v,
-                                    )
-                                    _history_trace(
-                                        t.get("page"),
-                                        t.get("line"),
-                                        phase="history7y",
-                                        kind=f"{b}_{last_key[b]}",
-                                        value=v,
-                                        x0=t.get("x0"),
-                                        x1=t.get("x1"),
-                                    )
-                                    last_key[b] = None
-                                    continue
+                            if DASH_PAT.match(raw):
+                                acc_seven_year[b][f"late{last_key[b]}"] = 0
+                                _history_trace(
+                                    t.get("page"),
+                                    t.get("line"),
+                                    phase="history7y",
+                                    kind=f"late{last_key[b]}",
+                                    value=0,
+                                    x0=t.get("x0"),
+                                    x1=t.get("x1"),
+                                )
+                                logger.info(
+                                    "H7Y_VALUE bureau=%s kind=late%s value=%d",
+                                    b.upper(),
+                                    last_key[b],
+                                    0,
+                                )
+                                last_key[b] = None
+                                continue
 
                 if bare in BARE_BUREAUS:
                     triad_log(

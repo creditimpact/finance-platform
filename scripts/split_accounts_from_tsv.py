@@ -2189,15 +2189,9 @@ def main(argv: List[str] | None = None) -> None:
         action="store_true",
         help="Print a summary of accounts per section",
     )
-    ap.add_argument("--sid", help="Run identifier for manifest registration")
-    ap.add_argument(
-        "--manifest",
-        help="Path to runs/<SID>/manifest.json (overrides RUNS_ROOT lookup)",
-    )
-    ap.add_argument(
-        "--general_out",
-        help="Path to write general_info_from_full.json if it is missing",
-    )
+    ap.add_argument("--sid", help="Run SID for registry")
+    ap.add_argument("--manifest", help="Path to runs/<SID>/manifest.json")
+    ap.add_argument("--general_out", help="Path for general_info_from_full.json")
     args = ap.parse_args(argv)
 
     tsv_path = Path(args.full)

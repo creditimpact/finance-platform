@@ -1,3 +1,4 @@
+import scripts._bootstrap  # KEEP FIRST
 #!/usr/bin/env python3
 """Debug CLI for interacting with run manifests.
 

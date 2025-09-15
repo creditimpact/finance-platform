@@ -1,4 +1,14 @@
-import scripts._bootstrap  # KEEP FIRST
+try:  # pragma: no cover - import shim
+    import scripts._bootstrap  # KEEP FIRST
+except ModuleNotFoundError:  # pragma: no cover - fallback for direct execution
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _repo_root = _Path(__file__).resolve().parent.parent
+    if str(_repo_root) not in _sys.path:
+        _sys.path.insert(0, str(_repo_root))
+    import scripts._bootstrap  # type: ignore  # KEEP FIRST
+
 #!/usr/bin/env python3
 """Debug CLI for interacting with run manifests.
 
@@ -6,7 +16,6 @@ This utility mirrors ``scripts/run_manifest.py`` but under a more explicit name
 and with an extra ``print`` command that dumps the manifest JSON.  It operates
 on the global run registry located under ``runs/<SID>/manifest.json``.
 """
-from __future__ import annotations
 
 import argparse
 import json

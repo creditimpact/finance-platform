@@ -1,3 +1,14 @@
+try:  # pragma: no cover - import shim
+    import scripts._bootstrap  # KEEP FIRST
+except ModuleNotFoundError:  # pragma: no cover - fallback for direct execution
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _repo_root = _Path(__file__).resolve().parent.parent
+    if str(_repo_root) not in _sys.path:
+        _sys.path.insert(0, str(_repo_root))
+    import scripts._bootstrap  # type: ignore  # KEEP FIRST
+
 #!/usr/bin/env python3
 """Split accounts from a full token TSV dump.
 
@@ -6,9 +17,6 @@ account boundaries based on lines that contain the exact string ``Account #``.
 Each account is emitted to a structured JSON file and, optionally, into
 individual TSV files for debugging.
 """
-from __future__ import annotations
-
-import scripts._bootstrap  # KEEP FIRST
 
 import argparse
 import csv

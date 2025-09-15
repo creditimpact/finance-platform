@@ -60,8 +60,20 @@ class RunManifest:
             "sid": sid,
             "created_at": _utc_now(),
             "status": "in_progress",
-            "base_dirs": {},
-            "artifacts": {},
+            "base_dirs": {
+                "uploads_dir": None,
+                "traces_dir": None,
+                "cases_dir": None,
+                "exports_dir": None,
+                "logs_dir": None,
+            },
+            "artifacts": {
+                "uploads": {},
+                "traces": {"accounts_table": {}},
+                "cases": {},
+                "exports": {},
+                "logs": {},
+            },
             "env_snapshot": {}
         }
         self._update_index(sid)
@@ -105,17 +117,29 @@ class RunManifest:
         return self.save()
 
     def set_base_dir(self, label: str, path: Path) -> "RunManifest":
-        self.data["base_dirs"][label] = str(Path(path).resolve())
+        resolved = Path(path).resolve()
+        self.data.setdefault("base_dirs", {})[label] = str(resolved)
         return self.save()
 
     def set_artifact(self, group: str, key: str, value: Path | str) -> "RunManifest":
-        self.data.setdefault("artifacts", {}).setdefault(group, {})
+        artifacts = self.data.setdefault("artifacts", {})
         # nested group keys like "traces.accounts_table"
-        cursor = self.data["artifacts"]
+        cursor = artifacts
         for part in group.split("."):
             cursor = cursor.setdefault(part, {})
         cursor[key] = str(Path(value).resolve())
         return self.save()
+
+    def ensure_run_subdir(self, label: str, rel: str) -> Path:
+        """
+        Ensure runs/<SID>/<rel> exists, register it as ``base_dirs[label]``,
+        and return the absolute :class:`~pathlib.Path`.
+        """
+
+        base = (self.path.parent / rel).resolve()
+        base.mkdir(parents=True, exist_ok=True)
+        self.set_base_dir(label, base)
+        return base
 
     def get(self, group: str, key: str) -> str:
         cursor = self.data.get("artifacts", {})

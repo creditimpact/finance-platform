@@ -9,7 +9,7 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
     """Smoke test for :func:`build_problem_cases`.
 
     The builder should read a sample ``accounts_from_full.json`` file and
-    generate the expected output structure under ``cases/``.
+    generate the expected output structure under ``runs/<sid>/cases/``.
     """
 
     sid = "S123"
@@ -52,15 +52,17 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
     ]
     summary = build_problem_cases(sid, candidates=candidates, root=tmp_path)
 
+    cases_dir = runs_root / sid / "cases"
+
     # Validate index.json was written with correct counts
-    index_path = tmp_path / "cases" / sid / "index.json"
+    index_path = cases_dir / "index.json"
     assert index_path.exists()
     index = json.loads(index_path.read_text())
     assert index["total"] == len(accounts)
     assert index["problematic"] == 1
 
     # Ensure at least one account case file exists with problem details
-    acc_dir = tmp_path / "cases" / sid / "accounts"
+    acc_dir = cases_dir / "accounts"
     files = list(acc_dir.glob("*.json"))
     assert files, "expected at least one account case file"
     case_data = json.loads(files[0].read_text())
@@ -70,22 +72,21 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
     assert summary["total"] == len(accounts)
     assert summary["problematic"] == 1
 
-    out_dir = tmp_path / "cases" / sid
     assert any(
-        f"PROBLEM_CASES start sid={sid} total={len(accounts)} out={out_dir}" in m
+        f"PROBLEM_CASES start sid={sid} total={len(accounts)} out={cases_dir}" in m
         for m in caplog.messages
     )
     assert any(
-        f"PROBLEM_CASES done sid={sid} total={len(accounts)} problematic=1 out={out_dir}"
+        f"PROBLEM_CASES done sid={sid} total={len(accounts)} problematic=1 out={cases_dir}"
         in m
         for m in caplog.messages
     )
 
     # Run manifest registration and breadcrumb
     m = RunManifest.for_sid(sid)
-    assert m.data["base_dirs"]["cases_dir"] == str(out_dir.resolve())
-    assert m.get("cases", "case_dir") == str(out_dir.resolve())
-    breadcrumb = out_dir / ".manifest"
+    assert m.data["base_dirs"]["cases_dir"] == str(cases_dir.resolve())
+    assert m.get("cases", "case_dir") == str(cases_dir.resolve())
+    breadcrumb = cases_dir / ".manifest"
     assert breadcrumb.read_text() == str(m.path.resolve())
 
 
@@ -99,25 +100,26 @@ def test_problem_case_builder_missing_accounts(tmp_path, caplog, monkeypatch):
     summary = build_problem_cases(sid, root=tmp_path)
 
     # Index should be written with zero counts
-    index_path = tmp_path / "cases" / sid / "index.json"
+    cases_dir = runs_root / sid / "cases"
+
+    index_path = cases_dir / "index.json"
     assert index_path.exists()
     index = json.loads(index_path.read_text())
     assert index["total"] == 0 and index["problematic"] == 0
     assert summary["total"] == 0 and summary["problematic"] == 0
 
-    out_dir = tmp_path / "cases" / sid
     assert any(
-        f"PROBLEM_CASES start sid={sid} total=0 out={out_dir}" in m
+        f"PROBLEM_CASES start sid={sid} total=0 out={cases_dir}" in m
         for m in caplog.messages
     )
     assert any(
-        f"PROBLEM_CASES done sid={sid} total=0 problematic=0 out={out_dir}" in m
+        f"PROBLEM_CASES done sid={sid} total=0 problematic=0 out={cases_dir}" in m
         for m in caplog.messages
     )
 
     # manifest and breadcrumb should still be written
     m = RunManifest.for_sid(sid)
-    assert m.data["base_dirs"]["cases_dir"] == str(out_dir.resolve())
-    assert m.get("cases", "case_dir") == str(out_dir.resolve())
-    breadcrumb = out_dir / ".manifest"
+    assert m.data["base_dirs"]["cases_dir"] == str(cases_dir.resolve())
+    assert m.get("cases", "case_dir") == str(cases_dir.resolve())
+    breadcrumb = cases_dir / ".manifest"
     assert breadcrumb.read_text() == str(m.path.resolve())

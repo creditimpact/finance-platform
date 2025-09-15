@@ -2,7 +2,7 @@
 
 This module exposes :func:`build_problem_cases` which, given a list of
 candidate accounts, writes one JSON file per account under
-``cases/<sid>/accounts`` and creates a summary ``index.json`` for the
+``runs/<sid>/cases/accounts`` and creates a summary ``index.json`` for the
 session.  The builder is intentionally dumb – it does not attempt to
 determine which accounts are problematic; that decision must be supplied
 via ``candidates``.
@@ -147,18 +147,15 @@ def build_problem_cases(
     total = len(accounts)
     lookup = _build_account_lookup(accounts)
 
-    out_dir = root_path / "cases" / sid
-    accounts_dir = out_dir / "accounts"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    accounts_dir.mkdir(parents=True, exist_ok=True)
-
-    # register directory in global run manifest and leave breadcrumb
+    # Register the cases directory under the run root and ensure it exists
     m = RunManifest.for_sid(sid)
-    m.set_base_dir("cases_dir", out_dir)
-    m.set_artifact("cases", "case_dir", out_dir)
-    write_breadcrumb(m.path, out_dir / ".manifest")
+    cases_dir = m.ensure_run_subdir("cases_dir", "cases")
+    accounts_dir = cases_dir / "accounts"
+    accounts_dir.mkdir(parents=True, exist_ok=True)
+    m.set_artifact("cases", "case_dir", cases_dir)
+    write_breadcrumb(m.path, cases_dir / ".manifest")
 
-    logger.info("PROBLEM_CASES start sid=%s total=%s out=%s", sid, total, out_dir)
+    logger.info("PROBLEM_CASES start sid=%s total=%s out=%s", sid, total, cases_dir)
 
     for cand in candidates or []:
         if not isinstance(cand, Mapping):
@@ -195,7 +192,7 @@ def build_problem_cases(
         "problematic": len(cand_list),
         "problematic_accounts": [c.get("account_id") for c in cand_list],
     }
-    (out_dir / "index.json").write_text(
+    (cases_dir / "index.json").write_text(
         json.dumps(index_data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
 
@@ -204,14 +201,14 @@ def build_problem_cases(
         sid,
         total,
         len(cand_list),
-        out_dir,
+        cases_dir,
     )
 
     return {
         "sid": sid,
         "total": total,
         "problematic": len(cand_list),
-        "out": str(out_dir),
+        "out": str(cases_dir),
     }
 
 

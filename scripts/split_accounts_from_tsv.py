@@ -249,6 +249,115 @@ def _slab_of(
     return None
 
 
+def _process_h7y_token(
+    t: dict,
+    slabs: Dict[str, Tuple[float, float]] | None,
+    acc_seven_year: Dict[str, Dict[str, int]],
+    last_key: Dict[str, Optional[str]],
+) -> None:
+    """Process a token within the 7-year history block.
+
+    Assigns counts to ``acc_seven_year`` based on the token's horizontal
+    position and updates ``last_key``. Also emits trace rows and debug logs.
+    """
+    if slabs is None:
+        return
+    raw = str(t.get("text", ""))
+    clean = _clean_value(raw)
+    mx: float | None
+    try:
+        mx = _triad_mid_x(t)
+    except Exception:
+        mx = None
+    if mx is None:
+        try:
+            mx = float(t.get("x0"))
+        except Exception:
+            mx = None
+    b = _slab_of(mx, slabs)
+    if not b:
+        return
+
+    m = LATE_KEY_PAT.match(raw)
+    if m:
+        key = m.group(1)
+        inline_val = m.group(2)
+        _history_trace(
+            t.get("page"),
+            t.get("line"),
+            phase="history7y",
+            text=raw,
+            kind=f"key:{key}",
+            x0=t.get("x0"),
+            x1=t.get("x1"),
+        )
+        logger.info("H7Y_KEY bureau=%s key=%s", b.upper(), key)
+        if inline_val is not None:
+            v = int(inline_val)
+            acc_seven_year[b][f"late{key}"] = v
+            _history_trace(
+                t.get("page"),
+                t.get("line"),
+                phase="history7y",
+                kind=f"late{key}",
+                value=v,
+                x0=t.get("x0"),
+                x1=t.get("x1"),
+            )
+            logger.info(
+                "H7Y_VALUE bureau=%s kind=late%s value=%d",
+                b.upper(),
+                key,
+                v,
+            )
+            last_key[b] = None
+        else:
+            last_key[b] = key
+        return
+
+    if last_key[b]:
+        key = last_key[b]
+        if INT_PAT.match(raw):
+            v = int(raw)
+            acc_seven_year[b][f"late{key}"] = v
+            _history_trace(
+                t.get("page"),
+                t.get("line"),
+                phase="history7y",
+                kind=f"late{key}",
+                value=v,
+                x0=t.get("x0"),
+                x1=t.get("x1"),
+            )
+            logger.info(
+                "H7Y_VALUE bureau=%s kind=late%s value=%d",
+                b.upper(),
+                key,
+                v,
+            )
+            last_key[b] = None
+            return
+        if DASH_PAT.match(clean):
+            acc_seven_year[b][f"late{key}"] = 0
+            _history_trace(
+                t.get("page"),
+                t.get("line"),
+                phase="history7y",
+                kind=f"late{key}",
+                value=0,
+                x0=t.get("x0"),
+                x1=t.get("x1"),
+            )
+            logger.info(
+                "H7Y_VALUE bureau=%s kind=late%s value=%d",
+                b.upper(),
+                key,
+                0,
+            )
+            last_key[b] = None
+
+
+
 def _flush_history(account: Optional[dict], acc_two_year, acc_seven_year) -> None:
     """Attach buffered history to ``account`` if provided."""
     if account is None:
@@ -1183,14 +1292,45 @@ def split_accounts(
                         h7y_title_seen = True
                     elif h7y_title_seen and all(b.lower() in s for b in H7Y_BUREAUS):
                         mids: Dict[str, float] = {}
-                        for t in toks:
+                        idxs: Dict[str, int] = {}
+                        for idx_t, t in enumerate(toks):
                             txt_norm = _norm(str(t.get("text", ""))).casefold()
                             if txt_norm.startswith("transunion"):
                                 mids["tu"] = _triad_mid_x(t)
+                                idxs["tu"] = idx_t
+                                _history_trace(
+                                    t.get("page"),
+                                    t.get("line"),
+                                    phase="history7y",
+                                    text=str(t.get("text", "")),
+                                    kind="slab:tu",
+                                    x0=t.get("x0"),
+                                    x1=t.get("x1"),
+                                )
                             elif txt_norm.startswith("experian"):
                                 mids["xp"] = _triad_mid_x(t)
+                                idxs["xp"] = idx_t
+                                _history_trace(
+                                    t.get("page"),
+                                    t.get("line"),
+                                    phase="history7y",
+                                    text=str(t.get("text", "")),
+                                    kind="slab:xp",
+                                    x0=t.get("x0"),
+                                    x1=t.get("x1"),
+                                )
                             elif txt_norm.startswith("equifax"):
                                 mids["eq"] = _triad_mid_x(t)
+                                idxs["eq"] = idx_t
+                                _history_trace(
+                                    t.get("page"),
+                                    t.get("line"),
+                                    phase="history7y",
+                                    text=str(t.get("text", "")),
+                                    kind="slab:eq",
+                                    x0=t.get("x0"),
+                                    x1=t.get("x1"),
+                                )
                         if len(mids) == 3:
                             h7y_slabs = {
                                 "tu": (0.0, mids["xp"]),
@@ -1208,6 +1348,14 @@ def split_accounts(
                                 h7y_slabs["eq"][0],
                             )
                             h7y_title_seen = False
+                            start_idx = max(idxs.values()) + 1
+                            for t in toks[start_idx:]:
+                                _process_h7y_token(
+                                    t,
+                                    h7y_slabs,
+                                    acc_seven_year,
+                                    last_key,
+                                )
                             continue
                         else:
                             # header not clean → do not enter in_h7y
@@ -1326,99 +1474,7 @@ def split_accounts(
 
                 if in_h7y and h7y_slabs:
                     for t in toks:
-                        raw = str(t.get("text", "")).strip()
-                        mx: float | None = None
-                        try:
-                            mx = _triad_mid_x(t)
-                        except Exception:
-                            mx = None
-                        if mx is None:
-                            try:
-                                mx = float(t.get("x0"))
-                            except Exception:
-                                mx = None
-                        b = _slab_of(mx, h7y_slabs)
-                        if not b:
-                            continue
-
-                        m = LATE_KEY_PAT.match(raw)
-                        if m:
-                            key = m.group(1)
-                            inline_val = m.group(2)
-                            _history_trace(
-                                t.get("page"),
-                                t.get("line"),
-                                phase="history7y",
-                                text=raw,
-                                kind=f"key:{key}",
-                                x0=t.get("x0"),
-                                x1=t.get("x1"),
-                            )
-                            logger.info("H7Y_KEY bureau=%s key=%s", b.upper(), key)
-
-                            if inline_val is not None:
-                                v = int(inline_val)
-                                acc_seven_year[b][f"late{key}"] = v
-                                _history_trace(
-                                    t.get("page"),
-                                    t.get("line"),
-                                    phase="history7y",
-                                    kind=f"late{key}",
-                                    value=v,
-                                    x0=t.get("x0"),
-                                    x1=t.get("x1"),
-                                )
-                                logger.info(
-                                    "H7Y_VALUE bureau=%s kind=late%s value=%d",
-                                    b.upper(),
-                                    key,
-                                    v,
-                                )
-                                last_key[b] = None
-                            else:
-                                last_key[b] = key
-                            continue
-
-                        if last_key[b]:
-                            if INT_PAT.match(raw):
-                                v = int(raw)
-                                acc_seven_year[b][f"late{last_key[b]}"] = v
-                                _history_trace(
-                                    t.get("page"),
-                                    t.get("line"),
-                                    phase="history7y",
-                                    kind=f"late{last_key[b]}",
-                                    value=v,
-                                    x0=t.get("x0"),
-                                    x1=t.get("x1"),
-                                )
-                                logger.info(
-                                    "H7Y_VALUE bureau=%s kind=late%s value=%d",
-                                    b.upper(),
-                                    last_key[b],
-                                    v,
-                                )
-                                last_key[b] = None
-                                continue
-                            if DASH_PAT.match(raw):
-                                acc_seven_year[b][f"late{last_key[b]}"] = 0
-                                _history_trace(
-                                    t.get("page"),
-                                    t.get("line"),
-                                    phase="history7y",
-                                    kind=f"late{last_key[b]}",
-                                    value=0,
-                                    x0=t.get("x0"),
-                                    x1=t.get("x1"),
-                                )
-                                logger.info(
-                                    "H7Y_VALUE bureau=%s kind=late%s value=%d",
-                                    b.upper(),
-                                    last_key[b],
-                                    0,
-                                )
-                                last_key[b] = None
-                                continue
+                        _process_h7y_token(t, h7y_slabs, acc_seven_year, last_key)
 
                 if bare in BARE_BUREAUS:
                     triad_log(

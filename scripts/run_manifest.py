@@ -1,10 +1,19 @@
-import scripts._bootstrap  # KEEP FIRST
+try:  # pragma: no cover - import shim
+    import scripts._bootstrap  # KEEP FIRST
+except ModuleNotFoundError:  # pragma: no cover - fallback for direct execution
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _repo_root = _Path(__file__).resolve().parent.parent
+    if str(_repo_root) not in _sys.path:
+        _sys.path.insert(0, str(_repo_root))
+    import scripts._bootstrap  # type: ignore  # KEEP FIRST
+
 #!/usr/bin/env python3
 """CLI helpers for interacting with run manifests.
 
 Allows ops to set or get artifact paths in the global run registry.
 """
-from __future__ import annotations
 
 import argparse
 from pathlib import Path

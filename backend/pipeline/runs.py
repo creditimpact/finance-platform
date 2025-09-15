@@ -38,6 +38,21 @@ class RunManifest:
         newest = max(map(Path, cands), key=lambda x: x.stat().st_mtime)
         return RunManifest(newest).load()
 
+    @staticmethod
+    def load_or_create(path: Path, sid: str | None = None) -> "RunManifest":
+        """Load an existing manifest at ``path`` or create a new one."""
+
+        manifest = RunManifest(path)
+        if path.exists():
+            return manifest.load()
+
+        effective_sid = sid or path.parent.name
+        if not effective_sid:
+            raise ValueError("sid is required to create a new manifest")
+
+        manifest.path.parent.mkdir(parents=True, exist_ok=True)
+        return manifest._load_or_create(effective_sid)
+
     def _load_or_create(self, sid: str) -> "RunManifest":
         if self.path.exists():
             return self.load()

@@ -35,6 +35,7 @@ from backend.api.config import (
 from backend.api.session_manager import update_session
 from backend.assets.paths import templates_path
 from backend.audit.audit import AuditLevel
+from backend.pipeline.runs import RunManifest
 from backend.core.case_store.api import get_account_case, list_accounts
 from backend.core.case_store.errors import CaseStoreError
 from backend.core.case_store.models import AccountCase
@@ -574,6 +575,7 @@ def analyze_credit_report(
     audit,
     log_messages,
     ai_client: AIClient | None = None,
+    manifest: RunManifest | None = None,
 ):
     """Ingest and analyze the client's credit report."""
     from backend.api.session_manager import update_session
@@ -700,7 +702,13 @@ def analyze_credit_report(
     safe_name = (
         (client_info.get("name") or "Client").replace(" ", "_").replace("/", "_")
     )
-    today_folder = Path(f"Clients/{get_current_month()}/{safe_name}_{session_id}")
+    month_component = get_current_month()
+    if manifest is not None:
+        exports_root = manifest.ensure_run_subdir("exports_dir", "exports")
+        base_folder = exports_root / month_component
+    else:
+        base_folder = Path("Clients") / month_component
+    today_folder = base_folder / f"{safe_name}_{session_id}"
     today_folder.mkdir(parents=True, exist_ok=True)
     log_messages.append(f"[INFO] Client folder created at: {today_folder}")
     if audit.level == AuditLevel.VERBOSE:
@@ -1169,10 +1177,19 @@ Best regards,
     audit.log_step("process_completed")
 
 
-def save_log_file(client_info, is_identity_theft, output_folder, log_lines):
+def save_log_file(
+    client_info,
+    is_identity_theft,
+    output_folder,
+    log_lines,
+    manifest: RunManifest | None = None,
+) -> Path:
     """Persist a human-readable log of pipeline activity."""
-    logs_dir = Path("logs")
-    logs_dir.mkdir(exist_ok=True)
+    if manifest is not None:
+        logs_dir = manifest.ensure_run_subdir("logs_dir", "logs")
+    else:
+        logs_dir = Path("logs")
+        logs_dir.mkdir(exist_ok=True)
     client_name = client_info.get("name", "Unknown").replace(" ", "_")
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     log_filename = f"{timestamp}_{client_name}.txt"
@@ -1191,6 +1208,10 @@ def save_log_file(client_info, is_identity_theft, output_folder, log_lines):
     with open(log_path, mode="w", encoding="utf-8") as f:
         f.write("\n".join(header + log_lines))
     print(f"[INFO] Log saved: {log_path}")
+    if manifest is not None:
+        manifest.set_artifact("logs", "run_log", log_path)
+
+    return log_path
 
 
 def run_credit_repair_process(
@@ -1217,6 +1238,7 @@ def run_credit_repair_process(
     today_folder: Path | None = None
     pdf_path: Path | None = None
     session_id = client_info.get("session_id", "session")
+    manifest: RunManifest | None = RunManifest.for_sid(session_id)
     from backend.audit.audit import create_audit_logger
     from backend.core.services.ai_client import build_ai_client
 
@@ -1230,13 +1252,21 @@ def run_credit_repair_process(
         audit.log_step("process_started", {"is_identity_theft": is_identity_theft})
 
         session_id, structured_map, raw_map = process_client_intake(client_info, audit)
+        if manifest is None or manifest.sid != session_id:
+            manifest = RunManifest.for_sid(session_id)
         os.environ["SESSION_ID"] = session_id
         classification_map = classify_client_responses(
             structured_map, raw_map, client_info, audit, ai_client
         )
         rulebook = load_rulebook()
         pdf_path, sections, bureau_data, today_folder = analyze_credit_report(
-            proofs_files, session_id, client_info, audit, log_messages, ai_client
+            proofs_files,
+            session_id,
+            client_info,
+            audit,
+            log_messages,
+            ai_client,
+            manifest=manifest,
         )
         # Ensure account blocks exist before any case-building
         sid = session_id
@@ -1334,6 +1364,10 @@ def run_credit_repair_process(
         finalize_outputs(
             client_info, today_folder, sections, audit, log_messages, app_config
         )
+        if manifest is not None and today_folder:
+            summary_pdf = today_folder / "Start_Here - Instructions.pdf"
+            if summary_pdf.exists():
+                manifest.set_artifact("exports", "summary_pdf", summary_pdf)
 
     except Exception as e:  # pragma: no cover - surface for higher-level handling
         error_msg = f"[ERROR] Error: {str(e)}"
@@ -1343,7 +1377,13 @@ def run_credit_repair_process(
         raise
 
     finally:
-        save_log_file(client_info, is_identity_theft, today_folder, log_messages)
+        save_log_file(
+            client_info,
+            is_identity_theft,
+            today_folder,
+            log_messages,
+            manifest=manifest,
+        )
         if today_folder:
             audit.save(today_folder)
             if app_config.export_trace_file:

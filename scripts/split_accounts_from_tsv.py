@@ -28,6 +28,7 @@ from backend.core.logic.report_analysis.triad_layout import (
     assign_band,
     bands_from_header_tokens,
 )
+from backend.pipeline.runs import RunManifest, write_breadcrumb
 
 logger = logging.getLogger(__name__)
 # Enable with RAW_TRIAD_FROM_X=1 for verbose triad logs
@@ -355,7 +356,6 @@ def _process_h7y_token(
                 0,
             )
             last_key[b] = None
-
 
 
 def _flush_history(account: Optional[dict], acc_two_year, acc_seven_year) -> None:
@@ -2209,6 +2209,35 @@ def main(argv: List[str] | None = None) -> None:
         if bad_last:
             print(f"Accounts ending with section starter: {bad_last}")
     print(f"Wrote accounts to {json_out}")
+
+    # --- RunManifest wiring ---
+    accounts_json_path = json_out
+    general_json_path = json_out.with_name("general_info_from_full.json")
+    debug_full_tsv_path = tsv_path
+    accounts_table_dir = accounts_json_path.parent
+    sid = accounts_table_dir.parent.name
+
+    m = RunManifest.for_sid(sid)
+    m.snapshot_env(
+        [
+            "RAW_TRIAD_FROM_X",
+            "USE_LAYOUT_TEXT",
+            "TRIAD_TRACE_CSV",
+            "KEEP_PER_ACCOUNT_TSV",
+        ]
+    )
+    m.set_base_dir("traces_accounts_table", accounts_table_dir)
+    m.set_artifact("traces.accounts_table", "accounts_json", accounts_json_path)
+    m.set_artifact("traces.accounts_table", "general_json", general_json_path)
+    if debug_full_tsv_path and debug_full_tsv_path.exists():
+        m.set_artifact("traces.accounts_table", "debug_full_tsv", debug_full_tsv_path)
+    per_acc = accounts_table_dir / "per_account_tsv"
+    if per_acc.exists():
+        m.set_artifact("traces.accounts_table", "per_account_tsv_dir", per_acc)
+
+    write_breadcrumb(m.path, accounts_table_dir / ".manifest")
+
+    logger.info("RUN_MANIFEST_READY sid=%s manifest=%s", m.sid, m.path)
 
 
 if __name__ == "__main__":  # pragma: no cover

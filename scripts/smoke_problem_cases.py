@@ -5,22 +5,29 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
-from backend.core.logic.report_analysis.problem_extractor import detect_problem_accounts
 from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
+from backend.core.logic.report_analysis.problem_extractor import detect_problem_accounts
+from backend.pipeline.runs import RunManifest
+
+
+def _resolve_manifest(manifest_arg: str | None) -> RunManifest:
+    if manifest_arg:
+        return RunManifest(Path(manifest_arg)).load()
+    return RunManifest.from_env_or_latest()
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Smoke test helper for problem account extraction"
+        description="Smoke test helper for problem account extraction",
     )
-    ap.add_argument("--sid", required=True, help="Session ID under traces/blocks")
-    ap.add_argument(
-        "--root", default=None, help="Optional repository root (defaults to backend.settings.PROJECT_ROOT)"
-    )
+    ap.add_argument("--manifest", help="Path to run manifest")
     args = ap.parse_args()
 
-    sid = args.sid
-    root = Path(args.root) if args.root else None
+    m = _resolve_manifest(args.manifest)
+    accounts_path = Path(m.get("traces.accounts_table", "accounts_json"))
+    general_path = Path(m.get("traces.accounts_table", "general_json"))
+    root = accounts_path.parent.parent.parent.parent
+    sid = m.sid
 
     candidates: List[Dict[str, Any]] = detect_problem_accounts(sid, root=root)
     summary = build_problem_cases(sid, candidates, root=root)
@@ -33,3 +40,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

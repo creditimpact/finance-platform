@@ -1,3 +1,4 @@
+import scripts._bootstrap  # KEEP FIRST
 from __future__ import annotations
 
 import argparse

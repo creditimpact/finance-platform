@@ -260,9 +260,13 @@ H2Y_PAT = re.compile(r"\bTwo[-\s]?Year\b.*\bPayment\b.*\bHistory\b", re.I)
 H2Y_STATUS_RE = re.compile(r"^(?:ok|co|[0-9]{2,3})$", re.I)
 H7Y_TITLE_PAT = re.compile(r"(Days\s*Late|7\s*Year\s*History)", re.I)
 H7Y_BUREAUS = ("Transunion", "Experian", "Equifax")
-# Accept "30:" and also merged "30:0" (second group optional)
-LATE_KEY_PAT = re.compile(r"^\s*(30|60|90)\s*:\s*(\d+)?\s*$", re.I)
+# Recognize "30:", "60:", "90:" optionally followed by a value (digits or --)
+# Examples: "30:", "30: 3", "30:3", "30: --"
+LATE_KEY_PAT = re.compile(r"^\s*(30|60|90)\s*:\s*(?:(\d+)|--)?\s*$", re.I)
+
+# Plain integer used when the value is on the next token
 INT_PAT = re.compile(r"^\d+$")
+DASH_PAT = re.compile(r"^--$", re.ASCII)
 H7Y_EPS = 6.0
 
 
@@ -1375,7 +1379,17 @@ def split_accounts(
                                 mx = None
                         b = _slab_of(mx, h7y_slabs)
                         if b:
-                            m = LATE_KEY_PAT.match(txt)
+                            _trace_write(
+                                phase="history7y",
+                                bureau=b,
+                                page=line["page"],
+                                line=line["line"],
+                                text=txt_raw,
+                                x0=t.get("x0"),
+                                x1=t.get("x1"),
+                                mid_x=mx,
+                            )
+                            m = LATE_KEY_PAT.match(txt_raw)
                             if m:
                                 key = m.group(1)
                                 inline_val = m.group(2)
@@ -1391,8 +1405,11 @@ def split_accounts(
                                     kind=f"late{key}",
                                     text="KEY",
                                 )
-                                if inline_val is not None:
-                                    v = int(inline_val)
+                                if inline_val is not None or (
+                                    ":" in txt_raw
+                                    and DASH_PAT.match(txt_raw.split(":", 1)[1].strip())
+                                ):
+                                    v = int(inline_val) if inline_val is not None else 0
                                     acc_seven_year[b][f"late{key}"] = v
                                     logger.info(
                                         "H7Y_VALUE bureau=%s kind=late%s value=%d",
@@ -1410,28 +1427,29 @@ def split_accounts(
                                     )
                                     last_key[b] = None
                                 continue
-                            if last_key[b] and INT_PAT.match(txt):
-                                k = last_key[b][-2:]
-                                v = int(txt)
-                                acc_seven_year[b][f"late{k}"] = v
-                                logger.info(
-                                    "H7Y_VALUE bureau=%s kind=late%s value=%d",
-                                    b.upper(),
-                                    k,
-                                    v,
-                                )
-                                _history_trace(
-                                    t.get("page"),
-                                    t.get("line"),
-                                    phase="history7y",
-                                    bureau=b,
-                                    kind=last_key[b],
-                                    value=v,
-                                    x0=t.get("x0"),
-                                    x1=t.get("x1"),
-                                )
-                                last_key[b] = None
-                                continue
+                            if last_key[b]:
+                                if INT_PAT.match(txt_raw) or DASH_PAT.match(txt_raw):
+                                    k = last_key[b][-2:]
+                                    v = int(txt_raw) if INT_PAT.match(txt_raw) else 0
+                                    acc_seven_year[b][f"late{k}"] = v
+                                    logger.info(
+                                        "H7Y_VALUE bureau=%s kind=late%s value=%d",
+                                        b.upper(),
+                                        k,
+                                        v,
+                                    )
+                                    _history_trace(
+                                        t.get("page"),
+                                        t.get("line"),
+                                        phase="history7y",
+                                        bureau=b,
+                                        kind=last_key[b],
+                                        value=v,
+                                        x0=t.get("x0"),
+                                        x1=t.get("x1"),
+                                    )
+                                    last_key[b] = None
+                                    continue
 
                 if bare in BARE_BUREAUS:
                     triad_log(

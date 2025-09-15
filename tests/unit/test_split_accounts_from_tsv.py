@@ -410,26 +410,23 @@ def create_h7y_tsv(path: Path) -> None:
         "1\t2\t0\t0\t0\t0\tAccount # 123\n"
         "1\t3\t0\t0\t0\t0\tDays Late - 7 Year History\n"
         "1\t4\t0\t0\t10\t20\tTransunion\n"
-        "1\t4\t0\t0\t40\t50\tExperian\n"
-        "1\t4\t0\t0\t70\t80\tEquifax\n"
+        "1\t4\t0\t0\t50\t60\tExperian\n"
+        "1\t4\t0\t0\t90\t100\tEquifax\n"
         "1\t5\t0\t0\t10\t20\t30:\n"
         "1\t5\t0\t0\t20\t25\t--\n"
-        "1\t5\t0\t0\t40\t50\t30:\n"
-        "1\t5\t0\t0\t50\t55\t1\n"
-        "1\t5\t0\t0\t70\t80\t30:\n"
-        "1\t5\t0\t0\t80\t85\t--\n"
-        "1\t6\t0\t0\t10\t20\t60:\n"
-        "1\t6\t0\t0\t20\t25\t1\n"
-        "1\t6\t0\t0\t40\t50\t60:\n"
-        "1\t6\t0\t0\t50\t55\t1\n"
-        "1\t6\t0\t0\t70\t80\t60:\n"
-        "1\t6\t0\t0\t80\t85\t--\n"
-        "1\t7\t0\t0\t10\t20\t90:\n"
-        "1\t7\t0\t0\t20\t25\t--\n"
-        "1\t7\t0\t0\t40\t50\t90:\n"
-        "1\t7\t0\t0\t50\t55\t3\n"
-        "1\t7\t0\t0\t70\t80\t90:\n"
-        "1\t7\t0\t0\t80\t85\t--\n"
+        "1\t5\t0\t0\t30\t40\t60:\n"
+        "1\t5\t0\t0\t40\t45\t--\n"
+        "1\t5\t0\t0\t44\t54\t90:\n"
+        "1\t5\t0\t0\t54\t55\t--\n"
+        "1\t5\t0\t0\t60\t70\t30:1\n"
+        "1\t5\t0\t0\t70\t80\t60:1\n"
+        "1\t5\t0\t0\t80\t90\t90:3\n"
+        "1\t5\t0\t0\t100\t110\t30:\n"
+        "1\t5\t0\t0\t110\t115\t--\n"
+        "1\t5\t0\t0\t115\t125\t60:\n"
+        "1\t5\t0\t0\t125\t130\t--\n"
+        "1\t5\t0\t0\t130\t140\t90:\n"
+        "1\t5\t0\t0\t140\t145\t--\n"
     )
     path.write_text(content, encoding="utf-8")
 
@@ -445,6 +442,6 @@ def test_seven_year_history_parsing(tmp_path: Path) -> None:
     accounts = data["accounts"]
     assert len(accounts) == 1
     sev = accounts[0]["seven_year_history"]
-    assert sev["transunion"] == {"late30": 0, "late60": 1, "late90": 0}
+    assert sev["transunion"] == {"late30": 0, "late60": 0, "late90": 0}
     assert sev["experian"] == {"late30": 1, "late60": 1, "late90": 3}
     assert sev["equifax"] == {"late30": 0, "late60": 0, "late90": 0}

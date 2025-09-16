@@ -122,6 +122,88 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
     assert breadcrumb.read_text() == str(m.path.resolve())
 
 
+def test_problem_case_builder_updates_merge_tag_only_for_existing_cases(
+    tmp_path, monkeypatch
+):
+    sid = "S777"
+    accounts = [
+        {"account_index": 1, "heading_guess": "A", "lines": [], "fields": {}}
+    ]
+
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+    m = RunManifest.for_sid(sid)
+    traces_dir = m.ensure_run_subdir("traces_dir", "traces")
+    acct_dir = traces_dir / "accounts_table"
+    acct_dir.mkdir(parents=True, exist_ok=True)
+    acc_path = acct_dir / "accounts_from_full.json"
+    gen_path = acct_dir / "general_info_from_full.json"
+    acc_path.write_text(json.dumps({"accounts": accounts}), encoding="utf-8")
+    gen_path.write_text(json.dumps({"client": "Tester"}), encoding="utf-8")
+    m.set_artifact("traces.accounts_table", "accounts_json", acc_path)
+    m.set_artifact("traces.accounts_table", "general_json", gen_path)
+
+    first_candidates = [
+        {
+            "account_id": "idx-001",
+            "account_index": 1,
+            "problem_tags": ["initial-tag"],
+            "problem_reasons": ["initial-reason"],
+            "merge_tag": {
+                "group_id": "g1",
+                "decision": "auto",
+                "score_to": [],
+                "best_match": None,
+                "parts": {},
+            },
+        }
+    ]
+
+    build_problem_cases(sid, candidates=first_candidates)
+
+    cases_dir = runs_root / sid / "cases"
+    summary_path = cases_dir / "accounts" / "idx-001" / "summary.json"
+    summary_data = json.loads(summary_path.read_text())
+    summary_data["problem_reasons"] = ["manual-reason"]
+    summary_data["problem_tags"] = ["manual-tag"]
+    summary_data["primary_issue"] = "custom-issue"
+    summary_path.write_text(json.dumps(summary_data, indent=2), encoding="utf-8")
+
+    second_candidates = [
+        {
+            "account_id": "idx-001",
+            "account_index": 1,
+            "problem_tags": ["new-tag"],
+            "problem_reasons": ["new-reason"],
+            "merge_tag": {
+                "group_id": "g2",
+                "decision": "ai",
+                "score_to": [
+                    {"account_index": 5, "score": 0.55, "decision": "ai"}
+                ],
+                "best_match": {
+                    "account_index": 5,
+                    "score": 0.55,
+                    "decision": "ai",
+                },
+                "parts": {"acct_num": 0.7},
+            },
+        }
+    ]
+
+    build_problem_cases(sid, candidates=second_candidates)
+
+    updated_data = json.loads(summary_path.read_text())
+    assert updated_data["problem_reasons"] == ["manual-reason"]
+    assert updated_data["problem_tags"] == ["manual-tag"]
+    assert updated_data["primary_issue"] == "custom-issue"
+    assert updated_data["merge_tag"]["decision"] == "ai"
+    assert updated_data["merge_tag"]["group_id"] == "g2"
+    assert updated_data["merge_tag"]["best_match"]["account_index"] == 5
+
+    accounts_index = json.loads((cases_dir / "accounts" / "index.json").read_text())
+    assert accounts_index["items"][0]["merge_group_id"] == "g2"
+
 
 def test_problem_case_builder_manifest_missing_accounts_raises(tmp_path, monkeypatch):
     sid = "S999"

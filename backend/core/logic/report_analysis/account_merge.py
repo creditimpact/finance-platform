@@ -1,0 +1,360 @@
+"""Tools for scoring and clustering problematic accounts prior to merging."""
+
+from __future__ import annotations
+
+import difflib
+import re
+from dataclasses import dataclass
+from datetime import date
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+
+@dataclass
+class MergeCfg:
+    """Configuration knobs for the merge pipeline."""
+
+    weights: Dict[str, float]
+    thresholds: Dict[str, float]
+    # optional knobs: date_tolerance_days, balance_tolerance_ratio, etc.
+
+
+DEFAULT_CFG = MergeCfg(
+    weights={
+        "acct_num": 0.30,
+        "dates": 0.20,
+        "balance": 0.20,
+        "status": 0.20,
+        "strings": 0.10,
+    },
+    thresholds={
+        "auto_merge_min": 0.78,
+        "ai_band_min": 0.35,
+        "ai_band_max": 0.78,
+        "ai_hard_min": 0.30,
+    },
+)
+
+_DATE_FIELDS = ("date_opened", "date_of_last_activity", "closed_date")
+_BALANCE_FIELDS = ("past_due_amount", "balance_owed")
+_STATUS_FIELDS = ("payment_status", "account_status")
+_STRING_FIELDS = ("creditor", "remarks")
+_STATUS_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
+    ("collection", re.compile(r"collection|charge\s*off|repo|repossession|foreclosure", re.I)),
+    ("delinquent", re.compile(r"delinquent|late|past\s+due|overdue|derog", re.I)),
+    ("paid", re.compile(r"paid\b|paid\s+off|settled|resolved|pif", re.I)),
+    (
+        "current",
+        re.compile(r"current|pays\s+as\s+agreed|paid\s+as\s+agreed|open", re.I),
+    ),
+    ("closed", re.compile(r"closed|inactive|terminated", re.I)),
+    ("bankruptcy", re.compile(r"bankrupt|bk", re.I)),
+)
+
+
+def _normalize_account_number(value: Any) -> Optional[str]:
+    digits = re.sub(r"\D", "", str(value or ""))
+    return digits or None
+
+
+def _score_account_number(acc_a: Dict[str, Any], acc_b: Dict[str, Any]) -> float:
+    acct_keys = ("account_number", "acct_num", "number")
+    a_val: Optional[str] = None
+    b_val: Optional[str] = None
+    for key in acct_keys:
+        if a_val is None and key in acc_a:
+            a_val = _normalize_account_number(acc_a.get(key))
+        if b_val is None and key in acc_b:
+            b_val = _normalize_account_number(acc_b.get(key))
+    if not a_val or not b_val:
+        return 0.0
+    if a_val == b_val:
+        return 1.0
+    if len(a_val) >= 4 and len(b_val) >= 4 and a_val[-4:] == b_val[-4:]:
+        return 0.7
+    return 0.0
+
+
+def _parse_date(value: Any) -> Optional[date]:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    text = text.replace("/", ".").replace("-", ".")
+    parts = text.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        day, month, year = (int(part) for part in parts)
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _score_date_values(dates_a: Iterable[Optional[date]], dates_b: Iterable[Optional[date]]) -> float:
+    scores: List[float] = []
+    for da, db in zip(dates_a, dates_b):
+        if da and db:
+            delta = abs((da - db).days)
+            scaled = max(0.0, 1.0 - min(delta, 365) / 365.0)
+            scores.append(scaled)
+    if not scores:
+        return 0.0
+    return sum(scores) / len(scores)
+
+
+def _score_dates(acc_a: Dict[str, Any], acc_b: Dict[str, Any]) -> float:
+    values_a = [_parse_date(acc_a.get(field)) for field in _DATE_FIELDS]
+    values_b = [_parse_date(acc_b.get(field)) for field in _DATE_FIELDS]
+    return _score_date_values(values_a, values_b)
+
+
+def _parse_currency(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    text = text.replace(",", "").replace("$", "").replace("USD", "")
+    if text in {"-", "n/a", "na"}:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        # Attempt to extract digits (including decimal point)
+        match = re.search(r"-?\d+(?:\.\d+)?", text)
+        if not match:
+            return None
+        try:
+            return float(match.group())
+        except ValueError:
+            return None
+
+
+def _score_numeric(a: Optional[float], b: Optional[float]) -> Optional[float]:
+    if a is None or b is None:
+        return None
+    max_val = max(abs(a), abs(b), 1.0)
+    delta = abs(a - b)
+    return max(0.0, 1.0 - min(delta / max_val, 1.0))
+
+
+def _score_balance(acc_a: Dict[str, Any], acc_b: Dict[str, Any]) -> float:
+    scores: List[float] = []
+    parsed_a = {field: _parse_currency(acc_a.get(field)) for field in _BALANCE_FIELDS}
+    parsed_b = {field: _parse_currency(acc_b.get(field)) for field in _BALANCE_FIELDS}
+
+    if parsed_a.get("past_due_amount") is not None and parsed_b.get("past_due_amount") is not None:
+        val = _score_numeric(parsed_a["past_due_amount"], parsed_b["past_due_amount"])
+        if val is not None:
+            scores.append(val)
+
+    if parsed_a.get("balance_owed") is not None and parsed_b.get("balance_owed") is not None:
+        val = _score_numeric(parsed_a["balance_owed"], parsed_b["balance_owed"])
+        if val is not None:
+            scores.append(val)
+
+    if not scores:
+        return 0.0
+    return sum(scores) / len(scores)
+
+
+def _clean_status(value: Any) -> Optional[str]:
+    if not value:
+        return None
+    text = str(value).lower()
+    text = text.replace("/", " ").replace("-", " ")
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text or None
+
+
+def _status_buckets_from_text(text: str) -> List[str]:
+    buckets = [name for name, pattern in _STATUS_PATTERNS if pattern.search(text)]
+    if not buckets and text:
+        buckets.append("other:" + text)
+    return buckets
+
+
+def _score_status(acc_a: Dict[str, Any], acc_b: Dict[str, Any]) -> float:
+    buckets_a: set[str] = set()
+    buckets_b: set[str] = set()
+    for field in _STATUS_FIELDS:
+        norm_a = _clean_status(acc_a.get(field))
+        norm_b = _clean_status(acc_b.get(field))
+        if norm_a:
+            buckets_a.update(_status_buckets_from_text(norm_a))
+        if norm_b:
+            buckets_b.update(_status_buckets_from_text(norm_b))
+    if not buckets_a or not buckets_b:
+        return 0.0
+    if buckets_a & buckets_b:
+        return 1.0
+    return 0.0
+
+
+def _normalize_text_fields(account: Dict[str, Any]) -> str:
+    parts: List[str] = []
+    for field in _STRING_FIELDS:
+        value = account.get(field)
+        if value:
+            cleaned = re.sub(r"\s+", " ", str(value).lower()).strip()
+            if cleaned:
+                parts.append(cleaned)
+    return " ".join(parts)
+
+
+def _score_strings(acc_a: Dict[str, Any], acc_b: Dict[str, Any]) -> float:
+    text_a = _normalize_text_fields(acc_a)
+    text_b = _normalize_text_fields(acc_b)
+    if not text_a or not text_b:
+        return 0.0
+    return difflib.SequenceMatcher(None, text_a, text_b).ratio()
+
+
+def score_accounts(
+    accA: Dict[str, Any], accB: Dict[str, Any], cfg: MergeCfg = DEFAULT_CFG
+) -> Tuple[float, Dict[str, float]]:
+    """Return overall score and per-part contributions."""
+
+    parts = {
+        "acct_num": _score_account_number(accA, accB),
+        "dates": _score_dates(accA, accB),
+        "balance": _score_balance(accA, accB),
+        "status": _score_status(accA, accB),
+        "strings": _score_strings(accA, accB),
+    }
+
+    total_weight = sum(cfg.weights.get(name, 0.0) for name in parts)
+    if total_weight <= 0:
+        return 0.0, parts
+
+    weighted = sum(parts[name] * cfg.weights.get(name, 0.0) for name in parts)
+    score = weighted / total_weight
+    return score, parts
+
+
+def decide_merge(score: float, cfg: MergeCfg = DEFAULT_CFG) -> str:
+    """Return decision label based on configured thresholds."""
+
+    thresholds = cfg.thresholds
+    auto_min = thresholds.get("auto_merge_min", 0.78)
+    ai_min = thresholds.get("ai_band_min", 0.35)
+    ai_max = thresholds.get("ai_band_max", auto_min)
+    hard_min = thresholds.get("ai_hard_min", ai_min)
+
+    if score >= auto_min:
+        return "auto"
+    if score < hard_min:
+        return "different"
+    if ai_min <= score < ai_max:
+        return "ai"
+    if score >= ai_max:
+        return "ai"
+    return "different"
+
+
+def _build_auto_graph(size: int, auto_edges: List[Tuple[int, int]]) -> List[List[int]]:
+    graph: List[List[int]] = [[] for _ in range(size)]
+    for i, j in auto_edges:
+        graph[i].append(j)
+        graph[j].append(i)
+    return graph
+
+
+def _connected_components(graph: List[List[int]]) -> List[List[int]]:
+    visited = [False] * len(graph)
+    components: List[List[int]] = []
+
+    for idx in range(len(graph)):
+        if visited[idx]:
+            continue
+        stack = [idx]
+        component: List[int] = []
+        visited[idx] = True
+        while stack:
+            node = stack.pop()
+            component.append(node)
+            for neighbor in graph[node]:
+                if not visited[neighbor]:
+                    visited[neighbor] = True
+                    stack.append(neighbor)
+        components.append(sorted(component))
+    return components
+
+
+def cluster_problematic_accounts(
+    candidates: List[Dict[str, Any]], cfg: MergeCfg = DEFAULT_CFG
+) -> List[Dict[str, Any]]:
+    """Cluster problematic accounts using pairwise comparisons."""
+
+    size = len(candidates)
+    if size == 0:
+        return []
+
+    pair_results: List[List[Optional[Tuple[float, str, Dict[str, float]]]]] = [
+        [None] * size for _ in range(size)
+    ]
+    auto_edges: List[Tuple[int, int]] = []
+
+    for i in range(size):
+        for j in range(i + 1, size):
+            score, parts = score_accounts(candidates[i], candidates[j], cfg)
+            decision = decide_merge(score, cfg)
+            pair_results[i][j] = (score, decision, parts)
+            pair_results[j][i] = (score, decision, parts)
+            if decision == "auto":
+                auto_edges.append((i, j))
+
+    graph = _build_auto_graph(size, auto_edges)
+    components = _connected_components(graph)
+    component_map = {}
+    for idx, comp in enumerate(components, start=1):
+        for node in comp:
+            component_map[node] = (idx, comp)
+
+    enriched: List[Dict[str, Any]] = []
+
+    for i, account in enumerate(candidates):
+        comp_idx, comp_nodes = component_map[i]
+        group_id = f"g{comp_idx}"
+        score_entries: List[Dict[str, Any]] = []
+        best: Optional[Dict[str, Any]] = None
+        best_parts: Dict[str, float] = {}
+
+        for j in range(size):
+            if i == j:
+                continue
+            pair = pair_results[i][j]
+            if pair is None:
+                continue
+            pair_score, pair_decision, pair_parts = pair
+            entry = {
+                "account_index": j,
+                "score": pair_score,
+                "decision": pair_decision,
+            }
+            score_entries.append(entry)
+            if best is None or pair_score > best["score"]:
+                best = entry.copy()
+                best_parts = pair_parts
+
+        if len(comp_nodes) > 1:
+            decision = "auto"
+        elif best is not None:
+            decision = best["decision"]
+        else:
+            decision = "different"
+
+        merge_tag = {
+            "group_id": group_id,
+            "decision": decision,
+            "score_to": sorted(score_entries, key=lambda item: item["score"], reverse=True),
+            "best_match": best,
+            "parts": best_parts,
+        }
+        enriched.append({**account, "merge_tag": merge_tag})
+
+    return enriched

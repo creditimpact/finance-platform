@@ -5,9 +5,10 @@ from __future__ import annotations
 import difflib
 import logging
 import re
+import os
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 
 logger = logging.getLogger(__name__)
@@ -22,21 +23,73 @@ class MergeCfg:
     # optional knobs: date_tolerance_days, balance_tolerance_ratio, etc.
 
 
-DEFAULT_CFG = MergeCfg(
-    weights={
-        "acct_num": 0.30,
-        "dates": 0.20,
-        "balance": 0.20,
-        "status": 0.20,
-        "strings": 0.10,
-    },
-    thresholds={
-        "auto_merge_min": 0.78,
-        "ai_band_min": 0.35,
-        "ai_band_max": 0.78,
-        "ai_hard_min": 0.30,
-    },
-)
+_DEFAULT_THRESHOLDS = {
+    "auto_merge_min": 0.78,
+    "ai_band_min": 0.35,
+    "ai_band_max": 0.78,
+    "ai_hard_min": 0.30,
+}
+
+_DEFAULT_WEIGHTS = {
+    "acct_num": 0.30,
+    "dates": 0.20,
+    "balance": 0.20,
+    "status": 0.20,
+    "strings": 0.10,
+}
+
+_ENV_THRESHOLD_KEYS = {
+    "auto_merge_min": "MERGE_AUTO_MIN",
+    "ai_band_min": "MERGE_AI_MIN",
+    "ai_band_max": "MERGE_AI_MAX",
+    "ai_hard_min": "MERGE_AI_HARD_MIN",
+}
+
+_ENV_WEIGHT_KEYS = {
+    "acct_num": "MERGE_W_ACCT",
+    "dates": "MERGE_W_DATES",
+    "balance": "MERGE_W_BAL",
+    "status": "MERGE_W_STATUS",
+    "strings": "MERGE_W_STR",
+}
+
+
+def _read_env_float(env: Mapping[str, str], key: str, default: float) -> float:
+    value = env.get(key)
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        logger.warning(
+            "Invalid float for %s=%r; falling back to default %.4f", key, value, default
+        )
+        return default
+
+
+def load_config_from_env(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
+    """Create a MergeCfg using optional environment overrides."""
+
+    env_mapping: Mapping[str, str]
+    if env is None:
+        env_mapping = os.environ
+    else:
+        env_mapping = env
+
+    thresholds = {
+        name: _read_env_float(env_mapping, env_key, _DEFAULT_THRESHOLDS[name])
+        for name, env_key in _ENV_THRESHOLD_KEYS.items()
+    }
+
+    weights = {
+        name: _read_env_float(env_mapping, env_key, _DEFAULT_WEIGHTS[name])
+        for name, env_key in _ENV_WEIGHT_KEYS.items()
+    }
+
+    return MergeCfg(weights=weights, thresholds=thresholds)
+
+
+DEFAULT_CFG = load_config_from_env()
 
 _DATE_FIELDS = ("date_opened", "date_of_last_activity", "closed_date")
 _BALANCE_FIELDS = ("past_due_amount", "balance_owed")

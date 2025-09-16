@@ -6,6 +6,7 @@ from backend.core.logic.report_analysis.account_merge import (
     DEFAULT_CFG,
     cluster_problematic_accounts,
     decide_merge,
+    load_config_from_env,
     score_accounts,
 )
 
@@ -69,6 +70,16 @@ def test_score_accounts_returns_weighted_score_and_parts():
 )
 def test_decide_merge_respects_thresholds(value, expected):
     assert decide_merge(value, DEFAULT_CFG) == expected
+
+
+def test_load_config_from_env_respects_overrides(monkeypatch):
+    monkeypatch.setenv("MERGE_AUTO_MIN", "0.91")
+    monkeypatch.setenv("MERGE_W_ACCT", "0.45")
+
+    cfg = load_config_from_env()
+
+    assert cfg.thresholds["auto_merge_min"] == 0.91
+    assert cfg.weights["acct_num"] == 0.45
 
 
 def test_cluster_problematic_accounts_builds_clusters():

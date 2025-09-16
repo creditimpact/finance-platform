@@ -17,7 +17,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping
+from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
 from backend.pipeline.runs import RunManifest, write_breadcrumb
 
@@ -115,6 +115,28 @@ def _build_account_lookup(
     return by_key
 
 
+def _load_summary_json(path: Path) -> Tuple[Dict[str, Any], bool]:
+    """Best-effort load of ``summary.json`` contents.
+
+    Returns a tuple containing the parsed dictionary and a flag indicating
+    whether a valid mapping was loaded.  When parsing fails the dictionary is
+    empty and the flag is ``False``.
+    """
+
+    if not path.exists():
+        return {}, False
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}, False
+
+    if isinstance(data, Mapping):
+        return dict(data), True
+
+    return {}, False
+
+
 def _resolve_inputs_from_manifest(sid: str) -> tuple[Path, Path, RunManifest]:
     m = RunManifest.for_sid(sid)
     try:
@@ -210,14 +232,23 @@ def build_problem_cases(
         )
 
         # summary.json: reasons/tags/confidence
-        summary_obj: Dict[str, Any] = {
-            "sid": sid,
-            "account_id": account_id,
-            "problem_tags": cand.get("problem_tags") or [],
-            "problem_reasons": cand.get("problem_reasons") or [],
-        }
-        if "confidence" in cand and cand.get("confidence") is not None:
-            summary_obj["confidence"] = cand.get("confidence")
+        summary_path = acc_dir / "summary.json"
+        existing_summary, loaded_existing = _load_summary_json(summary_path)
+
+        if loaded_existing:
+            summary_obj = dict(existing_summary)
+            summary_obj.setdefault("sid", sid)
+            summary_obj.setdefault("account_id", account_id)
+        else:
+            summary_obj = {
+                "sid": sid,
+                "account_id": account_id,
+                "problem_tags": cand.get("problem_tags") or [],
+                "problem_reasons": cand.get("problem_reasons") or [],
+            }
+            if "confidence" in cand and cand.get("confidence") is not None:
+                summary_obj["confidence"] = cand.get("confidence")
+
         merge_tag = cand.get("merge_tag")
         if isinstance(merge_tag, Mapping):
             try:
@@ -230,8 +261,14 @@ def build_problem_cases(
             group_id = merge_tag_obj.get("group_id")
             if isinstance(group_id, str):
                 merge_groups[account_id_str] = group_id
+        else:
+            existing_tag = summary_obj.get("merge_tag")
+            if isinstance(existing_tag, Mapping):
+                group_id = existing_tag.get("group_id")
+                if isinstance(group_id, str):
+                    merge_groups[account_id_str] = group_id
         # Attach selected general metadata if available
-        if isinstance(general_info, dict):
+        if not loaded_existing and isinstance(general_info, dict):
             extra: Dict[str, Any] = {}
             for k in (
                 "client",
@@ -248,7 +285,7 @@ def build_problem_cases(
                     extra[k] = v
             if extra:
                 summary_obj["general"] = extra
-        (acc_dir / "summary.json").write_text(
+        summary_path.write_text(
             json.dumps(summary_obj, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 

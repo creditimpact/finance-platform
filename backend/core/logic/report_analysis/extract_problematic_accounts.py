@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List
 
+from .account_merge import DEFAULT_CFG, cluster_problematic_accounts
 from .problem_case_builder import build_problem_cases
 from .problem_extractor import detect_problem_accounts
 
@@ -41,8 +42,13 @@ def extract_problematic_accounts(
     """
 
     candidates: List[Dict[str, Any]] = detect_problem_accounts(session_id, root=root)
-    summary = build_problem_cases(session_id, candidates, root=root)
-    return {"found": candidates, "summary": summary}
+    merged_candidates = cluster_problematic_accounts(
+        candidates,
+        DEFAULT_CFG,
+        sid=session_id,
+    )
+    summary = build_problem_cases(session_id, merged_candidates, root=root)
+    return {"found": merged_candidates, "summary": summary}
 
 
 __all__ = ["extract_problematic_accounts"]

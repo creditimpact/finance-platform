@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import difflib
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -286,18 +290,27 @@ def _connected_components(graph: List[List[int]]) -> List[List[int]]:
 
 
 def cluster_problematic_accounts(
-    candidates: List[Dict[str, Any]], cfg: MergeCfg = DEFAULT_CFG
+    candidates: List[Dict[str, Any]],
+    cfg: MergeCfg = DEFAULT_CFG,
+    *,
+    sid: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Cluster problematic accounts using pairwise comparisons."""
 
     size = len(candidates)
+    sid_value = sid or "-"
     if size == 0:
-        return []
+        logger.info(
+            "MERGE_SUMMARY  sid=<%s> clusters=<0> auto_pairs=<0> ai_pairs=<0>",
+            sid_value,
+        )
+        return candidates
 
     pair_results: List[List[Optional[Tuple[float, str, Dict[str, float]]]]] = [
         [None] * size for _ in range(size)
     ]
     auto_edges: List[Tuple[int, int]] = []
+    ai_pairs = 0
 
     for i in range(size):
         for j in range(i + 1, size):
@@ -307,6 +320,21 @@ def cluster_problematic_accounts(
             pair_results[j][i] = (score, decision, parts)
             if decision == "auto":
                 auto_edges.append((i, j))
+            elif decision == "ai":
+                ai_pairs += 1
+
+            parts_str = ",".join(
+                f"{name}:{parts[name]:.4f}" for name in sorted(parts.keys())
+            )
+            logger.info(
+                "MERGE_DECISION sid=<%s> accA=<%d> accB=<%d> score=<%.4f> decision=<%s> parts=<%s>",
+                sid_value,
+                i,
+                j,
+                score,
+                decision,
+                parts_str,
+            )
 
     graph = _build_auto_graph(size, auto_edges)
     components = _connected_components(graph)
@@ -315,10 +343,8 @@ def cluster_problematic_accounts(
         for node in comp:
             component_map[node] = (idx, comp)
 
-    enriched: List[Dict[str, Any]] = []
-
     for i, account in enumerate(candidates):
-        comp_idx, comp_nodes = component_map[i]
+        comp_idx, comp_nodes = component_map.get(i, (i + 1, [i]))
         group_id = f"g{comp_idx}"
         score_entries: List[Dict[str, Any]] = []
         best: Optional[Dict[str, Any]] = None
@@ -355,6 +381,14 @@ def cluster_problematic_accounts(
             "best_match": best,
             "parts": best_parts,
         }
-        enriched.append({**account, "merge_tag": merge_tag})
+        account["merge_tag"] = merge_tag
 
-    return enriched
+    logger.info(
+        "MERGE_SUMMARY  sid=<%s> clusters=<%d> auto_pairs=<%d> ai_pairs=<%d>",
+        sid_value,
+        len(components),
+        len(auto_edges),
+        ai_pairs,
+    )
+
+    return candidates

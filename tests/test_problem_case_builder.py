@@ -50,6 +50,25 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
             "account_index": 1,
             "problem_tags": ["past_due"],
             "problem_reasons": ["past_due_amount"],
+            "merge_tag": {
+                "group_id": "g1",
+                "decision": "auto",
+                "score_to": [
+                    {"account_index": 2, "score": 0.83, "decision": "auto"}
+                ],
+                "best_match": {
+                    "account_index": 2,
+                    "score": 0.83,
+                    "decision": "auto",
+                },
+                "parts": {
+                    "acct_num": 1.0,
+                    "balance": 0.95,
+                    "dates": 0.9,
+                    "status": 1.0,
+                    "strings": 0.7,
+                },
+            },
         }
     ]
     summary = build_problem_cases(sid, candidates=candidates)
@@ -72,6 +91,13 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
     assert (first / "summary.json").exists()
     case_data = json.loads((first / "summary.json").read_text())
     assert case_data.get("problem_tags") or case_data.get("problem_reasons")
+    assert case_data.get("merge_tag")
+    assert case_data["merge_tag"]["decision"] == "auto"
+    assert case_data["merge_tag"]["best_match"]["account_index"] == 2
+
+    accounts_index_path = acc_dir / "index.json"
+    acc_index = json.loads(accounts_index_path.read_text())
+    assert acc_index["items"][0]["merge_group_id"] == "g1"
 
     # Returned summary should mirror disk counts
     assert summary["total"] == len(accounts)

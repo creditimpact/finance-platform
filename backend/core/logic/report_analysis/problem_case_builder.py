@@ -181,6 +181,7 @@ def build_problem_cases(
     logger.info("PROBLEM_CASES start sid=%s total=%s out=%s", sid, total, cases_dir)
 
     written_ids: List[str] = []
+    merge_groups: Dict[str, str] = {}
     for cand in candidates or []:
         if not isinstance(cand, Mapping):
             continue
@@ -188,6 +189,8 @@ def build_problem_cases(
         account_id = cand.get("account_id")
         if account_id is None:
             continue
+
+        account_id_str = str(account_id)
 
         # Locate full account record either by provided index or account_id
         full_acc: Mapping[str, Any] | None = None
@@ -197,7 +200,7 @@ def build_problem_cases(
             full_acc = lookup.get(str(account_id), {})
 
         # Per-account directory and files
-        acc_dir = (accounts_dir / str(account_id)).resolve()
+        acc_dir = (accounts_dir / account_id_str).resolve()
         acc_dir.mkdir(parents=True, exist_ok=True)
 
         # account.json: full record for that account
@@ -215,6 +218,18 @@ def build_problem_cases(
         }
         if "confidence" in cand and cand.get("confidence") is not None:
             summary_obj["confidence"] = cand.get("confidence")
+        merge_tag = cand.get("merge_tag")
+        if isinstance(merge_tag, Mapping):
+            try:
+                merge_tag_obj = json.loads(
+                    json.dumps(merge_tag, ensure_ascii=False)
+                )
+            except TypeError:
+                merge_tag_obj = dict(merge_tag)
+            summary_obj["merge_tag"] = merge_tag_obj
+            group_id = merge_tag_obj.get("group_id")
+            if isinstance(group_id, str):
+                merge_groups[account_id_str] = group_id
         # Attach selected general metadata if available
         if isinstance(general_info, dict):
             extra: Dict[str, Any] = {}
@@ -243,7 +258,7 @@ def build_problem_cases(
         except Exception:
             pass
 
-        written_ids.append(str(account_id))
+        written_ids.append(account_id_str)
 
     cand_list = list(candidates or [])
     index_data = {
@@ -264,10 +279,14 @@ def build_problem_cases(
         "sid": sid,
         "count": len(written_ids),
         "ids": written_ids,
-        "items": [
-            {"id": aid, "dir": str((accounts_dir / aid).resolve())} for aid in written_ids
-        ],
+        "items": [],
     }
+    for aid in written_ids:
+        item = {"id": aid, "dir": str((accounts_dir / aid).resolve())}
+        group_id = merge_groups.get(aid)
+        if group_id is not None:
+            item["merge_group_id"] = group_id
+        acc_index["items"].append(item)
     accounts_index_path = accounts_dir / "index.json"
     accounts_index_path.write_text(
         json.dumps(acc_index, indent=2, ensure_ascii=False), encoding="utf-8"

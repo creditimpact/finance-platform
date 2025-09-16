@@ -19,9 +19,17 @@ from backend.core.logic.report_analysis.problem_extractor import detect_problem_
 from backend.pipeline.runs import RunManifest
 
 
-def _resolve_manifest(manifest_arg: str | None) -> RunManifest:
+def _resolve_manifest(manifest_arg: str | None, sid_arg: str | None) -> RunManifest:
     if manifest_arg:
         return RunManifest(Path(manifest_arg)).load()
+    if sid_arg:
+        return RunManifest.for_sid(sid_arg)
+    # fallback to runs/current.txt
+    cur = Path("runs") / "current.txt"
+    if cur.exists():
+        sid = cur.read_text(encoding="utf-8").strip()
+        if sid:
+            return RunManifest.for_sid(sid)
     return RunManifest.from_env_or_latest()
 
 
@@ -29,20 +37,39 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description="Smoke test helper for problem account extraction",
     )
+    ap.add_argument("--sid", help="Run SID (defaults to runs/current.txt)")
     ap.add_argument("--manifest", help="Path to run manifest")
     args = ap.parse_args()
 
-    m = _resolve_manifest(args.manifest)
-    accounts_path = Path(m.get("traces.accounts_table", "accounts_json"))
-    general_path = Path(m.get("traces.accounts_table", "general_json"))
-    root = accounts_path.parent.parent.parent.parent
+    m = _resolve_manifest(args.manifest, args.sid)
     sid = m.sid
 
-    candidates: List[Dict[str, Any]] = detect_problem_accounts(sid, root=root)
-    summary = build_problem_cases(sid, candidates, root=root)
+    # Analyzer: read strictly via manifest, no legacy inputs
+    candidates: List[Dict[str, Any]] = detect_problem_accounts(sid)
+    summary = build_problem_cases(sid, candidates)
 
-    payload = {"sid": sid, "found": candidates, "summary": summary}
-    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    # Resolve canonical outputs via manifest for reporting
+    try:
+        accounts_index = Path(m.get("cases", "accounts_index"))
+    except Exception:
+        # Fallback derive from standard layout if not registered (older runs)
+        cases_dir = Path(summary.get("out") or (Path("runs") / sid / "cases"))
+        accounts_index = cases_dir / "accounts" / "index.json"
+
+    out_obj: Dict[str, Any] = {
+        "sid": sid,
+        "problematic": int(summary.get("problematic", 0) or 0),
+        "out": str(accounts_index.resolve()),
+    }
+    # Optional: list first few account folders
+    try:
+        acc_index_obj = json.loads(accounts_index.read_text(encoding="utf-8"))
+        items = list(acc_index_obj.get("items") or [])
+        out_obj["sample"] = items[: min(5, len(items))]
+    except Exception:
+        pass
+
+    print(json.dumps(out_obj, ensure_ascii=False))
 
     return 0
 

@@ -1,0 +1,198 @@
+TRUISTMRTG
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+Transunion
+942029*******
+$109,000
+8.8.2019
+8.8.2019
+8.8.2019
+30.8.2013
+$0
+8.8.2019
+Closed
+Individual
+Account not disputed
+Bank - Mortgage Loans
+Closed
+Current
+Closed
+$0
+8.8.2019
+360 Month(s)
+$0
+Conventional real estate
+mortgage
+Monthly (every month)
+$0
+Experian
+942029*******
+$109,000
+--
+1.9.2019
+5.9.2019
+1.8.2013
+$0
+--
+Paid
+Individual
+Account not disputed
+Mortgage Companies - Finance
+Closed
+Current
+--
+$0
+8.8.2019
+360 Month(s)
+$0
+Conventional real estate
+mortgage
+--
+$0
+Equifax
+942029*******
+$109,000
+--
+1.8.2019
+1.9.2019
+1.8.2013
+$0
+--
+Paid
+Individual
+Account not disputed
+Mortgage Companies - Finance
+Closed
+Current
+Closed or paid account/zero
+balance
+Fannie Mae account
+$0
+1.8.2019
+360 Month(s)
+$0
+Real estate mortgage
+--
+$0
+Two-Year Payment History
+Transunion
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+Experian
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+ספט׳
+Equifax
+®
+®
+®

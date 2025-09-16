@@ -1,5 +1,6 @@
 import json
 import logging
+from pathlib import Path
 
 from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
 from backend.pipeline.runs import RUNS_ROOT_ENV, RunManifest
@@ -24,19 +25,20 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
         {"account_index": 3, "heading_guess": "OK", "lines": [], "fields": {}},
     ]
 
-    # Write sample accounts_from_full.json
-    acc_path = (
-        tmp_path
-        / "traces"
-        / "blocks"
-        / sid
-        / "accounts_table"
-        / "accounts_from_full.json"
-    )
-    acc_path.parent.mkdir(parents=True, exist_ok=True)
+        # Configure runs root and manifest; write canonical Stage-A artifacts
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+    m = RunManifest.for_sid(sid)
+    traces_dir = m.ensure_run_subdir("traces_dir", "traces")
+    acct_dir = traces_dir / "accounts_table"
+    acct_dir.mkdir(parents=True, exist_ok=True)
+    acc_path = acct_dir / "accounts_from_full.json"
+    gen_path = acct_dir / "general_info_from_full.json"
     acc_path.write_text(json.dumps({"accounts": accounts}), encoding="utf-8")
+    gen_path.write_text(json.dumps({"client_name": "Tester"}), encoding="utf-8")
+    m.set_artifact("traces.accounts_table", "accounts_json", acc_path)
+    m.set_artifact("traces.accounts_table", "general_json", gen_path)
 
-    # configure runs root for manifest
     runs_root = tmp_path / "runs"
     monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
 
@@ -50,7 +52,7 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
             "problem_reasons": ["past_due_amount"],
         }
     ]
-    summary = build_problem_cases(sid, candidates=candidates, root=tmp_path)
+    summary = build_problem_cases(sid, candidates=candidates)
 
     cases_dir = runs_root / sid / "cases"
 
@@ -63,9 +65,12 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
 
     # Ensure at least one account case file exists with problem details
     acc_dir = cases_dir / "accounts"
-    files = list(acc_dir.glob("*.json"))
-    assert files, "expected at least one account case file"
-    case_data = json.loads(files[0].read_text())
+    case_dirs = [p for p in acc_dir.iterdir() if p.is_dir()]
+    assert case_dirs, "expected at least one account case folder"
+    first = case_dirs[0]
+    assert (first / "account.json").exists()
+    assert (first / "summary.json").exists()
+    case_data = json.loads((first / "summary.json").read_text())
     assert case_data.get("problem_tags") or case_data.get("problem_reasons")
 
     # Returned summary should mirror disk counts
@@ -84,42 +89,25 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
 
     # Run manifest registration and breadcrumb
     m = RunManifest.for_sid(sid)
-    assert m.data["base_dirs"]["cases_dir"] == str(cases_dir.resolve())
-    assert m.get("cases", "case_dir") == str(cases_dir.resolve())
+    assert m.data["base_dirs"]["cases_accounts_dir"] == str((cases_dir / "accounts").resolve())
+    assert (Path(m.get("cases", "accounts_index")).is_absolute())
+    assert (Path(m.get("cases", "problematic_ids")).is_absolute())
     breadcrumb = cases_dir / ".manifest"
     assert breadcrumb.read_text() == str(m.path.resolve())
 
 
-def test_problem_case_builder_missing_accounts(tmp_path, caplog, monkeypatch):
-    sid = "S999"
 
+def test_problem_case_builder_manifest_missing_accounts_raises(tmp_path, monkeypatch):
+    sid = "S999"
     runs_root = tmp_path / "runs"
     monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+    RunManifest.for_sid(sid)  # create manifest without traces entries
+    try:
+        build_problem_cases(sid)
+        assert False, "expected RuntimeError when manifest lacks traces.accounts_table"
+    except RuntimeError:
+        pass
 
-    caplog.set_level(logging.INFO)
-    summary = build_problem_cases(sid, root=tmp_path)
 
-    # Index should be written with zero counts
-    cases_dir = runs_root / sid / "cases"
 
-    index_path = cases_dir / "index.json"
-    assert index_path.exists()
-    index = json.loads(index_path.read_text())
-    assert index["total"] == 0 and index["problematic"] == 0
-    assert summary["total"] == 0 and summary["problematic"] == 0
 
-    assert any(
-        f"PROBLEM_CASES start sid={sid} total=0 out={cases_dir}" in m
-        for m in caplog.messages
-    )
-    assert any(
-        f"PROBLEM_CASES done sid={sid} total=0 problematic=0 out={cases_dir}" in m
-        for m in caplog.messages
-    )
-
-    # manifest and breadcrumb should still be written
-    m = RunManifest.for_sid(sid)
-    assert m.data["base_dirs"]["cases_dir"] == str(cases_dir.resolve())
-    assert m.get("cases", "case_dir") == str(cases_dir.resolve())
-    breadcrumb = cases_dir / ".manifest"
-    assert breadcrumb.read_text() == str(m.path.resolve())

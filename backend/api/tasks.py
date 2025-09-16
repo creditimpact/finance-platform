@@ -14,8 +14,9 @@ load_dotenv()
 
 from backend.core.logic.report_analysis.block_exporter import export_stage_a, run_stage_a
 from backend.pipeline.runs import RunManifest
-from backend.core.logic.report_analysis.extract_problematic_accounts import (
-    extract_problematic_accounts as orchestrate_problem_accounts,
+from backend.core.logic.report_analysis.problem_extractor import (
+    detect_problem_accounts,
+    load_stagea_accounts_from_manifest,
 )
 from backend.core.logic.report_analysis.text_provider import (
     extract_and_cache_text,
@@ -185,11 +186,92 @@ def _manifest_keep_set(m: RunManifest) -> set[Path]:
 
 @shared_task(bind=True, autoretry_for=(), retry_backoff=False)
 def extract_problematic_accounts(self, sid: str) -> dict:
+    """Analyze Stage-A accounts and return candidates only (no writes)."""
     log.info("PROBLEMATIC start sid=%s", sid)
-    result = orchestrate_problem_accounts(sid)
-    found = result.get("found") or []
+    found = detect_problem_accounts(sid)
     log.info("PROBLEMATIC done sid=%s found=%d", sid, len(found))
-    return {"sid": sid, **result}
+    result = {"sid": sid, "problematic": len(found), "found": found}
+    # Optional auto-build cases
+    if os.getenv("ANALYZER_AUTO_BUILD_CASES", "1") == "1":
+        try:
+            build_problem_cases_task.delay(result, sid)  # type: ignore[name-defined]
+        except Exception:
+            log.warning("AUTO_BUILD_CASES_FAILED sid=%s", sid, exc_info=True)
+    return result
+
+
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = None) -> dict:
+    """Create per-account case folders for problematic candidates under runs/<SID>/cases/accounts.
+
+    When chained after extract_problematic_accounts, ``prev`` receives the previous result.
+    """
+    # Resolve SID and candidates
+    if sid is None and isinstance(prev, dict):
+        sid = str(prev.get("sid"))
+    assert sid, "sid is required"
+    candidates = []
+    if isinstance(prev, dict) and prev.get("found"):
+        candidates = list(prev.get("found") or [])
+    else:
+        candidates = detect_problem_accounts(sid)
+
+    m = RunManifest.for_sid(sid)
+    cases_base = m.ensure_run_subdir("cases_dir", "cases").resolve()
+    cases_accounts_dir = (cases_base / "accounts").resolve()
+    cases_accounts_dir.mkdir(parents=True, exist_ok=True)
+    m.set_base_dir("cases_accounts_dir", cases_accounts_dir)
+
+    # Build quick index of original accounts by account_index
+    try:
+        accounts = load_stagea_accounts_from_manifest(sid)
+    except Exception:
+        accounts = []
+    by_index = {}
+    for a in accounts:
+        try:
+            idx = int(a.get("account_index"))
+            by_index[idx] = a
+        except Exception:
+            continue
+
+    # Write per-candidate folders
+    ids: list[int] = []
+    for c in candidates:
+        try:
+            idx = int(c.get("account_index"))
+        except Exception:
+            continue
+        ids.append(idx)
+        acc_dir = cases_accounts_dir / str(idx)
+        acc_dir.mkdir(parents=True, exist_ok=True)
+
+        # account.json: original account object if available
+        account_obj = by_index.get(idx)
+        try:
+            (acc_dir / "account.json").write_text(
+                json.dumps(account_obj or {}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+        # summary.json: analyzer reason (candidate entry)
+        try:
+            (acc_dir / "summary.json").write_text(
+                json.dumps(c, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
+    # index.json in accounts dir
+    index_path = cases_accounts_dir / "index.json"
+    idx_payload = {"count": len(ids), "ids": sorted(ids)}
+    index_path.write_text(json.dumps(idx_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    m.set_artifact("cases", "accounts_index", index_path)
+
+    log.info("CASES_BUILD_DONE sid=%s count=%d dir=%s", sid, len(ids), cases_accounts_dir)
+    return {"sid": sid, "cases": {"count": len(ids), "dir": str(cases_accounts_dir)}}
 
 
 @app.task(bind=True, name="smoke_task")

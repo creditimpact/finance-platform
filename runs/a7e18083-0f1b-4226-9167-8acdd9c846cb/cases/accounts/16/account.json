@@ -1,0 +1,587 @@
+{
+  "account_index": 16,
+  "page_start": 19,
+  "line_start": 35,
+  "page_end": 20,
+  "line_end": 37,
+  "heading_guess": "U S BANK",
+  "heading_source": "section+heading",
+  "section": "unknown",
+  "section_prefix_seen": true,
+  "lines": [
+    {
+      "page": 19,
+      "line": 35,
+      "text": "U S BANK"
+    },
+    {
+      "page": 20,
+      "line": 1,
+      "text": "Transunion ® Experian ® Equifax ®"
+    },
+    {
+      "page": 20,
+      "line": 2,
+      "text": "Account # -- -- --"
+    },
+    {
+      "page": 20,
+      "line": 3,
+      "text": "High Balance: -- $0 --"
+    },
+    {
+      "page": 20,
+      "line": 4,
+      "text": "Last Verified: -- -- --"
+    },
+    {
+      "page": 20,
+      "line": 5,
+      "text": "Date of Last Activity: -- 1.5.2025 --"
+    },
+    {
+      "page": 20,
+      "line": 6,
+      "text": "Date Reported: -- 31.7.2025 --"
+    },
+    {
+      "page": 20,
+      "line": 7,
+      "text": "Date Opened: -- 1.11.2022 --"
+    },
+    {
+      "page": 20,
+      "line": 8,
+      "text": "Balance Owed: -- $12,091 --"
+    },
+    {
+      "page": 20,
+      "line": 9,
+      "text": "Closed Date: -- -- --"
+    },
+    {
+      "page": 20,
+      "line": 10,
+      "text": "Account Rating: -- Derogatory --"
+    },
+    {
+      "page": 20,
+      "line": 11,
+      "text": "Account Description: -- Individual --"
+    },
+    {
+      "page": 20,
+      "line": 12,
+      "text": "Dispute Status: -- Account not disputed --"
+    },
+    {
+      "page": 20,
+      "line": 13,
+      "text": "Creditor Type: -- Bank Credit Cards --"
+    },
+    {
+      "page": 20,
+      "line": 14,
+      "text": "Account Status: -- Closed --"
+    },
+    {
+      "page": 20,
+      "line": 15,
+      "text": "Payment Status: -- Collection/Chargeoff --"
+    },
+    {
+      "page": 20,
+      "line": 16,
+      "text": "Creditor Remarks: -- Account has been closed due to --"
+    },
+    {
+      "page": 20,
+      "line": 17,
+      "text": "inactivity."
+    },
+    {
+      "page": 20,
+      "line": 18,
+      "text": "Unpaid balance reported as a"
+    },
+    {
+      "page": 20,
+      "line": 19,
+      "text": "loss by the credit grantor."
+    },
+    {
+      "page": 20,
+      "line": 20,
+      "text": "Payment Amount: -- $0 --"
+    },
+    {
+      "page": 20,
+      "line": 21,
+      "text": "Last Payment: -- 13.9.2024 --"
+    },
+    {
+      "page": 20,
+      "line": 22,
+      "text": "Term Length: -- -- --"
+    },
+    {
+      "page": 20,
+      "line": 23,
+      "text": "Past Due Amount: -- $12,091 --"
+    },
+    {
+      "page": 20,
+      "line": 24,
+      "text": "Account Type: -- Credit Card --"
+    },
+    {
+      "page": 20,
+      "line": 25,
+      "text": "Payment Frequency: -- -- --"
+    },
+    {
+      "page": 20,
+      "line": 26,
+      "text": "Credit Limit: -- $11,000 --"
+    },
+    {
+      "page": 20,
+      "line": 27,
+      "text": "Two-Year Payment History"
+    },
+    {
+      "page": 20,
+      "line": 28,
+      "text": "Transunion NONE REPORTED"
+    },
+    {
+      "page": 20,
+      "line": 29,
+      "text": "Experian"
+    },
+    {
+      "page": 20,
+      "line": 30,
+      "text": "OK OK OK OK OK OK OK OK OK OK OK OK OK OK OK 30 60 90 120 150"
+    },
+    {
+      "page": 20,
+      "line": 31,
+      "text": "אוג׳ ספט׳ אוק׳ נוב׳ דצמ׳ ינו׳ פבר׳ מרץ אפר׳ מאי יוני יולי אוג׳ ספט׳ אוק׳ נוב׳ דצמ׳ ינו׳ פבר׳ מרץ אפר׳"
+    },
+    {
+      "page": 20,
+      "line": 32,
+      "text": "CO CO CO"
+    },
+    {
+      "page": 20,
+      "line": 33,
+      "text": "מאי יוני יולי"
+    },
+    {
+      "page": 20,
+      "line": 34,
+      "text": "Equifax NONE REPORTED"
+    },
+    {
+      "page": 20,
+      "line": 35,
+      "text": "Days Late - 7 Year History"
+    },
+    {
+      "page": 20,
+      "line": 36,
+      "text": "Transunion ® Experian ® Equifax ®"
+    },
+    {
+      "page": 20,
+      "line": 37,
+      "text": "30: -- 60: -- 90: -- 30: 1 60: 1 90: 3 30: -- 60: -- 90: --"
+    }
+  ],
+  "trailing_section_marker_pruned": false,
+  "noise_lines_skipped": 0,
+  "two_year_payment_history": {
+    "transunion": [],
+    "experian": [
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "30",
+      "60",
+      "90",
+      "120",
+      "150",
+      "CO",
+      "CO",
+      "CO"
+    ],
+    "equifax": []
+  },
+  "seven_year_history": {
+    "transunion": {
+      "late30": 0,
+      "late60": 0,
+      "late90": 0
+    },
+    "experian": {
+      "late30": 1,
+      "late60": 1,
+      "late90": 3
+    },
+    "equifax": {
+      "late30": 0,
+      "late60": 0,
+      "late90": 0
+    }
+  },
+  "triad": {
+    "enabled": true,
+    "order": [
+      "transunion",
+      "experian",
+      "equifax"
+    ]
+  },
+  "triad_fields": {
+    "transunion": {
+      "high_balance": "--",
+      "last_verified": "--",
+      "date_of_last_activity": "--",
+      "date_reported": "--",
+      "date_opened": "--",
+      "balance_owed": "--",
+      "closed_date": "--",
+      "account_rating": "--",
+      "account_description": "--",
+      "dispute_status": "--",
+      "creditor_type": "--",
+      "account_status": "--",
+      "payment_status": "--",
+      "creditor_remarks": "--",
+      "payment_amount": "--",
+      "last_payment": "--",
+      "term_length": "--",
+      "past_due_amount": "--",
+      "account_type": "--",
+      "payment_frequency": "--",
+      "credit_limit": "--",
+      "account_number_display": ""
+    },
+    "experian": {
+      "high_balance": "$0",
+      "last_verified": "--",
+      "date_of_last_activity": "1.5.2025",
+      "date_reported": "31.7.2025",
+      "date_opened": "1.11.2022",
+      "balance_owed": "$12,091",
+      "closed_date": "--",
+      "account_rating": "Derogatory",
+      "account_description": "Individual",
+      "dispute_status": "Account not disputed",
+      "creditor_type": "Bank Credit Cards",
+      "account_status": "Closed",
+      "payment_status": "Collection/Chargeoff",
+      "creditor_remarks": "Account has been closed due to",
+      "payment_amount": "$0",
+      "last_payment": "13.9.2024",
+      "term_length": "--",
+      "past_due_amount": "$12,091",
+      "account_type": "Credit Card",
+      "payment_frequency": "--",
+      "credit_limit": "$11,000",
+      "account_number_display": ""
+    },
+    "equifax": {
+      "high_balance": "--",
+      "last_verified": "--",
+      "date_of_last_activity": "--",
+      "date_reported": "--",
+      "date_opened": "--",
+      "balance_owed": "--",
+      "closed_date": "--",
+      "account_rating": "--",
+      "account_description": "--",
+      "dispute_status": "--",
+      "creditor_type": "--",
+      "account_status": "--",
+      "payment_status": "--",
+      "creditor_remarks": "--",
+      "payment_amount": "--",
+      "last_payment": "--",
+      "term_length": "--",
+      "past_due_amount": "--",
+      "account_type": "--",
+      "payment_frequency": "--",
+      "credit_limit": "--",
+      "account_number_display": ""
+    }
+  },
+  "triad_rows": [
+    {
+      "triad_row": true,
+      "label": "High Balance",
+      "key": "high_balance",
+      "values": {
+        "transunion": "--",
+        "experian": "$0",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Last Verified",
+      "key": "last_verified",
+      "values": {
+        "transunion": "--",
+        "experian": "--",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Date of Last Activity",
+      "key": "date_of_last_activity",
+      "values": {
+        "transunion": "--",
+        "experian": "1.5.2025",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Date Reported",
+      "key": "date_reported",
+      "values": {
+        "transunion": "--",
+        "experian": "31.7.2025",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Date Opened",
+      "key": "date_opened",
+      "values": {
+        "transunion": "--",
+        "experian": "1.11.2022",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Balance Owed",
+      "key": "balance_owed",
+      "values": {
+        "transunion": "--",
+        "experian": "$12,091",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Closed Date",
+      "key": "closed_date",
+      "values": {
+        "transunion": "--",
+        "experian": "--",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Account Rating",
+      "key": "account_rating",
+      "values": {
+        "transunion": "--",
+        "experian": "Derogatory",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Account Description",
+      "key": "account_description",
+      "values": {
+        "transunion": "--",
+        "experian": "Individual",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Dispute Status",
+      "key": "dispute_status",
+      "values": {
+        "transunion": "--",
+        "experian": "Account not disputed",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Creditor Type",
+      "key": "creditor_type",
+      "values": {
+        "transunion": "--",
+        "experian": "Bank Credit Cards",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Account Status",
+      "key": "account_status",
+      "values": {
+        "transunion": "--",
+        "experian": "Closed",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Payment Status",
+      "key": "payment_status",
+      "values": {
+        "transunion": "--",
+        "experian": "Collection/Chargeoff",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Creditor Remarks",
+      "key": "creditor_remarks",
+      "values": {
+        "transunion": "--",
+        "experian": "Account has been closed due to",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Payment Amount",
+      "key": "payment_amount",
+      "values": {
+        "transunion": "--",
+        "experian": "$0",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Last Payment",
+      "key": "last_payment",
+      "values": {
+        "transunion": "--",
+        "experian": "13.9.2024",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Term Length",
+      "key": "term_length",
+      "values": {
+        "transunion": "--",
+        "experian": "--",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Past Due Amount",
+      "key": "past_due_amount",
+      "values": {
+        "transunion": "--",
+        "experian": "$12,091",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Account Type",
+      "key": "account_type",
+      "values": {
+        "transunion": "--",
+        "experian": "Credit Card",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Payment Frequency",
+      "key": "payment_frequency",
+      "values": {
+        "transunion": "--",
+        "experian": "--",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    },
+    {
+      "triad_row": true,
+      "label": "Credit Limit",
+      "key": "credit_limit",
+      "values": {
+        "transunion": "--",
+        "experian": "$11,000",
+        "equifax": "--"
+      },
+      "last_bureau_with_text": "equifax",
+      "expect_values_on_next_line": false
+    }
+  ]
+}

@@ -8,7 +8,7 @@ import re
 import os
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 
 logger = logging.getLogger(__name__)
@@ -354,7 +354,7 @@ def cluster_problematic_accounts(
     sid_value = sid or "-"
     if size == 0:
         logger.info(
-            "MERGE_SUMMARY  sid=<%s> clusters=<0> auto_pairs=<0> ai_pairs=<0>",
+            "MERGE_SUMMARY  sid=<%s> clusters=<0> auto_pairs=<0> ai_pairs=<0> skipped_pairs=<0>",
             sid_value,
         )
         return candidates
@@ -363,7 +363,7 @@ def cluster_problematic_accounts(
         [None] * size for _ in range(size)
     ]
     auto_edges: List[Tuple[int, int]] = []
-    ai_pairs = 0
+    ai_pairs: List[Tuple[int, int]] = []
 
     for i in range(size):
         for j in range(i + 1, size):
@@ -374,7 +374,7 @@ def cluster_problematic_accounts(
             if decision == "auto":
                 auto_edges.append((i, j))
             elif decision == "ai":
-                ai_pairs += 1
+                ai_pairs.append((i, j))
 
             parts_str = ",".join(
                 f"{name}:{parts[name]:.4f}" for name in sorted(parts.keys())
@@ -391,10 +391,31 @@ def cluster_problematic_accounts(
 
     graph = _build_auto_graph(size, auto_edges)
     components = _connected_components(graph)
-    component_map = {}
+    component_map: Dict[int, Tuple[int, List[int]]] = {}
     for idx, comp in enumerate(components, start=1):
         for node in comp:
             component_map[node] = (idx, comp)
+
+    skip_pairs: Set[Tuple[int, int]] = set()
+    for i in range(size):
+        comp_i = component_map.get(i, (i + 1, [i]))
+        comp_nodes_i = comp_i[1]
+        if len(comp_nodes_i) <= 1:
+            continue
+        for j in range(i + 1, size):
+            pair = pair_results[i][j]
+            if pair is None:
+                continue
+            _, pair_decision, _ = pair
+            if pair_decision == "auto":
+                continue
+            comp_j = component_map.get(j, (j + 1, [j]))
+            if comp_i[0] == comp_j[0]:
+                skip_pairs.add((i, j))
+
+    ai_pair_keys = {(min(i, j), max(i, j)) for i, j in ai_pairs}
+    skipped_keys = {(min(i, j), max(i, j)) for i, j in skip_pairs}
+    effective_ai_pairs = sum(1 for key in ai_pair_keys if key not in skipped_keys)
 
     for i, account in enumerate(candidates):
         comp_idx, comp_nodes = component_map.get(i, (i + 1, [i]))
@@ -408,6 +429,9 @@ def cluster_problematic_accounts(
                 continue
             pair = pair_results[i][j]
             if pair is None:
+                continue
+            pair_key = (i, j) if i < j else (j, i)
+            if pair_key in skip_pairs:
                 continue
             pair_score, pair_decision, pair_parts = pair
             entry = {
@@ -437,11 +461,12 @@ def cluster_problematic_accounts(
         account["merge_tag"] = merge_tag
 
     logger.info(
-        "MERGE_SUMMARY  sid=<%s> clusters=<%d> auto_pairs=<%d> ai_pairs=<%d>",
+        "MERGE_SUMMARY  sid=<%s> clusters=<%d> auto_pairs=<%d> ai_pairs=<%d> skipped_pairs=<%d>",
         sid_value,
         len(components),
         len(auto_edges),
-        ai_pairs,
+        effective_ai_pairs,
+        len(skip_pairs),
     )
 
     return candidates

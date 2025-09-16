@@ -1,4 +1,5 @@
 import copy
+import logging
 
 import pytest
 
@@ -168,6 +169,47 @@ def test_graph_clustering_transitive_auto():
     assert tags[0]["best_match"]["account_index"] == 1
     assert tags[1]["best_match"]["account_index"] == 2
     assert tags[2]["best_match"]["account_index"] == 1
+
+    assert [entry["account_index"] for entry in tags[0]["score_to"]] == [1]
+    assert {entry["account_index"] for entry in tags[1]["score_to"]} == {0, 2}
+    assert [entry["account_index"] for entry in tags[2]["score_to"]] == [1]
+
+
+def test_cluster_problematic_accounts_logs_merge_events(caplog):
+    accounts = [
+        {
+            "account_number": "1111 2222 3333 4444",
+            "date_opened": "01-01-2020",
+            "balance_owed": 1000,
+            "payment_status": "Charge Off account",
+            "creditor": "Acme Bank",
+        },
+        {
+            "account_number": "9999000011114444",
+            "date_opened": "01-01-2020",
+            "date_of_last_activity": "05-01-2021",
+            "balance_owed": 1000,
+            "past_due_amount": 500,
+            "payment_status": "Charge Off account now paid as agreed",
+            "creditor": "Acme Bank Collections Dept",
+        },
+        {
+            "account_number": "9999000011114444",
+            "date_of_last_activity": "05-01-2021",
+            "past_due_amount": 500,
+            "payment_status": "Paid as agreed",
+            "creditor": "Collections Department",
+        },
+    ]
+
+    with caplog.at_level(logging.INFO, logger="backend.core.logic.report_analysis.account_merge"):
+        cluster_problematic_accounts(accounts, sid="log-test")
+
+    merge_messages = [record.getMessage() for record in caplog.records]
+    assert any("MERGE_DECISION" in msg for msg in merge_messages)
+    summary_messages = [msg for msg in merge_messages if "MERGE_SUMMARY" in msg]
+    assert summary_messages
+    assert "skipped_pairs=<1>" in summary_messages[-1]
 
 
 def test_scoring_handles_missing_fields():

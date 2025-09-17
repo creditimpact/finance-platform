@@ -57,6 +57,9 @@ def tmp_sid_fixture(tmp_path, monkeypatch):
                     "balance_owed": "1200",
                     "payment_status": "Charge Off",
                     "account_status": "Closed",
+                    "triad_rows": [
+                        {"label": "Balance Owed", "values": {"transunion": "1200"}}
+                    ],
                 },
                 "experian": {
                     "past_due_amount": "0",
@@ -151,9 +154,17 @@ def test_lean_cases_structure(tmp_sid_fixture):
     by_idx = {acc["account_index"]: acc for acc in full_accounts}
     idx = int(acc_dir.name)
     bureaus_path = acc_dir / "bureaus.json"
-    assert json.loads(bureaus_path.read_text(encoding="utf-8")) == by_idx[idx][
-        "triad_fields"
-    ]
+    bureaus_data = json.loads(bureaus_path.read_text(encoding="utf-8"))
+    expected_bureaus = {}
+    for bureau, payload in (by_idx[idx]["triad_fields"] or {}).items():
+        if isinstance(payload, dict):
+            payload = {k: v for k, v in payload.items() if k != "triad_rows"}
+        expected_bureaus[bureau] = payload
+
+    assert bureaus_data == expected_bureaus
+    for payload in bureaus_data.values():
+        if isinstance(payload, dict):
+            assert "triad_rows" not in payload
 
     assert summary["problematic"] == len(candidates_found)
 

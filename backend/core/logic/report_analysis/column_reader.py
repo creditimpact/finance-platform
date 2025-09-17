@@ -123,7 +123,7 @@ def extract_bureau_table(block: dict) -> Dict[str, Dict[str, str]]:
          b) Determine row-Y as median(midY of tokens on that line).
          c) Collect non-label tokens within Y-band [rowY-3, rowY+3].
          d) For each bureau, keep tokens whose midX is within that bureau’s (xL,xR).
-         e) Sort by X; join with spaces; cleanup: convert --/—/- → ""; merge hard-wraps for next Y band within ΔY ≤ 6.
+         e) Sort by X; join with spaces; cleanup: normalize dash placeholders to "--" and leave blanks empty; merge hard-wraps for next Y band within ΔY ≤ 6.
       2) Build dict for each bureau with all 22 keys present (empty string if missing).
     """
 

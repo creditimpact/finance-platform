@@ -22,6 +22,7 @@ import argparse
 import csv
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -32,9 +33,11 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from backend.config import RAW_JOIN_TOKENS_WITH_SPACE, RAW_TRIAD_FROM_X
 from backend.core.logic.report_analysis.canonical_labels import LABEL_MAP
-from backend.core.logic.report_analysis.normalize_fields import ensure_all_keys
+from backend.core.logic.report_analysis.normalize_fields import (
+    clean_value,
+    ensure_all_keys,
+)
 from backend.core.logic.report_analysis.triad_layout import (
-    EDGE_EPS,
     TriadLayout,
     assign_band,
     bands_from_header_tokens,
@@ -258,10 +261,8 @@ def _norm(s: str) -> str:
 def _clean_value(txt: str) -> str:
     s = _norm(txt)
     if not s:
-        return "--"
-    if s in {"—", "–"} or re.fullmatch(r"[—–-]\s*[—–-]", s):
-        return "--"
-    return s
+        return ""
+    return clean_value(s)
 
 
 def _split_triad_tail_3cols(tail: str) -> List[str]:
@@ -269,14 +270,17 @@ def _split_triad_tail_3cols(tail: str) -> List[str]:
 
     s = (tail or "").replace("\u00a0", " ").strip()
     if not s:
-        return ["--", "--", "--"]
+        return ["", "", ""]
 
     parts: List[str]
     normalized = s.replace("—", "--").replace("–", "--")
+    compact = normalized.replace(" ", "")
+    if compact and set(compact) <= {"-"}:
+        return ["--", "--", "--"]
     has_dash_delim = " -- " in normalized or normalized.count("--") >= 2
     if has_dash_delim:
         raw_parts = [p.strip() for p in normalized.split("--")]
-        parts = [p for p in raw_parts if p]
+        parts = [p if p else "--" for p in raw_parts]
     else:
         spaced = [p.strip() for p in MULTISPACE.split(normalized) if p.strip()]
         if len(spaced) >= 3:
@@ -319,12 +323,12 @@ def _group_single_space_tokens(tokens: List[str]) -> List[str]:
 def _normalize_triad_parts(parts: List[str]) -> List[str]:
     cleaned = [_clean_value(p) for p in parts]
     while len(cleaned) < 3:
-        cleaned.append("--")
+        cleaned.append("")
     while len(cleaned) > 3:
         merged = f"{cleaned[-2]} {cleaned[-1]}".strip()
         cleaned[-2] = _clean_value(merged)
         cleaned.pop()
-    return [c if c else "--" for c in cleaned]
+    return [c or "" for c in cleaned]
 
 
 _TRIAD_PRE_SPLIT_BANDS: List[Tuple[str, str]] = [
@@ -774,6 +778,9 @@ def _assign_band_any(
         xp_left = float(layout.xp_left_x0 or 0.0)
         eq_left = float(layout.eq_left_x0 or 0.0)
 
+        if _is_label_token_text(str(token.get("text", ""))) and x0 <= (tu_left + tol):
+            return "label"
+
         if x0 < (tu_left - tol):
             return "label"
         if x0 < (xp_left - tol):
@@ -793,7 +800,46 @@ def _assign_band_any(
         if x0 < eq_right_cutoff:
             return "eq"
         return "none"
-    return assign_band(token, layout)
+    band = assign_band(token, layout)
+    if band == "tu":
+        try:
+            tu_left = float(layout.tu_band[0])
+            xp_left = float(layout.xp_band[0])
+        except Exception:
+            tu_left = xp_left = None
+        if xp_left is not None and tu_left is not None and xp_left > tu_left:
+            seam = (tu_left + xp_left) / 2.0
+            if _triad_mid_x(token) >= seam:
+                return "xp"
+    if band == "xp":
+        try:
+            xp_left = float(layout.xp_band[0])
+            eq_left = float(layout.eq_band[0])
+        except Exception:
+            xp_left = eq_left = None
+        if eq_left is not None and xp_left is not None and eq_left > xp_left:
+            seam = (xp_left + eq_left) / 2.0
+            if _triad_mid_x(token) >= seam:
+                return "eq"
+    return band
+
+
+def _band_mid_and_eps(band: Tuple[float, float]) -> tuple[float, float]:
+    left, right = band
+    try:
+        left_f = float(left)
+    except Exception:
+        left_f = 0.0
+    try:
+        right_f = float(right)
+    except Exception:
+        right_f = float("inf")
+    width = right_f - left_f
+    if not math.isfinite(width) or width <= 0:
+        width = 160.0
+    eps = max(10.0, min(80.0, width / 2.0))
+    mid = left_f + eps
+    return mid, eps
 
 
 def in_label_band(token: dict, layout: TriadLayout) -> bool:
@@ -873,7 +919,7 @@ def _validate_anchor_row(
             by_band[b] += 1
 
     # Label must have a trailing marker and be in the label band.
-    # Snap tolerance: if first token sits within 2*EDGE_EPS left of TU mid,
+    # Snap tolerance: if first token sits within 2*eps left of the TU midpoint,
     # accept it as a label even if it barely crosses the seam.
     label_texts = [
         str(t.get("text", ""))
@@ -884,6 +930,24 @@ def _validate_anchor_row(
         s.strip().endswith(("#",) + UNICODE_COLONS_TUP) for s in label_texts
     )
 
+    if has_label:
+        try:
+            label_xs = [
+                float(t.get("x0", 0.0))
+                for t in anchor_tokens
+                if _token_band(t, layout) == "label"
+            ]
+        except Exception:
+            label_xs = []
+        try:
+            label_right = float(layout.label_band[1])
+        except Exception:
+            label_right = 0.0
+        if label_xs and label_right and min(label_xs) >= label_right:
+            has_label = False
+            by_band["label"] = 0
+            logger.info("TRIAD_X0_FALLBACK_OK anchor")
+
     if not has_label and anchor_tokens:
         first = anchor_tokens[0]
         try:
@@ -892,9 +956,9 @@ def _validate_anchor_row(
             mid = (x0 + x1) / 2.0
         except Exception:
             mid = 0.0
-        # Estimate TU midpoint from layout: tu_left ~ tu_mid - EDGE_EPS
-        tu_mid_est = layout.tu_band[0] + EDGE_EPS
-        if (tu_mid_est - 2 * EDGE_EPS) <= mid < tu_mid_est:
+        # Estimate TU midpoint from layout using band width heuristics
+        tu_mid_est, eps = _band_mid_and_eps(layout.tu_band)
+        if (tu_mid_est - 2 * eps) <= mid < tu_mid_est:
             if str(first.get("text", "")).strip().endswith(("#",) + UNICODE_COLONS_TUP):
                 has_label = True
 
@@ -1013,14 +1077,15 @@ def process_triad_labeled_line(
                 tu_left_x0 = 0.0
             # Stop label collection once a label-band token reaches the TU cutoff (with tolerance)
             if tu_left_x0 and (x0 + TRIAD_X0_TOL) >= tu_left_x0:
-                if label_span:
-                    suffix_idx = i - 1
-                logger.info(
-                    "TRIAD_LABEL_STOP reason=hit_tu_left_x0 x0=%.1f tu_left_x0=%.1f",
-                    x0,
-                    tu_left_x0,
-                )
-                break
+                if label_span or not _is_label_token_text(txt):
+                    if label_span:
+                        suffix_idx = i - 1
+                    logger.info(
+                        "TRIAD_LABEL_STOP reason=hit_tu_left_x0 x0=%.1f tu_left_x0=%.1f",
+                        x0,
+                        tu_left_x0,
+                    )
+                    break
         if _looks_like_value_text(txt):
             # set suffix position to last label token collected so far
             if label_span:
@@ -1132,7 +1197,7 @@ def process_triad_labeled_line(
     pre_split_mode: str | None = None
     if pre_split_override is not None:
         pre_split_cols = [
-            _clean_value(str(part)) if part is not None else "--"
+            _clean_value(str(part)) if part is not None else ""
             for part in pre_split_override
         ]
         pre_split_text = pre_split_override_text
@@ -1180,11 +1245,10 @@ def process_triad_labeled_line(
                 canonical or "",
             )
         for idx, bureau in enumerate(("transunion", "experian", "equifax")):
-            part = (pre_split_cols[idx] or "").strip()
-            if not part:
-                part = "--"
-            vals[bureau] = [part]
-            if part in dash_tokens:
+            part = pre_split_cols[idx] if idx < len(pre_split_cols) else ""
+            normalized = clean_value(part)
+            vals[bureau] = [normalized]
+            if normalized in dash_tokens:
                 saw_dash_for[bureau] = True
     else:
         for j, t in enumerate(tail_tokens, start=suffix_idx + 1):
@@ -1250,14 +1314,11 @@ def process_triad_labeled_line(
                 vals[b] = []
                 saw_dash_for[b] = False
             for idx, bureau in enumerate(("transunion", "experian", "equifax")):
-                part = (candidate_parts[idx] or "").strip()
-                if not part or part == "--":
-                    vals[bureau] = ["--"]
+                part = candidate_parts[idx] if idx < len(candidate_parts) else ""
+                normalized = clean_value(part)
+                vals[bureau] = [normalized]
+                if normalized in dash_tokens:
                     saw_dash_for[bureau] = True
-                else:
-                    vals[bureau] = [part]
-                    if part in {"--", "—", "–"}:
-                        saw_dash_for[bureau] = True
 
     # 2b) TU rescue: sometimes TU values are mis-banded into label due to compression/misalignment.
     # If TU is empty but XP/EQ have values, look for label-band tokens near the TU seam that look like values.
@@ -1584,6 +1645,7 @@ def split_accounts(
     tsv_path: Path, json_out: Path, write_tsv: bool = False
 ) -> Dict[str, Any]:
     """Core logic for splitting accounts from the full TSV."""
+    _triad_x0_fallback_logged.clear()
     tokens_by_line, lines = _read_tokens(tsv_path)
     global trace_dir
     if TRACE_ON:
@@ -2020,11 +2082,14 @@ def split_accounts(
                                 header_page,
                                 header_line,
                             )
+                        tu_mid, _ = _band_mid_and_eps(layout.tu_band)
+                        xp_mid, _ = _band_mid_and_eps(layout.xp_band)
+                        eq_mid, _ = _band_mid_and_eps(layout.eq_band)
                         triad_log(
                             "TRIAD_HEADER_XMIDS tu=%.1f xp=%.1f eq=%.1f",
-                            layout.tu_band[0] + EDGE_EPS,
-                            layout.xp_band[0] + EDGE_EPS,
-                            layout.eq_band[0] + EDGE_EPS,
+                            tu_mid,
+                            xp_mid,
+                            eq_mid,
                         )
                         # When banding by x0, derive left cutoffs from the anchor line's first TU/XP/EQ tokens
                         if TRIAD_BAND_BY_X0:
@@ -2105,6 +2170,8 @@ def split_accounts(
                                 if page not in _triad_x0_fallback_logged:
                                     logger.info("TRIAD_X0_FALLBACK_OK page=%s", page)
                                     _triad_x0_fallback_logged.add(page)
+                                else:
+                                    logger.info("TRIAD_X0_FALLBACK_OK page=%s", page)
                                 triad_active = True
                                 current_layout = layout
                                 current_layout_page = page
@@ -2627,7 +2694,7 @@ def split_accounts(
             for bureau in ("transunion", "experian", "equifax"):
                 filled = ensure_all_keys(triad_maps[bureau])
                 triad_fields_out[bureau] = {
-                    key: _clean_value(str(value)) if value is not None else "--"
+                    key: _clean_value(str(value)) if value is not None else ""
                     for key, value in filled.items()
                 }
             account_info["triad_fields"] = triad_fields_out

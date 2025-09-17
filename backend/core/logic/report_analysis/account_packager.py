@@ -5,7 +5,14 @@ from pathlib import Path
 import json
 import re
 
-from .normalize_fields import LABELS, LABEL_TO_KEY, CANONICAL_KEYS, ensure_all_keys, clean_value
+from .normalize_fields import (
+    LABELS,
+    LABEL_TO_KEY,
+    CANONICAL_KEYS,
+    ensure_all_keys,
+    clean_value,
+    is_effectively_blank,
+)
 
 
 def _mid_x(t: dict) -> float:
@@ -130,7 +137,13 @@ def package_account_block(block: dict, index_headline: str | None) -> dict:
         out_fields[b] = ensure_all_keys(fields.get(b) or {})
 
     # Presence flags: any non-empty value
-    presence = {b: any(str(v or "").strip() for v in out_fields.get(b, {}).values()) for b in ("transunion", "experian", "equifax")}
+    presence = {
+        b: any(
+            not is_effectively_blank(v)
+            for v in out_fields.get(b, {}).values()
+        )
+        for b in ("transunion", "experian", "equifax")
+    }
 
     # Layout section (optional)
     layout_tokens: List[dict] = list(blk.get("layout_tokens") or [])

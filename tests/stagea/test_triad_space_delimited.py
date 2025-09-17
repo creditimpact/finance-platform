@@ -104,7 +104,7 @@ def test_triad_space_delimited_tail_split(
     assert "TRIAD_TAIL_SPACE_SPLIT" in caplog.text
 
     for bureau in ("transunion", "experian", "equifax"):
-        assert fields[bureau]["high_balance"] == "--"
+        assert fields[bureau]["high_balance"] == ""
 
     assert fields["transunion"]["account_number_display"] == "123456789"
 

@@ -35,6 +35,20 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
                     "payment_status": "Late",
                 }
             },
+            "triad_rows": [
+                {
+                    "triad_row": True,
+                    "label": "Account #",
+                    "key": "account_number_display",
+                    "values": {
+                        "transunion": "12345",
+                        "experian": "12345",
+                        "equifax": "12345",
+                    },
+                    "last_bureau_with_text": "transunion",
+                    "expect_values_on_next_line": False,
+                }
+            ],
         },
         {
             "account_index": 2,
@@ -52,7 +66,7 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
         },
     ]
 
-        # Configure runs root and manifest; write canonical Stage-A artifacts
+    # Configure runs root and manifest; write canonical Stage-A artifacts
     runs_root = tmp_path / "runs"
     monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
     m = RunManifest.for_sid(sid)
@@ -135,6 +149,7 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
 
     fields_flat = json.loads((first / "fields_flat.json").read_text())
     assert "past_due_amount" in fields_flat
+    assert all(k == k.lower() for k in fields_flat.keys())
 
     tags_data = json.loads((first / "tags.json").read_text())
     assert tags_data == []
@@ -146,6 +161,9 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
     assert case_data["merge_tag"]["best_match"]["account_index"] == 2
     assert case_data["pointers"]["bureaus"] == "bureaus.json"
     assert "triad_rows" not in json.dumps(case_data)
+
+    for json_path in first.glob("*.json"):
+        assert "triad_rows" not in json_path.read_text(), json_path
 
     accounts_index_path = acc_dir / "index.json"
     acc_index = json.loads(accounts_index_path.read_text())

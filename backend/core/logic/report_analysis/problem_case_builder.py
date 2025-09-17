@@ -515,7 +515,7 @@ def _build_problem_cases_legacy(
         raw_lines = list(full_acc.get("lines") or [])
         _write_json(account_dir / pointers["raw"], raw_lines)
 
-        bureaus_obj = dict(full_acc.get("triad_fields") or {})
+        bureaus_obj = _sanitize_bureaus(full_acc.get("triad_fields"))
         _write_json(account_dir / pointers["bureaus"], bureaus_obj)
 
         flat_fields, _prov = build_rule_fields_from_triad(dict(full_acc))

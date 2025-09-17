@@ -1,9 +1,161 @@
 import json
 import logging
+import os
 from pathlib import Path
 
+import pytest
+
 from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
+from backend.core.logic.report_analysis.account_merge import (
+    DEFAULT_CFG,
+    cluster_problematic_accounts,
+)
+from backend.core.logic.report_analysis.problem_extractor import (
+    detect_problem_accounts,
+    load_stagea_accounts_from_manifest,
+)
 from backend.pipeline.runs import RUNS_ROOT_ENV, RunManifest
+
+
+@pytest.fixture
+def tmp_sid_fixture(tmp_path, monkeypatch):
+    sid = "SLEAN"
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+    monkeypatch.setenv("CASES_LEAN_MODE", "1")
+
+    m = RunManifest.for_sid(sid)
+    traces_dir = m.ensure_run_subdir("traces_dir", "traces")
+    acct_dir = traces_dir / "accounts_table"
+    acct_dir.mkdir(parents=True, exist_ok=True)
+
+    accounts = [
+        {
+            "account_id": "acct-001",
+            "account_index": 1,
+            "heading_guess": "Charge Off",
+            "page_start": 2,
+            "line_start": 5,
+            "page_end": 2,
+            "line_end": 6,
+            "account_number": "1234 5678 90",
+            "date_opened": "01-01-2020",
+            "date_of_last_activity": "01-03-2023",
+            "lines": [
+                {"page": 2, "line": 5, "text": "Account 1 line 1"},
+                {"page": 2, "line": 6, "text": "Account 1 line 2"},
+            ],
+            "fields": {
+                "past_due_amount": 150.0,
+                "balance_owed": 1200.0,
+                "payment_status": "Charge Off",
+                "account_status": "Closed",
+            },
+            "triad_fields": {
+                "transunion": {
+                    "past_due_amount": "150",
+                    "balance_owed": "1200",
+                    "payment_status": "Charge Off",
+                    "account_status": "Closed",
+                },
+                "experian": {
+                    "past_due_amount": "0",
+                    "balance_owed": "1180",
+                    "payment_status": "Delinquent",
+                    "account_status": "Closed",
+                },
+            },
+            "triad_rows": [
+                {
+                    "triad_row": True,
+                    "label": "Account #",
+                    "key": "account_number_display",
+                    "values": {
+                        "transunion": "1234 5678 90",
+                        "experian": "1234 5678 90",
+                        "equifax": "1234 5678 90",
+                    },
+                    "last_bureau_with_text": "transunion",
+                    "expect_values_on_next_line": False,
+                }
+            ],
+            "triad": {"order": ["transunion", "experian", "equifax"]},
+            "seven_year_history": {
+                "transunion": {"late30": 1, "late60": 0, "late90": 0},
+                "experian": {"late30": 0, "late60": 0, "late90": 0},
+                "equifax": {"late30": 0, "late60": 0, "late90": 0},
+            },
+            "two_year_payment_history": {
+                "transunion": ["30", "OK"],
+                "experian": ["OK", "OK"],
+                "equifax": ["OK", "OK"],
+            },
+        },
+        {
+            "account_id": "acct-002",
+            "account_index": 2,
+            "heading_guess": "Neutral Account",
+            "lines": [],
+            "fields": {
+                "past_due_amount": 0.0,
+                "balance_owed": 0.0,
+                "payment_status": "Pays as Agreed",
+                "account_status": "Open",
+            },
+            "triad_fields": {"transunion": {}},
+        },
+    ]
+
+    acc_path = acct_dir / "accounts_from_full.json"
+    gen_path = acct_dir / "general_info_from_full.json"
+    acc_path.write_text(json.dumps({"accounts": accounts}), encoding="utf-8")
+    gen_path.write_text(json.dumps({"client_name": "Lean Fixture"}), encoding="utf-8")
+    m.set_artifact("traces.accounts_table", "accounts_json", acc_path)
+    m.set_artifact("traces.accounts_table", "general_json", gen_path)
+
+    return sid
+
+
+def test_lean_cases_structure(tmp_sid_fixture):
+    sid = tmp_sid_fixture
+
+    candidates = detect_problem_accounts(sid)
+    assert candidates, "expected detection to flag at least one account"
+
+    candidates_found = cluster_problematic_accounts(candidates, DEFAULT_CFG, sid=sid)
+    summary = build_problem_cases(sid, candidates_found)
+
+    runs_root = Path(os.environ[RUNS_ROOT_ENV])
+    adir = runs_root / sid / "cases" / "accounts"
+    assert adir.exists(), "cases/accounts directory not created"
+
+    acc_dir = next(p for p in adir.iterdir() if p.is_dir())
+    for name in [
+        "meta.json",
+        "summary.json",
+        "bureaus.json",
+        "fields_flat.json",
+        "raw_lines.json",
+        "tags.json",
+    ]:
+        assert (acc_dir / name).exists(), f"missing expected file {name}"
+
+    summary_text = (acc_dir / "summary.json").read_text(encoding="utf-8")
+    assert "triad_rows" not in summary_text
+    summary_data = json.loads(summary_text)
+    assert summary_data.get("problem_reasons"), "summary missing reasons"
+    assert summary_data.get("merge_tag"), "summary missing merge tag"
+    assert summary_data.get("pointers"), "summary missing pointers"
+
+    full_accounts = load_stagea_accounts_from_manifest(sid)
+    by_idx = {acc["account_index"]: acc for acc in full_accounts}
+    idx = int(acc_dir.name)
+    bureaus_path = acc_dir / "bureaus.json"
+    assert json.loads(bureaus_path.read_text(encoding="utf-8")) == by_idx[idx][
+        "triad_fields"
+    ]
+
+    assert summary["problematic"] == len(candidates_found)
 
 
 def test_problem_case_builder(tmp_path, caplog, monkeypatch):

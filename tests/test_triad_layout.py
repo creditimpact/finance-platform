@@ -18,13 +18,13 @@ def test_detect_triads_with_trademark(caplog):
         layouts = detect_triads(tokens_by_line)
     assert 1 in layouts
     layout = layouts[1]
-    assert layout.label_band == (0.0, 194.0)
-    assert layout.tu_band == (194.0, 275.0)
-    assert layout.xp_band == (275.0, 425.0)
-    assert layout.eq_band == (425.0, float("inf"))
+    assert layout.label_band == (0.0, 160.0)
+    assert layout.tu_band == (160.0, 300.0)
+    assert layout.xp_band == (300.0, 460.0)
+    assert layout.eq_band == (460.0, float("inf"))
     assert any(
         rec.message
-        == "TRIAD_LAYOUT page=1 label=(0.0,194.0) tu=(194.0,275.0) xp=(275.0,425.0) eq=(425.0,inf)"
+        == "TRIAD_LAYOUT page=1 label=(0.0,160.0) tu=(160.0,300.0) xp=(300.0,460.0) eq=(460.0,inf)"
         for rec in caplog.records
     )
 
@@ -37,24 +37,24 @@ def test_bands_from_header_tokens_any_order():
     ]
     layout = bands_from_header_tokens(tokens)
     assert layout.page == 1
-    assert layout.label_band == (0.0, 194.0)
-    assert layout.tu_band == (194.0, 275.0)
-    assert layout.xp_band == (275.0, 425.0)
-    assert layout.eq_band == (425.0, float("inf"))
+    assert layout.label_band == (0.0, 160.0)
+    assert layout.tu_band == (160.0, 300.0)
+    assert layout.xp_band == (300.0, 460.0)
+    assert layout.eq_band == (460.0, float("inf"))
 
 
 def test_assign_band_midpoint_and_tolerance():
     layout = bands_from_header_tokens(
         [
-            {"text": "TransUnion", "x0": 0, "x1": 20, "page": 1},
-            {"text": "Experian", "x0": 30, "x1": 50, "page": 1},
-            {"text": "Equifax", "x0": 60, "x1": 80, "page": 1},
+            {"text": "TransUnion", "x0": 100, "x1": 140, "page": 1},
+            {"text": "Experian", "x0": 200, "x1": 240, "page": 1},
+            {"text": "Equifax", "x0": 300, "x1": 340, "page": 1},
         ]
     )
-    # Token slightly to the right of the TU midpoint → ``tu``
-    assert assign_band({"x0": 10.1, "x1": 10.2}, layout) == "tu"
+    # Token with midpoint within the TU column → ``tu``
+    assert assign_band({"x0": 150.0, "x1": 170.0}, layout) == "tu"
     # Clearly within the label band
-    assert assign_band({"x0": 1.0, "x1": 1.2}, layout) == "label"
+    assert assign_band({"x0": 10.0, "x1": 20.0}, layout) == "label"
     # Far outside all bands on the left → ``none``
     assert assign_band({"x0": -5.0, "x1": -4.5}, layout) == "none"
 
@@ -68,4 +68,4 @@ def test_assign_band_prefers_xp_on_seam():
         ]
     )
     # Token on the TU/XP boundary should be assigned to XP
-    assert assign_band({"x0": 274.0, "x1": 276.0}, layout) == "xp"
+    assert assign_band({"x0": 299.0, "x1": 301.0}, layout) == "xp"

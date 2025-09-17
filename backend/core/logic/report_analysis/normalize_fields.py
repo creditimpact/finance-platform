@@ -83,7 +83,15 @@ def is_effectively_blank(val: str | None) -> bool:
 
 
 def clean_value(val: str | None) -> str:
-    s = "" if val is None else str(val).strip()
+    raw = "" if val is None else str(val)
+    if not raw:
+        return ""
+
+    if "*" in raw:
+        # Preserve masked account patterns verbatim aside from whitespace cleanup
+        return re.sub(r"\s+", " ", raw).strip()
+
+    s = raw.strip()
     if not s:
         return ""
     if is_dash_placeholder(s):

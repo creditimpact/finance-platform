@@ -194,6 +194,7 @@ HEADING_BACK_LINES = 8
 
 
 _SPACE_RE = re.compile(r"\s+")
+MULTISPACE = re.compile(r"\s{2,}")
 
 
 def join_tokens_with_space(tokens: Iterable[str]) -> str:
@@ -220,6 +221,31 @@ def _clean_value(txt: str) -> str:
     if s in {"—", "–"} or re.fullmatch(r"[—–-]\s*[—–-]", s):
         return "--"
     return s
+
+
+def _split_triad_tail_3cols(tail: str) -> List[str]:
+    """Split a triad tail (after a label) into three bureau segments."""
+
+    s = (tail or "").strip()
+    if not s:
+        return ["--", "--", "--"]
+
+    has_dash_delim = " -- " in s or s.count("--") >= 2
+    parts: List[str]
+    if has_dash_delim:
+        raw_parts = [p.strip() for p in s.split("--")]
+        parts = [p for p in raw_parts if p]
+    else:
+        parts = [p for p in MULTISPACE.split(s) if p]
+
+    if len(parts) < 3:
+        parts = parts + ["--"] * (3 - len(parts))
+    elif len(parts) > 3:
+        while len(parts) > 3:
+            parts[-2] = (parts[-2] + " " + parts[-1]).strip()
+            parts.pop()
+
+    return [p.strip() or "--" for p in parts]
 
 
 def _norm_text(s: str) -> str:
@@ -856,7 +882,8 @@ def process_triad_labeled_line(
     dash_tokens = {"--", "—", "–"}
     vals = {"transunion": [], "experian": [], "equifax": []}
     saw_dash_for = {"transunion": False, "experian": False, "equifax": False}
-    for j, t in enumerate(tokens[suffix_idx + 1 :], start=suffix_idx + 1):
+    tail_tokens = tokens[suffix_idx + 1 :]
+    for j, t in enumerate(tail_tokens, start=suffix_idx + 1):
         b = _token_band(t, layout)
         txt = str(t.get("text", ""))
         z = txt.strip()
@@ -873,6 +900,65 @@ def process_triad_labeled_line(
             if z in dash_tokens:
                 saw_dash_for["equifax"] = True
         _trace_token(t.get("page"), t.get("line"), j, t, b, "labeled", canonical or "")
+
+    # 2a) Detect a collapsed triad tail rendered as a single space-delimited token.
+    band_to_bureau = {"tu": "transunion", "xp": "experian", "eq": "equifax"}
+    non_empty_bureaus = [b for b in ("transunion", "experian", "equifax") if vals[b]]
+    candidate_parts: List[str] | None = None
+    candidate_bureau: str | None = None
+    candidate_text: str | None = None
+    for t in tail_tokens:
+        band = _token_band(t, layout)
+        bureau = band_to_bureau.get(band)
+        if bureau is None:
+            continue
+        txt = str(t.get("text", ""))
+        s = txt.strip()
+        if not s:
+            continue
+        has_dash_delim = " -- " in s or s.count("--") >= 2
+        space_runs = list(MULTISPACE.finditer(s))
+        if not has_dash_delim and len(space_runs) < 2:
+            continue
+        parts = _split_triad_tail_3cols(txt)
+        if not parts:
+            continue
+        candidate_parts = parts
+        candidate_bureau = bureau
+        candidate_text = txt
+        break
+
+    if candidate_parts and (
+        not non_empty_bureaus
+        or (
+            len(non_empty_bureaus) == 1
+            and candidate_bureau == non_empty_bureaus[0]
+            and len(vals[candidate_bureau]) == 1
+            and all(
+                not vals[b]
+                for b in ("transunion", "experian", "equifax")
+                if b != candidate_bureau
+            )
+        )
+    ):
+        logger.info(
+            "TRIAD_TAIL_SPACE_SPLIT key=%s text=%r parts=%r",
+            canonical,
+            candidate_text,
+            candidate_parts,
+        )
+        for b in ("transunion", "experian", "equifax"):
+            vals[b] = []
+            saw_dash_for[b] = False
+        for idx, bureau in enumerate(("transunion", "experian", "equifax")):
+            part = (candidate_parts[idx] or "").strip()
+            if not part or part == "--":
+                vals[bureau] = ["--"]
+                saw_dash_for[bureau] = True
+            else:
+                vals[bureau] = [part]
+                if part in {"--", "—", "–"}:
+                    saw_dash_for[bureau] = True
 
     # 2b) TU rescue: sometimes TU values are mis-banded into label due to compression/misalignment.
     # If TU is empty but XP/EQ have values, look for label-band tokens near the TU seam that look like values.

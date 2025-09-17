@@ -83,8 +83,8 @@ def _build_bureaus_payload_from_stagea(acc: Mapping[str, Any] | None) -> Dict[st
         acc = {}
 
     tf = _sanitize_bureaus(acc.get("triad_fields"))
-    t2y = acc.get("two_year_payment_history") or {}
-    s7y = acc.get("seven_year_history") or {}
+    t2y = acc.get("two_year_payment_history")
+    s7y = acc.get("seven_year_history")
 
     payload: Dict[str, Any] = {k: v for k, v in tf.items()}
     payload["two_year_payment_history"] = t2y

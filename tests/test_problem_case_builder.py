@@ -122,6 +122,25 @@ def tmp_sid_fixture(tmp_path, monkeypatch):
     return sid
 
 
+def test_build_bureaus_payload_preserves_history_values():
+    account = {
+        "triad_fields": {
+            "transunion": {"payment_status": "Late", "triad_rows": [{"foo": "bar"}]}
+        },
+        "two_year_payment_history": None,
+        "seven_year_history": {"transunion": {"late30": 1, "late60": 0, "late90": 0}},
+    }
+
+    bureaus = _build_bureaus_payload_from_stagea(account)
+
+    assert bureaus["transunion"]["payment_status"] == "Late"
+    assert "triad_rows" not in bureaus["transunion"]
+    assert "two_year_payment_history" in bureaus
+    assert "seven_year_history" in bureaus
+    assert bureaus["two_year_payment_history"] is None
+    assert bureaus["seven_year_history"] is account["seven_year_history"]
+
+
 def test_lean_cases_structure(tmp_sid_fixture):
     sid = tmp_sid_fixture
 

@@ -760,7 +760,9 @@ def _has_label_suffix(txt: str) -> bool:
     return s.endswith(("#",) + UNICODE_COLONS_TUP)
 
 
-def _assign_band_any(token: dict, layout: TriadLayout) -> str:
+def _assign_band_any(
+    token: dict, layout: TriadLayout, row_eq_right_x0: float | None = None
+) -> str:
     if TRIAD_BAND_BY_X0:
         try:
             x0 = float(token.get("x0", 0.0))
@@ -773,6 +775,12 @@ def _assign_band_any(token: dict, layout: TriadLayout) -> str:
             return "tu"
         if x0 + TRIAD_X0_TOL < (layout.eq_left_x0 or 0.0):
             return "xp"
+        eq_left = layout.eq_left_x0 or 0.0
+        eq_right = row_eq_right_x0 if row_eq_right_x0 is not None else float("inf")
+        if eq_right != float("inf") and eq_right < eq_left:
+            eq_right = eq_left
+        if x0 >= eq_right:
+            return "none"
         return "eq"
     return assign_band(token, layout)
 
@@ -821,9 +829,11 @@ def _triad_mid_x(t: dict) -> float:
         return 0.0
 
 
-def _token_band(t: dict, layout: TriadLayout) -> str:
+def _token_band(
+    t: dict, layout: TriadLayout, row_eq_right_x0: float | None = None
+) -> str:
     # Use local helper; assign by geometry only
-    return _assign_band_any(t, layout)
+    return _assign_band_any(t, layout, row_eq_right_x0=row_eq_right_x0)
 
 
 def _validate_anchor_row(
@@ -1071,6 +1081,41 @@ def process_triad_labeled_line(
     vals = {"transunion": [], "experian": [], "equifax": []}
     saw_dash_for = {"transunion": False, "experian": False, "equifax": False}
     tail_tokens = tokens[suffix_idx + 1 :]
+    row_eq_right_x0: float | None = None
+    eq_left_x0_for_log = 0.0
+    if TRIAD_BAND_BY_X0:
+        try:
+            eq_left_x0_for_log = float(getattr(layout, "eq_left_x0", 0.0) or 0.0)
+        except Exception:
+            eq_left_x0_for_log = 0.0
+        if tail_tokens:
+            for next_label_token in tail_tokens:
+                text = str(next_label_token.get("text", ""))
+                if not _is_label_token_text(text):
+                    continue
+                try:
+                    candidate_x0 = float(next_label_token.get("x0", 0.0))
+                except Exception:
+                    continue
+                if (
+                    eq_left_x0_for_log
+                    and candidate_x0 + TRIAD_X0_TOL < eq_left_x0_for_log
+                ):
+                    continue
+                row_eq_right_x0 = candidate_x0
+                break
+        if (
+            row_eq_right_x0 is not None
+            and eq_left_x0_for_log
+            and row_eq_right_x0 < eq_left_x0_for_log
+        ):
+            row_eq_right_x0 = eq_left_x0_for_log
+        logger.info(
+            "TRIAD_ROW_BOUNDS key=%s eq=[%.1f,%.1f)",
+            canonical or canon_label,
+            eq_left_x0_for_log,
+            row_eq_right_x0 if row_eq_right_x0 is not None else float("inf"),
+        )
     pre_split_cols: List[str] | None = None
     pre_split_text: str | None = None
     pre_split_mode: str | None = None
@@ -1082,9 +1127,13 @@ def process_triad_labeled_line(
         pre_split_text = pre_split_override_text
         pre_split_mode = "override"
     elif SPLIT_SPACE_TRIADS and tail_tokens:
-        bureau_tokens = [
-            t for t in tail_tokens if _token_band(t, layout) in {"tu", "xp", "eq"}
-        ]
+        bureau_tokens = []
+        for t in tail_tokens:
+            band_name = _token_band(
+                t, layout, row_eq_right_x0=row_eq_right_x0
+            )
+            if band_name in {"tu", "xp", "eq"}:
+                bureau_tokens.append(t)
         if len(bureau_tokens) == 1:
             candidate = bureau_tokens[0]
             raw = candidate.get("text")
@@ -1109,7 +1158,7 @@ def process_triad_labeled_line(
             pre_split_cols,
         )
         for j, t in enumerate(tail_tokens, start=suffix_idx + 1):
-            b = _token_band(t, layout)
+            b = _token_band(t, layout, row_eq_right_x0=row_eq_right_x0)
             _trace_token(
                 t.get("page"),
                 t.get("line"),
@@ -1128,7 +1177,7 @@ def process_triad_labeled_line(
                 saw_dash_for[bureau] = True
     else:
         for j, t in enumerate(tail_tokens, start=suffix_idx + 1):
-            b = _token_band(t, layout)
+            b = _token_band(t, layout, row_eq_right_x0=row_eq_right_x0)
             txt = str(t.get("text", ""))
             z = txt.strip()
             if b == "tu":
@@ -1154,7 +1203,7 @@ def process_triad_labeled_line(
         candidate_bureau: str | None = None
         candidate_text: str | None = None
         for t in tail_tokens:
-            band = _token_band(t, layout)
+            band = _token_band(t, layout, row_eq_right_x0=row_eq_right_x0)
             bureau = band_to_bureau.get(band)
             if bureau is None:
                 continue
@@ -1218,7 +1267,7 @@ def process_triad_labeled_line(
         win_hi = tu_left + 2.0
         candidates: list[tuple[float, str]] = []
         for j, t in enumerate(tokens[suffix_idx + 1 :], start=suffix_idx + 1):
-            if _token_band(t, layout) != "label":
+            if _token_band(t, layout, row_eq_right_x0=row_eq_right_x0) != "label":
                 continue
             txt = str(t.get("text", ""))
             z = txt.strip()
@@ -1253,7 +1302,9 @@ def process_triad_labeled_line(
     # that looks like a TU value immediately after the label.
     if not vals["transunion"]:
         for j, t in enumerate(tokens[suffix_idx + 1 :], start=suffix_idx + 1):
-            if _token_band(t, layout) != "label":
+            if _token_band(
+                t, layout, row_eq_right_x0=row_eq_right_x0
+            ) != "label":
                 continue
             txt = str(t.get("text", ""))
             if not _looks_like_tu_value(txt):

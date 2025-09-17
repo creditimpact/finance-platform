@@ -768,20 +768,31 @@ def _assign_band_any(
             x0 = float(token.get("x0", 0.0))
         except Exception:
             x0 = 0.0
-        # Apply tolerance around cutoffs in x0-mode comparisons
-        if x0 + TRIAD_X0_TOL < (layout.tu_left_x0 or 0.0):
+
+        tol = TRIAD_X0_TOL
+        tu_left = float(layout.tu_left_x0 or 0.0)
+        xp_left = float(layout.xp_left_x0 or 0.0)
+        eq_left = float(layout.eq_left_x0 or 0.0)
+
+        if x0 < (tu_left - tol):
             return "label"
-        if x0 + TRIAD_X0_TOL < (layout.xp_left_x0 or 0.0):
+        if x0 < (xp_left - tol):
             return "tu"
-        if x0 + TRIAD_X0_TOL < (layout.eq_left_x0 or 0.0):
+        if x0 < (eq_left - tol):
             return "xp"
-        eq_left = layout.eq_left_x0 or 0.0
+
         eq_right = row_eq_right_x0 if row_eq_right_x0 is not None else float("inf")
         if eq_right != float("inf") and eq_right < eq_left:
             eq_right = eq_left
-        if x0 >= eq_right:
-            return "none"
-        return "eq"
+
+        eq_right_cutoff = eq_right - tol
+        eq_start = eq_left - tol
+        if eq_right_cutoff < eq_start:
+            eq_right_cutoff = eq_start
+
+        if x0 < eq_right_cutoff:
+            return "eq"
+        return "none"
     return assign_band(token, layout)
 
 

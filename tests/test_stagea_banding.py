@@ -272,3 +272,167 @@ def test_cleaning_empty_vs_dashes_and_masks(split_module) -> None:
     assert triad_fields["experian"]["high_balance"] == "--"
     assert triad_fields["equifax"]["high_balance"] == "--"
     assert triad_fields["experian"]["credit_limit"] == ""
+
+
+def test_no_bleed_with_explicit_dashes(split_module) -> None:
+    layout = _layout()
+    triad_fields: Dict[str, Dict[str, str]] = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+    }
+    triad_order = ["transunion", "experian", "equifax"]
+
+    row = [
+        _token(5, 80.0, 140.0, "Account"),
+        _token(5, 140.0, 190.0, "Type"),
+        _token(5, COLON_LEFT, COLON_RIGHT, ":"),
+        _token(5, TU_X0 + 10.0, TU_X0 + 40.0, "Flexible"),
+        _token(5, TU_X0 + 45.0, TU_X0 + 80.0, "spending"),
+        _token(5, TU_X0 + 85.0, TU_X0 + 120.0, "credit"),
+        _token(5, TU_X0 + 125.0, TU_X0 + 160.0, "card"),
+        _token(5, XP_X0 + 25.0, XP_X0 + 55.0, "--"),
+        _token(5, EQ_X0 + 20.0, EQ_X0 + 55.0, "--"),
+    ]
+
+    row_state = split_module.process_triad_labeled_line(
+        row,
+        layout,
+        split_module.LABEL_MAP,
+        None,
+        triad_fields,
+        triad_order,
+    )
+
+    assert row_state["values"]["transunion"] == "Flexible spending credit card"
+    assert row_state["values"]["experian"] == "--"
+    assert row_state["values"]["equifax"] == "--"
+
+    assert triad_fields["transunion"]["account_type"] == "Flexible spending credit card"
+    assert triad_fields["experian"]["account_type"] == "--"
+    assert triad_fields["equifax"]["account_type"] == "--"
+
+    tu_tokens = [t for t in row[3:7] if split_module._token_band(t, layout) == "tu"]
+    assert tu_tokens, "TU tokens should stay within the TU band"
+    xp_token = row[7]
+    eq_token = row[8]
+    assert split_module._token_band(xp_token, layout) == "xp"
+    assert split_module._token_band(eq_token, layout) == "eq"
+
+
+def test_numeric_rows_respect_guard(split_module) -> None:
+    layout = _layout()
+    triad_fields: Dict[str, Dict[str, str]] = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+    }
+    triad_order = ["transunion", "experian", "equifax"]
+
+    row = [
+        _token(6, 90.0, 150.0, "High"),
+        _token(6, 150.0, 200.0, "Balance"),
+        _token(6, COLON_LEFT, COLON_RIGHT, ":"),
+        _token(6, XP_X0 - 1.0, XP_X0 + 30.0, "1000"),
+        _token(6, XP_X0 + 6.0, XP_X0 + 40.0, "2000"),
+        _token(6, EQ_X0 + 10.0, EQ_X0 + 50.0, "3000"),
+    ]
+
+    row_state = split_module.process_triad_labeled_line(
+        row,
+        layout,
+        split_module.LABEL_MAP,
+        None,
+        triad_fields,
+        triad_order,
+    )
+
+    assert row_state["values"]["transunion"] == "1000"
+    assert row_state["values"]["experian"] == "2000"
+    assert row_state["values"]["equifax"] == "3000"
+
+    assert triad_fields["transunion"]["high_balance"] == "1000"
+    assert triad_fields["experian"]["high_balance"] == "2000"
+    assert triad_fields["equifax"]["high_balance"] == "3000"
+
+
+def test_tail_split_single_token_only(split_module) -> None:
+    layout = _layout()
+    triad_fields: Dict[str, Dict[str, str]] = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+    }
+    triad_order = ["transunion", "experian", "equifax"]
+
+    row = [
+        _token(7, 90.0, 150.0, "High"),
+        _token(7, 150.0, 200.0, "Balance"),
+        _token(7, COLON_LEFT, COLON_RIGHT, ":"),
+        _token(7, TU_X0 - 5.0, TU_X0 + 10.0, "400 500 600"),
+    ]
+
+    row_state = split_module.process_triad_labeled_line(
+        row,
+        layout,
+        split_module.LABEL_MAP,
+        None,
+        triad_fields,
+        triad_order,
+    )
+
+    assert row_state["values"]["transunion"] == "400"
+    assert row_state["values"]["experian"] == "500"
+    assert row_state["values"]["equifax"] == "600"
+
+    assert triad_fields["transunion"]["high_balance"] == "400"
+    assert triad_fields["experian"]["high_balance"] == "500"
+    assert triad_fields["equifax"]["high_balance"] == "600"
+
+
+def test_presence_semantics_for_empty_and_dashes(split_module) -> None:
+    layout = _layout()
+    triad_fields: Dict[str, Dict[str, str]] = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+    }
+    triad_order = ["transunion", "experian", "equifax"]
+
+    empty_row = [
+        _token(8, 80.0, 140.0, "Payment"),
+        _token(8, 140.0, 200.0, "Amount"),
+        _token(8, COLON_LEFT, COLON_RIGHT, ":"),
+        _token(8, TU_X0 + 20.0, TU_X0 + 55.0, "$75"),
+    ]
+
+    empty_state = split_module.process_triad_labeled_line(
+        empty_row,
+        layout,
+        split_module.LABEL_MAP,
+        None,
+        triad_fields,
+        triad_order,
+    )
+
+    dash_row = [
+        _token(9, 80.0, 140.0, "Payment"),
+        _token(9, 140.0, 200.0, "Frequency"),
+        _token(9, COLON_LEFT, COLON_RIGHT, ":"),
+        _token(9, TU_X0 + 20.0, TU_X0 + 55.0, "Weekly"),
+        _token(9, XP_X0 + 25.0, XP_X0 + 55.0, "--"),
+    ]
+
+    dash_state = split_module.process_triad_labeled_line(
+        dash_row,
+        layout,
+        split_module.LABEL_MAP,
+        None,
+        triad_fields,
+        triad_order,
+    )
+
+    assert empty_state["values"]["experian"] == ""
+    assert empty_state["values"]["equifax"] == ""
+    assert dash_state["values"]["experian"] == "--"
+    assert triad_fields["experian"]["payment_frequency"] == "--"

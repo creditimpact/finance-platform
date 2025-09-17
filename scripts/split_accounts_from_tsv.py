@@ -38,6 +38,7 @@ from backend.core.logic.report_analysis.normalize_fields import (
     ensure_all_keys,
 )
 from backend.core.logic.report_analysis.triad_layout import (
+    TRIAD_BOUNDARY_GUARD,
     TriadLayout,
     assign_band,
     bands_from_header_tokens,
@@ -781,32 +782,49 @@ def _assign_band_any(
             x0 = 0.0
 
         tol = TRIAD_X0_TOL
-        tu_left = float(layout.tu_left_x0 or 0.0)
-        xp_left = float(layout.xp_left_x0 or 0.0)
-        eq_left = float(layout.eq_left_x0 or 0.0)
+        guard = TRIAD_BOUNDARY_GUARD
 
-        if _is_label_token_text(str(token.get("text", ""))) and x0 <= (tu_left + tol):
+        tu_left = float(layout.tu_left_x0 or layout.tu_band[0] or 0.0)
+        xp_left = float(layout.xp_left_x0 or layout.xp_band[0] or 0.0)
+        eq_left = float(layout.eq_left_x0 or layout.eq_band[0] or 0.0)
+
+        eq_band_right = getattr(layout, "eq_band", (0.0, float("inf")))[1]
+        try:
+            eq_band_right = float(eq_band_right)
+        except Exception:
+            eq_band_right = float("inf")
+
+        eq_right = row_eq_right_x0 if row_eq_right_x0 is not None else eq_band_right
+        if not math.isfinite(eq_right):
+            eq_right = float("inf")
+        if eq_right < eq_left:
+            eq_right = eq_left
+
+        text = str(token.get("text", ""))
+        if _is_label_token_text(text) and x0 <= (tu_left + guard):
             return "label"
 
         if x0 < (tu_left - tol):
             return "label"
-        if x0 < (xp_left - tol):
+
+        band = "none"
+        if x0 < xp_left:
+            band = "tu"
+        elif x0 < eq_left:
+            band = "xp"
+        elif x0 < eq_right:
+            band = "eq"
+
+        if band == "xp" and xp_left and xp_left < x0 < (xp_left + guard):
             return "tu"
-        if x0 < (eq_left - tol):
-            return "xp"
-
-        eq_right = row_eq_right_x0 if row_eq_right_x0 is not None else float("inf")
-        if eq_right != float("inf") and eq_right < eq_left:
-            eq_right = eq_left
-
-        eq_right_cutoff = eq_right - tol
-        eq_start = eq_left - tol
-        if eq_right_cutoff < eq_start:
-            eq_right_cutoff = eq_start
-
-        if x0 < eq_right_cutoff:
+        if band == "eq":
+            if eq_left and eq_left < x0 < (eq_left + guard):
+                return "xp"
+            if row_eq_right_x0 is not None and x0 >= eq_right:
+                return "none"
             return "eq"
-        return "none"
+
+        return band
     band = assign_band(token, layout)
     if band == "tu":
         try:
@@ -1188,17 +1206,29 @@ def process_triad_labeled_line(
     eq_right_for_log = (
         row_eq_right_x0 if row_eq_right_x0 is not None else eq_band_right
     )
+    guard = TRIAD_BOUNDARY_GUARD
+    tu_right_guarded = max(tu_left, xp_left - guard)
+    xp_right_guarded = max(xp_left, eq_left - guard)
+    if not math.isfinite(eq_right_for_log):
+        eq_right_guarded = eq_right_for_log
+    else:
+        eq_right_guarded = max(eq_left, eq_right_for_log - guard)
     _triad_band_log(
-        "ROW_BANDS key=%s label=[%.3f,%.3f) tu=[%.3f,%.3f) xp=[%.3f,%.3f) eq=[%.3f,%.3f)",
+        "ROW_BANDS key=%s guard=%.2f headers=(tu=%.3f,xp=%.3f,eq=%.3f) "
+        "label=[%.3f,%.3f) tu=[%.3f,%.3f) xp=[%.3f,%.3f) eq=[%.3f,%.3f)",
         label_for_log,
+        guard,
+        tu_left,
+        xp_left,
+        eq_left,
         label_left,
         label_right,
         tu_left,
-        tu_right,
+        tu_right_guarded,
         xp_left,
-        xp_right,
+        xp_right_guarded,
         eq_left,
-        eq_right_for_log,
+        eq_right_guarded,
     )
 
     # Task 5: Strict line-break rule — if no suffix captured and the last label token
@@ -1233,6 +1263,15 @@ def process_triad_labeled_line(
         except Exception:
             return 0.0
 
+    dash_tokens = {"--", "—", "–"}
+    band_to_bureau = {"tu": "transunion", "xp": "experian", "eq": "equifax"}
+    band_tokens: Dict[str, List[dict]] = {
+        "transunion": [],
+        "experian": [],
+        "equifax": [],
+    }
+    explicit_dash_for = {"transunion": False, "experian": False, "equifax": False}
+
     tail_assignments: List[tuple[dict, str]] = []
     for t in tail_tokens:
         band_name = _token_band(t, layout, row_eq_right_x0=row_eq_right_x0)
@@ -1250,6 +1289,20 @@ def process_triad_labeled_line(
             band_label,
             text_for_log if text_for_log is not None else "",
         )
+        bureau = band_to_bureau.get(band_name)
+        if bureau:
+            band_tokens[bureau].append(t)
+            try:
+                token_text = str(t.get("text", "")).strip()
+            except Exception:
+                token_text = ""
+            if token_text in dash_tokens:
+                explicit_dash_for[bureau] = True
+    non_label_tail_tokens = [
+        t
+        for t, _band in tail_assignments
+        if not _is_label_token_text(str(t.get("text", "")))
+    ]
 
     if canonical is None and canon_label != "Account #":
         logger.info("TRIAD_GUARD_SKIP reason=unknown_label label=%r", canon_label)
@@ -1266,7 +1319,6 @@ def process_triad_labeled_line(
         )
 
     # 2) Collect values after label suffix, banded by X only
-    dash_tokens = {"--", "—", "–"}
     vals = {"transunion": [], "experian": [], "equifax": []}
     saw_dash_for = {"transunion": False, "experian": False, "equifax": False}
     pre_split_cols: List[str] | None = None
@@ -1279,36 +1331,40 @@ def process_triad_labeled_line(
         ]
         pre_split_text = pre_split_override_text
         pre_split_mode = "override"
-    elif SPLIT_SPACE_TRIADS and tail_tokens:
-        bureau_tokens = []
-        for t in tail_tokens:
-            band_name = _token_band(
-                t, layout, row_eq_right_x0=row_eq_right_x0
+    elif (
+        SPLIT_SPACE_TRIADS
+        and len(non_label_tail_tokens) == 1
+        and not any(band_tokens[b] for b in band_tokens)
+        and not any(explicit_dash_for.values())
+    ):
+        candidate = non_label_tail_tokens[0]
+        raw = candidate.get("text")
+        raw_str = str(raw or "")
+        parts = _maybe_split_triad_tail(raw_str)
+        if parts:
+            pre_split_cols = parts
+            pre_split_text = raw_str
+            pre_split_mode = "tail_split"
+        elif STAGEA_DEBUG and " " in raw_str:
+            label_for_log = canonical or canon_label
+            _stagea_debug(
+                "TRIAD_ROW_FALLBACK account_index=%s label=%s reason=no_delimiter_using_spaces",
+                account_index,
+                label_for_log,
             )
-            if band_name in {"tu", "xp", "eq"}:
-                bureau_tokens.append(t)
-        if len(bureau_tokens) == 1:
-            candidate = bureau_tokens[0]
-            raw = candidate.get("text")
-            raw_str = str(raw or "")
-            parts = _maybe_split_triad_tail(raw_str)
-            if parts:
-                pre_split_cols = parts
-                pre_split_text = raw_str
-            elif STAGEA_DEBUG and " " in raw_str:
-                label_for_log = canonical or canon_label
-                _stagea_debug(
-                    "TRIAD_ROW_FALLBACK account_index=%s label=%s reason=no_delimiter_using_spaces",
-                    account_index,
-                    label_for_log,
-                )
 
     if pre_split_cols:
+        reason = (
+            "single_token_no_geometric_hits"
+            if pre_split_mode == "tail_split"
+            else pre_split_mode
+        )
         logger.info(
-            "TRIAD_TAIL_SPACE_SPLIT key=%s text=%r parts=%r",
+            "TRIAD_TAIL_SPACE_SPLIT key=%s text=%r parts=%r reason=%s",
             canonical,
             pre_split_text,
             pre_split_cols,
+            reason,
         )
         for j, (t, b) in enumerate(tail_assignments, start=suffix_idx + 1):
             _trace_token(
@@ -1327,72 +1383,20 @@ def process_triad_labeled_line(
             if normalized in dash_tokens:
                 saw_dash_for[bureau] = True
     else:
+        for bureau in ("transunion", "experian", "equifax"):
+            if explicit_dash_for[bureau]:
+                vals[bureau] = ["--"]
+                saw_dash_for[bureau] = True
+                continue
+            for t in band_tokens[bureau]:
+                txt = str(t.get("text", ""))
+                vals[bureau].append(txt)
+                if txt.strip() in dash_tokens:
+                    saw_dash_for[bureau] = True
         for j, (t, b) in enumerate(tail_assignments, start=suffix_idx + 1):
-            txt = str(t.get("text", ""))
-            z = txt.strip()
-            if b == "tu":
-                vals["transunion"].append(txt)
-                if z in dash_tokens:
-                    saw_dash_for["transunion"] = True
-            elif b == "xp":
-                vals["experian"].append(txt)
-                if z in dash_tokens:
-                    saw_dash_for["experian"] = True
-            elif b == "eq":
-                vals["equifax"].append(txt)
-                if z in dash_tokens:
-                    saw_dash_for["equifax"] = True
             _trace_token(
                 t.get("page"), t.get("line"), j, t, b, "labeled", canonical or ""
             )
-
-        # 2a) Detect a collapsed triad tail rendered as a single space-delimited token.
-        band_to_bureau = {"tu": "transunion", "xp": "experian", "eq": "equifax"}
-        non_empty_bureaus = [b for b in ("transunion", "experian", "equifax") if vals[b]]
-        candidate_parts: List[str] | None = None
-        candidate_bureau: str | None = None
-        candidate_text: str | None = None
-        for t, band in tail_assignments:
-            bureau = band_to_bureau.get(band)
-            if bureau is None:
-                continue
-            txt = str(t.get("text", ""))
-            parts = _maybe_split_triad_tail(txt)
-            if not parts:
-                continue
-            candidate_parts = parts
-            candidate_bureau = bureau
-            candidate_text = txt
-            break
-
-        if candidate_parts and (
-            not non_empty_bureaus
-            or (
-                len(non_empty_bureaus) == 1
-                and candidate_bureau == non_empty_bureaus[0]
-                and len(vals[candidate_bureau]) == 1
-                and all(
-                    not vals[b]
-                    for b in ("transunion", "experian", "equifax")
-                    if b != candidate_bureau
-                )
-            )
-        ):
-            logger.info(
-                "TRIAD_TAIL_SPACE_SPLIT key=%s text=%r parts=%r",
-                canonical,
-                candidate_text,
-                candidate_parts,
-            )
-            for b in ("transunion", "experian", "equifax"):
-                vals[b] = []
-                saw_dash_for[b] = False
-            for idx, bureau in enumerate(("transunion", "experian", "equifax")):
-                part = candidate_parts[idx] if idx < len(candidate_parts) else ""
-                normalized = clean_value(part)
-                vals[bureau] = [normalized]
-                if normalized in dash_tokens:
-                    saw_dash_for[bureau] = True
 
     # 2b) TU rescue: sometimes TU values are mis-banded into label due to compression/misalignment.
     # If TU is empty but XP/EQ have values, look for label-band tokens near the TU seam that look like values.

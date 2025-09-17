@@ -4,12 +4,15 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Tuple
 
-from backend.config import RAW_TRIAD_FROM_X
+from backend.config import RAW_TRIAD_FROM_X, env_float
 
 from .header_utils import normalize_bureau_header
 
 logger = logging.getLogger(__name__)
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
+
+
+TRIAD_BOUNDARY_GUARD: float = env_float("TRIAD_BOUNDARY_GUARD", 2.0)
 
 
 @dataclass

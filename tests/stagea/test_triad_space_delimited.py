@@ -47,6 +47,24 @@ def _write_triad_continuation_row(tsv_path: Path, continuation_text: str) -> Non
     tsv_path.write_text(header + "".join(rows), encoding="utf-8")
 
 
+def _write_masked_account_row(tsv_path: Path) -> None:
+    header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
+    rows = [
+        "1\t1\t10\t11\t60\t100\tTransUnion\n",
+        "1\t1\t10\t11\t160\t200\tExperian\n",
+        "1\t1\t10\t11\t260\t300\tEquifax\n",
+        "1\t2\t20\t21\t0\t40\tAccount #\n",
+        "1\t2\t20\t21\t60\t100\t****\n",
+        "1\t2\t20\t21\t160\t200\t****\n",
+        "1\t2\t20\t21\t260\t340\t552433**********\n",
+        "1\t3\t30\t31\t0\t40\tHigh Balance:\n",
+        "1\t3\t30\t31\t60\t100\t$12,028\n",
+        "1\t3\t30\t31\t160\t200\t$0\n",
+        "1\t3\t30\t31\t260\t300\t$6,217\n",
+    ]
+    tsv_path.write_text(header + "".join(rows), encoding="utf-8")
+
+
 def _write_space_delimited_account(tsv_path: Path) -> None:
     header = "page\tline\ty0\ty1\tx0\tx1\ttext\n"
     rows = [
@@ -125,6 +143,20 @@ def test_triad_space_delimited_continuation_split(
     assert fields["transunion"]["past_due_amount"] == "100 400"
     assert fields["experian"]["past_due_amount"] == "200 500"
     assert fields["equifax"]["past_due_amount"] == "300 600"
+
+
+def test_triad_preserves_masked_account_numbers(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    tsv_path = tmp_path / "masked_account.tsv"
+    _write_masked_account_row(tsv_path)
+
+    data, _accounts_dir, _sid = _run_split(tsv_path, caplog)
+    fields = data["accounts"][0]["triad_fields"]
+
+    assert fields["transunion"]["account_number_display"] == "****"
+    assert fields["experian"]["account_number_display"] == "****"
+    assert fields["equifax"]["account_number_display"] == "552433**********"
 
 
 def test_stagea_space_delimited_account_fields(

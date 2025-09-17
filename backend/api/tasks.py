@@ -14,10 +14,8 @@ load_dotenv()
 
 from backend.core.logic.report_analysis.block_exporter import export_stage_a, run_stage_a
 from backend.pipeline.runs import RunManifest
-from backend.core.logic.report_analysis.problem_extractor import (
-    detect_problem_accounts,
-    load_stagea_accounts_from_manifest,
-)
+from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
+from backend.core.logic.report_analysis.problem_extractor import detect_problem_accounts
 from backend.core.logic.report_analysis.text_provider import (
     extract_and_cache_text,
     load_cached_text,
@@ -216,62 +214,15 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
     else:
         candidates = detect_problem_accounts(sid)
 
-    m = RunManifest.for_sid(sid)
-    cases_base = m.ensure_run_subdir("cases_dir", "cases").resolve()
-    cases_accounts_dir = (cases_base / "accounts").resolve()
-    cases_accounts_dir.mkdir(parents=True, exist_ok=True)
-    m.set_base_dir("cases_accounts_dir", cases_accounts_dir)
-
-    # Build quick index of original accounts by account_index
-    try:
-        accounts = load_stagea_accounts_from_manifest(sid)
-    except Exception:
-        accounts = []
-    by_index = {}
-    for a in accounts:
-        try:
-            idx = int(a.get("account_index"))
-            by_index[idx] = a
-        except Exception:
-            continue
-
-    # Write per-candidate folders
-    ids: list[int] = []
-    for c in candidates:
-        try:
-            idx = int(c.get("account_index"))
-        except Exception:
-            continue
-        ids.append(idx)
-        acc_dir = cases_accounts_dir / str(idx)
-        acc_dir.mkdir(parents=True, exist_ok=True)
-
-        # account.json: original account object if available
-        account_obj = by_index.get(idx)
-        try:
-            (acc_dir / "account.json").write_text(
-                json.dumps(account_obj or {}, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except Exception:
-            pass
-
-        # summary.json: analyzer reason (candidate entry)
-        try:
-            (acc_dir / "summary.json").write_text(
-                json.dumps(c, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-        except Exception:
-            pass
-
-    # index.json in accounts dir
-    index_path = cases_accounts_dir / "index.json"
-    idx_payload = {"count": len(ids), "ids": sorted(ids)}
-    index_path.write_text(json.dumps(idx_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    m.set_artifact("cases", "accounts_index", index_path)
-
-    log.info("CASES_BUILD_DONE sid=%s count=%d dir=%s", sid, len(ids), cases_accounts_dir)
-    return {"sid": sid, "cases": {"count": len(ids), "dir": str(cases_accounts_dir)}}
+    summary = build_problem_cases(sid, candidates=candidates)
+    cases_info = summary.get("cases", {}) if isinstance(summary, dict) else {}
+    log.info(
+        "CASES_BUILD_DONE sid=%s count=%s dir=%s",
+        sid,
+        cases_info.get("count"),
+        cases_info.get("dir"),
+    )
+    return summary
 
 
 @app.task(bind=True, name="smoke_task")

@@ -45,10 +45,26 @@ logger = logging.getLogger(__name__)
 # Enable with RAW_TRIAD_FROM_X=1 for verbose triad logs
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
 TRIAD_BAND_BY_X0 = os.environ.get("TRIAD_BAND_BY_X0") == "1"
-SPLIT_SPACE_TRIADS = os.environ.get("SPLIT_SPACE_TRIADS", "1").lower() not in {
-    "0",
-    "false",
-}
+
+
+def _env_truthy_opt(name: str) -> bool | None:
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    return raw.strip().lower() not in {"0", "false", "no"}
+
+
+def _resolve_split_space_triads() -> bool:
+    stagea_flag = _env_truthy_opt("STAGEA_SPLIT_SPACE_TRIADS")
+    if stagea_flag is not None:
+        return stagea_flag
+    legacy_flag = _env_truthy_opt("SPLIT_SPACE_TRIADS")
+    if legacy_flag is not None:
+        return legacy_flag
+    return True
+
+
+SPLIT_SPACE_TRIADS = _resolve_split_space_triads()
 STAGEA_DEBUG = os.environ.get("STAGEA_DEBUG") == "1"
 
 

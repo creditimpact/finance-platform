@@ -188,11 +188,9 @@ def _resolve_inputs_from_manifest(sid: str) -> tuple[Path, Path, RunManifest]:
 
 
 def _build_problem_cases_lean(
-    sid: str, candidates: List[Dict[str, Any]] | None = None, root: Path | None = None
+    sid: str, candidates: List[Dict[str, Any]]
 ) -> Dict[str, Any]:
     """Build lean per-account case folders under ``runs/<sid>/cases``."""
-
-    del root  # parameter retained for compatibility; lean mode resolves via manifest
 
     try:
         full_accounts = load_stagea_accounts_from_manifest(sid)
@@ -221,7 +219,7 @@ def _build_problem_cases_lean(
     written_ids: List[str] = []
     merge_groups: Dict[str, str] = {}
 
-    for cand in candidates or []:
+    for cand in candidates:
         if not isinstance(cand, Mapping):
             continue
 
@@ -356,7 +354,7 @@ def _build_problem_cases_lean(
 
         written_ids.append(str(idx))
 
-    candidates_list = [c for c in candidates or [] if isinstance(c, Mapping)]
+    candidates_list = [c for c in candidates if isinstance(c, Mapping)]
     index_payload = {
         "sid": sid,
         "total": total,
@@ -422,11 +420,9 @@ def _build_problem_cases_lean(
 
 
 def _build_problem_cases_legacy(
-    sid: str, candidates: List[Dict[str, Any]] | None = None, root: Path | None = None
+    sid: str, candidates: List[Dict[str, Any]]
 ) -> Dict[str, Any]:
     """Materialise legacy problem case files for ``sid``."""
-
-    del root  # retained for compatibility
 
     acc_path, gen_path, manifest = _resolve_inputs_from_manifest(sid)
     logger.info(
@@ -467,7 +463,7 @@ def _build_problem_cases_legacy(
 
     written_ids: List[str] = []
     merge_groups: Dict[str, str] = {}
-    for cand in candidates or []:
+    for cand in candidates:
         if not isinstance(cand, Mapping):
             continue
 
@@ -653,7 +649,7 @@ def _build_problem_cases_legacy(
 
         written_ids.append(str(account_index))
 
-    cand_list = list(candidates or [])
+    cand_list = list(candidates)
     index_data = {
         "sid": sid,
         "total": total,
@@ -719,12 +715,16 @@ def _build_problem_cases_legacy(
 
 def build_problem_cases(
     sid: str,
-    candidates: List[Dict[str, Any]] | None = None,
-    root: Path | None = None,
+    candidates: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
+    if candidates is None:  # pragma: no cover - defensive guard
+        raise TypeError("candidates must not be None")
+
+    cand_list = list(candidates)
+
     if not LEAN:
-        return _build_problem_cases_legacy(sid, candidates=candidates, root=root)
-    return _build_problem_cases_lean(sid, candidates=candidates, root=root)
+        return _build_problem_cases_legacy(sid, candidates=cand_list)
+    return _build_problem_cases_lean(sid, candidates=cand_list)
 
 
 __all__ = ["build_problem_cases"]

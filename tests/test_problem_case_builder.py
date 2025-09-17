@@ -282,7 +282,7 @@ def test_problem_case_builder_manifest_missing_accounts_raises(tmp_path, monkeyp
     monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
     RunManifest.for_sid(sid)  # create manifest without traces entries
     try:
-        build_problem_cases(sid)
+        build_problem_cases(sid, candidates=[])
         assert False, "expected RuntimeError when manifest lacks traces.accounts_table"
     except RuntimeError:
         pass

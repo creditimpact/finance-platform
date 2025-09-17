@@ -180,6 +180,9 @@ def test_band_by_x0_three_values_single_line(tmp_path: Path, caplog):
     assert fields["transunion"]["high_balance"] == "$149,500"
     assert fields["experian"]["high_balance"] == "$149,500"
     assert fields["equifax"]["high_balance"] == "$149,500"
+    assert "TRIAD_HEADER_X0S" in caplog.text
+    assert "ROW_BANDS key=high_balance" in caplog.text
+    assert "TOK p=1 l=3 x0=172.900 -> TU text='$149,500'" in caplog.text
     # no TU rescue logs
     assert "TRIAD_TU_RESCUE" not in caplog.text
     # trace used_axis should be x0

@@ -24,6 +24,9 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, MutableMapping, Sequence
 
+from backend.core.logic.report_analysis.problem_case_builder import (
+    _build_bureaus_payload_from_stagea,
+)
 from backend.core.logic.report_analysis.problem_extractor import (
     build_rule_fields_from_triad,
 )
@@ -64,18 +67,6 @@ def _ensure_list(value: Any) -> List[Any]:
     if isinstance(value, tuple):
         return list(value)
     return [value]
-
-
-def _sanitize_bureaus(data: Mapping[str, Any] | None) -> Dict[str, Any]:
-    cleaned: Dict[str, Any] = {}
-    for bureau, payload in (data or {}).items():
-        if isinstance(payload, Mapping):
-            cleaned[bureau] = {
-                key: value for key, value in payload.items() if key != "triad_rows"
-            }
-        else:
-            cleaned[bureau] = payload
-    return cleaned
 
 
 def _extract_reason_fields(
@@ -192,7 +183,7 @@ def migrate_account_dir(account_dir: Path, dry_run: bool = False) -> bool:
     account_id = account_data.get("account_id")
 
     raw_lines = list(account_data.get("lines") or [])
-    bureaus = _sanitize_bureaus(account_data.get("triad_fields"))
+    bureaus = _build_bureaus_payload_from_stagea(account_data)
     flat_fields, _prov = build_rule_fields_from_triad(dict(account_data))
 
     meta: Dict[str, Any] = {

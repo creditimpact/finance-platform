@@ -18,7 +18,10 @@ from backend.core.logic.report_analysis.account_merge import (
     DEFAULT_CFG,
     cluster_problematic_accounts,
 )
-from backend.core.logic.report_analysis.problem_extractor import detect_problem_accounts
+from backend.core.logic.report_analysis.problem_extractor import (
+    detect_problem_accounts,
+    load_stagea_accounts_from_manifest,
+)
 
 
 def _build_merge_summary(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -78,6 +81,22 @@ def check_lean(sid: str) -> None:
     if not base.exists():
         raise FileNotFoundError(f"accounts directory not found for SID {sid!r} at {base}")
 
+    try:
+        stagea_accounts = load_stagea_accounts_from_manifest(sid)
+        stagea_by_idx = {}
+        for account in stagea_accounts:
+            idx = account.get("account_index")
+            try:
+                if idx is None:
+                    continue
+                idx_key = int(idx)
+            except (TypeError, ValueError):
+                continue
+            stagea_by_idx[idx_key] = account
+    except Exception as exc:  # pragma: no cover - defensive logging only
+        print(f"[LEAN-CHECK] unable to load Stage-A accounts for sid={sid}: {exc}")
+        stagea_by_idx = None
+
     required_files = (
         "meta.json",
         "summary.json",
@@ -87,7 +106,10 @@ def check_lean(sid: str) -> None:
         "tags.json",
     )
 
-    for account_dir in base.iterdir():
+    lean_failures = False
+    samples: List[tuple[int, Dict[str, Any]]] = []
+
+    for account_dir in sorted(base.iterdir(), key=lambda p: p.name):
         if not account_dir.is_dir():
             continue
 
@@ -103,6 +125,48 @@ def check_lean(sid: str) -> None:
             raise AssertionError(
                 f"triad_rows detected in summary.json for {account_dir}; expected lean output"
             )
+
+        bureaus_path = account_dir / "bureaus.json"
+        bureaus_data = json.loads(bureaus_path.read_text(encoding="utf-8"))
+        missing = [
+            key
+            for key in ("two_year_payment_history", "seven_year_history")
+            if key not in bureaus_data
+        ]
+        if missing:
+            print(f"[LEAN-CHECK] bureaus.json missing keys: {missing}")
+            lean_failures = True
+
+        if len(samples) < 2:
+            try:
+                idx = int(account_dir.name)
+            except ValueError:
+                continue
+            samples.append((idx, bureaus_data))
+
+    if stagea_by_idx and samples:
+        sample_idx, bureaus_data = samples[0]
+        stagea_account = stagea_by_idx.get(sample_idx)
+        if stagea_account:
+            two_year_match = (
+                bureaus_data.get("two_year_payment_history")
+                == stagea_account.get("two_year_payment_history")
+            )
+            seven_year_match = (
+                bureaus_data.get("seven_year_history")
+                == stagea_account.get("seven_year_history")
+            )
+            print(
+                f"[LEAN-CHECK] account {sample_idx} two_year_payment_history match: {two_year_match}"
+            )
+            print(
+                f"[LEAN-CHECK] account {sample_idx} seven_year_history match: {seven_year_match}"
+            )
+            if not (two_year_match and seven_year_match):
+                lean_failures = True
+
+    if lean_failures:
+        raise AssertionError("lean check failed; see [LEAN-CHECK] messages above")
 
 
 def main() -> int:

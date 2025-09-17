@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime, timezone
-import json, os, glob, shutil
+import json, os, glob, shutil, time
 
 RUNS_ROOT_ENV = "RUNS_ROOT"                 # optional override
 MANIFEST_ENV  = "REPORT_MANIFEST_PATH"      # explicit manifest path
@@ -14,6 +14,19 @@ def _runs_root() -> Path:
 def _utc_now():
     # timezone-aware UTC to avoid deprecation; normalize suffix to 'Z'
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def safe_replace(src: str | Path, dst: str | Path, retries: int = 5, delay: float = 0.1) -> None:
+    src_path = str(src)
+    dst_path = str(dst)
+    for i in range(retries):
+        try:
+            os.replace(src_path, dst_path)
+            return
+        except PermissionError:
+            if i == retries - 1:
+                raise
+            time.sleep(delay)
 
 @dataclass
 class RunManifest:
@@ -91,7 +104,7 @@ class RunManifest:
         tmp = self.path.with_suffix(".tmp")
         with tmp.open("w", encoding="utf-8") as fh:
             json.dump(self.data, fh, ensure_ascii=False, indent=2)
-        tmp.replace(self.path)
+        safe_replace(tmp, self.path)
         return self
 
     def _update_index(self, sid: str) -> None:
@@ -157,3 +170,4 @@ class RunManifest:
 # -------- breadcrumbs --------
 def write_breadcrumb(target_manifest: Path, breadcrumb_file: Path) -> None:
     breadcrumb_file.write_text(str(target_manifest.resolve()), encoding="utf-8")
+

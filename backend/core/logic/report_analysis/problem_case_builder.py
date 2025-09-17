@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
@@ -27,13 +28,7 @@ logger = logging.getLogger(__name__)
 
 LEAN = os.getenv("CASES_LEAN_MODE", "1") != "0"
 
-ALLOWED_BUREAUS_TOPLEVEL = {
-    "transunion",
-    "experian",
-    "equifax",
-    "two_year_payment_history",
-    "seven_year_history",
-}
+ALLOWED_BUREAUS_TOPLEVEL = ("transunion", "experian", "equifax")
 
 
 def _write_json(path: Path, obj: Any) -> None:
@@ -64,33 +59,45 @@ def _coerce_list(value: Any) -> List[Any] | None:
     return [value]
 
 
+def _sanitize_bureau_fields(payload: Any) -> Any:
+    if isinstance(payload, Mapping):
+        return {key: value for key, value in payload.items() if key != "triad_rows"}
+    if payload is None:
+        return {}
+    return payload
+
+
 def _sanitize_bureaus(data: Mapping[str, Any] | None) -> Dict[str, Any]:
     cleaned: Dict[str, Any] = {}
     for bureau, payload in (data or {}).items():
-        if isinstance(payload, Mapping):
-            cleaned[bureau] = {
-                key: value
-                for key, value in payload.items()
-                if key != "triad_rows"
-            }
-        else:
-            cleaned[bureau] = payload
+        cleaned[bureau] = _sanitize_bureau_fields(payload)
     return cleaned
 
 
-def _build_bureaus_payload_from_stagea(acc: Mapping[str, Any] | None) -> Dict[str, Any]:
+def _build_bureaus_payload_from_stagea(
+    acc: Mapping[str, Any] | None,
+) -> OrderedDict[str, Any]:
     if not isinstance(acc, Mapping):
         acc = {}
 
-    tf = _sanitize_bureaus(acc.get("triad_fields"))
-    t2y = acc.get("two_year_payment_history")
-    s7y = acc.get("seven_year_history")
+    sanitized_bureaus = _sanitize_bureaus(acc.get("triad_fields"))
 
-    payload: Dict[str, Any] = {k: v for k, v in tf.items()}
-    payload["two_year_payment_history"] = t2y
-    payload["seven_year_history"] = s7y
+    ordered: "OrderedDict[str, Any]" = OrderedDict()
+    for bureau in ALLOWED_BUREAUS_TOPLEVEL:
+        value = sanitized_bureaus.get(bureau)
+        if value is None:
+            ordered[bureau] = {}
+        else:
+            ordered[bureau] = value
 
-    return {k: payload[k] for k in ALLOWED_BUREAUS_TOPLEVEL if k in payload}
+    two_year = acc.get("two_year_payment_history") or {}
+    seven_year = acc.get("seven_year_history") or {}
+
+    ordered["two_year_payment_history"] = two_year
+    ordered["seven_year_history"] = seven_year
+    ordered["order"] = list(ALLOWED_BUREAUS_TOPLEVEL)
+
+    return ordered
 
 
 def _extract_candidate_reason(cand: Mapping[str, Any]) -> Tuple[Any, Any, Any]:

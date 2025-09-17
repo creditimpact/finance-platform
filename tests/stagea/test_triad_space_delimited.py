@@ -31,7 +31,9 @@ def _write_triad_tail_row(tsv_path: Path, tail_text: str) -> None:
 @pytest.mark.parametrize(
     "tail_text, expected",
     [
+        ("30.3.2024 1.6.2025 1.2.2025", ("30.3.2024", "1.6.2025", "1.2.2025")),
         ("30.3.2024  1.6.2025  1.2.2025", ("30.3.2024", "1.6.2025", "1.2.2025")),
+        ("JAN 2024 FEB 2025 MAR 2026", ("JAN 2024", "FEB 2025", "MAR 2026")),
         ("30.3.2024 -- 1.6.2025 -- 1.2.2025", ("30.3.2024", "1.6.2025", "1.2.2025")),
         ("-- -- --", ("--", "--", "--")),
     ],
@@ -51,3 +53,8 @@ def test_triad_space_delimited_tail_split(
         fields["equifax"]["date_opened"],
     ) == expected
     assert "TRIAD_TAIL_SPACE_SPLIT" in caplog.text
+
+    for bureau in ("transunion", "experian", "equifax"):
+        assert fields[bureau]["high_balance"] == "--"
+
+    assert fields["transunion"]["account_number_display"] == "123456789"

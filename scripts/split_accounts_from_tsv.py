@@ -28,7 +28,7 @@ import shutil
 from bisect import bisect_right
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from backend.config import RAW_JOIN_TOKENS_WITH_SPACE, RAW_TRIAD_FROM_X
 from backend.core.logic.report_analysis.canonical_labels import LABEL_MAP
@@ -49,6 +49,12 @@ SPLIT_SPACE_TRIADS = os.environ.get("SPLIT_SPACE_TRIADS", "1").lower() not in {
     "0",
     "false",
 }
+STAGEA_DEBUG = os.environ.get("STAGEA_DEBUG") == "1"
+
+
+def _stagea_debug(message: str, *args) -> None:
+    if STAGEA_DEBUG:
+        logger.info(message, *args)
 
 
 def _dbg_path(label: str, p: Path | str | None):
@@ -303,6 +309,73 @@ def _normalize_triad_parts(parts: List[str]) -> List[str]:
         cleaned[-2] = _clean_value(merged)
         cleaned.pop()
     return [c if c else "--" for c in cleaned]
+
+
+_TRIAD_PRE_SPLIT_BANDS: List[Tuple[str, str]] = [
+    ("tu", "transunion"),
+    ("xp", "experian"),
+    ("eq", "equifax"),
+]
+
+
+def _band_window_for_synthetic(layout: TriadLayout, band: str) -> Tuple[float, float]:
+    if band == "tu":
+        left, right = layout.tu_band
+    elif band == "xp":
+        left, right = layout.xp_band
+    else:
+        left = layout.eq_band[0]
+        xp_width = layout.xp_band[1] - layout.xp_band[0]
+        if not (xp_width > 0):
+            xp_width = layout.tu_band[1] - layout.tu_band[0]
+        if not (xp_width > 0):
+            xp_width = 80.0
+        right = left + xp_width
+    if not (right > left):
+        right = left + 40.0
+    return float(left), float(right)
+
+
+def _make_synthetic_token(
+    token: dict, band: str, text: str, layout: TriadLayout
+) -> dict:
+    clone = dict(token)
+    clone["text"] = text
+    left, right = _band_window_for_synthetic(layout, band)
+    span = right - left
+    if not (span > 0):
+        span = 40.0
+    width = min(max(span * 0.6, 6.0), 60.0)
+    x0 = left + max(2.0, (span - width) / 2.0)
+    x1 = x0 + width
+    if x1 > right - 0.5:
+        x1 = right - 0.5
+        x0 = max(left + 0.5, x1 - width)
+    if x1 <= x0:
+        x0 = left + 1.0
+        x1 = x0 + max(1.0, width)
+    clone["x0"] = f"{x0:.2f}"
+    clone["x1"] = f"{x1:.2f}"
+    clone["_synthetic_pre_split"] = "1"
+    clone["_synthetic_band"] = band
+    return clone
+
+
+def _pre_split_bureau_token(
+    token: dict, layout: TriadLayout
+) -> List[Tuple[str, dict, str]] | None:
+    if not SPLIT_SPACE_TRIADS:
+        return None
+    if token.get("_synthetic_pre_split") == "1":
+        return None
+    parts = _maybe_split_triad_tail(token.get("text"))
+    if not parts:
+        return None
+    payload: List[Tuple[str, dict, str]] = []
+    for (band_key, _bureau_name), part in zip(_TRIAD_PRE_SPLIT_BANDS, parts):
+        synthetic = _make_synthetic_token(token, band_key, part, layout)
+        payload.append((band_key, synthetic, part))
+    return payload
 
 
 def _maybe_split_triad_tail(raw_text: str | None) -> List[str] | None:
@@ -859,6 +932,9 @@ def process_triad_labeled_line(
     open_row: Dict[str, Any] | None,
     triad_fields: Dict[str, Dict[str, str]],
     triad_order: List[str],
+    account_index: int | None = None,
+    pre_split_override: Sequence[str] | None = None,
+    pre_split_override_text: str | None = None,
 ):
     """
     Process a labeled triad line using geometry-only banding.
@@ -981,7 +1057,15 @@ def process_triad_labeled_line(
     tail_tokens = tokens[suffix_idx + 1 :]
     pre_split_cols: List[str] | None = None
     pre_split_text: str | None = None
-    if SPLIT_SPACE_TRIADS and tail_tokens:
+    pre_split_mode: str | None = None
+    if pre_split_override is not None:
+        pre_split_cols = [
+            _clean_value(str(part)) if part is not None else "--"
+            for part in pre_split_override
+        ]
+        pre_split_text = pre_split_override_text
+        pre_split_mode = "override"
+    elif SPLIT_SPACE_TRIADS and tail_tokens:
         bureau_tokens = [
             t for t in tail_tokens if _token_band(t, layout) in {"tu", "xp", "eq"}
         ]
@@ -993,6 +1077,13 @@ def process_triad_labeled_line(
             if parts:
                 pre_split_cols = parts
                 pre_split_text = raw_str
+            elif STAGEA_DEBUG and " " in raw_str:
+                label_for_log = canonical or canon_label
+                _stagea_debug(
+                    "TRIAD_ROW_FALLBACK account_index=%s label=%s reason=no_delimiter_using_spaces",
+                    account_index,
+                    label_for_log,
+                )
 
     if pre_split_cols:
         logger.info(
@@ -1168,12 +1259,15 @@ def process_triad_labeled_line(
             break
 
     # 3) Append joined values into fields (no content heuristics)
+    def _normalize_value_for_bureau(bureau: str) -> str:
+        raw = " ".join(vals[bureau]).strip()
+        if not raw:
+            return "--" if saw_dash_for[bureau] else ""
+        return _clean_value(raw)
+
     for bureau in triad_order:
-        s = _clean_value(" ".join(vals[bureau]).strip())
+        s = _normalize_value_for_bureau(bureau)
         prior = triad_fields[bureau].get(canonical or "", "") if canonical else ""
-        # ensure we persist "--" if the column contained only dashes
-        if not s and saw_dash_for[bureau]:
-            s = "--"
         triad_fields[bureau][canonical] = (f"{prior} {s}" if prior else s).strip()
 
     # If we expected values on the next line but actually appended values on this line,
@@ -1197,11 +1291,28 @@ def process_triad_labeled_line(
         _clean_value(" ".join(vals["equifax"]).strip()),
     )
 
+    if pre_split_mode == "override":
+        cols_for_log = [
+            _normalize_value_for_bureau("transunion"),
+            _normalize_value_for_bureau("experian"),
+            _normalize_value_for_bureau("equifax"),
+        ]
+        label_for_log = canonical or canon_label
+        _stagea_debug(
+            "TRIAD_ROW_PARSED account_index=%s label=%s cols=%s",
+            account_index,
+            label_for_log,
+            cols_for_log,
+        )
+
     return {
         "triad_row": True,
         "label": _strip_colon_only(visu_label),
         "key": canonical,
-        "values": {k: _clean_value(" ".join(v).strip()) for k, v in vals.items()},
+        "values": {
+            k: _normalize_value_for_bureau(k)
+            for k in ("transunion", "experian", "equifax")
+        },
         "last_bureau_with_text": last_bureau_with_text,
         "expect_values_on_next_line": expect_values_on_next_line,
     }
@@ -1496,6 +1607,7 @@ def split_accounts(
             "experian": {},
             "equifax": {},
         }
+        pre_split_line_values: Dict[Tuple[int, int], Tuple[Tuple[str, ...], str]] = {}
         in_h2y: bool = False
         in_h7y: bool = False
         current_bureau: Optional[str] = None
@@ -1812,6 +1924,24 @@ def split_accounts(
                     )
                     if header_toks:
                         layout = bands_from_header_tokens(header_toks)
+                        if STAGEA_DEBUG and header_toks:
+                            header_token = header_toks[0]
+                            header_page = header_token.get("page")
+                            header_line = header_token.get("line")
+                            try:
+                                header_page = int(float(header_page))
+                            except Exception:
+                                pass
+                            try:
+                                header_line = int(float(header_line))
+                            except Exception:
+                                pass
+                            _stagea_debug(
+                                "TRIAD_HEADER_DETECTED account_index=%s page=%s line=%s",
+                                idx + 1,
+                                header_page,
+                                header_line,
+                            )
                         triad_log(
                             "TRIAD_HEADER_XMIDS tu=%.1f xp=%.1f eq=%.1f",
                             layout.tu_band[0] + EDGE_EPS,
@@ -1926,6 +2056,20 @@ def split_accounts(
                     for t in toks:
                         band = assign_band(t, layout)
                         _trace(line["page"], line["line"], t, band, "band")
+                        pre_split_payload: List[Tuple[str, dict, str]] | None = None
+                        if band in {"tu", "xp", "eq"}:
+                            pre_split_payload = _pre_split_bureau_token(t, layout)
+                        if pre_split_payload:
+                            parts_for_line: List[str] = []
+                            for band_key, synthetic_token, part in pre_split_payload:
+                                band_tokens[band_key].append(synthetic_token)
+                                parts_for_line.append(part)
+                            if key not in pre_split_line_values:
+                                pre_split_line_values[key] = (
+                                    tuple(parts_for_line),
+                                    str(t.get("text", "")),
+                                )
+                            continue
                         if band in band_tokens:
                             band_tokens[band].append(t)
                         if label_token is None and _has_label_suffix(t.get("text", "")):
@@ -2194,6 +2338,12 @@ def split_accounts(
                 if label_token and _is_label_token_text(
                     str(label_token.get("text", ""))
                 ):
+                    override_cols: List[str] | None = None
+                    override_text: str | None = None
+                    override_entry = pre_split_line_values.get(key)
+                    if override_entry:
+                        override_cols = list(override_entry[0])
+                        override_text = override_entry[1]
                     row_or_state = process_triad_labeled_line(
                         toks,
                         layout,
@@ -2201,6 +2351,9 @@ def split_accounts(
                         open_row,
                         triad_maps,
                         ["transunion", "experian", "equifax"],
+                        account_index=idx + 1,
+                        pre_split_override=override_cols,
+                        pre_split_override_text=override_text,
                     )
                     if row_or_state is None:
                         reset()

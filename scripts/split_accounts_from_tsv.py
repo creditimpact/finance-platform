@@ -2197,13 +2197,36 @@ def split_accounts(
                 }
                 label_token = None
                 moved_from_label_on_continuation = False
+                pre_split_target: dict | None = None
                 if layout:
+                    banded_tokens: List[Tuple[dict, str]] = []
                     for t in toks:
                         band = assign_band(t, layout)
+                        banded_tokens.append((t, band))
+                    bureau_tokens_for_split = [
+                        t for t, band in banded_tokens if band in {"tu", "xp", "eq"}
+                    ]
+                    pre_split_target = (
+                        bureau_tokens_for_split[0]
+                        if len(bureau_tokens_for_split) == 1
+                        else None
+                    )
+                else:
+                    banded_tokens = [(t, "none") for t in toks]
+
+                pre_split_consumed = False
+                if layout:
+                    for t, band in banded_tokens:
                         _trace(line["page"], line["line"], t, band, "band")
                         pre_split_payload: List[Tuple[str, dict, str]] | None = None
-                        if band in {"tu", "xp", "eq"}:
+                        if (
+                            not pre_split_consumed
+                            and pre_split_target is not None
+                            and t is pre_split_target
+                            and band in {"tu", "xp", "eq"}
+                        ):
                             pre_split_payload = _pre_split_bureau_token(t, layout)
+                            pre_split_consumed = True
                         if pre_split_payload:
                             parts_for_line: List[str] = []
                             for band_key, synthetic_token, part in pre_split_payload:

@@ -2,7 +2,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 # Optional bootstrap to ensure repo root is on sys.path
 try:  # pragma: no cover - convenience import
@@ -18,10 +18,232 @@ from backend.core.logic.report_analysis.account_merge import (
     DEFAULT_CFG,
     cluster_problematic_accounts,
 )
-from backend.core.logic.report_analysis.problem_extractor import (
-    detect_problem_accounts,
-    load_stagea_accounts_from_manifest,
-)
+from backend.core.logic.report_analysis.problem_extractor import detect_problem_accounts
+from backend.pipeline.runs import RunManifest
+
+
+def _rebase_manifest_path(raw: str, sid: str) -> Path:
+    """Map a manifest-recorded path to the local ``runs/<sid>`` layout."""
+
+    path = Path(raw)
+    if path.exists():
+        return path
+
+    normalized = str(raw).replace("\\", "/")
+    if "/runs/" in normalized:
+        suffix = normalized.split("/runs/", 1)[1]
+        candidate = Path("runs") / suffix
+        if candidate.exists():
+            return candidate
+
+    if sid and sid in normalized:
+        after_sid = normalized.split(sid, 1)[1].lstrip("/\\")
+        if after_sid:
+            candidate = Path("runs") / sid / after_sid
+            if candidate.exists():
+                return candidate
+
+    return path
+
+
+def _load_stagea_accounts_with_fallback(sid: str) -> List[Dict[str, Any]]:
+    """Load Stage-A accounts, rebasing manifest paths when necessary."""
+
+    manifest = RunManifest.for_sid(sid)
+    raw_path = manifest.get("traces.accounts_table", "accounts_json")
+    accounts_path = _rebase_manifest_path(raw_path, sid)
+    if not accounts_path.exists():
+        raise FileNotFoundError(
+            f"Stage-A accounts JSON not found for sid={sid!r} (expected at {accounts_path})"
+        )
+
+    with accounts_path.open("r", encoding="utf-8") as fh:
+        payload = json.load(fh)
+
+    accounts = payload.get("accounts")
+    return list(accounts) if isinstance(accounts, list) else []
+
+
+def _coerce_index(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _find_stagea_account(accounts: Iterable[Dict[str, Any]], sid: str) -> Tuple[Dict[str, Any], int]:
+    """Locate account 8 (or fallback) within Stage-A ``accounts``."""
+
+    mask = "552433**********"
+    fallback: Optional[Tuple[Dict[str, Any], int]] = None
+
+    for acc in accounts:
+        idx = _coerce_index((acc or {}).get("account_index"))
+        if idx == 8:
+            return acc, idx
+
+        if fallback is None:
+            lines = acc.get("lines") if isinstance(acc.get("lines"), list) else []
+            for line in lines:
+                text = str((line or {}).get("text") or "")
+                if mask in text:
+                    if idx is not None:
+                        fallback = (acc, idx)
+                    break
+
+    if fallback is not None:
+        return fallback
+
+    raise AssertionError(
+        f"unable to locate Stage-A account 8 for sid={sid!r}; no matching account mask found"
+    )
+
+
+def _read_account_index_from_dir(path: Path) -> Optional[int]:
+    for name in ("meta.json", "summary.json", "account.json"):
+        candidate = path / name
+        if not candidate.exists():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        idx = _coerce_index((payload or {}).get("account_index"))
+        if idx is not None:
+            return idx
+    return None
+
+
+def _find_cases_accounts_dir(manifest: RunManifest) -> Path:
+    base_dirs = manifest.data.get("base_dirs", {}) if isinstance(manifest.data, dict) else {}
+    raw_dir = base_dirs.get("cases_accounts_dir") if isinstance(base_dirs, dict) else None
+    if isinstance(raw_dir, str) and raw_dir:
+        candidate = _rebase_manifest_path(raw_dir, manifest.sid)
+        if candidate.exists():
+            return candidate
+
+    fallback = Path("runs") / manifest.sid / "cases" / "accounts"
+    return fallback
+
+
+def _load_bureaus_for_account(sid: str, account_idx: int) -> Tuple[Dict[str, Any], Path]:
+    manifest = RunManifest.for_sid(sid)
+    cases_dir = _find_cases_accounts_dir(manifest)
+    if not cases_dir.exists():
+        raise FileNotFoundError(
+            f"cases/accounts directory not found for sid={sid!r} (looked at {cases_dir})"
+        )
+
+    search_dirs = [p for p in sorted(cases_dir.iterdir(), key=lambda item: item.name) if p.is_dir()]
+    if not search_dirs:
+        raise FileNotFoundError(
+            f"no account case folders found under {cases_dir} for sid={sid!r}"
+        )
+
+    selected_dir: Optional[Path] = None
+    for entry in search_dirs:
+        idx = _read_account_index_from_dir(entry)
+        if idx == account_idx or entry.name == str(account_idx):
+            selected_dir = entry
+            break
+
+    if selected_dir is None:
+        # Fallback: first available directory with bureaus.json
+        for entry in search_dirs:
+            if (entry / "bureaus.json").exists():
+                selected_dir = entry
+                break
+
+    if selected_dir is None:
+        raise FileNotFoundError(
+            f"unable to locate bureaus.json for account {account_idx} under {cases_dir}"
+        )
+
+    bureaus_path = selected_dir / "bureaus.json"
+    if not bureaus_path.exists():
+        raise FileNotFoundError(
+            f"expected bureaus.json in {selected_dir}, but the file was missing"
+        )
+
+    with bureaus_path.open("r", encoding="utf-8") as fh:
+        bureaus = json.load(fh)
+
+    return bureaus, bureaus_path
+
+
+def _assert_account8_values(
+    sid: str, stagea_account: Dict[str, Any], bureaus: Dict[str, Any]
+) -> None:
+    tu_expected = {
+        "account_number_display": "****",
+        "high_balance": "$12,028",
+        "last_verified": "11.8.2025",
+        "date_of_last_activity": "30.3.2024",
+        "date_reported": "11.8.2025",
+        "date_opened": "20.11.2021",
+        "balance_owed": "$6,217",
+        "closed_date": "30.3.2024",
+        "account_rating": "Derogatory",
+        "account_description": "Individual",
+        "dispute_status": "Account not disputed",
+        "creditor_type": "Bank Credit Cards",
+        "account_status": "Closed",
+        "payment_status": "Collection/Chargeoff",
+        "payment_amount": "$0",
+        "last_payment": "18.6.2025",
+        "term_length": "--",
+        "past_due_amount": "$6,217",
+        "account_type": "Credit Card",
+        "payment_frequency": "--",
+        "credit_limit": "$12,000",
+    }
+
+    triad_fields = stagea_account.get("triad_fields")
+    if not isinstance(triad_fields, dict):
+        raise AssertionError(f"Stage-A account for sid={sid!r} is missing triad_fields")
+
+    stagea_tu = triad_fields.get("transunion") if isinstance(triad_fields.get("transunion"), dict) else {}
+    stagea_eq = triad_fields.get("equifax") if isinstance(triad_fields.get("equifax"), dict) else {}
+
+    bureaus_tu = bureaus.get("transunion") if isinstance(bureaus.get("transunion"), dict) else {}
+    bureaus_eq = bureaus.get("equifax") if isinstance(bureaus.get("equifax"), dict) else {}
+
+    for key, expected in tu_expected.items():
+        stage_val = stagea_tu.get(key)
+        if stage_val != expected:
+            raise AssertionError(
+                f"Stage-A transunion.{key} expected {expected!r} but found {stage_val!r}"
+            )
+
+        bureau_val = bureaus_tu.get(key)
+        if bureau_val != expected:
+            raise AssertionError(
+                f"bureaus.json transunion.{key} expected {expected!r} but found {bureau_val!r}"
+            )
+
+    # Ensure missing values remain empty strings rather than "--".
+    for bureau_key in ("transunion", "experian", "equifax"):
+        stage_fields = triad_fields.get(bureau_key)
+        bureau_fields = bureaus.get(bureau_key)
+        if not isinstance(stage_fields, dict) or not isinstance(bureau_fields, dict):
+            continue
+        for key, stage_val in stage_fields.items():
+            if stage_val == "":
+                value = bureau_fields.get(key)
+                if value != "":
+                    raise AssertionError(
+                        f"{bureau_key}.{key} expected empty string for missing value but found {value!r}"
+                    )
+
+    # Equifax banding sanity: ensure the closed_date value was not polluted by the next label.
+    eq_closed_stage = stagea_eq.get("closed_date")
+    eq_closed_bureaus = bureaus_eq.get("closed_date")
+    if eq_closed_stage != eq_closed_bureaus:
+        raise AssertionError(
+            f"equifax.closed_date mismatch between Stage-A ({eq_closed_stage!r}) and bureaus.json ({eq_closed_bureaus!r})"
+        )
+    if isinstance(eq_closed_bureaus, str) and "Last Payment" in eq_closed_bureaus:
+        raise AssertionError("equifax.closed_date captured tokens from the next label (contains 'Last Payment')")
 
 
 def _build_merge_summary(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -82,7 +304,7 @@ def check_lean(sid: str) -> None:
         raise FileNotFoundError(f"accounts directory not found for SID {sid!r} at {base}")
 
     try:
-        stagea_accounts = load_stagea_accounts_from_manifest(sid)
+        stagea_accounts = _load_stagea_accounts_with_fallback(sid)
         stagea_by_idx = {}
         for account in stagea_accounts:
             idx = account.get("account_index")
@@ -271,6 +493,23 @@ def main() -> int:
             encoding="utf-8",
         )
         print(f"wrote JSON to {json_out_path}")
+
+    try:
+        stagea_accounts = _load_stagea_accounts_with_fallback(args.sid)
+    except Exception as exc:
+        print(f"[SMOKE] failed to load Stage-A accounts: {exc}")
+        raise
+
+    try:
+        stagea_account, account_idx = _find_stagea_account(stagea_accounts, args.sid)
+        bureaus, bureaus_path = _load_bureaus_for_account(args.sid, account_idx)
+        _assert_account8_values(args.sid, stagea_account, bureaus)
+        print(
+            f"[SMOKE] PASS account {account_idx} TU/EQ smoke checks verified via {bureaus_path}"
+        )
+    except Exception as exc:
+        print(f"[SMOKE] account 8 verification failed: {exc}")
+        raise
 
     if args.check_lean:
         check_lean(args.sid)

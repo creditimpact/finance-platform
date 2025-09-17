@@ -45,6 +45,10 @@ logger = logging.getLogger(__name__)
 # Enable with RAW_TRIAD_FROM_X=1 for verbose triad logs
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
 TRIAD_BAND_BY_X0 = os.environ.get("TRIAD_BAND_BY_X0") == "1"
+SPLIT_SPACE_TRIADS = os.environ.get("SPLIT_SPACE_TRIADS", "1").lower() not in {
+    "0",
+    "false",
+}
 
 
 def _dbg_path(label: str, p: Path | str | None):
@@ -195,6 +199,8 @@ HEADING_BACK_LINES = 8
 
 _SPACE_RE = re.compile(r"\s+")
 MULTISPACE = re.compile(r"\s{2,}")
+DOT_DATE_RE = re.compile(r"\d{1,2}\.\d{1,2}\.\d{2,4}")
+MONEY_RE = re.compile(r"\$\s*\d")
 
 
 def join_tokens_with_space(tokens: Iterable[str]) -> str:
@@ -883,82 +889,134 @@ def process_triad_labeled_line(
     vals = {"transunion": [], "experian": [], "equifax": []}
     saw_dash_for = {"transunion": False, "experian": False, "equifax": False}
     tail_tokens = tokens[suffix_idx + 1 :]
-    for j, t in enumerate(tail_tokens, start=suffix_idx + 1):
-        b = _token_band(t, layout)
-        txt = str(t.get("text", ""))
-        z = txt.strip()
-        if b == "tu":
-            vals["transunion"].append(txt)
-            if z in dash_tokens:
-                saw_dash_for["transunion"] = True
-        elif b == "xp":
-            vals["experian"].append(txt)
-            if z in dash_tokens:
-                saw_dash_for["experian"] = True
-        elif b == "eq":
-            vals["equifax"].append(txt)
-            if z in dash_tokens:
-                saw_dash_for["equifax"] = True
-        _trace_token(t.get("page"), t.get("line"), j, t, b, "labeled", canonical or "")
+    pre_split_cols: List[str] | None = None
+    pre_split_text: str | None = None
+    if SPLIT_SPACE_TRIADS and tail_tokens:
+        bureau_tokens = [
+            t for t in tail_tokens if _token_band(t, layout) in {"tu", "xp", "eq"}
+        ]
+        if len(bureau_tokens) == 1:
+            candidate = bureau_tokens[0]
+            raw = candidate.get("text")
+            if raw is None:
+                raw = ""
+            raw_str = str(raw)
+            sample = raw_str.replace("\u00a0", " ")
+            looks_multi = ("--" in sample) or bool(MULTISPACE.search(sample))
+            if not looks_multi:
+                date_hits = len(DOT_DATE_RE.findall(sample))
+                money_hits = len(MONEY_RE.findall(sample))
+                looks_multi = (date_hits >= 2) or (money_hits >= 2)
+            if looks_multi:
+                parts = _split_triad_tail_3cols(raw_str)
+                if parts:
+                    pre_split_cols = parts
+                    pre_split_text = raw_str
 
-    # 2a) Detect a collapsed triad tail rendered as a single space-delimited token.
-    band_to_bureau = {"tu": "transunion", "xp": "experian", "eq": "equifax"}
-    non_empty_bureaus = [b for b in ("transunion", "experian", "equifax") if vals[b]]
-    candidate_parts: List[str] | None = None
-    candidate_bureau: str | None = None
-    candidate_text: str | None = None
-    for t in tail_tokens:
-        band = _token_band(t, layout)
-        bureau = band_to_bureau.get(band)
-        if bureau is None:
-            continue
-        txt = str(t.get("text", ""))
-        s = txt.strip()
-        if not s:
-            continue
-        has_dash_delim = " -- " in s or s.count("--") >= 2
-        space_runs = list(MULTISPACE.finditer(s))
-        if not has_dash_delim and len(space_runs) < 2:
-            continue
-        parts = _split_triad_tail_3cols(txt)
-        if not parts:
-            continue
-        candidate_parts = parts
-        candidate_bureau = bureau
-        candidate_text = txt
-        break
-
-    if candidate_parts and (
-        not non_empty_bureaus
-        or (
-            len(non_empty_bureaus) == 1
-            and candidate_bureau == non_empty_bureaus[0]
-            and len(vals[candidate_bureau]) == 1
-            and all(
-                not vals[b]
-                for b in ("transunion", "experian", "equifax")
-                if b != candidate_bureau
-            )
-        )
-    ):
+    if pre_split_cols:
         logger.info(
             "TRIAD_TAIL_SPACE_SPLIT key=%s text=%r parts=%r",
             canonical,
-            candidate_text,
-            candidate_parts,
+            pre_split_text,
+            pre_split_cols,
         )
-        for b in ("transunion", "experian", "equifax"):
-            vals[b] = []
-            saw_dash_for[b] = False
+        for j, t in enumerate(tail_tokens, start=suffix_idx + 1):
+            b = _token_band(t, layout)
+            _trace_token(
+                t.get("page"),
+                t.get("line"),
+                j,
+                t,
+                b,
+                "labeled",
+                canonical or "",
+            )
         for idx, bureau in enumerate(("transunion", "experian", "equifax")):
-            part = (candidate_parts[idx] or "").strip()
-            if not part or part == "--":
-                vals[bureau] = ["--"]
+            part = (pre_split_cols[idx] or "").strip()
+            if not part:
+                part = "--"
+            vals[bureau] = [part]
+            if part in dash_tokens:
                 saw_dash_for[bureau] = True
-            else:
-                vals[bureau] = [part]
-                if part in {"--", "—", "–"}:
+    else:
+        for j, t in enumerate(tail_tokens, start=suffix_idx + 1):
+            b = _token_band(t, layout)
+            txt = str(t.get("text", ""))
+            z = txt.strip()
+            if b == "tu":
+                vals["transunion"].append(txt)
+                if z in dash_tokens:
+                    saw_dash_for["transunion"] = True
+            elif b == "xp":
+                vals["experian"].append(txt)
+                if z in dash_tokens:
+                    saw_dash_for["experian"] = True
+            elif b == "eq":
+                vals["equifax"].append(txt)
+                if z in dash_tokens:
+                    saw_dash_for["equifax"] = True
+            _trace_token(
+                t.get("page"), t.get("line"), j, t, b, "labeled", canonical or ""
+            )
+
+        # 2a) Detect a collapsed triad tail rendered as a single space-delimited token.
+        band_to_bureau = {"tu": "transunion", "xp": "experian", "eq": "equifax"}
+        non_empty_bureaus = [b for b in ("transunion", "experian", "equifax") if vals[b]]
+        candidate_parts: List[str] | None = None
+        candidate_bureau: str | None = None
+        candidate_text: str | None = None
+        for t in tail_tokens:
+            band = _token_band(t, layout)
+            bureau = band_to_bureau.get(band)
+            if bureau is None:
+                continue
+            txt = str(t.get("text", ""))
+            s = txt.strip()
+            if not s:
+                continue
+            has_dash_delim = " -- " in s or s.count("--") >= 2
+            space_runs = list(MULTISPACE.finditer(s))
+            if not has_dash_delim and len(space_runs) < 2:
+                continue
+            parts = _split_triad_tail_3cols(txt)
+            if not parts:
+                continue
+            candidate_parts = parts
+            candidate_bureau = bureau
+            candidate_text = txt
+            break
+
+        if candidate_parts and (
+            not non_empty_bureaus
+            or (
+                len(non_empty_bureaus) == 1
+                and candidate_bureau == non_empty_bureaus[0]
+                and len(vals[candidate_bureau]) == 1
+                and all(
+                    not vals[b]
+                    for b in ("transunion", "experian", "equifax")
+                    if b != candidate_bureau
+                )
+            )
+        ):
+            logger.info(
+                "TRIAD_TAIL_SPACE_SPLIT key=%s text=%r parts=%r",
+                canonical,
+                candidate_text,
+                candidate_parts,
+            )
+            for b in ("transunion", "experian", "equifax"):
+                vals[b] = []
+                saw_dash_for[b] = False
+            for idx, bureau in enumerate(("transunion", "experian", "equifax")):
+                part = (candidate_parts[idx] or "").strip()
+                if not part or part == "--":
+                    vals[bureau] = ["--"]
                     saw_dash_for[bureau] = True
+                else:
+                    vals[bureau] = [part]
+                    if part in {"--", "—", "–"}:
+                        saw_dash_for[bureau] = True
 
     # 2b) TU rescue: sometimes TU values are mis-banded into label due to compression/misalignment.
     # If TU is empty but XP/EQ have values, look for label-band tokens near the TU seam that look like values.

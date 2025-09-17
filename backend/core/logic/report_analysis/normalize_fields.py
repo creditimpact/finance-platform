@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Dict, List
 import re
 
+_DASH_CHARS = "-\u2010\u2011\u2012\u2013\u2014\u2015"
+_DASH_PLACEHOLDER_RE = re.compile(rf"^[{_DASH_CHARS}\s]+$")
+
 
 # Canonical label list in visual order (22)
 LABELS: List[str] = [
@@ -58,10 +61,33 @@ LABEL_TO_KEY: Dict[str, str] = {
 CANONICAL_KEYS: List[str] = [LABEL_TO_KEY[lbl] for lbl in LABELS]
 
 
+def is_dash_placeholder(val: str | None) -> bool:
+    if not isinstance(val, str):
+        return False
+    stripped = val.strip()
+    if not stripped:
+        return False
+    return bool(_DASH_PLACEHOLDER_RE.fullmatch(stripped))
+
+
+def is_effectively_blank(val: str | None) -> bool:
+    if val is None:
+        return True
+    if isinstance(val, str):
+        stripped = val.strip()
+    else:
+        stripped = str(val).strip()
+    if not stripped:
+        return True
+    return is_dash_placeholder(stripped)
+
+
 def clean_value(val: str | None) -> str:
-    s = (val or "").strip()
-    if s in {"--", "—", "-"}:
+    s = "" if val is None else str(val).strip()
+    if not s:
         return ""
+    if is_dash_placeholder(s):
+        return "--"
     # Keep dates/amount formats as found; just normalize whitespace
     s = re.sub(r"\s+", " ", s)
     return s
@@ -85,6 +111,8 @@ __all__ = [
     "LABELS",
     "LABEL_TO_KEY",
     "CANONICAL_KEYS",
+    "is_dash_placeholder",
+    "is_effectively_blank",
     "clean_value",
     "join_parts",
     "ensure_all_keys",

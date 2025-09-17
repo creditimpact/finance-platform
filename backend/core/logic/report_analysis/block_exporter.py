@@ -18,6 +18,11 @@ from backend.core.logic.report_analysis.account_packager_coords import (
 )
 from backend.core.logic.report_analysis.block_segmenter import segment_account_blocks
 from backend.core.logic.report_analysis.column_reader import detect_bureau_columns
+from backend.core.logic.report_analysis.normalize_fields import (
+    clean_value,
+    is_dash_placeholder,
+    is_effectively_blank,
+)
 from backend.core.logic.report_analysis.report_parsing import (
     build_block_fuzzy,
     detect_bureau_order,
@@ -333,9 +338,9 @@ def _zip_values_to_labels(raw_values: list[str], labels: list[str]) -> dict[str,
     """Map values to labels with simple continuation joining and padding.
 
     - If extra values exist, join them to the last label's value.
-    - Clean "--" or "-" to empty.
+    - Normalize tokens so dash placeholders stay as "--" and blanks stay empty.
     """
-    cleaned = [(v or "").strip() for v in raw_values]
+    cleaned = [clean_value(v) for v in raw_values]
     # Pad
     if len(cleaned) < len(labels):
         cleaned = cleaned + [""] * (len(labels) - len(cleaned))
@@ -349,10 +354,7 @@ def _zip_values_to_labels(raw_values: list[str], labels: list[str]) -> dict[str,
         cleaned = head
     out: dict[str, str] = {}
     for lab, val in zip(labels, cleaned):
-        v = val
-        if v in {"--", "-"}:
-            v = ""
-        out[lab] = v
+        out[lab] = clean_value(val)
     return out
 
 
@@ -681,8 +683,10 @@ def _g4_clean_money(val: str | None) -> str:
     if not isinstance(val, str):
         return ""
     s = val.strip()
-    if s in {"--", "-", ""}:
+    if not s:
         return ""
+    if is_dash_placeholder(s):
+        return "--"
     # gentle remove of $ and commas
     s = s.replace("$", "").replace(",", "").strip()
     return s
@@ -698,14 +702,13 @@ def _g4_apply(
         bureau_map = fields.get(b) or {}
         cleaned: dict[str, Any] = {}
         for k, v in bureau_map.items():
-            val = v if isinstance(v, str) else ("" if v is None else str(v))
-            if isinstance(val, str) and val.strip() in {"--", "-", ""}:
-                val = ""
+            raw = "" if v is None else v
+            text = clean_value(raw)
             if k in _MONEY_KEYS:
-                val = _g4_clean_money(val)
-            cleaned[k] = val
+                text = _g4_clean_money(text)
+            cleaned[k] = text
         fields[b] = cleaned
-        presence[b] = any(isinstance(v, str) and v.strip() for v in cleaned.values())
+        presence[b] = any(not is_effectively_blank(v) for v in cleaned.values())
 
     # Account number tail — if not already present, try to derive from fields
     if not meta.get("account_number_tail"):
@@ -1165,8 +1168,7 @@ def enrich_block_v2(blk: dict) -> dict:
         return [p.strip() for p in parts]
 
     def _clean_cell(v: str) -> str:
-        v = (v or "").strip()
-        return "" if v in {"--", "-"} else v
+        return clean_value(v)
 
     if hdr_idx is not None:
         logger.info(
@@ -1365,13 +1367,12 @@ def enrich_block(blk: dict) -> dict:
                 vals = _split_vals(rest, len(order))
                 for idx, bureau in enumerate(order):
                     v = vals[idx] if idx < len(vals) else ""
-                    v = v if v not in {"--", "-"} else ""
-                    fields[bureau][key] = v
+                    fields[bureau][key] = clean_value(v)
                 break
 
-    tu_count = sum(1 for v in fields["transunion"].values() if v)
-    ex_count = sum(1 for v in fields["experian"].values() if v)
-    eq_count = sum(1 for v in fields["equifax"].values() if v)
+    tu_count = sum(1 for v in fields["transunion"].values() if not is_effectively_blank(v))
+    ex_count = sum(1 for v in fields["experian"].values() if not is_effectively_blank(v))
+    eq_count = sum(1 for v in fields["equifax"].values() if not is_effectively_blank(v))
     if BLOCK_DEBUG:
         logger.warning(
             "ENRICH: fields_done tu=%d ex=%d eq=%d", tu_count, ex_count, eq_count
@@ -1386,9 +1387,15 @@ def enrich_block(blk: dict) -> dict:
 
     # Meta: presence flags and identifiers
     presence = {
-        "transunion": any(bool(v) for v in fields.get("transunion", {}).values()),
-        "experian": any(bool(v) for v in fields.get("experian", {}).values()),
-        "equifax": any(bool(v) for v in fields.get("equifax", {}).values()),
+        "transunion": any(
+            not is_effectively_blank(v) for v in fields.get("transunion", {}).values()
+        ),
+        "experian": any(
+            not is_effectively_blank(v) for v in fields.get("experian", {}).values()
+        ),
+        "equifax": any(
+            not is_effectively_blank(v) for v in fields.get("equifax", {}).values()
+        ),
     }
     logger.info(
         "BLOCK: bureau_presence tu=%d ex=%d eq=%d tail=%s",
@@ -3140,13 +3147,11 @@ def enrich_block(blk: dict) -> dict:
                 key = top_key_map.get(lab)
                 if not key:
                     continue
-                v = val.strip()
-                if v in {"--", "-"}:
-                    v = ""
+                v = clean_value(val)
                 fields[b][key] = v
         h1_applied = any(
             any(
-                fields[b].get(top_key_map[lab], "")
+                not is_effectively_blank(fields[b].get(top_key_map[lab], ""))
                 for lab in top_labels
                 if lab in top_key_map
             )
@@ -3259,12 +3264,10 @@ def enrich_block(blk: dict) -> dict:
                 keyb = bottom_key_map.get(lab)
                 if not keyb:
                     continue
-                v2 = (val or "").strip()
-                if v2 in {"--", "-"}:
-                    v2 = ""
-                if keyb == "creditor_remarks" and dst.get(keyb) and v2:
+                v2 = clean_value(val)
+                if keyb == "creditor_remarks" and dst.get(keyb) and not is_effectively_blank(v2):
                     dst[keyb] = f"{dst[keyb]} {v2}".strip()
-                elif (not dst.get(keyb)) and v2:
+                elif not dst.get(keyb):
                     dst[keyb] = v2
 
     # Fallback: simple column-split parsing when H1 didn't execute
@@ -3294,12 +3297,16 @@ def enrich_block(blk: dict) -> dict:
                         vals = _split_vals(rest, len(order2))
                         for idx3, bureau in enumerate(order2):
                             v = vals[idx3] if idx3 < len(vals) else ""
-                            v = v if v not in {"--", "-"} else ""
+                            normalized = clean_value(v)
                             dst2 = fields.setdefault(bureau, {})
-                            if key == "creditor_remarks" and dst2.get(key) and v:
-                                dst2[key] = f"{dst2[key]} {v}".strip()
-                            elif (not dst2.get(key)) and v:
-                                dst2[key] = v
+                            if (
+                                key == "creditor_remarks"
+                                and dst2.get(key)
+                                and not is_effectively_blank(normalized)
+                            ):
+                                dst2[key] = f"{dst2[key]} {normalized}".strip()
+                            elif not dst2.get(key):
+                                dst2[key] = normalized
                         break
 
     # T4: If layout tokens are provided on the block, use column-reader (T2+T3)

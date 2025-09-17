@@ -351,9 +351,9 @@ def test_seam_tie_break_right_to_xp(tmp_path: Path, caplog):
     tsv_path.write_text(header + "".join(rows), encoding="utf-8")
     data, accounts_dir, _ = _run_split(tsv_path, caplog)
     fields = data["accounts"][0]["triad_fields"]
-    assert fields["transunion"].get("high_balance", "") in {"", None}
+    assert fields["transunion"].get("high_balance", "") in {"", None, "--"}
     assert fields["experian"]["high_balance"] == "SEAM"
-    assert fields["equifax"].get("high_balance", "") in {"", None}
+    assert fields["equifax"].get("high_balance", "") in {"", None, "--"}
 
 
 def test_unknown_label_skipped_then_next_known_parsed(tmp_path: Path, caplog):

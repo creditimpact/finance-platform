@@ -200,6 +200,17 @@ HEADING_BACK_LINES = 8
 _SPACE_RE = re.compile(r"\s+")
 MULTISPACE = re.compile(r"\s{2,}")
 DOT_DATE_RE = re.compile(r"\d{1,2}\.\d{1,2}\.\d{2,4}")
+SLASH_DATE_RE = re.compile(r"\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}/\d{2,4}")
+MONTH_YEAR_RE = re.compile(
+    r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{2,4}\b",
+    re.IGNORECASE,
+)
+NUMERIC_TOKEN_RE = re.compile(r"\b\d[\d,./]*\b")
+MONTH_TOKEN_RE = re.compile(
+    r"^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?$",
+    re.IGNORECASE,
+)
+YEAR_TOKEN_RE = re.compile(r"^\d{2,4}$")
 MONEY_RE = re.compile(r"\$\s*\d")
 
 
@@ -224,6 +235,8 @@ def _norm(s: str) -> str:
 
 def _clean_value(txt: str) -> str:
     s = _norm(txt)
+    if not s:
+        return "--"
     if s in {"—", "–"} or re.fullmatch(r"[—–-]\s*[—–-]", s):
         return "--"
     return s
@@ -232,26 +245,103 @@ def _clean_value(txt: str) -> str:
 def _split_triad_tail_3cols(tail: str) -> List[str]:
     """Split a triad tail (after a label) into three bureau segments."""
 
-    s = (tail or "").strip()
+    s = (tail or "").replace("\u00a0", " ").strip()
     if not s:
         return ["--", "--", "--"]
 
-    has_dash_delim = " -- " in s or s.count("--") >= 2
     parts: List[str]
+    normalized = s.replace("—", "--").replace("–", "--")
+    has_dash_delim = " -- " in normalized or normalized.count("--") >= 2
     if has_dash_delim:
-        raw_parts = [p.strip() for p in s.split("--")]
+        raw_parts = [p.strip() for p in normalized.split("--")]
         parts = [p for p in raw_parts if p]
     else:
-        parts = [p for p in MULTISPACE.split(s) if p]
+        spaced = [p.strip() for p in MULTISPACE.split(normalized) if p.strip()]
+        if len(spaced) >= 3:
+            parts = spaced
+        else:
+            tokens = [tok for tok in normalized.split(" ") if tok]
+            if len(tokens) >= 3:
+                parts = _group_single_space_tokens(tokens)
+            else:
+                parts = tokens
 
-    if len(parts) < 3:
-        parts = parts + ["--"] * (3 - len(parts))
-    elif len(parts) > 3:
-        while len(parts) > 3:
-            parts[-2] = (parts[-2] + " " + parts[-1]).strip()
-            parts.pop()
+    return _normalize_triad_parts(parts)
 
-    return [p.strip() or "--" for p in parts]
+
+def _group_single_space_tokens(tokens: List[str]) -> List[str]:
+    """Group single-space-delimited tokens into up to three value segments."""
+
+    grouped: List[str] = []
+    idx = 0
+    # Capture up to the first two segments explicitly, remainder goes to the tail
+    while idx < len(tokens) and len(grouped) < 2:
+        tok = tokens[idx]
+        take_tokens = [tok]
+        next_idx = idx + 1
+        cleaned = re.sub(r"[.,]$", "", tok)
+        if MONTH_TOKEN_RE.match(cleaned) and next_idx < len(tokens):
+            nxt = tokens[next_idx]
+            nxt_clean = re.sub(r"[.,]$", "", nxt)
+            if YEAR_TOKEN_RE.match(nxt_clean):
+                take_tokens.append(nxt)
+                next_idx += 1
+        grouped.append(" ".join(take_tokens))
+        idx = next_idx
+
+    remainder = " ".join(tokens[idx:]) if idx < len(tokens) else ""
+    grouped.append(remainder)
+    return grouped
+
+
+def _normalize_triad_parts(parts: List[str]) -> List[str]:
+    cleaned = [_clean_value(p) for p in parts]
+    while len(cleaned) < 3:
+        cleaned.append("--")
+    while len(cleaned) > 3:
+        merged = f"{cleaned[-2]} {cleaned[-1]}".strip()
+        cleaned[-2] = _clean_value(merged)
+        cleaned.pop()
+    return [c if c else "--" for c in cleaned]
+
+
+def _maybe_split_triad_tail(raw_text: str | None) -> List[str] | None:
+    if raw_text is None:
+        return None
+
+    sample = str(raw_text).replace("\u00a0", " ").strip()
+    if not sample:
+        return None
+
+    parts = _split_triad_tail_3cols(sample)
+    if not parts:
+        return None
+
+    normalized_sample = " ".join(sample.split())
+    dash_hits = normalized_sample.count("--")
+    looks_multi = dash_hits >= 2
+    if not looks_multi and MULTISPACE.search(sample):
+        looks_multi = True
+    if not looks_multi and len(DOT_DATE_RE.findall(sample)) >= 2:
+        looks_multi = True
+    if not looks_multi and len(SLASH_DATE_RE.findall(sample)) >= 2:
+        looks_multi = True
+    if not looks_multi and len(MONTH_YEAR_RE.findall(sample)) >= 2:
+        looks_multi = True
+    if not looks_multi and len(MONEY_RE.findall(sample)) >= 2:
+        looks_multi = True
+    if not looks_multi and len(NUMERIC_TOKEN_RE.findall(sample)) >= 3:
+        looks_multi = True
+    if not looks_multi and all(p == "--" for p in parts):
+        looks_multi = dash_hits >= 2
+
+    if not looks_multi:
+        return None
+
+    if len(parts) == 3 and parts[0] == normalized_sample and parts[1] == parts[2] == "--":
+        return None
+
+    return parts
 
 
 def _norm_text(s: str) -> str:
@@ -898,20 +988,11 @@ def process_triad_labeled_line(
         if len(bureau_tokens) == 1:
             candidate = bureau_tokens[0]
             raw = candidate.get("text")
-            if raw is None:
-                raw = ""
-            raw_str = str(raw)
-            sample = raw_str.replace("\u00a0", " ")
-            looks_multi = ("--" in sample) or bool(MULTISPACE.search(sample))
-            if not looks_multi:
-                date_hits = len(DOT_DATE_RE.findall(sample))
-                money_hits = len(MONEY_RE.findall(sample))
-                looks_multi = (date_hits >= 2) or (money_hits >= 2)
-            if looks_multi:
-                parts = _split_triad_tail_3cols(raw_str)
-                if parts:
-                    pre_split_cols = parts
-                    pre_split_text = raw_str
+            raw_str = str(raw or "")
+            parts = _maybe_split_triad_tail(raw_str)
+            if parts:
+                pre_split_cols = parts
+                pre_split_text = raw_str
 
     if pre_split_cols:
         logger.info(
@@ -971,14 +1052,7 @@ def process_triad_labeled_line(
             if bureau is None:
                 continue
             txt = str(t.get("text", ""))
-            s = txt.strip()
-            if not s:
-                continue
-            has_dash_delim = " -- " in s or s.count("--") >= 2
-            space_runs = list(MULTISPACE.finditer(s))
-            if not has_dash_delim and len(space_runs) < 2:
-                continue
-            parts = _split_triad_tail_3cols(txt)
+            parts = _maybe_split_triad_tail(txt)
             if not parts:
                 continue
             candidate_parts = parts
@@ -1127,7 +1201,7 @@ def process_triad_labeled_line(
         "triad_row": True,
         "label": _strip_colon_only(visu_label),
         "key": canonical,
-        "values": {k: " ".join(v).strip() for k, v in vals.items()},
+        "values": {k: _clean_value(" ".join(v).strip()) for k, v in vals.items()},
         "last_bureau_with_text": last_bureau_with_text,
         "expect_values_on_next_line": expect_values_on_next_line,
     }
@@ -2318,11 +2392,14 @@ def split_accounts(
                 "enabled": True,
                 "order": ["transunion", "experian", "equifax"],
             }
-            account_info["triad_fields"] = {
-                "transunion": ensure_all_keys(triad_maps["transunion"]),
-                "experian": ensure_all_keys(triad_maps["experian"]),
-                "equifax": ensure_all_keys(triad_maps["equifax"]),
-            }
+            triad_fields_out: Dict[str, Dict[str, str]] = {}
+            for bureau in ("transunion", "experian", "equifax"):
+                filled = ensure_all_keys(triad_maps[bureau])
+                triad_fields_out[bureau] = {
+                    key: _clean_value(str(value)) if value is not None else "--"
+                    for key, value in filled.items()
+                }
+            account_info["triad_fields"] = triad_fields_out
             account_info["triad_rows"] = triad_rows
         accounts.append(account_info)
         if write_tsv:

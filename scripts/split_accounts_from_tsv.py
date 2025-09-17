@@ -207,6 +207,13 @@ def _trace_token(
         )
 
 
+def _triad_band_log(message: str, *args) -> None:
+    """Emit detailed band diagnostics when trace/debugging is enabled."""
+
+    if TRACE_ON or STAGEA_DEBUG or logger.isEnabledFor(logging.DEBUG):
+        logger.info(message, *args)
+
+
 _triad_x0_fallback_logged: set[int] = set()
 
 STOP_MARKER_NORM = "publicinformation"
@@ -1109,61 +1116,13 @@ def process_triad_labeled_line(
         except ValueError:
             suffix_idx = 0
 
-    visu_label = " ".join(
-        (str(t.get("text", "")) or "").strip() for t in label_span
-    ).strip()
-    canon_label = normalize_label_text(visu_label)
-    canonical = label_map.get(canon_label)
-    logger.info(
-        "TRIAD_LABEL_BUILT visu=%r canon=%r key=%r", visu_label, canon_label, canonical
-    )
-
-    # Task 5: Strict line-break rule — if no suffix captured and the last label token
-    # is still left of TU's left x0 cutoff, expect values to start on the next line.
-    expect_values_on_next_line = False
-    if TRIAD_BAND_BY_X0 and (not suffix_was_captured):
-        try:
-            last_x0 = float(label_span[-1].get("x0", 0.0))
-        except Exception:
-            last_x0 = 0.0
-        try:
-            tu_left_x0 = float(getattr(layout, "tu_left_x0", 0.0))
-        except Exception:
-            tu_left_x0 = 0.0
-        # Only expect continuation if the last label token is clearly left of TU cutoff
-        if tu_left_x0 and ((last_x0 + TRIAD_X0_TOL) < tu_left_x0):
-            expect_values_on_next_line = True
-            logger.info(
-                "TRIAD_LABEL_LINEBREAK key=%s -> expecting values on next line",
-                canonical,
-            )
-
-    if canonical is None and canon_label != "Account #":
-        logger.info("TRIAD_GUARD_SKIP reason=unknown_label label=%r", canon_label)
-        # Trace label tokens with empty key since it's unknown
-        for j, lt in enumerate(label_span):
-            _trace_token(lt.get("page"), lt.get("line"), j, lt, "label", "labeled", "")
-        # Close any open row to avoid appending future values to the wrong field
-        return "CLOSE_OPEN_ROW"
-
-    # Trace label tokens with the resolved key
-    for j, lt in enumerate(label_span):
-        _trace_token(
-            lt.get("page"), lt.get("line"), j, lt, "label", "labeled", canonical or ""
-        )
-
-    # 2) Collect values after label suffix, banded by X only
-    dash_tokens = {"--", "—", "–"}
-    vals = {"transunion": [], "experian": [], "equifax": []}
-    saw_dash_for = {"transunion": False, "experian": False, "equifax": False}
     tail_tokens = tokens[suffix_idx + 1 :]
     row_eq_right_x0: float | None = None
-    eq_left_x0_for_log = 0.0
+    try:
+        eq_left_x0_for_log = float(getattr(layout, "eq_left_x0", layout.eq_band[0]))
+    except Exception:
+        eq_left_x0_for_log = float(layout.eq_band[0])
     if TRIAD_BAND_BY_X0:
-        try:
-            eq_left_x0_for_log = float(getattr(layout, "eq_left_x0", 0.0) or 0.0)
-        except Exception:
-            eq_left_x0_for_log = 0.0
         if tail_tokens:
             for next_label_token in tail_tokens:
                 text = str(next_label_token.get("text", ""))
@@ -1186,12 +1145,130 @@ def process_triad_labeled_line(
             and row_eq_right_x0 < eq_left_x0_for_log
         ):
             row_eq_right_x0 = eq_left_x0_for_log
-        logger.info(
-            "TRIAD_ROW_BOUNDS key=%s eq=[%.1f,%.1f)",
-            canonical or canon_label,
-            eq_left_x0_for_log,
-            row_eq_right_x0 if row_eq_right_x0 is not None else float("inf"),
+
+    visu_label = " ".join(
+        (str(t.get("text", "")) or "").strip() for t in label_span
+    ).strip()
+    canon_label = normalize_label_text(visu_label)
+    canonical = label_map.get(canon_label)
+    logger.info(
+        "TRIAD_LABEL_BUILT visu=%r canon=%r key=%r", visu_label, canon_label, canonical
+    )
+
+    label_for_log = canonical or canon_label
+    try:
+        label_left = float(layout.label_band[0])
+    except Exception:
+        label_left = 0.0
+    try:
+        label_right = float(layout.label_band[1])
+    except Exception:
+        label_right = 0.0
+    try:
+        tu_left = float(layout.tu_band[0])
+    except Exception:
+        tu_left = 0.0
+    try:
+        tu_right = float(layout.tu_band[1])
+    except Exception:
+        tu_right = 0.0
+    try:
+        xp_left = float(layout.xp_band[0])
+    except Exception:
+        xp_left = 0.0
+    try:
+        xp_right = float(layout.xp_band[1])
+    except Exception:
+        xp_right = 0.0
+    eq_left = eq_left_x0_for_log
+    try:
+        eq_band_right = float(layout.eq_band[1])
+    except Exception:
+        eq_band_right = float("inf")
+    eq_right_for_log = (
+        row_eq_right_x0 if row_eq_right_x0 is not None else eq_band_right
+    )
+    _triad_band_log(
+        "ROW_BANDS key=%s label=[%.3f,%.3f) tu=[%.3f,%.3f) xp=[%.3f,%.3f) eq=[%.3f,%.3f)",
+        label_for_log,
+        label_left,
+        label_right,
+        tu_left,
+        tu_right,
+        xp_left,
+        xp_right,
+        eq_left,
+        eq_right_for_log,
+    )
+
+    # Task 5: Strict line-break rule — if no suffix captured and the last label token
+    # is still left of TU's left x0 cutoff, expect values to start on the next line.
+    expect_values_on_next_line = False
+    if TRIAD_BAND_BY_X0 and (not suffix_was_captured):
+        try:
+            last_x0 = float(label_span[-1].get("x0", 0.0))
+        except Exception:
+            last_x0 = 0.0
+        try:
+            tu_left_x0 = float(getattr(layout, "tu_left_x0", 0.0))
+        except Exception:
+            tu_left_x0 = 0.0
+        # Only expect continuation if the last label token is clearly left of TU cutoff
+        if tu_left_x0 and ((last_x0 + TRIAD_X0_TOL) < tu_left_x0):
+            expect_values_on_next_line = True
+            logger.info(
+                "TRIAD_LABEL_LINEBREAK key=%s -> expecting values on next line",
+                canonical,
+            )
+
+    def _int_for_log(raw: Any) -> Any:
+        try:
+            return int(float(raw))
+        except Exception:
+            return "?"
+
+    def _float_for_log(raw: Any) -> float:
+        try:
+            return float(raw)
+        except Exception:
+            return 0.0
+
+    tail_assignments: List[tuple[dict, str]] = []
+    for t in tail_tokens:
+        band_name = _token_band(t, layout, row_eq_right_x0=row_eq_right_x0)
+        tail_assignments.append((t, band_name))
+        page_for_log = _int_for_log(t.get("page"))
+        line_for_log = _int_for_log(t.get("line"))
+        x0_for_log = _float_for_log(t.get("x0"))
+        band_label = (band_name or "none").upper()
+        text_for_log = t.get("text")
+        _triad_band_log(
+            "TOK p=%s l=%s x0=%.3f -> %s text=%r",
+            page_for_log,
+            line_for_log,
+            x0_for_log,
+            band_label,
+            text_for_log if text_for_log is not None else "",
         )
+
+    if canonical is None and canon_label != "Account #":
+        logger.info("TRIAD_GUARD_SKIP reason=unknown_label label=%r", canon_label)
+        # Trace label tokens with empty key since it's unknown
+        for j, lt in enumerate(label_span):
+            _trace_token(lt.get("page"), lt.get("line"), j, lt, "label", "labeled", "")
+        # Close any open row to avoid appending future values to the wrong field
+        return "CLOSE_OPEN_ROW"
+
+    # Trace label tokens with the resolved key
+    for j, lt in enumerate(label_span):
+        _trace_token(
+            lt.get("page"), lt.get("line"), j, lt, "label", "labeled", canonical or ""
+        )
+
+    # 2) Collect values after label suffix, banded by X only
+    dash_tokens = {"--", "—", "–"}
+    vals = {"transunion": [], "experian": [], "equifax": []}
+    saw_dash_for = {"transunion": False, "experian": False, "equifax": False}
     pre_split_cols: List[str] | None = None
     pre_split_text: str | None = None
     pre_split_mode: str | None = None
@@ -1233,8 +1310,7 @@ def process_triad_labeled_line(
             pre_split_text,
             pre_split_cols,
         )
-        for j, t in enumerate(tail_tokens, start=suffix_idx + 1):
-            b = _token_band(t, layout, row_eq_right_x0=row_eq_right_x0)
+        for j, (t, b) in enumerate(tail_assignments, start=suffix_idx + 1):
             _trace_token(
                 t.get("page"),
                 t.get("line"),
@@ -1251,8 +1327,7 @@ def process_triad_labeled_line(
             if normalized in dash_tokens:
                 saw_dash_for[bureau] = True
     else:
-        for j, t in enumerate(tail_tokens, start=suffix_idx + 1):
-            b = _token_band(t, layout, row_eq_right_x0=row_eq_right_x0)
+        for j, (t, b) in enumerate(tail_assignments, start=suffix_idx + 1):
             txt = str(t.get("text", ""))
             z = txt.strip()
             if b == "tu":
@@ -1277,8 +1352,7 @@ def process_triad_labeled_line(
         candidate_parts: List[str] | None = None
         candidate_bureau: str | None = None
         candidate_text: str | None = None
-        for t in tail_tokens:
-            band = _token_band(t, layout, row_eq_right_x0=row_eq_right_x0)
+        for t, band in tail_assignments:
             bureau = band_to_bureau.get(band)
             if bureau is None:
                 continue
@@ -2064,6 +2138,24 @@ def split_accounts(
                     )
                     if header_toks:
                         layout = bands_from_header_tokens(header_toks)
+                        try:
+                            tu_header_x0 = float(getattr(layout, "tu_left_x0", layout.tu_band[0]))
+                        except Exception:
+                            tu_header_x0 = float(layout.tu_band[0])
+                        try:
+                            xp_header_x0 = float(getattr(layout, "xp_left_x0", layout.xp_band[0]))
+                        except Exception:
+                            xp_header_x0 = float(layout.xp_band[0])
+                        try:
+                            eq_header_x0 = float(getattr(layout, "eq_left_x0", layout.eq_band[0]))
+                        except Exception:
+                            eq_header_x0 = float(layout.eq_band[0])
+                        _triad_band_log(
+                            "TRIAD_HEADER_X0S tu=%.3f, xp=%.3f, eq=%.3f",
+                            tu_header_x0,
+                            xp_header_x0,
+                            eq_header_x0,
+                        )
                         if STAGEA_DEBUG and header_toks:
                             header_token = header_toks[0]
                             header_page = header_token.get("page")

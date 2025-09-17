@@ -71,6 +71,40 @@ def _build_merge_summary(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"clusters": clusters, "pairs": pairs}
 
 
+def check_lean(sid: str) -> None:
+    """Validate that case folders for the SID contain lean artifacts only."""
+
+    base = Path("runs") / sid / "cases" / "accounts"
+    if not base.exists():
+        raise FileNotFoundError(f"accounts directory not found for SID {sid!r} at {base}")
+
+    required_files = (
+        "meta.json",
+        "summary.json",
+        "bureaus.json",
+        "fields_flat.json",
+        "raw_lines.json",
+        "tags.json",
+    )
+
+    for account_dir in base.iterdir():
+        if not account_dir.is_dir():
+            continue
+
+        for filename in required_files:
+            path = account_dir / filename
+            if not path.exists():
+                raise AssertionError(
+                    f"expected {filename} in {account_dir}, but it was missing"
+                )
+
+        summary_text = (account_dir / "summary.json").read_text(encoding="utf-8")
+        if "triad_rows" in summary_text:
+            raise AssertionError(
+                f"triad_rows detected in summary.json for {account_dir}; expected lean output"
+            )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Smoke run problem candidate detection for a run SID")
     ap.add_argument("--sid", required=True, help="Run session id (SID) to analyze")
@@ -83,6 +117,11 @@ def main() -> int:
         "--show-merge",
         action="store_true",
         help="Display merge clustering summary",
+    )
+    ap.add_argument(
+        "--check-lean",
+        action="store_true",
+        help="Verify case folders contain lean artifacts with no triad_rows",
     )
     ap.add_argument("--json-out", help="Path to write full JSON payload including merge data")
     args = ap.parse_args()
@@ -168,6 +207,9 @@ def main() -> int:
             encoding="utf-8",
         )
         print(f"wrote JSON to {json_out_path}")
+
+    if args.check_lean:
+        check_lean(args.sid)
     return 0
 
 

@@ -11,13 +11,6 @@ from .header_utils import normalize_bureau_header
 logger = logging.getLogger(__name__)
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
 
-# Tolerance (in PDF points) applied around the TransUnion midpoint when
-# computing the label/TU boundary. This guards against OCR jitter around the
-# left edge so tokens landing slightly outside the column are still classified
-# correctly.
-EDGE_EPS = 6.0
-EDGE_EPS_LABEL = 9.0
-
 
 @dataclass
 class TriadLayout:
@@ -37,46 +30,44 @@ def bands_from_header_tokens(tokens: List[dict]) -> TriadLayout:
     """Compute a :class:`TriadLayout` from three bureau header tokens.
 
     ``tokens`` must contain exactly the ``transunion``, ``experian`` and
-    ``equifax`` headers from the same line (in any order). Their horizontal
-    midpoints are computed and non-overlapping bands are derived by splitting at
-    midpoints between bureaus. The left label band spans from ``0`` to
-    ``tu_mid - EDGE_EPS`` so tokens near the TransUnion seam are not
-    misclassified.
+    ``equifax`` headers from the same line (in any order). Column bands are
+    derived directly from the headers' left ``x0`` coordinates so the label band
+    ends exactly at the TransUnion column start.
     """
 
-    mids: List[Tuple[float, str]] = []
+    positions: List[Tuple[float, str]] = []
     page = 0
     for t in tokens:
         name = normalize_bureau_header(str(t.get("text", "")))
         if name not in {"transunion", "experian", "equifax"}:
             continue
-        mids.append((mid_x(t), name))
+        try:
+            x0 = float(t.get("x0", 0.0))
+        except Exception:
+            x0 = 0.0
+        positions.append((x0, name))
         if not page:
             try:
                 page = int(float(t.get("page", 0)))
             except Exception:
                 page = 0
-    if len(mids) != 3:
+    if len(positions) != 3:
         raise ValueError("expected three bureau header tokens")
 
-    # Order the tokens left→right and extract midpoints
-    mids.sort(key=lambda kv: kv[0])
-    m0, m1, m2 = mids[0][0], mids[1][0], mids[2][0]
-
-    # Boundaries halfway between midpoints (non-overlapping bands)
-    b1 = (m0 + m1) / 2.0
-    b2 = (m1 + m2) / 2.0
+    # Order the tokens left→right and extract x0 positions
+    positions.sort(key=lambda kv: kv[0])
+    tu_x0, xp_x0, eq_x0 = positions[0][0], positions[1][0], positions[2][0]
 
     label_left = 0.0
-    label_right = max(0.0, m0 - EDGE_EPS_LABEL)
+    label_right = tu_x0
 
-    tu_left = label_right
-    tu_right = b1
+    tu_left = tu_x0
+    tu_right = xp_x0
 
-    xp_left = b1
-    xp_right = b2
+    xp_left = xp_x0
+    xp_right = eq_x0
 
-    eq_left = b2
+    eq_left = eq_x0
     eq_right = float("inf")
 
     layout = TriadLayout(
@@ -85,6 +76,10 @@ def bands_from_header_tokens(tokens: List[dict]) -> TriadLayout:
         tu_band=(tu_left, tu_right),
         xp_band=(xp_left, xp_right),
         eq_band=(eq_left, eq_right),
+        label_right_x0=label_right,
+        tu_left_x0=tu_left,
+        xp_left_x0=xp_left,
+        eq_left_x0=eq_left,
     )
 
     # Explicit bounds log for debugging seam placement and label width

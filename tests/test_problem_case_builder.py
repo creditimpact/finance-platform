@@ -16,13 +16,40 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
     sid = "S123"
     accounts = [
         {
+            "account_id": "idx-001",
             "account_index": 1,
             "heading_guess": None,
-            "lines": [],
+            "page_start": 1,
+            "line_start": 2,
+            "page_end": 2,
+            "line_end": 4,
+            "lines": [
+                {"page": 1, "line": 2, "text": "Account line 1"},
+                {"page": 2, "line": 4, "text": "Account line 2"},
+            ],
             "fields": {"past_due_amount": 20},
+            "triad_fields": {
+                "transunion": {
+                    "past_due_amount": "30",
+                    "balance_owed": "100",
+                    "payment_status": "Late",
+                }
+            },
         },
-        {"account_index": 2, "heading_guess": "OK", "lines": [], "fields": {}},
-        {"account_index": 3, "heading_guess": "OK", "lines": [], "fields": {}},
+        {
+            "account_index": 2,
+            "heading_guess": "OK",
+            "lines": [],
+            "fields": {},
+            "triad_fields": {},
+        },
+        {
+            "account_index": 3,
+            "heading_guess": "OK",
+            "lines": [],
+            "fields": {},
+            "triad_fields": {},
+        },
     ]
 
         # Configure runs root and manifest; write canonical Stage-A artifacts
@@ -86,18 +113,44 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
     acc_dir = cases_dir / "accounts"
     case_dirs = [p for p in acc_dir.iterdir() if p.is_dir()]
     assert case_dirs, "expected at least one account case folder"
-    first = case_dirs[0]
-    assert (first / "account.json").exists()
+    first = acc_dir / "1"
+    assert first.exists()
+    assert (first / "meta.json").exists()
+    assert (first / "raw_lines.json").exists()
+    assert (first / "bureaus.json").exists()
+    assert (first / "fields_flat.json").exists()
+    assert (first / "tags.json").exists()
     assert (first / "summary.json").exists()
+
+    meta = json.loads((first / "meta.json").read_text())
+    assert meta["account_index"] == 1
+    assert meta["heading_guess"] is None
+    assert meta["pointers"]["raw"] == "raw_lines.json"
+
+    raw_lines = json.loads((first / "raw_lines.json").read_text())
+    assert raw_lines == accounts[0]["lines"]
+
+    bureaus = json.loads((first / "bureaus.json").read_text())
+    assert bureaus == accounts[0]["triad_fields"]
+
+    fields_flat = json.loads((first / "fields_flat.json").read_text())
+    assert "past_due_amount" in fields_flat
+
+    tags_data = json.loads((first / "tags.json").read_text())
+    assert tags_data == []
+
     case_data = json.loads((first / "summary.json").read_text())
     assert case_data.get("problem_tags") or case_data.get("problem_reasons")
     assert case_data.get("merge_tag")
     assert case_data["merge_tag"]["decision"] == "auto"
     assert case_data["merge_tag"]["best_match"]["account_index"] == 2
+    assert case_data["pointers"]["bureaus"] == "bureaus.json"
+    assert "triad_rows" not in json.dumps(case_data)
 
     accounts_index_path = acc_dir / "index.json"
     acc_index = json.loads(accounts_index_path.read_text())
-    assert acc_index["items"][0]["merge_group_id"] == "g1"
+    item = next(i for i in acc_index["items"] if i["id"] == "1")
+    assert item["merge_group_id"] == "g1"
 
     # Returned summary should mirror disk counts
     assert summary["total"] == len(accounts)
@@ -162,7 +215,7 @@ def test_problem_case_builder_updates_merge_tag_only_for_existing_cases(
     build_problem_cases(sid, candidates=first_candidates)
 
     cases_dir = runs_root / sid / "cases"
-    summary_path = cases_dir / "accounts" / "idx-001" / "summary.json"
+    summary_path = cases_dir / "accounts" / "1" / "summary.json"
     summary_data = json.loads(summary_path.read_text())
     summary_data["problem_reasons"] = ["manual-reason"]
     summary_data["problem_tags"] = ["manual-tag"]

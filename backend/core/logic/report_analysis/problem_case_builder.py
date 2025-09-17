@@ -22,6 +22,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Tuple
 from backend.pipeline.runs import RunManifest, write_breadcrumb
 
 from .keys import compute_logical_account_key
+from .problem_extractor import build_rule_fields_from_triad
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,16 @@ def _load_summary_json(path: Path) -> Tuple[Dict[str, Any], bool]:
     return {}, False
 
 
+def _coerce_list(value: Any) -> List[Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
 def _resolve_inputs_from_manifest(sid: str) -> tuple[Path, Path, RunManifest]:
     m = RunManifest.for_sid(sid)
     try:
@@ -180,6 +191,11 @@ def build_problem_cases(
     accounts = _load_accounts(acc_path)
     total = len(accounts)
     lookup = _build_account_lookup(accounts)
+    accounts_by_index: Dict[int, Mapping[str, Any]] = {}
+    for acc in accounts:
+        idx = acc.get("account_index")
+        if isinstance(idx, int):
+            accounts_by_index[idx] = acc
 
     # Optional enrichment: load general_info_from_full.json once to attach
     # high-level metadata (e.g., client and report dates) to each summary.
@@ -209,45 +225,123 @@ def build_problem_cases(
             continue
 
         account_id = cand.get("account_id")
-        if account_id is None:
+        account_index = cand.get("account_index") if isinstance(cand.get("account_index"), int) else None
+
+        full_acc: Mapping[str, Any] | None = None
+        if account_index is not None:
+            full_acc = accounts_by_index.get(account_index)
+        if full_acc is None and account_id is not None:
+            full_acc = lookup.get(str(account_id))
+            if isinstance(full_acc, Mapping):
+                idx_from_acc = full_acc.get("account_index")
+                if isinstance(idx_from_acc, int):
+                    account_index = idx_from_acc
+
+        if not isinstance(account_index, int):
+            logger.warning("CASE_BUILD_SKIP sid=%s account_id=%s reason=no_account_index", sid, account_id)
             continue
 
-        account_id_str = str(account_id)
+        if not isinstance(full_acc, Mapping):
+            full_acc = accounts_by_index.get(account_index)
 
-        # Locate full account record either by provided index or account_id
-        full_acc: Mapping[str, Any] | None = None
-        if isinstance(cand.get("account_index"), int):
-            full_acc = lookup.get(str(cand["account_index"]))
-        if full_acc is None:
-            full_acc = lookup.get(str(account_id), {})
+        if not isinstance(full_acc, Mapping):
+            logger.warning("CASE_BUILD_SKIP sid=%s idx=%s reason=no_full_account", sid, account_index)
+            continue
 
-        # Per-account directory and files
-        acc_dir = (accounts_dir / account_id_str).resolve()
+        account_id_str = str(account_id) if account_id is not None else f"idx-{account_index:03d}"
+        acc_dir = (accounts_dir / str(account_index)).resolve()
         acc_dir.mkdir(parents=True, exist_ok=True)
 
-        # account.json: full record for that account
-        account_obj: Dict[str, Any] = dict(full_acc or {})
-        (acc_dir / "account.json").write_text(
-            json.dumps(account_obj, indent=2, ensure_ascii=False), encoding="utf-8"
+        pointers = {
+            "raw": "raw_lines.json",
+            "bureaus": "bureaus.json",
+            "flat": "fields_flat.json",
+            "tags": "tags.json",
+            "summary": "summary.json",
+        }
+
+        raw_lines = list(full_acc.get("lines") or [])
+        (acc_dir / pointers["raw"]).write_text(
+            json.dumps(raw_lines, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
-        # summary.json: reasons/tags/confidence
-        summary_path = acc_dir / "summary.json"
-        existing_summary, loaded_existing = _load_summary_json(summary_path)
+        bureaus_obj = dict(full_acc.get("triad_fields") or {})
+        (acc_dir / pointers["bureaus"]).write_text(
+            json.dumps(bureaus_obj, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
+        flat_fields, _prov = build_rule_fields_from_triad(dict(full_acc))
+        (acc_dir / pointers["flat"]).write_text(
+            json.dumps(flat_fields, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+        tags_path = acc_dir / pointers["tags"]
+        if not tags_path.exists():
+            tags_path.write_text("[]", encoding="utf-8")
+
+        meta_obj = {
+            "account_index": account_index,
+            "heading_guess": full_acc.get("heading_guess"),
+            "page_start": full_acc.get("page_start"),
+            "line_start": full_acc.get("line_start"),
+            "page_end": full_acc.get("page_end"),
+            "line_end": full_acc.get("line_end"),
+            "pointers": pointers,
+        }
+        if account_id is not None:
+            meta_obj["account_id"] = account_id
+        (acc_dir / "meta.json").write_text(
+            json.dumps(meta_obj, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+        summary_path = acc_dir / pointers["summary"]
+        existing_summary, loaded_existing = _load_summary_json(summary_path)
         if loaded_existing:
             summary_obj = dict(existing_summary)
-            summary_obj.setdefault("sid", sid)
-            summary_obj.setdefault("account_id", account_id)
         else:
-            summary_obj = {
-                "sid": sid,
-                "account_id": account_id,
-                "problem_tags": cand.get("problem_tags") or [],
-                "problem_reasons": cand.get("problem_reasons") or [],
-            }
+            summary_obj = {}
+
+        summary_obj["sid"] = sid
+        summary_obj["account_index"] = account_index
+        if account_id is not None:
+            summary_obj["account_id"] = account_id
+
+        candidate_reason = cand.get("reason") if isinstance(cand.get("reason"), Mapping) else None
+        candidate_primary_issue = (
+            candidate_reason.get("primary_issue")
+            if isinstance(candidate_reason, Mapping)
+            else cand.get("primary_issue")
+        )
+        candidate_problem_reasons = (
+            candidate_reason.get("problem_reasons")
+            if isinstance(candidate_reason, Mapping)
+            else cand.get("problem_reasons")
+        )
+        candidate_problem_tags = cand.get("problem_tags")
+
+        coerced_tags = _coerce_list(candidate_problem_tags)
+        coerced_reasons = _coerce_list(candidate_problem_reasons)
+
+        if not loaded_existing:
+            if coerced_tags is not None:
+                summary_obj["problem_tags"] = coerced_tags
+            else:
+                summary_obj.setdefault("problem_tags", [])
+            if coerced_reasons is not None:
+                summary_obj["problem_reasons"] = coerced_reasons
+            else:
+                summary_obj.setdefault("problem_reasons", [])
+            if candidate_primary_issue is not None:
+                summary_obj["primary_issue"] = candidate_primary_issue
             if "confidence" in cand and cand.get("confidence") is not None:
                 summary_obj["confidence"] = cand.get("confidence")
+        else:
+            if "problem_tags" not in summary_obj and coerced_tags is not None:
+                summary_obj["problem_tags"] = coerced_tags
+            if "problem_reasons" not in summary_obj and coerced_reasons is not None:
+                summary_obj["problem_reasons"] = coerced_reasons
+            if "primary_issue" not in summary_obj and candidate_primary_issue is not None:
+                summary_obj["primary_issue"] = candidate_primary_issue
 
         merge_tag = cand.get("merge_tag")
         if isinstance(merge_tag, Mapping):
@@ -260,14 +354,16 @@ def build_problem_cases(
             summary_obj["merge_tag"] = merge_tag_obj
             group_id = merge_tag_obj.get("group_id")
             if isinstance(group_id, str):
-                merge_groups[account_id_str] = group_id
+                merge_groups[str(account_index)] = group_id
         else:
             existing_tag = summary_obj.get("merge_tag")
             if isinstance(existing_tag, Mapping):
                 group_id = existing_tag.get("group_id")
                 if isinstance(group_id, str):
-                    merge_groups[account_id_str] = group_id
-        # Attach selected general metadata if available
+                    merge_groups[str(account_index)] = group_id
+
+        summary_obj["pointers"] = pointers
+
         if not loaded_existing and isinstance(general_info, dict):
             extra: Dict[str, Any] = {}
             for k in (
@@ -285,17 +381,33 @@ def build_problem_cases(
                     extra[k] = v
             if extra:
                 summary_obj["general"] = extra
+
         summary_path.write_text(
             json.dumps(summary_obj, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
-        # Optional discoverability per account in manifest
         try:
-            m.set_artifact(f"cases.accounts.{account_id}", "dir", acc_dir)
+            m.set_artifact(f"cases.accounts.{account_index}", "dir", acc_dir)
+            m.set_artifact(f"cases.accounts.{account_index}", "meta", acc_dir / "meta.json")
+            m.set_artifact(
+                f"cases.accounts.{account_index}", "raw", acc_dir / pointers["raw"]
+            )
+            m.set_artifact(
+                f"cases.accounts.{account_index}", "bureaus", acc_dir / pointers["bureaus"]
+            )
+            m.set_artifact(
+                f"cases.accounts.{account_index}", "flat", acc_dir / pointers["flat"]
+            )
+            m.set_artifact(
+                f"cases.accounts.{account_index}", "summary", summary_path
+            )
+            m.set_artifact(
+                f"cases.accounts.{account_index}", "tags", acc_dir / pointers["tags"]
+            )
         except Exception:
             pass
 
-        written_ids.append(account_id_str)
+        written_ids.append(str(account_index))
 
     cand_list = list(candidates or [])
     index_data = {
@@ -319,7 +431,20 @@ def build_problem_cases(
         "items": [],
     }
     for aid in written_ids:
-        item = {"id": aid, "dir": str((accounts_dir / aid).resolve())}
+        item = {
+            "id": aid,
+            "dir": str((accounts_dir / aid).resolve()),
+        }
+        try:
+            aid_int = int(aid)
+        except (TypeError, ValueError):
+            aid_int = None
+        if aid_int is not None:
+            full_acc = accounts_by_index.get(aid_int)
+            if isinstance(full_acc, Mapping):
+                account_id_val = full_acc.get("account_id")
+                if account_id_val is not None:
+                    item["account_id"] = account_id_val
         group_id = merge_groups.get(aid)
         if group_id is not None:
             item["merge_group_id"] = group_id

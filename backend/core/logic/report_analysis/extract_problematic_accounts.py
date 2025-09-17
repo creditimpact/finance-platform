@@ -47,7 +47,7 @@ def extract_problematic_accounts(
         DEFAULT_CFG,
         sid=session_id,
     )
-    summary = build_problem_cases(session_id, merged_candidates, root=root)
+    summary = build_problem_cases(session_id, merged_candidates)
     return {"found": merged_candidates, "summary": summary}
 
 

@@ -70,6 +70,12 @@ def tmp_sid_fixture(tmp_path, monkeypatch):
                     "payment_status": "Delinquent",
                     "account_status": "Closed",
                 },
+                "equifax": {
+                    "past_due_amount": "0",
+                    "balance_owed": "1190",
+                    "payment_status": "Current",
+                    "account_status": "Closed",
+                },
             },
             "triad_rows": [
                 {
@@ -183,6 +189,14 @@ def test_lean_cases_structure(tmp_sid_fixture):
     assert bureaus_data == expected_bureaus
     assert "two_year_payment_history" in bureaus_data
     assert "seven_year_history" in bureaus_data
+    assert bureaus_data["two_year_payment_history"] == stagea_account.get(
+        "two_year_payment_history"
+    )
+    assert bureaus_data["seven_year_history"] == stagea_account.get(
+        "seven_year_history"
+    )
+    for key in ("transunion", "experian", "equifax"):
+        assert key in bureaus_data and isinstance(bureaus_data[key], dict)
     for payload in bureaus_data.values():
         if isinstance(payload, dict):
             assert "triad_rows" not in payload
@@ -217,7 +231,17 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
                     "past_due_amount": "30",
                     "balance_owed": "100",
                     "payment_status": "Late",
-                }
+                },
+                "experian": {
+                    "past_due_amount": "25",
+                    "balance_owed": "110",
+                    "payment_status": "Late",
+                },
+                "equifax": {
+                    "past_due_amount": "28",
+                    "balance_owed": "95",
+                    "payment_status": "Late",
+                },
             },
             "triad_rows": [
                 {
@@ -233,6 +257,16 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
                     "expect_values_on_next_line": False,
                 }
             ],
+            "seven_year_history": {
+                "transunion": {"late30": 1, "late60": 0, "late90": 0},
+                "experian": {"late30": 2, "late60": 1, "late90": 0},
+                "equifax": {"late30": 0, "late60": 0, "late90": 0},
+            },
+            "two_year_payment_history": {
+                "transunion": ["30", "60"],
+                "experian": ["OK", "30"],
+                "equifax": ["OK", "OK"],
+            },
         },
         {
             "account_index": 2,
@@ -332,6 +366,12 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
     assert bureaus == _build_bureaus_payload_from_stagea(accounts[0])
     assert "two_year_payment_history" in bureaus
     assert "seven_year_history" in bureaus
+    assert bureaus["two_year_payment_history"] == accounts[0][
+        "two_year_payment_history"
+    ]
+    assert bureaus["seven_year_history"] == accounts[0]["seven_year_history"]
+    for key in ("transunion", "experian", "equifax"):
+        assert key in bureaus and isinstance(bureaus[key], dict)
 
     fields_flat = json.loads((first / "fields_flat.json").read_text())
     assert "past_due_amount" in fields_flat

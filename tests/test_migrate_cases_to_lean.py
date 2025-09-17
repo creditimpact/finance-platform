@@ -30,6 +30,7 @@ def test_migrate_cases_to_lean(tmp_path):
                 "triad_rows": [{"label": "Balance", "values": {"transunion": "125"}}],
             },
             "experian": {"balance_owed": "500"},
+            "equifax": {},
         },
         "triad_rows": [
             {"label": "Account #", "values": {"transunion": "1234"}},
@@ -72,6 +73,12 @@ def test_migrate_cases_to_lean(tmp_path):
     assert bureaus["transunion"]["payment_status"] == "Charge Off"
     assert "two_year_payment_history" in bureaus
     assert "seven_year_history" in bureaus
+    assert bureaus["two_year_payment_history"] == account_data[
+        "two_year_payment_history"
+    ]
+    assert bureaus["seven_year_history"] == account_data["seven_year_history"]
+    for key in ("transunion", "experian", "equifax"):
+        assert key in bureaus and isinstance(bureaus[key], dict)
 
     flat_fields = json.loads((account_dir / POINTERS["flat"]).read_text(encoding="utf-8"))
     assert flat_fields["past_due_amount"] == 125.0

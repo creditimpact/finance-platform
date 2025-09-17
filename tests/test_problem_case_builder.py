@@ -1,11 +1,13 @@
 import json
 import logging
 import os
+from collections import OrderedDict
 from pathlib import Path
 
 import pytest
 
 from backend.core.logic.report_analysis.problem_case_builder import (
+    ALLOWED_BUREAUS_TOPLEVEL,
     _build_bureaus_payload_from_stagea,
     build_problem_cases,
 )
@@ -128,6 +130,23 @@ def tmp_sid_fixture(tmp_path, monkeypatch):
     return sid
 
 
+@pytest.fixture
+def built_case_dir(tmp_sid_fixture):
+    sid = tmp_sid_fixture
+
+    candidates = detect_problem_accounts(sid)
+    assert candidates, "expected detection to flag at least one account"
+
+    candidates_found = cluster_problematic_accounts(candidates, DEFAULT_CFG, sid=sid)
+    summary = build_problem_cases(sid, candidates_found)
+
+    runs_root = Path(os.environ[RUNS_ROOT_ENV])
+    accounts_dir = runs_root / sid / "cases" / "accounts"
+    account_dir = next(p for p in accounts_dir.iterdir() if p.is_dir())
+
+    return sid, summary, account_dir, candidates_found
+
+
 def test_build_bureaus_payload_preserves_history_values():
     account = {
         "triad_fields": {
@@ -143,24 +162,55 @@ def test_build_bureaus_payload_preserves_history_values():
     assert "triad_rows" not in bureaus["transunion"]
     assert "two_year_payment_history" in bureaus
     assert "seven_year_history" in bureaus
-    assert bureaus["two_year_payment_history"] is None
+    assert bureaus["two_year_payment_history"] == {}
     assert bureaus["seven_year_history"] is account["seven_year_history"]
 
 
-def test_lean_cases_structure(tmp_sid_fixture):
-    sid = tmp_sid_fixture
+def test_bureaus_json_key_order(built_case_dir):
+    sid, _summary, account_dir, _candidates_found = built_case_dir
 
-    candidates = detect_problem_accounts(sid)
-    assert candidates, "expected detection to flag at least one account"
+    data = json.loads(
+        (account_dir / "bureaus.json").read_text(encoding="utf-8"),
+        object_pairs_hook=OrderedDict,
+    )
 
-    candidates_found = cluster_problematic_accounts(candidates, DEFAULT_CFG, sid=sid)
-    summary = build_problem_cases(sid, candidates_found)
+    assert "triad_rows" not in json.dumps(data)
+
+    assert list(data.keys()) == [
+        "transunion",
+        "experian",
+        "equifax",
+        "two_year_payment_history",
+        "seven_year_history",
+        "order",
+    ]
+    assert data["order"] == ["transunion", "experian", "equifax"]
+
+    stagea_accounts = load_stagea_accounts_from_manifest(sid)
+    by_idx = {acc["account_index"]: acc for acc in stagea_accounts}
+    account_data = by_idx[int(account_dir.name)]
+
+    for history_key in ("two_year_payment_history", "seven_year_history"):
+        history_value = data[history_key]
+        assert isinstance(history_value, dict)
+        expected_history = account_data.get(history_key) or {}
+        assert history_value == expected_history
+        if expected_history:
+            assert set(history_value.keys()) <= set(ALLOWED_BUREAUS_TOPLEVEL)
+
+    for bureau in ALLOWED_BUREAUS_TOPLEVEL:
+        bureau_payload = data[bureau]
+        assert "triad_rows" not in json.dumps(bureau_payload)
+
+
+def test_lean_cases_structure(built_case_dir):
+    sid, summary, account_dir, candidates_found = built_case_dir
 
     runs_root = Path(os.environ[RUNS_ROOT_ENV])
     adir = runs_root / sid / "cases" / "accounts"
     assert adir.exists(), "cases/accounts directory not created"
 
-    acc_dir = next(p for p in adir.iterdir() if p.is_dir())
+    acc_dir = account_dir
     for name in [
         "meta.json",
         "summary.json",
@@ -197,9 +247,10 @@ def test_lean_cases_structure(tmp_sid_fixture):
     )
     for key in ("transunion", "experian", "equifax"):
         assert key in bureaus_data and isinstance(bureaus_data[key], dict)
-    for payload in bureaus_data.values():
+    for key, payload in bureaus_data.items():
         if isinstance(payload, dict):
             assert "triad_rows" not in payload
+    assert bureaus_data.get("order") == ["transunion", "experian", "equifax"]
 
     assert summary["problematic"] == len(candidates_found)
 

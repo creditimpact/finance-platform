@@ -1,6 +1,8 @@
 import json
+from collections import OrderedDict
 
 from backend.core.logic.report_analysis.problem_case_builder import (
+    ALLOWED_BUREAUS_TOPLEVEL,
     _build_bureaus_payload_from_stagea,
 )
 from scripts.migrate_cases_to_lean import POINTERS, migrate
@@ -67,9 +69,21 @@ def test_migrate_cases_to_lean(tmp_path):
     raw_lines = json.loads((account_dir / POINTERS["raw"]).read_text(encoding="utf-8"))
     assert raw_lines == account_data["lines"]
 
-    bureaus = json.loads((account_dir / POINTERS["bureaus"]).read_text(encoding="utf-8"))
+    bureaus = json.loads(
+        (account_dir / POINTERS["bureaus"]).read_text(encoding="utf-8"),
+        object_pairs_hook=OrderedDict,
+    )
     assert "triad_rows" not in json.dumps(bureaus)
     assert bureaus == _build_bureaus_payload_from_stagea(account_data)
+    assert list(bureaus.keys()) == [
+        "transunion",
+        "experian",
+        "equifax",
+        "two_year_payment_history",
+        "seven_year_history",
+        "order",
+    ]
+    assert bureaus["order"] == list(ALLOWED_BUREAUS_TOPLEVEL)
     assert bureaus["transunion"]["payment_status"] == "Charge Off"
     assert "two_year_payment_history" in bureaus
     assert "seven_year_history" in bureaus
@@ -77,8 +91,16 @@ def test_migrate_cases_to_lean(tmp_path):
         "two_year_payment_history"
     ]
     assert bureaus["seven_year_history"] == account_data["seven_year_history"]
-    for key in ("transunion", "experian", "equifax"):
+    for key in ALLOWED_BUREAUS_TOPLEVEL:
         assert key in bureaus and isinstance(bureaus[key], dict)
+        assert "triad_rows" not in bureaus[key]
+
+    for history_key in ("two_year_payment_history", "seven_year_history"):
+        history_value = bureaus[history_key]
+        expected_history = account_data.get(history_key) or {}
+        assert history_value == expected_history
+        if expected_history:
+            assert set(history_value.keys()) <= set(ALLOWED_BUREAUS_TOPLEVEL)
 
     flat_fields = json.loads((account_dir / POINTERS["flat"]).read_text(encoding="utf-8"))
     assert flat_fields["past_due_amount"] == 125.0

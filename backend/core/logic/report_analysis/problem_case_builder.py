@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 
 LEAN = os.getenv("CASES_LEAN_MODE", "1") != "0"
 
+ALLOWED_BUREAUS_TOPLEVEL = {
+    "transunion",
+    "experian",
+    "equifax",
+    "two_year_payment_history",
+    "seven_year_history",
+}
+
 
 def _write_json(path: Path, obj: Any) -> None:
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -68,6 +76,21 @@ def _sanitize_bureaus(data: Mapping[str, Any] | None) -> Dict[str, Any]:
         else:
             cleaned[bureau] = payload
     return cleaned
+
+
+def _build_bureaus_payload_from_stagea(acc: Mapping[str, Any] | None) -> Dict[str, Any]:
+    if not isinstance(acc, Mapping):
+        acc = {}
+
+    tf = _sanitize_bureaus(acc.get("triad_fields"))
+    t2y = acc.get("two_year_payment_history") or {}
+    s7y = acc.get("seven_year_history") or {}
+
+    payload: Dict[str, Any] = {k: v for k, v in tf.items()}
+    payload["two_year_payment_history"] = t2y
+    payload["seven_year_history"] = s7y
+
+    return {k: payload[k] for k in ALLOWED_BUREAUS_TOPLEVEL if k in payload}
 
 
 def _extract_candidate_reason(cand: Mapping[str, Any]) -> Tuple[Any, Any, Any]:
@@ -253,8 +276,8 @@ def _build_problem_cases_lean(
         raw_lines = list(account.get("lines") or [])
         _write_json(account_dir / pointers["raw"], raw_lines)
 
-        bureaus = _sanitize_bureaus(account.get("triad_fields"))
-        _write_json(account_dir / pointers["bureaus"], bureaus)
+        bureaus_payload = _build_bureaus_payload_from_stagea(account)
+        _write_json(account_dir / pointers["bureaus"], bureaus_payload)
 
         flat_fields, _provenance = build_rule_fields_from_triad(dict(account))
         _write_json(account_dir / pointers["flat"], flat_fields)
@@ -511,7 +534,7 @@ def _build_problem_cases_legacy(
         raw_lines = list(full_acc.get("lines") or [])
         _write_json(account_dir / pointers["raw"], raw_lines)
 
-        bureaus_obj = _sanitize_bureaus(full_acc.get("triad_fields"))
+        bureaus_obj = _build_bureaus_payload_from_stagea(full_acc)
         _write_json(account_dir / pointers["bureaus"], bureaus_obj)
 
         flat_fields, _prov = build_rule_fields_from_triad(dict(full_acc))

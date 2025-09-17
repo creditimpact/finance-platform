@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
+from backend.core.logic.report_analysis.problem_case_builder import (
+    _build_bureaus_payload_from_stagea,
+    build_problem_cases,
+)
 from backend.core.logic.report_analysis.account_merge import (
     DEFAULT_CFG,
     cluster_problematic_accounts,
@@ -155,13 +158,12 @@ def test_lean_cases_structure(tmp_sid_fixture):
     idx = int(acc_dir.name)
     bureaus_path = acc_dir / "bureaus.json"
     bureaus_data = json.loads(bureaus_path.read_text(encoding="utf-8"))
-    expected_bureaus = {}
-    for bureau, payload in (by_idx[idx]["triad_fields"] or {}).items():
-        if isinstance(payload, dict):
-            payload = {k: v for k, v in payload.items() if k != "triad_rows"}
-        expected_bureaus[bureau] = payload
+    stagea_account = by_idx[idx]
+    expected_bureaus = _build_bureaus_payload_from_stagea(stagea_account)
 
     assert bureaus_data == expected_bureaus
+    assert "two_year_payment_history" in bureaus_data
+    assert "seven_year_history" in bureaus_data
     for payload in bureaus_data.values():
         if isinstance(payload, dict):
             assert "triad_rows" not in payload
@@ -308,7 +310,9 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
     assert raw_lines == accounts[0]["lines"]
 
     bureaus = json.loads((first / "bureaus.json").read_text())
-    assert bureaus == accounts[0]["triad_fields"]
+    assert bureaus == _build_bureaus_payload_from_stagea(accounts[0])
+    assert "two_year_payment_history" in bureaus
+    assert "seven_year_history" in bureaus
 
     fields_flat = json.loads((first / "fields_flat.json").read_text())
     assert "past_due_amount" in fields_flat

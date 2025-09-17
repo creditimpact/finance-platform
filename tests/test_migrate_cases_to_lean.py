@@ -1,5 +1,8 @@
 import json
 
+from backend.core.logic.report_analysis.problem_case_builder import (
+    _build_bureaus_payload_from_stagea,
+)
 from scripts.migrate_cases_to_lean import POINTERS, migrate
 
 
@@ -65,7 +68,10 @@ def test_migrate_cases_to_lean(tmp_path):
 
     bureaus = json.loads((account_dir / POINTERS["bureaus"]).read_text(encoding="utf-8"))
     assert "triad_rows" not in json.dumps(bureaus)
+    assert bureaus == _build_bureaus_payload_from_stagea(account_data)
     assert bureaus["transunion"]["payment_status"] == "Charge Off"
+    assert "two_year_payment_history" in bureaus
+    assert "seven_year_history" in bureaus
 
     flat_fields = json.loads((account_dir / POINTERS["flat"]).read_text(encoding="utf-8"))
     assert flat_fields["past_due_amount"] == 125.0

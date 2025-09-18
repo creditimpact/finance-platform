@@ -10,6 +10,7 @@ from backend.core.logic.report_analysis.account_merge import (
     build_ai_decision_pack,
     cluster_problematic_accounts,
     decide_merge,
+    load_config_from_env,
     score_accounts,
 )
 
@@ -382,6 +383,83 @@ def test_acctnum_exact_override_forces_ai(monkeypatch, caplog):
         " masked_any=<0> lifted_to=<0.4500>" in msg
         for msg in override_messages
     )
+
+
+def test_balowed_override_triggers_ai_from_case_files(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("MERGE_BALOWED_TRIGGER_AI", "1")
+    monkeypatch.setenv("MERGE_BALOWED_MIN_SCORE", "0.31")
+    monkeypatch.setenv("MERGE_W_BALOWED", "0.32")
+    monkeypatch.setenv("MERGE_W_ACCT", "0.25")
+    monkeypatch.setenv("MERGE_W_DATES", "0.18")
+    monkeypatch.setenv("MERGE_W_STATUS", "0.15")
+    monkeypatch.setenv("MERGE_W_STRINGS", "0.10")
+    monkeypatch.setenv("MERGE_AI_MIN", "0.35")
+    monkeypatch.setenv("MERGE_AI_MAX", "0.78")
+    monkeypatch.setenv("MERGE_AI_HARD_MIN", "0.30")
+
+    cfg = load_config_from_env()
+
+    balance_value = 4321.0
+    account_a = {"balance_owed": balance_value}
+    account_b = {"balance_owed": balance_value}
+
+    base_score, parts, aux = score_accounts(account_a, account_b, cfg)
+
+    assert parts["balowed"] == pytest.approx(1.0)
+    expected_score = cfg.weights["balowed"] / sum(cfg.weights.values())
+    assert base_score == pytest.approx(expected_score)
+    assert base_score < cfg.thresholds["ai_band_min"]
+    assert base_score >= 0.31
+    assert aux["balowed_a"] == pytest.approx(balance_value)
+    assert aux["balowed_b"] == pytest.approx(balance_value)
+
+    sid = "balowed-case"
+    runs_root = tmp_path / "runs"
+    for idx in (7, 10):
+        account_dir = runs_root / sid / "cases" / "accounts" / str(idx)
+        account_dir.mkdir(parents=True, exist_ok=True)
+        fields_flat = {"balance_owed": balance_value}
+        (account_dir / "fields_flat.json").write_text(
+            json.dumps(fields_flat), encoding="utf-8"
+        )
+        (account_dir / "bureaus.json").write_text("{}", encoding="utf-8")
+        (account_dir / "raw_lines.json").write_text("[]", encoding="utf-8")
+        (account_dir / "summary.json").write_text(
+            json.dumps({"account_index": idx}, indent=2), encoding="utf-8"
+        )
+
+    candidates = [
+        {"account_index": 7},
+        {"account_index": 10},
+    ]
+
+    with caplog.at_level(
+        logging.INFO, logger="backend.core.logic.report_analysis.account_merge"
+    ):
+        merged = cluster_problematic_accounts(
+            candidates,
+            cfg=cfg,
+            sid=sid,
+            runs_root=runs_root,
+        )
+
+    first_tag = merged[0]["merge_tag"]
+    best = first_tag["best_match"]
+
+    assert first_tag["decision"] == "ai"
+    assert best["decision"] == "ai"
+    assert best["score"] == pytest.approx(base_score)
+    assert best["reasons"]["balance_only_triggers_ai"] is True
+    assert best["reasons"]["balance_exact_match"] is True
+
+    override_messages = _extract_override_log_messages(caplog.records)
+    assert override_messages
+    assert any("kind=balowed" in msg for msg in override_messages)
+
+    override_reasons = first_tag["aux"].get("override_reasons")
+    assert override_reasons is not None
+    assert override_reasons["balance_only_triggers_ai"] is True
+    assert override_reasons["balance_exact_match"] is True
 
 
 @pytest.mark.parametrize("trigger", ["any", "last4"])

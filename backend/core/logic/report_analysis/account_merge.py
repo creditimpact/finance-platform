@@ -5,6 +5,7 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -105,15 +106,18 @@ def _read_json(p: Path) -> Union[Dict[str, Any], List[Any]]:
         return json.load(f)
 
 
-def _extract_acct_from_raw_lines(raw_lines: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+def _extract_acct_from_raw_lines(
+    raw_lines: Optional[List[Dict[str, Any]]]
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     if not raw_lines:
-        return None
+        return None, None
     for row in raw_lines:
         text = (row.get("text") or "").strip()
         if text.startswith("Account #"):
             parts = text.replace("Account #", "").strip().split()
-            return parts[0] if parts else None
-    return None
+            value = parts[0] if parts else None
+            return value, row
+    return None, None
 
 
 def _manifest_group_key(acc_idx: int) -> str:
@@ -176,7 +180,9 @@ def load_case_account(
         or (bureaus.get("equifax") or {}).get("account_number")
     )
     if not acct_display:
-        acct_display = _extract_acct_from_raw_lines(raw if isinstance(raw, list) else [])
+        acct_display, _ = _extract_acct_from_raw_lines(
+            raw if isinstance(raw, list) else []
+        )
 
     return {
         "index": acc_idx,
@@ -189,6 +195,7 @@ def load_case_account(
             "dates": dates,
             "account_number_display": acct_display,
         },
+        "case_dir": base,
     }
 
 
@@ -305,12 +312,15 @@ def _normalize_account_number(value: Any) -> Optional[str]:
     return digits or None
 
 
-def _prepare_account_for_scoring(case_account: Mapping[str, Any]) -> Dict[str, Any]:
+def _prepare_account_for_scoring(
+    case_account: Mapping[str, Any]
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     fields = dict(case_account.get("fields_flat") or {})
     bureaus = case_account.get("bureaus") or {}
     norm = case_account.get("norm") or {}
 
     prepared: Dict[str, Any] = {}
+    meta: Dict[str, Any] = {}
 
     # Start with flattened fields to retain as much context as possible.
     for key, value in fields.items():
@@ -320,12 +330,21 @@ def _prepare_account_for_scoring(case_account: Mapping[str, Any]) -> Dict[str, A
     if balowed not in (None, "", "--"):
         prepared["balance_owed"] = balowed
 
+    balance_value = _parse_currency(balowed)
+    if balance_value is None:
+        balance_value = _parse_currency(fields.get("balance_owed"))
+    if balance_value is None:
+        balance_value = _parse_currency(fields.get("past_due_amount"))
+    if balance_value is not None:
+        meta["balance_owed"] = balance_value
+
     status = norm.get("status")
     if status not in (None, ""):
         prepared["payment_status"] = status
         prepared.setdefault("account_status", status)
 
     dates = norm.get("dates") or {}
+    meta_dates: Dict[str, Any] = {}
     if isinstance(dates, Mapping):
         date_map = {
             "date_opened": dates.get("opened"),
@@ -336,19 +355,40 @@ def _prepare_account_for_scoring(case_account: Mapping[str, Any]) -> Dict[str, A
         for key, value in date_map.items():
             if value not in (None, ""):
                 prepared[key] = value
+            if value not in (None, ""):
+                meta_dates[key] = value
+    if meta_dates:
+        meta["dates"] = meta_dates
 
     acct_display = norm.get("account_number_display")
-    if acct_display in (None, ""):
+    acct_display_source: Optional[str] = None
+    acct_display_raw_line: Optional[Dict[str, Any]] = None
+    if acct_display not in (None, "", "--"):
+        acct_display_source = "norm"
+    if acct_display in (None, "", "--"):
         for bureau_key in ("transunion", "experian", "equifax"):
             bureau_val = (bureaus.get(bureau_key) or {}).get("account_number")
             if bureau_val not in (None, ""):
                 acct_display = bureau_val
+                acct_display_source = f"bureau:{bureau_key}"
                 break
+    if acct_display in (None, "", "--"):
+        raw_lines = case_account.get("raw_lines")
+        if isinstance(raw_lines, list):
+            acct_display, raw_entry = _extract_acct_from_raw_lines(raw_lines)
+            if acct_display not in (None, ""):
+                acct_display_source = "raw_lines"
+                acct_display_raw_line = raw_entry
     if acct_display not in (None, ""):
         prepared["account_number"] = acct_display
         prepared["acct_num"] = acct_display
         prepared["number"] = acct_display
         prepared["account_number_display"] = acct_display
+        meta["account_number_display"] = acct_display
+    if acct_display_source:
+        meta["acct_display_source"] = acct_display_source
+    if acct_display_raw_line:
+        meta["acct_display_raw_line"] = acct_display_raw_line
 
     if "creditor" not in prepared or not str(prepared.get("creditor") or "").strip():
         for key in ("creditor", "creditor_name", "original_creditor", "creditor_type"):
@@ -367,8 +407,9 @@ def _prepare_account_for_scoring(case_account: Mapping[str, Any]) -> Dict[str, A
     account_index = case_account.get("index")
     if isinstance(account_index, int):
         prepared.setdefault("account_index", account_index)
+        meta["account_index"] = account_index
 
-    return prepared
+    return prepared, meta
 
 
 def _extract_account_number_fields(account: Mapping[str, Any]) -> Dict[str, Any]:
@@ -966,6 +1007,232 @@ def _persist_merge_tag(
         )
 
 
+def _sanitize_for_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _sanitize_for_json(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_for_json(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_for_json(item) for item in value]
+    if isinstance(value, (str, int, bool)) or value is None:
+        return value
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return float(value)
+    return str(value)
+
+
+def _coerce_balance_value(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        number = float(value)
+        if math.isnan(number) or math.isinf(number):
+            return None
+        return number
+    parsed = _parse_currency(value)
+    if parsed is None:
+        return None
+    if math.isnan(parsed) or math.isinf(parsed):
+        return None
+    return float(parsed)
+
+
+def _build_raw_line_payload(raw_entry: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(raw_entry, Mapping):
+        text = str(raw_entry.get("text") or "").strip()
+        if not text:
+            return None
+        payload: Dict[str, Any] = {"text": text}
+        for key in ("page", "line", "x0", "y0", "x1", "y1"):
+            if key in raw_entry:
+                payload[key] = raw_entry[key]
+        return payload
+    if isinstance(raw_entry, str):
+        text = raw_entry.strip()
+        if text:
+            return {"text": text}
+    return None
+
+
+def _resolve_case_dir_for_account(
+    sid: str,
+    account_index: int,
+    runs_root_path: Optional[Path],
+    manifest: Optional[RunManifest],
+    *,
+    context_dir: Optional[Any] = None,
+) -> Optional[Path]:
+    if isinstance(context_dir, Path):
+        return context_dir
+    if isinstance(context_dir, str) and context_dir:
+        return Path(context_dir)
+    if runs_root_path is None or not sid:
+        return None
+
+    group = _manifest_group_key(account_index)
+    base = _manifest_path(manifest, group, "dir")
+    if base is not None:
+        return base
+
+    base = runs_root_path / sid / "cases" / "accounts" / str(account_index)
+    if base.exists():
+        return base
+    alt_base = runs_root_path / "cases" / sid / "accounts" / str(account_index)
+    if alt_base.exists():
+        return alt_base
+    return base
+
+
+def _write_ai_pack(
+    *,
+    sid: str,
+    runs_root_path: Optional[Path],
+    manifest: Optional[RunManifest],
+    idx_a: int,
+    idx_b: int,
+    score: float,
+    parts: Mapping[str, float],
+    aux: Mapping[str, Any],
+    reasons: Optional[Mapping[str, Any]],
+    account_contexts: List[Mapping[str, Any]],
+) -> None:
+    if runs_root_path is None or not sid:
+        return
+    if not isinstance(idx_a, int) or not isinstance(idx_b, int):
+        return
+
+    context_a: Mapping[str, Any] = {}
+    context_b: Mapping[str, Any] = {}
+    if 0 <= idx_a < len(account_contexts):
+        context_a = account_contexts[idx_a]
+    if 0 <= idx_b < len(account_contexts):
+        context_b = account_contexts[idx_b]
+
+    acc_idx_a = context_a.get("account_index")
+    if not isinstance(acc_idx_a, int):
+        acc_idx_a = idx_a
+
+    case_dir = _resolve_case_dir_for_account(
+        sid,
+        acc_idx_a,
+        runs_root_path,
+        manifest,
+        context_dir=context_a.get("case_dir"),
+    )
+    if case_dir is None:
+        return
+
+    ai_dir = case_dir / "ai"
+    try:
+        ai_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        logger.exception(
+            "MERGE_SCORE sid=<%s> i=<%d> j=<%d> ai_pack_mkdir_failed path=%s",
+            sid,
+            idx_a,
+            idx_b,
+            ai_dir,
+        )
+        return
+
+    pack_path = ai_dir / f"merge_pair_{idx_a}_{idx_b}.json"
+
+    parts_payload: Dict[str, float] = {}
+    for name, value in parts.items():
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isnan(number) or math.isinf(number):
+            continue
+        parts_payload[name] = number
+
+    balance_payload = {
+        "left": _coerce_balance_value(aux.get("balowed_a")),
+        "right": _coerce_balance_value(aux.get("balowed_b")),
+    }
+
+    acct_a = aux.get("acct_num_a") if isinstance(aux, Mapping) else None
+    acct_b = aux.get("acct_num_b") if isinstance(aux, Mapping) else None
+    acct_payload = {
+        "level": aux.get("acctnum_level") if isinstance(aux, Mapping) else None,
+        "masked_any": bool(aux.get("acctnum_masked_any", False))
+        if isinstance(aux, Mapping)
+        else False,
+        "left": _sanitize_for_json(acct_a) if acct_a is not None else None,
+        "right": _sanitize_for_json(acct_b) if acct_b is not None else None,
+    }
+    if acct_payload["level"] is None:
+        acct_payload["level"] = "none"
+
+    sources: Dict[str, Any] = {}
+    raw_line_context: Dict[str, Any] = {}
+
+    left_source = context_a.get("acct_display_source") if isinstance(context_a, Mapping) else None
+    right_source = context_b.get("acct_display_source") if isinstance(context_b, Mapping) else None
+    if left_source:
+        sources["left"] = left_source
+    if right_source:
+        sources["right"] = right_source
+
+    if left_source == "raw_lines":
+        payload = _build_raw_line_payload(context_a.get("acct_display_raw_line"))
+        if payload:
+            raw_line_context["left"] = payload
+    if right_source == "raw_lines":
+        payload = _build_raw_line_payload(context_b.get("acct_display_raw_line"))
+        if payload:
+            raw_line_context["right"] = payload
+
+    display_map: Dict[str, Any] = {}
+    left_display = context_a.get("account_number_display")
+    right_display = context_b.get("account_number_display")
+    if left_display not in (None, ""):
+        display_map["left"] = left_display
+    if right_display not in (None, ""):
+        display_map["right"] = right_display
+
+    pack: Dict[str, Any] = {
+        "sid": sid,
+        "decision": "ai",
+        "pair": {"left_index": idx_a, "right_index": idx_b},
+        "score": float(score),
+        "parts": parts_payload,
+        "balance_owed": balance_payload,
+        "acctnum": acct_payload,
+    }
+
+    override_reasons = None
+    if isinstance(aux, Mapping):
+        override_reasons = aux.get("override_reasons")
+    if override_reasons:
+        pack["override_reasons"] = _sanitize_for_json(override_reasons)
+
+    if sources:
+        pack["acct_display_source"] = _sanitize_for_json(sources)
+    if display_map:
+        pack["account_number_display"] = _sanitize_for_json(display_map)
+    if raw_line_context:
+        pack["raw_lines"] = _sanitize_for_json(raw_line_context)
+
+    if reasons:
+        pack["reasons"] = _sanitize_for_json(reasons)
+
+    sanitized_pack = _sanitize_for_json(pack)
+    try:
+        pack_text = json.dumps(sanitized_pack, ensure_ascii=False, indent=2, sort_keys=True)
+        pack_path.write_text(pack_text, encoding="utf-8")
+    except Exception:
+        logger.exception(
+            "MERGE_SCORE sid=<%s> i=<%d> j=<%d> ai_pack_write_failed path=%s",
+            sid,
+            idx_a,
+            idx_b,
+            pack_path,
+        )
+
 def cluster_problematic_accounts(
     candidates: List[Dict[str, Any]],
     cfg: MergeCfg = DEFAULT_CFG,
@@ -999,18 +1266,20 @@ def cluster_problematic_accounts(
 
     if size == 0:
         logger.info(
-            "MERGE_SUMMARY  sid=<%s> clusters=<0> auto_pairs=<0> ai_pairs=<0> skipped_pairs=<0>",
+            "MERGE_SUMMARY sid=<%s> clusters=<0> auto_pairs=<0> ai_pairs=<0> skipped_pairs=<0>",
             sid_value,
         )
         return candidates
 
     prepared_accounts: List[Dict[str, Any]] = []
+    account_contexts: List[Dict[str, Any]] = []
     for idx, candidate in enumerate(candidates):
         account_index = candidate.get("account_index")
         if not isinstance(account_index, int):
             account_index = idx
 
         prepared = dict(candidate)
+        context: Dict[str, Any] = {"account_index": account_index}
         if sid_value != "-" and runs_root_path is not None:
             try:
                 case_data = load_case_account(
@@ -1024,17 +1293,23 @@ def cluster_problematic_accounts(
                     account_index,
                 )
             else:
-                prepared_case = _prepare_account_for_scoring(case_data)
-                if isinstance(prepared_case, dict):
-                    prepared = dict(prepared_case)
-                    for key in ("heading_guess", "account_id"):
-                        if key in candidate and key not in prepared:
-                            prepared[key] = candidate[key]
+                prepared_case, prepared_meta = _prepare_account_for_scoring(case_data)
+                merged_prepared = dict(candidate)
+                merged_prepared.update(prepared_case)
+                prepared = merged_prepared
+                if isinstance(prepared_meta, Mapping):
+                    context.update(dict(prepared_meta))
+                context["case_dir"] = case_data.get("case_dir")
+                context["raw_lines"] = case_data.get("raw_lines")
+                for key in ("heading_guess", "account_id"):
+                    if key in candidate and key not in prepared:
+                        prepared[key] = candidate[key]
 
         prepared.setdefault("account_index", account_index)
         if "account_id" not in prepared and candidate.get("account_id") is not None:
             prepared["account_id"] = candidate["account_id"]
         prepared_accounts.append(prepared)
+        account_contexts.append(context)
 
     pair_results: List[
         List[
@@ -1078,6 +1353,18 @@ def cluster_problematic_accounts(
                 auto_edges.append((i, j))
             elif decision == "ai":
                 ai_pairs.append((i, j))
+                _write_ai_pack(
+                    sid=sid_value,
+                    runs_root_path=runs_root_path,
+                    manifest=manifest,
+                    idx_a=i,
+                    idx_b=j,
+                    score=score,
+                    parts=parts,
+                    aux=aux,
+                    reasons=reasons,
+                    account_contexts=account_contexts,
+                )
 
             parts_log = json.dumps(
                 {name: float(parts[name]) for name in sorted(parts.keys())},
@@ -1203,7 +1490,7 @@ def cluster_problematic_accounts(
         )
 
     logger.info(
-        "MERGE_SUMMARY  sid=<%s> clusters=<%d> auto_pairs=<%d> ai_pairs=<%d> skipped_pairs=<%d>",
+        "MERGE_SUMMARY sid=<%s> clusters=<%d> auto_pairs=<%d> ai_pairs=<%d> skipped_pairs=<%d>",
         sid_value,
         len(components),
         len(auto_edges),

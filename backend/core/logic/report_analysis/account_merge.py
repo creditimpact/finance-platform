@@ -414,6 +414,72 @@ def decide_merge(score: float, cfg: MergeCfg = DEFAULT_CFG) -> str:
     return "different"
 
 
+def _apply_account_number_ai_override(
+    base_score: float,
+    score: float,
+    decision: str,
+    aux: Dict[str, Any],
+    reasons: Dict[str, Any],
+    thresholds: Mapping[str, float],
+    *,
+    sid_value: str,
+    idx_a: int,
+    idx_b: int,
+) -> Tuple[float, str, Dict[str, Any], Dict[str, Any]]:
+    """Lift low scores into the AI band for strong account-number matches."""
+
+    ai_band_min = thresholds.get("ai_band_min", 0.35)
+    ai_hard_min = thresholds.get("ai_hard_min", ai_band_min)
+
+    level = aux.get("acctnum_level")
+    masked_any = bool(aux.get("acctnum_masked_any", False))
+
+    env = os.environ
+    trig = _read_env_choice(
+        env, _ACCTNUM_TRIGGER_KEY, _DEFAULT_ACCTNUM_TRIGGER, _ACCTNUM_TRIGGER_CHOICES
+    )
+    minscore = _read_env_float(env, _ACCTNUM_MIN_SCORE_KEY, _DEFAULT_ACCTNUM_MIN_SCORE)
+    req_masked = _read_env_flag(
+        env, _ACCTNUM_REQUIRE_MASKED_KEY, _DEFAULT_ACCTNUM_REQUIRE_MASKED
+    )
+
+    eligible = (
+        (trig == "any" and level in {"exact", "last4"})
+        or (trig == "exact" and level == "exact")
+        or (trig == "last4" and level == "last4")
+    )
+    if req_masked:
+        eligible = eligible and masked_any
+
+    if eligible and base_score < ai_band_min:
+        lifted_score = max(score, minscore, ai_hard_min)
+        updated_reasons = dict(reasons)
+        updated_reasons["acctnum_only_triggers_ai"] = True
+        updated_reasons["acctnum_match_level"] = level
+        updated_reasons["acctnum_masked_any"] = masked_any
+
+        aux_with_reasons = dict(aux)
+        aux_with_reasons["override_reasons"] = dict(updated_reasons)
+
+        logger.info(
+            "MERGE_OVERRIDE sid=<%s> accA=<%d> accB=<%d> reason=acctnum_only_triggers_ai "
+            "level=<%s> masked_any=<%d> lifted_to=<%.4f>",
+            sid_value,
+            idx_a,
+            idx_b,
+            level or "none",
+            1 if masked_any else 0,
+            lifted_score,
+        )
+
+        return lifted_score, "ai", updated_reasons, aux_with_reasons
+
+    if reasons:
+        aux = dict(aux)
+        aux["override_reasons"] = dict(reasons)
+    return score, decision, reasons, aux
+
+
 def _build_auto_graph(size: int, auto_edges: List[Tuple[int, int]]) -> List[List[int]]:
     graph: List[List[int]] = [[] for _ in range(size)]
     for i, j in auto_edges:
@@ -461,7 +527,11 @@ def cluster_problematic_accounts(
         return candidates
 
     pair_results: List[
-        List[Optional[Tuple[float, str, Dict[str, float], Dict[str, Any]]]]
+        List[
+            Optional[
+                Tuple[float, str, Dict[str, float], Dict[str, Any], Dict[str, Any]]
+            ]
+        ]
     ] = [
         [None] * size for _ in range(size)
     ]
@@ -471,9 +541,23 @@ def cluster_problematic_accounts(
     for i in range(size):
         for j in range(i + 1, size):
             score, parts, aux = score_accounts(candidates[i], candidates[j], cfg)
+            base_score = score
             decision = decide_merge(score, cfg)
-            pair_results[i][j] = (score, decision, parts, aux)
-            pair_results[j][i] = (score, decision, parts, aux)
+            reasons: Dict[str, Any] = {}
+            score, decision, reasons, aux = _apply_account_number_ai_override(
+                base_score,
+                score,
+                decision,
+                aux,
+                reasons,
+                cfg.thresholds,
+                sid_value=sid_value,
+                idx_a=i,
+                idx_b=j,
+            )
+
+            pair_results[i][j] = (score, decision, parts, aux, reasons)
+            pair_results[j][i] = (score, decision, parts, aux, reasons)
             if decision == "auto":
                 auto_edges.append((i, j))
             elif decision == "ai":
@@ -509,7 +593,7 @@ def cluster_problematic_accounts(
             pair = pair_results[i][j]
             if pair is None:
                 continue
-            _, pair_decision, _, _ = pair
+            _, pair_decision, _, _, _ = pair
             if pair_decision == "auto":
                 continue
             comp_j = component_map.get(j, (j + 1, [j]))
@@ -537,12 +621,14 @@ def cluster_problematic_accounts(
             pair_key = (i, j) if i < j else (j, i)
             if pair_key in skip_pairs:
                 continue
-            pair_score, pair_decision, pair_parts, pair_aux = pair
+            pair_score, pair_decision, pair_parts, pair_aux, pair_reasons = pair
             entry = {
                 "account_index": j,
                 "score": pair_score,
                 "decision": pair_decision,
             }
+            if pair_reasons:
+                entry["reasons"] = dict(pair_reasons)
             score_entries.append(entry)
             if best is None or pair_score > best["score"]:
                 best = entry.copy()

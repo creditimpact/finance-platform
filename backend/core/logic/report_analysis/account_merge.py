@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import difflib
+import json
 import logging
-import re
 import os
+import re
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
 
 logger = logging.getLogger(__name__)
@@ -34,9 +36,9 @@ _DEFAULT_THRESHOLDS = {
 }
 
 _DEFAULT_WEIGHTS = {
-    "acct_num": 0.30,
+    "acct": 0.25,
     "dates": 0.20,
-    "balance": 0.20,
+    "balowed": 0.25,
     "status": 0.20,
     "strings": 0.10,
 }
@@ -53,11 +55,11 @@ _ENV_THRESHOLD_KEYS = {
 }
 
 _ENV_WEIGHT_KEYS = {
-    "acct_num": "MERGE_W_ACCT",
+    "acct": "MERGE_W_ACCT",
     "dates": "MERGE_W_DATES",
-    "balance": "MERGE_W_BAL",
+    "balowed": "MERGE_W_BALOWED",
     "status": "MERGE_W_STATUS",
-    "strings": "MERGE_W_STR",
+    "strings": "MERGE_W_STRINGS",
 }
 
 _ACCTNUM_TRIGGER_CHOICES = {"off", "exact", "last4", "any"}
@@ -65,8 +67,75 @@ _ACCTNUM_TRIGGER_KEY = "MERGE_ACCTNUM_TRIGGER_AI"
 _ACCTNUM_MIN_SCORE_KEY = "MERGE_ACCTNUM_MIN_SCORE"
 _ACCTNUM_REQUIRE_MASKED_KEY = "MERGE_ACCTNUM_REQUIRE_MASKED"
 
-_ACCT_NUMBER_FIELDS = ("account_number", "acct_num", "number")
+_ACCT_NUMBER_FIELDS = (
+    "account_number",
+    "acct_num",
+    "number",
+    "account_number_display",
+)
 _MASKED_ACCOUNT_PATTERN = re.compile(r"[xX*#•]")
+
+
+def _read_json(p: Path) -> Union[Dict[str, Any], List[Any]]:
+    if not p.exists():
+        return {}
+    with p.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _extract_acct_from_raw_lines(raw_lines: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+    if not raw_lines:
+        return None
+    for row in raw_lines:
+        text = (row.get("text") or "").strip()
+        if text.startswith("Account #"):
+            parts = text.replace("Account #", "").strip().split()
+            return parts[0] if parts else None
+    return None
+
+
+def load_case_account(sid: str, acc_idx: int, runs_root: Path) -> Dict[str, Any]:
+    base = runs_root / sid / "cases" / "accounts" / str(acc_idx)
+    if not base.exists():
+        raise FileNotFoundError(
+            f"case data not found for sid={sid!r} index={acc_idx} under {runs_root}"
+        )
+    fields = _read_json(base / "fields_flat.json")
+    bureaus = _read_json(base / "bureaus.json")
+    raw = _read_json(base / "raw_lines.json")
+
+    balowed = fields.get("balance_owed")
+    if balowed in (None, "", "--"):
+        balowed = fields.get("past_due_amount")
+
+    status = fields.get("payment_status") or fields.get("account_status")
+    dates = {
+        "opened": fields.get("date_opened"),
+        "dla": fields.get("date_of_last_activity"),
+        "closed": fields.get("closed_date"),
+        "reported": fields.get("date_reported"),
+    }
+
+    acct_display = (
+        (bureaus.get("transunion") or {}).get("account_number")
+        or (bureaus.get("experian") or {}).get("account_number")
+        or (bureaus.get("equifax") or {}).get("account_number")
+    )
+    if not acct_display:
+        acct_display = _extract_acct_from_raw_lines(raw if isinstance(raw, list) else [])
+
+    return {
+        "index": acc_idx,
+        "fields_flat": fields,
+        "bureaus": bureaus,
+        "raw_lines": raw,
+        "norm": {
+            "balance_owed": balowed,
+            "status": status,
+            "dates": dates,
+            "account_number_display": acct_display,
+        },
+    }
 
 
 def _read_env_float(env: Mapping[str, str], key: str, default: float) -> float:
@@ -176,6 +245,72 @@ _STATUS_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
 def _normalize_account_number(value: Any) -> Optional[str]:
     digits = re.sub(r"\D", "", str(value or ""))
     return digits or None
+
+
+def _prepare_account_for_scoring(case_account: Mapping[str, Any]) -> Dict[str, Any]:
+    fields = dict(case_account.get("fields_flat") or {})
+    bureaus = case_account.get("bureaus") or {}
+    norm = case_account.get("norm") or {}
+
+    prepared: Dict[str, Any] = {}
+
+    # Start with flattened fields to retain as much context as possible.
+    for key, value in fields.items():
+        prepared[key] = value
+
+    balowed = norm.get("balance_owed")
+    if balowed not in (None, "", "--"):
+        prepared["balance_owed"] = balowed
+
+    status = norm.get("status")
+    if status not in (None, ""):
+        prepared["payment_status"] = status
+        prepared.setdefault("account_status", status)
+
+    dates = norm.get("dates") or {}
+    if isinstance(dates, Mapping):
+        date_map = {
+            "date_opened": dates.get("opened"),
+            "date_of_last_activity": dates.get("dla"),
+            "closed_date": dates.get("closed"),
+            "date_reported": dates.get("reported"),
+        }
+        for key, value in date_map.items():
+            if value not in (None, ""):
+                prepared[key] = value
+
+    acct_display = norm.get("account_number_display")
+    if acct_display in (None, ""):
+        for bureau_key in ("transunion", "experian", "equifax"):
+            bureau_val = (bureaus.get(bureau_key) or {}).get("account_number")
+            if bureau_val not in (None, ""):
+                acct_display = bureau_val
+                break
+    if acct_display not in (None, ""):
+        prepared["account_number"] = acct_display
+        prepared["acct_num"] = acct_display
+        prepared["number"] = acct_display
+        prepared["account_number_display"] = acct_display
+
+    if "creditor" not in prepared or not str(prepared.get("creditor") or "").strip():
+        for key in ("creditor", "creditor_name", "original_creditor", "creditor_type"):
+            value = fields.get(key) or (bureaus.get("transunion") or {}).get(key)
+            if value not in (None, "", "--"):
+                prepared["creditor"] = value
+                break
+
+    if "remarks" not in prepared or not str(prepared.get("remarks") or "").strip():
+        for key in ("remarks", "creditor_remarks", "comment", "comments"):
+            value = fields.get(key) or (bureaus.get("transunion") or {}).get(key)
+            if value not in (None, "", "--"):
+                prepared["remarks"] = value
+                break
+
+    account_index = case_account.get("index")
+    if isinstance(account_index, int):
+        prepared.setdefault("account_index", account_index)
+
+    return prepared
 
 
 def _extract_account_number_fields(account: Mapping[str, Any]) -> Dict[str, Any]:
@@ -378,9 +513,9 @@ def score_accounts(
     acct_score, acct_aux = _score_account_number(accA, accB)
 
     parts = {
-        "acct_num": acct_score,
+        "acct": acct_score,
         "dates": _score_dates(accA, accB),
-        "balance": _score_balance(accA, accB),
+        "balowed": _score_balance(accA, accB),
         "status": _score_status(accA, accB),
         "strings": _score_strings(accA, accB),
     }
@@ -462,8 +597,8 @@ def _apply_account_number_ai_override(
         aux_with_reasons["override_reasons"] = dict(updated_reasons)
 
         logger.info(
-            "MERGE_OVERRIDE sid=<%s> i=<%d> j=<%d> reason=acctnum_only_triggers_ai "
-            "level=<%s> masked_any=<%d> lifted_to=<%.4f>",
+            "MERGE_OVERRIDE sid=<%s> i=<%d> j=<%d> kind=acctnum level=<%s> "
+            "masked_any=<%d> lifted_to=<%.4f>",
             sid_value,
             idx_a,
             idx_b,
@@ -576,17 +711,48 @@ def cluster_problematic_accounts(
     cfg: MergeCfg = DEFAULT_CFG,
     *,
     sid: Optional[str] = None,
+    runs_root: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """Cluster problematic accounts using pairwise comparisons."""
 
     size = len(candidates)
     sid_value = sid or "-"
+    runs_root_path: Optional[Path] = None
+    if runs_root is not None:
+        runs_root_path = Path(runs_root)
+    elif sid_value != "-":
+        env_root = os.getenv("RUNS_ROOT")
+        runs_root_path = Path(env_root) if env_root else Path("runs")
+
     if size == 0:
         logger.info(
             "MERGE_SUMMARY  sid=<%s> clusters=<0> auto_pairs=<0> ai_pairs=<0> skipped_pairs=<0>",
             sid_value,
         )
         return candidates
+
+    prepared_accounts: List[Dict[str, Any]] = []
+    for idx, candidate in enumerate(candidates):
+        account_index = candidate.get("account_index")
+        if not isinstance(account_index, int):
+            account_index = idx
+
+        prepared = dict(candidate)
+        if sid_value != "-" and runs_root_path is not None:
+            try:
+                case_data = load_case_account(sid_value, account_index, runs_root_path)
+            except Exception:
+                logger.debug(
+                    "MERGE_SCORE sid=<%s> i=<%d> load_case_failed index=<%s>",
+                    sid_value,
+                    idx,
+                    account_index,
+                )
+            else:
+                prepared = _prepare_account_for_scoring(case_data)
+
+        prepared.setdefault("account_index", account_index)
+        prepared_accounts.append(prepared)
 
     pair_results: List[
         List[
@@ -602,7 +768,7 @@ def cluster_problematic_accounts(
 
     for i in range(size):
         for j in range(i + 1, size):
-            score, parts, aux = score_accounts(candidates[i], candidates[j], cfg)
+            score, parts, aux = score_accounts(prepared_accounts[i], prepared_accounts[j], cfg)
             base_score = score
             decision = decide_merge(score, cfg)
             reasons: Dict[str, Any] = {}
@@ -625,17 +791,25 @@ def cluster_problematic_accounts(
             elif decision == "ai":
                 ai_pairs.append((i, j))
 
-            parts_str = ",".join(
-                f"{name}:{parts[name]:.4f}" for name in sorted(parts.keys())
+            parts_log = json.dumps(
+                {name: float(parts[name]) for name in sorted(parts.keys())},
+                sort_keys=True,
             )
             logger.info(
-                "MERGE_DECISION sid=<%s> accA=<%d> accB=<%d> score=<%.4f> decision=<%s> parts=<%s>",
+                "MERGE_SCORE sid=<%s> i=<%d> j=<%d> parts=<%s> score=<%.4f>",
                 sid_value,
                 i,
                 j,
+                parts_log,
                 score,
+            )
+            logger.info(
+                "MERGE_DECISION sid=<%s> i=<%d> j=<%d> decision=<%s> score=<%.4f>",
+                sid_value,
+                i,
+                j,
                 decision,
-                parts_str,
+                score,
             )
 
     graph = _build_auto_graph(size, auto_edges)

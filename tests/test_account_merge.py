@@ -111,9 +111,9 @@ def test_partial_overlap_ai_decision():
     score, parts, aux = score_accounts(account_a, account_b)
 
     assert 0.35 <= score < 0.78
-    assert parts["acct_num"] == pytest.approx(0.7)
+    assert parts["acct"] == pytest.approx(0.7)
     assert parts["dates"] == pytest.approx(1.0)
-    assert parts["balance"] == pytest.approx(1.0)
+    assert parts["balowed"] == pytest.approx(1.0)
     assert parts["status"] == pytest.approx(0.0)
     assert parts["strings"] == pytest.approx(0.48)
     assert aux["acctnum_level"] == "last4"
@@ -254,9 +254,9 @@ def test_scoring_handles_missing_fields():
     assert parts_first == parts_second
     assert aux_first == aux_second
     assert 0 < score_first < 0.35
-    assert parts_first["acct_num"] == 0.0
+    assert parts_first["acct"] == 0.0
     assert parts_first["dates"] == 0.0
-    assert parts_first["balance"] == pytest.approx(1.0)
+    assert parts_first["balowed"] == pytest.approx(1.0)
     assert parts_first["strings"] > 0.5
     assert aux_first["acctnum_level"] == "none"
     assert aux_first["acctnum_masked_any"] is False
@@ -290,8 +290,8 @@ def test_acctnum_exact_override_forces_ai(monkeypatch, caplog):
     account_b = {"account_number": "1234567890"}
 
     base_score, parts, aux = score_accounts(account_a, account_b)
-    assert base_score == pytest.approx(0.3)
-    assert parts["acct_num"] == pytest.approx(1.0)
+    assert base_score == pytest.approx(0.25)
+    assert parts["acct"] == pytest.approx(1.0)
     assert aux["acctnum_level"] == "exact"
     assert aux["acctnum_masked_any"] is False
 
@@ -308,7 +308,7 @@ def test_acctnum_exact_override_forces_ai(monkeypatch, caplog):
     assert first_tag["decision"] == "ai"
     assert best["decision"] == "ai"
     assert best["score"] == pytest.approx(0.45)
-    assert first_tag["parts"]["acct_num"] == pytest.approx(1.0)
+    assert first_tag["parts"]["acct"] == pytest.approx(1.0)
     assert first_tag["reasons"]["acctnum_only_triggers_ai"] is True
     assert first_tag["reasons"]["acctnum_match_level"] == "exact"
     assert best["reasons"]["acctnum_only_triggers_ai"] is True
@@ -317,8 +317,8 @@ def test_acctnum_exact_override_forces_ai(monkeypatch, caplog):
 
     override_messages = _extract_override_log_messages(caplog.records)
     assert any(
-        "MERGE_OVERRIDE sid=<acctnum-exact> i=<0> j=<1> reason=acctnum_only_triggers_ai"
-        " level=<exact> masked_any=<0> lifted_to=<0.4500>" in msg
+        "MERGE_OVERRIDE sid=<acctnum-exact> i=<0> j=<1> kind=acctnum level=<exact>"
+        " masked_any=<0> lifted_to=<0.4500>" in msg
         for msg in override_messages
     )
 
@@ -333,7 +333,7 @@ def test_acctnum_last4_override_honors_trigger(monkeypatch, trigger):
     account_b = {"account_number": "0000000000005678"}
 
     base_score, _, aux = score_accounts(account_a, account_b)
-    assert base_score == pytest.approx(0.21)
+    assert base_score == pytest.approx(0.175)
     assert aux["acctnum_level"] == "last4"
     assert aux["acctnum_masked_any"] is True
 
@@ -361,7 +361,7 @@ def test_acctnum_override_respects_mask_requirement(monkeypatch):
     account_b = {"account_number": "1234567890"}
 
     base_score, _, aux = score_accounts(account_a, account_b)
-    assert base_score == pytest.approx(0.3)
+    assert base_score == pytest.approx(0.25)
     assert aux["acctnum_masked_any"] is False
 
     merged = cluster_problematic_accounts(
@@ -373,7 +373,7 @@ def test_acctnum_override_respects_mask_requirement(monkeypatch):
 
     assert first_tag["decision"] == "different"
     assert best["decision"] == "different"
-    assert best["score"] == pytest.approx(0.3)
+    assert best["score"] == pytest.approx(0.25)
     assert "reasons" not in best
     assert "override_reasons" not in first_tag.get("aux", {})
 
@@ -431,8 +431,7 @@ def test_acctnum_override_emits_logs_and_builds_ai_pack(monkeypatch, caplog, tmp
 
     override_messages = _extract_override_log_messages(caplog.records)
     assert any(
-        "MERGE_OVERRIDE sid=<acctnum-pack> i=<0> j=<1> reason=acctnum_only_triggers_ai"
-        in msg
+        "MERGE_OVERRIDE sid=<acctnum-pack> i=<0> j=<1> kind=acctnum" in msg
         for msg in override_messages
     )
 
@@ -453,3 +452,44 @@ def test_acctnum_override_emits_logs_and_builds_ai_pack(monkeypatch, caplog, tmp
     assert saved["acctnum"] == {"level": "exact", "masked_any": False}
     assert saved["reasons"]["acctnum_only_triggers_ai"] is True
     assert pack_path.exists()
+
+
+def test_cluster_uses_case_files_for_scoring(tmp_path):
+    sid = "case-loader"
+    runs_root = tmp_path / "runs"
+    base_dir = runs_root / sid / "cases" / "accounts"
+    for idx in (7, 10):
+        account_dir = base_dir / str(idx)
+        account_dir.mkdir(parents=True, exist_ok=True)
+        fields_flat = {
+            "balance_owed": 5912.0,
+            "date_opened": "2020-01-01",
+            "payment_status": "Charge Off",
+            "creditor": "Case Bank",
+        }
+        bureaus = {
+            "transunion": {"account_number": "0000 1234"},
+            "experian": {},
+            "equifax": {},
+        }
+        raw_lines = [{"text": "Account #0000 1234"}]
+        (account_dir / "fields_flat.json").write_text(
+            json.dumps(fields_flat), encoding="utf-8"
+        )
+        (account_dir / "bureaus.json").write_text(json.dumps(bureaus), encoding="utf-8")
+        (account_dir / "raw_lines.json").write_text(json.dumps(raw_lines), encoding="utf-8")
+
+    candidates = [
+        {"account_index": 7},
+        {"account_index": 10},
+    ]
+
+    merged = cluster_problematic_accounts(
+        candidates,
+        sid=sid,
+        runs_root=runs_root,
+    )
+
+    parts = merged[0]["merge_tag"]["parts"]
+    assert parts["balowed"] == pytest.approx(1.0)
+    assert parts["acct"] == pytest.approx(1.0)

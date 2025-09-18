@@ -46,18 +46,18 @@ def test_score_accounts_returns_weighted_score_and_parts():
     normalized_b = "acme financial original creditor acct"
     expected_strings = difflib.SequenceMatcher(None, normalized_a, normalized_b).ratio()
 
-    assert parts["acct_num"] == 1.0
+    assert parts["acct"] == 1.0
     assert parts["dates"] == pytest.approx(expected_dates, rel=1e-3)
-    assert parts["balance"] == pytest.approx(expected_balance, rel=1e-3)
+    assert parts["balowed"] == pytest.approx(expected_balance, rel=1e-3)
     assert parts["status"] == 1.0
     assert parts["strings"] == pytest.approx(expected_strings, rel=1e-6)
     assert aux["acctnum_level"] == "exact"
     assert aux["acctnum_masked_any"] is True
 
     expected_score = (
-        DEFAULT_CFG.weights["acct_num"] * parts["acct_num"]
+        DEFAULT_CFG.weights["acct"] * parts["acct"]
         + DEFAULT_CFG.weights["dates"] * parts["dates"]
-        + DEFAULT_CFG.weights["balance"] * parts["balance"]
+        + DEFAULT_CFG.weights["balowed"] * parts["balowed"]
         + DEFAULT_CFG.weights["status"] * parts["status"]
         + DEFAULT_CFG.weights["strings"] * parts["strings"]
     )
@@ -119,7 +119,7 @@ def test_load_config_from_env_respects_overrides(monkeypatch):
     cfg = load_config_from_env()
 
     assert cfg.thresholds["auto_merge_min"] == 0.91
-    assert cfg.weights["acct_num"] == 0.45
+    assert cfg.weights["acct"] == 0.45
     assert cfg.acctnum_trigger_ai == "last4"
     assert cfg.acctnum_min_score == 0.52
     assert cfg.acctnum_require_masked is True
@@ -170,7 +170,7 @@ def test_cluster_problematic_accounts_builds_clusters():
     assert first_tag["decision"] == second_tag["decision"] == "auto"
     assert first_tag["best_match"]["account_index"] == 1
     assert second_tag["best_match"]["account_index"] == 0
-    assert first_tag["parts"]["acct_num"] == 1.0
+    assert first_tag["parts"]["acct"] == 1.0
     assert first_tag["aux"]["acctnum_level"] == "exact"
     assert third_tag["aux"]["acctnum_level"] == "none"
 
@@ -179,7 +179,7 @@ def test_cluster_problematic_accounts_builds_clusters():
     assert third_tag["best_match"] is not None
     assert third_tag["best_match"]["decision"] == "ai"
     assert third_tag["score_to"][0]["score"] >= third_tag["score_to"][1]["score"]
-    assert third_tag["parts"]["acct_num"] == 0.0
+    assert third_tag["parts"]["acct"] == 0.0
 
 
 def test_acctnum_override_lifts_low_score_to_ai(monkeypatch, caplog):
@@ -197,7 +197,7 @@ def test_acctnum_override_lifts_low_score_to_ai(monkeypatch, caplog):
     }
 
     score, _, aux = score_accounts(account_a, account_b, DEFAULT_CFG)
-    assert score == pytest.approx(0.3)
+    assert score == pytest.approx(0.25)
     assert aux["acctnum_level"] == "exact"
 
     with caplog.at_level(
@@ -230,8 +230,8 @@ def test_acctnum_override_lifts_low_score_to_ai(monkeypatch, caplog):
         if "MERGE_OVERRIDE" in record.getMessage()
     ]
     assert any(
-        "MERGE_OVERRIDE sid=<acctnum-override> i=<0> j=<1> reason=acctnum_only_triggers_ai "
-        "level=<exact> masked_any=<0> lifted_to=<0.4000>" in msg
+        "MERGE_OVERRIDE sid=<acctnum-override> i=<0> j=<1> kind=acctnum level=<exact>"
+        " masked_any=<0> lifted_to=<0.4000>" in msg
         for msg in override_messages
     )
 
@@ -244,7 +244,7 @@ def test_acctnum_override_respects_mask_requirement(monkeypatch):
     account_b = {"account_number": "1234567890"}
 
     score, _, aux = score_accounts(account_a, account_b, DEFAULT_CFG)
-    assert score == pytest.approx(0.3)
+    assert score == pytest.approx(0.25)
     assert aux["acctnum_level"] == "exact"
     assert aux["acctnum_masked_any"] is False
 
@@ -256,7 +256,7 @@ def test_acctnum_override_respects_mask_requirement(monkeypatch):
     assert first_tag["decision"] == "different"
     best = first_tag["best_match"]
     assert best["decision"] == "different"
-    assert best["score"] == pytest.approx(0.3)
+    assert best["score"] == pytest.approx(0.25)
     assert "reasons" not in best
     assert "override_reasons" not in first_tag.get("aux", {})
 

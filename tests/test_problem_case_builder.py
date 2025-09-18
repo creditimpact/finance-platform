@@ -372,8 +372,8 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
                     "decision": "auto",
                 },
                 "parts": {
-                    "acct_num": 1.0,
-                    "balance": 0.95,
+                    "acct": 1.0,
+                    "balowed": 0.95,
                     "dates": 0.9,
                     "status": 1.0,
                     "strings": 0.7,
@@ -534,7 +534,7 @@ def test_problem_case_builder_updates_merge_tag_only_for_existing_cases(
                     "score": 0.55,
                     "decision": "ai",
                 },
-                "parts": {"acct_num": 0.7},
+                "parts": {"acct": 0.7},
             },
         }
     ]

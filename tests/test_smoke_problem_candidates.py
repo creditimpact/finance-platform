@@ -57,7 +57,7 @@ def test_build_merge_summary_includes_override_columns():
                     "acctnum_match_level": "last4",
                 },
             },
-            parts={"acct_num": 0.7},
+            parts={"acct": 0.7},
         ),
         _make_candidate(
             1,
@@ -70,7 +70,7 @@ def test_build_merge_summary_includes_override_columns():
                 "acctnum_level": "none",
                 "override_reasons": {"balance_only_triggers_ai": True},
             },
-            parts={"balance": 1.0},
+            parts={"balowed": 1.0},
         ),
         _make_candidate(
             2,

@@ -41,12 +41,12 @@ def test_score_accounts_returns_weighted_score_and_parts():
     score, parts, aux = score_accounts(account_a, account_b, DEFAULT_CFG)
 
     expected_dates = ((364 / 365) + (360 / 365) + 1.0) / 3
-    expected_balance = ((1 - (50 / 1050)) + (1 - (100 / 2000))) / 2
+    expected_balance = 1 - (100 / 2000)
     normalized_a = "acme bank original creditor account"
     normalized_b = "acme financial original creditor acct"
     expected_strings = difflib.SequenceMatcher(None, normalized_a, normalized_b).ratio()
 
-    assert parts["acct"] == 1.0
+    assert parts["acct_num"] == 1.0
     assert parts["dates"] == pytest.approx(expected_dates, rel=1e-3)
     assert parts["balowed"] == pytest.approx(expected_balance, rel=1e-3)
     assert parts["status"] == 1.0
@@ -55,7 +55,7 @@ def test_score_accounts_returns_weighted_score_and_parts():
     assert aux["acctnum_masked_any"] is True
 
     expected_score = (
-        DEFAULT_CFG.weights["acct"] * parts["acct"]
+        DEFAULT_CFG.weights["acct_num"] * parts["acct_num"]
         + DEFAULT_CFG.weights["dates"] * parts["dates"]
         + DEFAULT_CFG.weights["balowed"] * parts["balowed"]
         + DEFAULT_CFG.weights["status"] * parts["status"]
@@ -111,6 +111,7 @@ def test_decide_merge_respects_thresholds(value, expected):
 
 def test_load_config_from_env_respects_overrides(monkeypatch):
     monkeypatch.setenv("MERGE_AUTO_MIN", "0.91")
+    monkeypatch.setenv("MERGE_W_BALOWED", "0.40")
     monkeypatch.setenv("MERGE_W_ACCT", "0.45")
     monkeypatch.setenv("MERGE_ACCTNUM_TRIGGER_AI", "last4")
     monkeypatch.setenv("MERGE_ACCTNUM_MIN_SCORE", "0.52")
@@ -119,7 +120,8 @@ def test_load_config_from_env_respects_overrides(monkeypatch):
     cfg = load_config_from_env()
 
     assert cfg.thresholds["auto_merge_min"] == 0.91
-    assert cfg.weights["acct"] == 0.45
+    assert cfg.weights["balowed"] == 0.40
+    assert cfg.weights["acct_num"] == 0.45
     assert cfg.acctnum_trigger_ai == "last4"
     assert cfg.acctnum_min_score == 0.52
     assert cfg.acctnum_require_masked is True
@@ -170,7 +172,7 @@ def test_cluster_problematic_accounts_builds_clusters():
     assert first_tag["decision"] == second_tag["decision"] == "auto"
     assert first_tag["best_match"]["account_index"] == 1
     assert second_tag["best_match"]["account_index"] == 0
-    assert first_tag["parts"]["acct"] == 1.0
+    assert first_tag["parts"]["acct_num"] == 1.0
     assert first_tag["aux"]["acctnum_level"] == "exact"
     assert third_tag["aux"]["acctnum_level"] == "none"
 
@@ -179,7 +181,7 @@ def test_cluster_problematic_accounts_builds_clusters():
     assert third_tag["best_match"] is not None
     assert third_tag["best_match"]["decision"] == "ai"
     assert third_tag["score_to"][0]["score"] >= third_tag["score_to"][1]["score"]
-    assert third_tag["parts"]["acct"] == 0.0
+    assert third_tag["parts"]["acct_num"] == 0.0
 
 
 def test_acctnum_override_lifts_low_score_to_ai(monkeypatch, caplog):

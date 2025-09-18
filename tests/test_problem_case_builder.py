@@ -372,7 +372,7 @@ def test_problem_case_builder(tmp_path, caplog, monkeypatch):
                     "decision": "auto",
                 },
                 "parts": {
-                    "acct": 1.0,
+                    "acct_num": 1.0,
                     "balowed": 0.95,
                     "dates": 0.9,
                     "status": 1.0,
@@ -534,7 +534,7 @@ def test_problem_case_builder_updates_merge_tag_only_for_existing_cases(
                     "score": 0.55,
                     "decision": "ai",
                 },
-                "parts": {"acct": 0.7},
+                "parts": {"acct_num": 0.7},
             },
         }
     ]
@@ -557,6 +557,9 @@ def test_problem_case_builder_manifest_missing_accounts_raises(tmp_path, monkeyp
     sid = "S999"
     runs_root = tmp_path / "runs"
     monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+    monkeypatch.setattr(
+        "backend.core.logic.report_analysis.problem_case_builder.LEAN", False
+    )
     RunManifest.for_sid(sid)  # create manifest without traces entries
     try:
         build_problem_cases(sid, candidates=[])

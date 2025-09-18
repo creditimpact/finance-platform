@@ -178,3 +178,65 @@ def test_cluster_problematic_accounts_builds_clusters():
     assert third_tag["best_match"]["decision"] == "ai"
     assert third_tag["score_to"][0]["score"] >= third_tag["score_to"][1]["score"]
     assert third_tag["parts"]["acct_num"] == 0.0
+
+
+def test_acctnum_override_lifts_low_score_to_ai(monkeypatch):
+    monkeypatch.setenv("MERGE_ACCTNUM_TRIGGER_AI", "exact")
+    monkeypatch.setenv("MERGE_ACCTNUM_MIN_SCORE", "0.4")
+    monkeypatch.setenv("MERGE_ACCTNUM_REQUIRE_MASKED", "0")
+
+    account_a = {
+        "account_number": "1234567890",
+        "payment_status": "",
+    }
+    account_b = {
+        "account_number": "1234567890",
+        "payment_status": "",
+    }
+
+    score, _, aux = score_accounts(account_a, account_b, DEFAULT_CFG)
+    assert score == pytest.approx(0.3)
+    assert aux["acctnum_level"] == "exact"
+
+    merged = cluster_problematic_accounts(
+        [dict(account_a), dict(account_b)], DEFAULT_CFG, sid="acctnum-override"
+    )
+
+    first_tag = merged[0]["merge_tag"]
+    second_tag = merged[1]["merge_tag"]
+
+    assert first_tag["decision"] == "ai"
+    assert second_tag["decision"] == "ai"
+
+    best_first = first_tag["best_match"]
+    assert best_first["decision"] == "ai"
+    assert best_first["score"] == pytest.approx(0.4)
+    assert best_first["reasons"]["acctnum_only_triggers_ai"] is True
+    assert best_first["reasons"]["acctnum_match_level"] == "exact"
+    assert best_first["reasons"]["acctnum_masked_any"] is False
+    assert first_tag["aux"]["override_reasons"]["acctnum_only_triggers_ai"] is True
+
+
+def test_acctnum_override_respects_mask_requirement(monkeypatch):
+    monkeypatch.setenv("MERGE_ACCTNUM_TRIGGER_AI", "exact")
+    monkeypatch.setenv("MERGE_ACCTNUM_REQUIRE_MASKED", "1")
+
+    account_a = {"account_number": "1234567890"}
+    account_b = {"account_number": "1234567890"}
+
+    score, _, aux = score_accounts(account_a, account_b, DEFAULT_CFG)
+    assert score == pytest.approx(0.3)
+    assert aux["acctnum_level"] == "exact"
+    assert aux["acctnum_masked_any"] is False
+
+    merged = cluster_problematic_accounts(
+        [dict(account_a), dict(account_b)], DEFAULT_CFG, sid="acctnum-nomask"
+    )
+
+    first_tag = merged[0]["merge_tag"]
+    assert first_tag["decision"] == "different"
+    best = first_tag["best_match"]
+    assert best["decision"] == "different"
+    assert best["score"] == pytest.approx(0.3)
+    assert "reasons" not in best
+    assert "override_reasons" not in first_tag.get("aux", {})

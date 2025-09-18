@@ -65,6 +65,9 @@ _ACCTNUM_TRIGGER_KEY = "MERGE_ACCTNUM_TRIGGER_AI"
 _ACCTNUM_MIN_SCORE_KEY = "MERGE_ACCTNUM_MIN_SCORE"
 _ACCTNUM_REQUIRE_MASKED_KEY = "MERGE_ACCTNUM_REQUIRE_MASKED"
 
+_ACCT_NUMBER_FIELDS = ("account_number", "acct_num", "number")
+_MASKED_ACCOUNT_PATTERN = re.compile(r"[xX*#•]")
+
 
 def _read_env_float(env: Mapping[str, str], key: str, default: float) -> float:
     value = env.get(key)
@@ -175,22 +178,56 @@ def _normalize_account_number(value: Any) -> Optional[str]:
     return digits or None
 
 
-def _score_account_number(acc_a: Dict[str, Any], acc_b: Dict[str, Any]) -> float:
-    acct_keys = ("account_number", "acct_num", "number")
-    a_val: Optional[str] = None
-    b_val: Optional[str] = None
-    for key in acct_keys:
-        if a_val is None and key in acc_a:
-            a_val = _normalize_account_number(acc_a.get(key))
-        if b_val is None and key in acc_b:
-            b_val = _normalize_account_number(acc_b.get(key))
-    if not a_val or not b_val:
-        return 0.0
-    if a_val == b_val:
-        return 1.0
-    if len(a_val) >= 4 and len(b_val) >= 4 and a_val[-4:] == b_val[-4:]:
-        return 0.7
-    return 0.0
+def _extract_account_number_fields(account: Mapping[str, Any]) -> Dict[str, Any]:
+    raw: Optional[str] = None
+    for key in _ACCT_NUMBER_FIELDS:
+        if key in account and account.get(key) not in (None, ""):
+            raw = str(account.get(key))
+            if raw.strip():
+                break
+    digits = _normalize_account_number(raw)
+    last4 = digits[-4:] if digits and len(digits) >= 4 else None
+    masked = bool(raw and _MASKED_ACCOUNT_PATTERN.search(raw))
+    return {
+        "acct_num_raw": raw,
+        "acct_num_digits": digits,
+        "acct_num_masked": masked,
+        "acct_num_last4": last4,
+    }
+
+
+def acctnum_match_level(a: Mapping[str, Any], b: Mapping[str, Any]) -> str:
+    digits_a = (a or {}).get("acct_num_digits") or ""
+    digits_b = (b or {}).get("acct_num_digits") or ""
+    if digits_a and digits_b and digits_a == digits_b:
+        return "exact"
+
+    last4_a = (a or {}).get("acct_num_last4") or ""
+    last4_b = (b or {}).get("acct_num_last4") or ""
+    if last4_a and last4_b and last4_a == last4_b:
+        return "last4"
+
+    return "none"
+
+
+def _score_account_number(acc_a: Dict[str, Any], acc_b: Dict[str, Any]) -> Tuple[float, Dict[str, Any]]:
+    norm_a = _extract_account_number_fields(acc_a)
+    norm_b = _extract_account_number_fields(acc_b)
+    level = acctnum_match_level(norm_a, norm_b)
+    if level == "exact":
+        score = 1.0
+    elif level == "last4":
+        score = 0.7
+    else:
+        score = 0.0
+    masked_any = bool(norm_a.get("acct_num_masked") or norm_b.get("acct_num_masked"))
+    aux = {
+        "acctnum_level": level,
+        "acctnum_masked_any": masked_any,
+        "acct_num_a": norm_a,
+        "acct_num_b": norm_b,
+    }
+    return score, aux
 
 
 def _parse_date(value: Any) -> Optional[date]:
@@ -335,11 +372,13 @@ def _score_strings(acc_a: Dict[str, Any], acc_b: Dict[str, Any]) -> float:
 
 def score_accounts(
     accA: Dict[str, Any], accB: Dict[str, Any], cfg: MergeCfg = DEFAULT_CFG
-) -> Tuple[float, Dict[str, float]]:
-    """Return overall score and per-part contributions."""
+) -> Tuple[float, Dict[str, float], Dict[str, Any]]:
+    """Return overall score, per-part contributions, and auxiliary details."""
+
+    acct_score, acct_aux = _score_account_number(accA, accB)
 
     parts = {
-        "acct_num": _score_account_number(accA, accB),
+        "acct_num": acct_score,
         "dates": _score_dates(accA, accB),
         "balance": _score_balance(accA, accB),
         "status": _score_status(accA, accB),
@@ -348,11 +387,11 @@ def score_accounts(
 
     total_weight = sum(cfg.weights.get(name, 0.0) for name in parts)
     if total_weight <= 0:
-        return 0.0, parts
+        return 0.0, parts, acct_aux
 
     weighted = sum(parts[name] * cfg.weights.get(name, 0.0) for name in parts)
     score = weighted / total_weight
-    return score, parts
+    return score, parts, acct_aux
 
 
 def decide_merge(score: float, cfg: MergeCfg = DEFAULT_CFG) -> str:
@@ -421,7 +460,9 @@ def cluster_problematic_accounts(
         )
         return candidates
 
-    pair_results: List[List[Optional[Tuple[float, str, Dict[str, float]]]]] = [
+    pair_results: List[
+        List[Optional[Tuple[float, str, Dict[str, float], Dict[str, Any]]]]
+    ] = [
         [None] * size for _ in range(size)
     ]
     auto_edges: List[Tuple[int, int]] = []
@@ -429,10 +470,10 @@ def cluster_problematic_accounts(
 
     for i in range(size):
         for j in range(i + 1, size):
-            score, parts = score_accounts(candidates[i], candidates[j], cfg)
+            score, parts, aux = score_accounts(candidates[i], candidates[j], cfg)
             decision = decide_merge(score, cfg)
-            pair_results[i][j] = (score, decision, parts)
-            pair_results[j][i] = (score, decision, parts)
+            pair_results[i][j] = (score, decision, parts, aux)
+            pair_results[j][i] = (score, decision, parts, aux)
             if decision == "auto":
                 auto_edges.append((i, j))
             elif decision == "ai":
@@ -468,7 +509,7 @@ def cluster_problematic_accounts(
             pair = pair_results[i][j]
             if pair is None:
                 continue
-            _, pair_decision, _ = pair
+            _, pair_decision, _, _ = pair
             if pair_decision == "auto":
                 continue
             comp_j = component_map.get(j, (j + 1, [j]))
@@ -485,6 +526,7 @@ def cluster_problematic_accounts(
         score_entries: List[Dict[str, Any]] = []
         best: Optional[Dict[str, Any]] = None
         best_parts: Dict[str, float] = {}
+        best_aux: Dict[str, Any] = {}
 
         for j in range(size):
             if i == j:
@@ -495,7 +537,7 @@ def cluster_problematic_accounts(
             pair_key = (i, j) if i < j else (j, i)
             if pair_key in skip_pairs:
                 continue
-            pair_score, pair_decision, pair_parts = pair
+            pair_score, pair_decision, pair_parts, pair_aux = pair
             entry = {
                 "account_index": j,
                 "score": pair_score,
@@ -505,6 +547,7 @@ def cluster_problematic_accounts(
             if best is None or pair_score > best["score"]:
                 best = entry.copy()
                 best_parts = pair_parts
+                best_aux = pair_aux
 
         if len(comp_nodes) > 1:
             decision = "auto"
@@ -520,6 +563,8 @@ def cluster_problematic_accounts(
             "best_match": best,
             "parts": best_parts,
         }
+        if best is not None:
+            merge_tag["aux"] = best_aux
         account["merge_tag"] = merge_tag
 
     logger.info(

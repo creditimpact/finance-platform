@@ -1039,6 +1039,23 @@ def _coerce_balance_value(value: Any) -> Optional[float]:
     return float(parsed)
 
 
+def _coerce_account_index(value: Any, fallback: int) -> int:
+    """Return a stable integer account index for merge-tag payloads."""
+
+    if isinstance(value, bool):
+        return fallback
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            try:
+                return int(stripped)
+            except ValueError:
+                return fallback
+    return fallback
+
+
 def _build_raw_line_payload(raw_entry: Any) -> Optional[Dict[str, Any]]:
     if isinstance(raw_entry, Mapping):
         text = str(raw_entry.get("text") or "").strip()
@@ -1433,11 +1450,17 @@ def cluster_problematic_accounts(
             if pair_key in skip_pairs:
                 continue
             pair_score, pair_decision, pair_parts, pair_aux, pair_reasons = pair
+            other_account = prepared_accounts[j]
+            other_index = _coerce_account_index(other_account.get("account_index"), j)
             entry = {
-                "account_index": j,
+                "account_index": other_index,
                 "score": pair_score,
                 "decision": pair_decision,
             }
+            if isinstance(other_account, Mapping):
+                other_account_id = other_account.get("account_id")
+                if other_account_id is not None:
+                    entry["account_id"] = other_account_id
             if pair_reasons:
                 reasons_payload = None
                 if isinstance(pair_reasons, Mapping):

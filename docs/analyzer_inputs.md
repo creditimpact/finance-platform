@@ -141,15 +141,15 @@ only fields present on both sides influence the final score.
 
 | Feature  | Default weight | Compared fields | Notes |
 |----------|----------------|-----------------|-------|
-| `acct_num` | 0.30 | `account_number`, `acct_num`, `number` | Exact match scores 1.0. Matching only the last four digits scores 0.7; otherwise 0.0.【F:backend/core/logic/report_analysis/account_merge.py†L33-L131】 |
-| `dates`  | 0.20 | `date_opened`, `date_of_last_activity`, `closed_date` | Dates are parsed (`dd.mm.yyyy` tolerant of `/` or `-`). Each aligned pair contributes up to 1.0, scaled down linearly when the difference grows toward one year.【F:backend/core/logic/report_analysis/account_merge.py†L94-L166】 |
-| `balance` | 0.20 | `past_due_amount`, `balance_owed` | Currency strings are normalized, then each pair contributes based on relative difference. Missing values yield no contribution.【F:backend/core/logic/report_analysis/account_merge.py†L169-L218】 |
-| `status` | 0.20 | `payment_status`, `account_status` | Strings are normalized and bucketed (collection, delinquent, paid, current, closed, bankruptcy). Any shared bucket yields 1.0; otherwise 0.0.【F:backend/core/logic/report_analysis/account_merge.py†L221-L252】 |
-| `strings` | 0.10 | `creditor`, `remarks` | Lowercased creditor and remark text are concatenated and compared with `SequenceMatcher` for a fuzzy 0–1 ratio.【F:backend/core/logic/report_analysis/account_merge.py†L255-L271】 |
+| `acct` | 0.25 | `account_number`, `acct_num`, `number`, `account_number_display` | Exact match scores 1.0. Matching only the last four digits scores 0.7; otherwise 0.0.【F:backend/core/logic/report_analysis/account_merge.py†L334-L365】 |
+| `dates`  | 0.20 | `date_opened`, `date_of_last_activity`, `closed_date` | Dates are parsed (`dd.mm.yyyy` tolerant of `/` or `-`). Each aligned pair contributes up to 1.0, scaled down linearly when the difference grows toward one year.【F:backend/core/logic/report_analysis/account_merge.py†L368-L400】 |
+| `balowed` | 0.25 | `past_due_amount`, `balance_owed` | Currency strings are normalized, then each pair contributes based on relative difference. Missing values yield no contribution.【F:backend/core/logic/report_analysis/account_merge.py†L403-L452】 |
+| `status` | 0.20 | `payment_status`, `account_status` | Strings are normalized and bucketed (collection, delinquent, paid, current, closed, bankruptcy). Any shared bucket yields 1.0; otherwise 0.0.【F:backend/core/logic/report_analysis/account_merge.py†L455-L486】 |
+| `strings` | 0.10 | `creditor`, `remarks` | Lowercased creditor and remark text are concatenated and compared with `SequenceMatcher` for a fuzzy 0–1 ratio.【F:backend/core/logic/report_analysis/account_merge.py†L489-L505】 |
 
 The total score is the weighted average of the five parts, and `score_accounts`
 also returns the per-part contributions so they can be logged alongside the
-overall value.【F:backend/core/logic/report_analysis/account_merge.py†L274-L293】
+overall value.【F:backend/core/logic/report_analysis/account_merge.py†L508-L529】
 
 ### Thresholds and AI gray band
 
@@ -162,34 +162,34 @@ Decisions are derived from the final score using the following default policy:
 
 The thresholds and weights can be overridden via environment variables such as
 `MERGE_AUTO_MIN`, `MERGE_AI_MIN`, or `MERGE_W_ACCT`, but the defaults above are
-applied when no overrides are present.【F:backend/core/logic/report_analysis/account_merge.py†L26-L89】【F:backend/core/logic/report_analysis/account_merge.py†L296-L313】
+applied when no overrides are present.【F:backend/core/logic/report_analysis/account_merge.py†L31-L223】【F:backend/core/logic/report_analysis/account_merge.py†L532-L549】
 
 ### Example: account 11 vs 16
 
 Our reference pair (account 11 vs 16: original card → later collection
 tradeline) shares the exact account number, near-identical open/last-activity
 dates, matching collection statuses, similar balances, and overlapping creditor
-text. That produces per-part scores roughly `acct_num=1.0`, `dates≈0.9`,
-`balance≈0.8`, `status=1.0`, `strings≈0.6`. Applying the default weights yields a
-final score around `0.82–0.88`, so both sides get a `decision="auto"` and fall
+text. That produces per-part scores roughly `acct=1.0`, `dates≈0.9`,
+`balowed≈0.8`, `status=1.0`, `strings≈0.6`. Applying the default weights yields a
+final score around `0.84–0.88`, so both sides get a `decision="auto"` and fall
 into the same merge group.
 
 ### Observability and logs
 
-- Pairwise scoring emits `MERGE_DECISION sid=<...> accA=<i> accB=<j>
-  score=<...> decision=<...> parts=<...>` for every comparison. Use ripgrep to
+- Pairwise scoring emits `MERGE_SCORE sid=<...> i=<i> j=<j> parts=<...> score=<...>`
+  followed by `MERGE_DECISION sid=<...> i=<i> j=<j> decision=<...> score=<...>` for every comparison. Use ripgrep to
   inspect them, e.g. `rg "MERGE_DECISION" runs/<sid>/ -g"*.log"`.
 - At the end of a run we log `MERGE_SUMMARY sid=<...> clusters=<...>
   auto_pairs=<...> ai_pairs=<...> skipped_pairs=<...>` summarizing the merge
   graph.
 
 Both log lines come from `cluster_problematic_accounts`, so they are emitted in
-the same deterministic order as the pairwise loop.【F:backend/core/logic/report_analysis/account_merge.py†L345-L470】
+the same deterministic order as the pairwise loop.【F:backend/core/logic/report_analysis/account_merge.py†L794-L902】
 
 ### Where `merge_tag` is stored
 
 For each problematic account, `cluster_problematic_accounts` attaches a
 `merge_tag` with the group id, final decision, sorted `score_to` list, best
-match, and per-part scores.【F:backend/core/logic/report_analysis/account_merge.py†L420-L461】 The case builder then persists that tag into
+match, and per-part scores.【F:backend/core/logic/report_analysis/account_merge.py†L881-L892】 The case builder then persists that tag into
 `runs/<sid>/cases/accounts/<account_id>/summary.json` alongside the rest of the
 per-account summary payload.【F:backend/core/logic/report_analysis/problem_case_builder.py†L224-L290】 This keeps merge context available for downstream review and auditing.

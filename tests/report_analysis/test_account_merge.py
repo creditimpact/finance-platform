@@ -75,11 +75,17 @@ def test_decide_merge_respects_thresholds(value, expected):
 def test_load_config_from_env_respects_overrides(monkeypatch):
     monkeypatch.setenv("MERGE_AUTO_MIN", "0.91")
     monkeypatch.setenv("MERGE_W_ACCT", "0.45")
+    monkeypatch.setenv("MERGE_ACCTNUM_TRIGGER_AI", "last4")
+    monkeypatch.setenv("MERGE_ACCTNUM_MIN_SCORE", "0.52")
+    monkeypatch.setenv("MERGE_ACCTNUM_REQUIRE_MASKED", "1")
 
     cfg = load_config_from_env()
 
     assert cfg.thresholds["auto_merge_min"] == 0.91
     assert cfg.weights["acct_num"] == 0.45
+    assert cfg.acctnum_trigger_ai == "last4"
+    assert cfg.acctnum_min_score == 0.52
+    assert cfg.acctnum_require_masked is True
 
 
 def test_cluster_problematic_accounts_builds_clusters():

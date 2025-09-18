@@ -20,6 +20,9 @@ class MergeCfg:
 
     weights: Dict[str, float]
     thresholds: Dict[str, float]
+    acctnum_trigger_ai: str = "any"
+    acctnum_min_score: float = 0.31
+    acctnum_require_masked: bool = False
     # optional knobs: date_tolerance_days, balance_tolerance_ratio, etc.
 
 
@@ -38,6 +41,10 @@ _DEFAULT_WEIGHTS = {
     "strings": 0.10,
 }
 
+_DEFAULT_ACCTNUM_TRIGGER = "any"
+_DEFAULT_ACCTNUM_MIN_SCORE = 0.31
+_DEFAULT_ACCTNUM_REQUIRE_MASKED = False
+
 _ENV_THRESHOLD_KEYS = {
     "auto_merge_min": "MERGE_AUTO_MIN",
     "ai_band_min": "MERGE_AI_MIN",
@@ -53,6 +60,11 @@ _ENV_WEIGHT_KEYS = {
     "strings": "MERGE_W_STR",
 }
 
+_ACCTNUM_TRIGGER_CHOICES = {"off", "exact", "last4", "any"}
+_ACCTNUM_TRIGGER_KEY = "MERGE_ACCTNUM_TRIGGER_AI"
+_ACCTNUM_MIN_SCORE_KEY = "MERGE_ACCTNUM_MIN_SCORE"
+_ACCTNUM_REQUIRE_MASKED_KEY = "MERGE_ACCTNUM_REQUIRE_MASKED"
+
 
 def _read_env_float(env: Mapping[str, str], key: str, default: float) -> float:
     value = env.get(key)
@@ -65,6 +77,40 @@ def _read_env_float(env: Mapping[str, str], key: str, default: float) -> float:
             "Invalid float for %s=%r; falling back to default %.4f", key, value, default
         )
         return default
+
+
+def _read_env_choice(
+    env: Mapping[str, str], key: str, default: str, choices: Set[str]
+) -> str:
+    value = env.get(key)
+    if value is None or value == "":
+        return default
+    normalized = str(value).strip().lower()
+    if normalized not in choices:
+        logger.warning(
+            "Invalid option for %s=%r; falling back to default %s", key, value, default
+        )
+        return default
+    return normalized
+
+
+def _read_env_flag(env: Mapping[str, str], key: str, default: bool) -> bool:
+    value = env.get(key)
+    if value is None or value == "":
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid flag for %s=%r; falling back to default %s", key, value, int(default)
+        )
+        return default
+    if parsed not in (0, 1):
+        logger.warning(
+            "Invalid flag for %s=%r; falling back to default %s", key, value, int(default)
+        )
+        return default
+    return bool(parsed)
 
 
 def load_config_from_env(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
@@ -86,7 +132,23 @@ def load_config_from_env(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         for name, env_key in _ENV_WEIGHT_KEYS.items()
     }
 
-    return MergeCfg(weights=weights, thresholds=thresholds)
+    acctnum_trigger_ai = _read_env_choice(
+        env_mapping, _ACCTNUM_TRIGGER_KEY, _DEFAULT_ACCTNUM_TRIGGER, _ACCTNUM_TRIGGER_CHOICES
+    )
+    acctnum_min_score = _read_env_float(
+        env_mapping, _ACCTNUM_MIN_SCORE_KEY, _DEFAULT_ACCTNUM_MIN_SCORE
+    )
+    acctnum_require_masked = _read_env_flag(
+        env_mapping, _ACCTNUM_REQUIRE_MASKED_KEY, _DEFAULT_ACCTNUM_REQUIRE_MASKED
+    )
+
+    return MergeCfg(
+        weights=weights,
+        thresholds=thresholds,
+        acctnum_trigger_ai=acctnum_trigger_ai,
+        acctnum_min_score=acctnum_min_score,
+        acctnum_require_masked=acctnum_require_masked,
+    )
 
 
 DEFAULT_CFG = load_config_from_env()

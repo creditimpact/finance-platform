@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
@@ -13,17 +14,121 @@ from .keys import compute_logical_account_key
 logger = logging.getLogger(__name__)
 
 
-def load_stagea_accounts_from_manifest(sid: str) -> list[dict]:
-    """Load Stage-A accounts from the run manifest for ``sid``.
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path(__file__).resolve().parents[4]))
 
-    Expects the manifest to provide ``traces.accounts_table.accounts_json``
-    pointing to a JSON file shaped like {"accounts": [...], ...}.
+
+def _candidate_manifest_paths(sid: str, root: Path | None = None) -> List[Path]:
+    """Yield manifest locations ordered by priority."""
+
+    candidates: List[Path] = []
+
+    env_manifest = os.getenv("REPORT_MANIFEST_PATH")
+    if env_manifest:
+        candidates.append(Path(env_manifest))
+
+    runs_root_env = os.getenv("RUNS_ROOT")
+    if runs_root_env:
+        candidates.append(Path(runs_root_env) / sid / "manifest.json")
+
+    if root is not None:
+        candidates.append(Path(root) / "runs" / sid / "manifest.json")
+
+    default_runs = PROJECT_ROOT / "runs" / sid / "manifest.json"
+    candidates.append(default_runs)
+
+    # Drop duplicates while preserving order
+    unique: List[Path] = []
+    seen: set[Path] = set()
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+        except RuntimeError:
+            resolved = path
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(path)
+    return unique
+
+
+def _load_manifest_for_sid(sid: str, root: Path | None = None) -> Optional[RunManifest]:
+    for path in _candidate_manifest_paths(sid, root=root):
+        if path.exists():
+            try:
+                return RunManifest(path).load()
+            except Exception:
+                logger.debug(
+                    "PROBLEM_EXTRACTOR manifest_load_failed sid=%s path=%s", sid, path
+                )
+                continue
+    return None
+
+
+def _load_accounts_from_path(path: Path) -> List[dict]:
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    if isinstance(obj, Mapping):
+        accounts = obj.get("accounts")
+        if isinstance(accounts, list):
+            return list(accounts)
+        # some fixtures may store the accounts list directly under another key
+        if isinstance(obj.get("Accounts"), list):  # pragma: no cover - defensive
+            return list(obj["Accounts"])
+        return []
+    if isinstance(obj, list):
+        return list(obj)
+    return []
+
+
+def _fallback_stagea_paths(sid: str, root: Path | None = None) -> List[Path]:
+    roots: List[Path] = []
+    if root is not None:
+        roots.append(Path(root))
+    roots.append(PROJECT_ROOT)
+
+    filenames = [
+        "accounts_from_full.json",
+        "accounts.json",
+    ]
+
+    paths: List[Path] = []
+    for base in roots:
+        table_dir = base / "traces" / "blocks" / sid / "accounts_table"
+        for name in filenames:
+            candidate = table_dir / name
+            if candidate.exists():
+                paths.append(candidate)
+    return paths
+
+
+def load_stagea_accounts_from_manifest(sid: str, *, root: Path | None = None) -> list[dict]:
+    """Load Stage-A accounts using the run manifest when available.
+
+    Falls back to legacy ``traces/blocks`` locations when the manifest or
+    registered artifacts are missing.  This retains backwards compatibility for
+    tests that synthesise inputs without running the full Stage-A pipeline.
     """
-    m = RunManifest.for_sid(sid)
-    acc_path = Path(m.get("traces.accounts_table", "accounts_json"))
-    with acc_path.open("r", encoding="utf-8") as fh:
-        obj = json.load(fh)
-    return list(obj.get("accounts", []))
+
+    manifest = _load_manifest_for_sid(sid, root=root)
+    if manifest is not None:
+        try:
+            acc_path = Path(manifest.get("traces.accounts_table", "accounts_json"))
+        except KeyError:
+            acc_path = None
+        else:
+            if acc_path.exists():
+                accounts = _load_accounts_from_path(acc_path)
+                if accounts:
+                    return accounts
+
+    for fallback in _fallback_stagea_paths(sid, root=root):
+        accounts = _load_accounts_from_path(fallback)
+        if accounts:
+            return accounts
+
+    return []
 
 
 _CURRENCY = re.compile(r"[^\d.\-]")
@@ -290,13 +395,15 @@ def detect_problem_accounts(sid: str, root: Path | None = None) -> List[Dict[str
     a flat ``fields`` mapping is not present. Does not write any files.
     """
     try:
-        accounts: List[Mapping[str, Any]] = list(load_stagea_accounts_from_manifest(sid))
+        accounts: List[Mapping[str, Any]] = list(
+            load_stagea_accounts_from_manifest(sid, root=root)
+        )
     except Exception:
         accounts = []
     logger.info("ANALYZER_START sid=%s accounts=%d", sid, len(accounts))
 
     candidates: List[Dict[str, Any]] = []
-    for acc in accounts:
+    for pos, acc in enumerate(accounts, start=1):
         if not isinstance(acc, Mapping):
             continue
         fields = acc.get("fields") if isinstance(acc.get("fields"), Mapping) else None
@@ -339,10 +446,19 @@ def detect_problem_accounts(sid: str, root: Path | None = None) -> List[Dict[str
         except Exception:
             pass
         if reason and list(reason.get("problem_reasons") or []):
+            idx_raw = acc.get("account_index")
+            try:
+                idx_int = int(idx_raw)
+            except Exception:
+                idx_int = pos
+            account_id = acc.get("account_id")
+            if account_id is None:
+                account_id = _make_account_id(acc, idx_int)
             candidates.append(
                 {
                     "account_index": acc.get("account_index"),
                     "heading_guess": acc.get("heading_guess"),
+                    "account_id": account_id,
                     "reason": reason,
                 }
             )

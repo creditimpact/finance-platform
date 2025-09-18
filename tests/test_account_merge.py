@@ -1,6 +1,7 @@
 import copy
 import json
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,19 @@ from backend.core.logic.report_analysis.account_merge import (
     decide_merge,
     score_accounts,
 )
+
+
+def _write_case_files(base: Path, fields: dict) -> None:
+    base.mkdir(parents=True, exist_ok=True)
+    (base / "fields_flat.json").write_text(
+        json.dumps(fields, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (base / "bureaus.json").write_text("{}", encoding="utf-8")
+    (base / "raw_lines.json").write_text("[]", encoding="utf-8")
+    summary = {"account_index": int(base.name)}
+    (base / "summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 @pytest.fixture
@@ -186,6 +200,51 @@ def test_graph_clustering_transitive_auto():
     assert [entry["account_index"] for entry in tags[0]["score_to"]] == [1]
     assert {entry["account_index"] for entry in tags[1]["score_to"]} == {0, 2}
     assert [entry["account_index"] for entry in tags[2]["score_to"]] == [1]
+
+
+def test_cluster_problematic_accounts_persists_merge_tag(tmp_path):
+    sid = "persist-sid"
+    runs_root = tmp_path / "runs"
+    base_dir = runs_root / sid / "cases" / "accounts"
+
+    fields = {
+        "account_number": "1111222233334444",
+        "balance_owed": "1500",
+        "past_due_amount": "300",
+        "payment_status": "Charge Off",
+        "account_status": "Charge Off",
+        "date_opened": "01-01-2020",
+        "date_of_last_activity": "05-01-2021",
+        "closed_date": "05-02-2021",
+        "creditor": "Example Bank",
+        "remarks": "Original creditor account",
+    }
+
+    _write_case_files(base_dir / "0", fields)
+    _write_case_files(base_dir / "1", fields)
+
+    candidates = [
+        {"account_index": 0, "reason": {"primary_issue": "collection"}},
+        {"account_index": 1, "reason": {"primary_issue": "collection"}},
+    ]
+
+    merged = cluster_problematic_accounts(
+        candidates,
+        sid=sid,
+        runs_root=runs_root,
+    )
+
+    summary0 = json.loads(
+        (base_dir / "0" / "summary.json").read_text(encoding="utf-8")
+    )
+    summary1 = json.loads(
+        (base_dir / "1" / "summary.json").read_text(encoding="utf-8")
+    )
+
+    assert summary0.get("merge_tag", {}).get("parts")
+    assert summary1.get("merge_tag", {}).get("parts")
+    assert merged[0]["merge_tag"]["parts"]
+    assert merged[1]["merge_tag"]["parts"]
 
 
 def test_cluster_problematic_accounts_logs_merge_events(caplog):

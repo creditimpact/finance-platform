@@ -12,6 +12,7 @@ specialised modules.  This keeps responsibilities clear:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -42,12 +43,22 @@ def extract_problematic_accounts(
     """
 
     candidates: List[Dict[str, Any]] = detect_problem_accounts(session_id, root=root)
+    summary = build_problem_cases(session_id, candidates=candidates, root=root)
+
+    if root is not None:
+        default_runs_root = Path(root)
+    else:
+        default_runs_root = Path("runs")
+
+    runs_root = Path(os.environ.get("RUNS_ROOT", str(default_runs_root)))
+
     merged_candidates = cluster_problematic_accounts(
         candidates,
         DEFAULT_CFG,
         sid=session_id,
+        runs_root=runs_root,
     )
-    summary = build_problem_cases(session_id, merged_candidates)
+
     return {"found": merged_candidates, "summary": summary}
 
 

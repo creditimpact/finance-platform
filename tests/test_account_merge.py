@@ -481,6 +481,18 @@ def test_balowed_override_triggers_ai_from_case_files(monkeypatch, tmp_path, cap
     assert override_reasons["balance_only_triggers_ai"] is True
     assert override_reasons["balance_exact_match"] is True
 
+    summary_dir = runs_root / sid / "cases" / "accounts"
+    summary7 = json.loads((summary_dir / "7" / "summary.json").read_text())
+    summary10 = json.loads((summary_dir / "10" / "summary.json").read_text())
+
+    tag7 = summary7["merge_tag"]
+    tag10 = summary10["merge_tag"]
+
+    assert tag7["best_match"]["account_index"] == 10
+    assert {entry["account_index"] for entry in tag7["score_to"]} == {10}
+    assert tag10["best_match"]["account_index"] == 7
+    assert {entry["account_index"] for entry in tag10["score_to"]} == {7}
+
 
 @pytest.mark.parametrize("trigger", ["any", "last4"])
 def test_acctnum_last4_override_honors_trigger(monkeypatch, trigger):

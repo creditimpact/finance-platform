@@ -68,6 +68,8 @@ _ENV_WEIGHT_KEYS = {
 
 _BALOWED_TOL_ABS_KEY = "MERGE_BALOWED_TOL_ABS"
 _BALOWED_TOL_RATIO_KEY = "MERGE_BALOWED_TOL_RATIO"
+_BALOWED_TRIGGER_KEY = "MERGE_BALOWED_TRIGGER_AI"
+_BALOWED_MIN_SCORE_KEY = "MERGE_BALOWED_MIN_SCORE"
 
 _ACCTNUM_TRIGGER_CHOICES = {"off", "exact", "last4", "any"}
 _ACCTNUM_TRIGGER_KEY = "MERGE_ACCTNUM_TRIGGER_AI"
@@ -633,6 +635,79 @@ def decide_merge(score: float, cfg: MergeCfg = DEFAULT_CFG) -> str:
     return "different"
 
 
+def _maybe_apply_balowed_override(
+    parts: Mapping[str, float],
+    score: float,
+    cfg: MergeCfg,
+    meta: Mapping[str, Any],
+) -> Tuple[float, Optional[str], Dict[str, Any]]:
+    """Lift low scores into the AI band when balances match perfectly."""
+
+    trigger_enabled = _read_env_flag(os.environ, _BALOWED_TRIGGER_KEY, False)
+    if not trigger_enabled:
+        return score, None, {}
+
+    balowed_part = parts.get("balowed", 0.0)
+    if balowed_part < 0.9999:
+        return score, None, {}
+
+    thresholds = cfg.thresholds or {}
+    ai_min = thresholds.get("ai_band_min", 0.35)
+    if score >= ai_min:
+        return score, None, {}
+
+    min_score = _read_env_float(os.environ, _BALOWED_MIN_SCORE_KEY, 0.31)
+    if score < min_score:
+        return score, None, {}
+
+    aux = dict(meta.get("aux") or {})
+    balance_a = aux.get("balowed_a")
+    balance_b = aux.get("balowed_b")
+
+    tol_abs = max(getattr(cfg, "balowed_tol_abs", 0.0), 0.0)
+    tol_ratio = max(getattr(cfg, "balowed_tol_ratio", 0.0), 0.0)
+
+    delta: Optional[float] = None
+    allowed: float = tol_abs
+    exact = False
+
+    if isinstance(balance_a, (int, float)) and isinstance(balance_b, (int, float)):
+        a_val = float(balance_a)
+        b_val = float(balance_b)
+        delta = abs(a_val - b_val)
+        base = max(abs(a_val), abs(b_val))
+        allowed = max(tol_abs, tol_ratio * base)
+        exact = delta <= 1e-6
+    else:
+        exact = balowed_part >= 0.9999 and tol_abs <= 0 and tol_ratio <= 0
+
+    reasons: Dict[str, Any] = {
+        "balance_only_triggers_ai": True,
+        "balance_exact_match": bool(exact),
+    }
+    if delta is not None:
+        reasons["balance_delta"] = float(delta)
+        reasons["balance_tolerance"] = float(allowed)
+
+    sid_value = meta.get("sid") or "-"
+    idx_a = meta.get("idx_a")
+    idx_b = meta.get("idx_b")
+
+    logger.info(
+        "MERGE_OVERRIDE sid=<%s> i=<%s> j=<%s> kind=balowed exact=<%d> delta=<%.4f> "
+        "allowed=<%.4f> score=<%.4f>",
+        sid_value,
+        idx_a if isinstance(idx_a, int) else "-",
+        idx_b if isinstance(idx_b, int) else "-",
+        1 if exact else 0,
+        float(delta) if delta is not None else 0.0,
+        allowed,
+        score,
+    )
+
+    return score, "ai", reasons
+
+
 def _apply_account_number_ai_override(
     base_score: float,
     score: float,
@@ -930,8 +1005,14 @@ def cluster_problematic_accounts(
         for j in range(i + 1, size):
             score, parts, aux = score_accounts(prepared_accounts[i], prepared_accounts[j], cfg)
             base_score = score
-            decision = decide_merge(score, cfg)
-            reasons: Dict[str, Any] = {}
+            override_meta = {"sid": sid_value, "idx_a": i, "idx_b": j, "aux": aux}
+            score, override_decision, reasons = _maybe_apply_balowed_override(
+                parts, score, cfg, override_meta
+            )
+            if override_decision is None:
+                decision = decide_merge(score, cfg)
+            else:
+                decision = override_decision
             score, decision, reasons, aux = _apply_account_number_ai_override(
                 base_score,
                 score,

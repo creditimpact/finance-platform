@@ -1,4 +1,5 @@
 import difflib
+import logging
 
 import pytest
 
@@ -180,7 +181,7 @@ def test_cluster_problematic_accounts_builds_clusters():
     assert third_tag["parts"]["acct_num"] == 0.0
 
 
-def test_acctnum_override_lifts_low_score_to_ai(monkeypatch):
+def test_acctnum_override_lifts_low_score_to_ai(monkeypatch, caplog):
     monkeypatch.setenv("MERGE_ACCTNUM_TRIGGER_AI", "exact")
     monkeypatch.setenv("MERGE_ACCTNUM_MIN_SCORE", "0.4")
     monkeypatch.setenv("MERGE_ACCTNUM_REQUIRE_MASKED", "0")
@@ -198,9 +199,12 @@ def test_acctnum_override_lifts_low_score_to_ai(monkeypatch):
     assert score == pytest.approx(0.3)
     assert aux["acctnum_level"] == "exact"
 
-    merged = cluster_problematic_accounts(
-        [dict(account_a), dict(account_b)], DEFAULT_CFG, sid="acctnum-override"
-    )
+    with caplog.at_level(
+        logging.INFO, logger="backend.core.logic.report_analysis.account_merge"
+    ):
+        merged = cluster_problematic_accounts(
+            [dict(account_a), dict(account_b)], DEFAULT_CFG, sid="acctnum-override"
+        )
 
     first_tag = merged[0]["merge_tag"]
     second_tag = merged[1]["merge_tag"]
@@ -215,6 +219,17 @@ def test_acctnum_override_lifts_low_score_to_ai(monkeypatch):
     assert best_first["reasons"]["acctnum_match_level"] == "exact"
     assert best_first["reasons"]["acctnum_masked_any"] is False
     assert first_tag["aux"]["override_reasons"]["acctnum_only_triggers_ai"] is True
+
+    override_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "MERGE_OVERRIDE" in record.getMessage()
+    ]
+    assert any(
+        "MERGE_OVERRIDE sid=<acctnum-override> i=<0> j=<1> reason=acctnum_only_triggers_ai "
+        "level=<exact> masked_any=<0> lifted_to=<0.4000>" in msg
+        for msg in override_messages
+    )
 
 
 def test_acctnum_override_respects_mask_requirement(monkeypatch):

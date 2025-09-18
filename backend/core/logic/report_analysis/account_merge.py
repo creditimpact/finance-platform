@@ -462,7 +462,7 @@ def _apply_account_number_ai_override(
         aux_with_reasons["override_reasons"] = dict(updated_reasons)
 
         logger.info(
-            "MERGE_OVERRIDE sid=<%s> accA=<%d> accB=<%d> reason=acctnum_only_triggers_ai "
+            "MERGE_OVERRIDE sid=<%s> i=<%d> j=<%d> reason=acctnum_only_triggers_ai "
             "level=<%s> masked_any=<%d> lifted_to=<%.4f>",
             sid_value,
             idx_a,

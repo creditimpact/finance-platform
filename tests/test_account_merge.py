@@ -2,29 +2,47 @@ import copy
 import json
 import logging
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
 from backend.core.logic.report_analysis.account_merge import (
     _apply_account_number_ai_override,
+    _extract_acct_from_raw_lines,
     build_ai_decision_pack,
     cluster_problematic_accounts,
     decide_merge,
+    load_case_account,
     load_config_from_env,
     score_accounts,
 )
 
 
-def _write_case_files(base: Path, fields: dict) -> None:
+def _write_case_files(
+    base: Path,
+    fields: dict,
+    *,
+    bureaus: Optional[dict] = None,
+    raw_lines: Optional[list] = None,
+    summary: Optional[dict] = None,
+) -> None:
     base.mkdir(parents=True, exist_ok=True)
     (base / "fields_flat.json").write_text(
         json.dumps(fields, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    (base / "bureaus.json").write_text("{}", encoding="utf-8")
-    (base / "raw_lines.json").write_text("[]", encoding="utf-8")
-    summary = {"account_index": int(base.name)}
+    bureaus_payload = bureaus if isinstance(bureaus, dict) else {}
+    (base / "bureaus.json").write_text(
+        json.dumps(bureaus_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    raw_payload = raw_lines if isinstance(raw_lines, list) else []
+    (base / "raw_lines.json").write_text(
+        json.dumps(raw_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    summary_payload = {"account_index": int(base.name)}
+    if isinstance(summary, dict):
+        summary_payload.update(summary)
     (base / "summary.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(summary_payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
 
@@ -635,3 +653,120 @@ def test_cluster_uses_case_files_for_scoring(tmp_path):
     parts = merged[0]["merge_tag"]["parts"]
     assert parts["balowed"] == pytest.approx(1.0)
     assert parts["acct_num"] == pytest.approx(1.0)
+
+
+def test_load_case_account_extracts_masked_account_number(tmp_path):
+    sid = "masked-acct"
+    runs_root = tmp_path / "runs"
+    case_dir = runs_root / sid / "cases" / "accounts" / "5"
+    fields = {"balance_owed": "1200", "creditor": "Loader Bank"}
+    raw_lines = [{"text": "Account # ****9876"}]
+
+    _write_case_files(case_dir, fields, bureaus={}, raw_lines=raw_lines)
+
+    case_data = load_case_account(sid, 5, runs_root)
+    assert case_data["norm"]["balance_owed"] == "1200"
+    assert case_data["norm"]["account_number_display"] == "****9876"
+
+    acct_display, raw_entry = _extract_acct_from_raw_lines(raw_lines)
+    assert acct_display == "****9876"
+    assert raw_entry == raw_lines[0]
+
+
+def test_balowed_override_lifts_low_score_to_ai(monkeypatch):
+    monkeypatch.setenv("MERGE_BALOWED_TRIGGER_AI", "1")
+    monkeypatch.setenv("MERGE_BALOWED_TOL_ABS", "0")
+    monkeypatch.setenv("MERGE_BALOWED_TOL_RATIO", "0.0")
+    monkeypatch.setenv("MERGE_BALOWED_MIN_SCORE", "0.31")
+    monkeypatch.setenv("MERGE_W_BALOWED", "0.32")
+    monkeypatch.setenv("MERGE_W_ACCT", "0.68")
+    monkeypatch.setenv("MERGE_W_DATES", "0.0")
+    monkeypatch.setenv("MERGE_W_STATUS", "0.0")
+    monkeypatch.setenv("MERGE_W_STRINGS", "0.0")
+
+    cfg = load_config_from_env()
+
+    account_a = {
+        "account_index": 0,
+        "account_number": "11112222",
+        "balance_owed": "1500",
+        "payment_status": "Current",
+    }
+    account_b = {
+        "account_index": 1,
+        "account_number": "99998888",
+        "balance_owed": "1500",
+        "payment_status": "Bankruptcy",
+    }
+
+    score, parts, aux = score_accounts(account_a, account_b, cfg)
+    assert parts["balowed"] == pytest.approx(1.0)
+    assert score == pytest.approx(0.32, abs=1e-6)
+    assert decide_merge(score, cfg) == "different"
+
+    merged = cluster_problematic_accounts(
+        [dict(account_a), dict(account_b)], cfg=cfg, sid="balowed-override"
+    )
+
+    tag_a = merged[0]["merge_tag"]
+    tag_b = merged[1]["merge_tag"]
+
+    for tag in (tag_a, tag_b):
+        assert tag["decision"] == "ai"
+        assert tag["best_match"]["decision"] == "ai"
+        assert tag["best_match"]["score"] == pytest.approx(0.32, abs=1e-6)
+        assert tag["parts"]["balowed"] == pytest.approx(1.0)
+        reasons = tag["reasons"]
+        assert isinstance(reasons, dict)
+        assert reasons["balance_only_triggers_ai"] is True
+        override = tag["aux"]["override_reasons"]
+        assert override["balance_only_triggers_ai"] is True
+
+
+@pytest.mark.parametrize(
+    "acct_a, acct_b, expected_level, masked_any",
+    [
+        ("12345678", "12345678", "exact", False),
+        ("12345678", "00005678", "last4", False),
+        ("****", "XXXX", "masked", True),
+    ],
+)
+def test_account_number_override_lifts_low_scores(monkeypatch, acct_a, acct_b, expected_level, masked_any):
+    monkeypatch.setenv("MERGE_ACCTNUM_TRIGGER_AI", "any")
+    monkeypatch.setenv("MERGE_ACCTNUM_MIN_SCORE", "0.31")
+    monkeypatch.setenv("MERGE_ACCTNUM_REQUIRE_MASKED", "0")
+    monkeypatch.setenv("MERGE_W_BALOWED", "0.8")
+    monkeypatch.setenv("MERGE_W_ACCT", "0.2")
+    monkeypatch.setenv("MERGE_W_DATES", "0.0")
+    monkeypatch.setenv("MERGE_W_STATUS", "0.0")
+    monkeypatch.setenv("MERGE_W_STRINGS", "0.0")
+
+    cfg = load_config_from_env()
+
+    account_a = {"account_index": 0, "account_number": acct_a}
+    account_b = {"account_index": 1, "account_number": acct_b}
+
+    score, parts, aux = score_accounts(account_a, account_b, cfg)
+    assert score < cfg.thresholds["ai_band_min"]
+    assert aux["acctnum_level"] == expected_level
+
+    merged = cluster_problematic_accounts(
+        [dict(account_a), dict(account_b)], cfg=cfg, sid=f"acctnum-{expected_level}"
+    )
+
+    tag = merged[0]["merge_tag"]
+    assert tag["decision"] == "ai"
+    assert tag["best_match"]["decision"] == "ai"
+    assert tag["best_match"]["score"] >= cfg.thresholds["ai_hard_min"]
+    assert tag["aux"]["acctnum_level"] == expected_level
+    override_reasons = tag["aux"]["override_reasons"]
+    assert override_reasons["acctnum_only_triggers_ai"] is True
+    assert override_reasons["acctnum_match_level"] == expected_level
+    reason_entries = tag["reasons"]
+    assert isinstance(reason_entries, list)
+    assert any(
+        entry.get("kind") == "acctnum"
+        and entry.get("level") == expected_level
+        and entry.get("masked_any") is masked_any
+        for entry in reason_entries
+    )

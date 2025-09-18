@@ -2,7 +2,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 # Optional bootstrap to ensure repo root is on sys.path
 try:  # pragma: no cover - convenience import
@@ -246,7 +246,34 @@ def _assert_account8_values(
         raise AssertionError("equifax.closed_date captured tokens from the next label (contains 'Last Payment')")
 
 
-def _build_merge_summary(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _format_reasons(reasons: Mapping[str, Any]) -> List[str]:
+    formatted: List[str] = []
+    for key in sorted(reasons.keys()):
+        value = reasons[key]
+        if isinstance(value, bool):
+            if value:
+                formatted.append(str(key))
+        elif value not in (None, ""):
+            formatted.append(f"{key}={value}")
+    return formatted
+
+
+def _merge_reason_maps(*sources: Mapping[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        for key, value in source.items():
+            if key not in merged:
+                merged[key] = value
+            elif value:
+                merged[key] = value
+    return merged
+
+
+def _build_merge_summary(
+    candidates: List[Dict[str, Any]], *, only_ai: bool = False
+) -> Dict[str, Any]:
     """Return clusters and pair table summaries from merge-tagged candidates."""
 
     cluster_map: Dict[str, Dict[str, Any]] = {}
@@ -258,17 +285,26 @@ def _build_merge_summary(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
         best_match = merge_tag.get("best_match") or {}
         parts = merge_tag.get("parts") or {}
 
+        best_score = best_match.get("score")
+        pair_decision = best_match.get("decision")
+        account_decision = merge_tag.get("decision")
+        aux = merge_tag.get("aux") or {}
+        override_reasons = (aux or {}).get("override_reasons")
+        combined_reasons = _merge_reason_maps(override_reasons, merge_tag.get("reasons"))
+
         entry: Dict[str, Any] = {
             "idx": idx,
             "group": group_id,
             "best": best_match.get("account_index"),
-            "score": best_match.get("score"),
-            "decision": merge_tag.get("decision"),
+            "score": best_score,
+            "decision": pair_decision or account_decision,
+            "acctnum_level": aux.get("acctnum_level"),
+            "balowed_ok": bool(combined_reasons.get("balance_only_triggers_ai")),
+            "reasons": _format_reasons(combined_reasons),
         }
 
-        pair_decision = best_match.get("decision")
-        if pair_decision is not None and pair_decision != entry.get("decision"):
-            entry["pair_decision"] = pair_decision
+        if account_decision and account_decision != entry["decision"]:
+            entry["account_decision"] = account_decision
 
         if parts:
             entry["parts"] = {key: float(value) for key, value in parts.items()}
@@ -281,6 +317,9 @@ def _build_merge_summary(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
         )
         cluster_entry["members"].append(idx)
         cluster_entry["best_matches"].append(entry)
+
+    if only_ai:
+        pairs = [entry for entry in pairs if entry.get("decision") == "ai"]
 
     pairs.sort(key=lambda item: item["idx"])
 
@@ -405,6 +444,11 @@ def main() -> int:
         help="Display merge clustering summary",
     )
     ap.add_argument(
+        "--only-ai",
+        action="store_true",
+        help="Limit merge summary tables to pairs requiring AI review packs",
+    )
+    ap.add_argument(
         "--check-lean",
         action="store_true",
         help="Verify case folders contain lean artifacts with no triad_rows",
@@ -433,7 +477,7 @@ def main() -> int:
     merge_summary: Dict[str, Any] | None = None
     if args.show_merge:
         out = cluster_problematic_accounts(out, DEFAULT_CFG, sid=args.sid)
-        merge_summary = _build_merge_summary(out)
+        merge_summary = _build_merge_summary(out, only_ai=args.only_ai)
 
     payload = {
         "sid": args.sid,
@@ -460,7 +504,16 @@ def main() -> int:
                     "best_matches": [
                         {
                             key: entry[key]
-                            for key in ("idx", "best", "score", "decision")
+                            for key in (
+                                "idx",
+                                "best",
+                                "score",
+                                "decision",
+                                "account_decision",
+                                "acctnum_level",
+                                "balowed_ok",
+                                "reasons",
+                            )
                             if key in entry
                         }
                         for entry in cluster["best_matches"]
@@ -469,7 +522,20 @@ def main() -> int:
             )
 
         pairs_view = [
-            {key: entry[key] for key in ("idx", "best", "score", "decision") if key in entry}
+            {
+                key: entry[key]
+                for key in (
+                    "idx",
+                    "best",
+                    "score",
+                    "decision",
+                    "account_decision",
+                    "acctnum_level",
+                    "balowed_ok",
+                    "reasons",
+                )
+                if key in entry
+            }
             for entry in merge_summary["pairs"]
         ]
 

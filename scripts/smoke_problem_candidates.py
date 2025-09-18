@@ -481,6 +481,11 @@ def main() -> int:
         action="store_true",
         help="Verify case folders contain lean artifacts with no triad_rows",
     )
+    ap.add_argument(
+        "--skip-stagea-asserts",
+        action="store_true",
+        help="Skip Stage-A account-number verification checks",
+    )
     ap.add_argument("--json-out", help="Path to write full JSON payload including merge data")
     args = ap.parse_args()
 
@@ -560,6 +565,7 @@ def main() -> int:
                     "account_decision",
                     "acctnum_level",
                     "balowed_ok",
+                    "parts",
                     "reasons",
                 )
                 if key in entry
@@ -588,22 +594,25 @@ def main() -> int:
         )
         print(f"wrote JSON to {json_out_path}")
 
-    try:
-        stagea_accounts = _load_stagea_accounts_with_fallback(args.sid)
-    except Exception as exc:
-        print(f"[SMOKE] failed to load Stage-A accounts: {exc}")
-        raise
+    if args.skip_stagea_asserts:
+        print("[SMOKE] skipped Stage-A account verification (--skip-stagea-asserts)")
+    else:
+        try:
+            stagea_accounts = _load_stagea_accounts_with_fallback(args.sid)
+        except Exception as exc:
+            print(f"[SMOKE] failed to load Stage-A accounts: {exc}")
+            raise
 
-    try:
-        stagea_account, account_idx = _find_stagea_account(stagea_accounts, args.sid)
-        bureaus, bureaus_path = _load_bureaus_for_account(args.sid, account_idx)
-        _assert_account8_values(args.sid, stagea_account, bureaus)
-        print(
-            f"[SMOKE] PASS account {account_idx} TU/EQ smoke checks verified via {bureaus_path}"
-        )
-    except Exception as exc:
-        print(f"[SMOKE] account 8 verification failed: {exc}")
-        raise
+        try:
+            stagea_account, account_idx = _find_stagea_account(stagea_accounts, args.sid)
+            bureaus, bureaus_path = _load_bureaus_for_account(args.sid, account_idx)
+            _assert_account8_values(args.sid, stagea_account, bureaus)
+            print(
+                f"[SMOKE] PASS account {account_idx} TU/EQ smoke checks verified via {bureaus_path}"
+            )
+        except Exception as exc:
+            print(f"[SMOKE] account 8 verification failed: {exc}")
+            raise
 
     if args.check_lean:
         check_lean(args.sid)

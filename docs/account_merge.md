@@ -12,7 +12,7 @@ paths, including the new account-number trigger.
 
 | Env var | Default | Description |
 | --- | --- | --- |
-| `MERGE_ACCTNUM_TRIGGER_AI` | `any` | Minimum account-number match level that can lift a low overall score into the AI band. Accepted values: `off`, `exact`, `last4`, `any`. |
+| `MERGE_ACCTNUM_TRIGGER_AI` | `any` | Minimum account-number match level that can lift a low overall score into the AI band. Accepted values: `off`, `exact`, `last4`, `masked`, `any`. |
 | `MERGE_ACCTNUM_MIN_SCORE` | `0.31` | Floor used when forcing an AI decision for account-number matches. The lifted score is the max of the part score, this floor, and `MERGE_AI_HARD_MIN`. |
 | `MERGE_ACCTNUM_REQUIRE_MASKED` | `0` | When set to `1`, the override only fires if at least one side used a masked account number (e.g., `XXXX1234`). |
 
@@ -29,6 +29,8 @@ pair receives an `acctnum_level`:
 
 - `exact` – The normalized digits are identical.
 - `last4` – The normalized digits differ overall but share the same last four.
+- `masked` – Both sides only provide masked characters (e.g., `XXXX` or `****`) with the
+  same mask pattern.
 - `none` – No usable match.
 
 We also track `acctnum_masked_any`, a boolean indicating whether *either* side
@@ -47,7 +49,8 @@ weighted score is computed.
    - `off` disables the override.
    - `exact` requires an `acctnum_level` of `exact`.
    - `last4` only requires `acctnum_level == "last4"`.
-   - `any` accepts either `exact` or `last4`.
+   - `masked` accepts `acctnum_level` values of `masked`, `last4`, or `exact`.
+   - `any` accepts `exact`, `last4`, or `masked`.
 4. When `MERGE_ACCTNUM_REQUIRE_MASKED=1`, the override only activates if
    `acctnum_masked_any` is `True`.
 5. Eligible matches lift the score to `max(current_score, MERGE_ACCTNUM_MIN_SCORE, MERGE_AI_HARD_MIN)`

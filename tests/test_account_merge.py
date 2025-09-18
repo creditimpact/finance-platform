@@ -371,10 +371,12 @@ def test_acctnum_exact_override_forces_ai(monkeypatch, caplog):
     assert best["decision"] == "ai"
     assert best["score"] == pytest.approx(0.45)
     assert first_tag["parts"]["acct_num"] == pytest.approx(1.0)
-    assert first_tag["reasons"]["acctnum_only_triggers_ai"] is True
-    assert first_tag["reasons"]["acctnum_match_level"] == "exact"
-    assert best["reasons"]["acctnum_only_triggers_ai"] is True
-    assert best["reasons"]["acctnum_match_level"] == "exact"
+    first_reasons = first_tag["reasons"]
+    assert isinstance(first_reasons, list)
+    assert {"kind": "acctnum", "level": "exact", "masked_any": False} in first_reasons
+    best_reasons = best["reasons"]
+    assert isinstance(best_reasons, list)
+    assert {"kind": "acctnum", "level": "exact", "masked_any": False} in best_reasons
     assert first_tag["aux"]["override_reasons"]["acctnum_only_triggers_ai"] is True
 
     override_messages = _extract_override_log_messages(caplog.records)
@@ -486,8 +488,9 @@ def test_acctnum_last4_override_honors_trigger(monkeypatch, trigger):
     assert first_tag["decision"] == "ai"
     assert best["decision"] == "ai"
     assert best["score"] == pytest.approx(0.43)
-    assert best["reasons"]["acctnum_only_triggers_ai"] is True
-    assert best["reasons"]["acctnum_match_level"] == "last4"
+    best_reasons = best["reasons"]
+    assert isinstance(best_reasons, list)
+    assert {"kind": "acctnum", "level": "last4", "masked_any": True} in best_reasons
     assert first_tag["aux"]["override_reasons"]["acctnum_match_level"] == "last4"
 
 
@@ -589,7 +592,7 @@ def test_acctnum_override_emits_logs_and_builds_ai_pack(monkeypatch, caplog, tmp
 
     assert saved["decision"] == "ai"
     assert saved["acctnum"] == {"level": "exact", "masked_any": False}
-    assert saved["reasons"]["acctnum_only_triggers_ai"] is True
+    assert {"kind": "acctnum", "level": "exact", "masked_any": False} in saved["reasons"]
     assert pack_path.exists()
 
 

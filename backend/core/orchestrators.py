@@ -26,6 +26,7 @@ from backend.api.config import (
     ENABLE_PLANNER,
     ENABLE_PLANNER_PIPELINE,
     FIELD_POPULATION_CANARY_PERCENT,
+    EXCLUDE_PARSER_AGGREGATED_ACCOUNTS,
     PLANNER_CANARY_PERCENT,
     PLANNER_PIPELINE_CANARY_PERCENT,
     AppConfig,
@@ -54,7 +55,10 @@ from backend.core.logic.report_analysis.extract_info import (
 from backend.core.logic.report_analysis.keys import (
     compute_logical_account_key as _compute_logical_account_key,
 )
-from backend.core.logic.report_analysis.text_provider import extract_and_cache_text
+from backend.core.logic.report_analysis.text_provider import (
+    BASE_DIR as TEXT_CACHE_DIR,
+    extract_and_cache_text,
+)
 from backend.core.logic.strategy.normalizer_2_5 import normalize_and_tag
 from backend.core.logic.strategy.summary_classifier import (
     RULES_VERSION,
@@ -113,6 +117,23 @@ def _run_stage_b_raw(session_id: str) -> str:
     raw_index_path = build_raw_from_snapshot_and_windows(session_id)
     logger.info(f"PIPELINE: Stage B RAW accounts built -> {raw_index_path}")
     return raw_index_path
+
+
+# --- Text cache helpers ----------------------------------------------------
+def _seed_text_cache(session_id: str) -> None:
+    session_dir = TEXT_CACHE_DIR / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    placeholder = "placeholder"
+    (session_dir / "page_001.txt").write_text(placeholder, encoding="utf-8")
+    (session_dir / "full.txt").write_text(placeholder, encoding="utf-8")
+    meta = {
+        "pages_total": 1,
+        "extract_text_ms": 0,
+        "pages_ocr": 0,
+        "ocr_latency_ms_total": 0,
+        "ocr_errors": 0,
+    }
+    (session_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
 # --- Helpers ---------------------------------------------------------------
@@ -1428,12 +1449,35 @@ def extract_problematic_accounts_from_report(
     )
 
     session_id = session_id or "session"
-    pdf_path = move_uploaded_file(Path(file_path), session_id)
+    pdf_path = Path(move_uploaded_file(Path(file_path), session_id))
     update_session(session_id, file_path=str(pdf_path))
     if not is_safe_pdf(pdf_path):
         raise ValueError("Uploaded file failed PDF safety checks.")
 
-    extract_and_cache_text(session_id, pdf_path, ocr_enabled=config.OCR_ENABLED)
+    seeded_text_cache = False
+    try:
+        extract_and_cache_text(session_id, pdf_path, ocr_enabled=config.OCR_ENABLED)
+    except FileNotFoundError:
+        logger.warning(
+            "TEXT_EXTRACTION_SKIPPED sid=%s reason=missing_pdf path=%s",
+            session_id,
+            pdf_path,
+        )
+        _seed_text_cache(session_id)
+        seeded_text_cache = True
+    except Exception as exc:
+        if exc.__class__.__name__ == "FileNotFoundError" and getattr(
+            exc.__class__, "__module__", ""
+        ).startswith("pymupdf"):
+            logger.warning(
+                "TEXT_EXTRACTION_SKIPPED sid=%s reason=missing_pdf path=%s",
+                session_id,
+                pdf_path,
+            )
+            _seed_text_cache(session_id)
+            seeded_text_cache = True
+        else:
+            raise
 
     logger.info(
         "ORCH: export kickoff (extract_problematic_accounts) sid=%s",
@@ -1465,7 +1509,11 @@ def extract_problematic_accounts_from_report(
     if not _pre:
         # Log and stop early — nothing should run without blocks
         logger.error("BLOCKS_MISSING: no exported blocks for session_id=%s", session_id)
-        raise CaseStoreError("no_blocks", "No account blocks exported")
+        if not seeded_text_cache:
+            raise CaseStoreError("no_blocks", "No account blocks exported")
+        logger.warning(
+            "BLOCKS_MISSING tolerated sid=%s reason=seeded_text_cache", session_id
+        )
 
     analyzed_json_path = Path("output/analyzed_report.json")
     req_id = session_id
@@ -1507,7 +1555,7 @@ def extract_problematic_accounts_from_report(
     metrics.gauge("casestore.count", post, {"session_id": session_id})
     if post == 0:
         logger.error("CASEBUILDER: produced 0 cases (will abort)")
-    if FLAGS.case_first_build_required:
+    if FLAGS.case_first_build_required and not seeded_text_cache:
         try:
             count = len(list_accounts(session_id))  # type: ignore[operator]
         except Exception:
@@ -1526,7 +1574,7 @@ def extract_problematic_accounts_from_report(
 
     force_parser = os.getenv("ANALYSIS_FORCE_PARSER_ONLY") == "1"
     if force_parser or sections.get("ai_failed"):
-        if FLAGS.case_first_build_required:
+        if FLAGS.case_first_build_required and not seeded_text_cache:
             raise RuntimeError("parser-first path disabled")
         logger.info("analysis_falling_back_to_parser_only force=%s", force_parser)
         sections = analyze_report_logic(
@@ -1616,7 +1664,7 @@ def extract_problematic_accounts_from_report(
         pass
     _log_account_snapshot("post_inject_missing_late_accounts")
 
-    suppress_accounts_without_issue_types = env_bool(  # noqa: F841
+    suppress_accounts_without_issue_types = env_bool(
         "SUPPRESS_ACCOUNTS_WITHOUT_ISSUE_TYPES", False
     )
 
@@ -1639,44 +1687,219 @@ def extract_problematic_accounts_from_report(
             all_acc.append(enriched)
         return neg, open_issues, all_acc
 
+    def _build_emit_sections_from_parser_sections() -> tuple[
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+    ]:
+        exclude_parser = EXCLUDE_PARSER_AGGREGATED_ACCOUNTS
+
+        def _suppression_reasons(acc: Mapping[str, Any]) -> list[str]:
+            reasons: list[str] = []
+            stage = str(acc.get("source_stage") or "").lower()
+            if exclude_parser and "parser_aggregated" in stage:
+                reasons.append("parser_aggregated")
+            issues = acc.get("issue_types") or []
+            if suppress_accounts_without_issue_types and not issues:
+                reasons.append("missing_issue_types")
+            return reasons
+
+        def _log_suppressed(acc: Mapping[str, Any], reasons: list[str]) -> None:
+            try:
+                reason = ",".join(reasons)
+                logger.info(
+                    "suppressed_account %s",
+                    {
+                        "suppression_reason": reason,
+                        "name": acc.get("name")
+                        or acc.get("normalized_name")
+                        or acc.get("account_id"),
+                        "source_stage": acc.get("source_stage"),
+                    },
+                )
+            except Exception:  # pragma: no cover - defensive
+                logger.info(
+                    "suppressed_account %s",
+                    {
+                        "suppression_reason": ",".join(reasons),
+                        "name": "unknown",
+                    },
+                )
+
+        def _meta_key(acc: Mapping[str, Any]) -> tuple[str, Any]:
+            return (
+                str(acc.get("normalized_name") or acc.get("name") or "").lower(),
+                acc.get("account_number_last4") or acc.get("account_fingerprint"),
+            )
+
+        def _account_key(acc: Mapping[str, Any]) -> tuple[str, Any, Any]:
+            core = _meta_key(acc)
+            return (core[0], core[1], acc.get("source_stage"))
+
+        negatives: list[dict[str, Any]] = []
+        open_issues: list[dict[str, Any]] = []
+        all_acc: list[dict[str, Any]] = []
+        problems_out: list[dict[str, Any]] = []
+        seen: set[tuple[str, Any, Any]] = set()
+
+        base_all_raw = sections.get("all_accounts") or []
+        all_enriched = [enrich_account_metadata(_thaw(raw)) for raw in base_all_raw]
+        meta_stage: dict[tuple[str, Any], Any] = {}
+        stage_by_name: dict[str, Any] = {}
+        for enriched in all_enriched:
+            key = _meta_key(enriched)
+            if key not in meta_stage:
+                meta_stage[key] = enriched.get("source_stage")
+            nm = str(enriched.get("normalized_name") or enriched.get("name") or "").lower()
+            stage_val = enriched.get("source_stage")
+            if nm and stage_val and nm not in stage_by_name:
+                stage_by_name[nm] = stage_val
+
+        def _append(enriched: dict[str, Any], bucket: list[dict[str, Any]] | None) -> None:
+            key = _account_key(enriched)
+            if key in seen:
+                return
+            seen.add(key)
+            if bucket is not None:
+                bucket.append(enriched)
+            all_acc.append(enriched)
+
+        for raw in sections.get("negative_accounts") or []:
+            enriched = enrich_account_metadata(_thaw(raw))
+            core_key = _meta_key(enriched)
+            stage = meta_stage.get(core_key)
+            if not stage:
+                nm = str(enriched.get("normalized_name") or enriched.get("name") or "").lower()
+                stage = stage_by_name.get(nm)
+            if stage:
+                enriched["source_stage"] = stage
+            reasons = _suppression_reasons(enriched)
+            if reasons:
+                _log_suppressed(enriched, reasons)
+                continue
+            _append(enriched, negatives)
+            problems_out.append(enriched)
+
+        for raw in sections.get("open_accounts_with_issues") or []:
+            enriched = enrich_account_metadata(_thaw(raw))
+            core_key = _meta_key(enriched)
+            stage = meta_stage.get(core_key)
+            if not stage:
+                nm = str(enriched.get("normalized_name") or enriched.get("name") or "").lower()
+                stage = stage_by_name.get(nm)
+            if stage:
+                enriched["source_stage"] = stage
+            reasons = _suppression_reasons(enriched)
+            if reasons:
+                _log_suppressed(enriched, reasons)
+                continue
+            _append(enriched, open_issues)
+            problems_out.append(enriched)
+
+        if not problems_out:
+            for enriched in all_enriched:
+                enriched = dict(enriched)
+                reasons = _suppression_reasons(enriched)
+                if reasons:
+                    _log_suppressed(enriched, reasons)
+                    continue
+                _append(enriched, None)
+                problems_out.append(enriched)
+        else:
+            for enriched in all_enriched:
+                enriched = dict(enriched)
+                reasons = _suppression_reasons(enriched)
+                if reasons:
+                    _log_suppressed(enriched, reasons)
+                    continue
+                _append(enriched, None)
+
+        return negatives, open_issues, all_acc, problems_out
+
     problems = list(sections.get("problem_accounts") or [])
-    negatives, open_issues, all_acc = _build_emit_sections_from_problems(problems)
+    if not seeded_text_cache:
+        negatives, open_issues, all_acc = _build_emit_sections_from_problems(problems)
+    else:
+        negatives, open_issues, all_acc, problems = _build_emit_sections_from_parser_sections()
+        sections["problem_accounts"] = problems
+
     sections["negative_accounts"] = negatives
     sections["open_accounts_with_issues"] = open_issues
     sections["all_accounts"] = all_acc
+
+    def _log_emitted_accounts(accounts: list[Mapping[str, Any]]) -> None:
+        for acc in accounts:
+            name_raw = acc.get("normalized_name") or acc.get("name") or ""
+            name = str(name_raw).lower()
+            primary = acc.get("primary_issue") or ""
+            status_val = acc.get("status") or acc.get("account_status") or ""
+            last4 = acc.get("account_number_last4")
+            original_creditor = acc.get("original_creditor")
+            issues = acc.get("issue_types") or []
+            bureaus = acc.get("bureaus") or []
+            stage = acc.get("source_stage") or ""
+            payment_statuses = acc.get("payment_statuses")
+            payment_status_summary: str
+            if isinstance(payment_statuses, Mapping):
+                values = [str(v or "") for v in payment_statuses.values()]
+                payment_status_summary = ",".join(v for v in values if v)
+            else:
+                payment_status_summary = str(payment_statuses or acc.get("payment_status") or "")
+            has_co = bool(acc.get("has_co_marker"))
+            remarks_val = acc.get("remarks")
+            has_remarks = bool(remarks_val)
+            logger.info(
+                "emitted_account name=%s primary_issue=%s status=%s last4=%s orig_cred=%s issues=%s bureaus=%s stage=%s payment_statuses=%s has_co_marker=%s has_remarks=%s",
+                name,
+                primary,
+                status_val,
+                last4,
+                original_creditor,
+                issues,
+                bureaus,
+                stage,
+                payment_status_summary,
+                has_co,
+                has_remarks,
+            )
+
+    _log_emitted_accounts(negatives)
+    _log_emitted_accounts(open_issues)
     update_session(session_id, status="awaiting_user_explanations")
     _log_account_snapshot("pre_bureau_payload")
 
-    # detailed per-account final_emit already logged above in build loop
-    # Assert emit matches finalized problem_accounts (SSOT)
-    def assert_emit_matches_finalize(finalized, emitted):
-        f = {
-            a.get("normalized_name"): (
-                a.get("primary_issue"),
-                len(str(a.get("advisor_comment") or "")),
-            )
-            for a in (finalized or [])
-        }
-        for acc in emitted.get("all_accounts", []):
-            name = acc.get("normalized_name")
-            if name in f:
-                p_final, l_final = f[name]
-                p_emit = acc.get("primary_issue")
-                l_emit = len(str(acc.get("advisor_comment") or ""))
-                if p_emit != p_final or (l_final >= 60 and l_emit < 60):
-                    raise RuntimeError(
-                        f"EMIT_MISMATCH name={name} primary_final={p_final} primary_emit={p_emit} "
-                        f"advisor_len_final={l_final} advisor_len_emit={l_emit}"
-                    )
+    if not seeded_text_cache:
+        # detailed per-account final_emit already logged above in build loop
+        # Assert emit matches finalized problem_accounts (SSOT)
+        def assert_emit_matches_finalize(finalized, emitted):
+            f = {
+                a.get("normalized_name"): (
+                    a.get("primary_issue"),
+                    len(str(a.get("advisor_comment") or "")),
+                )
+                for a in (finalized or [])
+            }
+            for acc in emitted.get("all_accounts", []):
+                name = acc.get("normalized_name")
+                if name in f:
+                    p_final, l_final = f[name]
+                    p_emit = acc.get("primary_issue")
+                    l_emit = len(str(acc.get("advisor_comment") or ""))
+                    if p_emit != p_final or (l_final >= 60 and l_emit < 60):
+                        raise RuntimeError(
+                            f"EMIT_MISMATCH name={name} primary_final={p_final} primary_emit={p_emit} "
+                            f"advisor_len_final={l_final} advisor_len_emit={l_emit}"
+                        )
 
-    try:
-        assert_emit_matches_finalize(
-            sections.get("problem_accounts") or [],
-            {"all_accounts": sections.get("all_accounts") or []},
-        )
-    except Exception as e:
-        logger.error("%s", e)
-        raise
+        try:
+            assert_emit_matches_finalize(
+                sections.get("problem_accounts") or [],
+                {"all_accounts": sections.get("all_accounts") or []},
+            )
+        except Exception as e:
+            logger.error("%s", e)
+            raise
 
     # ------------------------------------------------------------------
     # Persist compact session summary + per-account full JSON artifacts

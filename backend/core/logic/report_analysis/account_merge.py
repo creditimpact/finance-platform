@@ -12,6 +12,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
+from backend.pipeline.runs import RunManifest
+
 
 logger = logging.getLogger(__name__)
 
@@ -94,15 +96,47 @@ def _extract_acct_from_raw_lines(raw_lines: Optional[List[Dict[str, Any]]]) -> O
     return None
 
 
-def load_case_account(sid: str, acc_idx: int, runs_root: Path) -> Dict[str, Any]:
-    base = runs_root / sid / "cases" / "accounts" / str(acc_idx)
+def _manifest_group_key(acc_idx: int) -> str:
+    return f"cases.accounts.{acc_idx}"
+
+
+def _manifest_path(
+    manifest: Optional[RunManifest], group: str, key: str
+) -> Optional[Path]:
+    if manifest is None:
+        return None
+    try:
+        return Path(manifest.get(group, key))
+    except KeyError:
+        return None
+
+
+def load_case_account(
+    sid: str,
+    acc_idx: int,
+    runs_root: Path,
+    manifest: Optional[RunManifest] = None,
+) -> Dict[str, Any]:
+    group = _manifest_group_key(acc_idx)
+    base = _manifest_path(manifest, group, "dir")
+    if base is None:
+        base = runs_root / sid / "cases" / "accounts" / str(acc_idx)
+        if not base.exists():
+            alt_base = runs_root / "cases" / sid / "accounts" / str(acc_idx)
+            if alt_base.exists():
+                base = alt_base
+    fields_path = _manifest_path(manifest, group, "flat") or (base / "fields_flat.json")
+    bureaus_path = _manifest_path(manifest, group, "bureaus") or (base / "bureaus.json")
+    raw_path = _manifest_path(manifest, group, "raw") or (base / "raw_lines.json")
+
     if not base.exists():
         raise FileNotFoundError(
             f"case data not found for sid={sid!r} index={acc_idx} under {runs_root}"
         )
-    fields = _read_json(base / "fields_flat.json")
-    bureaus = _read_json(base / "bureaus.json")
-    raw = _read_json(base / "raw_lines.json")
+
+    fields = _read_json(fields_path)
+    bureaus = _read_json(bureaus_path)
+    raw = _read_json(raw_path)
 
     balowed = fields.get("balance_owed")
     if balowed in (None, "", "--"):
@@ -706,6 +740,60 @@ def _connected_components(graph: List[List[int]]) -> List[List[int]]:
     return components
 
 
+def _persist_merge_tag(
+    sid: str,
+    account_index: Optional[int],
+    merge_tag: Mapping[str, Any],
+    runs_root_path: Optional[Path],
+    manifest: Optional[RunManifest],
+) -> None:
+    if runs_root_path is None or not sid or not isinstance(account_index, int):
+        return
+
+    summary_path = _manifest_path(
+        manifest, _manifest_group_key(account_index), "summary"
+    )
+    if summary_path is None:
+        summary_path = (
+            runs_root_path
+            / sid
+            / "cases"
+            / "accounts"
+            / str(account_index)
+            / "summary.json"
+        )
+
+    summary_dir = summary_path.parent
+    if not summary_dir.exists():
+        return
+
+    summary_obj: Dict[str, Any] = {}
+    if summary_path.exists():
+        try:
+            summary_obj = json.loads(summary_path.read_text(encoding="utf-8"))
+            if not isinstance(summary_obj, dict):
+                summary_obj = {}
+        except Exception:
+            summary_obj = {}
+
+    try:
+        sanitized = json.loads(json.dumps(merge_tag, ensure_ascii=False))
+    except TypeError:
+        sanitized = dict(merge_tag)
+
+    summary_obj["merge_tag"] = sanitized
+
+    try:
+        summary_path.write_text(
+            json.dumps(summary_obj, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        logger.exception(
+            "MERGE_SCORE sid=<%s> summary_write_failed path=%s", sid, summary_path
+        )
+
+
 def cluster_problematic_accounts(
     candidates: List[Dict[str, Any]],
     cfg: MergeCfg = DEFAULT_CFG,
@@ -724,6 +812,19 @@ def cluster_problematic_accounts(
         env_root = os.getenv("RUNS_ROOT")
         runs_root_path = Path(env_root) if env_root else Path("runs")
 
+    manifest: Optional[RunManifest] = None
+    if runs_root_path is not None and sid_value != "-":
+        manifest_path = runs_root_path / sid_value / "manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = RunManifest(manifest_path).load()
+            except Exception:
+                logger.debug(
+                    "MERGE_SCORE sid=<%s> manifest_load_failed path=%s",
+                    sid_value,
+                    manifest_path,
+                )
+
     if size == 0:
         logger.info(
             "MERGE_SUMMARY  sid=<%s> clusters=<0> auto_pairs=<0> ai_pairs=<0> skipped_pairs=<0>",
@@ -740,7 +841,9 @@ def cluster_problematic_accounts(
         prepared = dict(candidate)
         if sid_value != "-" and runs_root_path is not None:
             try:
-                case_data = load_case_account(sid_value, account_index, runs_root_path)
+                case_data = load_case_account(
+                    sid_value, account_index, runs_root_path, manifest
+                )
             except Exception:
                 logger.debug(
                     "MERGE_SCORE sid=<%s> i=<%d> load_case_failed index=<%s>",
@@ -749,9 +852,16 @@ def cluster_problematic_accounts(
                     account_index,
                 )
             else:
-                prepared = _prepare_account_for_scoring(case_data)
+                prepared_case = _prepare_account_for_scoring(case_data)
+                if isinstance(prepared_case, dict):
+                    prepared = dict(prepared_case)
+                    for key in ("heading_guess", "account_id"):
+                        if key in candidate and key not in prepared:
+                            prepared[key] = candidate[key]
 
         prepared.setdefault("account_index", account_index)
+        if "account_id" not in prepared and candidate.get("account_id") is not None:
+            prepared["account_id"] = candidate["account_id"]
         prepared_accounts.append(prepared)
 
     pair_results: List[
@@ -890,6 +1000,13 @@ def cluster_problematic_accounts(
         if best is not None:
             merge_tag["aux"] = best_aux
         account["merge_tag"] = merge_tag
+        _persist_merge_tag(
+            sid_value,
+            account.get("account_index"),
+            merge_tag,
+            runs_root_path,
+            manifest,
+        )
 
     logger.info(
         "MERGE_SUMMARY  sid=<%s> clusters=<%d> auto_pairs=<%d> ai_pairs=<%d> skipped_pairs=<%d>",

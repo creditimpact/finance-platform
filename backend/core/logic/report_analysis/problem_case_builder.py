@@ -26,9 +26,52 @@ from .keys import compute_logical_account_key
 
 logger = logging.getLogger(__name__)
 
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path(__file__).resolve().parents[4]))
+
 LEAN = os.getenv("CASES_LEAN_MODE", "1") != "0"
 
 ALLOWED_BUREAUS_TOPLEVEL = ("transunion", "experian", "equifax")
+
+
+def _candidate_manifest_paths(sid: str, root: Path | None = None) -> List[Path]:
+    candidates: List[Path] = []
+
+    env_manifest = os.getenv("REPORT_MANIFEST_PATH")
+    if env_manifest:
+        candidates.append(Path(env_manifest))
+
+    runs_root_env = os.getenv("RUNS_ROOT")
+    if runs_root_env:
+        candidates.append(Path(runs_root_env) / sid / "manifest.json")
+
+    if root is not None:
+        candidates.append(Path(root) / "runs" / sid / "manifest.json")
+
+    candidates.append(PROJECT_ROOT / "runs" / sid / "manifest.json")
+
+    unique: List[Path] = []
+    seen: set[Path] = set()
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+        except RuntimeError:
+            resolved = path
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(path)
+    return unique
+
+
+def _load_manifest_for_sid(sid: str, root: Path | None = None) -> RunManifest | None:
+    for path in _candidate_manifest_paths(sid, root=root):
+        if path.exists():
+            try:
+                return RunManifest(path).load()
+            except Exception:
+                logger.debug(
+                    "CASE_BUILDER manifest_load_failed sid=%s path=%s", sid, path
+                )
+    return None
 
 
 def _write_json(path: Path, obj: Any) -> None:
@@ -200,8 +243,12 @@ def _build_account_lookup(
     return by_key
 
 
-def _resolve_inputs_from_manifest(sid: str) -> tuple[Path, Path, RunManifest]:
-    m = RunManifest.for_sid(sid)
+def _resolve_inputs_from_manifest(
+    sid: str, *, root: Path | None = None
+) -> tuple[Path, Path, RunManifest]:
+    m = _load_manifest_for_sid(sid, root=root)
+    if m is None:
+        raise RuntimeError(f"Run manifest not found for sid={sid}")
     try:
         accounts_path = Path(m.get("traces.accounts_table", "accounts_json")).resolve()
         general_path = Path(m.get("traces.accounts_table", "general_json")).resolve()
@@ -218,12 +265,12 @@ def _resolve_inputs_from_manifest(sid: str) -> tuple[Path, Path, RunManifest]:
 
 
 def _build_problem_cases_lean(
-    sid: str, candidates: List[Dict[str, Any]]
+    sid: str, candidates: List[Dict[str, Any]], *, root: Path | None = None
 ) -> Dict[str, Any]:
     """Build lean per-account case folders under ``runs/<sid>/cases``."""
 
     try:
-        full_accounts = load_stagea_accounts_from_manifest(sid)
+        full_accounts = load_stagea_accounts_from_manifest(sid, root=root)
     except Exception as exc:
         raise RuntimeError(f"Failed to load Stage-A accounts for sid={sid}") from exc
 
@@ -237,12 +284,20 @@ def _build_problem_cases_lean(
 
     total = len(full_accounts)
 
-    manifest = RunManifest.for_sid(sid)
-    cases_dir = manifest.ensure_run_subdir("cases_dir", "cases")
-    accounts_dir = (cases_dir / "accounts").resolve()
-    accounts_dir.mkdir(parents=True, exist_ok=True)
-    manifest.set_base_dir("cases_accounts_dir", accounts_dir)
-    write_breadcrumb(manifest.path, cases_dir / ".manifest")
+    manifest = _load_manifest_for_sid(sid, root=root)
+    if manifest is not None:
+        cases_dir = manifest.ensure_run_subdir("cases_dir", "cases")
+        accounts_dir = (cases_dir / "accounts").resolve()
+        accounts_dir.mkdir(parents=True, exist_ok=True)
+        manifest.set_base_dir("cases_accounts_dir", accounts_dir)
+        write_breadcrumb(manifest.path, cases_dir / ".manifest")
+    else:
+        base_root = Path(root) if root is not None else PROJECT_ROOT
+        cases_dir = (base_root / "cases" / sid).resolve()
+        accounts_dir = cases_dir / "accounts"
+        accounts_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = cases_dir / ".manifest"
+        manifest_path.write_text("missing", encoding="utf-8")
 
     logger.info("PROBLEM_CASES start sid=%s total=%d out=%s", sid, total, cases_dir)
 
@@ -358,29 +413,42 @@ def _build_problem_cases_lean(
         if account_id is not None:
             artifact_keys.add(str(account_id))
 
-        try:
-            for key in artifact_keys:
-                manifest.set_artifact(f"cases.accounts.{key}", "dir", account_dir)
-                manifest.set_artifact(
-                    f"cases.accounts.{key}", "meta", account_dir / "meta.json"
+        if manifest is None:
+            legacy_id = str(account_id) if account_id is not None else f"idx-{idx:03d}"
+            legacy_path = accounts_dir / f"{legacy_id}.json"
+            legacy_payload = dict(summary_obj)
+            legacy_payload.setdefault("case_dir", str(account_dir))
+            try:
+                _write_json(legacy_path, legacy_payload)
+            except Exception:
+                logger.debug(
+                    "CASE_BUILD_LEGACY_WRITE_FAILED sid=%s path=%s", sid, legacy_path
                 )
-                manifest.set_artifact(
-                    f"cases.accounts.{key}", "raw", account_dir / pointers["raw"]
-                )
-                manifest.set_artifact(
-                    f"cases.accounts.{key}", "bureaus", account_dir / pointers["bureaus"]
-                )
-                manifest.set_artifact(
-                    f"cases.accounts.{key}", "flat", account_dir / pointers["flat"]
-                )
-                manifest.set_artifact(
-                    f"cases.accounts.{key}", "summary", summary_path
-                )
-                manifest.set_artifact(
-                    f"cases.accounts.{key}", "tags", account_dir / pointers["tags"]
-                )
-        except Exception:
-            pass
+
+        if manifest is not None:
+            try:
+                for key in artifact_keys:
+                    manifest.set_artifact(f"cases.accounts.{key}", "dir", account_dir)
+                    manifest.set_artifact(
+                        f"cases.accounts.{key}", "meta", account_dir / "meta.json"
+                    )
+                    manifest.set_artifact(
+                        f"cases.accounts.{key}", "raw", account_dir / pointers["raw"]
+                    )
+                    manifest.set_artifact(
+                        f"cases.accounts.{key}", "bureaus", account_dir / pointers["bureaus"]
+                    )
+                    manifest.set_artifact(
+                        f"cases.accounts.{key}", "flat", account_dir / pointers["flat"]
+                    )
+                    manifest.set_artifact(
+                        f"cases.accounts.{key}", "summary", summary_path
+                    )
+                    manifest.set_artifact(
+                        f"cases.accounts.{key}", "tags", account_dir / pointers["tags"]
+                    )
+            except Exception:
+                pass
 
         written_ids.append(str(idx))
 
@@ -392,8 +460,9 @@ def _build_problem_cases_lean(
         "problematic_accounts": [c.get("account_index") for c in candidates_list],
     }
     _write_json(cases_dir / "index.json", index_payload)
-    manifest.set_artifact("cases", "accounts_index", accounts_dir / "index.json")
-    manifest.set_artifact("cases", "problematic_ids", cases_dir / "index.json")
+    if manifest is not None:
+        manifest.set_artifact("cases", "accounts_index", accounts_dir / "index.json")
+        manifest.set_artifact("cases", "problematic_ids", cases_dir / "index.json")
 
     accounts_index = {
         "sid": sid,
@@ -450,11 +519,11 @@ def _build_problem_cases_lean(
 
 
 def _build_problem_cases_legacy(
-    sid: str, candidates: List[Dict[str, Any]]
+    sid: str, candidates: List[Dict[str, Any]], *, root: Path | None = None
 ) -> Dict[str, Any]:
     """Materialise legacy problem case files for ``sid``."""
 
-    acc_path, gen_path, manifest = _resolve_inputs_from_manifest(sid)
+    acc_path, gen_path, manifest = _resolve_inputs_from_manifest(sid, root=root)
     logger.info(
         "ANALYZER_INPUT sid=%s accounts_json=%s general_json=%s",
         sid,
@@ -746,6 +815,8 @@ def _build_problem_cases_legacy(
 def build_problem_cases(
     sid: str,
     candidates: List[Dict[str, Any]],
+    *,
+    root: Path | None = None,
 ) -> Dict[str, Any]:
     if candidates is None:  # pragma: no cover - defensive guard
         raise TypeError("candidates must not be None")
@@ -753,8 +824,8 @@ def build_problem_cases(
     cand_list = list(candidates)
 
     if not LEAN:
-        return _build_problem_cases_legacy(sid, candidates=cand_list)
-    return _build_problem_cases_lean(sid, candidates=cand_list)
+        return _build_problem_cases_legacy(sid, candidates=cand_list, root=root)
+    return _build_problem_cases_lean(sid, candidates=cand_list, root=root)
 
 
 __all__ = ["build_problem_cases"]

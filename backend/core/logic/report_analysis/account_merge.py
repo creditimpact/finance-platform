@@ -71,7 +71,7 @@ _BALOWED_TOL_RATIO_KEY = "MERGE_BALOWED_TOL_RATIO"
 _BALOWED_TRIGGER_KEY = "MERGE_BALOWED_TRIGGER_AI"
 _BALOWED_MIN_SCORE_KEY = "MERGE_BALOWED_MIN_SCORE"
 
-_ACCTNUM_TRIGGER_CHOICES = {"off", "exact", "last4", "any"}
+_ACCTNUM_TRIGGER_CHOICES = {"off", "exact", "last4", "masked", "any"}
 _ACCTNUM_TRIGGER_KEY = "MERGE_ACCTNUM_TRIGGER_AI"
 _ACCTNUM_MIN_SCORE_KEY = "MERGE_ACCTNUM_MIN_SCORE"
 _ACCTNUM_REQUIRE_MASKED_KEY = "MERGE_ACCTNUM_REQUIRE_MASKED"
@@ -83,6 +83,19 @@ _ACCT_NUMBER_FIELDS = (
     "account_number_display",
 )
 _MASKED_ACCOUNT_PATTERN = re.compile(r"[xX*#•]")
+
+
+def _normalized_mask_skeleton(value: Optional[str]) -> Optional[str]:
+    """Collapse masking characters into a normalized skeleton string."""
+
+    if not value:
+        return None
+
+    mask_chars = _MASKED_ACCOUNT_PATTERN.findall(value)
+    if not mask_chars:
+        return None
+
+    return "x" * len(mask_chars)
 
 
 def _read_json(p: Path) -> Union[Dict[str, Any], List[Any]]:
@@ -368,11 +381,13 @@ def _extract_account_number_fields(account: Mapping[str, Any]) -> Dict[str, Any]
     digits = _normalize_account_number(raw)
     last4 = digits[-4:] if digits and len(digits) >= 4 else None
     masked = bool(raw and _MASKED_ACCOUNT_PATTERN.search(raw))
+    skeleton = _normalized_mask_skeleton(raw)
     return {
         "acct_num_raw": raw,
         "acct_num_digits": digits,
         "acct_num_masked": masked,
         "acct_num_last4": last4,
+        "acct_num_mask_skeleton": skeleton,
     }
 
 
@@ -386,6 +401,14 @@ def acctnum_match_level(a: Mapping[str, Any], b: Mapping[str, Any]) -> str:
     last4_b = (b or {}).get("acct_num_last4") or ""
     if last4_a and last4_b and last4_a == last4_b:
         return "last4"
+
+    masked_a = bool((a or {}).get("acct_num_masked"))
+    masked_b = bool((b or {}).get("acct_num_masked"))
+    if masked_a and masked_b and not (digits_a or digits_b):
+        skeleton_a = (a or {}).get("acct_num_mask_skeleton") or ""
+        skeleton_b = (b or {}).get("acct_num_mask_skeleton") or ""
+        if skeleton_a and skeleton_a == skeleton_b:
+            return "masked"
 
     return "none"
 
@@ -725,7 +748,7 @@ def _apply_account_number_ai_override(
     ai_band_min = thresholds.get("ai_band_min", 0.35)
     ai_hard_min = thresholds.get("ai_hard_min", ai_band_min)
 
-    level = aux.get("acctnum_level")
+    level = aux.get("acctnum_level") or "none"
     masked_any = bool(aux.get("acctnum_masked_any", False))
 
     env = os.environ
@@ -737,27 +760,42 @@ def _apply_account_number_ai_override(
         env, _ACCTNUM_REQUIRE_MASKED_KEY, _DEFAULT_ACCTNUM_REQUIRE_MASKED
     )
 
-    eligible = (
-        (trig == "any" and level in {"exact", "last4"})
-        or (trig == "exact" and level == "exact")
-        or (trig == "last4" and level == "last4")
-    )
+    if trig == "off":
+        eligible = False
+    elif trig == "exact":
+        eligible = level == "exact"
+    elif trig == "last4":
+        eligible = level in {"exact", "last4"}
+    elif trig == "masked":
+        eligible = level in {"exact", "last4", "masked"}
+    else:  # any
+        eligible = level in {"exact", "last4", "masked"}
     if req_masked:
         eligible = eligible and masked_any
 
     if eligible and base_score < ai_band_min:
         lifted_score = max(score, minscore, ai_hard_min)
-        updated_reasons = dict(reasons)
+        updated_reasons = dict(reasons or {})
+        reason_list: List[Dict[str, Any]]
+        existing = updated_reasons.get("reasons")
+        if isinstance(existing, list):
+            reason_list = list(existing)
+        else:
+            reason_list = []
+        reason_entry = {"kind": "acctnum", "level": level, "masked_any": masked_any}
+        reason_list.append(reason_entry)
+
+        updated_reasons["reasons"] = reason_list
         updated_reasons["acctnum_only_triggers_ai"] = True
         updated_reasons["acctnum_match_level"] = level
         updated_reasons["acctnum_masked_any"] = masked_any
 
         aux_with_reasons = dict(aux)
         aux_with_reasons["override_reasons"] = dict(updated_reasons)
+        aux_with_reasons["override_reason_entries"] = list(reason_list)
 
         logger.info(
-            "MERGE_OVERRIDE sid=<%s> i=<%d> j=<%d> kind=acctnum level=<%s> "
-            "masked_any=<%d> lifted_to=<%.4f>",
+            "MERGE_OVERRIDE sid=<%s> i=<%d> j=<%d> kind=acctnum level=<%s> masked_any=<%d> lifted_to=<%.4f>",
             sid_value,
             idx_a,
             idx_b,
@@ -771,6 +809,8 @@ def _apply_account_number_ai_override(
     if reasons:
         aux = dict(aux)
         aux["override_reasons"] = dict(reasons)
+        if isinstance(reasons.get("reasons"), list):
+            aux["override_reason_entries"] = list(reasons["reasons"])
     return score, decision, reasons, aux
 
 
@@ -831,7 +871,14 @@ def build_ai_decision_pack(
     }
 
     if reasons:
-        pack["reasons"] = dict(reasons)
+        if isinstance(reasons, Mapping):
+            payload = reasons.get("reasons")
+            if isinstance(payload, list):
+                pack["reasons"] = [dict(item) for item in payload]
+            else:
+                pack["reasons"] = dict(reasons)
+        elif isinstance(reasons, list):
+            pack["reasons"] = [dict(item) for item in reasons]
 
     return pack
 
@@ -1105,7 +1152,15 @@ def cluster_problematic_accounts(
                 "decision": pair_decision,
             }
             if pair_reasons:
-                entry["reasons"] = dict(pair_reasons)
+                reasons_payload = None
+                if isinstance(pair_reasons, Mapping):
+                    payload = pair_reasons.get("reasons")
+                    if isinstance(payload, list):
+                        reasons_payload = [dict(item) for item in payload]
+                if reasons_payload is None and isinstance(pair_reasons, Mapping):
+                    reasons_payload = dict(pair_reasons)
+                if reasons_payload is not None:
+                    entry["reasons"] = reasons_payload
             score_entries.append(entry)
             if best is None or pair_score > best["score"]:
                 best = entry.copy()
@@ -1127,7 +1182,15 @@ def cluster_problematic_accounts(
             "parts": best_parts,
         }
         if best is not None and best.get("reasons"):
-            merge_tag["reasons"] = dict(best["reasons"])
+            best_reasons = best["reasons"]
+            if isinstance(best_reasons, list):
+                merge_tag["reasons"] = [dict(item) for item in best_reasons]
+            elif isinstance(best_reasons, Mapping):
+                merge_tag["reasons"] = dict(best_reasons)
+        elif best is not None and isinstance(best_aux, Mapping):
+            aux_reasons = best_aux.get("override_reason_entries")
+            if isinstance(aux_reasons, list) and aux_reasons:
+                merge_tag["reasons"] = [dict(item) for item in aux_reasons]
         if best is not None:
             merge_tag["aux"] = best_aux
         account["merge_tag"] = merge_tag

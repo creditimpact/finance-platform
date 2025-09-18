@@ -10,7 +10,7 @@ def _make_candidate(
     score: Optional[float],
     decision: Optional[str],
     account_decision: str,
-    reasons: Optional[Dict[str, Any]] = None,
+    reasons: Optional[Any] = None,
     aux: Optional[Dict[str, Any]] = None,
     parts: Optional[Dict[str, Any]] = None,
 ):
@@ -27,8 +27,12 @@ def _make_candidate(
             "decision": decision,
         }
         if reasons:
-            merge_tag["best_match"]["reasons"] = dict(reasons)
-            merge_tag["reasons"] = dict(reasons)
+            if isinstance(reasons, list):
+                payload = [dict(item) for item in reasons]
+            else:
+                payload = dict(reasons)
+            merge_tag["best_match"]["reasons"] = payload
+            merge_tag["reasons"] = payload
     else:
         merge_tag["best_match"] = {}
     if aux is not None:
@@ -46,16 +50,16 @@ def test_build_merge_summary_includes_override_columns():
             score=0.42,
             decision="ai",
             account_decision="ai",
-            reasons={
-                "acctnum_only_triggers_ai": True,
-                "acctnum_match_level": "last4",
-            },
+            reasons=[{"kind": "acctnum", "level": "last4", "masked_any": True}],
             aux={
                 "acctnum_level": "last4",
                 "override_reasons": {
                     "acctnum_only_triggers_ai": True,
                     "acctnum_match_level": "last4",
                 },
+                "override_reason_entries": [
+                    {"kind": "acctnum", "level": "last4", "masked_any": True}
+                ],
             },
             parts={"acct_num": 0.7},
         ),
@@ -91,7 +95,7 @@ def test_build_merge_summary_includes_override_columns():
     assert first["decision"] == "ai"
     assert first["acctnum_level"] == "last4"
     assert first["balowed_ok"] is False
-    assert any(item.startswith("acctnum_match_level=") for item in first["reasons"])
+    assert any(item.startswith("acctnum(") for item in first["reasons"])
 
     second = pairs[1]
     assert second["balowed_ok"] is True

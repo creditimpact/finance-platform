@@ -95,6 +95,20 @@ def test_acctnum_match_level_variants():
     }
     assert acctnum_match_level(none_a, none_b) == "none"
 
+    masked_a = {
+        "acct_num_digits": "",
+        "acct_num_last4": None,
+        "acct_num_masked": True,
+        "acct_num_mask_skeleton": "xxxx",
+    }
+    masked_b = {
+        "acct_num_digits": "",
+        "acct_num_last4": None,
+        "acct_num_masked": True,
+        "acct_num_mask_skeleton": "xxxx",
+    }
+    assert acctnum_match_level(masked_a, masked_b) == "masked"
+
 
 @pytest.mark.parametrize(
     "value,expected",
@@ -214,16 +228,16 @@ def test_acctnum_override_lifts_low_score_to_ai(monkeypatch, caplog):
 
     assert first_tag["decision"] == "ai"
     assert second_tag["decision"] == "ai"
-    assert first_tag["reasons"]["acctnum_only_triggers_ai"] is True
-    assert first_tag["reasons"]["acctnum_match_level"] == "exact"
-    assert first_tag["reasons"]["acctnum_masked_any"] is False
+    first_reasons = first_tag["reasons"]
+    assert isinstance(first_reasons, list)
+    assert {"kind": "acctnum", "level": "exact", "masked_any": False} in first_reasons
 
     best_first = first_tag["best_match"]
     assert best_first["decision"] == "ai"
     assert best_first["score"] == pytest.approx(0.4)
-    assert best_first["reasons"]["acctnum_only_triggers_ai"] is True
-    assert best_first["reasons"]["acctnum_match_level"] == "exact"
-    assert best_first["reasons"]["acctnum_masked_any"] is False
+    best_reasons = best_first["reasons"]
+    assert isinstance(best_reasons, list)
+    assert {"kind": "acctnum", "level": "exact", "masked_any": False} in best_reasons
     assert first_tag["aux"]["override_reasons"]["acctnum_only_triggers_ai"] is True
 
     override_messages = [
@@ -295,7 +309,7 @@ def test_build_ai_pack_includes_account_number_highlights(monkeypatch):
 
     assert pack["decision"] == "ai"
     assert pack["acctnum"] == {"level": "last4", "masked_any": True}
-    assert pack["reasons"]["acctnum_only_triggers_ai"] is True
+    assert {"kind": "acctnum", "level": "last4", "masked_any": True} in pack["reasons"]
     assert pack["left"]["highlights"]["balance_owed"] == pytest.approx(5912.0)
     assert pack["left"]["highlights"]["acct_num_raw"] == "M20191************"
     assert pack["left"]["highlights"]["acct_num_last4"] == "0191"

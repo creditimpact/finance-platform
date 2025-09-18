@@ -246,15 +246,35 @@ def _assert_account8_values(
         raise AssertionError("equifax.closed_date captured tokens from the next label (contains 'Last Payment')")
 
 
-def _format_reasons(reasons: Mapping[str, Any]) -> List[str]:
+def _format_reasons(reasons: Any) -> List[str]:
     formatted: List[str] = []
-    for key in sorted(reasons.keys()):
-        value = reasons[key]
-        if isinstance(value, bool):
-            if value:
-                formatted.append(str(key))
-        elif value not in (None, ""):
-            formatted.append(f"{key}={value}")
+    if isinstance(reasons, Mapping):
+        for key in sorted(reasons.keys()):
+            value = reasons[key]
+            if isinstance(value, bool):
+                if value:
+                    formatted.append(str(key))
+            elif value not in (None, ""):
+                formatted.append(f"{key}={value}")
+        return formatted
+
+    if isinstance(reasons, Iterable) and not isinstance(reasons, (str, bytes)):
+        for entry in reasons:
+            if not isinstance(entry, Mapping):
+                continue
+            kind = entry.get("kind") or "reason"
+            extras: List[str] = []
+            for key in sorted(entry.keys()):
+                if key == "kind":
+                    continue
+                value = entry[key]
+                if value in (None, ""):
+                    continue
+                extras.append(f"{key}={value}")
+            if extras:
+                formatted.append(f"{kind}({' '.join(extras)})")
+            else:
+                formatted.append(str(kind))
     return formatted
 
 
@@ -290,7 +310,11 @@ def _build_merge_summary(
         account_decision = merge_tag.get("decision")
         aux = merge_tag.get("aux") or {}
         override_reasons = (aux or {}).get("override_reasons")
-        combined_reasons = _merge_reason_maps(override_reasons, merge_tag.get("reasons"))
+        reasons_field = merge_tag.get("reasons")
+        mapping_sources = [
+            source for source in (override_reasons, reasons_field) if isinstance(source, Mapping)
+        ]
+        combined_reasons = _merge_reason_maps(*mapping_sources)
 
         entry: Dict[str, Any] = {
             "idx": idx,
@@ -300,8 +324,12 @@ def _build_merge_summary(
             "decision": pair_decision or account_decision,
             "acctnum_level": aux.get("acctnum_level"),
             "balowed_ok": bool(combined_reasons.get("balance_only_triggers_ai")),
-            "reasons": _format_reasons(combined_reasons),
+            "reasons": [],
         }
+
+        if isinstance(reasons_field, list):
+            entry["reasons"].extend(_format_reasons(reasons_field))
+        entry["reasons"].extend(_format_reasons(combined_reasons))
 
         if account_decision and account_decision != entry["decision"]:
             entry["account_decision"] = account_decision

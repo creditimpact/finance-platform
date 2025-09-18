@@ -480,6 +480,68 @@ def _apply_account_number_ai_override(
     return score, decision, reasons, aux
 
 
+def _build_ai_side_snapshot(
+    account: Mapping[str, Any], acct_meta: Optional[Mapping[str, Any]]
+) -> Dict[str, Any]:
+    snapshot: Dict[str, Any] = {}
+
+    idx = account.get("account_index")
+    if isinstance(idx, int):
+        snapshot["account_index"] = idx
+
+    account_id = account.get("account_id")
+    if account_id is not None:
+        snapshot["account_id"] = account_id
+
+    highlights: Dict[str, Any] = {}
+    balance_val = _parse_currency(account.get("balance_owed"))
+    if balance_val is not None:
+        highlights["balance_owed"] = balance_val
+
+    if acct_meta:
+        raw_val = acct_meta.get("acct_num_raw")
+        if raw_val not in (None, ""):
+            highlights["acct_num_raw"] = raw_val
+        last4 = acct_meta.get("acct_num_last4")
+        if last4 not in (None, ""):
+            highlights["acct_num_last4"] = last4
+
+    if highlights:
+        snapshot["highlights"] = highlights
+
+    return snapshot
+
+
+def build_ai_decision_pack(
+    left_account: Mapping[str, Any],
+    right_account: Mapping[str, Any],
+    *,
+    score: float,
+    parts: Mapping[str, float],
+    aux: Mapping[str, Any],
+    reasons: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Assemble an AI review pack payload for a matched account pair."""
+
+    aux_dict = dict(aux or {})
+    pack: Dict[str, Any] = {
+        "decision": "ai",
+        "score": float(score),
+        "parts": {name: float(value) for name, value in dict(parts or {}).items()},
+        "left": _build_ai_side_snapshot(left_account, aux_dict.get("acct_num_a")),
+        "right": _build_ai_side_snapshot(right_account, aux_dict.get("acct_num_b")),
+        "acctnum": {
+            "level": aux_dict.get("acctnum_level") or "none",
+            "masked_any": bool(aux_dict.get("acctnum_masked_any", False)),
+        },
+    }
+
+    if reasons:
+        pack["reasons"] = dict(reasons)
+
+    return pack
+
+
 def _build_auto_graph(size: int, auto_edges: List[Tuple[int, int]]) -> List[List[int]]:
     graph: List[List[int]] = [[] for _ in range(size)]
     for i, j in auto_edges:
@@ -649,6 +711,8 @@ def cluster_problematic_accounts(
             "best_match": best,
             "parts": best_parts,
         }
+        if best is not None and best.get("reasons"):
+            merge_tag["reasons"] = dict(best["reasons"])
         if best is not None:
             merge_tag["aux"] = best_aux
         account["merge_tag"] = merge_tag

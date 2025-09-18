@@ -10,6 +10,7 @@ from backend.core.logic.report_analysis.account_merge import (
     decide_merge,
     load_config_from_env,
     score_accounts,
+    build_ai_decision_pack,
 )
 
 
@@ -211,6 +212,9 @@ def test_acctnum_override_lifts_low_score_to_ai(monkeypatch, caplog):
 
     assert first_tag["decision"] == "ai"
     assert second_tag["decision"] == "ai"
+    assert first_tag["reasons"]["acctnum_only_triggers_ai"] is True
+    assert first_tag["reasons"]["acctnum_match_level"] == "exact"
+    assert first_tag["reasons"]["acctnum_masked_any"] is False
 
     best_first = first_tag["best_match"]
     assert best_first["decision"] == "ai"
@@ -255,3 +259,44 @@ def test_acctnum_override_respects_mask_requirement(monkeypatch):
     assert best["score"] == pytest.approx(0.3)
     assert "reasons" not in best
     assert "override_reasons" not in first_tag.get("aux", {})
+
+
+def test_build_ai_pack_includes_account_number_highlights(monkeypatch):
+    monkeypatch.setenv("MERGE_ACCTNUM_TRIGGER_AI", "last4")
+    monkeypatch.setenv("MERGE_ACCTNUM_MIN_SCORE", "0.4")
+    monkeypatch.setenv("MERGE_ACCTNUM_REQUIRE_MASKED", "0")
+
+    left_account = {
+        "account_index": 2,
+        "account_number": "M20191************",
+        "balance_owed": "5912",
+    }
+    right_account = {
+        "account_index": 3,
+        "account_number": "0000000000000191",
+        "balance_owed": 1750,
+    }
+
+    merged = cluster_problematic_accounts(
+        [dict(left_account), dict(right_account)], DEFAULT_CFG, sid="ai-pack"
+    )
+
+    tag = merged[0]["merge_tag"]
+    pack = build_ai_decision_pack(
+        left_account,
+        right_account,
+        score=tag["best_match"]["score"],
+        parts=tag["parts"],
+        aux=tag["aux"],
+        reasons=tag.get("reasons"),
+    )
+
+    assert pack["decision"] == "ai"
+    assert pack["acctnum"] == {"level": "last4", "masked_any": True}
+    assert pack["reasons"]["acctnum_only_triggers_ai"] is True
+    assert pack["left"]["highlights"]["balance_owed"] == pytest.approx(5912.0)
+    assert pack["left"]["highlights"]["acct_num_raw"] == "M20191************"
+    assert pack["left"]["highlights"]["acct_num_last4"] == "0191"
+    assert pack["right"]["highlights"]["balance_owed"] == pytest.approx(1750.0)
+    assert pack["right"]["highlights"]["acct_num_raw"] == "0000000000000191"
+    assert pack["right"]["highlights"]["acct_num_last4"] == "0191"

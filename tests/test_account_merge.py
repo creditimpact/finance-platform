@@ -125,7 +125,7 @@ def test_partial_overlap_ai_decision():
     score, parts, aux = score_accounts(account_a, account_b)
 
     assert 0.35 <= score < 0.78
-    assert parts["acct"] == pytest.approx(0.7)
+    assert parts["acct_num"] == pytest.approx(0.7)
     assert parts["dates"] == pytest.approx(1.0)
     assert parts["balowed"] == pytest.approx(1.0)
     assert parts["status"] == pytest.approx(0.0)
@@ -163,11 +163,12 @@ def test_graph_clustering_transitive_auto():
         "balance_owed": 1000,
         "past_due_amount": 500,
         "payment_status": "Charge Off account now paid as agreed",
-        "creditor": "Acme Bank Collections Dept",
+        "creditor": "Collections Department",
     }
     account_c = {
         "account_number": "9999000011114444",
         "date_of_last_activity": "05-01-2021",
+        "balance_owed": 580,
         "past_due_amount": 500,
         "payment_status": "Paid as agreed",
         "creditor": "Collections Department",
@@ -256,22 +257,23 @@ def test_cluster_problematic_accounts_logs_merge_events(caplog):
             "payment_status": "Charge Off account",
             "creditor": "Acme Bank",
         },
-        {
-            "account_number": "9999000011114444",
-            "date_opened": "01-01-2020",
-            "date_of_last_activity": "05-01-2021",
-            "balance_owed": 1000,
-            "past_due_amount": 500,
-            "payment_status": "Charge Off account now paid as agreed",
-            "creditor": "Acme Bank Collections Dept",
-        },
-        {
-            "account_number": "9999000011114444",
-            "date_of_last_activity": "05-01-2021",
-            "past_due_amount": 500,
-            "payment_status": "Paid as agreed",
-            "creditor": "Collections Department",
-        },
+            {
+                "account_number": "9999000011114444",
+                "date_opened": "01-01-2020",
+                "date_of_last_activity": "05-01-2021",
+                "balance_owed": 1000,
+                "past_due_amount": 500,
+                "payment_status": "Charge Off account now paid as agreed",
+                "creditor": "Collections Department",
+            },
+            {
+                "account_number": "9999000011114444",
+                "date_of_last_activity": "05-01-2021",
+                "balance_owed": 580,
+                "past_due_amount": 500,
+                "payment_status": "Paid as agreed",
+                "creditor": "Collections Department",
+            },
     ]
 
     with caplog.at_level(logging.INFO, logger="backend.core.logic.report_analysis.account_merge"):
@@ -313,9 +315,9 @@ def test_scoring_handles_missing_fields():
     assert parts_first == parts_second
     assert aux_first == aux_second
     assert 0 < score_first < 0.35
-    assert parts_first["acct"] == 0.0
+    assert parts_first["acct_num"] == 0.0
     assert parts_first["dates"] == 0.0
-    assert parts_first["balowed"] == pytest.approx(1.0)
+    assert parts_first["balowed"] == 0.0
     assert parts_first["strings"] > 0.5
     assert aux_first["acctnum_level"] == "none"
     assert aux_first["acctnum_masked_any"] is False
@@ -350,7 +352,7 @@ def test_acctnum_exact_override_forces_ai(monkeypatch, caplog):
 
     base_score, parts, aux = score_accounts(account_a, account_b)
     assert base_score == pytest.approx(0.25)
-    assert parts["acct"] == pytest.approx(1.0)
+    assert parts["acct_num"] == pytest.approx(1.0)
     assert aux["acctnum_level"] == "exact"
     assert aux["acctnum_masked_any"] is False
 
@@ -367,7 +369,7 @@ def test_acctnum_exact_override_forces_ai(monkeypatch, caplog):
     assert first_tag["decision"] == "ai"
     assert best["decision"] == "ai"
     assert best["score"] == pytest.approx(0.45)
-    assert first_tag["parts"]["acct"] == pytest.approx(1.0)
+    assert first_tag["parts"]["acct_num"] == pytest.approx(1.0)
     assert first_tag["reasons"]["acctnum_only_triggers_ai"] is True
     assert first_tag["reasons"]["acctnum_match_level"] == "exact"
     assert best["reasons"]["acctnum_only_triggers_ai"] is True
@@ -551,4 +553,4 @@ def test_cluster_uses_case_files_for_scoring(tmp_path):
 
     parts = merged[0]["merge_tag"]["parts"]
     assert parts["balowed"] == pytest.approx(1.0)
-    assert parts["acct"] == pytest.approx(1.0)
+    assert parts["acct_num"] == pytest.approx(1.0)

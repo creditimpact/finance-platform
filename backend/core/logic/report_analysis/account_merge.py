@@ -27,6 +27,8 @@ class MergeCfg:
     acctnum_trigger_ai: str = "any"
     acctnum_min_score: float = 0.31
     acctnum_require_masked: bool = False
+    balowed_tol_abs: float = 0.0
+    balowed_tol_ratio: float = 0.0
     # optional knobs: date_tolerance_days, balance_tolerance_ratio, etc.
 
 
@@ -38,9 +40,9 @@ _DEFAULT_THRESHOLDS = {
 }
 
 _DEFAULT_WEIGHTS = {
-    "acct": 0.25,
-    "dates": 0.20,
     "balowed": 0.25,
+    "acct_num": 0.25,
+    "dates": 0.20,
     "status": 0.20,
     "strings": 0.10,
 }
@@ -57,12 +59,15 @@ _ENV_THRESHOLD_KEYS = {
 }
 
 _ENV_WEIGHT_KEYS = {
-    "acct": "MERGE_W_ACCT",
-    "dates": "MERGE_W_DATES",
     "balowed": "MERGE_W_BALOWED",
+    "acct_num": "MERGE_W_ACCT",
+    "dates": "MERGE_W_DATES",
     "status": "MERGE_W_STATUS",
     "strings": "MERGE_W_STRINGS",
 }
+
+_BALOWED_TOL_ABS_KEY = "MERGE_BALOWED_TOL_ABS"
+_BALOWED_TOL_RATIO_KEY = "MERGE_BALOWED_TOL_RATIO"
 
 _ACCTNUM_TRIGGER_CHOICES = {"off", "exact", "last4", "any"}
 _ACCTNUM_TRIGGER_KEY = "MERGE_ACCTNUM_TRIGGER_AI"
@@ -238,6 +243,9 @@ def load_config_from_env(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         for name, env_key in _ENV_WEIGHT_KEYS.items()
     }
 
+    balowed_tol_abs = _read_env_float(env_mapping, _BALOWED_TOL_ABS_KEY, 0.0)
+    balowed_tol_ratio = _read_env_float(env_mapping, _BALOWED_TOL_RATIO_KEY, 0.0)
+
     acctnum_trigger_ai = _read_env_choice(
         env_mapping, _ACCTNUM_TRIGGER_KEY, _DEFAULT_ACCTNUM_TRIGGER, _ACCTNUM_TRIGGER_CHOICES
     )
@@ -254,13 +262,14 @@ def load_config_from_env(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         acctnum_trigger_ai=acctnum_trigger_ai,
         acctnum_min_score=acctnum_min_score,
         acctnum_require_masked=acctnum_require_masked,
+        balowed_tol_abs=balowed_tol_abs,
+        balowed_tol_ratio=balowed_tol_ratio,
     )
 
 
 DEFAULT_CFG = load_config_from_env()
 
 _DATE_FIELDS = ("date_opened", "date_of_last_activity", "closed_date")
-_BALANCE_FIELDS = ("past_due_amount", "balance_owed")
 _STATUS_FIELDS = ("payment_status", "account_status")
 _STRING_FIELDS = ("creditor", "remarks")
 _STATUS_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
@@ -458,32 +467,48 @@ def _parse_currency(value: Any) -> Optional[float]:
             return None
 
 
-def _score_numeric(a: Optional[float], b: Optional[float]) -> Optional[float]:
-    if a is None or b is None:
-        return None
-    max_val = max(abs(a), abs(b), 1.0)
-    delta = abs(a - b)
-    return max(0.0, 1.0 - min(delta / max_val, 1.0))
+def _normalized_balance_owed(account: Mapping[str, Any]) -> Optional[float]:
+    norm_block = account.get("norm")
+    if isinstance(norm_block, Mapping):
+        parsed = _parse_currency(norm_block.get("balance_owed"))
+        if parsed is not None:
+            return parsed
+
+    for key in (
+        "balance_owed_norm",
+        "balance_owed_normalized",
+        "normalized_balance_owed",
+    ):
+        parsed = _parse_currency(account.get(key))
+        if parsed is not None:
+            return parsed
+
+    return _parse_currency(account.get("balance_owed"))
 
 
-def _score_balance(acc_a: Dict[str, Any], acc_b: Dict[str, Any]) -> float:
-    scores: List[float] = []
-    parsed_a = {field: _parse_currency(acc_a.get(field)) for field in _BALANCE_FIELDS}
-    parsed_b = {field: _parse_currency(acc_b.get(field)) for field in _BALANCE_FIELDS}
-
-    if parsed_a.get("past_due_amount") is not None and parsed_b.get("past_due_amount") is not None:
-        val = _score_numeric(parsed_a["past_due_amount"], parsed_b["past_due_amount"])
-        if val is not None:
-            scores.append(val)
-
-    if parsed_a.get("balance_owed") is not None and parsed_b.get("balance_owed") is not None:
-        val = _score_numeric(parsed_a["balance_owed"], parsed_b["balance_owed"])
-        if val is not None:
-            scores.append(val)
-
-    if not scores:
+def _score_balowed_values(
+    balance_a: Optional[float],
+    balance_b: Optional[float],
+    tol_abs: float,
+    tol_ratio: float,
+) -> float:
+    if balance_a is None or balance_b is None:
         return 0.0
-    return sum(scores) / len(scores)
+
+    delta = abs(balance_a - balance_b)
+    base = max(abs(balance_a), abs(balance_b))
+
+    tol_abs = max(tol_abs, 0.0)
+    tol_ratio = max(tol_ratio, 0.0)
+    allowed = max(tol_abs, tol_ratio * base)
+
+    if delta <= allowed:
+        return 1.0
+
+    denom = max(base, 1.0)
+    over = delta - allowed
+    scaled = 1.0 - min(over / denom, 1.0)
+    return max(0.0, scaled)
 
 
 def _clean_status(value: Any) -> Optional[str]:
@@ -545,22 +570,47 @@ def score_accounts(
     """Return overall score, per-part contributions, and auxiliary details."""
 
     acct_score, acct_aux = _score_account_number(accA, accB)
+    balance_a = _normalized_balance_owed(accA)
+    balance_b = _normalized_balance_owed(accB)
+    balowed_score = _score_balowed_values(
+        balance_a,
+        balance_b,
+        getattr(cfg, "balowed_tol_abs", 0.0),
+        getattr(cfg, "balowed_tol_ratio", 0.0),
+    )
 
     parts = {
-        "acct": acct_score,
+        "acct_num": acct_score,
         "dates": _score_dates(accA, accB),
-        "balowed": _score_balance(accA, accB),
+        "balowed": balowed_score,
         "status": _score_status(accA, accB),
         "strings": _score_strings(accA, accB),
     }
 
-    total_weight = sum(cfg.weights.get(name, 0.0) for name in parts)
+    weights_present = {
+        name: cfg.weights.get(name, 0.0)
+        for name in parts
+        if cfg.weights.get(name, 0.0) > 0.0
+    }
+    total_weight = sum(weights_present.values())
     if total_weight <= 0:
-        return 0.0, parts, acct_aux
+        aux = dict(acct_aux)
+        if balance_a is not None:
+            aux["balowed_a"] = balance_a
+        if balance_b is not None:
+            aux["balowed_b"] = balance_b
+        return 0.0, parts, aux
 
-    weighted = sum(parts[name] * cfg.weights.get(name, 0.0) for name in parts)
+    weighted = sum(parts[name] * weight for name, weight in weights_present.items())
     score = weighted / total_weight
-    return score, parts, acct_aux
+
+    aux = dict(acct_aux)
+    if balance_a is not None:
+        aux["balowed_a"] = balance_a
+    if balance_b is not None:
+        aux["balowed_b"] = balance_b
+
+    return score, parts, aux
 
 
 def decide_merge(score: float, cfg: MergeCfg = DEFAULT_CFG) -> str:

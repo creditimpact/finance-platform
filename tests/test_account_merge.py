@@ -30,11 +30,13 @@ def test_identical_accounts_auto_cluster(identical_account):
     account_a = copy.deepcopy(identical_account)
     account_b = copy.deepcopy(identical_account)
 
-    score, parts = score_accounts(account_a, account_b)
+    score, parts, aux = score_accounts(account_a, account_b)
 
     assert score >= 0.9
     for value in parts.values():
         assert value == pytest.approx(1.0)
+    assert aux["acctnum_level"] == "exact"
+    assert aux["acctnum_masked_any"] is False
 
     assert decide_merge(score) == "auto"
 
@@ -50,6 +52,7 @@ def test_identical_accounts_auto_cluster(identical_account):
     assert second_tag["best_match"]["account_index"] == 0
     assert first_tag["best_match"]["decision"] == "auto"
     assert second_tag["best_match"]["decision"] == "auto"
+    assert first_tag["aux"]["acctnum_level"] == "exact"
 
 
 def test_unrelated_accounts_different_decision():
@@ -68,9 +71,11 @@ def test_unrelated_accounts_different_decision():
         "creditor": "Different Creditor",
     }
 
-    score, _ = score_accounts(account_a, account_b)
+    score, _, aux = score_accounts(account_a, account_b)
     assert score < 0.2
     assert decide_merge(score) == "different"
+    assert aux["acctnum_level"] == "none"
+    assert aux["acctnum_masked_any"] is False
 
     merged = cluster_problematic_accounts(
         [copy.deepcopy(account_a), copy.deepcopy(account_b)], sid="unrelated"
@@ -100,7 +105,7 @@ def test_partial_overlap_ai_decision():
         "creditor": "Acme Collections",
     }
 
-    score, parts = score_accounts(account_a, account_b)
+    score, parts, aux = score_accounts(account_a, account_b)
 
     assert 0.35 <= score < 0.78
     assert parts["acct_num"] == pytest.approx(0.7)
@@ -108,6 +113,8 @@ def test_partial_overlap_ai_decision():
     assert parts["balance"] == pytest.approx(1.0)
     assert parts["status"] == pytest.approx(0.0)
     assert parts["strings"] == pytest.approx(0.48)
+    assert aux["acctnum_level"] == "last4"
+    assert aux["acctnum_masked_any"] is False
 
     assert decide_merge(score) == "ai"
 
@@ -149,13 +156,16 @@ def test_graph_clustering_transitive_auto():
         "creditor": "Collections Department",
     }
 
-    score_ab, _ = score_accounts(account_a, account_b)
-    score_bc, _ = score_accounts(account_b, account_c)
-    score_ac, _ = score_accounts(account_a, account_c)
+    score_ab, _, aux_ab = score_accounts(account_a, account_b)
+    score_bc, _, aux_bc = score_accounts(account_b, account_c)
+    score_ac, _, aux_ac = score_accounts(account_a, account_c)
 
     assert score_ab >= 0.78
     assert score_bc >= 0.78
     assert score_ac < 0.35
+    assert aux_ab["acctnum_level"] == "last4"
+    assert aux_bc["acctnum_level"] == "exact"
+    assert aux_ac["acctnum_level"] == "last4"
 
     merged = cluster_problematic_accounts(
         [copy.deepcopy(account_a), copy.deepcopy(account_b), copy.deepcopy(account_c)],
@@ -234,16 +244,19 @@ def test_scoring_handles_missing_fields():
         "remarks": "--",
     }
 
-    score_first, parts_first = score_accounts(account_a, account_b)
-    score_second, parts_second = score_accounts(account_a, account_b)
+    score_first, parts_first, aux_first = score_accounts(account_a, account_b)
+    score_second, parts_second, aux_second = score_accounts(account_a, account_b)
 
     assert score_first == pytest.approx(score_second)
     assert parts_first == parts_second
+    assert aux_first == aux_second
     assert 0 < score_first < 0.35
     assert parts_first["acct_num"] == 0.0
     assert parts_first["dates"] == 0.0
     assert parts_first["balance"] == pytest.approx(1.0)
     assert parts_first["strings"] > 0.5
+    assert aux_first["acctnum_level"] == "none"
+    assert aux_first["acctnum_masked_any"] is False
 
     merged = cluster_problematic_accounts(
         [copy.deepcopy(account_a), copy.deepcopy(account_b)], sid="missing"

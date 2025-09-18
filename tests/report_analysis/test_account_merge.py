@@ -4,6 +4,7 @@ import pytest
 
 from backend.core.logic.report_analysis.account_merge import (
     DEFAULT_CFG,
+    acctnum_match_level,
     cluster_problematic_accounts,
     decide_merge,
     load_config_from_env,
@@ -35,7 +36,7 @@ def test_score_accounts_returns_weighted_score_and_parts():
         "remarks": "Original creditor acct",
     }
 
-    score, parts = score_accounts(account_a, account_b, DEFAULT_CFG)
+    score, parts, aux = score_accounts(account_a, account_b, DEFAULT_CFG)
 
     expected_dates = ((364 / 365) + (360 / 365) + 1.0) / 3
     expected_balance = ((1 - (50 / 1050)) + (1 - (100 / 2000))) / 2
@@ -48,6 +49,8 @@ def test_score_accounts_returns_weighted_score_and_parts():
     assert parts["balance"] == pytest.approx(expected_balance, rel=1e-3)
     assert parts["status"] == 1.0
     assert parts["strings"] == pytest.approx(expected_strings, rel=1e-6)
+    assert aux["acctnum_level"] == "exact"
+    assert aux["acctnum_masked_any"] is True
 
     expected_score = (
         DEFAULT_CFG.weights["acct_num"] * parts["acct_num"]
@@ -57,6 +60,38 @@ def test_score_accounts_returns_weighted_score_and_parts():
         + DEFAULT_CFG.weights["strings"] * parts["strings"]
     )
     assert score == pytest.approx(expected_score, rel=1e-6)
+
+
+def test_acctnum_match_level_variants():
+    exact_a = {
+        "acct_num_digits": "12345678",
+        "acct_num_last4": "5678",
+    }
+    exact_b = {
+        "acct_num_digits": "12345678",
+        "acct_num_last4": "5678",
+    }
+    assert acctnum_match_level(exact_a, exact_b) == "exact"
+
+    last4_a = {
+        "acct_num_digits": "1234",
+        "acct_num_last4": "1234",
+    }
+    last4_b = {
+        "acct_num_digits": "001231234",
+        "acct_num_last4": "1234",
+    }
+    assert acctnum_match_level(last4_a, last4_b) == "last4"
+
+    none_a = {
+        "acct_num_digits": "1234",
+        "acct_num_last4": "1234",
+    }
+    none_b = {
+        "acct_num_digits": None,
+        "acct_num_last4": None,
+    }
+    assert acctnum_match_level(none_a, none_b) == "none"
 
 
 @pytest.mark.parametrize(
@@ -134,6 +169,8 @@ def test_cluster_problematic_accounts_builds_clusters():
     assert first_tag["best_match"]["account_index"] == 1
     assert second_tag["best_match"]["account_index"] == 0
     assert first_tag["parts"]["acct_num"] == 1.0
+    assert first_tag["aux"]["acctnum_level"] == "exact"
+    assert third_tag["aux"]["acctnum_level"] == "none"
 
     assert third_tag["group_id"] != first_tag["group_id"]
     assert third_tag["decision"] == "ai"

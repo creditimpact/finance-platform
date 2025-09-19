@@ -918,6 +918,105 @@ def _sanitize_parts(parts: Optional[Mapping[str, Any]]) -> Dict[str, int]:
     return values
 
 
+def _build_pair_entry(partner_idx: int, result: Mapping[str, Any]) -> Dict[str, Any]:
+    """Build a stable payload describing the merge relationship with a partner."""
+
+    total = 0
+    mid_value = 0
+    dates_all = False
+    triggers_raw: Iterable[Any] = []
+    decision = "different"
+    aux_payload: Mapping[str, Any] = {}
+    parts_payload: Mapping[str, Any] = {}
+
+    if isinstance(result, Mapping):
+        try:
+            total = int(result.get("total", 0) or 0)
+        except (TypeError, ValueError):
+            total = 0
+        try:
+            mid_value = int(result.get("mid_sum", 0) or 0)
+        except (TypeError, ValueError):
+            mid_value = 0
+        dates_all = bool(result.get("dates_all"))
+        decision = str(result.get("decision", "different"))
+        aux_candidate = result.get("aux")
+        if isinstance(aux_candidate, Mapping):
+            aux_payload = aux_candidate
+        parts_candidate = result.get("parts")
+        if isinstance(parts_candidate, Mapping):
+            parts_payload = parts_candidate
+        triggers_candidate = result.get("triggers", []) or []
+        if isinstance(triggers_candidate, Iterable):
+            triggers_raw = triggers_candidate
+
+    triggers = [str(trigger) for trigger in triggers_raw if trigger is not None]
+    strong = any(trigger.startswith("strong:") for trigger in triggers)
+    sanitized_parts = _sanitize_parts(parts_payload)
+    aux_slim = _build_aux_payload(aux_payload)
+    acct_level = str(aux_slim.get("acctnum_level", "none") or "none")
+
+    entry: Dict[str, Any] = {
+        "with": int(partner_idx),
+        "total": total,
+        "decision": decision,
+        "strong": strong,
+        "mid": mid_value,
+        "dates_all": dates_all,
+        "acctnum_level": acct_level,
+        "reasons": triggers,
+        "parts": sanitized_parts,
+    }
+
+    return entry
+
+
+def _build_best_match_entry(
+    best_info: Optional[Mapping[str, Any]],
+    pair_entries: Mapping[int, Mapping[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Construct the best-match payload leveraging computed pair entries."""
+
+    if not isinstance(best_info, Mapping):
+        return None
+
+    partner = best_info.get("partner_index")
+    if not isinstance(partner, int):
+        return None
+
+    entry = pair_entries.get(partner)
+    total = 0
+    decision = "different"
+
+    if isinstance(entry, Mapping):
+        try:
+            total = int(entry.get("total", 0) or 0)
+        except (TypeError, ValueError):
+            total = 0
+        decision = str(entry.get("decision", "different"))
+    else:
+        result_payload = best_info.get("result")
+        if isinstance(result_payload, Mapping):
+            try:
+                total = int(result_payload.get("total", 0) or 0)
+            except (TypeError, ValueError):
+                total = 0
+            decision = str(result_payload.get("decision", "different"))
+        try:
+            total = int(best_info.get("score_total", total) or total)
+        except (TypeError, ValueError):
+            pass
+
+    tiebreaker = str(best_info.get("tiebreaker", "none"))
+
+    return {
+        "with": int(partner),
+        "total": total,
+        "decision": decision,
+        "tiebreaker": tiebreaker,
+    }
+
+
 def _build_score_entries(
     partner_scores: Mapping[int, Mapping[str, Any]],
     best_partner: Optional[int],
@@ -1011,12 +1110,56 @@ def persist_merge_tags(
 
     merge_tags: Dict[int, Dict[str, Any]] = {}
     all_indices = sorted(set(scores_by_idx.keys()) | set(best_by_idx.keys()))
+
+    pair_payloads: Dict[int, Dict[int, Dict[str, Any]]] = {idx: {} for idx in all_indices}
+    processed_pairs: Set[Tuple[int, int]] = set()
+
+    for left in sorted(scores_by_idx.keys()):
+        partner_map = scores_by_idx.get(left) or {}
+        for right in sorted(partner_map.keys()):
+            if right == left or not isinstance(right, int):
+                continue
+            ordered = (min(left, right), max(left, right))
+            if ordered in processed_pairs:
+                continue
+
+            result = partner_map.get(right)
+            result_mapping: Mapping[str, Any]
+            if isinstance(result, Mapping):
+                result_mapping = result
+            else:
+                result_mapping = {}
+
+            left_entry = _build_pair_entry(right, result_mapping)
+            right_entry = _build_pair_entry(left, result_mapping)
+
+            pair_payloads.setdefault(left, {})[right] = left_entry
+            pair_payloads.setdefault(right, {})[left] = right_entry
+
+            processed_pairs.add(ordered)
+
+    merge_tag_v2_map: Dict[int, Dict[str, Any]] = {}
+    for idx in all_indices:
+        partner_entries = pair_payloads.get(idx, {}) or {}
+        sorted_pairs: List[Dict[str, Any]] = []
+        for partner_idx in sorted(partner_entries.keys()):
+            entry = partner_entries.get(partner_idx)
+            if isinstance(entry, Mapping):
+                sorted_pairs.append(dict(entry))
+
+        best_payload = _build_best_match_entry(best_by_idx.get(idx), partner_entries)
+        merge_tag_v2: Dict[str, Any] = {"pairs": sorted_pairs}
+        if best_payload is not None:
+            merge_tag_v2["best_match"] = best_payload
+        merge_tag_v2_map[idx] = merge_tag_v2
+
     for idx in all_indices:
         partner_scores = scores_by_idx.get(idx, {})
         best_info = best_by_idx.get(idx, {})
         merge_tag = _merge_tag_from_best(idx, partner_scores, best_info)
         merge_tags[idx] = merge_tag
-        _persist_merge_tag(sid, idx, merge_tag, runs_root, None)
+        merge_tag_v2 = merge_tag_v2_map.get(idx, {"pairs": []})
+        _persist_merge_tag(sid, idx, merge_tag, runs_root, None, merge_tag_v2)
         logger.info(
             "MERGE_TAG sid=<%s> idx=<%s> decision=<%s> score=<%s> tiebreaker=<%s>",
             sid,
@@ -1025,6 +1168,10 @@ def persist_merge_tags(
             merge_tag.get("score_total"),
             merge_tag.get("tiebreaker"),
         )
+
+    if os.getenv("WRITE_AI_PACK", "0") == "1":
+        # Placeholder for future optional AI pack writes.
+        pass
 
     return merge_tags
 
@@ -1259,12 +1406,113 @@ def _manifest_path(
         return None
 
 
+def _normalize_pair_entry(entry: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(entry, Mapping):
+        return None
+
+    partner = entry.get("with")
+    try:
+        partner_idx = int(partner)
+    except (TypeError, ValueError):
+        return None
+
+    normalized = dict(entry)
+    normalized["with"] = partner_idx
+
+    try:
+        normalized["total"] = int(entry.get("total", 0) or 0)
+    except (TypeError, ValueError):
+        normalized["total"] = 0
+
+    normalized["decision"] = str(entry.get("decision", "different"))
+    normalized["strong"] = bool(entry.get("strong"))
+
+    try:
+        normalized["mid"] = int(entry.get("mid", 0) or 0)
+    except (TypeError, ValueError):
+        normalized["mid"] = 0
+
+    normalized["dates_all"] = bool(entry.get("dates_all"))
+    normalized["acctnum_level"] = str(entry.get("acctnum_level", "none") or "none")
+
+    reasons = entry.get("reasons", [])
+    if isinstance(reasons, Iterable) and not isinstance(reasons, (str, bytes)):
+        normalized["reasons"] = [str(reason) for reason in reasons if reason is not None]
+    else:
+        normalized["reasons"] = [str(reasons)] if reasons not in (None, "") else []
+
+    normalized["parts"] = _sanitize_parts(entry.get("parts"))
+
+    return normalized
+
+
+def _normalize_best_match(entry: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(entry, Mapping):
+        return None
+
+    partner = entry.get("with")
+    try:
+        partner_idx = int(partner)
+    except (TypeError, ValueError):
+        return None
+
+    normalized = dict(entry)
+    normalized["with"] = partner_idx
+
+    try:
+        normalized["total"] = int(entry.get("total", 0) or 0)
+    except (TypeError, ValueError):
+        normalized["total"] = 0
+
+    normalized["decision"] = str(entry.get("decision", "different"))
+    normalized["tiebreaker"] = str(entry.get("tiebreaker", "none"))
+
+    return normalized
+
+
+def _merge_merge_tag_v2(
+    existing_payload: Any, update_payload: Mapping[str, Any]
+) -> Dict[str, Any]:
+    merged_pairs: Dict[int, Dict[str, Any]] = {}
+
+    if isinstance(existing_payload, Mapping):
+        for entry in existing_payload.get("pairs", []) or []:
+            normalized = _normalize_pair_entry(entry)
+            if normalized is None:
+                continue
+            merged_pairs[int(normalized["with"])] = normalized
+
+    if isinstance(update_payload, Mapping):
+        for entry in update_payload.get("pairs", []) or []:
+            normalized = _normalize_pair_entry(entry)
+            if normalized is None:
+                continue
+            merged_pairs[int(normalized["with"])] = normalized
+
+    ordered_pairs = [merged_pairs[key] for key in sorted(merged_pairs.keys())]
+
+    merged: Dict[str, Any] = {"pairs": ordered_pairs}
+
+    best_entry: Any = None
+    if isinstance(update_payload, Mapping):
+        best_entry = update_payload.get("best_match")
+    if best_entry is None and isinstance(existing_payload, Mapping):
+        best_entry = existing_payload.get("best_match")
+
+    normalized_best = _normalize_best_match(best_entry)
+    if normalized_best is not None:
+        merged["best_match"] = normalized_best
+
+    return merged
+
+
 def _persist_merge_tag(
     sid: str,
     account_index: Optional[int],
     merge_tag: Mapping[str, Any],
     runs_root_path: Optional[Path],
     manifest: Optional[RunManifest],
+    merge_tag_v2: Optional[Mapping[str, Any]] = None,
 ) -> None:
     if runs_root_path is None or not sid or not isinstance(account_index, int):
         return
@@ -1301,6 +1549,14 @@ def _persist_merge_tag(
         sanitized = dict(merge_tag)
 
     summary_obj["merge_tag"] = sanitized
+
+    if merge_tag_v2 is not None:
+        combined_v2 = _merge_merge_tag_v2(summary_obj.get("merge_tag_v2"), merge_tag_v2)
+        try:
+            sanitized_v2 = json.loads(json.dumps(combined_v2, ensure_ascii=False))
+        except TypeError:
+            sanitized_v2 = combined_v2
+        summary_obj["merge_tag_v2"] = sanitized_v2
 
     try:
         summary_path.write_text(

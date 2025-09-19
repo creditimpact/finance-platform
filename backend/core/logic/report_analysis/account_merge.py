@@ -9,7 +9,7 @@ import math
 import os
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
@@ -179,6 +179,243 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         tolerances=tolerances,
     )
 
+
+# ---------------------------------------------------------------------------
+# Deterministic merge helpers
+# ---------------------------------------------------------------------------
+
+_AMOUNT_SANITIZE_RE = re.compile(r"[\s$,/]")
+_AMOUNT_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
+_ACCOUNT_LEVEL_ORDER = {"none": 0, "any": 1, "last4": 2, "exact": 3}
+_TYPE_ALIAS_MAP = {
+    "us bk cacs": "u s bank",
+    "us bk cac": "u s bank",
+    "us bk cas": "u s bank",
+    "us bk cc": "u s bank",
+    "us bank cacs": "u s bank",
+    "u.s. bank": "u s bank",
+    "us bank": "u s bank",
+}
+_DATE_FORMATS = (
+    "%Y-%m-%d",
+    "%Y/%m/%d",
+    "%Y.%m.%d",
+    "%m/%d/%Y",
+    "%m-%d-%Y",
+    "%m.%d.%Y",
+    "%d.%m.%Y",
+    "%d-%m-%Y",
+    "%d/%m/%Y",
+    "%m/%d/%y",
+    "%m-%d-%y",
+    "%Y%m%d",
+)
+
+
+def to_amount(value: Any) -> Optional[float]:
+    """Normalize free-form amount text to a float."""
+
+    if is_missing(value):
+        return None
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    negative = False
+    if text.startswith("(") and text.endswith(")"):
+        negative = True
+        text = text[1:-1]
+
+    cleaned = _AMOUNT_SANITIZE_RE.sub("", text)
+    if not cleaned:
+        return None
+
+    match = _AMOUNT_RE.search(cleaned)
+    if not match:
+        return None
+
+    number_text = match.group()
+    try:
+        number = float(number_text)
+    except ValueError:
+        return None
+
+    if negative and number >= 0:
+        number = -number
+
+    return number
+
+
+def amounts_match(a: Optional[float], b: Optional[float], tol_abs: float, tol_ratio: float) -> bool:
+    """Return True when two normalized amounts match within tolerance."""
+
+    if a is None or b is None:
+        return False
+
+    tol_abs = max(float(tol_abs), 0.0)
+    tol_ratio = max(float(tol_ratio), 0.0)
+    base = min(abs(a), abs(b))
+    allowed = max(tol_abs, base * tol_ratio)
+    return abs(a - b) <= allowed
+
+
+def normalize_balance_owed(value: Any) -> Optional[float]:
+    return to_amount(value)
+
+
+def match_balance_owed(a: Optional[float], b: Optional[float]) -> bool:
+    if a is None or b is None:
+        return False
+    return a == b
+
+
+def normalize_amount_field(value: Any) -> Optional[float]:
+    return to_amount(value)
+
+
+def match_amount_field(
+    a: Optional[float],
+    b: Optional[float],
+    *,
+    tol_abs: float,
+    tol_ratio: float,
+) -> bool:
+    return amounts_match(a, b, tol_abs, tol_ratio)
+
+
+def match_payment_amount(
+    a: Optional[float],
+    b: Optional[float],
+    *,
+    tol_abs: float,
+    tol_ratio: float,
+    count_zero_payment_match: int,
+) -> bool:
+    if a is None or b is None:
+        return False
+    if not count_zero_payment_match and a == 0 and b == 0:
+        return False
+    return amounts_match(a, b, tol_abs, tol_ratio)
+
+
+def digits_only(value: Any) -> Optional[str]:
+    if is_missing(value):
+        return None
+    digits = re.sub(r"\D", "", str(value))
+    return digits or None
+
+
+def normalize_account_number(value: Any) -> Optional[str]:
+    return digits_only(value)
+
+
+def account_number_level(a: Any, b: Any) -> str:
+    digits_a = digits_only(a)
+    digits_b = digits_only(b)
+    if not digits_a or not digits_b:
+        return "none"
+
+    norm_a = digits_a.lstrip("0") or "0"
+    norm_b = digits_b.lstrip("0") or "0"
+    if norm_a == norm_b:
+        return "exact"
+
+    if len(digits_a) >= 4 and len(digits_b) >= 4:
+        if digits_a[-4:] == digits_b[-4:]:
+            return "last4"
+
+    return "none"
+
+
+def account_numbers_match(a: Any, b: Any, min_level: str = "last4") -> Tuple[bool, str]:
+    level = account_number_level(a, b)
+    threshold = _ACCOUNT_LEVEL_ORDER.get(min_level, 0)
+    match = _ACCOUNT_LEVEL_ORDER.get(level, 0) >= threshold and level != "none"
+    return match, level
+
+
+def to_date(value: Any) -> Optional[date]:
+    if is_missing(value):
+        return None
+    if isinstance(value, date):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    # Remove trailing time components if present (e.g., ISO timestamps).
+    if "T" in text:
+        text = text.split("T", 1)[0]
+    if " " in text and len(text.split()) > 1:
+        text = text.split()[0]
+
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+
+    # Attempt separator normalization and retry common Y/M/D patterns.
+    alt = re.sub(r"[.\\-]", "/", text)
+    for fmt in ("%Y/%m/%d", "%m/%d/%Y", "%m/%d/%y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(alt, fmt).date()
+        except ValueError:
+            continue
+
+    return None
+
+
+def date_equal(a: Optional[date], b: Optional[date]) -> bool:
+    if a is None or b is None:
+        return False
+    return a == b
+
+
+def date_within(a: Optional[date], b: Optional[date], days: int) -> bool:
+    if a is None or b is None:
+        return False
+    days = max(int(days), 0)
+    delta = abs((a - b).days)
+    return delta <= days
+
+
+def normalize_type(value: Any) -> Optional[str]:
+    if is_missing(value):
+        return None
+
+    text = str(value).strip().lower()
+    if not text:
+        return None
+
+    text = text.replace("\u2013", "-").replace("\u2014", "-")
+    text = re.sub(r"[._]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    text = text.strip("- ")
+    if not text:
+        return None
+
+    alias_key = text.replace("-", " ")
+    alias_key = re.sub(r"\s+", " ", alias_key)
+    alias = _TYPE_ALIAS_MAP.get(alias_key)
+    if alias:
+        return alias
+
+    normalized = alias_key
+    normalized = normalized.replace("creditcard", "credit card")
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+
+    if "credit card" in normalized:
+        return "credit card"
+
+    return normalized or None
 
 @dataclass
 class LegacyMergeCfg:

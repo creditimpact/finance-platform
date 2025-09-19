@@ -211,6 +211,157 @@ _DATE_FORMATS = (
     "%Y%m%d",
 )
 
+_AMOUNT_FIELDS = {"past_due_amount", "high_balance", "credit_limit"}
+_DATE_FIELDS_DET = {
+    "last_verified",
+    "date_of_last_activity",
+    "date_reported",
+    "date_opened",
+    "closed_date",
+}
+_TYPE_FIELDS = {"creditor_type", "account_type"}
+
+
+def _normalize_field_value(field: str, value: Any) -> Optional[Any]:
+    """Normalize a merge field value according to deterministic rules."""
+
+    if field == "balance_owed":
+        return normalize_balance_owed(value)
+    if field == "account_number":
+        return normalize_account_number(value)
+    if field == "payment_amount" or field in _AMOUNT_FIELDS:
+        return normalize_amount_field(value)
+    if field == "last_payment" or field in _DATE_FIELDS_DET:
+        return to_date(value)
+    if field in _TYPE_FIELDS:
+        return normalize_type(value)
+    return value
+
+
+def _serialize_normalized_value(value: Any) -> Any:
+    """Convert normalized values into JSON/log friendly primitives."""
+
+    if isinstance(value, datetime):
+        value = value.date()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return value
+
+
+def _serialize_normalized_pair(a: Any, b: Any) -> Tuple[Any, Any]:
+    return (_serialize_normalized_value(a), _serialize_normalized_value(b))
+
+
+def _match_field_values(
+    field: str,
+    norm_a: Any,
+    norm_b: Any,
+    raw_a: Any,
+    raw_b: Any,
+    cfg: MergeCfg,
+) -> Tuple[bool, Dict[str, Any]]:
+    """Apply the appropriate predicate for a normalized pair of values."""
+
+    aux: Dict[str, Any] = {}
+
+    if field == "account_number":
+        min_level = str(cfg.triggers.get("MERGE_AI_ON_ACCTNUM_LEVEL", "last4")).lower()
+        matched, level = account_numbers_match(raw_a, raw_b, min_level=min_level)
+        aux["acctnum_level"] = level
+        return matched, aux
+
+    if field == "balance_owed":
+        return match_balance_owed(norm_a, norm_b), aux
+
+    if field == "payment_amount":
+        tol_abs = float(cfg.tolerances.get("AMOUNT_TOL_ABS", 0.0))
+        tol_ratio = float(cfg.tolerances.get("AMOUNT_TOL_RATIO", 0.0))
+        count_zero = int(cfg.tolerances.get("COUNT_ZERO_PAYMENT_MATCH", 0))
+        matched = match_payment_amount(
+            norm_a,
+            norm_b,
+            tol_abs=tol_abs,
+            tol_ratio=tol_ratio,
+            count_zero_payment_match=count_zero,
+        )
+        return matched, aux
+
+    if field in _AMOUNT_FIELDS:
+        tol_abs = float(cfg.tolerances.get("AMOUNT_TOL_ABS", 0.0))
+        tol_ratio = float(cfg.tolerances.get("AMOUNT_TOL_RATIO", 0.0))
+        matched = match_amount_field(norm_a, norm_b, tol_abs=tol_abs, tol_ratio=tol_ratio)
+        return matched, aux
+
+    if field == "last_payment":
+        day_tol = int(cfg.tolerances.get("LAST_PAYMENT_DAY_TOL", 0))
+        matched = date_within(norm_a, norm_b, day_tol)
+        return matched, aux
+
+    if field in _DATE_FIELDS_DET:
+        return date_equal(norm_a, norm_b), aux
+
+    if field in _TYPE_FIELDS:
+        matched = norm_a == norm_b and norm_a is not None and norm_b is not None
+        return matched, aux
+
+    raise KeyError(f"Unsupported merge field: {field}")
+
+
+def match_field_best_of_9(
+    field_name: str,
+    A: Mapping[str, Mapping[str, Any]],
+    B: Mapping[str, Mapping[str, Any]],
+    cfg: MergeCfg,
+) -> Tuple[bool, Dict[str, Any]]:
+    """Check all cross-bureau pairs for a field and return best match metadata."""
+
+    if not isinstance(A, Mapping):
+        A = {}
+    if not isinstance(B, Mapping):
+        B = {}
+
+    bureaus = ("transunion", "experian", "equifax")
+    field_key = str(field_name)
+
+    for left in bureaus:
+        left_branch = A.get(left)
+        if not isinstance(left_branch, Mapping):
+            continue
+        raw_left = left_branch.get(field_key)
+        if is_missing(raw_left):
+            continue
+        norm_left = _normalize_field_value(field_key, raw_left)
+        if norm_left is None:
+            continue
+
+        for right in bureaus:
+            right_branch = B.get(right)
+            if not isinstance(right_branch, Mapping):
+                continue
+            raw_right = right_branch.get(field_key)
+            if is_missing(raw_right):
+                continue
+            norm_right = _normalize_field_value(field_key, raw_right)
+            if norm_right is None:
+                continue
+
+            matched, aux = _match_field_values(
+                field_key, norm_left, norm_right, raw_left, raw_right, cfg
+            )
+            if not matched:
+                continue
+
+            result_aux = {
+                "best_pair": (left, right),
+                "normalized_values": _serialize_normalized_pair(norm_left, norm_right),
+            }
+            result_aux.update(aux)
+            return True, result_aux
+
+    return False, {}
+
 
 def to_amount(value: Any) -> Optional[float]:
     """Normalize free-form amount text to a float."""

@@ -32,9 +32,18 @@ def test_strong_balance_owed_trigger(cfg) -> None:
     assert result["triggers"] == ["strong:balance_owed", "total"]
 
 
-def test_strong_account_number_trigger(cfg) -> None:
-    bureaus_a = _make_bureaus(transunion={"account_number": "1234"})
-    bureaus_b = _make_bureaus(equifax={"account_number": "001234"})
+@pytest.mark.parametrize(
+    "left,right,expected_level",
+    [
+        ("1234", "001234", "exact"),
+        ("XXXX1234", "99991234", "last4"),
+    ],
+)
+def test_strong_account_number_trigger_levels(
+    cfg, left: str, right: str, expected_level: str
+) -> None:
+    bureaus_a = _make_bureaus(transunion={"account_number": left})
+    bureaus_b = _make_bureaus(equifax={"account_number": right})
 
     result = score_pair(bureaus_a, bureaus_b, cfg)
 
@@ -43,6 +52,23 @@ def test_strong_account_number_trigger(cfg) -> None:
     assert result["decision"] == "ai"
     assert result["conflicts"] == []
     assert result["triggers"] == ["strong:account_number", "total"]
+    assert (
+        result["aux"]["account_number"].get("acctnum_level")
+        == expected_level
+    )
+
+
+def test_account_number_masked_without_digits_does_not_match(cfg) -> None:
+    bureaus_a = _make_bureaus(transunion={"account_number": "****"})
+    bureaus_b = _make_bureaus(equifax={"account_number": "XXXX"})
+
+    result = score_pair(bureaus_a, bureaus_b, cfg)
+
+    assert result["total"] == 0
+    assert result["parts"]["account_number"] == 0
+    assert result["decision"] == "different"
+    assert result["triggers"] == []
+    assert result["aux"]["account_number"]["matched"] is False
 
 
 def test_mid_trigger(cfg) -> None:
@@ -68,6 +94,22 @@ def test_mid_trigger(cfg) -> None:
     assert result["decision"] == "ai"
     assert result["triggers"] == ["mid", "total"]
     assert result["dates_all"] is False
+
+
+def test_any_to_any_cross_bureau_match(cfg) -> None:
+    bureaus_a = _make_bureaus(transunion={"high_balance": "900"})
+    bureaus_b = _make_bureaus(equifax={"high_balance": 900})
+
+    result = score_pair(bureaus_a, bureaus_b, cfg)
+
+    assert result["total"] == cfg.points["high_balance"]
+    assert result["parts"]["high_balance"] == cfg.points["high_balance"]
+    assert result["decision"] == "different"
+    assert result["triggers"] == []
+    assert result["aux"]["high_balance"]["best_pair"] == (
+        "transunion",
+        "equifax",
+    )
 
 
 def test_dates_all_trigger(cfg) -> None:

@@ -8,8 +8,10 @@ from backend.core.logic.report_analysis.account_merge import (
     date_equal,
     date_within,
     digits_only,
+    get_merge_cfg,
     match_amount_field,
     match_balance_owed,
+    match_field_best_of_9,
     match_payment_amount,
     normalize_amount_field,
     normalize_balance_owed,
@@ -113,4 +115,68 @@ def test_normalize_type_aliases_credit_card_and_bank():
     assert normalize_type("US BK CACS") == "u s bank"
     assert normalize_type("Credit-Card - Revolving") == "credit card"
     assert normalize_type("--") is None
+
+
+def test_match_field_best_of_9_cross_bureau_balance():
+    cfg = get_merge_cfg()
+    account_a = {
+        "transunion": {"balance_owed": "100"},
+        "experian": {},
+        "equifax": {},
+    }
+    account_b = {
+        "transunion": {"balance_owed": "200"},
+        "experian": {},
+        "equifax": {"balance_owed": "100.00"},
+    }
+
+    matched, aux = match_field_best_of_9("balance_owed", account_a, account_b, cfg)
+
+    assert matched is True
+    assert aux["best_pair"] == ("transunion", "equifax")
+    assert aux["normalized_values"] == (100.0, 100.0)
+
+
+def test_match_field_best_of_9_account_number_aux():
+    cfg = get_merge_cfg()
+    account_a = {
+        "experian": {"account_number": "****1234"},
+        "transunion": {},
+        "equifax": {},
+    }
+    account_b = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {"account_number": "00001234"},
+    }
+
+    matched, aux = match_field_best_of_9("account_number", account_a, account_b, cfg)
+
+    assert matched is True
+    assert aux["best_pair"] == ("experian", "equifax")
+    assert aux["acctnum_level"] == "exact"
+    assert aux["normalized_values"] == ("1234", "00001234")
+
+
+def test_match_field_best_of_9_missing_values_do_not_match():
+    cfg = get_merge_cfg()
+    account_a = {"transunion": {"high_balance": "--"}}
+    account_b = {"equifax": {"high_balance": ""}}
+
+    matched, aux = match_field_best_of_9("high_balance", account_a, account_b, cfg)
+
+    assert matched is False
+    assert aux == {}
+
+
+def test_match_field_best_of_9_last_payment_within_tolerance():
+    cfg = get_merge_cfg()
+    account_a = {"experian": {"last_payment": "2023-05-01"}}
+    account_b = {"transunion": {"last_payment": "2023-05-05"}}
+
+    matched, aux = match_field_best_of_9("last_payment", account_a, account_b, cfg)
+
+    assert matched is True
+    assert aux["best_pair"] == ("experian", "transunion")
+    assert aux["normalized_values"] == ("2023-05-01", "2023-05-05")
 

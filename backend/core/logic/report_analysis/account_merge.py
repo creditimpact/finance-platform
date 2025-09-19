@@ -11,7 +11,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from itertools import combinations
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
 from backend.pipeline.runs import RunManifest
@@ -19,6 +18,7 @@ from backend.pipeline.runs import RunManifest
 __all__ = [
     "load_bureaus",
     "get_merge_cfg",
+    "gen_unordered_pairs",
     "score_pair_0_100",
     "score_all_pairs_0_100",
     "choose_best_partner",
@@ -77,6 +77,13 @@ def _read_env_choice(
         return str(default)
     lowered = str(raw).strip().lower()
     return lowered_choices.get(lowered, str(default))
+
+
+def gen_unordered_pairs(indices: List[int]) -> List[Tuple[int, int]]:
+    """Return all unordered pairs (i, j) with i < j and no duplicates."""
+
+    unique = sorted(set(indices))
+    return [(i, j) for pos, i in enumerate(unique) for j in unique[pos + 1 :]]
 
 
 def load_bureaus(
@@ -753,7 +760,7 @@ def score_all_pairs_0_100(
         idx: {} for idx in unique_indices
     }
 
-    for left, right in combinations(unique_indices, 2):
+    for left, right in gen_unordered_pairs(unique_indices):
         result = score_pair_0_100(
             bureaus_by_idx.get(left, {}), bureaus_by_idx.get(right, {}), cfg
         )

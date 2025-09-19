@@ -6,23 +6,33 @@ import argparse
 import json
 import os
 from copy import deepcopy
+from functools import lru_cache
+from importlib import import_module
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from backend.core.logic.report_analysis.account_merge import (
-    _FIELD_SEQUENCE,
-    _build_aux_payload,
-    _merge_tag_from_best,
-    _sanitize_parts,
-    choose_best_partner,
-    get_merge_cfg,
-    load_bureaus,
-    score_pair,
-)
+from backend.core.logic.report_analysis.account_merge import score_all_pairs_0_100
 
 
 DEFAULT_RUNS_ROOT = Path(os.environ.get("RUNS_ROOT", "runs"))
 AUTO_DECISIONS = {"ai", "auto"}
+
+FIELD_SEQUENCE: Tuple[str, ...] = (
+    "balance_owed",
+    "account_number",
+    "last_payment",
+    "past_due_amount",
+    "high_balance",
+    "creditor_type",
+    "account_type",
+    "payment_amount",
+    "credit_limit",
+    "last_verified",
+    "date_of_last_activity",
+    "date_reported",
+    "date_opened",
+    "closed_date",
+)
 
 
 def _discover_account_indices(accounts_dir: Path) -> List[int]:
@@ -42,26 +52,15 @@ def _discover_account_indices(accounts_dir: Path) -> List[int]:
     return sorted(set(indices))
 
 
-def _load_all_bureaus(
-    sid: str, indices: Sequence[int], runs_root: Path
-) -> Dict[int, Mapping[str, Mapping[str, Any]]]:
-    data: Dict[int, Mapping[str, Mapping[str, Any]]] = {}
-    for idx in indices:
-        try:
-            data[idx] = load_bureaus(sid, idx, runs_root=runs_root)
-        except FileNotFoundError:
-            data[idx] = {}
-        except Exception:
-            data[idx] = {}
-    return data
-
-
 def _format_top_parts(parts: Mapping[str, int], limit: int = 5) -> str:
-    sortable = [
-        (field, int(parts.get(field, 0) or 0))
-        for field in _FIELD_SEQUENCE
-        if int(parts.get(field, 0) or 0) > 0
-    ]
+    sortable = []
+    for field in FIELD_SEQUENCE:
+        try:
+            points = int(parts.get(field, 0) or 0)
+        except (TypeError, ValueError):
+            points = 0
+        if points > 0:
+            sortable.append((field, points))
     if not sortable:
         return "-"
 
@@ -72,7 +71,7 @@ def _format_top_parts(parts: Mapping[str, int], limit: int = 5) -> str:
 
 def _format_matched_pairs(mapping: Mapping[str, Sequence[str]]) -> str:
     parts: List[str] = []
-    for field in _FIELD_SEQUENCE:
+    for field in FIELD_SEQUENCE:
         pair = mapping.get(field)
         if not pair:
             continue
@@ -80,6 +79,46 @@ def _format_matched_pairs(mapping: Mapping[str, Sequence[str]]) -> str:
             continue
         parts.append(f"{field}={pair[0]}/{pair[1]}")
     return ", ".join(parts) if parts else "-"
+
+
+def _sanitize_parts(parts: Optional[Mapping[str, Any]]) -> Dict[str, int]:
+    sanitized: Dict[str, int] = {}
+    for field in FIELD_SEQUENCE:
+        value = 0
+        if isinstance(parts, Mapping):
+            try:
+                value = int(parts.get(field, 0) or 0)
+            except (TypeError, ValueError):
+                value = 0
+        sanitized[field] = value
+    return sanitized
+
+
+def _extract_aux_payload(aux: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    acct_level = "none"
+    by_field_pairs: Dict[str, List[str]] = {}
+
+    if isinstance(aux, Mapping):
+        acct_aux = aux.get("account_number")
+        if isinstance(acct_aux, Mapping):
+            level = acct_aux.get("acctnum_level")
+            if isinstance(level, str) and level:
+                acct_level = level
+
+        for field in FIELD_SEQUENCE:
+            field_aux = aux.get(field)
+            if not isinstance(field_aux, Mapping):
+                continue
+            best_pair = field_aux.get("best_pair")
+            if (
+                isinstance(best_pair, Iterable)
+                and not isinstance(best_pair, (str, bytes))
+            ):
+                pair_list = list(best_pair)
+                if len(pair_list) == 2:
+                    by_field_pairs[field] = [str(pair_list[0]), str(pair_list[1])]
+
+    return {"acctnum_level": acct_level, "by_field_pairs": by_field_pairs}
 
 
 def _build_row(
@@ -98,7 +137,7 @@ def _build_row(
         reasons.extend([f"conflict:{name}" for name in conflicts])
 
     parts = _sanitize_parts(result.get("parts"))
-    aux_payload = _build_aux_payload(result.get("aux", {}))
+    aux_payload = _extract_aux_payload(result.get("aux", {}))
     acctnum_level = aux_payload.get("acctnum_level", "none")
     matched_pairs_map = aux_payload.get("by_field_pairs", {})
 
@@ -150,43 +189,58 @@ def compute_scores_for_sid(
     sid: str,
     *,
     runs_root: Path = DEFAULT_RUNS_ROOT,
-    cfg: Optional[Any] = None,
 ) -> Tuple[List[int], Dict[int, Mapping[int, Mapping[str, Any]]]]:
     accounts_dir = runs_root / sid / "cases" / "accounts"
     indices = _discover_account_indices(accounts_dir)
     if not indices:
         return [], {}
 
-    if cfg is None:
-        cfg = get_merge_cfg()
+    scores = score_all_pairs_0_100(sid, indices, runs_root=runs_root)
 
-    bureaus = _load_all_bureaus(sid, indices, runs_root)
-
-    scores: Dict[int, Dict[int, Mapping[str, Any]]] = {
-        idx: {} for idx in indices
-    }
-
-    for pos, left in enumerate(indices):
-        left_data = bureaus.get(left, {})
-        for right in indices[pos + 1 :]:
-            right_data = bureaus.get(right, {})
-            result = score_pair(left_data, right_data, cfg)
-            scores[left][right] = deepcopy(result)
-            scores.setdefault(right, {})[left] = deepcopy(result)
+    for idx in indices:
+        scores.setdefault(idx, {})
 
     return indices, scores
 
 
-def build_merge_tags(
+@lru_cache(maxsize=1)
+def _get_account_merge_module():
+    return import_module("backend.core.logic.report_analysis.account_merge")
+
+
+def choose_best_partner_cached(
     scores_by_idx: Mapping[int, Mapping[int, Mapping[str, Any]]]
 ) -> Dict[int, Dict[str, Any]]:
-    best_by_idx = choose_best_partner(scores_by_idx)
+    module = _get_account_merge_module()
+    return module.choose_best_partner(scores_by_idx)
+
+
+def build_merge_tags(
+    scores_by_idx: Mapping[int, Mapping[int, Mapping[str, Any]]],
+    best_by_idx: Optional[Mapping[int, Mapping[str, Any]]] = None,
+) -> Dict[int, Dict[str, Any]]:
+    if best_by_idx is None:
+        best_by_idx = choose_best_partner_cached(scores_by_idx)
+    module = _get_account_merge_module()
     tags: Dict[int, Dict[str, Any]] = {}
     for idx in sorted(set(scores_by_idx.keys()) | set(best_by_idx.keys())):
         partner_scores = scores_by_idx.get(idx, {})
         best_info = best_by_idx.get(idx, {})
-        tags[idx] = _merge_tag_from_best(idx, partner_scores, best_info)
+        tags[idx] = module._merge_tag_from_best(idx, partner_scores, best_info)
     return tags
+
+
+def persist_merge_tags_to_summary(
+    sid: str,
+    scores_by_idx: Mapping[int, Mapping[int, Mapping[str, Any]]],
+    best_by_idx: Mapping[int, Mapping[str, Any]],
+    *,
+    runs_root: Path,
+) -> Dict[int, Dict[str, Any]]:
+    module = _get_account_merge_module()
+    return module.persist_merge_tags(
+        sid, scores_by_idx, best_by_idx, runs_root=runs_root
+    )
 
 
 def _print_rows(rows: Sequence[Mapping[str, Any]]) -> None:
@@ -252,19 +306,24 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         action="store_true",
         help="Display detailed JSON for each pair after the table",
     )
+    parser.add_argument(
+        "--write-tags",
+        action="store_true",
+        help="Persist merge tags back to account summaries",
+    )
 
     args = parser.parse_args(argv)
 
     sid = str(args.sid)
     runs_root = Path(args.runs_root)
 
-    cfg = get_merge_cfg()
-    indices, scores_by_idx = compute_scores_for_sid(sid, runs_root=runs_root, cfg=cfg)
+    indices, scores_by_idx = compute_scores_for_sid(sid, runs_root=runs_root)
 
     if not indices:
         print(f"No accounts found for SID {sid!r} under {runs_root}")
         return
 
+    best_by_idx = choose_best_partner_cached(scores_by_idx)
     rows = build_pair_rows(scores_by_idx, only_ai=bool(args.only_ai))
 
     if not rows:
@@ -272,7 +331,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     else:
         _print_rows(rows)
 
-    merge_tags = build_merge_tags(scores_by_idx)
+    merge_tags = build_merge_tags(scores_by_idx, best_by_idx)
+
+    if args.write_tags:
+        merge_tags = persist_merge_tags_to_summary(
+            sid, scores_by_idx, best_by_idx, runs_root=runs_root
+        )
 
     if args.show:
         for row in rows:

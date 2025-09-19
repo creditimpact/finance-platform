@@ -219,6 +219,52 @@ _DATE_FIELDS_DET = {
     "date_opened",
     "closed_date",
 }
+_FIELD_SEQUENCE = (
+    "balance_owed",
+    "account_number",
+    "last_payment",
+    "past_due_amount",
+    "high_balance",
+    "creditor_type",
+    "account_type",
+    "payment_amount",
+    "credit_limit",
+    "last_verified",
+    "date_of_last_activity",
+    "date_reported",
+    "date_opened",
+    "closed_date",
+)
+_MID_FIELD_SET = {
+    "last_payment",
+    "past_due_amount",
+    "high_balance",
+    "creditor_type",
+    "account_type",
+    "payment_amount",
+    "credit_limit",
+}
+_DATE_FIELDS_ORDER = (
+    "last_verified",
+    "date_of_last_activity",
+    "date_reported",
+    "date_opened",
+    "closed_date",
+)
+_AMOUNT_CONFLICT_FIELDS = {
+    "balance_owed",
+    "payment_amount",
+    "past_due_amount",
+    "high_balance",
+    "credit_limit",
+}
+_ACCOUNT_LAST4_KEYS = (
+    "account_number_last4",
+    "acct_last4",
+    "account_last4",
+    "last4",
+    "account_number",
+)
 _TYPE_FIELDS = {"creditor_type", "account_type"}
 
 
@@ -361,6 +407,192 @@ def match_field_best_of_9(
             return True, result_aux
 
     return False, {}
+
+
+def _collect_normalized_field_values(
+    bureaus: Mapping[str, Mapping[str, Any]], field: str
+) -> List[Any]:
+    values: List[Any] = []
+    if not isinstance(bureaus, Mapping):
+        return values
+
+    for bureau_key in ("transunion", "experian", "equifax"):
+        branch = bureaus.get(bureau_key)
+        if not isinstance(branch, Mapping):
+            continue
+        raw_value = branch.get(field)
+        if is_missing(raw_value):
+            continue
+        norm_value = _normalize_field_value(field, raw_value)
+        if norm_value is None:
+            continue
+        values.append(norm_value)
+    return values
+
+
+def _collect_account_last4(bureaus: Mapping[str, Mapping[str, Any]]) -> Set[str]:
+    last4_values: Set[str] = set()
+    if not isinstance(bureaus, Mapping):
+        return last4_values
+
+    for bureau_key in ("transunion", "experian", "equifax"):
+        branch = bureaus.get(bureau_key)
+        if not isinstance(branch, Mapping):
+            continue
+        for key in _ACCOUNT_LAST4_KEYS:
+            raw_value = branch.get(key)
+            if is_missing(raw_value):
+                continue
+            digits = digits_only(raw_value)
+            if not digits or len(digits) < 4:
+                continue
+            last4_values.add(digits[-4:])
+    return last4_values
+
+
+def _detect_amount_conflicts(
+    A: Mapping[str, Mapping[str, Any]],
+    B: Mapping[str, Mapping[str, Any]],
+    cfg: MergeCfg,
+) -> List[str]:
+    conflicts: List[str] = []
+    tol_abs = float(cfg.tolerances.get("AMOUNT_TOL_ABS", 0.0))
+    tol_ratio = float(cfg.tolerances.get("AMOUNT_TOL_RATIO", 0.0))
+
+    for field in _AMOUNT_CONFLICT_FIELDS:
+        values_a = _collect_normalized_field_values(A, field)
+        values_b = _collect_normalized_field_values(B, field)
+        if not values_a or not values_b:
+            continue
+
+        conflict = True
+        if field == "balance_owed":
+            for left in values_a:
+                for right in values_b:
+                    if match_balance_owed(left, right):
+                        conflict = False
+                        break
+                if not conflict:
+                    break
+        else:
+            for left in values_a:
+                for right in values_b:
+                    if match_amount_field(left, right, tol_abs=tol_abs, tol_ratio=tol_ratio):
+                        conflict = False
+                        break
+                if not conflict:
+                    break
+
+        if conflict:
+            conflicts.append(f"amount_conflict:{field}")
+
+    return conflicts
+
+
+def score_pair(
+    A_bureaus: Mapping[str, Mapping[str, Any]],
+    B_bureaus: Mapping[str, Mapping[str, Any]],
+    cfg: MergeCfg,
+) -> Dict[str, Any]:
+    if not isinstance(A_bureaus, Mapping):
+        A_data: Mapping[str, Mapping[str, Any]] = {}
+    else:
+        A_data = A_bureaus
+    if not isinstance(B_bureaus, Mapping):
+        B_data: Mapping[str, Mapping[str, Any]] = {}
+    else:
+        B_data = B_bureaus
+
+    total = 0
+    mid_sum = 0
+    parts: Dict[str, int] = {}
+    aux: Dict[str, Dict[str, Any]] = {}
+    field_matches: Dict[str, bool] = {}
+    date_matches: Dict[str, bool] = {field: False for field in _DATE_FIELDS_ORDER}
+
+    for field in _FIELD_SEQUENCE:
+        matched, match_aux = match_field_best_of_9(field, A_data, B_data, cfg)
+        points = int(cfg.points.get(field, 0))
+        if matched:
+            total += points
+            if field in _MID_FIELD_SET:
+                mid_sum += points
+        parts[field] = points if matched else 0
+
+        per_field_aux: Dict[str, Any] = dict(match_aux)
+        per_field_aux["matched"] = matched
+        aux[field] = per_field_aux
+        field_matches[field] = matched
+
+        if field in date_matches:
+            date_matches[field] = matched
+
+    dates_all = bool(date_matches) and all(date_matches.values())
+
+    triggers: List[str] = []
+    decision = "different"
+
+    if cfg.triggers.get("MERGE_AI_ON_BALOWED_EXACT", True) and field_matches.get(
+        "balance_owed"
+    ):
+        triggers.append("strong:balance_owed")
+        if decision == "different":
+            decision = "ai"
+
+    acctnum_aux = aux.get("account_number", {})
+    acct_level = str(acctnum_aux.get("acctnum_level") or "")
+    min_level = str(cfg.triggers.get("MERGE_AI_ON_ACCTNUM_LEVEL", "last4")).lower()
+    if field_matches.get("account_number") and acct_level:
+        if _ACCOUNT_LEVEL_ORDER.get(acct_level, 0) >= _ACCOUNT_LEVEL_ORDER.get(
+            min_level, 0
+        ) and acct_level != "none":
+            triggers.append("strong:account_number")
+            if decision == "different":
+                decision = "ai"
+
+    mid_threshold = int(cfg.triggers.get("MERGE_AI_ON_MID_K", 0))
+    if mid_sum >= mid_threshold and mid_threshold > 0:
+        triggers.append("mid")
+        if decision == "different":
+            decision = "ai"
+
+    if cfg.triggers.get("MERGE_AI_ON_ALL_DATES", False) and dates_all:
+        triggers.append("dates")
+        if decision == "different":
+            decision = "ai"
+
+    ai_threshold = int(cfg.thresholds.get("AI_THRESHOLD", 0))
+    if total >= ai_threshold and ai_threshold > 0:
+        triggers.append("total")
+        if decision == "different":
+            decision = "ai"
+
+    conflicts: List[str] = []
+    last4_a = _collect_account_last4(A_data)
+    last4_b = _collect_account_last4(B_data)
+    if last4_a and last4_b and last4_a.isdisjoint(last4_b):
+        conflicts.append("acct_last4_mismatch")
+
+    for conflict in _detect_amount_conflicts(A_data, B_data, cfg):
+        if conflict not in conflicts:
+            conflicts.append(conflict)
+
+    auto_threshold = int(cfg.thresholds.get("AUTO_MERGE_THRESHOLD", 0))
+    if total >= auto_threshold and auto_threshold > 0 and not conflicts:
+        decision = "auto"
+
+    result = {
+        "total": int(total),
+        "parts": parts,
+        "mid_sum": int(mid_sum),
+        "dates_all": dates_all,
+        "aux": aux,
+        "triggers": triggers,
+        "conflicts": conflicts,
+        "decision": decision,
+    }
+
+    return result
 
 
 def to_amount(value: Any) -> Optional[float]:

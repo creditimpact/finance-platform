@@ -592,12 +592,16 @@ def score_pair_0_100(
     dates_all = bool(date_matches) and all(date_matches.values())
 
     triggers: List[str] = []
-    decision = "different"
+    strong_triggered = False
+    mid_triggered = False
+    dates_triggered = False
+    total_triggered = False
 
     if cfg.triggers.get("MERGE_AI_ON_BALOWED_EXACT", True) and field_matches.get(
         "balance_owed"
     ):
         triggers.append("strong:balance_owed")
+        strong_triggered = True
         trigger_events.append(
             {
                 "kind": "strong",
@@ -607,8 +611,6 @@ def score_pair_0_100(
                 },
             }
         )
-        if decision == "different":
-            decision = "ai"
 
     acctnum_aux = aux.get("account_number", {})
     acct_level = str(acctnum_aux.get("acctnum_level") or "")
@@ -618,6 +620,7 @@ def score_pair_0_100(
             min_level, 0
         ) and acct_level != "none":
             triggers.append("strong:account_number")
+            strong_triggered = True
             trigger_events.append(
                 {
                     "kind": "strong",
@@ -628,12 +631,11 @@ def score_pair_0_100(
                     },
                 }
             )
-            if decision == "different":
-                decision = "ai"
 
     mid_threshold = int(cfg.triggers.get("MERGE_AI_ON_MID_K", 0))
     if mid_sum >= mid_threshold and mid_threshold > 0:
         triggers.append("mid")
+        mid_triggered = True
         trigger_events.append(
             {
                 "kind": "mid",
@@ -643,11 +645,10 @@ def score_pair_0_100(
                 },
             }
         )
-        if decision == "different":
-            decision = "ai"
 
     if cfg.triggers.get("MERGE_AI_ON_ALL_DATES", False) and dates_all:
         triggers.append("dates")
+        dates_triggered = True
         trigger_events.append(
             {
                 "kind": "dates",
@@ -661,12 +662,11 @@ def score_pair_0_100(
                 },
             }
         )
-        if decision == "different":
-            decision = "ai"
 
     ai_threshold = int(cfg.thresholds.get("AI_THRESHOLD", 0))
     if total >= ai_threshold and ai_threshold > 0:
         triggers.append("total")
+        total_triggered = True
         trigger_events.append(
             {
                 "kind": "total",
@@ -676,8 +676,6 @@ def score_pair_0_100(
                 },
             }
         )
-        if decision == "different":
-            decision = "ai"
 
     conflicts: List[str] = []
     last4_a = _collect_account_last4(A_data)
@@ -690,8 +688,20 @@ def score_pair_0_100(
             conflicts.append(conflict)
 
     auto_threshold = int(cfg.thresholds.get("AUTO_MERGE_THRESHOLD", 0))
-    if total >= auto_threshold and auto_threshold > 0 and not conflicts:
+    has_hard_conflict = bool(conflicts)
+
+    decision = "different"
+    if total >= auto_threshold and auto_threshold > 0 and not has_hard_conflict:
         decision = "auto"
+    else:
+        ai_triggered = (
+            strong_triggered
+            or mid_triggered
+            or dates_triggered
+            or total_triggered
+        )
+        if ai_triggered:
+            decision = "ai"
 
     result = {
         "total": int(total),

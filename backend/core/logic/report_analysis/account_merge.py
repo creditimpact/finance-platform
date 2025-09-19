@@ -8,9 +8,11 @@ import logging
 import math
 import os
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from itertools import combinations
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
 from backend.pipeline.runs import RunManifest
@@ -593,6 +595,304 @@ def score_pair(
     }
 
     return result
+
+
+def _strong_priority(triggers: Iterable[str]) -> int:
+    """Return a numeric priority for strong triggers."""
+
+    trigger_set = set(triggers or [])
+    if "strong:balance_owed" in trigger_set:
+        return 2
+    if "strong:account_number" in trigger_set:
+        return 1
+    return 0
+
+
+def score_all_pairs(
+    sid: str,
+    idx_list: Iterable[int],
+    runs_root: Path = Path("runs"),
+) -> Dict[int, Dict[int, Dict[str, Any]]]:
+    """Score all unordered account pairs for a case run."""
+
+    cfg = get_merge_cfg()
+
+    indices: List[int] = []
+    for raw_idx in idx_list:
+        if isinstance(raw_idx, bool):
+            continue
+        try:
+            idx_val = int(raw_idx)
+        except (TypeError, ValueError):
+            logger.warning("MERGE_SCORE sid=<%s> invalid_index=%r", sid, raw_idx)
+            continue
+        indices.append(idx_val)
+
+    unique_indices = sorted(set(indices))
+    bureaus_by_idx: Dict[int, Dict[str, Dict[str, Any]]] = {}
+    for idx in unique_indices:
+        try:
+            bureaus = load_bureaus(sid, idx, runs_root=runs_root)
+        except FileNotFoundError:
+            logger.warning(
+                "MERGE_SCORE sid=<%s> idx=<%s> bureaus_missing", sid, idx
+            )
+            bureaus = {}
+        except Exception:
+            logger.exception(
+                "MERGE_SCORE sid=<%s> idx=<%s> bureaus_load_failed", sid, idx
+            )
+            bureaus = {}
+        bureaus_by_idx[idx] = bureaus
+
+    scores: Dict[int, Dict[int, Dict[str, Any]]] = {
+        idx: {} for idx in unique_indices
+    }
+
+    for left, right in combinations(unique_indices, 2):
+        result = score_pair(bureaus_by_idx.get(left, {}), bureaus_by_idx.get(right, {}), cfg)
+        logger.info(
+            "MERGE_SCORE sid=<%s> pair=(%s,%s) total=<%s> decision=<%s>",
+            sid,
+            left,
+            right,
+            result.get("total"),
+            result.get("decision"),
+        )
+        scores[left][right] = deepcopy(result)
+        scores[right][left] = deepcopy(result)
+
+    return scores
+
+
+def choose_best_partner(
+    scores_by_idx: Mapping[int, Mapping[int, Mapping[str, Any]]]
+) -> Dict[int, Dict[str, Any]]:
+    """Select the best partner for each account using deterministic tie-breakers."""
+
+    best_map: Dict[int, Dict[str, Any]] = {}
+    for idx in sorted(scores_by_idx.keys()):
+        partner_map = scores_by_idx.get(idx) or {}
+        best_partner: Optional[int] = None
+        best_priority = -1
+        best_score = -1
+        tiebreaker_reason = "none"
+        best_result: Optional[Dict[str, Any]] = None
+
+        for partner_idx in sorted(partner_map.keys()):
+            if partner_idx == idx:
+                continue
+            result = partner_map.get(partner_idx)
+            if not isinstance(result, Mapping):
+                continue
+            triggers = result.get("triggers") or []
+            strong_rank = _strong_priority(triggers)
+            total_score = int(result.get("total", 0) or 0)
+
+            choose = False
+            reason = tiebreaker_reason
+            if best_partner is None:
+                choose = True
+                if strong_rank > 0:
+                    reason = "strong"
+                elif total_score > 0:
+                    reason = "score"
+                else:
+                    reason = "index"
+            elif strong_rank > best_priority:
+                choose = True
+                reason = "strong"
+            elif strong_rank == best_priority:
+                if total_score > best_score:
+                    choose = True
+                    reason = "score"
+                elif total_score == best_score and partner_idx < best_partner:
+                    choose = True
+                    reason = "index"
+
+            if not choose:
+                continue
+
+            best_partner = partner_idx
+            best_priority = strong_rank
+            best_score = total_score
+            tiebreaker_reason = reason
+            best_result = deepcopy(result)
+
+        best_map[idx] = {
+            "partner_index": best_partner,
+            "result": best_result,
+            "tiebreaker": tiebreaker_reason,
+            "strong_rank": best_priority,
+            "score_total": best_score if best_score >= 0 else 0,
+        }
+
+    return best_map
+
+
+def _build_aux_payload(aux: Mapping[str, Any]) -> Dict[str, Any]:
+    acct_level = "none"
+    by_field_pairs: Dict[str, List[str]] = {}
+    matched_fields: Dict[str, bool] = {}
+
+    if isinstance(aux, Mapping):
+        acct_aux = aux.get("account_number")
+        if isinstance(acct_aux, Mapping):
+            level = acct_aux.get("acctnum_level")
+            if isinstance(level, str) and level:
+                acct_level = level
+
+        for field in _FIELD_SEQUENCE:
+            field_aux = aux.get(field) if isinstance(aux, Mapping) else None
+            if not isinstance(field_aux, Mapping):
+                continue
+            if "matched" in field_aux:
+                matched_fields[field] = bool(field_aux.get("matched"))
+            best_pair = field_aux.get("best_pair")
+            if best_pair and isinstance(best_pair, (list, tuple)) and len(best_pair) == 2:
+                by_field_pairs[field] = [str(best_pair[0]), str(best_pair[1])]
+
+    return {
+        "acctnum_level": acct_level,
+        "by_field_pairs": by_field_pairs,
+        "matched_fields": matched_fields,
+    }
+
+
+def _sanitize_parts(parts: Optional[Mapping[str, Any]]) -> Dict[str, int]:
+    values: Dict[str, int] = {}
+    for field in _FIELD_SEQUENCE:
+        value = 0
+        if isinstance(parts, Mapping):
+            try:
+                value = int(parts.get(field, 0) or 0)
+            except (TypeError, ValueError):
+                value = 0
+        values[field] = value
+    return values
+
+
+def _build_score_entries(
+    partner_scores: Mapping[int, Mapping[str, Any]],
+    best_partner: Optional[int],
+) -> List[Dict[str, Any]]:
+    entries: Dict[int, Dict[str, Any]] = {}
+    for partner_idx, result in partner_scores.items():
+        if partner_idx == best_partner:
+            # handle separately to ensure copy from best result later
+            continue
+        if not isinstance(result, Mapping):
+            continue
+        entry = {
+            "account_index": partner_idx,
+            "score": int(result.get("total", 0) or 0),
+            "decision": str(result.get("decision", "different")),
+            "triggers": list(result.get("triggers", [])),
+            "conflicts": list(result.get("conflicts", [])),
+        }
+        entries[partner_idx] = entry
+
+    sorted_entries = sorted(
+        entries.values(), key=lambda item: (-item["score"], item["account_index"])
+    )
+    return sorted_entries
+
+
+def _merge_tag_from_best(
+    idx: int,
+    partner_scores: Mapping[int, Mapping[str, Any]],
+    best_info: Mapping[str, Any],
+) -> Dict[str, Any]:
+    best_partner = best_info.get("partner_index")
+    best_result = best_info.get("result")
+    tiebreaker = str(best_info.get("tiebreaker") or "none")
+
+    if not isinstance(best_partner, int) or not isinstance(best_result, Mapping):
+        parts = {field: 0 for field in _FIELD_SEQUENCE}
+        merge_tag = {
+            "group_id": f"g{idx}",
+            "decision": "different",
+            "score_total": 0,
+            "score_to": _build_score_entries(partner_scores, None),
+            "parts": parts,
+            "aux": {"acctnum_level": "none", "by_field_pairs": {}, "matched_fields": {}},
+            "reasons": [],
+            "tiebreaker": "none",
+        }
+        return merge_tag
+
+    score_total = int(best_result.get("total", 0) or 0)
+    decision = str(best_result.get("decision", "different"))
+    triggers = list(best_result.get("triggers", []))
+    conflicts = list(best_result.get("conflicts", []))
+    parts = _sanitize_parts(best_result.get("parts"))
+    aux_payload = _build_aux_payload(best_result.get("aux", {}))
+
+    score_entries = _build_score_entries(partner_scores, best_partner)
+    best_entry = {
+        "account_index": best_partner,
+        "score": score_total,
+        "decision": decision,
+        "triggers": triggers,
+        "conflicts": conflicts,
+    }
+    score_to = [best_entry] + score_entries
+
+    reasons = list(triggers)
+    if conflicts:
+        reasons.extend([f"conflict:{name}" for name in conflicts])
+
+    merge_tag = {
+        "group_id": f"g{idx}",
+        "decision": decision,
+        "score_total": score_total,
+        "score_to": score_to,
+        "parts": parts,
+        "aux": aux_payload,
+        "reasons": reasons,
+        "tiebreaker": tiebreaker,
+    }
+    return merge_tag
+
+
+def persist_merge_tags(
+    sid: str,
+    scores_by_idx: Mapping[int, Mapping[int, Mapping[str, Any]]],
+    best_by_idx: Mapping[int, Mapping[str, Any]],
+    runs_root: Path = Path("runs"),
+) -> Dict[int, Dict[str, Any]]:
+    """Persist merge tags for each account based on best-partner selection."""
+
+    merge_tags: Dict[int, Dict[str, Any]] = {}
+    all_indices = sorted(set(scores_by_idx.keys()) | set(best_by_idx.keys()))
+    for idx in all_indices:
+        partner_scores = scores_by_idx.get(idx, {})
+        best_info = best_by_idx.get(idx, {})
+        merge_tag = _merge_tag_from_best(idx, partner_scores, best_info)
+        merge_tags[idx] = merge_tag
+        _persist_merge_tag(sid, idx, merge_tag, runs_root, None)
+        logger.info(
+            "MERGE_TAG sid=<%s> idx=<%s> decision=<%s> score=<%s> tiebreaker=<%s>",
+            sid,
+            idx,
+            merge_tag.get("decision"),
+            merge_tag.get("score_total"),
+            merge_tag.get("tiebreaker"),
+        )
+
+    return merge_tags
+
+
+def score_and_tag_best_partners(
+    sid: str,
+    idx_list: Iterable[int],
+    runs_root: Path = Path("runs"),
+) -> Dict[int, Dict[str, Any]]:
+    """Convenience wrapper to score accounts, pick best partners, and persist tags."""
+
+    scores = score_all_pairs(sid, idx_list, runs_root=runs_root)
+    best = choose_best_partner(scores)
+    return persist_merge_tags(sid, scores, best, runs_root=runs_root)
 
 
 def to_amount(value: Any) -> Optional[float]:

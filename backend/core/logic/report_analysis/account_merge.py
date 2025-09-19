@@ -511,6 +511,7 @@ def score_pair(
     aux: Dict[str, Dict[str, Any]] = {}
     field_matches: Dict[str, bool] = {}
     date_matches: Dict[str, bool] = {field: False for field in _DATE_FIELDS_ORDER}
+    trigger_events: List[Dict[str, Any]] = []
 
     for field in _FIELD_SEQUENCE:
         matched, match_aux = match_field_best_of_9(field, A_data, B_data, cfg)
@@ -538,6 +539,15 @@ def score_pair(
         "balance_owed"
     ):
         triggers.append("strong:balance_owed")
+        trigger_events.append(
+            {
+                "kind": "strong",
+                "details": {
+                    "field": "balance_owed",
+                    "points": int(cfg.points.get("balance_owed", 0)),
+                },
+            }
+        )
         if decision == "different":
             decision = "ai"
 
@@ -549,23 +559,64 @@ def score_pair(
             min_level, 0
         ) and acct_level != "none":
             triggers.append("strong:account_number")
+            trigger_events.append(
+                {
+                    "kind": "strong",
+                    "details": {
+                        "field": "account_number",
+                        "acctnum_level": acct_level,
+                        "required_level": min_level,
+                    },
+                }
+            )
             if decision == "different":
                 decision = "ai"
 
     mid_threshold = int(cfg.triggers.get("MERGE_AI_ON_MID_K", 0))
     if mid_sum >= mid_threshold and mid_threshold > 0:
         triggers.append("mid")
+        trigger_events.append(
+            {
+                "kind": "mid",
+                "details": {
+                    "mid_sum": int(mid_sum),
+                    "threshold": int(mid_threshold),
+                },
+            }
+        )
         if decision == "different":
             decision = "ai"
 
     if cfg.triggers.get("MERGE_AI_ON_ALL_DATES", False) and dates_all:
         triggers.append("dates")
+        trigger_events.append(
+            {
+                "kind": "dates",
+                "details": {
+                    "matched_fields": [
+                        field
+                        for field, matched in date_matches.items()
+                        if matched
+                    ],
+                    "required_all": True,
+                },
+            }
+        )
         if decision == "different":
             decision = "ai"
 
     ai_threshold = int(cfg.thresholds.get("AI_THRESHOLD", 0))
     if total >= ai_threshold and ai_threshold > 0:
         triggers.append("total")
+        trigger_events.append(
+            {
+                "kind": "total",
+                "details": {
+                    "total": int(total),
+                    "threshold": int(ai_threshold),
+                },
+            }
+        )
         if decision == "different":
             decision = "ai"
 
@@ -592,6 +643,7 @@ def score_pair(
         "triggers": triggers,
         "conflicts": conflicts,
         "decision": decision,
+        "trigger_events": trigger_events,
     }
 
     return result
@@ -651,14 +703,47 @@ def score_all_pairs(
 
     for left, right in combinations(unique_indices, 2):
         result = score_pair(bureaus_by_idx.get(left, {}), bureaus_by_idx.get(right, {}), cfg)
-        logger.info(
-            "MERGE_SCORE sid=<%s> pair=(%s,%s) total=<%s> decision=<%s>",
-            sid,
-            left,
-            right,
-            result.get("total"),
-            result.get("decision"),
-        )
+
+        total_score = int(result.get("total", 0) or 0)
+        sanitized_parts = _sanitize_parts(result.get("parts"))
+        aux_payload = _build_aux_payload(result.get("aux", {}))
+
+        score_log = {
+            "sid": sid,
+            "i": left,
+            "j": right,
+            "total": total_score,
+            "parts": sanitized_parts,
+            "acctnum_level": aux_payload.get("acctnum_level", "none"),
+            "matched_pairs": aux_payload.get("by_field_pairs", {}),
+            "matched_fields": aux_payload.get("matched_fields", {}),
+        }
+        logger.info("MERGE_SCORE %s", json.dumps(score_log, sort_keys=True))
+
+        for event in result.get("trigger_events", []) or []:
+            if not isinstance(event, Mapping):
+                continue
+            kind = event.get("kind")
+            trigger_log = {
+                "sid": sid,
+                "i": left,
+                "j": right,
+                "kind": kind,
+                "details": event.get("details", {}),
+            }
+            logger.info("MERGE_TRIGGER %s", json.dumps(trigger_log, sort_keys=True))
+
+        decision_log = {
+            "sid": sid,
+            "i": left,
+            "j": right,
+            "decision": result.get("decision", "different"),
+            "total": total_score,
+            "triggers": list(result.get("triggers", [])),
+            "conflicts": list(result.get("conflicts", [])),
+        }
+        logger.info("MERGE_DECISION %s", json.dumps(decision_log, sort_keys=True))
+
         scores[left][right] = deepcopy(result)
         scores[right][left] = deepcopy(result)
 

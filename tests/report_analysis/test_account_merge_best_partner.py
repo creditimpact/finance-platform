@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 
 from backend.core.logic.report_analysis.account_merge import (
@@ -83,3 +84,69 @@ def test_best_partner_prefers_strong_match(tmp_path) -> None:
     summary_path = accounts_root / "0" / "summary.json"
     summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary_data["merge_tag"] == tag_a
+
+
+def test_score_all_pairs_emits_structured_logs(tmp_path, caplog) -> None:
+    sid = "SID-LOG"
+    accounts_root = tmp_path / sid / "cases" / "accounts"
+
+    bureaus_a = {
+        "transunion": {
+            "balance_owed": "1200",
+            "account_number": "1234567890123456",
+        }
+    }
+    bureaus_b = {
+        "experian": {
+            "balance_owed": 1200,
+            "account_number": "1234567890123456",
+        }
+    }
+
+    _write_account_payload(accounts_root, 0, bureaus_a)
+    _write_account_payload(accounts_root, 1, bureaus_b)
+
+    with caplog.at_level(
+        logging.INFO, logger="backend.core.logic.report_analysis.account_merge"
+    ):
+        score_all_pairs(sid, [0, 1], runs_root=tmp_path)
+
+    score_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("MERGE_SCORE ")
+    ]
+    assert score_messages
+    score_payload = json.loads(score_messages[0].split(" ", 1)[1])
+    assert score_payload["sid"] == sid
+    assert score_payload["i"] == 0
+    assert score_payload["j"] == 1
+    assert score_payload["parts"]["balance_owed"] > 0
+    assert score_payload["acctnum_level"]
+    assert "matched_pairs" in score_payload
+    assert "account_number" in score_payload["matched_pairs"]
+
+    trigger_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("MERGE_TRIGGER ")
+    ]
+    assert trigger_messages
+    trigger_payload = json.loads(trigger_messages[0].split(" ", 1)[1])
+    assert {
+        "sid",
+        "i",
+        "j",
+        "kind",
+        "details",
+    }.issubset(trigger_payload)
+
+    decision_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("MERGE_DECISION ")
+    ]
+    assert decision_messages
+    decision_payload = json.loads(decision_messages[0].split(" ", 1)[1])
+    for key in ("sid", "i", "j", "decision", "total"):
+        assert key in decision_payload

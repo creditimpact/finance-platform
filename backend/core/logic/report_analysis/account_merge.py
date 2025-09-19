@@ -19,6 +19,51 @@ from backend.pipeline.runs import RunManifest
 logger = logging.getLogger(__name__)
 
 
+def is_missing(value: Any) -> bool:
+    """Return True when a value represents an explicit missing sentinel."""
+
+    return value in {None, "", "--"}
+
+
+def load_bureaus(
+    sid: str, idx: int, runs_root: Path = Path("runs")
+) -> Dict[str, Dict[str, Any]]:
+    """Load bureau data for a case account, normalizing missing values."""
+
+    bureaus_path = runs_root / sid / "cases" / "accounts" / str(idx) / "bureaus.json"
+    if not bureaus_path.exists():
+        raise FileNotFoundError(
+            f"bureaus.json not found for sid={sid!r} index={idx} under {runs_root}"
+        )
+
+    with bureaus_path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    if not isinstance(data, Mapping):
+        logger.warning(
+            "Unexpected bureaus payload type %s for sid=%s idx=%s; treating as empty",
+            type(data).__name__,
+            sid,
+            idx,
+        )
+        data = {}
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for bureau in ("transunion", "experian", "equifax"):
+        branch = data.get(bureau) if isinstance(data, Mapping) else None
+        if isinstance(branch, Mapping):
+            cleaned = {
+                key: value
+                for key, value in branch.items()
+                if not is_missing(value)
+            }
+        else:
+            cleaned = {}
+        result[bureau] = dict(cleaned)
+
+    return result
+
+
 @dataclass
 class MergeCfg:
     """Centralized configuration for deterministic account merging."""

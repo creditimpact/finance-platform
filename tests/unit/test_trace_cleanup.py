@@ -144,10 +144,10 @@ def test_keep_texts_flag(tmp_path: Path) -> None:
 
 
 def test_cases_directory_untouched(tmp_path: Path) -> None:
-    """Running cleanup must not remove any files under cases/<sid>."""
+    """Running cleanup must not remove any files under runs/<sid>/cases."""
     sid = "case"
     _setup(tmp_path, sid)
-    cases_file = tmp_path / "cases" / sid / "case.json"
+    cases_file = tmp_path / "runs" / sid / "cases" / "case.json"
     cases_file.parent.mkdir(parents=True)
     cases_file.write_text("1")
 

@@ -39,3 +39,93 @@ def test_manifest_cases_registration(tmp_path, monkeypatch):
     per = Path(m2.get("cases.accounts.idx-001", "dir"))
     assert per.is_absolute() and per.exists()
 
+
+def test_build_problem_cases_writes_tags(tmp_path):
+    sid = "PAIR-100"
+
+    # Stage-A fallback artifacts
+    stage_dir = tmp_path / "traces" / "blocks" / sid / "accounts_table"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+
+    account_a = {
+        "account_index": 0,
+        "account_id": "0",
+        "triad_fields": {
+            "transunion": {
+                "balance_owed": "100",
+                "last_payment": "2024-01-01",
+                "past_due_amount": "50",
+                "high_balance": "500",
+                "account_type": "Credit Card",
+                "date_of_last_activity": "2024-01-02",
+                "date_opened": "2020-01-01",
+            }
+        },
+        "lines": [],
+        "two_year_payment_history": {},
+        "seven_year_history": {},
+        "triad": {"order": ["transunion", "experian", "equifax"]},
+    }
+    account_b = {
+        "account_index": 1,
+        "account_id": "1",
+        "triad_fields": {
+            "experian": {
+                "balance_owed": "150",
+                "last_payment": "2024-01-05",
+                "past_due_amount": "50",
+                "high_balance": "500",
+                "account_type": "Credit Card",
+                "date_of_last_activity": "2024-01-02",
+                "date_opened": "2020-01-01",
+            }
+        },
+        "lines": [],
+        "two_year_payment_history": {},
+        "seven_year_history": {},
+        "triad": {"order": ["transunion", "experian", "equifax"]},
+    }
+
+    accounts_payload = {"accounts": [account_a, account_b]}
+    (stage_dir / "accounts_from_full.json").write_text(
+        json.dumps(accounts_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    summary = build_problem_cases(
+        sid,
+        candidates=[
+            {"account_index": 0, "account_id": "0", "primary_issue": "collection"},
+            {"account_index": 1, "account_id": "1", "primary_issue": "collection"},
+        ],
+        root=tmp_path,
+    )
+
+    run_dir = tmp_path / "runs" / sid
+    tags_a = json.loads(
+        (run_dir / "cases" / "accounts" / "0" / "tags.json").read_text(encoding="utf-8")
+    )
+    tags_b = json.loads(
+        (run_dir / "cases" / "accounts" / "1" / "tags.json").read_text(encoding="utf-8")
+    )
+
+    issue_a = [tag for tag in tags_a if tag.get("kind") == "issue"][0]
+    issue_b = [tag for tag in tags_b if tag.get("kind") == "issue"][0]
+    assert issue_a["value"] == issue_b["value"] == "collection"
+
+    pair_a = [tag for tag in tags_a if tag.get("kind") == "merge_pair"][0]
+    pair_b = [tag for tag in tags_b if tag.get("kind") == "merge_pair"][0]
+    assert pair_a["with"] == 1 and pair_b["with"] == 0
+    assert pair_a["decision"] == pair_b["decision"] == "ai"
+
+    best_a = [tag for tag in tags_a if tag.get("kind") == "merge_best"][0]
+    best_b = [tag for tag in tags_b if tag.get("kind") == "merge_best"][0]
+    assert best_a["with"] == 1 and best_b["with"] == 0
+    assert best_a["decision"] == best_b["decision"] == "ai"
+
+    summary_path = run_dir / "cases" / "accounts" / "0" / "summary.json"
+    summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert "merge_tag" not in summary_data
+
+    assert summary["merge_scoring"]["scores"][0][1]["decision"] == "ai"
+    assert summary["merge_scoring"]["best"][0]["partner_index"] == 1

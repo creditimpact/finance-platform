@@ -21,7 +21,123 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class MergeCfg:
-    """Configuration knobs for the merge pipeline."""
+    """Centralized configuration for deterministic account merging."""
+
+    points: Mapping[str, int]
+    thresholds: Mapping[str, int]
+    triggers: Mapping[str, Union[int, str, bool]]
+    tolerances: Mapping[str, Union[int, float]]
+
+
+_POINT_DEFAULTS: Dict[str, int] = {
+    "balance_owed": 31,
+    "account_number": 28,
+    "last_payment": 12,
+    "past_due_amount": 8,
+    "high_balance": 6,
+    "creditor_type": 3,
+    "account_type": 3,
+    "payment_amount": 2,
+    "credit_limit": 1,
+    "last_verified": 1,
+    "date_of_last_activity": 2,
+    "date_reported": 1,
+    "date_opened": 1,
+    "closed_date": 1,
+}
+
+_THRESHOLD_DEFAULTS: Dict[str, int] = {
+    "AI_THRESHOLD": 26,
+    "AUTO_MERGE_THRESHOLD": 70,
+}
+
+_TRIGGER_DEFAULTS: Dict[str, Union[int, str, bool]] = {
+    "MERGE_AI_ON_BALOWED_EXACT": 1,
+    "MERGE_AI_ON_ACCTNUM_LEVEL": "last4",
+    "MERGE_AI_ON_MID_K": 26,
+    "MERGE_AI_ON_ALL_DATES": 1,
+}
+
+_TOLERANCE_DEFAULTS: Dict[str, Union[int, float]] = {
+    "AMOUNT_TOL_ABS": 50.0,
+    "AMOUNT_TOL_RATIO": 0.01,
+    "LAST_PAYMENT_DAY_TOL": 7,
+    "COUNT_ZERO_PAYMENT_MATCH": 0,
+}
+
+_ACCTNUM_LEVEL_CHOICES: Set[str] = {"any", "last4", "exact"}
+
+
+def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
+    """Return merge configuration using environment overrides when provided."""
+
+    env_mapping: Mapping[str, str]
+    if env is None:
+        env_mapping = os.environ
+    else:
+        env_mapping = env
+
+    points = dict(_POINT_DEFAULTS)
+
+    thresholds = {
+        key: _read_env_int(env_mapping, key, default)
+        for key, default in _THRESHOLD_DEFAULTS.items()
+    }
+
+    triggers: Dict[str, Union[int, str, bool]] = {}
+    triggers["MERGE_AI_ON_BALOWED_EXACT"] = _read_env_flag(
+        env_mapping,
+        "MERGE_AI_ON_BALOWED_EXACT",
+        bool(_TRIGGER_DEFAULTS["MERGE_AI_ON_BALOWED_EXACT"]),
+    )
+    triggers["MERGE_AI_ON_ACCTNUM_LEVEL"] = _read_env_choice(
+        env_mapping,
+        "MERGE_AI_ON_ACCTNUM_LEVEL",
+        str(_TRIGGER_DEFAULTS["MERGE_AI_ON_ACCTNUM_LEVEL"]),
+        _ACCTNUM_LEVEL_CHOICES,
+    )
+    triggers["MERGE_AI_ON_MID_K"] = _read_env_int(
+        env_mapping,
+        "MERGE_AI_ON_MID_K",
+        int(_TRIGGER_DEFAULTS["MERGE_AI_ON_MID_K"]),
+    )
+    triggers["MERGE_AI_ON_ALL_DATES"] = _read_env_flag(
+        env_mapping,
+        "MERGE_AI_ON_ALL_DATES",
+        bool(_TRIGGER_DEFAULTS["MERGE_AI_ON_ALL_DATES"]),
+    )
+
+    tolerances = {
+        key: (
+            _read_env_int(env_mapping, key, int(default))
+            if isinstance(default, int)
+            else _read_env_float(env_mapping, key, float(default))
+        )
+        for key, default in _TOLERANCE_DEFAULTS.items()
+    }
+
+    # Ensure tolerance types remain float for ratio/absolute values
+    if isinstance(tolerances["AMOUNT_TOL_ABS"], int):
+        tolerances["AMOUNT_TOL_ABS"] = float(tolerances["AMOUNT_TOL_ABS"])
+    if isinstance(tolerances["AMOUNT_TOL_RATIO"], int):
+        tolerances["AMOUNT_TOL_RATIO"] = float(tolerances["AMOUNT_TOL_RATIO"])
+
+    # Count-zero-payment match is an integer toggle but maintain numeric type explicitly.
+    tolerances["COUNT_ZERO_PAYMENT_MATCH"] = int(
+        tolerances["COUNT_ZERO_PAYMENT_MATCH"]
+    )
+
+    return MergeCfg(
+        points=points,
+        thresholds=thresholds,
+        triggers=triggers,
+        tolerances=tolerances,
+    )
+
+
+@dataclass
+class LegacyMergeCfg:
+    """Legacy configuration used by the existing scoring pipeline."""
 
     weights: Dict[str, float]
     thresholds: Dict[str, float]
@@ -30,7 +146,6 @@ class MergeCfg:
     acctnum_require_masked: bool = False
     balowed_tol_abs: float = 0.0
     balowed_tol_ratio: float = 0.0
-    # optional knobs: date_tolerance_days, balance_tolerance_ratio, etc.
 
 
 _DEFAULT_THRESHOLDS = {
@@ -199,6 +314,22 @@ def load_case_account(
     }
 
 
+def _read_env_int(env: Mapping[str, str], key: str, default: int) -> int:
+    value = env.get(key)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid integer for %s=%r; falling back to default %s",
+            key,
+            value,
+            default,
+        )
+        return default
+
+
 def _read_env_float(env: Mapping[str, str], key: str, default: float) -> float:
     value = env.get(key)
     if value is None or value == "":
@@ -246,8 +377,8 @@ def _read_env_flag(env: Mapping[str, str], key: str, default: bool) -> bool:
     return bool(parsed)
 
 
-def load_config_from_env(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
-    """Create a MergeCfg using optional environment overrides."""
+def load_config_from_env(env: Optional[Mapping[str, str]] = None) -> LegacyMergeCfg:
+    """Create a LegacyMergeCfg using optional environment overrides."""
 
     env_mapping: Mapping[str, str]
     if env is None:
@@ -278,7 +409,7 @@ def load_config_from_env(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         env_mapping, _ACCTNUM_REQUIRE_MASKED_KEY, _DEFAULT_ACCTNUM_REQUIRE_MASKED
     )
 
-    return MergeCfg(
+    return LegacyMergeCfg(
         weights=weights,
         thresholds=thresholds,
         acctnum_trigger_ai=acctnum_trigger_ai,
@@ -289,7 +420,7 @@ def load_config_from_env(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     )
 
 
-DEFAULT_CFG = load_config_from_env()
+DEFAULT_CFG: LegacyMergeCfg = load_config_from_env()
 
 _DATE_FIELDS = ("date_opened", "date_of_last_activity", "closed_date")
 _STATUS_FIELDS = ("payment_status", "account_status")
@@ -631,7 +762,7 @@ def _score_strings(acc_a: Dict[str, Any], acc_b: Dict[str, Any]) -> float:
 
 
 def score_accounts(
-    accA: Dict[str, Any], accB: Dict[str, Any], cfg: MergeCfg = DEFAULT_CFG
+    accA: Dict[str, Any], accB: Dict[str, Any], cfg: LegacyMergeCfg = DEFAULT_CFG
 ) -> Tuple[float, Dict[str, float], Dict[str, Any]]:
     """Return overall score, per-part contributions, and auxiliary details."""
 
@@ -679,7 +810,7 @@ def score_accounts(
     return score, parts, aux
 
 
-def decide_merge(score: float, cfg: MergeCfg = DEFAULT_CFG) -> str:
+def decide_merge(score: float, cfg: LegacyMergeCfg = DEFAULT_CFG) -> str:
     """Return decision label based on configured thresholds."""
 
     thresholds = cfg.thresholds
@@ -702,7 +833,7 @@ def decide_merge(score: float, cfg: MergeCfg = DEFAULT_CFG) -> str:
 def _maybe_apply_balowed_override(
     parts: Mapping[str, float],
     score: float,
-    cfg: MergeCfg,
+    cfg: LegacyMergeCfg,
     meta: Mapping[str, Any],
 ) -> Tuple[float, Optional[str], Dict[str, Any]]:
     """Lift low scores into the AI band when balances match perfectly."""
@@ -1252,7 +1383,7 @@ def _write_ai_pack(
 
 def cluster_problematic_accounts(
     candidates: List[Dict[str, Any]],
-    cfg: MergeCfg = DEFAULT_CFG,
+    cfg: LegacyMergeCfg = DEFAULT_CFG,
     *,
     sid: Optional[str] = None,
     runs_root: Optional[Path] = None,

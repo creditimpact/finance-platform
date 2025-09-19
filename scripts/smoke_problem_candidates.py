@@ -14,10 +14,6 @@ except Exception:
         sys.path.insert(0, str(repo_root))
 
 from collections import Counter
-from backend.core.logic.report_analysis.account_merge import (
-    DEFAULT_CFG,
-    cluster_problematic_accounts,
-)
 from backend.core.logic.report_analysis.problem_extractor import detect_problem_accounts
 from backend.pipeline.runs import RunManifest
 
@@ -509,8 +505,9 @@ def main() -> int:
 
     merge_summary: Dict[str, Any] | None = None
     if args.show_merge:
-        out = cluster_problematic_accounts(out, DEFAULT_CFG, sid=args.sid)
-        merge_summary = _build_merge_summary(out, only_ai=args.only_ai)
+        raise RuntimeError(
+            "Merge preview is unavailable: the legacy merge scorer has been removed."
+        )
 
     payload = {
         "sid": args.sid,

@@ -5,7 +5,7 @@ from pathlib import Path
 from backend.core.logic.report_analysis.account_merge import (
     choose_best_partner,
     persist_merge_tags,
-    score_all_pairs,
+    score_all_pairs_0_100,
 )
 
 
@@ -57,7 +57,7 @@ def test_best_partner_prefers_strong_match(tmp_path) -> None:
     _write_account_payload(accounts_root, 1, bureaus_b)
     _write_account_payload(accounts_root, 2, bureaus_c)
 
-    scores = score_all_pairs(sid, [0, 1, 2], runs_root=tmp_path)
+    scores = score_all_pairs_0_100(sid, [0, 1, 2], runs_root=tmp_path)
 
     assert scores[0][1]["total"] > scores[0][2]["total"]
     assert "strong:balance_owed" in scores[0][2]["triggers"]
@@ -109,7 +109,7 @@ def test_score_all_pairs_emits_structured_logs(tmp_path, caplog) -> None:
     with caplog.at_level(
         logging.INFO, logger="backend.core.logic.report_analysis.account_merge"
     ):
-        score_all_pairs(sid, [0, 1], runs_root=tmp_path)
+        score_all_pairs_0_100(sid, [0, 1], runs_root=tmp_path)
 
     score_messages = [
         record.getMessage()

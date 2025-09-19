@@ -407,6 +407,23 @@ def _build_problem_cases_lean(
         elif merge_tag_obj is not None:
             summary_obj["merge_tag"] = merge_tag_obj
 
+        merge_tag_v2_obj: Any = (
+            cand.get("merge_tag_v2") if isinstance(cand, Mapping) else None
+        )
+        if merge_tag_v2_obj is None and had_existing:
+            merge_tag_v2_obj = existing_summary.get("merge_tag_v2")
+
+        if isinstance(merge_tag_v2_obj, Mapping):
+            try:
+                sanitized_tag_v2 = json.loads(
+                    json.dumps(merge_tag_v2_obj, ensure_ascii=False)
+                )
+            except TypeError:
+                sanitized_tag_v2 = dict(merge_tag_v2_obj)
+            summary_obj["merge_tag_v2"] = sanitized_tag_v2
+        elif merge_tag_v2_obj is not None:
+            summary_obj["merge_tag_v2"] = merge_tag_v2_obj
+
         _write_json(summary_path, summary_obj)
 
         artifact_keys = {str(idx)}
@@ -700,6 +717,28 @@ def _build_problem_cases_legacy(
                 group_id = existing_tag.get("group_id")
                 if isinstance(group_id, str):
                     merge_groups[str(account_index)] = group_id
+
+        merge_tag_v2 = cand.get("merge_tag_v2")
+        if isinstance(merge_tag_v2, Mapping):
+            try:
+                merge_tag_v2_obj = json.loads(
+                    json.dumps(merge_tag_v2, ensure_ascii=False)
+                )
+            except TypeError:
+                merge_tag_v2_obj = dict(merge_tag_v2)
+            summary_obj["merge_tag_v2"] = merge_tag_v2_obj
+        else:
+            existing_v2 = summary_obj.get("merge_tag_v2")
+            if existing_v2 is None:
+                legacy_v2 = existing_summary.get("merge_tag_v2")
+                if isinstance(legacy_v2, Mapping):
+                    try:
+                        legacy_v2_obj = json.loads(
+                            json.dumps(legacy_v2, ensure_ascii=False)
+                        )
+                    except TypeError:
+                        legacy_v2_obj = dict(legacy_v2)
+                    summary_obj["merge_tag_v2"] = legacy_v2_obj
 
         summary_obj["pointers"] = pointers
 

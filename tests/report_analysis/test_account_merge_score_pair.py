@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from backend.core.logic.report_analysis.account_merge import get_merge_cfg, score_pair
+from backend.core.logic.report_analysis.account_merge import (
+    get_merge_cfg,
+    score_pair_0_100,
+)
 
 
 @pytest.fixture()
@@ -21,7 +24,7 @@ def test_strong_balance_owed_trigger(cfg) -> None:
     bureaus_a = _make_bureaus(transunion={"balance_owed": "1000"})
     bureaus_b = _make_bureaus(experian={"balance_owed": 1000})
 
-    result = score_pair(bureaus_a, bureaus_b, cfg)
+    result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
     assert result["total"] == cfg.points["balance_owed"]
     assert result["parts"]["balance_owed"] == cfg.points["balance_owed"]
@@ -45,7 +48,7 @@ def test_strong_account_number_trigger_levels(
     bureaus_a = _make_bureaus(transunion={"account_number": left})
     bureaus_b = _make_bureaus(equifax={"account_number": right})
 
-    result = score_pair(bureaus_a, bureaus_b, cfg)
+    result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
     assert result["total"] == cfg.points["account_number"]
     assert result["parts"]["account_number"] == cfg.points["account_number"]
@@ -62,7 +65,7 @@ def test_account_number_masked_without_digits_does_not_match(cfg) -> None:
     bureaus_a = _make_bureaus(transunion={"account_number": "****"})
     bureaus_b = _make_bureaus(equifax={"account_number": "XXXX"})
 
-    result = score_pair(bureaus_a, bureaus_b, cfg)
+    result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
     assert result["total"] == 0
     assert result["parts"]["account_number"] == 0
@@ -87,7 +90,7 @@ def test_mid_trigger(cfg) -> None:
         }
     )
 
-    result = score_pair(bureaus_a, bureaus_b, cfg)
+    result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
     assert result["total"] == 26
     assert result["mid_sum"] == 26
@@ -100,7 +103,7 @@ def test_any_to_any_cross_bureau_match(cfg) -> None:
     bureaus_a = _make_bureaus(transunion={"high_balance": "900"})
     bureaus_b = _make_bureaus(equifax={"high_balance": 900})
 
-    result = score_pair(bureaus_a, bureaus_b, cfg)
+    result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
     assert result["total"] == cfg.points["high_balance"]
     assert result["parts"]["high_balance"] == cfg.points["high_balance"]
@@ -123,7 +126,7 @@ def test_dates_all_trigger(cfg) -> None:
     bureaus_a = _make_bureaus(transunion=common)
     bureaus_b = _make_bureaus(experian=common)
 
-    result = score_pair(bureaus_a, bureaus_b, cfg)
+    result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
     assert result["total"] == 6
     assert result["dates_all"] is True
@@ -151,7 +154,7 @@ def test_total_trigger_without_mid(cfg) -> None:
         }
     )
 
-    result = score_pair(bureaus_a, bureaus_b, cfg)
+    result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
     assert result["total"] == 26
     assert result["mid_sum"] == 23
@@ -176,7 +179,7 @@ def test_auto_merge_success(cfg) -> None:
         }
     )
 
-    result = score_pair(bureaus_a, bureaus_b, cfg)
+    result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
     assert result["total"] == 71
     assert result["decision"] == "auto"
@@ -203,7 +206,7 @@ def test_auto_merge_blocked_by_last4_conflict(cfg) -> None:
     bureaus_a = _make_bureaus(transunion={**shared_values, "account_number": "1111222233334444"})
     bureaus_b = _make_bureaus(equifax={**shared_values, "account_number": "9999888877770000"})
 
-    result = score_pair(bureaus_a, bureaus_b, cfg)
+    result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
     assert result["total"] == 72
     assert result["decision"] == "ai"
@@ -229,7 +232,7 @@ def test_auto_merge_blocked_by_amount_conflict(cfg) -> None:
         }
     )
 
-    result = score_pair(bureaus_a, bureaus_b, cfg)
+    result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
     assert result["total"] == 71
     assert result["decision"] == "ai"
@@ -241,7 +244,7 @@ def test_missing_values_do_not_match(cfg) -> None:
     bureaus_a = _make_bureaus(transunion={"balance_owed": None})
     bureaus_b = _make_bureaus(equifax={"balance_owed": "--"})
 
-    result = score_pair(bureaus_a, bureaus_b, cfg)
+    result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
     assert result["total"] == 0
     assert result["parts"]["balance_owed"] == 0

@@ -34,14 +34,24 @@ def test_extract_problematic_accounts_task_builder(tmp_path, monkeypatch, caplog
     )
     _write_accounts(acc_path)
 
+    def _run_build(prev, sid):
+        summary = task_module.build_problem_cases_task(prev=prev, sid=sid)
+        if isinstance(prev, dict):
+            prev["summary"] = summary
+        return summary
+
+    monkeypatch.setattr(task_module.build_problem_cases_task, "delay", _run_build)
+
     caplog.set_level(logging.INFO)
     result = extract_problematic_accounts.run(sid)
 
     assert result["sid"] == sid
     assert len(result["found"]) == 1
     cand_id = result["found"][0]["account_id"]
-    assert (tmp_path / "cases" / sid / "accounts" / f"{cand_id}.json").exists()
-    assert (tmp_path / "cases" / sid / "index.json").exists()
+    assert (
+        tmp_path / "runs" / sid / "cases" / "accounts" / f"{cand_id}.json"
+    ).exists()
+    assert (tmp_path / "runs" / sid / "cases" / "index.json").exists()
     assert result["summary"]["problematic"] == 1
     assert any(f"PROBLEMATIC start sid={sid}" in m for m in caplog.messages)
     assert any(f"PROBLEMATIC done sid={sid} found=1" in m for m in caplog.messages)
@@ -61,15 +71,24 @@ def test_extract_problematic_accounts_task_no_candidates(tmp_path, monkeypatch, 
     acc_path.parent.mkdir(parents=True, exist_ok=True)
     acc_path.write_text(json.dumps({"accounts": [{"account_index": 1, "fields": {}}]}))
 
+    def _run_build(prev, sid):
+        summary = task_module.build_problem_cases_task(prev=prev, sid=sid)
+        if isinstance(prev, dict):
+            prev["summary"] = summary
+        return summary
+
+    monkeypatch.setattr(task_module.build_problem_cases_task, "delay", _run_build)
+
     caplog.set_level(logging.INFO)
     result = extract_problematic_accounts.run(sid)
 
     assert result["sid"] == sid
     assert result["found"] == []
     assert result["summary"]["problematic"] == 0
-    index = tmp_path / "cases" / sid / "index.json"
+    index = tmp_path / "runs" / sid / "cases" / "index.json"
     assert index.exists()
-    accounts_dir = tmp_path / "cases" / sid / "accounts"
-    assert accounts_dir.exists() and not any(accounts_dir.iterdir())
+    accounts_dir = tmp_path / "runs" / sid / "cases" / "accounts"
+    assert accounts_dir.exists()
+    assert sorted(p.name for p in accounts_dir.iterdir()) == ["index.json"]
     assert any(f"PROBLEMATIC start sid={sid}" in m for m in caplog.messages)
     assert any(f"PROBLEMATIC done sid={sid} found=0" in m for m in caplog.messages)

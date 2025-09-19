@@ -77,7 +77,9 @@ def test_extract_problematic_accounts_orchestrates(tmp_path, monkeypatch):
 
     assert len(result["found"]) == 1
     cand_id = result["found"][0]["account_id"]
-    assert (tmp_path / "cases" / sid / "accounts" / f"{cand_id}.json").exists()
+    assert (
+        tmp_path / "runs" / sid / "cases" / "accounts" / f"{cand_id}.json"
+    ).exists()
     assert result["summary"]["problematic"] == 1
 
 

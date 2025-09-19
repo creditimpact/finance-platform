@@ -22,6 +22,12 @@ from backend.core.logic.report_analysis.problem_extractor import (
     load_stagea_accounts_from_manifest,
 )
 
+from backend.core.logic.report_analysis.account_merge import (
+    choose_best_partner,
+    gen_unordered_pairs,
+    score_all_pairs_0_100,
+)
+
 from .keys import compute_logical_account_key
 
 logger = logging.getLogger(__name__)
@@ -115,6 +121,142 @@ def _sanitize_bureaus(data: Mapping[str, Any] | None) -> Dict[str, Any]:
     for bureau, payload in (data or {}).items():
         cleaned[bureau] = _sanitize_bureau_fields(payload)
     return cleaned
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _normalize_str_list(values: Any) -> List[str]:
+    if isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
+        return [str(item) for item in values if item is not None]
+    return []
+
+
+def _normalize_merge_parts(parts: Any) -> Dict[str, int]:
+    normalized: Dict[str, int] = {}
+    if isinstance(parts, Mapping):
+        for key in sorted(parts.keys(), key=str):
+            normalized[str(key)] = _safe_int(parts.get(key))
+    return normalized
+
+
+def _normalize_merge_aux(aux: Any) -> Dict[str, Any]:
+    acct_level = "none"
+    by_field_pairs: Dict[str, List[str]] = {}
+    matched_fields: Dict[str, bool] = {}
+
+    if isinstance(aux, Mapping):
+        acct_aux = aux.get("account_number")
+        if isinstance(acct_aux, Mapping):
+            level = acct_aux.get("acctnum_level")
+            if isinstance(level, str) and level:
+                acct_level = level
+
+        for field, field_aux in aux.items():
+            if not isinstance(field_aux, Mapping):
+                continue
+            if "matched" in field_aux:
+                matched_fields[str(field)] = bool(field_aux.get("matched"))
+            best_pair = field_aux.get("best_pair")
+            if (
+                isinstance(best_pair, (list, tuple))
+                and len(best_pair) == 2
+                and all(part is not None for part in best_pair)
+            ):
+                by_field_pairs[str(field)] = [str(best_pair[0]), str(best_pair[1])]
+
+    return {
+        "acctnum_level": acct_level,
+        "by_field_pairs": by_field_pairs,
+        "matched_fields": matched_fields,
+    }
+
+
+def _normalize_merge_payload(result: Mapping[str, Any] | None) -> Dict[str, Any]:
+    payload = {
+        "decision": "different",
+        "total": 0,
+        "mid": 0,
+        "dates_all": False,
+        "parts": {},
+        "aux": {
+            "acctnum_level": "none",
+            "by_field_pairs": {},
+            "matched_fields": {},
+        },
+        "reasons": [],
+        "conflicts": [],
+        "strong": False,
+    }
+
+    if isinstance(result, Mapping):
+        payload["decision"] = str(result.get("decision", "different"))
+        payload["total"] = _safe_int(result.get("total"))
+        payload["mid"] = _safe_int(result.get("mid_sum"))
+        payload["dates_all"] = bool(result.get("dates_all"))
+        payload["parts"] = _normalize_merge_parts(result.get("parts"))
+        payload["aux"] = _normalize_merge_aux(result.get("aux"))
+        payload["reasons"] = _normalize_str_list(result.get("triggers"))
+        payload["conflicts"] = _normalize_str_list(result.get("conflicts"))
+
+    payload["strong"] = any(
+        isinstance(reason, str) and reason.startswith("strong:")
+        for reason in payload["reasons"]
+    )
+
+    return payload
+
+
+def _build_merge_pair_tag(partner_idx: int, result: Mapping[str, Any]) -> Dict[str, Any]:
+    payload = _normalize_merge_payload(result)
+    payload.update(
+        {
+            "tag": "merge_pair",
+            "kind": "merge_pair",
+            "source": "merge_scorer",
+            "with": int(partner_idx),
+        }
+    )
+    return payload
+
+
+def _build_merge_best_tag(best_info: Mapping[str, Any]) -> Dict[str, Any] | None:
+    if not isinstance(best_info, Mapping):
+        return None
+
+    partner = best_info.get("partner_index")
+    result = best_info.get("result")
+    if not isinstance(partner, int) or not isinstance(result, Mapping):
+        return None
+
+    payload = _normalize_merge_payload(result)
+    payload.update(
+        {
+            "tag": "merge_best",
+            "kind": "merge_best",
+            "source": "merge_scorer",
+            "with": int(partner),
+            "tiebreaker": str(best_info.get("tiebreaker", "none")),
+            "strong_rank": _safe_int(best_info.get("strong_rank")),
+            "score_total": _safe_int(best_info.get("score_total", payload["total"])),
+        }
+    )
+    return payload
+
+
+def _tag_sort_key(entry: Mapping[str, Any]) -> Tuple[str, int, str]:
+    kind = str(entry.get("kind", ""))
+    partner = entry.get("with")
+    if isinstance(partner, int):
+        partner_key = partner
+    else:
+        partner_key = -1
+    tag_name = str(entry.get("tag", ""))
+    return (kind, partner_key, tag_name)
 
 
 def _build_bureaus_payload_from_stagea(
@@ -291,9 +433,11 @@ def _build_problem_cases_lean(
         accounts_dir.mkdir(parents=True, exist_ok=True)
         manifest.set_base_dir("cases_accounts_dir", accounts_dir)
         write_breadcrumb(manifest.path, cases_dir / ".manifest")
+        runs_root_path = cases_dir.parent.parent.resolve()
     else:
         base_root = Path(root) if root is not None else PROJECT_ROOT
-        cases_dir = (base_root / "cases" / sid).resolve()
+        runs_root_path = (base_root / "runs").resolve()
+        cases_dir = (runs_root_path / sid / "cases").resolve()
         accounts_dir = cases_dir / "accounts"
         accounts_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = cases_dir / ".manifest"
@@ -303,6 +447,9 @@ def _build_problem_cases_lean(
 
     written_ids: List[str] = []
     merge_groups: Dict[str, str] = {}
+    tag_paths: Dict[int, Path] = {}
+    issue_by_idx: Dict[int, str] = {}
+    written_indices: List[int] = []
 
     for cand in candidates:
         if not isinstance(cand, Mapping):
@@ -347,6 +494,7 @@ def _build_problem_cases_lean(
         tags_path = account_dir / pointers["tags"]
         if not tags_path.exists():
             tags_path.write_text("[]", encoding="utf-8")
+        tag_paths[idx] = tags_path
 
         meta = {
             "account_index": idx,
@@ -389,24 +537,6 @@ def _build_problem_cases_lean(
             if primary_issue is not None:
                 summary_obj["primary_issue"] = primary_issue
 
-        merge_tag_obj: Any = cand.get("merge_tag") if isinstance(cand, Mapping) else None
-        if merge_tag_obj is None and had_existing:
-            merge_tag_obj = existing_summary.get("merge_tag")
-
-        if isinstance(merge_tag_obj, Mapping):
-            try:
-                sanitized_tag = json.loads(
-                    json.dumps(merge_tag_obj, ensure_ascii=False)
-                )
-            except TypeError:
-                sanitized_tag = dict(merge_tag_obj)
-            summary_obj["merge_tag"] = sanitized_tag
-            group_id = sanitized_tag.get("group_id")
-            if isinstance(group_id, str):
-                merge_groups[str(idx)] = group_id
-        elif merge_tag_obj is not None:
-            summary_obj["merge_tag"] = merge_tag_obj
-
         merge_tag_v2_obj: Any = (
             cand.get("merge_tag_v2") if isinstance(cand, Mapping) else None
         )
@@ -429,6 +559,10 @@ def _build_problem_cases_lean(
         artifact_keys = {str(idx)}
         if account_id is not None:
             artifact_keys.add(str(account_id))
+
+        issue_value = summary_obj.get("primary_issue")
+        if isinstance(issue_value, str) and issue_value.strip():
+            issue_by_idx[idx] = issue_value.strip()
 
         if manifest is None:
             legacy_id = str(account_id) if account_id is not None else f"idx-{idx:03d}"
@@ -468,6 +602,7 @@ def _build_problem_cases_lean(
                 pass
 
         written_ids.append(str(idx))
+        written_indices.append(idx)
 
     candidates_list = [c for c in candidates if isinstance(c, Mapping)]
     index_payload = {
@@ -513,6 +648,55 @@ def _build_problem_cases_lean(
         "CASES_INDEX sid=%s file=%s count=%d", sid, accounts_index_path, len(written_ids)
     )
 
+    merge_scores: Dict[int, Dict[int, Dict[str, Any]]] = {}
+    best_partners: Dict[int, Dict[str, Any]] = {}
+    if written_indices:
+        try:
+            merge_scores = score_all_pairs_0_100(
+                sid, written_indices, runs_root=runs_root_path
+            )
+            best_partners = choose_best_partner(merge_scores)
+        except Exception:
+            logger.exception("CASE_MERGE_SCORE sid=%s failed", sid)
+            merge_scores = {}
+            best_partners = {}
+
+    tags_by_idx: Dict[int, List[Dict[str, Any]]] = {idx: [] for idx in tag_paths}
+    for idx, issue_value in issue_by_idx.items():
+        tags_by_idx.setdefault(idx, []).append(
+            {
+                "tag": f"issue:{issue_value}",
+                "kind": "issue",
+                "source": "analyzer",
+                "value": issue_value,
+            }
+        )
+
+    valid_decisions = {"ai", "auto"}
+    for left, right in gen_unordered_pairs(written_indices):
+        result = merge_scores.get(left, {}).get(right)
+        if not isinstance(result, Mapping):
+            continue
+        pair_left = _build_merge_pair_tag(right, result)
+        if pair_left.get("decision") not in valid_decisions:
+            continue
+        pair_right = _build_merge_pair_tag(left, result)
+        tags_by_idx.setdefault(left, []).append(pair_left)
+        tags_by_idx.setdefault(right, []).append(pair_right)
+
+    for idx in written_indices:
+        best_tag = _build_merge_best_tag(best_partners.get(idx, {}))
+        if not best_tag:
+            continue
+        if best_tag.get("decision") not in valid_decisions:
+            continue
+        tags_by_idx.setdefault(idx, []).append(best_tag)
+
+    for idx, path in tag_paths.items():
+        tags = tags_by_idx.get(idx, [])
+        ordered = sorted(tags, key=_tag_sort_key)
+        _write_json(path, ordered)
+
     logger.info(
         "PROBLEM_CASES done sid=%s total=%d problematic=%d out=%s",
         sid,
@@ -527,6 +711,7 @@ def _build_problem_cases_lean(
         "problematic": len(candidates_list),
         "out": str(cases_dir),
         "cases": {"count": len(written_ids), "dir": str(accounts_dir)},
+        "merge_scoring": {"scores": merge_scores, "best": best_partners},
     }
 
 

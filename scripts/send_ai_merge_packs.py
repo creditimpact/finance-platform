@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
+from collections.abc import Mapping as MappingABC
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -16,7 +19,9 @@ except Exception:  # pragma: no cover - fallback when bootstrap is unavailable
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-from backend.core.logic.report_analysis import ai_sender
+from backend.config import AI_REQUEST_TIMEOUT
+from backend.core.ai.adjudicator import decide_merge_or_different
+from backend.core.io.tags import upsert_tag
 from backend.pipeline.runs import RunManifest, persist_manifest
 
 
@@ -29,7 +34,7 @@ def _load_index(path: Path) -> list[Mapping[str, object]]:
 
 def _load_pack(path: Path) -> Mapping[str, object]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, Mapping):
+    if not isinstance(data, MappingABC):
         raise ValueError(f"AI pack must be a JSON object: {path}")
     return data
 
@@ -56,10 +61,81 @@ def _log_factory(path: Path, sid: str, pair: Mapping[str, int], file_name: str):
         if payload:
             extras.update(payload)
         serialized = json.dumps(extras, ensure_ascii=False, sort_keys=True)
-        line = f"{ai_sender.isoformat_timestamp()} AI_ADJUDICATOR_{event} {serialized}\n"
+        line = f"{_isoformat_timestamp()} AI_ADJUDICATOR_{event} {serialized}\n"
         _append_log(path, line)
 
     return _log
+
+
+def _isoformat_timestamp(dt: datetime | None = None) -> str:
+    if dt is None:
+        dt = datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _accounts_root(runs_root: Path, sid: str) -> Path:
+    return runs_root / sid / "cases" / "accounts"
+
+
+def _ensure_int(value: object, label: str) -> int:
+    try:
+        return int(value)
+    except Exception as exc:  # pragma: no cover - defensive
+        raise ValueError(f"{label} must be an integer") from exc
+
+
+def _should_mark_same_debt(payload: Mapping[str, object]) -> bool:
+    reason = str(payload.get("reason") or "")
+    if "same debt" in reason.lower():
+        return True
+
+    flags = payload.get("flags")
+    if isinstance(flags, MappingABC):
+        flag_value = flags.get("same_debt")
+        if isinstance(flag_value, bool) and flag_value:
+            return True
+    return False
+
+
+def _write_decision_tags(
+    runs_root: Path,
+    sid: str,
+    a_idx: int,
+    b_idx: int,
+    decision: str,
+    reason: str,
+    timestamp: str,
+    payload: Mapping[str, object],
+) -> None:
+    base = _accounts_root(runs_root, sid)
+    same_debt = _should_mark_same_debt(payload)
+
+    for source_idx, other_idx in ((a_idx, b_idx), (b_idx, a_idx)):
+        tag_path = base / str(source_idx) / "tags.json"
+        decision_tag = {
+            "kind": "ai_decision",
+            "tag": "ai_decision",
+            "source": "ai_adjudicator",
+            "with": other_idx,
+            "decision": decision,
+            "reason": reason,
+            "at": timestamp,
+        }
+        upsert_tag(tag_path, decision_tag, ("kind", "with", "source"))
+
+        if same_debt:
+            same_debt_tag = {
+                "kind": "same_debt_pair",
+                "with": other_idx,
+                "source": "ai_adjudicator",
+                "reason": reason,
+                "at": timestamp,
+            }
+            upsert_tag(tag_path, same_debt_tag, ("kind", "with", "source"))
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -75,13 +151,19 @@ def main(argv: Sequence[str] | None = None) -> None:
         default=None,
         help="Optional override for the directory containing ai packs",
     )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        help="Maximum number of retries after the initial request",
+    )
+    parser.add_argument(
+        "--backoff",
+        type=float,
+        default=2.0,
+        help="Base backoff (seconds) multiplied by the attempt number",
+    )
     args = parser.parse_args(argv)
-
-    if not ai_sender.is_enabled():
-        print("[AI] adjudicator disabled; skipping")
-        return
-
-    config = ai_sender.load_config_from_env()
 
     sid = str(args.sid)
     runs_root = Path(args.runs_root)
@@ -122,49 +204,94 @@ def main(argv: Sequence[str] | None = None) -> None:
         total += 1
 
         log = _log_factory(logs_path, sid, {"a": a_idx, "b": b_idx}, pack_path.name)
-        log("PACK_START", {})
+        attempts = 0
+        max_attempts = max(0, int(args.max_retries)) + 1
+        backoff = max(float(args.backoff), 0.0)
+        decision_payload: Mapping[str, object] | None = None
 
-        outcome = ai_sender.process_pack(pack, config, log=log)
-        timestamp = ai_sender.isoformat_timestamp()
+        while attempts < max_attempts:
+            attempts += 1
+            log(
+                "REQUEST",
+                {"attempt": attempts, "max_attempts": max_attempts},
+            )
+            try:
+                decision_payload = decide_merge_or_different(
+                    dict(pack), timeout=AI_REQUEST_TIMEOUT
+                )
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                log(
+                    "ERROR",
+                    {
+                        "attempt": attempts,
+                        "error": exc.__class__.__name__,
+                        "message": str(exc),
+                    },
+                )
+                if attempts >= max_attempts:
+                    decision_payload = None
+                    break
+                if backoff > 0:
+                    time.sleep(backoff * attempts)
+            else:
+                log(
+                    "RESPONSE",
+                    {
+                        "attempt": attempts,
+                        "payload": decision_payload,
+                    },
+                )
+                break
 
-        if outcome.success and outcome.decision and outcome.reason:
-            ai_sender.write_decision_tags(
-                runs_root,
-                sid,
-                a_idx,
-                b_idx,
-                outcome.decision,
-                outcome.reason,
-                timestamp,
-            )
+        if decision_payload is None:
+            failures += 1
+            continue
+
+        decision_raw = decision_payload.get("decision")
+        reason_raw = decision_payload.get("reason")
+        decision = str(decision_raw).strip() if decision_raw is not None else ""
+        reason = str(reason_raw).strip() if reason_raw is not None else ""
+        if decision not in {"merge", "different"} or not reason:
             log(
-                "PACK_SUCCESS",
-                {"decision": outcome.decision, "reason": outcome.reason},
-            )
-            successes += 1
-        else:
-            ai_sender.write_error_tags(
-                runs_root,
-                sid,
-                a_idx,
-                b_idx,
-                outcome.error_kind or "Error",
-                outcome.error_message or "",
-                timestamp,
-            )
-            log(
-                "PACK_FAILURE",
+                "ERROR",
                 {
-                    "error_kind": outcome.error_kind or "Error",
+                    "attempt": attempts,
+                    "error": "InvalidDecision",
+                    "message": "Decision payload missing required fields",
                 },
             )
             failures += 1
+            continue
+        timestamp = _isoformat_timestamp()
+
+        a_int = _ensure_int(a_idx, "a_idx")
+        b_int = _ensure_int(b_idx, "b_idx")
+        payload_for_tags = dict(decision_payload)
+        payload_for_tags["decision"] = decision
+        payload_for_tags["reason"] = reason
+
+        _write_decision_tags(
+            runs_root,
+            sid,
+            a_int,
+            b_int,
+            decision,
+            reason,
+            timestamp,
+            payload_for_tags,
+        )
+        successes += 1
 
     print(
         "[AI] adjudicated {total} packs ({successes} success, {failures} errors)".format(
             total=total, successes=successes, failures=failures
         )
     )
+
+    if failures:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point

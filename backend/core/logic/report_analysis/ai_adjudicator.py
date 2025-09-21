@@ -308,6 +308,33 @@ def adjudicate_pair(pack: dict) -> dict[str, Any]:
         raise
 
 
+def _prune_legacy_pack_pairs(base: Path, account_idx: int) -> None:
+    ai_dir = base / str(account_idx) / "ai"
+    if not ai_dir.exists():
+        return
+    try:
+        entries = list(ai_dir.iterdir())
+    except FileNotFoundError:
+        return
+    except NotADirectoryError:
+        return
+    except OSError:
+        logger.debug(
+            "AI_ADJUDICATOR_PRUNE_PACK_PAIR_LIST_FAILED path=%s", ai_dir, exc_info=True
+        )
+        return
+
+    for entry in entries:
+        if not entry.is_file():
+            continue
+        if not entry.name.startswith("pack_pair_"):
+            continue
+        try:
+            entry.unlink()
+        except OSError:
+            logger.debug("AI_ADJUDICATOR_PRUNE_PACK_PAIR_FAILED path=%s", entry, exc_info=True)
+
+
 def persist_ai_decision(
     sid: str,
     runs_root: str | os.PathLike[str],
@@ -325,6 +352,9 @@ def persist_ai_decision(
 
     sid_str = str(sid)
     base = Path(runs_root) / sid_str / "cases" / "accounts"
+
+    _prune_legacy_pack_pairs(base, account_a)
+    _prune_legacy_pack_pairs(base, account_b)
 
     artifact_a = {
         "sid": sid_str,

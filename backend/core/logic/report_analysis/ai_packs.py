@@ -357,6 +357,8 @@ def _collect_pair_entries(accounts_root: Path) -> tuple[Dict[tuple[int, int], Li
     pair_entries: Dict[tuple[int, int], List[_PairTag]] = {}
     best_partners: Dict[int, set[int]] = {}
 
+    allowed_kinds = {"merge_pair", "merge_best"}
+
     for entry in sorted(accounts_root.iterdir(), key=lambda item: item.name):
         if not entry.is_dir():
             continue
@@ -371,6 +373,8 @@ def _collect_pair_entries(accounts_root: Path) -> tuple[Dict[tuple[int, int], Li
             if not isinstance(tag, Mapping):
                 continue
             kind = str(tag.get("kind"))
+            if kind not in allowed_kinds:
+                continue
             decision = str(tag.get("decision", "")).lower()
             if decision != "ai":
                 continue
@@ -472,9 +476,11 @@ def build_merge_ai_packs(
         context_b = list(account_b.get("context", []))[:context_limit]
         highlights = _build_highlights(primary_tag)
 
+        account_number_a = account_a.get("account_number")
+        account_number_b = account_b.get("account_number")
         ids_payload = {
-            "account_number_a": account_a.get("account_number") or "--",
-            "account_number_b": account_b.get("account_number") or "--",
+            "account_number_a": account_number_a if account_number_a else None,
+            "account_number_b": account_number_b if account_number_b else None,
         }
 
         summary = dict(highlights)

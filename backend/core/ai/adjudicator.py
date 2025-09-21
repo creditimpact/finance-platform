@@ -16,7 +16,7 @@ Consider:
 • High-precision cues: account-number (last4/exact), balance owed equality within tolerances, date alignments.
 • Lender names/brands and free-text descriptors from the raw “context” lines.
 • The numeric 0–100 match summary as a hint, but override if raw context contradicts it.
-• If entries describe the SAME DEBT but different tradelines (e.g., CA vs OC), say decision="different" but mention “same debt” in the reason.
+• If entries describe the SAME DEBT but different tradelines (e.g., OC vs CA), say decision="different" and mention “same debt” in the reason.
 Be conservative: if critical fields conflict without plausible explanation → "different".
 Do NOT mention these rules in the output."""
 
@@ -53,7 +53,10 @@ def _prepare_user_payload(pack: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def decide_merge_or_different(pack: dict, *, timeout: int) -> dict:
-    """Call the AI adjudicator and return the merge decision payload."""
+    """Returns {"decision": "merge"|"different", "reason": "<short>"}.
+
+    May raise transport/HTTP errors; caller handles retries and ai_error tags.
+    """
 
     base_url = (os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
     api_key = os.getenv("OPENAI_API_KEY")

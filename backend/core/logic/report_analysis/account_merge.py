@@ -745,8 +745,9 @@ def score_all_pairs_0_100(
 
     cfg = get_merge_cfg()
 
-    indices: List[int] = []
-    for raw_idx in idx_list:
+    requested_raw = list(idx_list) if idx_list is not None else []
+    requested_indices: List[int] = []
+    for raw_idx in requested_raw:
         if isinstance(raw_idx, bool):
             continue
         try:
@@ -754,11 +755,59 @@ def score_all_pairs_0_100(
         except (TypeError, ValueError):
             logger.warning("MERGE_SCORE sid=<%s> invalid_index=%r", sid, raw_idx)
             continue
-        indices.append(idx_val)
+        requested_indices.append(idx_val)
 
-    unique_indices = sorted(set(indices))
+    requested_set = set(requested_indices)
+
+    accounts_root = runs_root / sid / "cases" / "accounts"
+    discovered_indices: List[int] = []
+    if accounts_root.exists():
+        for entry in accounts_root.iterdir():
+            if not entry.is_dir():
+                continue
+            try:
+                idx_val = int(entry.name)
+            except (TypeError, ValueError):
+                logger.debug(
+                    "MERGE_SCORE sid=<%s> skip_account_dir=%r", sid, entry.name
+                )
+                continue
+            discovered_indices.append(idx_val)
+    else:
+        logger.warning(
+            "MERGE_SCORE sid=<%s> accounts_dir_missing path=%s",
+            sid,
+            accounts_root,
+        )
+
+    if requested_raw:
+        if requested_set:
+            indices = sorted(idx for idx in set(discovered_indices) if idx in requested_set)
+            missing = requested_set - set(indices)
+            if missing:
+                logger.debug(
+                    "MERGE_SCORE sid=<%s> missing_requested_indices=%s",
+                    sid,
+                    sorted(missing),
+                )
+        else:
+            indices = []
+    else:
+        indices = sorted(set(discovered_indices))
+
+    total_accounts = len(indices)
+    expected_pairs = total_accounts * (total_accounts - 1) // 2
+
+    overview_log = {
+        "sid": sid,
+        "indices": indices,
+        "total_accounts": total_accounts,
+        "expected_pairs": expected_pairs,
+    }
+    logger.debug("MERGE_PAIR_OVERVIEW %s", json.dumps(overview_log, sort_keys=True))
+
     bureaus_by_idx: Dict[int, Dict[str, Dict[str, Any]]] = {}
-    for idx in unique_indices:
+    for idx in indices:
         try:
             bureaus = load_bureaus(sid, idx, runs_root=runs_root)
         except FileNotFoundError:
@@ -773,57 +822,79 @@ def score_all_pairs_0_100(
             bureaus = {}
         bureaus_by_idx[idx] = bureaus
 
-    scores: Dict[int, Dict[int, Dict[str, Any]]] = {
-        idx: {} for idx in unique_indices
-    }
+    scores: Dict[int, Dict[int, Dict[str, Any]]] = {idx: {} for idx in indices}
 
-    for left, right in gen_unordered_pairs(unique_indices):
-        result = score_pair_0_100(
-            bureaus_by_idx.get(left, {}), bureaus_by_idx.get(right, {}), cfg
-        )
-
-        total_score = int(result.get("total", 0) or 0)
-        sanitized_parts = _sanitize_parts(result.get("parts"))
-        aux_payload = _build_aux_payload(result.get("aux", {}))
-
-        score_log = {
-            "sid": sid,
-            "i": left,
-            "j": right,
-            "total": total_score,
-            "parts": sanitized_parts,
-            "acctnum_level": aux_payload.get("acctnum_level", "none"),
-            "matched_pairs": aux_payload.get("by_field_pairs", {}),
-            "matched_fields": aux_payload.get("matched_fields", {}),
-        }
-        logger.info("MERGE_SCORE %s", json.dumps(score_log, sort_keys=True))
-
-        for event in result.get("trigger_events", []) or []:
-            if not isinstance(event, Mapping):
-                continue
-            kind = event.get("kind")
-            trigger_log = {
+    pair_counter = 0
+    for left_pos in range(total_accounts - 1):
+        left = indices[left_pos]
+        for right_pos in range(left_pos + 1, total_accounts):
+            right = indices[right_pos]
+            pair_counter += 1
+            step_log = {
                 "sid": sid,
                 "i": left,
                 "j": right,
-                "kind": kind,
-                "details": event.get("details", {}),
+                "pair_index": pair_counter,
+                "expected_pairs": expected_pairs,
             }
-            logger.info("MERGE_TRIGGER %s", json.dumps(trigger_log, sort_keys=True))
+            logger.debug("MERGE_PAIR_STEP %s", json.dumps(step_log, sort_keys=True))
 
-        decision_log = {
-            "sid": sid,
-            "i": left,
-            "j": right,
-            "decision": result.get("decision", "different"),
-            "total": total_score,
-            "triggers": list(result.get("triggers", [])),
-            "conflicts": list(result.get("conflicts", [])),
-        }
-        logger.info("MERGE_DECISION %s", json.dumps(decision_log, sort_keys=True))
+            result = score_pair_0_100(
+                bureaus_by_idx.get(left, {}),
+                bureaus_by_idx.get(right, {}),
+                cfg,
+            )
 
-        scores[left][right] = deepcopy(result)
-        scores[right][left] = deepcopy(result)
+            total_score = int(result.get("total", 0) or 0)
+            sanitized_parts = _sanitize_parts(result.get("parts"))
+            aux_payload = _build_aux_payload(result.get("aux", {}))
+
+            score_log = {
+                "sid": sid,
+                "i": left,
+                "j": right,
+                "total": total_score,
+                "parts": sanitized_parts,
+                "acctnum_level": aux_payload.get("acctnum_level", "none"),
+                "matched_pairs": aux_payload.get("by_field_pairs", {}),
+                "matched_fields": aux_payload.get("matched_fields", {}),
+            }
+            logger.info("MERGE_SCORE %s", json.dumps(score_log, sort_keys=True))
+
+            for event in result.get("trigger_events", []) or []:
+                if not isinstance(event, Mapping):
+                    continue
+                kind = event.get("kind")
+                trigger_log = {
+                    "sid": sid,
+                    "i": left,
+                    "j": right,
+                    "kind": kind,
+                    "details": event.get("details", {}),
+                }
+                logger.info("MERGE_TRIGGER %s", json.dumps(trigger_log, sort_keys=True))
+
+            decision_log = {
+                "sid": sid,
+                "i": left,
+                "j": right,
+                "decision": result.get("decision", "different"),
+                "total": total_score,
+                "triggers": list(result.get("triggers", [])),
+                "conflicts": list(result.get("conflicts", [])),
+            }
+            logger.info("MERGE_DECISION %s", json.dumps(decision_log, sort_keys=True))
+
+            scores[left][right] = deepcopy(result)
+            scores[right][left] = deepcopy(result)
+
+    summary_log = {
+        "sid": sid,
+        "total_accounts": total_accounts,
+        "expected_pairs": expected_pairs,
+        "pairs_scored": pair_counter,
+    }
+    logger.debug("MERGE_PAIR_SUMMARY %s", json.dumps(summary_log, sort_keys=True))
 
     return scores
 

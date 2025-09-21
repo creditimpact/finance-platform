@@ -175,3 +175,39 @@ def test_score_all_pairs_emits_structured_logs(tmp_path, caplog) -> None:
     decision_payload = json.loads(decision_messages[0].split(" ", 1)[1])
     for key in ("sid", "i", "j", "decision", "total"):
         assert key in decision_payload
+
+
+def test_score_all_pairs_debug_pair_logs(tmp_path, caplog) -> None:
+    sid = "SID-DEBUG"
+    accounts_root = tmp_path / sid / "cases" / "accounts"
+
+    for idx in range(3):
+        bureaus = {"transunion": {"balance_owed": str(100 + idx)}}
+        _write_account_payload(accounts_root, idx, bureaus)
+
+    with caplog.at_level(
+        logging.DEBUG, logger="backend.core.logic.report_analysis.account_merge"
+    ):
+        score_all_pairs_0_100(sid, [0, 1, 2], runs_root=tmp_path)
+
+    step_payloads = [
+        json.loads(record.getMessage().split(" ", 1)[1])
+        for record in caplog.records
+        if record.getMessage().startswith("MERGE_PAIR_STEP ")
+    ]
+    summary_payloads = [
+        json.loads(record.getMessage().split(" ", 1)[1])
+        for record in caplog.records
+        if record.getMessage().startswith("MERGE_PAIR_SUMMARY ")
+    ]
+
+    assert step_payloads
+    assert summary_payloads
+
+    summary_payload = summary_payloads[-1]
+    expected_pairs = {(0, 1), (0, 2), (1, 2)}
+    logged_pairs = {(payload["i"], payload["j"]) for payload in step_payloads}
+
+    assert logged_pairs == expected_pairs
+    assert summary_payload["expected_pairs"] == len(expected_pairs)
+    assert summary_payload["pairs_scored"] == len(step_payloads) == len(expected_pairs)

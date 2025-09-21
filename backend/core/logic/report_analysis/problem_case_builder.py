@@ -25,6 +25,8 @@ from backend.core.logic.report_analysis.problem_extractor import (
 
 from backend.core.logic.report_analysis.account_merge import (
     choose_best_partner,
+    build_merge_best_tag,
+    build_merge_pair_tag,
     gen_unordered_pairs,
     merge_v2_only_enabled,
     score_all_pairs_0_100,
@@ -125,129 +127,10 @@ def _sanitize_bureaus(data: Mapping[str, Any] | None) -> Dict[str, Any]:
     return cleaned
 
 
-def _safe_int(value: Any) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
 def _normalize_str_list(values: Any) -> List[str]:
     if isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
         return [str(item) for item in values if item is not None]
     return []
-
-
-def _normalize_merge_parts(parts: Any) -> Dict[str, int]:
-    normalized: Dict[str, int] = {}
-    if isinstance(parts, Mapping):
-        for key in sorted(parts.keys(), key=str):
-            normalized[str(key)] = _safe_int(parts.get(key))
-    return normalized
-
-
-def _normalize_merge_aux(aux: Any) -> Dict[str, Any]:
-    acct_level = "none"
-    by_field_pairs: Dict[str, List[str]] = {}
-    matched_fields: Dict[str, bool] = {}
-
-    if isinstance(aux, Mapping):
-        acct_aux = aux.get("account_number")
-        if isinstance(acct_aux, Mapping):
-            level = acct_aux.get("acctnum_level")
-            if isinstance(level, str) and level:
-                acct_level = level
-
-        for field, field_aux in aux.items():
-            if not isinstance(field_aux, Mapping):
-                continue
-            if "matched" in field_aux:
-                matched_fields[str(field)] = bool(field_aux.get("matched"))
-            best_pair = field_aux.get("best_pair")
-            if (
-                isinstance(best_pair, (list, tuple))
-                and len(best_pair) == 2
-                and all(part is not None for part in best_pair)
-            ):
-                by_field_pairs[str(field)] = [str(best_pair[0]), str(best_pair[1])]
-
-    return {
-        "acctnum_level": acct_level,
-        "by_field_pairs": by_field_pairs,
-        "matched_fields": matched_fields,
-    }
-
-
-def _normalize_merge_payload(result: Mapping[str, Any] | None) -> Dict[str, Any]:
-    payload = {
-        "decision": "different",
-        "total": 0,
-        "mid": 0,
-        "dates_all": False,
-        "parts": {},
-        "aux": {
-            "acctnum_level": "none",
-            "by_field_pairs": {},
-            "matched_fields": {},
-        },
-        "reasons": [],
-        "conflicts": [],
-        "strong": False,
-    }
-
-    if isinstance(result, Mapping):
-        payload["decision"] = str(result.get("decision", "different"))
-        payload["total"] = _safe_int(result.get("total"))
-        payload["mid"] = _safe_int(result.get("mid_sum"))
-        payload["dates_all"] = bool(result.get("dates_all"))
-        payload["parts"] = _normalize_merge_parts(result.get("parts"))
-        payload["aux"] = _normalize_merge_aux(result.get("aux"))
-        payload["reasons"] = _normalize_str_list(result.get("triggers"))
-        payload["conflicts"] = _normalize_str_list(result.get("conflicts"))
-
-    payload["strong"] = any(
-        isinstance(reason, str) and reason.startswith("strong:")
-        for reason in payload["reasons"]
-    )
-
-    return payload
-
-
-def _build_merge_pair_tag(partner_idx: int, result: Mapping[str, Any]) -> Dict[str, Any]:
-    payload = _normalize_merge_payload(result)
-    payload.update(
-        {
-            "tag": "merge_pair",
-            "kind": "merge_pair",
-            "source": "merge_scorer",
-            "with": int(partner_idx),
-        }
-    )
-    return payload
-
-
-def _build_merge_best_tag(best_info: Mapping[str, Any]) -> Dict[str, Any] | None:
-    if not isinstance(best_info, Mapping):
-        return None
-
-    partner = best_info.get("partner_index")
-    result = best_info.get("result")
-    if not isinstance(partner, int) or not isinstance(result, Mapping):
-        return None
-
-    payload = _normalize_merge_payload(result)
-    payload.update(
-        {
-            "tag": "merge_best",
-            "kind": "merge_best",
-            "source": "merge_scorer",
-            "with": int(partner),
-            "tiebreaker": str(best_info.get("tiebreaker", "none")),
-            "strong_rank": _safe_int(best_info.get("strong_rank")),
-            "score_total": _safe_int(best_info.get("score_total", payload["total"])),
-        }
-    )
-    return payload
 
 
 def _build_issue_tag(summary: Mapping[str, Any]) -> Dict[str, Any] | None:
@@ -696,7 +579,7 @@ def _build_problem_cases_lean(
         result = merge_scores.get(left, {}).get(right)
         if not isinstance(result, Mapping):
             continue
-        pair_left = _build_merge_pair_tag(right, result)
+        pair_left = build_merge_pair_tag(right, result)
         decision = pair_left.get("decision")
         if decision not in valid_decisions:
             continue
@@ -705,11 +588,11 @@ def _build_problem_cases_lean(
             upsert_tag(left_path, pair_left, ("kind", "with"))
         right_path = tag_paths.get(right)
         if right_path is not None:
-            pair_right = _build_merge_pair_tag(left, result)
+            pair_right = build_merge_pair_tag(left, result)
             upsert_tag(right_path, pair_right, ("kind", "with"))
 
     for idx in written_indices:
-        best_tag = _build_merge_best_tag(best_partners.get(idx, {}))
+        best_tag = build_merge_best_tag(best_partners.get(idx, {}))
         if not best_tag:
             continue
         if best_tag.get("decision") not in valid_decisions:

@@ -145,18 +145,22 @@ consumers.【F:backend/core/logic/report_analysis/account_merge.py†L272-L352�
 
 ### Observability and logs
 
-- Pairwise scoring emits `MERGE_SCORE sid=<...> i=<i> j=<j> parts=<...> total=<...>`
-  followed by `MERGE_DECISION ...` for every comparison. Use ripgrep to
-  inspect them, e.g. `rg "MERGE_DECISION" runs/<sid>/ -g"*.log"`.
-- `score_all_pairs_0_100` also emits `MERGE_TRIGGER` entries whenever a
-  strong, mid, or dates-only trigger fires so reviewers can trace why a
-  pair crossed the AI threshold.【F:backend/core/logic/report_analysis/account_merge.py†L628-L670】
+- Pairwise scoring emits the detailed `MERGE_SCORE ...` / `MERGE_DECISION ...`
+  logs for every comparison. Use ripgrep to inspect them, e.g. `rg
+  "MERGE_DECISION" runs/<sid>/ -g"*.log"`.
+- Compact counterparts (`MERGE_V2_SCORE`, `MERGE_V2_TRIGGER`,
+  `MERGE_V2_DECISION`) mirror the same activity with just the essential
+  identifiers so dashboards can efficiently trace merge traffic. The
+  scorer continues to expose the richer `MERGE_TRIGGER` entries whenever a
+  strong, mid, dates, or total trigger fires.【F:backend/core/logic/report_analysis/account_merge.py†L821-L878】
 
-### Where `merge_tag` is stored
+### Where merge conclusions are stored
 
-`persist_merge_tags` writes the best-partner summary for each account to
-`runs/<sid>/cases/accounts/<account_index>/summary.json` under the
-`merge_tag` key.【F:backend/core/logic/report_analysis/account_merge.py†L900-L958】 The
-payload contains the best partner, ordered score list, and per-field
-matches that feed dashboards and audit tooling.
-【F:backend/core/logic/report_analysis/problem_case_builder.py†L224-L290】 This keeps merge context available for downstream review and auditing.
+`persist_merge_tags` returns the traditional best-partner payload for
+callers, but it now persists conclusions exclusively in
+`runs/<sid>/cases/accounts/<idx>/tags.json`. Each run rewrites the merge
+tags for AI/auto pairs (`merge_pair`) and the selected best partner
+(`merge_best`) so downstream systems can read a single source of truth
+without touching `summary.json`.【F:backend/core/logic/report_analysis/account_merge.py†L1213-L1263】 The lean case builder consumes the
+same helpers, ensuring analyzer issue tags and merge tags live together in
+each account's tags file.【F:backend/core/logic/report_analysis/problem_case_builder.py†L557-L612】

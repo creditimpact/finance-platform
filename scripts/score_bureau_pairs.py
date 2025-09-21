@@ -230,7 +230,7 @@ def build_merge_tags(
     return tags
 
 
-def persist_merge_tags_to_summary(
+def persist_merge_tags_to_tags(
     sid: str,
     scores_by_idx: Mapping[int, Mapping[int, Mapping[str, Any]]],
     best_by_idx: Mapping[int, Mapping[str, Any]],
@@ -309,7 +309,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     parser.add_argument(
         "--write-tags",
         action="store_true",
-        help="Persist merge tags back to account summaries",
+        help="Persist merge tags to per-account tags.json files",
     )
 
     args = parser.parse_args(argv)
@@ -334,7 +334,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     merge_tags = build_merge_tags(scores_by_idx, best_by_idx)
 
     if args.write_tags:
-        merge_tags = persist_merge_tags_to_summary(
+        merge_tags = persist_merge_tags_to_tags(
             sid, scores_by_idx, best_by_idx, runs_root=runs_root
         )
 

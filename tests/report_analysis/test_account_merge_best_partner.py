@@ -85,8 +85,27 @@ def test_best_partner_prefers_strong_match(tmp_path) -> None:
     summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
     assert "merge_tag" not in summary_data
 
+    tags_path = accounts_root / "0" / "tags.json"
+    tags_payload = json.loads(tags_path.read_text(encoding="utf-8"))
+    pair_tags = [tag for tag in tags_payload if tag.get("kind") == "merge_pair"]
+    by_partner = {tag.get("with"): tag for tag in pair_tags}
+    assert all(tag.get("decision") in {"ai", "auto"} for tag in pair_tags)
 
-def test_persist_merge_tags_writes_summary_when_legacy_enabled(
+    partner_decision = scores[0][2]["decision"]
+    if partner_decision in {"ai", "auto"}:
+        assert by_partner[2]["decision"] == partner_decision
+    else:
+        assert 2 not in by_partner
+
+    best_tags = [tag for tag in tags_payload if tag.get("kind") == "merge_best"]
+    if partner_decision in {"ai", "auto"}:
+        assert best_tags and best_tags[0]["with"] == 2
+        assert best_tags[0]["decision"] == partner_decision
+    else:
+        assert not best_tags
+
+
+def test_persist_merge_tags_updates_tags_when_legacy_disabled(
     tmp_path, monkeypatch
 ) -> None:
     monkeypatch.setenv("MERGE_V2_ONLY", "0")
@@ -108,7 +127,13 @@ def test_persist_merge_tags_writes_summary_when_legacy_enabled(
 
     summary_path = accounts_root / "0" / "summary.json"
     summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
-    assert summary_data["merge_tag"] == tag_a
+    assert "merge_tag" not in summary_data
+
+    tags_path = accounts_root / "0" / "tags.json"
+    tags_payload = json.loads(tags_path.read_text(encoding="utf-8"))
+    merge_pairs = [tag for tag in tags_payload if tag.get("kind") == "merge_pair"]
+    assert merge_pairs
+    assert merge_pairs[0]["decision"] in {"ai", "auto"}
 
 
 def test_score_all_pairs_emits_structured_logs(tmp_path, caplog) -> None:
@@ -175,6 +200,27 @@ def test_score_all_pairs_emits_structured_logs(tmp_path, caplog) -> None:
     decision_payload = json.loads(decision_messages[0].split(" ", 1)[1])
     for key in ("sid", "i", "j", "decision", "total"):
         assert key in decision_payload
+
+    v2_score_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("MERGE_V2_SCORE ")
+    ]
+    assert v2_score_messages
+
+    v2_trigger_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("MERGE_V2_TRIGGER ")
+    ]
+    assert v2_trigger_messages
+
+    v2_decision_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("MERGE_V2_DECISION ")
+    ]
+    assert v2_decision_messages
 
 
 def test_score_all_pairs_debug_pair_logs(tmp_path, caplog) -> None:

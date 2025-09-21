@@ -19,14 +19,13 @@ def _sample_pack() -> dict:
 
 def _enable_ai(monkeypatch) -> None:
     monkeypatch.setattr(config, "ENABLE_AI_ADJUDICATOR", True)
-    monkeypatch.setattr(config, "AI_MODEL_ID", "gpt-test")
     monkeypatch.setattr(config, "AI_TEMPERATURE_DEFAULT", 0.0)
     monkeypatch.setattr(config, "AI_MAX_TOKENS", 256)
-    monkeypatch.setattr(config, "AI_REQUEST_TIMEOUT_S", 5)
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1")
-    monkeypatch.setenv("AI_REQUEST_TIMEOUT_S", "3.5")
+    monkeypatch.setenv("AI_MODEL", "gpt-test")
+    monkeypatch.setenv("AI_REQUEST_TIMEOUT", "3")
 
 
 def test_adjudicate_pair_disabled(monkeypatch, tmp_path):
@@ -134,7 +133,7 @@ def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
     assert captured["headers"]["Authorization"] == "Bearer test-key"
     assert captured["payload"]["model"] == "gpt-test"
     assert captured["payload"]["response_format"] == {"type": "json_object"}
-    assert captured["timeout"] == 3.5
+    assert captured["timeout"] == 3.0
 
     ai_adjudicator.persist_ai_decision("case-123", tmp_path, 11, 16, resp)
 

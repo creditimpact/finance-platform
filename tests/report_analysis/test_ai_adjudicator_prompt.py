@@ -6,7 +6,7 @@ from backend.core.logic.report_analysis.ai_adjudicator import build_prompt_from_
 
 
 def test_build_prompt_from_pack_limits_context(monkeypatch):
-    monkeypatch.setenv("AI_PACK_MAX_LINES_PER_SIDE", "3")
+    monkeypatch.setenv("AI_PACK_MAX_LINES_PER_SIDE", "9")
 
     pack = {
         "sid": "sample-sid",
@@ -33,7 +33,7 @@ def test_build_prompt_from_pack_limits_context(monkeypatch):
                 "Status: Open",
             ],
         },
-        "limits": {"max_lines_per_side": 5},
+        "limits": {"max_lines_per_side": 3},
     }
 
     prompt = build_prompt_from_pack(pack)

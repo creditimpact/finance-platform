@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Uni
 
 from backend.core.io.tags import read_tags, upsert_tag, write_tags
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
+from backend.core.logic.report_analysis import config as merge_config
 
 __all__ = [
     "load_bureaus",
@@ -85,7 +86,7 @@ def _read_env_choice(
 def merge_v2_only_enabled() -> bool:
     """Return True when legacy merge artefact writes must be skipped."""
 
-    return _read_env_flag(os.environ, "MERGE_V2_ONLY", True)
+    return merge_config.get_merge_v2_only()
 
 
 def gen_unordered_pairs(indices: List[int]) -> List[Tuple[int, int]]:

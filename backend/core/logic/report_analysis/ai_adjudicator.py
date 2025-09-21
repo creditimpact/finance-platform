@@ -13,6 +13,7 @@ import backend.config as config
 from backend.core.io.tags import upsert_tag
 from backend.core.utils.atomic_io import atomic_write_json
 
+from . import config as merge_config
 from .ai_pack import DEFAULT_MAX_LINES
 
 
@@ -105,7 +106,9 @@ def _build_user_message(pack: dict, max_lines: int) -> str:
 
 def build_prompt_from_pack(pack: dict) -> dict[str, str]:
     limits = pack.get("limits") or {}
-    default_limit = _coerce_positive_int(os.getenv("AI_PACK_MAX_LINES_PER_SIDE"), DEFAULT_MAX_LINES)
+    default_limit = merge_config.get_ai_pack_max_lines_per_side()
+    if default_limit <= 0:
+        default_limit = DEFAULT_MAX_LINES
     pack_limit = _coerce_positive_int(limits.get("max_lines_per_side"), default_limit)
     max_lines = min(default_limit, pack_limit)
 
@@ -200,7 +203,7 @@ def _build_request_payload(pack: dict) -> tuple[str, dict[str, Any], dict[str, s
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is required when AI adjudication is enabled")
 
-    model = os.getenv("AI_MODEL_ID", getattr(config, "AI_MODEL_ID", "gpt-4o-mini"))
+    model = merge_config.get_ai_model()
     temperature = _coerce_float(
         os.getenv("AI_TEMPERATURE_DEFAULT"), getattr(config, "AI_TEMPERATURE_DEFAULT", 0.0)
     )
@@ -264,9 +267,7 @@ def adjudicate_pair(pack: dict) -> dict[str, Any]:
     }
     logger.info("MERGE_V2_CALL %s", json.dumps(request_log, sort_keys=True))
 
-    timeout_s = _coerce_float(
-        os.getenv("AI_REQUEST_TIMEOUT_S"), getattr(config, "AI_REQUEST_TIMEOUT_S", 8)
-    )
+    timeout_s = float(merge_config.get_ai_request_timeout())
 
     started = time.perf_counter()
     try:

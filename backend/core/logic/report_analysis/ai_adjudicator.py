@@ -1,10 +1,21 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
-from typing import Any
+import time
+from pathlib import Path
+from typing import Any, Mapping
+
+import httpx
+
+import backend.config as config
+from backend.core.utils.atomic_io import atomic_write_json
 
 from .ai_pack import DEFAULT_MAX_LINES
+
+
+logger = logging.getLogger(__name__)
 
 
 HIGHLIGHT_KEYS: tuple[str, ...] = (
@@ -37,6 +48,13 @@ def _coerce_positive_int(value: Any, default: int) -> int:
     except Exception:
         return default
     return number if number > 0 else default
+
+
+def _coerce_float(value: Any, default: float) -> float:
+    try:
+        return float(str(value))
+    except Exception:
+        return default
 
 
 def _limit_context(lines: list[Any], limit: int) -> list[str]:
@@ -93,4 +111,214 @@ def build_prompt_from_pack(pack: dict) -> dict[str, str]:
     user_message = _build_user_message(pack, max_lines)
 
     return {"system": SYSTEM_MESSAGE, "user": user_message}
+
+
+def _strip_code_fences(content: str) -> str:
+    text = content.strip()
+    if not text.startswith("```"):
+        return text
+
+    lines = text.splitlines()
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _normalize_reasons(value: Any) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value if item is not None]
+    return [str(value)]
+
+
+def _sanitize_ai_decision(resp: Mapping[str, Any] | None, *, allow_disabled: bool) -> dict[str, Any]:
+    if not isinstance(resp, Mapping):
+        raise ValueError("AI decision payload must be a mapping")
+
+    decision = str(resp.get("decision", "")).strip()
+    if decision == "ai_disabled":
+        if not allow_disabled:
+            raise ValueError("ai_disabled decision not permitted in this context")
+        return {"decision": "ai_disabled", "confidence": 0.0, "reasons": []}
+
+    if decision not in {"merge", "no_merge"}:
+        raise ValueError(f"Unsupported AI decision: {decision!r}")
+
+    confidence_raw = resp.get("confidence", 0.0)
+    confidence = _coerce_float(confidence_raw, 0.0)
+    if confidence < 0.0 or confidence > 1.0:
+        raise ValueError(f"Confidence must be between 0 and 1: {confidence_raw!r}")
+
+    reasons = _normalize_reasons(resp.get("reasons"))
+
+    return {
+        "decision": decision,
+        "confidence": float(confidence),
+        "reasons": reasons,
+    }
+
+
+def _parse_ai_response(content: str) -> dict[str, Any]:
+    trimmed = _strip_code_fences(content)
+    data = json.loads(trimmed)
+    if not isinstance(data, Mapping):
+        raise ValueError("AI response JSON must be an object")
+    return dict(data)
+
+
+def _build_request_payload(pack: dict) -> tuple[str, dict[str, Any], dict[str, str], dict[str, Any]]:
+    prompt = build_prompt_from_pack(pack)
+    messages = [
+        {"role": "system", "content": prompt["system"]},
+        {"role": "user", "content": prompt["user"]},
+    ]
+
+    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is required when AI adjudication is enabled")
+
+    model = os.getenv("AI_MODEL_ID", getattr(config, "AI_MODEL_ID", "gpt-4o-mini"))
+    temperature = _coerce_float(
+        os.getenv("AI_TEMPERATURE_DEFAULT"), getattr(config, "AI_TEMPERATURE_DEFAULT", 0.0)
+    )
+    max_tokens = _coerce_positive_int(
+        os.getenv("AI_MAX_TOKENS"), getattr(config, "AI_MAX_TOKENS", 600)
+    )
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"},
+    }
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    metadata = {
+        "model": model,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+    return f"{base_url}/chat/completions", payload, headers, metadata
+
+
+def adjudicate_pair(pack: dict) -> dict[str, Any]:
+    pair = pack.get("pair") or {}
+    sid = str(pack.get("sid") or "")
+    a_idx = pair.get("a")
+    b_idx = pair.get("b")
+
+    context = pack.get("context") or {}
+    context_sizes = {
+        "a": len(context.get("a") or []),
+        "b": len(context.get("b") or []),
+    }
+
+    if not getattr(config, "ENABLE_AI_ADJUDICATOR", False):
+        log_payload = {
+            "sid": sid,
+            "pair": {"a": a_idx, "b": b_idx},
+            "reason": "disabled",
+        }
+        logger.info("MERGE_V2_AI_SKIPPED %s", json.dumps(log_payload, sort_keys=True))
+        return {"decision": "ai_disabled", "confidence": 0.0, "reasons": []}
+
+    url, payload, headers, metadata = _build_request_payload(pack)
+    request_log = {
+        "sid": sid,
+        "pair": {"a": a_idx, "b": b_idx},
+        "context_sizes": context_sizes,
+        **metadata,
+    }
+    logger.info("MERGE_V2_AI_REQUEST %s", json.dumps(request_log, sort_keys=True))
+
+    timeout_s = _coerce_float(
+        os.getenv("AI_REQUEST_TIMEOUT_S"), getattr(config, "AI_REQUEST_TIMEOUT_S", 8)
+    )
+
+    started = time.perf_counter()
+    try:
+        response = httpx.post(url, json=payload, headers=headers, timeout=timeout_s)
+        response.raise_for_status()
+        data = response.json()
+        choices = data.get("choices") or []
+        if not choices:
+            raise ValueError("OpenAI response missing choices")
+        message = choices[0].get("message") or {}
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise ValueError("OpenAI response missing textual content")
+
+        parsed = _parse_ai_response(content)
+        sanitized = _sanitize_ai_decision(parsed, allow_disabled=False)
+
+        duration_ms = (time.perf_counter() - started) * 1000
+        response_log = {
+            "sid": sid,
+            "pair": {"a": a_idx, "b": b_idx},
+            "decision": sanitized["decision"],
+            "confidence": sanitized["confidence"],
+            "latency_ms": round(duration_ms, 3),
+        }
+        logger.info("MERGE_V2_AI_RESPONSE %s", json.dumps(response_log, sort_keys=True))
+        return sanitized
+    except Exception as exc:
+        duration_ms = (time.perf_counter() - started) * 1000
+        error_log = {
+            "sid": sid,
+            "pair": {"a": a_idx, "b": b_idx},
+            "error": exc.__class__.__name__,
+            "latency_ms": round(duration_ms, 3),
+        }
+        logger.error("MERGE_V2_AI_ERROR %s", json.dumps(error_log, sort_keys=True))
+        raise
+
+
+def persist_ai_decision(
+    sid: str,
+    runs_root: str | os.PathLike[str],
+    a_idx: int,
+    b_idx: int,
+    resp: Mapping[str, Any],
+) -> None:
+    sanitized = _sanitize_ai_decision(resp, allow_disabled=True)
+
+    try:
+        account_a = int(a_idx)
+        account_b = int(b_idx)
+    except Exception as exc:  # pragma: no cover - defensive
+        raise ValueError("Account indices must be integers") from exc
+
+    sid_str = str(sid)
+    base = Path(runs_root) / sid_str / "cases" / "accounts"
+
+    artifact_a = {
+        "sid": sid_str,
+        "pair": {"a": account_a, "b": account_b},
+        "decision": sanitized["decision"],
+        "confidence": sanitized["confidence"],
+        "reasons": sanitized["reasons"],
+    }
+    artifact_b = {
+        "sid": sid_str,
+        "pair": {"a": account_b, "b": account_a},
+        "decision": sanitized["decision"],
+        "confidence": sanitized["confidence"],
+        "reasons": sanitized["reasons"],
+    }
+
+    path_a = base / str(account_a) / "ai" / f"decision_pair_{account_a}_{account_b}.json"
+    path_b = base / str(account_b) / "ai" / f"decision_pair_{account_b}_{account_a}.json"
+
+    atomic_write_json(path_a.as_posix(), artifact_a, ensure_ascii=False)
+    atomic_write_json(path_b.as_posix(), artifact_b, ensure_ascii=False)
 

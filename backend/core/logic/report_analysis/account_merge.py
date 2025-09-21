@@ -24,6 +24,7 @@ __all__ = [
     "choose_best_partner",
     "persist_merge_tags",
     "score_and_tag_best_partners",
+    "merge_v2_only_enabled",
 ]
 
 
@@ -77,6 +78,12 @@ def _read_env_choice(
         return str(default)
     lowered = str(raw).strip().lower()
     return lowered_choices.get(lowered, str(default))
+
+
+def merge_v2_only_enabled() -> bool:
+    """Return True when legacy merge artefact writes must be skipped."""
+
+    return _read_env_flag(os.environ, "MERGE_V2_ONLY", True)
 
 
 def gen_unordered_pairs(indices: List[int]) -> List[Tuple[int, int]]:
@@ -1524,6 +1531,9 @@ def _persist_merge_tag(
     manifest: Optional[RunManifest],
     merge_tag_v2: Optional[Mapping[str, Any]] = None,
 ) -> None:
+    if merge_v2_only_enabled():
+        return
+
     if runs_root_path is None or not sid or not isinstance(account_index, int):
         return
 

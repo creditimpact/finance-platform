@@ -83,6 +83,31 @@ def test_best_partner_prefers_strong_match(tmp_path) -> None:
 
     summary_path = accounts_root / "0" / "summary.json"
     summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert "merge_tag" not in summary_data
+
+
+def test_persist_merge_tags_writes_summary_when_legacy_enabled(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("MERGE_V2_ONLY", "0")
+
+    sid = "SID-LEGACY"
+    accounts_root = tmp_path / sid / "cases" / "accounts"
+
+    bureaus_a = {"transunion": {"balance_owed": "100"}}
+    bureaus_b = {"experian": {"balance_owed": "100"}}
+
+    _write_account_payload(accounts_root, 0, bureaus_a)
+    _write_account_payload(accounts_root, 1, bureaus_b)
+
+    scores = score_all_pairs_0_100(sid, [0, 1], runs_root=tmp_path)
+    best = choose_best_partner(scores)
+
+    merge_tags = persist_merge_tags(sid, scores, best, runs_root=tmp_path)
+    tag_a = merge_tags[0]
+
+    summary_path = accounts_root / "0" / "summary.json"
+    summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary_data["merge_tag"] == tag_a
 
 

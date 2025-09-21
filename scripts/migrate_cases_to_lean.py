@@ -24,6 +24,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, MutableMapping, Sequence
 
+from backend.core.logic.report_analysis.account_merge import merge_v2_only_enabled
 from backend.core.logic.report_analysis.problem_case_builder import (
     _build_bureaus_payload_from_stagea,
 )
@@ -203,13 +204,16 @@ def migrate_account_dir(account_dir: Path, dry_run: bool = False) -> bool:
         account_data,
     )
 
+    merge_v2_only = merge_v2_only_enabled()
+
     summary_obj: Dict[str, Any] = {
         "account_index": account_index,
         "pointers": POINTERS,
         "problem_reasons": fallback_reasons,
         "problem_tags": fallback_tags,
-        "merge_tag": None,
     }
+    if not merge_v2_only:
+        summary_obj["merge_tag"] = None
     if account_id is not None:
         summary_obj["account_id"] = account_id
     if primary_issue is not None:
@@ -224,13 +228,16 @@ def migrate_account_dir(account_dir: Path, dry_run: bool = False) -> bool:
             summary_obj["problem_tags"] = _ensure_list(summary_data.get("problem_tags"))
         if "primary_issue" in summary_data and summary_data.get("primary_issue") is not None:
             summary_obj["primary_issue"] = summary_data.get("primary_issue")
-        if "merge_tag" in summary_data:
+        if not merge_v2_only and "merge_tag" in summary_data:
             summary_obj["merge_tag"] = _sanitize_merge_tag(summary_data.get("merge_tag"))
 
     summary_obj["problem_tags"] = summary_obj.get("problem_tags") or []
     summary_obj["problem_reasons"] = summary_obj.get("problem_reasons") or []
 
-    summary_obj["merge_tag"] = _sanitize_merge_tag(summary_obj.get("merge_tag"))
+    if not merge_v2_only:
+        summary_obj["merge_tag"] = _sanitize_merge_tag(summary_obj.get("merge_tag"))
+    else:
+        summary_obj.pop("merge_tag", None)
 
     tags_path = account_dir / POINTERS["tags"]
     if tags_path.exists():

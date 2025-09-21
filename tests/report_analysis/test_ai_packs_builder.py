@@ -157,6 +157,75 @@ def test_build_merge_ai_packs_only_merge_best_filter(tmp_path: Path) -> None:
     assert len(pack["context"]["b"]) <= 3
 
 
+def test_build_merge_ai_packs_caps_context_to_env_limit(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AI_PACK_MAX_LINES_PER_SIDE", "7")
+
+    sid = "env-cap-sid"
+    runs_root = tmp_path
+    accounts_root = runs_root / sid / "cases" / "accounts"
+
+    account_a_dir = accounts_root / "31"
+    account_b_dir = accounts_root / "32"
+
+    _write_raw_lines(
+        account_a_dir / "raw_lines.json",
+        [
+            "US BK CACS",
+            "Account # 9988",
+            "Balance Owed: $500",
+            "Last Payment: 2024-01-01",
+            "Past Due Amount: $0",
+            "High Balance: $800",
+            "Creditor Type: Bank",
+            "Account Type: Revolving",
+            "Payment Amount: $50",
+            "Credit Limit: $1000",
+            "Creditor Remarks: Test remark",
+            "Two-Year Payment History: 111111",
+        ],
+    )
+
+    _write_raw_lines(
+        account_b_dir / "raw_lines.json",
+        [
+            "U S BANK",
+            "Account # 7766",
+            "Balance Owed: $400",
+            "Last Payment: 2023-12-15",
+            "Past Due Amount: $25",
+            "High Balance: $900",
+            "Creditor Type: Bank",
+            "Account Type: Revolving",
+            "Payment Amount: $40",
+            "Credit Limit: $950",
+            "Creditor Remarks: Sample",
+            "Days Late - 7 Year History: 0000",
+        ],
+    )
+
+    _write_json(account_a_dir / "tags.json", [_merge_best_tag(32)])
+    _write_json(account_b_dir / "tags.json", [_merge_best_tag(31)])
+
+    packs = build_merge_ai_packs(
+        sid,
+        runs_root,
+        only_merge_best=False,
+        max_lines_per_side=12,
+    )
+
+    assert len(packs) == 1
+    pack = packs[0]
+
+    context_a = pack["context"]["a"]
+    context_b = pack["context"]["b"]
+
+    assert context_a[0] == "US BK CACS"
+    assert context_b[0] == "U S BANK"
+    assert len(context_a) <= 7
+    assert len(context_b) <= 7
+    assert pack["limits"]["max_lines_per_side"] == 7
+
+
 def test_build_ai_merge_packs_cli_updates_manifest(tmp_path: Path, monkeypatch) -> None:
     sid = "cli-sid"
     runs_root = tmp_path / "runs"

@@ -12,7 +12,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
-from backend.core.io.tags import read_tags, upsert_tag, write_tags
+from backend.core.io.tags import read_tags, upsert_tag, write_tags_atomic
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
 
@@ -1400,7 +1400,7 @@ def persist_merge_tags(
         existing_tags = read_tags(path)
         filtered = [tag for tag in existing_tags if tag.get("kind") not in merge_kinds]
         if filtered != existing_tags:
-            write_tags(path, filtered)
+            write_tags_atomic(path, filtered)
 
     valid_decisions = {"ai", "auto"}
     processed_pairs: Set[Tuple[int, int]] = set()

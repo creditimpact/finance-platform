@@ -30,7 +30,7 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
             },
         ]
     }
-    pack_path = packs_dir / "pair-11-16.json"
+    pack_path = packs_dir / "011-016.json"
     pack_path.write_text(json.dumps(pack_payload), encoding="utf-8")
     index_payload = [{"a": 11, "b": 16, "file": pack_path.name}]
     (packs_dir / "index.json").write_text(json.dumps(index_payload), encoding="utf-8")
@@ -92,7 +92,7 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
 
     manifest_path = runs_root / sid / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    ai_artifacts = manifest["artifacts"]["ai"]
-    assert Path(ai_artifacts["packs_dir"]) == packs_dir.resolve()
-    assert Path(ai_artifacts["packs_index"]) == (packs_dir / "index.json").resolve()
+    ai_artifacts = manifest["artifacts"]["ai_packs"]
+    assert Path(ai_artifacts["dir"]) == packs_dir.resolve()
+    assert Path(ai_artifacts["index"]) == (packs_dir / "index.json").resolve()
     assert Path(ai_artifacts["logs"]) == logs_path.resolve()

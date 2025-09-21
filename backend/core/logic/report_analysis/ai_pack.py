@@ -180,22 +180,12 @@ def _build_pack_payload(
     }
 
 
-def _write_pack(path: Path, payload: dict, overwrite: bool) -> None:
-    if path.exists() and not overwrite:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
-    path.write_text(serialized + "\n", encoding="utf-8")
-
-
 def build_ai_pack_for_pair(
     sid: str,
     runs_root: str | os.PathLike[str],
     a_idx: int,
     b_idx: int,
     highlights: Mapping[str, object] | None,
-    *,
-    overwrite: bool = False,
 ) -> dict:
     sid_str = str(sid)
     runs_root_path = Path(runs_root)
@@ -235,23 +225,6 @@ def build_ai_pack_for_pair(
         highlights,
         max_lines,
     )
-    pack_for_b = _build_pack_payload(
-        sid_str,
-        account_b,
-        account_a,
-        context_b,
-        context_a,
-        account_number_b,
-        account_number_a,
-        highlights,
-        max_lines,
-    )
-
-    pack_a_path = accounts_root / str(account_a) / "ai" / f"pack_pair_{account_a}_{account_b}.json"
-    pack_b_path = accounts_root / str(account_b) / "ai" / f"pack_pair_{account_b}_{account_a}.json"
-
-    _write_pack(pack_a_path, pack_for_a, overwrite)
-    _write_pack(pack_b_path, pack_for_b, overwrite)
 
     return pack_for_a
 

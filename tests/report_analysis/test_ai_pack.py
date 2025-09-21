@@ -69,22 +69,11 @@ def test_build_ai_pack_for_pair_creates_packs(tmp_path, monkeypatch):
     assert pack["ids"]["account_number_b"] == "409451******"
     assert pack["limits"]["max_lines_per_side"] == 5
 
-    pack_a_path = account_a_dir / "ai" / "pack_pair_11_16.json"
-    pack_b_path = account_b_dir / "ai" / "pack_pair_16_11.json"
-
-    assert pack_a_path.exists()
-    assert pack_b_path.exists()
-
-    saved_a = json.loads(pack_a_path.read_text(encoding="utf-8"))
-    saved_b = json.loads(pack_b_path.read_text(encoding="utf-8"))
-
-    assert saved_a == pack
-    assert saved_b["pair"] == {"a": 16, "b": 11}
-    assert saved_b["context"]["a"][0] == "U S BANK"
-    assert saved_b["context"]["b"][0] == "US BK CACS"
+    assert not (account_a_dir / "ai").exists()
+    assert not (account_b_dir / "ai").exists()
 
 
-def test_build_ai_pack_for_pair_writes_symmetrically(tmp_path, monkeypatch):
+def test_build_ai_pack_for_pair_is_consistent(tmp_path, monkeypatch):
     monkeypatch.setenv("AI_PACK_MAX_LINES_PER_SIDE", "3")
 
     sid = "sample-symmetric"
@@ -107,19 +96,15 @@ def test_build_ai_pack_for_pair_writes_symmetrically(tmp_path, monkeypatch):
 
     first_pack = build_ai_pack_for_pair(sid, runs_root, 201, 305, highlights)
 
-    pack_a_path = account_a_dir / "ai" / "pack_pair_201_305.json"
-    pack_b_path = account_b_dir / "ai" / "pack_pair_305_201.json"
-
-    assert pack_a_path.exists()
-    assert pack_b_path.exists()
+    assert first_pack["pair"] == {"a": 201, "b": 305}
+    assert first_pack["context"]["a"][0] == "Creditor A"
+    assert first_pack["context"]["b"][0] == "Creditor B"
 
     second_pack = build_ai_pack_for_pair(sid, runs_root, 305, 201, highlights)
 
-    # Reversing the inputs should still leave the artifacts mirrored correctly.
-    saved_a = json.loads(pack_a_path.read_text(encoding="utf-8"))
-    saved_b = json.loads(pack_b_path.read_text(encoding="utf-8"))
-
-    assert saved_a == first_pack
-    assert saved_b["pair"] == {"a": 305, "b": 201}
     assert second_pack["pair"] == {"a": 305, "b": 201}
-    assert saved_b == second_pack
+    assert second_pack["context"]["a"][0] == "Creditor B"
+    assert second_pack["context"]["b"][0] == "Creditor A"
+
+    assert not (account_a_dir / "ai").exists()
+    assert not (account_b_dir / "ai").exists()

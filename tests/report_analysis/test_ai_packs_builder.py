@@ -205,14 +205,14 @@ def test_build_ai_merge_packs_cli_updates_manifest(tmp_path: Path, monkeypatch) 
     assert index_payload == [{"a": 11, "b": 16, "file": "011-016.json"}]
 
     manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    ai_artifacts = manifest_data["artifacts"]["ai"]
+    ai_artifacts = manifest_data["artifacts"]["ai_packs"]
 
     expected_dir = str(out_dir.resolve())
     expected_index = str(index_path.resolve())
     expected_logs = str((out_dir / "logs.txt").resolve())
 
     assert ai_artifacts == {
-        "packs_dir": expected_dir,
-        "packs_index": expected_index,
+        "dir": expected_dir,
+        "index": expected_index,
         "logs": expected_logs,
     }

@@ -124,17 +124,21 @@ for pr in pairs:
         )
     }
 
-    out_dir = PACKS_ROOT/f"{a_idx}-{b_idx}"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_file = out_dir/"pack.json"
+    filename = f"{a_idx:03d}-{b_idx:03d}.json"
+    out_file = PACKS_ROOT/filename
     dump_json(out_file, pack)
-    out_index.append({"a":a_idx,"b":b_idx,"file":str(out_file)})
+    out_index.append({"a":a_idx,"b":b_idx,"file":filename})
+
+# כתיבת אינדקס מרכזי
+index_path = PACKS_ROOT/"index.json"
+dump_json(index_path, out_index)
 
 # עדכון המניפסט
 manifest = load_json(manifest_path, default={})
-manifest.setdefault("artifacts",{}).setdefault("ai",{})
-manifest["artifacts"]["ai"]["packs_dir"] = str(PACKS_ROOT)
-manifest["artifacts"]["ai"]["pairs"] = out_index
+ai_packs = manifest.setdefault("artifacts",{}).setdefault("ai_packs",{})
+ai_packs["dir"] = str(PACKS_ROOT.resolve())
+ai_packs["index"] = str(index_path.resolve())
+ai_packs["logs"] = str((PACKS_ROOT/"logs.txt").resolve())
 manifest["artifacts"]["logs"] = manifest.get("artifacts",{}).get("logs",{})
 dump_json(manifest_path, manifest)
 

@@ -181,7 +181,6 @@ def adjudicate_pairs_for_sid(
             a_idx,
             b_idx,
             highlights,
-            overwrite=True,
         )
 
         decision = adjudicate_pair(pack)

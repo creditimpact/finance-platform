@@ -89,6 +89,7 @@ class RunManifest:
                 "exports": {},
                 "logs": {},
                 "ai": {},
+                "ai_packs": {},
             },
             "env_snapshot": {}
         }

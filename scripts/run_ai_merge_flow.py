@@ -149,9 +149,9 @@ def build_packs_for_sid(
     persist_manifest(
         manifest,
         artifacts={
-            "ai": {
-                "packs_dir": output_dir,
-                "packs_index": index_path,
+            "ai_packs": {
+                "dir": output_dir,
+                "index": index_path,
                 "logs": logs_path,
             }
         },

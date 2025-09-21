@@ -97,9 +97,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     persist_manifest(
         manifest,
         artifacts={
-            "ai": {
-                "packs_dir": packs_dir,
-                "packs_index": index_path,
+            "ai_packs": {
+                "dir": packs_dir,
+                "index": index_path,
                 "logs": logs_path,
             }
         },

@@ -5,7 +5,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import httpx
 
@@ -170,6 +170,24 @@ def _parse_ai_response(content: str) -> dict[str, Any]:
     return dict(data)
 
 
+def _estimate_token_count(messages: Sequence[Mapping[str, Any]] | None) -> int:
+    if not messages:
+        return 0
+
+    total_chars = 0
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            total_chars += len(content)
+
+    if total_chars <= 0:
+        return 0
+
+    return max(1, (total_chars + 3) // 4)
+
+
 def _build_request_payload(pack: dict) -> tuple[str, dict[str, Any], dict[str, str], dict[str, Any]]:
     prompt = build_prompt_from_pack(pack)
     messages = [
@@ -230,17 +248,21 @@ def adjudicate_pair(pack: dict) -> dict[str, Any]:
             "pair": {"a": a_idx, "b": b_idx},
             "reason": "disabled",
         }
-        logger.info("MERGE_V2_AI_SKIPPED %s", json.dumps(log_payload, sort_keys=True))
+        logger.info("MERGE_V2_SKIPPED %s", json.dumps(log_payload, sort_keys=True))
         return {"decision": "ai_disabled", "confidence": 0.0, "reasons": []}
 
     url, payload, headers, metadata = _build_request_payload(pack)
+    prompt_tokens_est = _estimate_token_count(payload.get("messages"))
     request_log = {
         "sid": sid,
         "pair": {"a": a_idx, "b": b_idx},
         "context_sizes": context_sizes,
-        **metadata,
+        "model": metadata.get("model"),
+        "temperature": metadata.get("temperature"),
+        "max_tokens": metadata.get("max_tokens"),
+        "prompt_tokens_est": prompt_tokens_est,
     }
-    logger.info("MERGE_V2_AI_REQUEST %s", json.dumps(request_log, sort_keys=True))
+    logger.info("MERGE_V2_CALL %s", json.dumps(request_log, sort_keys=True))
 
     timeout_s = _coerce_float(
         os.getenv("AI_REQUEST_TIMEOUT_S"), getattr(config, "AI_REQUEST_TIMEOUT_S", 8)
@@ -268,9 +290,10 @@ def adjudicate_pair(pack: dict) -> dict[str, Any]:
             "pair": {"a": a_idx, "b": b_idx},
             "decision": sanitized["decision"],
             "confidence": sanitized["confidence"],
+            "reasons_count": len(sanitized.get("reasons", [])),
             "latency_ms": round(duration_ms, 3),
         }
-        logger.info("MERGE_V2_AI_RESPONSE %s", json.dumps(response_log, sort_keys=True))
+        logger.info("MERGE_V2_DECISION %s", json.dumps(response_log, sort_keys=True))
         return sanitized
     except Exception as exc:
         duration_ms = (time.perf_counter() - started) * 1000
@@ -280,7 +303,7 @@ def adjudicate_pair(pack: dict) -> dict[str, Any]:
             "error": exc.__class__.__name__,
             "latency_ms": round(duration_ms, 3),
         }
-        logger.error("MERGE_V2_AI_ERROR %s", json.dumps(error_log, sort_keys=True))
+        logger.error("MERGE_V2_CALL_ERROR %s", json.dumps(error_log, sort_keys=True))
         raise
 
 
@@ -353,5 +376,5 @@ def persist_ai_decision(
         "confidence": sanitized["confidence"],
         "reasons": list(sanitized["reasons"]),
     }
-    logger.info("MERGE_V2_AI_DECISION %s", json.dumps(tag_log, sort_keys=True))
+    logger.info("MERGE_V2_TAG_UPDATE %s", json.dumps(tag_log, sort_keys=True))
 

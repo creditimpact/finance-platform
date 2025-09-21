@@ -19,6 +19,7 @@ def _write_account_payload(base: Path, idx: int, bureaus: dict) -> None:
         json.dumps({"account_index": idx}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    (account_dir / "raw_lines.json").write_text("[]\n", encoding="utf-8")
 
 
 def test_best_partner_prefers_strong_match(tmp_path) -> None:

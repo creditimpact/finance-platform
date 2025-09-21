@@ -1430,13 +1430,51 @@ def persist_merge_tags(
 
                 if left_tag.get("decision") == "ai":
                     highlights_from_pair = _build_ai_highlights(result)
-                    build_ai_pack_for_pair(
+                    pack_payload = build_ai_pack_for_pair(
                         sid,
                         runs_root,
                         left,
                         right,
                         highlights_from_pair,
                     )
+                    try:
+                        context_payload = pack_payload.get("context", {}) if isinstance(
+                            pack_payload, Mapping
+                        ) else {}
+                        highlights_payload = pack_payload.get("highlights", {}) if isinstance(
+                            pack_payload, Mapping
+                        ) else {}
+
+                        context_a = list(context_payload.get("a") or [])
+                        context_b = list(context_payload.get("b") or [])
+
+                        total_value = highlights_payload.get("total")
+                        try:
+                            total_value = int(total_value)
+                        except (TypeError, ValueError):
+                            total_value = None
+
+                        triggers_raw = highlights_payload.get("triggers", [])
+                        if isinstance(triggers_raw, Iterable) and not isinstance(
+                            triggers_raw, (str, bytes)
+                        ):
+                            triggers_value = [str(item) for item in triggers_raw if item is not None]
+                        else:
+                            triggers_value = []
+
+                        pack_log = {
+                            "sid": sid,
+                            "pair": {"a": left, "b": right},
+                            "lines_a": len(context_a),
+                            "lines_b": len(context_b),
+                            "total": total_value,
+                            "triggers": triggers_value,
+                        }
+                        logger.info("MERGE_V2_PACK %s", json.dumps(pack_log, sort_keys=True))
+                    except Exception:  # pragma: no cover - defensive logging
+                        logger.exception(
+                            "MERGE_V2_PACK_FAILED sid=%s pair=(%s,%s)", sid, left, right
+                        )
 
     for idx in all_indices:
         best_info = best_by_idx.get(idx, {})

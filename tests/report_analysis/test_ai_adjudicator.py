@@ -52,6 +52,26 @@ def test_adjudicate_pair_disabled(monkeypatch, tmp_path):
     assert saved_b["pair"] == {"a": 16, "b": 11}
     assert saved_b["decision"] == "ai_disabled"
 
+    tags_a_path = base / "11" / "tags.json"
+    tags_b_path = base / "16" / "tags.json"
+
+    tags_a = jsonlib.loads(tags_a_path.read_text(encoding="utf-8"))
+    tags_b = jsonlib.loads(tags_b_path.read_text(encoding="utf-8"))
+
+    expected_tag_a = {
+        "kind": "merge_result",
+        "with": 16,
+        "decision": "ai_disabled",
+        "confidence": 0.0,
+        "reasons": [],
+        "source": "ai_adjudicator",
+    }
+    expected_tag_b = dict(expected_tag_a)
+    expected_tag_b["with"] = 11
+
+    assert tags_a == [expected_tag_a]
+    assert tags_b == [expected_tag_b]
+
 
 def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "ENABLE_AI_ADJUDICATOR", True)
@@ -126,3 +146,29 @@ def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
     assert saved_a["pair"] == {"a": 11, "b": 16}
     assert saved_b["pair"] == {"a": 16, "b": 11}
     assert saved_b["reasons"] == ["matched creditor names"]
+
+    tags_a_path = base / "11" / "tags.json"
+    tags_b_path = base / "16" / "tags.json"
+
+    tags_a = jsonlib.loads(tags_a_path.read_text(encoding="utf-8"))
+    tags_b = jsonlib.loads(tags_b_path.read_text(encoding="utf-8"))
+
+    expected_a = {
+        "kind": "merge_result",
+        "with": 16,
+        "decision": "merge",
+        "confidence": 0.83,
+        "reasons": ["matched creditor names"],
+        "source": "ai_adjudicator",
+    }
+    expected_b = {
+        "kind": "merge_result",
+        "with": 11,
+        "decision": "merge",
+        "confidence": 0.83,
+        "reasons": ["matched creditor names"],
+        "source": "ai_adjudicator",
+    }
+
+    assert tags_a == [expected_a]
+    assert tags_b == [expected_b]

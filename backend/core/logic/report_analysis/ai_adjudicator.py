@@ -10,6 +10,7 @@ from typing import Any, Mapping
 import httpx
 
 import backend.config as config
+from backend.core.io.tags import upsert_tag
 from backend.core.utils.atomic_io import atomic_write_json
 
 from .ai_pack import DEFAULT_MAX_LINES
@@ -321,4 +322,36 @@ def persist_ai_decision(
 
     atomic_write_json(path_a.as_posix(), artifact_a, ensure_ascii=False)
     atomic_write_json(path_b.as_posix(), artifact_b, ensure_ascii=False)
+
+    tag_a = {
+        "kind": "merge_result",
+        "with": account_b,
+        "decision": artifact_a["decision"],
+        "confidence": artifact_a["confidence"],
+        "reasons": list(artifact_a["reasons"]),
+        "source": "ai_adjudicator",
+    }
+    tag_b = {
+        "kind": "merge_result",
+        "with": account_a,
+        "decision": artifact_b["decision"],
+        "confidence": artifact_b["confidence"],
+        "reasons": list(artifact_b["reasons"]),
+        "source": "ai_adjudicator",
+    }
+
+    tag_path_a = base / str(account_a) / "tags.json"
+    tag_path_b = base / str(account_b) / "tags.json"
+
+    upsert_tag(tag_path_a, tag_a, ("kind", "with", "source"))
+    upsert_tag(tag_path_b, tag_b, ("kind", "with", "source"))
+
+    tag_log = {
+        "sid": sid_str,
+        "pair": {"a": account_a, "b": account_b},
+        "decision": sanitized["decision"],
+        "confidence": sanitized["confidence"],
+        "reasons": list(sanitized["reasons"]),
+    }
+    logger.info("MERGE_V2_AI_DECISION %s", json.dumps(tag_log, sort_keys=True))
 

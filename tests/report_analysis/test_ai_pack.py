@@ -61,6 +61,7 @@ def test_build_ai_pack_for_pair_creates_packs(tmp_path, monkeypatch):
     ]
     assert pack["context"]["a"] == expected_context_a
     assert pack["context"]["b"][0] == "U S BANK"
+    assert all("Transunion" not in line for line in pack["context"]["a"])
     assert "--" not in {line.strip() for line in pack["context"]["a"]}
     assert len(pack["context"]["a"]) <= 5
     assert len(pack["context"]["b"]) <= 5

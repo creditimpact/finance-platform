@@ -679,14 +679,14 @@ def _build_problem_cases_lean(
             merge_scores = {}
             best_partners = {}
 
-    tags_by_idx: Dict[int, List[Dict[str, Any]]] = {
-        idx: read_tags(path) for idx, path in tag_paths.items()
-    }
     merge_kinds = {"merge_pair", "merge_best"}
-    for idx, existing_tags in list(tags_by_idx.items()):
-        tags_by_idx[idx] = [
+    for idx, path in tag_paths.items():
+        existing_tags = read_tags(path)
+        filtered_tags = [
             tag for tag in existing_tags if tag.get("kind") not in merge_kinds
         ]
+        if filtered_tags != existing_tags:
+            write_tags(path, filtered_tags)
 
     valid_decisions = {"ai", "auto"}
     for left, right in gen_unordered_pairs(written_indices):
@@ -694,11 +694,16 @@ def _build_problem_cases_lean(
         if not isinstance(result, Mapping):
             continue
         pair_left = _build_merge_pair_tag(right, result)
-        if pair_left.get("decision") not in valid_decisions:
+        decision = pair_left.get("decision")
+        if decision not in valid_decisions:
             continue
-        pair_right = _build_merge_pair_tag(left, result)
-        tags_by_idx.setdefault(left, []).append(pair_left)
-        tags_by_idx.setdefault(right, []).append(pair_right)
+        left_path = tag_paths.get(left)
+        if left_path is not None:
+            upsert_tag(left_path, pair_left, ("kind", "with"))
+        right_path = tag_paths.get(right)
+        if right_path is not None:
+            pair_right = _build_merge_pair_tag(left, result)
+            upsert_tag(right_path, pair_right, ("kind", "with"))
 
     for idx in written_indices:
         best_tag = _build_merge_best_tag(best_partners.get(idx, {}))
@@ -706,12 +711,9 @@ def _build_problem_cases_lean(
             continue
         if best_tag.get("decision") not in valid_decisions:
             continue
-        tags_by_idx.setdefault(idx, []).append(best_tag)
-
-    for idx, path in tag_paths.items():
-        tags = tags_by_idx.get(idx, [])
-        ordered = sorted(tags, key=_tag_sort_key)
-        write_tags(path, ordered)
+        path = tag_paths.get(idx)
+        if path is not None:
+            upsert_tag(path, best_tag, ("kind",))
 
     logger.info(
         "PROBLEM_CASES done sid=%s total=%d problematic=%d out=%s",

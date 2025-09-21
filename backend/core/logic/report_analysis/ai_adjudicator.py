@@ -251,7 +251,7 @@ def adjudicate_pair(pack: dict) -> dict[str, Any]:
             "pair": {"a": a_idx, "b": b_idx},
             "reason": "disabled",
         }
-        logger.info("MERGE_V2_SKIPPED %s", json.dumps(log_payload, sort_keys=True))
+        logger.info("AI_ADJUDICATOR_SKIPPED %s", json.dumps(log_payload, sort_keys=True))
         return {"decision": "ai_disabled", "confidence": 0.0, "reasons": []}
 
     url, payload, headers, metadata = _build_request_payload(pack)
@@ -265,7 +265,7 @@ def adjudicate_pair(pack: dict) -> dict[str, Any]:
         "max_tokens": metadata.get("max_tokens"),
         "prompt_tokens_est": prompt_tokens_est,
     }
-    logger.info("MERGE_V2_CALL %s", json.dumps(request_log, sort_keys=True))
+    logger.info("AI_ADJUDICATOR_REQUEST %s", json.dumps(request_log, sort_keys=True))
 
     timeout_s = float(merge_config.get_ai_request_timeout())
 
@@ -294,7 +294,7 @@ def adjudicate_pair(pack: dict) -> dict[str, Any]:
             "reasons_count": len(sanitized.get("reasons", [])),
             "latency_ms": round(duration_ms, 3),
         }
-        logger.info("MERGE_V2_DECISION %s", json.dumps(response_log, sort_keys=True))
+        logger.info("AI_ADJUDICATOR_RESPONSE %s", json.dumps(response_log, sort_keys=True))
         return sanitized
     except Exception as exc:
         duration_ms = (time.perf_counter() - started) * 1000
@@ -304,7 +304,7 @@ def adjudicate_pair(pack: dict) -> dict[str, Any]:
             "error": exc.__class__.__name__,
             "latency_ms": round(duration_ms, 3),
         }
-        logger.error("MERGE_V2_CALL_ERROR %s", json.dumps(error_log, sort_keys=True))
+        logger.error("AI_ADJUDICATOR_ERROR %s", json.dumps(error_log, sort_keys=True))
         raise
 
 

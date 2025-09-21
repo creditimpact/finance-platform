@@ -756,7 +756,7 @@ def score_all_pairs_0_100(
         try:
             idx_val = int(raw_idx)
         except (TypeError, ValueError):
-            logger.warning("MERGE_SCORE sid=<%s> invalid_index=%r", sid, raw_idx)
+            logger.warning("MERGE_V2_SCORE sid=<%s> invalid_index=%r", sid, raw_idx)
             continue
         requested_indices.append(idx_val)
 
@@ -772,13 +772,13 @@ def score_all_pairs_0_100(
                 idx_val = int(entry.name)
             except (TypeError, ValueError):
                 logger.debug(
-                    "MERGE_SCORE sid=<%s> skip_account_dir=%r", sid, entry.name
+                    "MERGE_V2_SCORE sid=<%s> skip_account_dir=%r", sid, entry.name
                 )
                 continue
             discovered_indices.append(idx_val)
     else:
         logger.warning(
-            "MERGE_SCORE sid=<%s> accounts_dir_missing path=%s",
+            "MERGE_V2_SCORE sid=<%s> accounts_dir_missing path=%s",
             sid,
             accounts_root,
         )
@@ -789,7 +789,7 @@ def score_all_pairs_0_100(
             missing = requested_set - set(indices)
             if missing:
                 logger.debug(
-                    "MERGE_SCORE sid=<%s> missing_requested_indices=%s",
+                    "MERGE_V2_SCORE sid=<%s> missing_requested_indices=%s",
                     sid,
                     sorted(missing),
                 )
@@ -815,12 +815,12 @@ def score_all_pairs_0_100(
             bureaus = load_bureaus(sid, idx, runs_root=runs_root)
         except FileNotFoundError:
             logger.warning(
-                "MERGE_SCORE sid=<%s> idx=<%s> bureaus_missing", sid, idx
+                "MERGE_V2_SCORE sid=<%s> idx=<%s> bureaus_missing", sid, idx
             )
             bureaus = {}
         except Exception:
             logger.exception(
-                "MERGE_SCORE sid=<%s> idx=<%s> bureaus_load_failed", sid, idx
+                "MERGE_V2_SCORE sid=<%s> idx=<%s> bureaus_load_failed", sid, idx
             )
             bureaus = {}
         bureaus_by_idx[idx] = bureaus
@@ -862,15 +862,8 @@ def score_all_pairs_0_100(
                 "matched_pairs": aux_payload.get("by_field_pairs", {}),
                 "matched_fields": aux_payload.get("matched_fields", {}),
             }
-            logger.info("MERGE_SCORE %s", json.dumps(score_log, sort_keys=True))
-            compact_score = {
-                "sid": sid,
-                "i": left,
-                "j": right,
-                "total": total_score,
-                "decision": str(result.get("decision", "different")),
-            }
-            logger.info("MERGE_V2_SCORE %s", json.dumps(compact_score, sort_keys=True))
+            score_log["decision"] = str(result.get("decision", "different"))
+            logger.info("MERGE_V2_SCORE %s", json.dumps(score_log, sort_keys=True))
 
             for event in result.get("trigger_events", []) or []:
                 if not isinstance(event, Mapping):
@@ -883,12 +876,10 @@ def score_all_pairs_0_100(
                     "kind": kind,
                     "details": event.get("details", {}),
                 }
-                logger.info("MERGE_TRIGGER %s", json.dumps(trigger_log, sort_keys=True))
-                if kind in {"strong", "mid", "dates", "total"}:
-                    logger.info(
-                        "MERGE_V2_TRIGGER %s",
-                        json.dumps(trigger_log, sort_keys=True),
-                    )
+                logger.info(
+                    "MERGE_V2_TRIGGER %s",
+                    json.dumps(trigger_log, sort_keys=True),
+                )
 
             decision_log = {
                 "sid": sid,
@@ -899,7 +890,6 @@ def score_all_pairs_0_100(
                 "triggers": list(result.get("triggers", [])),
                 "conflicts": list(result.get("conflicts", [])),
             }
-            logger.info("MERGE_DECISION %s", json.dumps(decision_log, sort_keys=True))
             logger.info(
                 "MERGE_V2_DECISION %s", json.dumps(decision_log, sort_keys=True)
             )

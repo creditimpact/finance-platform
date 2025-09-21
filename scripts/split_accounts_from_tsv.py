@@ -49,6 +49,8 @@ logger = logging.getLogger(__name__)
 # Enable with RAW_TRIAD_FROM_X=1 for verbose triad logs
 triad_log = logger.info if RAW_TRIAD_FROM_X else (lambda *a, **k: None)
 TRIAD_BAND_BY_X0 = os.environ.get("TRIAD_BAND_BY_X0") == "1"
+TRIAD_X0_STRICT = int(os.getenv("TRIAD_X0_STRICT", "1"))
+TRIAD_CONT_USE_NEAREST = int(os.getenv("TRIAD_CONT_USE_NEAREST", "0"))
 
 
 def _env_truthy_opt(name: str) -> bool | None:
@@ -70,6 +72,7 @@ def _resolve_split_space_triads() -> bool:
 
 SPLIT_SPACE_TRIADS = _resolve_split_space_triads()
 STAGEA_DEBUG = os.environ.get("STAGEA_DEBUG") == "1"
+STRICT_TRIAD_APPEND = os.environ.get("STRICT_TRIAD_APPEND", "1").strip().lower() not in {"0", "false", "no"}
 
 
 def _stagea_debug(message: str, *args) -> None:
@@ -267,10 +270,15 @@ def _norm(s: str) -> str:
 
 
 def _clean_value(txt: str) -> str:
+    """Normalize whitespace only; preserve masking and raw characters.
+
+    - Collapses internal whitespace and strips surrounding spaces.
+    - Does not coerce placeholders to "--" and does not strip asterisks.
+    """
     s = _norm(txt)
     if not s:
         return ""
-    return clean_value(s)
+    return s
 
 
 def _split_triad_tail_3cols(tail: str) -> List[str]:
@@ -396,7 +404,12 @@ def _pre_split_bureau_token(
         return None
     if token.get("_synthetic_pre_split") == "1":
         return None
-    parts = _maybe_split_triad_tail(token.get("text"))
+    # Task 5: Only split when the row has a single token across TU/XP/EQ
+    # (enforced by caller), and that token plausibly contains three
+    # space-delimited values. Use the existing splitter which groups
+    # month+year as one value when appropriate.
+    raw_text = token.get("text")
+    parts = _maybe_split_triad_tail(str(raw_text) if raw_text is not None else None)
     if not parts:
         return None
     payload: List[Tuple[str, dict, str]] = []
@@ -517,10 +530,16 @@ def _process_h7y_token(
     raw = str(t.get("text", ""))
     clean = _clean_value(raw)
     mx: float | None
-    try:
-        mx = _triad_mid_x(t)
-    except Exception:
-        mx = None
+    if not TRIAD_X0_STRICT:
+        try:
+            mx = _triad_mid_x(t)
+        except Exception:
+            mx = None
+    else:
+        try:
+            mx = float(t.get("x0"))
+        except Exception:
+            mx = None
     if mx is None:
         try:
             mx = float(t.get("x0"))
@@ -775,25 +794,26 @@ def _has_label_suffix(txt: str) -> bool:
 def _assign_band_any(
     token: dict, layout: TriadLayout, row_eq_right_x0: float | None = None
 ) -> str:
-    if TRIAD_BAND_BY_X0:
+    if TRIAD_BAND_BY_X0 or TRIAD_X0_STRICT:
+        # Strict closed-open bands by left x0 edges only:
+        # TU = [tu_left_x0, xp_left_x0), XP = [xp_left_x0, eq_left_x0),
+        # EQ = [eq_left_x0, next_label_x0)
         try:
             x0 = float(token.get("x0", 0.0))
         except Exception:
             x0 = 0.0
 
-        tol = TRIAD_X0_TOL
-        guard = TRIAD_BOUNDARY_GUARD
-
         tu_left = float(layout.tu_left_x0 or layout.tu_band[0] or 0.0)
         xp_left = float(layout.xp_left_x0 or layout.xp_band[0] or 0.0)
         eq_left = float(layout.eq_left_x0 or layout.eq_band[0] or 0.0)
+        guard = TRIAD_BOUNDARY_GUARD
 
+        # Cap EQ by the next label token on this row when present
         eq_band_right = getattr(layout, "eq_band", (0.0, float("inf")))[1]
         try:
             eq_band_right = float(eq_band_right)
         except Exception:
             eq_band_right = float("inf")
-
         eq_right = row_eq_right_x0 if row_eq_right_x0 is not None else eq_band_right
         if not math.isfinite(eq_right):
             eq_right = float("inf")
@@ -801,51 +821,67 @@ def _assign_band_any(
             eq_right = eq_left
 
         text = str(token.get("text", ""))
-        if _is_label_token_text(text) and x0 <= (tu_left + guard):
+        # Treat explicit label suffix tokens as label even if they skim the seam
+        if _is_label_token_text(text) and x0 <= tu_left:
             return "label"
 
-        if x0 < (tu_left - tol):
+        # Label band is everything strictly left of TU's left edge
+        if x0 < tu_left:
             return "label"
 
-        band = "none"
-        if x0 < xp_left:
-            band = "tu"
-        elif x0 < eq_left:
-            band = "xp"
-        elif x0 < eq_right:
-            band = "eq"
-
-        if band == "xp" and xp_left and xp_left < x0 < (xp_left + guard):
+        # Boundary guard: keep near-edge tokens in the left band for TU→XP
+        if xp_left and (xp_left - guard) <= x0 < xp_left:
             return "tu"
-        if band == "eq":
-            if eq_left and eq_left < x0 < (eq_left + guard):
-                return "xp"
-            if row_eq_right_x0 is not None and x0 >= eq_right:
-                return "none"
-            return "eq"
+        # Note: No EQ-left snap; tokens with x0 < eq_left remain non-EQ.
 
-        return band
+        # Closed-open column bands strictly by left edges
+        if tu_left <= x0 < xp_left:
+            return "tu"
+        if xp_left <= x0 < eq_left:
+            return "xp"
+        if eq_left <= x0 < eq_right:
+            return "eq"
+        # Outside any band
+        return "none"
     band = assign_band(token, layout)
-    if band == "tu":
-        try:
-            tu_left = float(layout.tu_band[0])
-            xp_left = float(layout.xp_band[0])
-        except Exception:
-            tu_left = xp_left = None
-        if xp_left is not None and tu_left is not None and xp_left > tu_left:
-            seam = (tu_left + xp_left) / 2.0
-            if _triad_mid_x(token) >= seam:
-                return "xp"
-    if band == "xp":
-        try:
-            xp_left = float(layout.xp_band[0])
-            eq_left = float(layout.eq_band[0])
-        except Exception:
-            xp_left = eq_left = None
-        if eq_left is not None and xp_left is not None and eq_left > xp_left:
-            seam = (xp_left + eq_left) / 2.0
-            if _triad_mid_x(token) >= seam:
-                return "eq"
+    # Apply boundary guard even in midpoint mode, using x0
+    try:
+        x0 = float(token.get("x0", 0.0))
+    except Exception:
+        x0 = 0.0
+    try:
+        xp_left = float(layout.xp_band[0])
+    except Exception:
+        xp_left = 0.0
+    try:
+        eq_left = float(layout.eq_band[0])
+    except Exception:
+        eq_left = 0.0
+    guard = TRIAD_BOUNDARY_GUARD
+    if xp_left and (xp_left - guard) <= x0 < xp_left:
+        return "tu"
+    if not TRIAD_X0_STRICT:
+        # In non-strict mode, allow midpoint seam tie-breaks only (no EQ-left snap)
+        if band == "tu":
+            try:
+                tu_left = float(layout.tu_band[0])
+                xp_left = float(layout.xp_band[0])
+            except Exception:
+                tu_left = xp_left = None
+            if xp_left is not None and tu_left is not None and xp_left > tu_left:
+                seam = (tu_left + xp_left) / 2.0
+                if _triad_mid_x(token) >= seam:
+                    return "xp"
+        if band == "xp":
+            try:
+                xp_left = float(layout.xp_band[0])
+                eq_left = float(layout.eq_band[0])
+            except Exception:
+                xp_left = eq_left = None
+            if eq_left is not None and xp_left is not None and eq_left > xp_left:
+                seam = (xp_left + eq_left) / 2.0
+                if _triad_mid_x(token) >= seam:
+                    return "eq"
     return band
 
 
@@ -872,6 +908,38 @@ def in_label_band(token: dict, layout: TriadLayout) -> bool:
     band = _assign_band_any(token, layout)
     _trace(token.get("page"), token.get("line"), token, band, "in_label_band")
     return band == "label"
+
+
+def _append_fragment(vals: Dict[str, str], b: str, frag: str) -> bool:
+    """Append a fragment to ``vals[b]`` safely.
+
+    - Only updates the specified bureau ``b``.
+    - Replaces "--" with real text when appropriate.
+    - Returns True if the value changed, else False.
+    """
+    try:
+        frag_s = (frag or "").strip()
+    except Exception:
+        frag_s = ""
+    if not frag_s:
+        return False
+    try:
+        cur = (vals.get(b) or "").strip()
+    except Exception:
+        cur = ""
+    if frag_s == "--":
+        if cur == "":
+            vals[b] = "--"
+            return True
+        return False
+    if cur in ("", "--"):
+        new_val = frag_s
+    else:
+        new_val = f"{cur} {frag_s}".strip()
+    if new_val != cur:
+        vals[b] = new_val
+        return True
+    return False
 
 
 def verify_anchor_row(tokens: List[dict], layout: TriadLayout) -> bool:
@@ -973,7 +1041,7 @@ def _validate_anchor_row(
             by_band["label"] = 0
             logger.info("TRIAD_X0_FALLBACK_OK anchor")
 
-    if not has_label and anchor_tokens:
+    if not has_label and anchor_tokens and not TRIAD_X0_STRICT:
         first = anchor_tokens[0]
         try:
             x0 = float(first.get("x0", 0.0))
@@ -1137,7 +1205,7 @@ def process_triad_labeled_line(
     tail_tokens = tokens[suffix_idx + 1 :]
     row_eq_right_x0: float | None = None
     try:
-        eq_left_x0_for_log = float(getattr(layout, "eq_left_x0", layout.eq_band[0]))
+        eq_left_x0_for_log = float(getattr(layout, "eq_left_x0", 0.0) or layout.eq_band[0])
     except Exception:
         eq_left_x0_for_log = float(layout.eq_band[0])
     if TRIAD_BAND_BY_X0:
@@ -1206,6 +1274,14 @@ def process_triad_labeled_line(
     eq_right_for_log = (
         row_eq_right_x0 if row_eq_right_x0 is not None else eq_band_right
     )
+
+    # Propagate per-row EQ cap for use on continuation lines
+    try:
+        if open_row is None:
+            open_row = {}
+        open_row["row_eq_right_x0"] = row_eq_right_x0
+    except Exception:
+        pass
     guard = TRIAD_BOUNDARY_GUARD
     tu_right_guarded = max(tu_left, xp_left - guard)
     xp_right_guarded = max(xp_left, eq_left - guard)
@@ -1213,6 +1289,31 @@ def process_triad_labeled_line(
         eq_right_guarded = eq_right_for_log
     else:
         eq_right_guarded = max(eq_left, eq_right_for_log - guard)
+    # Strict interval trace (labeled row): show left-x0 cutoffs and EQ cap
+    try:
+        tu_left_x0_log = float(getattr(layout, "tu_left_x0", 0.0) or layout.tu_band[0])
+    except Exception:
+        tu_left_x0_log = float(layout.tu_band[0])
+    try:
+        xp_left_x0_log = float(getattr(layout, "xp_left_x0", 0.0) or layout.xp_band[0])
+    except Exception:
+        xp_left_x0_log = float(layout.xp_band[0])
+    try:
+        eq_left_x0_log = float(getattr(layout, "eq_left_x0", 0.0) or layout.eq_band[0])
+    except Exception:
+        eq_left_x0_log = float(layout.eq_band[0])
+    logger.info(
+        "TRIAD_STRICT_X0 key=%s guard=%.2f tu=[%.3f,%.3f) xp=[%.3f,%.3f) eq=[%.3f,%.3f)",
+        label_for_log,
+        TRIAD_BOUNDARY_GUARD,
+        tu_left_x0_log,
+        xp_left_x0_log,
+        xp_left_x0_log,
+        eq_left_x0_log,
+        eq_left_x0_log,
+        float(eq_right_for_log),
+    )
+
     _triad_band_log(
         "ROW_BANDS key=%s guard=%.2f headers=(tu=%.3f,xp=%.3f,eq=%.3f) "
         "label=[%.3f,%.3f) tu=[%.3f,%.3f) xp=[%.3f,%.3f) eq=[%.3f,%.3f)",
@@ -1230,6 +1331,27 @@ def process_triad_labeled_line(
         eq_left,
         eq_right_guarded,
     )
+
+    # Debug assertions: enforce numeric invariants on this labeled line
+    _ASSERT_ON = 1
+    try:
+        _ASSERT_ON = int(os.getenv("TRIAD_ASSERT_STRICT", "1"))
+    except Exception:
+        _ASSERT_ON = 1
+    def _expect(band_key: str, x0v: float) -> None:
+        if not _ASSERT_ON or not TRIAD_BAND_BY_X0:
+            return
+        try:
+            xv = float(x0v)
+        except Exception:
+            xv = 0.0
+        if band_key == "tu":
+            assert tu_left <= xv < xp_left
+        elif band_key == "xp":
+            assert xp_left <= xv < eq_left
+        elif band_key == "eq":
+            _cap = row_eq_right_x0 if row_eq_right_x0 is not None else float("inf")
+            assert eq_left <= xv < _cap
 
     # Task 5: Strict line-break rule — if no suffix captured and the last label token
     # is still left of TU's left x0 cutoff, expect values to start on the next line.
@@ -1275,6 +1397,12 @@ def process_triad_labeled_line(
     tail_assignments: List[tuple[dict, str]] = []
     for t in tail_tokens:
         band_name = _token_band(t, layout, row_eq_right_x0=row_eq_right_x0)
+        if band_name in {"tu", "xp", "eq"}:
+            try:
+                _x0v = float(t.get("x0", 0.0))
+            except Exception:
+                _x0v = 0.0
+            _expect(band_name, _x0v)
         tail_assignments.append((t, band_name))
         page_for_log = _int_for_log(t.get("page"))
         line_for_log = _int_for_log(t.get("line"))
@@ -1340,6 +1468,9 @@ def process_triad_labeled_line(
         candidate = non_label_tail_tokens[0]
         raw = candidate.get("text")
         raw_str = str(raw or "")
+        # Task 5: Only split when there is exactly one token overall after the
+        # label and no explicit TU/XP/EQ tokens. The splitter groups values
+        # like 'JAN 2024 FEB 2025 MAR 2026' into three parts.
         parts = _maybe_split_triad_tail(raw_str)
         if parts:
             pre_split_cols = parts
@@ -1388,7 +1519,11 @@ def process_triad_labeled_line(
                 vals[bureau] = ["--"]
                 saw_dash_for[bureau] = True
                 continue
-            for t in band_tokens[bureau]:
+            # Collect all tokens in-band, in left-to-right order by x0
+            ordered = sorted(
+                band_tokens[bureau], key=lambda tt: float(tt.get("x0", 0.0))
+            )
+            for t in ordered:
                 txt = str(t.get("text", ""))
                 vals[bureau].append(txt)
                 if txt.strip() in dash_tokens:
@@ -1411,7 +1546,11 @@ def process_triad_labeled_line(
         # plain integers / with commas / with decimal
         return bool(re.match(r"^[0-9][0-9,]*(?:\.[0-9]+)?$", z))
 
-    if not vals["transunion"] and (vals["experian"] or vals["equifax"]):
+    if (
+        not TRIAD_X0_STRICT
+        and not vals["transunion"]
+        and (vals["experian"] or vals["equifax"])
+    ):
         tu_left = float(getattr(layout, "tu_band")[0])
         win_lo = tu_left - 10.0
         win_hi = tu_left + 2.0
@@ -1427,10 +1566,16 @@ def process_triad_labeled_line(
             else:
                 if not _looks_like_tu_value(txt):
                     continue
-            try:
-                midx = _triad_mid_x(t)
-            except Exception:
-                midx = 0.0
+            if not TRIAD_X0_STRICT:
+                try:
+                    midx = _triad_mid_x(t)
+                except Exception:
+                    midx = 0.0
+            else:
+                try:
+                    midx = float(t.get("x0", 0.0))
+                except Exception:
+                    midx = 0.0
             if win_lo <= midx <= win_hi:
                 candidates.append((abs(midx - tu_left), txt, midx))
         if candidates:
@@ -1450,7 +1595,7 @@ def process_triad_labeled_line(
 
     # 2c) Special rule: if TU still empty, pick the first label-band token
     # that looks like a TU value immediately after the label.
-    if not vals["transunion"]:
+    if not TRIAD_X0_STRICT and not vals["transunion"]:
         for j, t in enumerate(tokens[suffix_idx + 1 :], start=suffix_idx + 1):
             if _token_band(
                 t, layout, row_eq_right_x0=row_eq_right_x0
@@ -1532,6 +1677,7 @@ def process_triad_labeled_line(
         },
         "last_bureau_with_text": last_bureau_with_text,
         "expect_values_on_next_line": expect_values_on_next_line,
+        "row_eq_right_x0": row_eq_right_x0,
     }
 
 
@@ -1872,7 +2018,13 @@ def split_accounts(
                         for idx_t, t in enumerate(toks):
                             txt_norm = _norm(str(t.get("text", ""))).casefold()
                             if txt_norm.startswith("transunion"):
-                                mids["tu"] = _triad_mid_x(t)
+                                if not TRIAD_X0_STRICT:
+                                    mids["tu"] = _triad_mid_x(t)
+                                else:
+                                    try:
+                                        mids["tu"] = float(t.get("x0", 0.0))
+                                    except Exception:
+                                        mids["tu"] = 0.0
                                 idxs["tu"] = idx_t
                                 _history_trace(
                                     t.get("page"),
@@ -1884,7 +2036,13 @@ def split_accounts(
                                     x1=t.get("x1"),
                                 )
                             elif txt_norm.startswith("experian"):
-                                mids["xp"] = _triad_mid_x(t)
+                                if not TRIAD_X0_STRICT:
+                                    mids["xp"] = _triad_mid_x(t)
+                                else:
+                                    try:
+                                        mids["xp"] = float(t.get("x0", 0.0))
+                                    except Exception:
+                                        mids["xp"] = 0.0
                                 idxs["xp"] = idx_t
                                 _history_trace(
                                     t.get("page"),
@@ -1896,7 +2054,13 @@ def split_accounts(
                                     x1=t.get("x1"),
                                 )
                             elif txt_norm.startswith("equifax"):
-                                mids["eq"] = _triad_mid_x(t)
+                                if not TRIAD_X0_STRICT:
+                                    mids["eq"] = _triad_mid_x(t)
+                                else:
+                                    try:
+                                        mids["eq"] = float(t.get("x0", 0.0))
+                                    except Exception:
+                                        mids["eq"] = 0.0
                                 idxs["eq"] = idx_t
                                 _history_trace(
                                     t.get("page"),
@@ -2037,6 +2201,10 @@ def split_accounts(
                                 txt_raw,
                                 x0,
                             )
+                            # Guard midpoint reporting in strict mode
+                            _mid_val = None
+                            if not TRIAD_X0_STRICT:
+                                _mid_val = _triad_mid_x(t)
                             _trace_write(
                                 phase="history2y",
                                 bureau=current_bureau,
@@ -2045,7 +2213,7 @@ def split_accounts(
                                 text=txt_raw,
                                 x0=t.get("x0"),
                                 x1=t.get("x1"),
-                                mid_x=_triad_mid_x(t),
+                                mid_x=_mid_val,
                             )
 
                 if in_h7y and h7y_slabs:
@@ -2247,7 +2415,13 @@ def split_accounts(
                                 for ht in header_toks:
                                     bkey = _bureau_key(_norm(str(ht.get("text", ""))))
                                     if bkey:
-                                        mids[bkey] = _triad_mid_x(ht)
+                                        if not TRIAD_X0_STRICT:
+                                            mids[bkey] = _triad_mid_x(ht)
+                                        else:
+                                            try:
+                                                mids[bkey] = float(ht.get("x0", 0.0))
+                                            except Exception:
+                                                mids[bkey] = 0.0
                                 if len(mids) == 3:
                                     layout.label_band = (0.0, mids["tu"])
                                     layout.tu_band = (mids["tu"], mids["xp"])
@@ -2296,8 +2470,51 @@ def split_accounts(
                 pre_split_target: dict | None = None
                 if layout:
                     banded_tokens: List[Tuple[dict, str]] = []
+                    # Use strict per-band assignment (X0-aware) and apply
+                    # continuation EQ cap when available from open_row
+                    cap = (open_row or {}).get("row_eq_right_x0") if 'open_row' in locals() else None
+
+                    # Debug assertions: numeric band invariants on continuation lines (pre-split phase)
+                    _ASSERT_ON = 1
+                    try:
+                        _ASSERT_ON = int(os.getenv("TRIAD_ASSERT_STRICT", "1"))
+                    except Exception:
+                        _ASSERT_ON = 1
+                    try:
+                        tu_left_c = float(getattr(layout, "tu_left_x0", 0.0) or layout.tu_band[0])
+                    except Exception:
+                        tu_left_c = float(layout.tu_band[0])
+                    try:
+                        xp_left_c = float(getattr(layout, "xp_left_x0", 0.0) or layout.xp_band[0])
+                    except Exception:
+                        xp_left_c = float(layout.xp_band[0])
+                    try:
+                        eq_left_c = float(getattr(layout, "eq_left_x0", 0.0) or layout.eq_band[0])
+                    except Exception:
+                        eq_left_c = float(layout.eq_band[0])
+                    def _expect_cont(band_key: str, x0v: float) -> None:
+                        if not _ASSERT_ON or not TRIAD_BAND_BY_X0:
+                            return
+                        try:
+                            xv = float(x0v)
+                        except Exception:
+                            xv = 0.0
+                        if band_key == "tu":
+                            assert tu_left_c <= xv < xp_left_c
+                        elif band_key == "xp":
+                            assert xp_left_c <= xv < eq_left_c
+                        elif band_key == "eq":
+                            _cap = cap if cap is not None else float("inf")
+                            assert eq_left_c <= xv < _cap
+
                     for t in toks:
-                        band = assign_band(t, layout)
+                        band = _token_band(t, layout, row_eq_right_x0=cap)
+                        if band in {"tu", "xp", "eq"}:
+                            try:
+                                _x0v = float(t.get("x0", 0.0))
+                            except Exception:
+                                _x0v = 0.0
+                            _expect_cont(band, _x0v)
                         banded_tokens.append((t, band))
                     bureau_tokens_for_split = [
                         t for t, band in banded_tokens if band in {"tu", "xp", "eq"}
@@ -2375,15 +2592,19 @@ def split_accounts(
                                 },
                                 "last_bureau_with_text": None,
                                 "expect_values_on_next_line": True,
+                                "row_eq_right_x0": None,
                             }
                             triad_rows.append(row_state)
                             open_row = row_state
                             continue
-                    # Continuations: in x0 mode with no label on this line, do not keep tokens in 'label' band.
+                    # Continuations: optional nearest-band reassignment for label-band tokens.
+                    # In strict mode, or when nearest is disabled, keep label-band tokens as-is.
                     if (
                         TRIAD_BAND_BY_X0
                         and label_token is None
                         and band_tokens["label"]
+                        and (not TRIAD_X0_STRICT)
+                        and TRIAD_CONT_USE_NEAREST
                     ):
 
                         def _nearest_band_from_x0(x0v: float, lay: TriadLayout) -> str:
@@ -2473,6 +2694,48 @@ def split_accounts(
                             len(moved["xp"]),
                             len(moved["eq"]),
                         )
+                    else:
+                        # Strict path: classify purely via _token_band with EQ cap from open_row
+                        cap = (open_row or {}).get("row_eq_right_x0") if 'open_row' in locals() else None
+                        # Debug assert support for this path
+                        _ASSERT_ON = 1
+                        try:
+                            _ASSERT_ON = int(os.getenv("TRIAD_ASSERT_STRICT", "1"))
+                        except Exception:
+                            _ASSERT_ON = 1
+                        try:
+                            tu_left_c2 = float(getattr(current_layout or layout, "tu_left_x0", (current_layout or layout).tu_band[0]))
+                        except Exception:
+                            tu_left_c2 = float((current_layout or layout).tu_band[0])
+                        try:
+                            xp_left_c2 = float(getattr(current_layout or layout, "xp_left_x0", (current_layout or layout).xp_band[0]))
+                        except Exception:
+                            xp_left_c2 = float((current_layout or layout).xp_band[0])
+                        try:
+                            eq_left_c2 = float(getattr(current_layout or layout, "eq_left_x0", (current_layout or layout).eq_band[0]))
+                        except Exception:
+                            eq_left_c2 = float((current_layout or layout).eq_band[0])
+                        for lt in list(band_tokens["label"]):
+                            b = _token_band(lt, current_layout or layout, row_eq_right_x0=cap)
+                            if b in {"tu", "xp", "eq"}:
+                                if _ASSERT_ON and TRIAD_BAND_BY_X0:
+                                    try:
+                                        _x0v = float(lt.get("x0", 0.0))
+                                    except Exception:
+                                        _x0v = 0.0
+                                    if b == "tu":
+                                        assert tu_left_c2 <= _x0v < xp_left_c2
+                                    elif b == "xp":
+                                        assert xp_left_c2 <= _x0v < eq_left_c2
+                                    elif b == "eq":
+                                        _cap2 = cap if cap is not None else float("inf")
+                                        assert eq_left_c2 <= _x0v < _cap2
+                                band_tokens[b].append(lt)
+                                try:
+                                    band_tokens["label"].remove(lt)
+                                except Exception:
+                                    pass
+                                moved_from_label_on_continuation = True
                     if (
                         triad_active
                         and ":" in joined_line_text
@@ -2508,10 +2771,16 @@ def split_accounts(
                 ) -> List[dict]:
                     out: List[dict] = []
                     for _t in btks:
-                        try:
-                            mx = _triad_mid_x(_t)
-                        except Exception:
-                            mx = left_edge
+                        if not TRIAD_X0_STRICT:
+                            try:
+                                mx = _triad_mid_x(_t)
+                            except Exception:
+                                mx = left_edge
+                        else:
+                            try:
+                                mx = float(_t.get("x0", left_edge))
+                            except Exception:
+                                mx = left_edge
                         if mx <= left_edge + window:
                             out.append(_t)
                     return out
@@ -2525,6 +2794,106 @@ def split_accounts(
                     )
                     band_tokens["eq"] = _filter_band_tokens(
                         band_tokens["eq"], layout.eq_band[0]
+                    )
+                    # Stable left-to-right order for joining on continuation lines
+                    try:
+                        band_tokens["tu"] = sorted(
+                            band_tokens["tu"], key=lambda tt: float(tt.get("x0", 0.0))
+                        )
+                        band_tokens["xp"] = sorted(
+                            band_tokens["xp"], key=lambda tt: float(tt.get("x0", 0.0))
+                        )
+                        band_tokens["eq"] = sorted(
+                            band_tokens["eq"], key=lambda tt: float(tt.get("x0", 0.0))
+                        )
+                    except Exception:
+                        pass
+
+                # Continuation line band log: show EQ band capped by row_eq_right_x0
+                if layout and open_row:
+                    try:
+                        label_left = float(layout.label_band[0])
+                        label_right = float(layout.label_band[1])
+                        tu_left = float(layout.tu_band[0])
+                        xp_left = float(layout.xp_band[0])
+                        eq_left = float(layout.eq_band[0])
+                        eq_band_right = float(layout.eq_band[1])
+                    except Exception:
+                        label_left = 0.0
+                        label_right = float(getattr(layout, "label_right_x0", 0.0) or 0.0)
+                        tu_left = float(getattr(layout, "tu_left_x0", 0.0) or 0.0)
+                        xp_left = float(getattr(layout, "xp_left_x0", 0.0) or 0.0)
+                        eq_left = float(getattr(layout, "eq_left_x0", 0.0) or 0.0)
+                        eq_band_right = float("inf")
+                    eq_right_for_log = (open_row or {}).get("row_eq_right_x0")
+                    if not eq_right_for_log:
+                        eq_right_for_log = eq_band_right
+                    guard = TRIAD_BOUNDARY_GUARD
+                    tu_right_guarded = max(tu_left, xp_left - guard)
+                    xp_right_guarded = max(xp_left, eq_left - guard)
+                    if not math.isfinite(eq_right_for_log):
+                        eq_right_guarded = eq_right_for_log
+                    else:
+                        eq_right_guarded = max(eq_left, float(eq_right_for_log) - guard)
+                    # Strict interval trace (continuation): left-x0 cutoffs and row EQ cap
+                    try:
+                        tu_left_x0_log = float(getattr(layout, "tu_left_x0", 0.0) or layout.tu_band[0])
+                    except Exception:
+                        tu_left_x0_log = float(layout.tu_band[0])
+                    try:
+                        xp_left_x0_log = float(getattr(layout, "xp_left_x0", 0.0) or layout.xp_band[0])
+                    except Exception:
+                        xp_left_x0_log = float(layout.xp_band[0])
+                    try:
+                        eq_left_x0_log = float(getattr(layout, "eq_left_x0", 0.0) or layout.eq_band[0])
+                    except Exception:
+                        eq_left_x0_log = float(layout.eq_band[0])
+                    logger.info(
+                        "TRIAD_STRICT_X0 key=%s guard=%.2f tu=[%.3f,%.3f) xp=[%.3f,%.3f) eq=[%.3f,%.3f)",
+                        (open_row or {}).get("key"),
+                        TRIAD_BOUNDARY_GUARD,
+                        tu_left_x0_log,
+                        xp_left_x0_log,
+                        xp_left_x0_log,
+                        eq_left_x0_log,
+                        eq_left_x0_log,
+                        float(eq_right_for_log),
+                    )
+
+                    _triad_band_log(
+                        "ROW_BANDS key=%s guard=%.2f headers=(tu=%.3f,xp=%.3f,eq=%.3f) "
+                        "label=[%.3f,%.3f) tu=[%.3f,%.3f) xp=[%.3f,%.3f) eq=[%.3f,%.3f)",
+                        (open_row or {}).get("key"),
+                        guard,
+                        tu_left,
+                        xp_left,
+                        eq_left,
+                        label_left,
+                        label_right,
+                        tu_left,
+                        tu_right_guarded,
+                        xp_left,
+                        xp_right_guarded,
+                        eq_left,
+                        eq_right_guarded,
+                    )
+                    # Mirror bands with CONT_ROW_BANDS label for clarity on continuations
+                    logger.info(
+                        "CONT_ROW_BANDS key=%s guard=%.2f headers=(tu=%.3f,xp=%.3f,eq=%.3f) "
+                        "label=[%.3f,%.3f) tu=[%.3f,%.3f) xp=[%.3f,%.3f) eq=[%.3f,%.3f)",
+                        (open_row or {}).get("key"),
+                        guard,
+                        tu_left,
+                        xp_left,
+                        eq_left,
+                        label_left,
+                        label_right,
+                        tu_left,
+                        tu_right_guarded,
+                        xp_left,
+                        xp_right_guarded,
+                        eq_left,
+                        eq_right_guarded,
                     )
 
                 label_txt = join_tokens_with_space(
@@ -2631,6 +3000,63 @@ def split_accounts(
                         continue
                 else:
                     if open_row:
+                        # Continuation-band summary with EQ cap from labeled row
+                        try:
+                            label_left = float(layout.label_band[0])
+                        except Exception:
+                            label_left = 0.0
+                        try:
+                            label_right = float(layout.label_band[1])
+                        except Exception:
+                            label_right = float(getattr(layout, "label_right_x0", 0.0) or 0.0)
+                        try:
+                            tu_left = float(getattr(layout, "tu_left_x0", layout.tu_band[0]))
+                        except Exception:
+                            tu_left = float(layout.tu_band[0])
+                        try:
+                            xp_left = float(getattr(layout, "xp_left_x0", layout.xp_band[0]))
+                        except Exception:
+                            xp_left = float(layout.xp_band[0])
+                        try:
+                            eq_left = float(getattr(layout, "eq_left_x0", layout.eq_band[0]))
+                        except Exception:
+                            eq_left = float(layout.eq_band[0])
+                        try:
+                            tu_band_right = float(layout.tu_band[1])
+                        except Exception:
+                            tu_band_right = xp_left
+                        try:
+                            xp_band_right = float(layout.xp_band[1])
+                        except Exception:
+                            xp_band_right = eq_left
+                        try:
+                            eq_band_right = float(layout.eq_band[1])
+                        except Exception:
+                            eq_band_right = float("inf")
+                        cap_right = (open_row or {}).get("row_eq_right_x0")
+                        if cap_right is None:
+                            cap_right = eq_band_right
+                        guard = TRIAD_BOUNDARY_GUARD
+                        tu_right_guarded = min(tu_band_right, xp_left - guard) if math.isfinite(xp_left) else tu_band_right
+                        xp_right_guarded = min(xp_band_right, eq_left - guard) if math.isfinite(eq_left) else xp_band_right
+                        eq_right_guarded = float(cap_right)
+                        _triad_band_log(
+                            "CONT_ROW_BANDS key=%s guard=%.2f headers=(tu=%.3f,xp=%.3f,eq=%.3f) "
+                            "label=[%.3f,%.3f) tu=[%.3f,%.3f) xp=[%.3f,%.3f) eq=[%.3f,%.3f)",
+                            (open_row or {}).get("key"),
+                            guard,
+                            tu_left,
+                            xp_left,
+                            eq_left,
+                            label_left,
+                            label_right,
+                            tu_left,
+                            tu_right_guarded,
+                            xp_left,
+                            xp_right_guarded,
+                            eq_left,
+                            eq_right_guarded,
+                        )
                         if not (triad_active and current_layout):
                             triad_log(
                                 "TRIAD_GUARD_SKIP page=%s line=%s reason=%s",
@@ -2685,10 +3111,19 @@ def split_accounts(
                                     and "moved_map" in locals()
                                 ):
                                     bb = moved_map.get(
-                                        id(tt), assign_band(tt, current_layout)
+                                        id(tt),
+                                        _token_band(
+                                            tt,
+                                            current_layout,
+                                            row_eq_right_x0=(open_row or {}).get("row_eq_right_x0"),
+                                        ),
                                     )
                                 else:
-                                    bb = assign_band(tt, current_layout)
+                                    bb = _token_band(
+                                        tt,
+                                        current_layout,
+                                        row_eq_right_x0=(open_row or {}).get("row_eq_right_x0"),
+                                    )
                                 _trace_token(
                                     line["page"],
                                     line["line"],
@@ -2699,36 +3134,29 @@ def split_accounts(
                                     open_row.get("key") if open_row else "",
                                 )
                         appended_any = False
+
+                        def _apply_append(target_bureau: str, token_bureau: str, fragment: str) -> bool:
+                            if STRICT_TRIAD_APPEND and target_bureau != token_bureau:
+                                logger.warning(
+                                    "TRIAD_APPEND_SKIP cross-bureau target=%s token=%s text=%r",
+                                    target_bureau,
+                                    token_bureau,
+                                    fragment,
+                                )
+                                return False
+                            changed = _append_fragment(open_row["values"], target_bureau, fragment)
+                            if changed:
+                                if open_row.get("key"):
+                                    triad_maps[target_bureau][open_row["key"]] = open_row["values"].get(target_bureau, "")
+                                open_row["last_bureau_with_text"] = target_bureau
+                            return changed
+
                         if has_tu:
-                            open_row["values"][
-                                "transunion"
-                            ] = f"{open_row['values']['transunion']} {tu_val}".strip()
-                            if open_row["key"]:
-                                triad_maps["transunion"][open_row["key"]] = open_row[
-                                    "values"
-                                ]["transunion"]
-                            open_row["last_bureau_with_text"] = "transunion"
-                            appended_any = True
+                            appended_any = _apply_append("transunion", "transunion", tu_val) or appended_any
                         if has_xp:
-                            open_row["values"][
-                                "experian"
-                            ] = f"{open_row['values']['experian']} {xp_val}".strip()
-                            if open_row["key"]:
-                                triad_maps["experian"][open_row["key"]] = open_row[
-                                    "values"
-                                ]["experian"]
-                            open_row["last_bureau_with_text"] = "experian"
-                            appended_any = True
+                            appended_any = _apply_append("experian", "experian", xp_val) or appended_any
                         if has_eq:
-                            open_row["values"][
-                                "equifax"
-                            ] = f"{open_row['values']['equifax']} {eq_val}".strip()
-                            if open_row["key"]:
-                                triad_maps["equifax"][open_row["key"]] = open_row[
-                                    "values"
-                                ]["equifax"]
-                            open_row["last_bureau_with_text"] = "equifax"
-                            appended_any = True
+                            appended_any = _apply_append("equifax", "equifax", eq_val) or appended_any
                         # Task 5: once we've appended any values on the continuation line,
                         # clear the expectation flag for future lines.
                         if appended_any and open_row.get("expect_values_on_next_line"):

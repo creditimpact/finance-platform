@@ -436,3 +436,57 @@ def test_presence_semantics_for_empty_and_dashes(split_module) -> None:
     assert empty_state["values"]["equifax"] == ""
     assert dash_state["values"]["experian"] == "--"
     assert triad_fields["experian"]["payment_frequency"] == "--"
+
+
+def test_account_type_tracing(split_module, monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    # Enable triad debug logs so _triad_band_log emits messages
+    monkeypatch.setenv("STAGEA_DEBUG", "1")
+    monkeypatch.setenv("TRIAD_BAND_BY_X0", "1")
+
+    layout = _layout()
+    triad_fields: Dict[str, Dict[str, str]] = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+    }
+    triad_order = ["transunion", "experian", "equifax"]
+
+    row = [
+        _token(5, 80.0, 140.0, "Account"),
+        _token(5, 140.0, 190.0, "Type"),
+        _token(5, COLON_LEFT, COLON_RIGHT, ":"),
+        _token(5, TU_X0 + 10.0, TU_X0 + 40.0, "Flexible"),
+        _token(5, TU_X0 + 45.0, TU_X0 + 80.0, "spending"),
+        _token(5, TU_X0 + 85.0, TU_X0 + 120.0, "credit"),
+        _token(5, TU_X0 + 125.0, TU_X0 + 160.0, "card"),
+        _token(5, XP_X0 + 25.0, XP_X0 + 55.0, "--"),
+        _token(5, EQ_X0 + 20.0, EQ_X0 + 55.0, "--"),
+    ]
+
+    with caplog.at_level("INFO"):
+        row_state = split_module.process_triad_labeled_line(
+            row,
+            layout,
+            split_module.LABEL_MAP,
+            None,
+            triad_fields,
+            triad_order,
+        )
+
+    # Final assembled values
+    assert row_state["values"]["transunion"] == "Flexible spending credit card"
+    assert row_state["values"]["experian"] == "--"
+    assert row_state["values"]["equifax"] == "--"
+
+    # Trace should include header x0s via ROW_BANDS and per-token band assignments
+    text = caplog.text
+    assert "ROW_BANDS key=account_type" in text
+    # 4 TU tokens assigned in band
+    assert "TOK p=1 l=5" in text  # at least some token logs for this line
+    assert text.count("-> TU text='Flexible'") == 1
+    assert text.count("-> TU text='spending'") == 1
+    assert text.count("-> TU text='credit'") == 1
+    assert text.count("-> TU text='card'") == 1
+    # XP/EQ are dashes
+    assert "-> XP text='--'" in text
+    assert "-> EQ text='--'" in text

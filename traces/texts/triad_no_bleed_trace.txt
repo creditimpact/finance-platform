@@ -1,8 +1,0 @@
-ROW_BANDS key=account_type guard=2.00 headers=(tu=172.875,xp=309.000,eq=445.125) label=[0.000,172.875) tu=[172.875,307.000) xp=[309.000,443.125) eq=[445.125,498.000)
-TOK p=1 l=5 x0=182.875 -> TU text='Flexible'
-TOK p=1 l=5 x0=214.125 -> TU text='spending'
-TOK p=1 l=5 x0=246.375 -> TU text='credit'
-TOK p=1 l=5 x0=278.625 -> TU text='card'
-TOK p=1 l=5 x0=334.000 -> XP text='--'
-TOK p=1 l=5 x0=468.750 -> EQ text='--'
-TRIAD_ROW_LABELED key=account_type TU='Flexible spending credit card' XP='--' EQ='--'

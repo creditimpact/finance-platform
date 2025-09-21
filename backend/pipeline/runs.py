@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Mapping
 import json, os, glob, shutil, time
 
 RUNS_ROOT_ENV = "RUNS_ROOT"                 # optional override
@@ -87,6 +88,7 @@ class RunManifest:
                 "cases": {},
                 "exports": {},
                 "logs": {},
+                "ai": {},
             },
             "env_snapshot": {}
         }
@@ -170,4 +172,31 @@ class RunManifest:
 # -------- breadcrumbs --------
 def write_breadcrumb(target_manifest: Path, breadcrumb_file: Path) -> None:
     breadcrumb_file.write_text(str(target_manifest.resolve()), encoding="utf-8")
+
+
+def persist_manifest(
+    manifest: RunManifest,
+    *,
+    artifacts: Mapping[str, Mapping[str, Path | str]] | None = None,
+) -> RunManifest:
+    """Persist ``manifest`` after applying artifact path updates.
+
+    Parameters
+    ----------
+    manifest:
+        The manifest instance to persist.
+    artifacts:
+        Optional mapping of artifact groups to update before saving.  Values are
+        converted to absolute paths.
+    """
+
+    if artifacts:
+        manifest_artifacts = manifest.data.setdefault("artifacts", {})
+        for group, entries in artifacts.items():
+            cursor = manifest_artifacts
+            for part in str(group).split("."):
+                cursor = cursor.setdefault(part, {})
+            for key, value in entries.items():
+                cursor[str(key)] = str(Path(value).resolve())
+    return manifest.save()
 

@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 
 from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
+from backend.pipeline.runs import RUNS_ROOT_ENV
+from scripts.build_ai_merge_packs import main as build_packs_main
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -153,3 +155,64 @@ def test_build_merge_ai_packs_only_merge_best_filter(tmp_path: Path) -> None:
     assert pack["pair"] == {"a": 21, "b": 22}
     assert len(pack["context"]["a"]) <= 3
     assert len(pack["context"]["b"]) <= 3
+
+
+def test_build_ai_merge_packs_cli_updates_manifest(tmp_path: Path, monkeypatch) -> None:
+    sid = "cli-sid"
+    runs_root = tmp_path / "runs"
+    accounts_root = runs_root / sid / "cases" / "accounts"
+
+    account_a_dir = accounts_root / "11"
+    account_b_dir = accounts_root / "16"
+
+    _write_raw_lines(
+        account_a_dir / "raw_lines.json",
+        [
+            "US BK CACS",
+            "Account # 409451******",
+        ],
+    )
+
+    _write_raw_lines(
+        account_b_dir / "raw_lines.json",
+        [
+            "US BANK",
+            "Account # 409451******",
+        ],
+    )
+
+    _write_json(account_a_dir / "tags.json", [_merge_pair_tag(16), _merge_best_tag(16)])
+    _write_json(account_b_dir / "tags.json", [_merge_best_tag(11)])
+
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+
+    build_packs_main(
+        [
+            "--sid",
+            sid,
+            "--runs-root",
+            str(runs_root),
+            "--max-lines-per-side",
+            "5",
+        ]
+    )
+
+    out_dir = runs_root / sid / "ai_packs"
+    index_path = out_dir / "index.json"
+    manifest_path = runs_root / sid / "manifest.json"
+
+    index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+    assert index_payload == [{"a": 11, "b": 16, "file": "011-016.json"}]
+
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    ai_artifacts = manifest_data["artifacts"]["ai"]
+
+    expected_dir = str(out_dir.resolve())
+    expected_index = str(index_path.resolve())
+    expected_logs = str((out_dir / "logs.txt").resolve())
+
+    assert ai_artifacts == {
+        "packs_dir": expected_dir,
+        "packs_index": expected_index,
+        "logs": expected_logs,
+    }

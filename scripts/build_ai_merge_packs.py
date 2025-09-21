@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Sequence
 
 try:  # pragma: no cover - convenience bootstrap
     import scripts._bootstrap  # type: ignore  # noqa: F401
@@ -17,10 +17,10 @@ except Exception:  # pragma: no cover - fallback for direct execution
         sys.path.insert(0, str(repo_root))
 
 from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
-from backend.pipeline.runs import RunManifest
+from backend.pipeline.runs import RunManifest, persist_manifest
 
 
-def _write_pack(path: Path, payload: Mapping[str, object]) -> None:
+def _write_json_file(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(payload, ensure_ascii=False, indent=2)
     path.write_text(serialized + "\n", encoding="utf-8")
@@ -90,14 +90,24 @@ def main(argv: Sequence[str] | None = None) -> None:
             raise ValueError("Pack is missing pair indices") from exc
         filename = f"{a_idx:03d}-{b_idx:03d}.json"
         path = out_dir / filename
-        _write_pack(path, pack)
-        index.append({"a": a_idx, "b": b_idx, "file": str(path.resolve())})
+        _write_json_file(path, pack)
+        index.append({"a": a_idx, "b": b_idx, "file": filename})
+
+    index_path = out_dir / "index.json"
+    _write_json_file(index_path, index)
 
     manifest = RunManifest.for_sid(sid)
-    manifest.set_artifact("ai", "packs_dir", out_dir.resolve())
-    ai_group = manifest.data.setdefault("artifacts", {}).setdefault("ai", {})
-    ai_group["pairs"] = index
-    manifest.save()
+    logs_path = out_dir / "logs.txt"
+    persist_manifest(
+        manifest,
+        artifacts={
+            "ai": {
+                "packs_dir": out_dir,
+                "packs_index": index_path,
+                "logs": logs_path,
+            }
+        },
+    )
 
     print(f"[BUILD] wrote {len(packs)} packs to {out_dir}")
 

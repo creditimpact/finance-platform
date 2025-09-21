@@ -86,10 +86,15 @@ def _backoff_delay(schedule: Sequence[float], attempt_number: int) -> float:
     return schedule[index]
 
 
-def _resolve_packs_dir(runs_root: Path, sid: str, override: str | None) -> Path:
+def _resolve_packs_dir(manifest: RunManifest, override: str | None) -> Path:
     if override:
         return Path(override)
-    return runs_root / sid / "ai_packs"
+
+    try:
+        path = Path(manifest.get("ai_packs", "dir"))
+    except KeyError:
+        path = manifest.path.parent / "ai_packs"
+    return path
 
 
 def _append_log(path: Path, line: str) -> None:
@@ -124,8 +129,8 @@ def _isoformat_timestamp(dt: datetime | None = None) -> str:
     return dt.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _accounts_root(runs_root: Path, sid: str) -> Path:
-    return runs_root / sid / "cases" / "accounts"
+def _accounts_root(run_dir: Path) -> Path:
+    return run_dir / "cases" / "accounts"
 
 
 def _ensure_int(value: object, label: str) -> int:
@@ -153,8 +158,7 @@ def _should_mark_same_debt(payload: Mapping[str, object]) -> bool:
 
 
 def _write_decision_tags(
-    runs_root: Path,
-    sid: str,
+    run_dir: Path,
     a_idx: int,
     b_idx: int,
     decision: str,
@@ -162,14 +166,13 @@ def _write_decision_tags(
     timestamp: str,
     payload: Mapping[str, object],
 ) -> None:
-    base = _accounts_root(runs_root, sid)
+    base = _accounts_root(run_dir)
     same_debt = _should_mark_same_debt(payload)
 
     for source_idx, other_idx in ((a_idx, b_idx), (b_idx, a_idx)):
         tag_path = base / str(source_idx) / "tags.json"
         decision_tag = {
             "kind": "ai_decision",
-            "tag": "ai_decision",
             "source": "ai_adjudicator",
             "with": other_idx,
             "decision": decision,
@@ -189,24 +192,53 @@ def _write_decision_tags(
             upsert_tag(tag_path, same_debt_tag, unique_keys=("kind", "with", "source"))
 
 
+def _write_error_tags(
+    run_dir: Path,
+    a_idx: int,
+    b_idx: int,
+    error_kind: str,
+    message: str,
+    timestamp: str,
+) -> None:
+    base = _accounts_root(run_dir)
+    for source_idx, other_idx in ((a_idx, b_idx), (b_idx, a_idx)):
+        tag_path = base / str(source_idx) / "tags.json"
+        error_tag = {
+            "kind": "ai_error",
+            "with": other_idx,
+            "error_kind": error_kind,
+            "message": message,
+            "source": "ai_adjudicator",
+            "at": timestamp,
+        }
+        upsert_tag(tag_path, error_tag, unique_keys=("kind", "with", "source"))
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sid", required=True, help="Session identifier")
-    parser.add_argument(
-        "--runs-root",
-        default="runs",
-        help="Root directory containing runs/<SID> outputs",
-    )
     parser.add_argument(
         "--packs-dir",
         default=None,
         help="Optional override for the directory containing ai packs",
     )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=None,
+        help="Maximum number of retries before failing (defaults to AI_MAX_RETRIES)",
+    )
+    parser.add_argument(
+        "--backoff",
+        default=None,
+        help="Comma-separated backoff schedule in seconds (defaults to AI_BACKOFF_SCHEDULE)",
+    )
     args = parser.parse_args(argv)
 
     sid = str(args.sid)
-    runs_root = Path(args.runs_root)
-    packs_dir = _resolve_packs_dir(runs_root, sid, args.packs_dir)
+    manifest = RunManifest.for_sid(sid)
+    run_dir = manifest.path.parent
+    packs_dir = _resolve_packs_dir(manifest, args.packs_dir)
     index_path = packs_dir / "index.json"
     if not index_path.exists():
         raise FileNotFoundError(f"Pack index not found: {index_path}")
@@ -214,7 +246,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     index = _load_index(index_path)
     logs_path = packs_dir / "logs.txt"
 
-    manifest = RunManifest.for_sid(sid)
     persist_manifest(
         manifest,
         artifacts={
@@ -229,8 +260,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     total = 0
     successes = 0
     failures = 0
-    max_retries = _env_max_retries()
-    backoff_schedule = _env_backoff_schedule()
+    if args.max_retries is None:
+        max_retries = _env_max_retries()
+    else:
+        max_retries = max(0, int(args.max_retries))
+
+    if args.backoff is None:
+        backoff_schedule = _env_backoff_schedule()
+    else:
+        backoff_schedule = _parse_backoff_schedule(str(args.backoff))
     max_attempts = max(0, max_retries) + 1
 
     for entry in index:
@@ -305,6 +343,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         if decision_payload is None:
             error_name = last_error.__class__.__name__ if last_error else "UnknownError"
+            message = str(last_error) if last_error else ""
             log(
                 "PACK_FAILURE",
                 {
@@ -312,14 +351,16 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "error": error_name,
                 },
             )
+            timestamp = _isoformat_timestamp()
+            _write_error_tags(run_dir, a_idx, b_idx, error_name, message, timestamp)
             failures += 1
             continue
 
         decision_raw = decision_payload.get("decision")
         reason_raw = decision_payload.get("reason")
-        decision = str(decision_raw).strip() if decision_raw is not None else ""
+        decision_value = str(decision_raw).strip().lower() if decision_raw is not None else ""
         reason = str(reason_raw).strip() if reason_raw is not None else ""
-        if decision not in {"merge", "different", "same_debt"} or not reason:
+        if decision_value not in {"merge", "different", "same_debt"} or not reason:
             log(
                 "ERROR",
                 {
@@ -335,8 +376,18 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "error": "InvalidDecision",
                 },
             )
+            timestamp = _isoformat_timestamp()
+            _write_error_tags(
+                run_dir,
+                a_idx,
+                b_idx,
+                "InvalidDecision",
+                "Decision payload missing required fields",
+                timestamp,
+            )
             failures += 1
             continue
+        decision = "merge" if decision_value == "same_debt" else decision_value
         timestamp = _isoformat_timestamp()
 
         a_int = _ensure_int(a_idx, "a_idx")
@@ -346,8 +397,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         payload_for_tags["reason"] = reason
 
         _write_decision_tags(
-            runs_root,
-            sid,
+            run_dir,
             a_int,
             b_int,
             decision,

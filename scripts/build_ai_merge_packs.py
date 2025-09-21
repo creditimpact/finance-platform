@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 try:  # pragma: no cover - convenience bootstrap
     import scripts._bootstrap  # type: ignore  # noqa: F401
@@ -24,6 +24,52 @@ def _write_json_file(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(payload, ensure_ascii=False, indent=2)
     path.write_text(serialized + "\n", encoding="utf-8")
+
+
+def _update_run_manifest_stub(
+    run_dir: Path,
+    sid: str,
+    *,
+    ai_packs: Mapping[str, Path | str],
+) -> None:
+    """Update ``runs/<SID>/.manifest`` with the AI pack artifact metadata.
+
+    The ``.manifest`` file serves as a lightweight manifest for tooling that
+    consumes the run outputs directly (e.g., Codex automations).  Historical
+    runs may have stored only a plain-text pointer in this location.  For
+    compatibility, retain that information while merging in the structured
+    ``artifacts.ai_packs`` payload required by the automation stack.
+    """
+
+    manifest_path = run_dir / ".manifest"
+    if manifest_path.exists():
+        raw = manifest_path.read_text(encoding="utf-8").strip()
+        if raw:
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                data = {"manifest_path": raw}
+        else:
+            data = {}
+    else:
+        data = {}
+
+    if not isinstance(data, dict):
+        data = {}
+
+    data.setdefault("sid", sid)
+
+    artifacts = data.get("artifacts")
+    if not isinstance(artifacts, dict):
+        artifacts = {}
+        data["artifacts"] = artifacts
+
+    artifacts["ai_packs"] = {
+        key: str(Path(value).resolve()) for key, value in ai_packs.items()
+    }
+
+    serialized = json.dumps(data, ensure_ascii=False, indent=2)
+    manifest_path.write_text(serialized + "\n", encoding="utf-8")
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -85,8 +131,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     index_path = out_dir / "index.json"
     _write_json_file(index_path, index)
 
-    manifest = RunManifest.for_sid(sid)
     logs_path = out_dir / "logs.txt"
+    logs_path.touch(exist_ok=True)
+
+    manifest = RunManifest.for_sid(sid)
     persist_manifest(
         manifest,
         artifacts={
@@ -95,6 +143,16 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "index": index_path,
                 "logs": logs_path,
             }
+        },
+    )
+
+    _update_run_manifest_stub(
+        runs_root / sid,
+        sid,
+        ai_packs={
+            "dir": out_dir,
+            "index": index_path,
+            "logs": logs_path,
         },
     )
 

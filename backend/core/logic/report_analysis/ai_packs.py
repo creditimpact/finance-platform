@@ -13,6 +13,8 @@ from backend.core.io.tags import read_tags
 from backend.core.logic.report_analysis.account_merge import get_merge_cfg
 from backend.core.logic.report_analysis.keys import normalize_issuer
 
+from . import config as merge_config
+
 
 logger = logging.getLogger(__name__)
 
@@ -418,7 +420,9 @@ def build_merge_ai_packs(
     only_merge_best:
         When ``True`` include only pairs that appear as ``merge_best`` partners.
     max_lines_per_side:
-        Maximum number of context lines per account.
+        Maximum number of context lines per account. Values greater than the
+        ``AI_PACK_MAX_LINES_PER_SIDE`` environment configuration are clamped to
+        that cap.
     """
 
     sid_str = str(sid)
@@ -429,6 +433,10 @@ def build_merge_ai_packs(
         raise FileNotFoundError(
             f"cases/accounts directory not found for sid={sid_str!r} under {runs_root_path}"
         )
+
+    env_limit = merge_config.get_ai_pack_max_lines_per_side()
+    requested_limit = max_lines_per_side if max_lines_per_side and max_lines_per_side > 0 else env_limit
+    context_limit = min(env_limit, requested_limit) if env_limit > 0 else max(requested_limit, 1)
 
     pair_entries, best_partners = _collect_pair_entries(accounts_root)
     tolerance_hint = _tolerance_hint()
@@ -449,8 +457,8 @@ def build_merge_ai_packs(
         a_idx, b_idx = pair
 
         try:
-            account_a = _load_account_payload(accounts_root, a_idx, cache, max_lines_per_side)
-            account_b = _load_account_payload(accounts_root, b_idx, cache, max_lines_per_side)
+            account_a = _load_account_payload(accounts_root, a_idx, cache, context_limit)
+            account_b = _load_account_payload(accounts_root, b_idx, cache, context_limit)
         except FileNotFoundError as exc:
             logger.warning(
                 "MERGE_V2_PACK_MISSING_LINES sid=%s pair=%s error=%s",
@@ -460,8 +468,8 @@ def build_merge_ai_packs(
             )
             continue
 
-        context_a = list(account_a.get("context", []))
-        context_b = list(account_b.get("context", []))
+        context_a = list(account_a.get("context", []))[:context_limit]
+        context_b = list(account_b.get("context", []))[:context_limit]
         highlights = _build_highlights(primary_tag)
 
         ids_payload = {
@@ -477,7 +485,7 @@ def build_merge_ai_packs(
             "ids": ids_payload,
             "numeric_match_summary": summary,
             "tolerances_hint": dict(tolerance_hint),
-            "limits": {"max_lines_per_side": max_lines_per_side},
+            "limits": {"max_lines_per_side": context_limit},
             "context": {"a": context_a, "b": context_b},
             "output_contract": {
                 "decision": ["merge", "same_debt", "different"],
@@ -491,7 +499,7 @@ def build_merge_ai_packs(
             "ids": ids_payload,
             "highlights": summary,
             "tolerances_hint": dict(tolerance_hint),
-            "limits": {"max_lines_per_side": max_lines_per_side},
+            "limits": {"max_lines_per_side": context_limit},
             "context": {"a": context_a, "b": context_b},
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},

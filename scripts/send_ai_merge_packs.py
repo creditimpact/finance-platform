@@ -9,7 +9,7 @@ import time
 from collections.abc import Mapping as MappingABC
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Mapping, Sequence, overload
 
 try:  # pragma: no cover - convenience bootstrap for direct execution
     import scripts._bootstrap  # type: ignore  # noqa: F401
@@ -157,7 +157,61 @@ def _should_mark_same_debt(payload: Mapping[str, object]) -> bool:
     return False
 
 
+@overload
 def _write_decision_tags(
+    run_path: Path | str,
+    a_idx: int,
+    b_idx: int,
+    decision: str,
+    reason: str,
+    timestamp: str,
+    payload: Mapping[str, object],
+) -> None:
+    ...
+
+
+@overload
+def _write_decision_tags(
+    run_path: Path | str,
+    sid: str,
+    a_idx: int,
+    b_idx: int,
+    decision: str,
+    reason: str,
+    timestamp: str,
+    payload: Mapping[str, object],
+) -> None:
+    ...
+
+
+def _write_decision_tags(run_path: Path | str, *args: object) -> None:
+    if len(args) == 6:
+        a_idx, b_idx, decision, reason, timestamp, payload = args
+        run_dir = Path(run_path)
+    elif len(args) == 7:
+        sid, a_idx, b_idx, decision, reason, timestamp, payload = args
+        run_dir = Path(run_path) / str(sid)
+    else:  # pragma: no cover - defensive
+        raise TypeError("_write_decision_tags expects 7 or 8 arguments")
+
+    account_a = _ensure_int(a_idx, "a_idx")
+    account_b = _ensure_int(b_idx, "b_idx")
+
+    if not isinstance(payload, MappingABC):
+        raise TypeError("payload must be a mapping")
+
+    _write_decision_tags_resolved(
+        run_dir,
+        account_a,
+        account_b,
+        str(decision),
+        str(reason),
+        str(timestamp),
+        payload,
+    )
+
+
+def _write_decision_tags_resolved(
     run_dir: Path,
     a_idx: int,
     b_idx: int,
@@ -173,6 +227,7 @@ def _write_decision_tags(
         tag_path = base / str(source_idx) / "tags.json"
         decision_tag = {
             "kind": "ai_decision",
+            "tag": "ai_decision",
             "source": "ai_adjudicator",
             "with": other_idx,
             "decision": decision,
@@ -218,6 +273,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sid", required=True, help="Session identifier")
     parser.add_argument(
+        "--runs-root",
+        default=None,
+        help="Root directory containing runs/<SID> outputs",
+    )
+    parser.add_argument(
         "--packs-dir",
         default=None,
         help="Optional override for the directory containing ai packs",
@@ -236,7 +296,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     sid = str(args.sid)
-    manifest = RunManifest.for_sid(sid)
+    runs_root_override = args.runs_root
+    if runs_root_override:
+        manifest_path = Path(runs_root_override) / sid / "manifest.json"
+        manifest = RunManifest.load_or_create(manifest_path, sid=sid)
+    else:
+        manifest = RunManifest.for_sid(sid)
+
     run_dir = manifest.path.parent
     packs_dir = _resolve_packs_dir(manifest, args.packs_dir)
     index_path = packs_dir / "index.json"
@@ -387,7 +453,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
             failures += 1
             continue
-        decision = "merge" if decision_value == "same_debt" else decision_value
+        decision = decision_value
         timestamp = _isoformat_timestamp()
 
         a_int = _ensure_int(a_idx, "a_idx")

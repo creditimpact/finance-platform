@@ -7,12 +7,14 @@ from scripts.score_bureau_pairs import (
     build_merge_tags,
     build_pair_rows,
     compute_scores_for_sid,
+    score_accounts,
 )
 
 
 def _write_bureaus(base: Path, payload: dict) -> None:
     base.mkdir(parents=True, exist_ok=True)
     (base / "bureaus.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    (base / "raw_lines.json").write_text("[]\n", encoding="utf-8")
 
 
 @pytest.fixture
@@ -78,4 +80,31 @@ def test_score_bureau_pairs_cli_helpers(runs_root: Path) -> None:
     assert merge_tags[1]["score_total"] >= 70
     assert merge_tags[1]["aux"]["acctnum_level"] == "exact"
     assert merge_tags[2]["decision"] == "auto"
+
+
+def test_score_accounts_writes_merge_tags(runs_root: Path) -> None:
+    sid = "SID002"
+    accounts_dir = runs_root / sid / "cases" / "accounts"
+
+    bureaus_payload = {
+        "transunion": {"balance_owed": "1000", "account_number": "9999"},
+        "experian": {"balance_owed": "1000", "account_number": "9999"},
+    }
+
+    _write_bureaus(accounts_dir / "5", bureaus_payload)
+    _write_bureaus(accounts_dir / "9", bureaus_payload)
+
+    result = score_accounts(sid, runs_root=runs_root, write_tags=True)
+
+    assert result.indices == [5, 9]
+    assert result.merge_tags
+    assert result.best_by_idx[5]["partner_index"] == 9
+
+    tags_path = accounts_dir / "5" / "tags.json"
+    assert tags_path.exists()
+    tag_data = json.loads(tags_path.read_text(encoding="utf-8"))
+    merge_pairs = [entry for entry in tag_data if entry.get("kind") == "merge_pair"]
+    assert merge_pairs
+    assert merge_pairs[0]["with"] == 9
+    assert merge_pairs[0]["decision"] in {"ai", "auto"}
 

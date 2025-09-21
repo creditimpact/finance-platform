@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from dataclasses import dataclass
 from copy import deepcopy
 from functools import lru_cache
 from importlib import import_module
@@ -16,6 +17,19 @@ from backend.core.logic.report_analysis.account_merge import score_all_pairs_0_1
 
 DEFAULT_RUNS_ROOT = Path(os.environ.get("RUNS_ROOT", "runs"))
 AUTO_DECISIONS = {"ai", "auto"}
+
+
+@dataclass(frozen=True)
+class ScoreComputationResult:
+    """Container returned by :func:`score_accounts` with rich score metadata."""
+
+    sid: str
+    runs_root: Path
+    indices: List[int]
+    scores_by_idx: Dict[int, Mapping[int, Mapping[str, Any]]]
+    best_by_idx: Dict[int, Mapping[str, Any]]
+    merge_tags: Dict[int, Dict[str, Any]]
+    rows: List[Dict[str, Any]]
 
 FIELD_SEQUENCE: Tuple[str, ...] = (
     "balance_owed",
@@ -283,6 +297,47 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def score_accounts(
+    sid: str,
+    *,
+    runs_root: Path | str = DEFAULT_RUNS_ROOT,
+    only_ai_rows: bool = False,
+    write_tags: bool = False,
+) -> ScoreComputationResult:
+    """Compute merge scores and optionally persist merge tags for ``sid``."""
+
+    sid_str = str(sid)
+    runs_root_path = Path(runs_root)
+
+    indices, scores_by_idx = compute_scores_for_sid(sid_str, runs_root=runs_root_path)
+
+    if indices:
+        best_by_idx = choose_best_partner_cached(scores_by_idx)
+        rows = build_pair_rows(scores_by_idx, only_ai=bool(only_ai_rows))
+        merge_tags = build_merge_tags(scores_by_idx, best_by_idx)
+        if write_tags:
+            merge_tags = persist_merge_tags_to_tags(
+                sid_str,
+                scores_by_idx,
+                best_by_idx,
+                runs_root=runs_root_path,
+            )
+    else:
+        best_by_idx = {}
+        rows = []
+        merge_tags = {}
+
+    return ScoreComputationResult(
+        sid=sid_str,
+        runs_root=runs_root_path,
+        indices=indices,
+        scores_by_idx=scores_by_idx,
+        best_by_idx=best_by_idx,
+        merge_tags=merge_tags,
+        rows=rows,
+    )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sid", required=True, help="Session identifier")
@@ -317,26 +372,25 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     sid = str(args.sid)
     runs_root = Path(args.runs_root)
 
-    indices, scores_by_idx = compute_scores_for_sid(sid, runs_root=runs_root)
+    computation = score_accounts(
+        sid,
+        runs_root=runs_root,
+        only_ai_rows=bool(args.only_ai),
+        write_tags=bool(args.write_tags),
+    )
 
-    if not indices:
+    if not computation.indices:
         print(f"No accounts found for SID {sid!r} under {runs_root}")
         return
 
-    best_by_idx = choose_best_partner_cached(scores_by_idx)
-    rows = build_pair_rows(scores_by_idx, only_ai=bool(args.only_ai))
+    rows = computation.rows
 
     if not rows:
         print("No pairs matched the provided filters.")
     else:
         _print_rows(rows)
 
-    merge_tags = build_merge_tags(scores_by_idx, best_by_idx)
-
-    if args.write_tags:
-        merge_tags = persist_merge_tags_to_tags(
-            sid, scores_by_idx, best_by_idx, runs_root=runs_root
-        )
+    merge_tags = computation.merge_tags
 
     if args.show:
         for row in rows:

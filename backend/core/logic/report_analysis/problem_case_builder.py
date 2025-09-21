@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
 from backend.pipeline.runs import RunManifest, write_breadcrumb
-from backend.core.io.tags import read_tags, upsert_tag, write_tags
+from backend.core.io.tags import read_tags, upsert_tag, write_tags_atomic
 from backend.core.logic.report_analysis.problem_extractor import (
     build_rule_fields_from_triad,
     load_stagea_accounts_from_manifest,
@@ -572,7 +572,7 @@ def _build_problem_cases_lean(
             tag for tag in existing_tags if tag.get("kind") not in merge_kinds
         ]
         if filtered_tags != existing_tags:
-            write_tags(path, filtered_tags)
+            write_tags_atomic(path, filtered_tags)
 
     valid_decisions = {"ai", "auto"}
     for left, right in gen_unordered_pairs(written_indices):

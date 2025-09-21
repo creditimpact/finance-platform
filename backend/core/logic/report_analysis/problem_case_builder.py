@@ -26,6 +26,7 @@ from backend.core.logic.report_analysis.problem_extractor import (
 from backend.core.logic.report_analysis.account_merge import (
     choose_best_partner,
     gen_unordered_pairs,
+    merge_v2_only_enabled,
     score_all_pairs_0_100,
 )
 
@@ -468,6 +469,7 @@ def _build_problem_cases_lean(
     merge_groups: Dict[str, str] = {}
     tag_paths: Dict[int, Path] = {}
     written_indices: List[int] = []
+    merge_v2_only = merge_v2_only_enabled()
 
     for cand in candidates:
         if not isinstance(cand, Mapping):
@@ -561,16 +563,17 @@ def _build_problem_cases_lean(
         if merge_tag_v2_obj is None and had_existing:
             merge_tag_v2_obj = existing_summary.get("merge_tag_v2")
 
-        if isinstance(merge_tag_v2_obj, Mapping):
-            try:
-                sanitized_tag_v2 = json.loads(
-                    json.dumps(merge_tag_v2_obj, ensure_ascii=False)
-                )
-            except TypeError:
-                sanitized_tag_v2 = dict(merge_tag_v2_obj)
-            summary_obj["merge_tag_v2"] = sanitized_tag_v2
-        elif merge_tag_v2_obj is not None:
-            summary_obj["merge_tag_v2"] = merge_tag_v2_obj
+        if not merge_v2_only:
+            if isinstance(merge_tag_v2_obj, Mapping):
+                try:
+                    sanitized_tag_v2 = json.loads(
+                        json.dumps(merge_tag_v2_obj, ensure_ascii=False)
+                    )
+                except TypeError:
+                    sanitized_tag_v2 = dict(merge_tag_v2_obj)
+                summary_obj["merge_tag_v2"] = sanitized_tag_v2
+            elif merge_tag_v2_obj is not None:
+                summary_obj["merge_tag_v2"] = merge_tag_v2_obj
 
         _write_json(summary_path, summary_obj)
 
@@ -782,6 +785,7 @@ def _build_problem_cases_legacy(
 
     written_ids: List[str] = []
     merge_groups: Dict[str, str] = {}
+    merge_v2_only = merge_v2_only_enabled()
     for cand in candidates:
         if not isinstance(cand, Mapping):
             continue
@@ -857,6 +861,9 @@ def _build_problem_cases_legacy(
         existing_summary, loaded_existing = _load_summary_json(summary_path)
         if loaded_existing:
             summary_obj = dict(existing_summary)
+            if merge_v2_only:
+                summary_obj.pop("merge_tag", None)
+                summary_obj.pop("merge_tag_v2", None)
         else:
             summary_obj = {}
 
@@ -903,6 +910,7 @@ def _build_problem_cases_legacy(
                 summary_obj["primary_issue"] = candidate_primary_issue
 
         merge_tag = cand.get("merge_tag")
+        group_id: Any = None
         if isinstance(merge_tag, Mapping):
             try:
                 merge_tag_obj = json.loads(
@@ -910,38 +918,46 @@ def _build_problem_cases_legacy(
                 )
             except TypeError:
                 merge_tag_obj = dict(merge_tag)
-            summary_obj["merge_tag"] = merge_tag_obj
+            if not merge_v2_only:
+                summary_obj["merge_tag"] = merge_tag_obj
             group_id = merge_tag_obj.get("group_id")
-            if isinstance(group_id, str):
-                merge_groups[str(account_index)] = group_id
         else:
-            existing_tag = summary_obj.get("merge_tag")
+            existing_tag: Any = None
+            if not merge_v2_only:
+                existing_tag = summary_obj.get("merge_tag")
+            if existing_tag is None:
+                legacy_tag = existing_summary.get("merge_tag")
+                if isinstance(legacy_tag, Mapping):
+                    existing_tag = legacy_tag
             if isinstance(existing_tag, Mapping):
                 group_id = existing_tag.get("group_id")
-                if isinstance(group_id, str):
-                    merge_groups[str(account_index)] = group_id
+        if isinstance(group_id, str):
+            merge_groups[str(account_index)] = group_id
 
         merge_tag_v2 = cand.get("merge_tag_v2")
-        if isinstance(merge_tag_v2, Mapping):
-            try:
-                merge_tag_v2_obj = json.loads(
-                    json.dumps(merge_tag_v2, ensure_ascii=False)
-                )
-            except TypeError:
-                merge_tag_v2_obj = dict(merge_tag_v2)
-            summary_obj["merge_tag_v2"] = merge_tag_v2_obj
+        if not merge_v2_only:
+            if isinstance(merge_tag_v2, Mapping):
+                try:
+                    merge_tag_v2_obj = json.loads(
+                        json.dumps(merge_tag_v2, ensure_ascii=False)
+                    )
+                except TypeError:
+                    merge_tag_v2_obj = dict(merge_tag_v2)
+                summary_obj["merge_tag_v2"] = merge_tag_v2_obj
+            else:
+                existing_v2 = summary_obj.get("merge_tag_v2")
+                if existing_v2 is None:
+                    legacy_v2 = existing_summary.get("merge_tag_v2")
+                    if isinstance(legacy_v2, Mapping):
+                        try:
+                            legacy_v2_obj = json.loads(
+                                json.dumps(legacy_v2, ensure_ascii=False)
+                            )
+                        except TypeError:
+                            legacy_v2_obj = dict(legacy_v2)
+                        summary_obj["merge_tag_v2"] = legacy_v2_obj
         else:
-            existing_v2 = summary_obj.get("merge_tag_v2")
-            if existing_v2 is None:
-                legacy_v2 = existing_summary.get("merge_tag_v2")
-                if isinstance(legacy_v2, Mapping):
-                    try:
-                        legacy_v2_obj = json.loads(
-                            json.dumps(legacy_v2, ensure_ascii=False)
-                        )
-                    except TypeError:
-                        legacy_v2_obj = dict(legacy_v2)
-                    summary_obj["merge_tag_v2"] = legacy_v2_obj
+            summary_obj.pop("merge_tag_v2", None)
 
         summary_obj["pointers"] = pointers
 

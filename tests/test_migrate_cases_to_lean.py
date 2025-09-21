@@ -116,7 +116,7 @@ def test_migrate_cases_to_lean(tmp_path):
     summary = json.loads((account_dir / POINTERS["summary"]).read_text(encoding="utf-8"))
     assert summary["problem_reasons"] == ["legacy-reason"]
     assert summary["problem_tags"] == ["legacy-tag"]
-    assert summary["merge_tag"]["group_id"] == "legacy"
+    assert "merge_tag" not in summary
     assert summary["primary_issue"] == "collection"
     assert summary["pointers"] == POINTERS
 

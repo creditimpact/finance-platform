@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 
 from backend.core.logic.report_analysis import ai_sender
 
@@ -143,6 +144,21 @@ def test_process_pack_failure_records_error() -> None:
     error_events = [payload for event, payload in events if event == "ERROR"]
     assert error_events
     assert error_events[-1]["final"] is True
+
+
+def test_parse_model_payload_accepts_code_fences() -> None:
+    payload = """```json\n{\"decision\": \"merge\", \"reason\": \"context ok\"}\n```"""
+
+    parsed = ai_sender._parse_model_payload(payload)
+    decision, reason = ai_sender._sanitize_decision(parsed)
+
+    assert decision == "merge"
+    assert reason == "context ok"
+
+
+def test_sanitize_decision_rejects_unknown_value() -> None:
+    with pytest.raises(ValueError, match="Unsupported decision"):
+        ai_sender._sanitize_decision({"decision": "skip", "reason": "n/a"})
 
 
 def test_write_decision_tags_same_debt(tmp_path: Path) -> None:

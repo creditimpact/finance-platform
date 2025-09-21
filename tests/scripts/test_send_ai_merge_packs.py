@@ -3,7 +3,57 @@ from pathlib import Path
 
 import pytest
 
+from backend.pipeline.runs import RUNS_ROOT_ENV
 from scripts import send_ai_merge_packs
+from scripts.build_ai_merge_packs import main as build_ai_merge_packs_main
+
+
+def _write_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _write_raw_lines(path: Path, lines: list[str]) -> None:
+    _write_json(path, [{"text": line} for line in lines])
+
+
+def _merge_pair_tag(partner: int) -> dict:
+    return {
+        "tag": "merge_pair",
+        "kind": "merge_pair",
+        "source": "merge_scorer",
+        "with": partner,
+        "decision": "ai",
+        "total": 59,
+        "mid": 20,
+        "dates_all": False,
+        "parts": {"balance_owed": 31, "account_number": 28},
+        "aux": {
+            "acctnum_level": "last4",
+            "matched_fields": {"balance_owed": True, "last_payment": True},
+        },
+        "conflicts": ["credit_limit:conflict"],
+        "strong": True,
+    }
+
+
+def _merge_best_tag(partner: int) -> dict:
+    return {
+        "tag": "merge_best",
+        "kind": "merge_best",
+        "source": "merge_scorer",
+        "with": partner,
+        "decision": "ai",
+        "total": 59,
+        "mid": 20,
+        "parts": {"balance_owed": 31, "account_number": 28},
+        "aux": {
+            "acctnum_level": "last4",
+            "matched_fields": {"balance_owed": True, "last_payment": True},
+        },
+        "conflicts": ["credit_limit:conflict"],
+        "strong": True,
+    }
 
 
 @pytest.fixture()
@@ -11,6 +61,93 @@ def runs_root(tmp_path: Path) -> Path:
     root = tmp_path / "runs"
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def test_send_ai_merge_packs_records_merge_decision(
+    monkeypatch: pytest.MonkeyPatch, runs_root: Path
+) -> None:
+    sid = "codex-smoke"
+    accounts_root = runs_root / sid / "cases" / "accounts"
+    account_a_dir = accounts_root / "11"
+    account_b_dir = accounts_root / "16"
+
+    _write_raw_lines(
+        account_a_dir / "raw_lines.json",
+        [
+            "US BK CACS",
+            "Transunion ® Experian ® Equifax ®",
+            "Account # 409451****** -- 409451******",
+            "Balance Owed: $12,091 -- $12,091",
+            "Two-Year Payment History: 111100001111",
+            "Creditor Remarks: Late due to pandemic",
+        ],
+    )
+    _write_raw_lines(
+        account_b_dir / "raw_lines.json",
+        [
+            "U S BANK",
+            "Account # -- 409451******",
+            "Balance Owed: -- $12,091 --",
+            "Past Due Amount: --",
+            "Last Payment: 13.9.2024",
+            "Days Late - 7 Year History: 0000000",
+        ],
+    )
+
+    _write_json(account_a_dir / "tags.json", [_merge_pair_tag(16), _merge_best_tag(16)])
+    _write_json(account_b_dir / "tags.json", [_merge_best_tag(11)])
+
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+    build_ai_merge_packs_main(
+        ["--sid", sid, "--runs-root", str(runs_root), "--max-lines-per-side", "6"]
+    )
+
+    monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+
+    def _fake_decide(pack: dict, *, timeout: float):
+        assert pack["pair"] == {"a": 11, "b": 16}
+        return {"decision": "merge", "reason": "Records align cleanly."}
+
+    monkeypatch.setattr(send_ai_merge_packs, "decide_merge_or_different", _fake_decide)
+    monkeypatch.setattr(
+        send_ai_merge_packs,
+        "_isoformat_timestamp",
+        lambda dt=None: "2024-07-01T09:30:00Z",
+    )
+
+    send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
+
+    account_a_tags = json.loads((account_a_dir / "tags.json").read_text(encoding="utf-8"))
+    account_b_tags = json.loads((account_b_dir / "tags.json").read_text(encoding="utf-8"))
+
+    decision_tag_a = next(
+        tag
+        for tag in account_a_tags
+        if tag.get("kind") == "ai_decision" and tag.get("with") == 16
+    )
+    decision_tag_b = next(
+        tag
+        for tag in account_b_tags
+        if tag.get("kind") == "ai_decision" and tag.get("with") == 11
+    )
+
+    expected_decision = {
+        "kind": "ai_decision",
+        "tag": "ai_decision",
+        "source": "ai_adjudicator",
+        "decision": "merge",
+        "reason": "Records align cleanly.",
+        "at": "2024-07-01T09:30:00Z",
+    }
+
+    assert decision_tag_a == {"with": 16, **expected_decision}
+    assert decision_tag_b == {"with": 11, **expected_decision}
+
+    logs_path = runs_root / sid / "ai_packs" / "logs.txt"
+    logs_text = logs_path.read_text(encoding="utf-8")
+    assert "AI_ADJUDICATOR_RESPONSE" in logs_text
 
 
 def test_send_ai_merge_packs_writes_same_debt_tags(

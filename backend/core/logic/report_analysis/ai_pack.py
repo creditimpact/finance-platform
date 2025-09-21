@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from typing import Iterable, Mapping
 
+from . import config as merge_config
+
 WANTED_CONTEXT_KEYS: list[str] = [
     "Account #",
     "High Balance:",
@@ -211,10 +213,7 @@ def build_ai_pack_for_pair(
     raw_lines_a = _load_raw_lines(raw_a_path)
     raw_lines_b = _load_raw_lines(raw_b_path)
 
-    max_lines = _coerce_positive_int(
-        os.getenv("AI_PACK_MAX_LINES_PER_SIDE", DEFAULT_MAX_LINES),
-        DEFAULT_MAX_LINES,
-    )
+    max_lines = merge_config.get_ai_pack_max_lines_per_side()
 
     context_a = extract_context_raw(raw_lines_a, WANTED_CONTEXT_KEYS, max_lines)
     context_b = extract_context_raw(raw_lines_b, WANTED_CONTEXT_KEYS, max_lines)

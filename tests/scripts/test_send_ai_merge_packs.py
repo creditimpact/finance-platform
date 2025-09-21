@@ -98,6 +98,7 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
 
     logs_path = packs_dir / "logs.txt"
     log_lines = logs_path.read_text(encoding="utf-8").strip().splitlines()
+    assert any("AI_ADJUDICATOR_PACK_START" in line for line in log_lines)
     assert any("AI_ADJUDICATOR_REQUEST" in line for line in log_lines)
     assert any("AI_ADJUDICATOR_RESPONSE" in line for line in log_lines)
     assert any("AI_ADJUDICATOR_PACK_SUCCESS" in line for line in log_lines)
@@ -108,6 +109,50 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
     assert Path(ai_artifacts["dir"]) == packs_dir.resolve()
     assert Path(ai_artifacts["index"]) == (packs_dir / "index.json").resolve()
     assert Path(ai_artifacts["logs"]) == logs_path.resolve()
+
+
+def test_send_ai_merge_packs_logs_failure(monkeypatch: pytest.MonkeyPatch, runs_root: Path) -> None:
+    sid = "merge-case-errors"
+    packs_dir = runs_root / sid / "ai_packs"
+    packs_dir.mkdir(parents=True, exist_ok=True)
+
+    pack_payload = {
+        "messages": [
+            {"role": "system", "content": "instructions"},
+            {"role": "user", "content": "Account pair"},
+        ]
+    }
+    pack_path = packs_dir / "001-002.json"
+    pack_path.write_text(json.dumps(pack_payload), encoding="utf-8")
+    index_payload = [{"a": 1, "b": 2, "file": pack_path.name}]
+    (packs_dir / "index.json").write_text(json.dumps(index_payload), encoding="utf-8")
+
+    monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("AI_MAX_RETRIES", "0")
+
+    def _fake_decide(pack, *, timeout):
+        assert pack == pack_payload
+        return {"decision": "maybe", "reason": ""}
+
+    monkeypatch.setattr(send_ai_merge_packs, "decide_merge_or_different", _fake_decide)
+    monkeypatch.setattr(
+        send_ai_merge_packs,
+        "_isoformat_timestamp",
+        lambda dt=None: "2024-06-15T12:00:00Z",
+    )
+
+    with pytest.raises(SystemExit):
+        send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
+
+    logs_path = packs_dir / "logs.txt"
+    log_lines = logs_path.read_text(encoding="utf-8").strip().splitlines()
+    assert any("AI_ADJUDICATOR_PACK_START" in line for line in log_lines)
+    assert any("AI_ADJUDICATOR_REQUEST" in line for line in log_lines)
+    assert any("AI_ADJUDICATOR_RESPONSE" in line for line in log_lines)
+    assert any("AI_ADJUDICATOR_ERROR" in line for line in log_lines)
+    assert any("AI_ADJUDICATOR_PACK_FAILURE" in line for line in log_lines)
 
 
 def test_write_decision_tags_idempotent(tmp_path: Path) -> None:

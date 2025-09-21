@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import os
 import re
 from copy import deepcopy
@@ -13,7 +12,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
-from backend.pipeline.runs import RunManifest
+from backend.core.io.tags import read_tags, upsert_tag, write_tags
 
 __all__ = [
     "load_bureaus",
@@ -25,6 +24,8 @@ __all__ = [
     "persist_merge_tags",
     "score_and_tag_best_partners",
     "merge_v2_only_enabled",
+    "build_merge_pair_tag",
+    "build_merge_best_tag",
 ]
 
 
@@ -860,6 +861,14 @@ def score_all_pairs_0_100(
                 "matched_fields": aux_payload.get("matched_fields", {}),
             }
             logger.info("MERGE_SCORE %s", json.dumps(score_log, sort_keys=True))
+            compact_score = {
+                "sid": sid,
+                "i": left,
+                "j": right,
+                "total": total_score,
+                "decision": str(result.get("decision", "different")),
+            }
+            logger.info("MERGE_V2_SCORE %s", json.dumps(compact_score, sort_keys=True))
 
             for event in result.get("trigger_events", []) or []:
                 if not isinstance(event, Mapping):
@@ -873,17 +882,25 @@ def score_all_pairs_0_100(
                     "details": event.get("details", {}),
                 }
                 logger.info("MERGE_TRIGGER %s", json.dumps(trigger_log, sort_keys=True))
+                if kind in {"strong", "mid", "dates", "total"}:
+                    logger.info(
+                        "MERGE_V2_TRIGGER %s",
+                        json.dumps(trigger_log, sort_keys=True),
+                    )
 
             decision_log = {
                 "sid": sid,
                 "i": left,
                 "j": right,
-                "decision": result.get("decision", "different"),
+                "decision": str(result.get("decision", "different")),
                 "total": total_score,
                 "triggers": list(result.get("triggers", [])),
                 "conflicts": list(result.get("conflicts", [])),
             }
             logger.info("MERGE_DECISION %s", json.dumps(decision_log, sort_keys=True))
+            logger.info(
+                "MERGE_V2_DECISION %s", json.dumps(decision_log, sort_keys=True)
+            )
 
             scores[left][right] = deepcopy(result)
             scores[right][left] = deepcopy(result)
@@ -1105,6 +1122,138 @@ def _build_best_match_entry(
     }
 
 
+def _tag_safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _tag_normalize_str_list(values: Any) -> List[str]:
+    if isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
+        return [str(item) for item in values if item is not None]
+    return []
+
+
+def _tag_normalize_merge_parts(parts: Any) -> Dict[str, int]:
+    normalized: Dict[str, int] = {}
+    if isinstance(parts, Mapping):
+        for key in sorted(parts.keys(), key=str):
+            normalized[str(key)] = _tag_safe_int(parts.get(key))
+    return normalized
+
+
+def _tag_normalize_merge_aux(aux: Any) -> Dict[str, Any]:
+    acct_level = "none"
+    by_field_pairs: Dict[str, List[str]] = {}
+    matched_fields: Dict[str, bool] = {}
+
+    if isinstance(aux, Mapping):
+        acct_aux = aux.get("account_number")
+        if isinstance(acct_aux, Mapping):
+            level = acct_aux.get("acctnum_level")
+            if isinstance(level, str) and level:
+                acct_level = level
+
+        for field, field_aux in aux.items():
+            if not isinstance(field_aux, Mapping):
+                continue
+            if "matched" in field_aux:
+                matched_fields[str(field)] = bool(field_aux.get("matched"))
+            best_pair = field_aux.get("best_pair")
+            if (
+                isinstance(best_pair, (list, tuple))
+                and len(best_pair) == 2
+                and all(part is not None for part in best_pair)
+            ):
+                by_field_pairs[str(field)] = [
+                    str(best_pair[0]),
+                    str(best_pair[1]),
+                ]
+
+    return {
+        "acctnum_level": acct_level,
+        "by_field_pairs": by_field_pairs,
+        "matched_fields": matched_fields,
+    }
+
+
+def _normalize_merge_payload_for_tag(
+    result: Mapping[str, Any] | None,
+) -> Dict[str, Any]:
+    payload = {
+        "decision": "different",
+        "total": 0,
+        "mid": 0,
+        "dates_all": False,
+        "parts": {},
+        "aux": {
+            "acctnum_level": "none",
+            "by_field_pairs": {},
+            "matched_fields": {},
+        },
+        "reasons": [],
+        "conflicts": [],
+        "strong": False,
+    }
+
+    if isinstance(result, Mapping):
+        payload["decision"] = str(result.get("decision", "different"))
+        payload["total"] = _tag_safe_int(result.get("total"))
+        payload["mid"] = _tag_safe_int(result.get("mid_sum"))
+        payload["dates_all"] = bool(result.get("dates_all"))
+        payload["parts"] = _tag_normalize_merge_parts(result.get("parts"))
+        payload["aux"] = _tag_normalize_merge_aux(result.get("aux"))
+        payload["reasons"] = _tag_normalize_str_list(result.get("triggers"))
+        payload["conflicts"] = _tag_normalize_str_list(result.get("conflicts"))
+
+    payload["strong"] = any(
+        isinstance(reason, str) and reason.startswith("strong:")
+        for reason in payload["reasons"]
+    )
+
+    return payload
+
+
+def build_merge_pair_tag(partner_idx: int, result: Mapping[str, Any]) -> Dict[str, Any]:
+    payload = _normalize_merge_payload_for_tag(result)
+    payload.update(
+        {
+            "tag": "merge_pair",
+            "kind": "merge_pair",
+            "source": "merge_scorer",
+            "with": int(partner_idx),
+        }
+    )
+    return payload
+
+
+def build_merge_best_tag(best_info: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(best_info, Mapping):
+        return None
+
+    partner = best_info.get("partner_index")
+    result = best_info.get("result")
+    if not isinstance(partner, int) or not isinstance(result, Mapping):
+        return None
+
+    payload = _normalize_merge_payload_for_tag(result)
+    payload.update(
+        {
+            "tag": "merge_best",
+            "kind": "merge_best",
+            "source": "merge_scorer",
+            "with": int(partner),
+            "tiebreaker": str(best_info.get("tiebreaker", "none")),
+            "strong_rank": _tag_safe_int(best_info.get("strong_rank")),
+            "score_total": _tag_safe_int(
+                best_info.get("score_total", payload["total"])
+            ),
+        }
+    )
+    return payload
+
+
 def _build_score_entries(
     partner_scores: Mapping[int, Mapping[str, Any]],
     best_partner: Optional[int],
@@ -1199,9 +1348,20 @@ def persist_merge_tags(
     merge_tags: Dict[int, Dict[str, Any]] = {}
     all_indices = sorted(set(scores_by_idx.keys()) | set(best_by_idx.keys()))
 
-    pair_payloads: Dict[int, Dict[int, Dict[str, Any]]] = {idx: {} for idx in all_indices}
-    processed_pairs: Set[Tuple[int, int]] = set()
+    tags_root = runs_root / sid / "cases" / "accounts"
+    tag_paths: Dict[int, Path] = {
+        idx: tags_root / str(idx) / "tags.json" for idx in all_indices
+    }
 
+    merge_kinds = {"merge_pair", "merge_best"}
+    for idx, path in tag_paths.items():
+        existing_tags = read_tags(path)
+        filtered = [tag for tag in existing_tags if tag.get("kind") not in merge_kinds]
+        if filtered != existing_tags:
+            write_tags(path, filtered)
+
+    valid_decisions = {"ai", "auto"}
+    processed_pairs: Set[Tuple[int, int]] = set()
     for left in sorted(scores_by_idx.keys()):
         partner_map = scores_by_idx.get(left) or {}
         for right in sorted(partner_map.keys()):
@@ -1210,56 +1370,37 @@ def persist_merge_tags(
             ordered = (min(left, right), max(left, right))
             if ordered in processed_pairs:
                 continue
-
-            result = partner_map.get(right)
-            result_mapping: Mapping[str, Any]
-            if isinstance(result, Mapping):
-                result_mapping = result
-            else:
-                result_mapping = {}
-
-            left_entry = _build_pair_entry(right, result_mapping)
-            right_entry = _build_pair_entry(left, result_mapping)
-
-            pair_payloads.setdefault(left, {})[right] = left_entry
-            pair_payloads.setdefault(right, {})[left] = right_entry
-
             processed_pairs.add(ordered)
 
-    merge_tag_v2_map: Dict[int, Dict[str, Any]] = {}
-    for idx in all_indices:
-        partner_entries = pair_payloads.get(idx, {}) or {}
-        sorted_pairs: List[Dict[str, Any]] = []
-        for partner_idx in sorted(partner_entries.keys()):
-            entry = partner_entries.get(partner_idx)
-            if isinstance(entry, Mapping):
-                sorted_pairs.append(dict(entry))
+            result = partner_map.get(right)
+            if not isinstance(result, Mapping):
+                continue
 
-        best_payload = _build_best_match_entry(best_by_idx.get(idx), partner_entries)
-        merge_tag_v2: Dict[str, Any] = {"pairs": sorted_pairs}
-        if best_payload is not None:
-            merge_tag_v2["best_match"] = best_payload
-        merge_tag_v2_map[idx] = merge_tag_v2
+            left_tag = build_merge_pair_tag(right, result)
+            if left_tag.get("decision") in valid_decisions:
+                left_path = tag_paths.get(left)
+                if left_path is not None:
+                    upsert_tag(left_path, left_tag, ("kind", "with"))
+
+                right_tag = build_merge_pair_tag(left, result)
+                right_path = tag_paths.get(right)
+                if right_path is not None:
+                    upsert_tag(right_path, right_tag, ("kind", "with"))
+
+    for idx in all_indices:
+        best_info = best_by_idx.get(idx, {})
+        best_tag = build_merge_best_tag(best_info)
+        if not best_tag or best_tag.get("decision") not in valid_decisions:
+            continue
+        path = tag_paths.get(idx)
+        if path is not None:
+            upsert_tag(path, best_tag, ("kind",))
 
     for idx in all_indices:
         partner_scores = scores_by_idx.get(idx, {})
         best_info = best_by_idx.get(idx, {})
         merge_tag = _merge_tag_from_best(idx, partner_scores, best_info)
         merge_tags[idx] = merge_tag
-        merge_tag_v2 = merge_tag_v2_map.get(idx, {"pairs": []})
-        _persist_merge_tag(sid, idx, merge_tag, runs_root, None, merge_tag_v2)
-        logger.info(
-            "MERGE_TAG sid=<%s> idx=<%s> decision=<%s> score=<%s> tiebreaker=<%s>",
-            sid,
-            idx,
-            merge_tag.get("decision"),
-            merge_tag.get("score_total"),
-            merge_tag.get("tiebreaker"),
-        )
-
-    if os.getenv("WRITE_AI_PACK", "0") == "1":
-        # Placeholder for future optional AI pack writes.
-        pass
 
     return merge_tags
 
@@ -1478,183 +1619,3 @@ def normalize_type(value: Any) -> Optional[str]:
 
     return normalized or None
 
-
-def _manifest_group_key(acc_idx: int) -> str:
-    return f"cases.accounts.{acc_idx}"
-
-
-def _manifest_path(
-    manifest: Optional[RunManifest], group: str, key: str
-) -> Optional[Path]:
-    if manifest is None:
-        return None
-    try:
-        return Path(manifest.get(group, key))
-    except KeyError:
-        return None
-
-
-def _normalize_pair_entry(entry: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
-    if not isinstance(entry, Mapping):
-        return None
-
-    partner = entry.get("with")
-    try:
-        partner_idx = int(partner)
-    except (TypeError, ValueError):
-        return None
-
-    normalized = dict(entry)
-    normalized["with"] = partner_idx
-
-    try:
-        normalized["total"] = int(entry.get("total", 0) or 0)
-    except (TypeError, ValueError):
-        normalized["total"] = 0
-
-    normalized["decision"] = str(entry.get("decision", "different"))
-    normalized["strong"] = bool(entry.get("strong"))
-
-    try:
-        normalized["mid"] = int(entry.get("mid", 0) or 0)
-    except (TypeError, ValueError):
-        normalized["mid"] = 0
-
-    normalized["dates_all"] = bool(entry.get("dates_all"))
-    normalized["acctnum_level"] = str(entry.get("acctnum_level", "none") or "none")
-
-    reasons = entry.get("reasons", [])
-    if isinstance(reasons, Iterable) and not isinstance(reasons, (str, bytes)):
-        normalized["reasons"] = [str(reason) for reason in reasons if reason is not None]
-    else:
-        normalized["reasons"] = [str(reasons)] if reasons not in (None, "") else []
-
-    normalized["parts"] = _sanitize_parts(entry.get("parts"))
-
-    return normalized
-
-
-def _normalize_best_match(entry: Any) -> Optional[Dict[str, Any]]:
-    if not isinstance(entry, Mapping):
-        return None
-
-    partner = entry.get("with")
-    try:
-        partner_idx = int(partner)
-    except (TypeError, ValueError):
-        return None
-
-    normalized = dict(entry)
-    normalized["with"] = partner_idx
-
-    try:
-        normalized["total"] = int(entry.get("total", 0) or 0)
-    except (TypeError, ValueError):
-        normalized["total"] = 0
-
-    normalized["decision"] = str(entry.get("decision", "different"))
-    normalized["tiebreaker"] = str(entry.get("tiebreaker", "none"))
-
-    return normalized
-
-
-def _merge_merge_tag_v2(
-    existing_payload: Any, update_payload: Mapping[str, Any]
-) -> Dict[str, Any]:
-    merged_pairs: Dict[int, Dict[str, Any]] = {}
-
-    if isinstance(existing_payload, Mapping):
-        for entry in existing_payload.get("pairs", []) or []:
-            normalized = _normalize_pair_entry(entry)
-            if normalized is None:
-                continue
-            merged_pairs[int(normalized["with"])] = normalized
-
-    if isinstance(update_payload, Mapping):
-        for entry in update_payload.get("pairs", []) or []:
-            normalized = _normalize_pair_entry(entry)
-            if normalized is None:
-                continue
-            merged_pairs[int(normalized["with"])] = normalized
-
-    ordered_pairs = [merged_pairs[key] for key in sorted(merged_pairs.keys())]
-
-    merged: Dict[str, Any] = {"pairs": ordered_pairs}
-
-    best_entry: Any = None
-    if isinstance(update_payload, Mapping):
-        best_entry = update_payload.get("best_match")
-    if best_entry is None and isinstance(existing_payload, Mapping):
-        best_entry = existing_payload.get("best_match")
-
-    normalized_best = _normalize_best_match(best_entry)
-    if normalized_best is not None:
-        merged["best_match"] = normalized_best
-
-    return merged
-
-
-def _persist_merge_tag(
-    sid: str,
-    account_index: Optional[int],
-    merge_tag: Mapping[str, Any],
-    runs_root_path: Optional[Path],
-    manifest: Optional[RunManifest],
-    merge_tag_v2: Optional[Mapping[str, Any]] = None,
-) -> None:
-    if merge_v2_only_enabled():
-        return
-
-    if runs_root_path is None or not sid or not isinstance(account_index, int):
-        return
-
-    summary_path = _manifest_path(
-        manifest, _manifest_group_key(account_index), "summary"
-    )
-    if summary_path is None:
-        summary_path = (
-            runs_root_path
-            / sid
-            / "cases"
-            / "accounts"
-            / str(account_index)
-            / "summary.json"
-        )
-
-    summary_dir = summary_path.parent
-    if not summary_dir.exists():
-        return
-
-    summary_obj: Dict[str, Any] = {}
-    if summary_path.exists():
-        try:
-            summary_obj = json.loads(summary_path.read_text(encoding="utf-8"))
-            if not isinstance(summary_obj, dict):
-                summary_obj = {}
-        except Exception:
-            summary_obj = {}
-
-    try:
-        sanitized = json.loads(json.dumps(merge_tag, ensure_ascii=False))
-    except TypeError:
-        sanitized = dict(merge_tag)
-
-    summary_obj["merge_tag"] = sanitized
-
-    if merge_tag_v2 is not None:
-        combined_v2 = _merge_merge_tag_v2(summary_obj.get("merge_tag_v2"), merge_tag_v2)
-        try:
-            sanitized_v2 = json.loads(json.dumps(combined_v2, ensure_ascii=False))
-        except TypeError:
-            sanitized_v2 = combined_v2
-        summary_obj["merge_tag_v2"] = sanitized_v2
-
-    try:
-        summary_path.write_text(
-            json.dumps(summary_obj, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        logger.exception(
-            "MERGE_SCORE sid=<%s> summary_write_failed path=%s", sid, summary_path
-        )

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
 from backend.core.io.tags import read_tags, upsert_tag, write_tags
+from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 
 __all__ = [
     "load_bureaus",
@@ -1010,6 +1011,46 @@ def _build_aux_payload(aux: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _build_ai_highlights(result: Mapping[str, Any] | None) -> Dict[str, Any]:
+    result_payload: Mapping[str, Any] = result if isinstance(result, Mapping) else {}
+
+    total = _tag_safe_int(result_payload.get("total"))
+
+    triggers_raw = result_payload.get("triggers", []) or []
+    if isinstance(triggers_raw, Iterable) and not isinstance(triggers_raw, (str, bytes)):
+        triggers = [str(item) for item in triggers_raw if item is not None]
+    else:
+        triggers = []
+
+    conflicts_raw = result_payload.get("conflicts", []) or []
+    if isinstance(conflicts_raw, Iterable) and not isinstance(conflicts_raw, (str, bytes)):
+        conflicts = [str(item) for item in conflicts_raw if item is not None]
+    else:
+        conflicts = []
+
+    parts = _sanitize_parts(result_payload.get("parts"))
+    aux_payload = _build_aux_payload(result_payload.get("aux", {}))
+
+    matched_fields_raw = aux_payload.get("matched_fields", {})
+    if isinstance(matched_fields_raw, Mapping):
+        matched_fields = {
+            str(field): bool(flag) for field, flag in matched_fields_raw.items()
+        }
+    else:
+        matched_fields = {}
+
+    acctnum_level = str(aux_payload.get("acctnum_level", "none") or "none")
+
+    return {
+        "total": total,
+        "triggers": triggers,
+        "parts": parts,
+        "matched_fields": matched_fields,
+        "conflicts": conflicts,
+        "acctnum_level": acctnum_level,
+    }
+
+
 def _sanitize_parts(parts: Optional[Mapping[str, Any]]) -> Dict[str, int]:
     values: Dict[str, int] = {}
     for field in _FIELD_SEQUENCE:
@@ -1386,6 +1427,16 @@ def persist_merge_tags(
                 right_path = tag_paths.get(right)
                 if right_path is not None:
                     upsert_tag(right_path, right_tag, ("kind", "with"))
+
+                if left_tag.get("decision") == "ai":
+                    highlights_from_pair = _build_ai_highlights(result)
+                    build_ai_pack_for_pair(
+                        sid,
+                        runs_root,
+                        left,
+                        right,
+                        highlights_from_pair,
+                    )
 
     for idx in all_indices:
         best_info = best_by_idx.get(idx, {})

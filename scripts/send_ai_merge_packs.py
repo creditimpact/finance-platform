@@ -246,8 +246,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         total += 1
 
         log = _log_factory(logs_path, sid, {"a": a_idx, "b": b_idx}, pack_path.name)
+        log(
+            "PACK_START",
+            {
+                "max_attempts": max_attempts,
+            },
+        )
         attempts = 0
         decision_payload: Mapping[str, object] | None = None
+        last_error: Exception | None = None
 
         while attempts < max_attempts:
             attempts += 1
@@ -262,6 +269,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             except KeyboardInterrupt:
                 raise
             except Exception as exc:
+                last_error = exc
                 log(
                     "ERROR",
                     {
@@ -296,6 +304,14 @@ def main(argv: Sequence[str] | None = None) -> None:
                 break
 
         if decision_payload is None:
+            error_name = last_error.__class__.__name__ if last_error else "UnknownError"
+            log(
+                "PACK_FAILURE",
+                {
+                    "attempts": attempts,
+                    "error": error_name,
+                },
+            )
             failures += 1
             continue
 
@@ -310,6 +326,13 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "attempt": attempts,
                     "error": "InvalidDecision",
                     "message": "Decision payload missing required fields",
+                },
+            )
+            log(
+                "PACK_FAILURE",
+                {
+                    "attempts": attempts,
+                    "error": "InvalidDecision",
                 },
             )
             failures += 1

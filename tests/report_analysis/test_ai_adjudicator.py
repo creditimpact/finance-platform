@@ -17,6 +17,18 @@ def _sample_pack() -> dict:
     }
 
 
+def _enable_ai(monkeypatch) -> None:
+    monkeypatch.setattr(config, "ENABLE_AI_ADJUDICATOR", True)
+    monkeypatch.setattr(config, "AI_MODEL_ID", "gpt-test")
+    monkeypatch.setattr(config, "AI_TEMPERATURE_DEFAULT", 0.0)
+    monkeypatch.setattr(config, "AI_MAX_TOKENS", 256)
+    monkeypatch.setattr(config, "AI_REQUEST_TIMEOUT_S", 5)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1")
+    monkeypatch.setenv("AI_REQUEST_TIMEOUT_S", "3.5")
+
+
 def test_adjudicate_pair_disabled(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "ENABLE_AI_ADJUDICATOR", False)
 
@@ -74,15 +86,7 @@ def test_adjudicate_pair_disabled(monkeypatch, tmp_path):
 
 
 def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
-    monkeypatch.setattr(config, "ENABLE_AI_ADJUDICATOR", True)
-    monkeypatch.setattr(config, "AI_MODEL_ID", "gpt-test")
-    monkeypatch.setattr(config, "AI_TEMPERATURE_DEFAULT", 0.0)
-    monkeypatch.setattr(config, "AI_MAX_TOKENS", 256)
-    monkeypatch.setattr(config, "AI_REQUEST_TIMEOUT_S", 5)
-
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1")
-    monkeypatch.setenv("AI_REQUEST_TIMEOUT_S", "3.5")
+    _enable_ai(monkeypatch)
 
     captured: dict = {}
 
@@ -167,6 +171,85 @@ def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
         "decision": "merge",
         "confidence": 0.83,
         "reasons": ["matched creditor names"],
+        "source": "ai_adjudicator",
+    }
+
+    assert tags_a == [expected_a]
+    assert tags_b == [expected_b]
+
+
+def test_adjudicate_pair_enabled_no_merge(monkeypatch, tmp_path):
+    _enable_ai(monkeypatch)
+
+    def _fake_post(url, json=None, headers=None, timeout=None):
+        class _Resp:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": jsonlib.dumps(
+                                    {
+                                        "decision": "no_merge",
+                                        "confidence": 0.41,
+                                        "reasons": ["conflicting payment history"],
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+
+        return _Resp()
+
+    monkeypatch.setattr(ai_adjudicator.httpx, "post", _fake_post)
+
+    pack = _sample_pack()
+    resp = ai_adjudicator.adjudicate_pair(pack)
+
+    assert resp == {
+        "decision": "no_merge",
+        "confidence": 0.41,
+        "reasons": ["conflicting payment history"],
+    }
+
+    ai_adjudicator.persist_ai_decision("case-123", tmp_path, 11, 16, resp)
+
+    base = tmp_path / "case-123" / "cases" / "accounts"
+    path_a = base / "11" / "ai" / "decision_pair_11_16.json"
+    path_b = base / "16" / "ai" / "decision_pair_16_11.json"
+
+    saved_a = jsonlib.loads(path_a.read_text(encoding="utf-8"))
+    saved_b = jsonlib.loads(path_b.read_text(encoding="utf-8"))
+
+    assert saved_a["decision"] == "no_merge"
+    assert saved_a["confidence"] == 0.41
+    assert saved_b["decision"] == "no_merge"
+    assert saved_b["reasons"] == ["conflicting payment history"]
+
+    tags_a_path = base / "11" / "tags.json"
+    tags_b_path = base / "16" / "tags.json"
+
+    tags_a = jsonlib.loads(tags_a_path.read_text(encoding="utf-8"))
+    tags_b = jsonlib.loads(tags_b_path.read_text(encoding="utf-8"))
+
+    expected_a = {
+        "kind": "merge_result",
+        "with": 16,
+        "decision": "no_merge",
+        "confidence": 0.41,
+        "reasons": ["conflicting payment history"],
+        "source": "ai_adjudicator",
+    }
+    expected_b = {
+        "kind": "merge_result",
+        "with": 11,
+        "decision": "no_merge",
+        "confidence": 0.41,
+        "reasons": ["conflicting payment history"],
         "source": "ai_adjudicator",
     }
 

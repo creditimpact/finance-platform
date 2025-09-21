@@ -125,7 +125,6 @@ def preview_pair_pack(
         a_idx,
         b_idx,
         highlights,
-        overwrite=True,
     )
 
     pair = pack.get("pair", {})
@@ -141,8 +140,8 @@ def preview_pair_pack(
         )
     )
 
-    pack_path = runs_root / sid / "cases" / "accounts" / str(a_idx) / "ai" / f"pack_pair_{a_idx}_{b_idx}.json"
-    print(f"Pack path (A side): {pack_path}")
+    pack_path = runs_root / sid / "ai_packs" / f"{a_idx:03d}-{b_idx:03d}.json"
+    print(f"Pack path: {pack_path}")
 
     print("Highlights:")
     print(json.dumps(highlights_payload, ensure_ascii=False, indent=2, sort_keys=True))

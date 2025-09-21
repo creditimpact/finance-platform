@@ -26,12 +26,6 @@ def _write_json_file(path: Path, payload: object) -> None:
     path.write_text(serialized + "\n", encoding="utf-8")
 
 
-def _resolve_out_dir(base: Path, sid: str, out_dir_arg: str | None) -> Path:
-    if out_dir_arg:
-        return Path(out_dir_arg)
-    return base / sid / "ai_packs"
-
-
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sid", required=True, help="Session identifier")
@@ -39,11 +33,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--runs-root",
         default="runs",
         help="Root directory containing runs/<SID> outputs",
-    )
-    parser.add_argument(
-        "--out-dir",
-        default=None,
-        help="Optional output directory for packs (defaults to runs/<SID>/ai_packs)",
     )
     parser.add_argument(
         "--max-lines-per-side",
@@ -69,7 +58,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     sid = str(args.sid)
     runs_root = Path(args.runs_root)
-    out_dir = _resolve_out_dir(runs_root, sid, args.out_dir)
+    out_dir = runs_root / sid / "ai_packs"
 
     packs = build_merge_ai_packs(
         sid,
@@ -101,9 +90,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     persist_manifest(
         manifest,
         artifacts={
-            "ai": {
-                "packs_dir": out_dir,
-                "packs_index": index_path,
+            "ai_packs": {
+                "dir": out_dir,
+                "index": index_path,
                 "logs": logs_path,
             }
         },

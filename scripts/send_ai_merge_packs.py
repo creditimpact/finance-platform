@@ -136,6 +136,10 @@ def _ensure_int(value: object, label: str) -> int:
 
 
 def _should_mark_same_debt(payload: Mapping[str, object]) -> bool:
+    decision = str(payload.get("decision") or "")
+    if decision.strip().lower() == "same_debt":
+        return True
+
     reason = str(payload.get("reason") or "")
     if "same debt" in reason.lower():
         return True
@@ -172,7 +176,7 @@ def _write_decision_tags(
             "reason": reason,
             "at": timestamp,
         }
-        upsert_tag(tag_path, decision_tag, ("kind", "with", "source"))
+        upsert_tag(tag_path, decision_tag, unique_keys=("kind", "with", "source"))
 
         if same_debt:
             same_debt_tag = {
@@ -182,7 +186,7 @@ def _write_decision_tags(
                 "reason": reason,
                 "at": timestamp,
             }
-            upsert_tag(tag_path, same_debt_tag, ("kind", "with", "source"))
+            upsert_tag(tag_path, same_debt_tag, unique_keys=("kind", "with", "source"))
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -299,7 +303,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         reason_raw = decision_payload.get("reason")
         decision = str(decision_raw).strip() if decision_raw is not None else ""
         reason = str(reason_raw).strip() if reason_raw is not None else ""
-        if decision not in {"merge", "different"} or not reason:
+        if decision not in {"merge", "different", "same_debt"} or not reason:
             log(
                 "ERROR",
                 {
@@ -327,6 +331,14 @@ def main(argv: Sequence[str] | None = None) -> None:
             reason,
             timestamp,
             payload_for_tags,
+        )
+        log(
+            "PACK_SUCCESS",
+            {
+                "attempts": attempts,
+                "decision": decision,
+                "reason": reason,
+            },
         )
         successes += 1
 

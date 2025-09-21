@@ -367,8 +367,8 @@ def persist_ai_decision(
     tag_path_a = base / str(account_a) / "tags.json"
     tag_path_b = base / str(account_b) / "tags.json"
 
-    upsert_tag(tag_path_a, tag_a, ("kind", "with", "source"))
-    upsert_tag(tag_path_b, tag_b, ("kind", "with", "source"))
+    upsert_tag(tag_path_a, tag_a, unique_keys=("kind", "with", "source"))
+    upsert_tag(tag_path_b, tag_b, unique_keys=("kind", "with", "source"))
 
     tag_log = {
         "sid": sid_str,

@@ -22,7 +22,7 @@ def test_upsert_tag_updates_without_duplicates(tmp_path: Path) -> None:
         "score": 87,
     }
 
-    upsert_tag(account_dir, initial, ("kind", "with"))
+    upsert_tag(account_dir, initial, unique_keys=("kind", "with"))
 
     update_payload = {
         "kind": "merge_pair",
@@ -32,7 +32,7 @@ def test_upsert_tag_updates_without_duplicates(tmp_path: Path) -> None:
         "reason": "new_context",
     }
 
-    upsert_tag(account_dir, update_payload, ("kind", "with"))
+    upsert_tag(account_dir, update_payload, unique_keys=("kind", "with"))
 
     tags = read_tags(account_dir)
     assert len(tags) == 1

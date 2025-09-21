@@ -466,7 +466,7 @@ def _build_problem_cases_lean(
 
         issue_tag = _build_issue_tag(summary_obj)
         if issue_tag is not None:
-            upsert_tag(tags_path, issue_tag, ("kind",))
+            upsert_tag(tags_path, issue_tag, unique_keys=("kind",))
 
         if manifest is None:
             legacy_id = str(account_id) if account_id is not None else f"idx-{idx:03d}"
@@ -585,11 +585,11 @@ def _build_problem_cases_lean(
             continue
         left_path = tag_paths.get(left)
         if left_path is not None:
-            upsert_tag(left_path, pair_left, ("kind", "with"))
+            upsert_tag(left_path, pair_left, unique_keys=("kind", "with"))
         right_path = tag_paths.get(right)
         if right_path is not None:
             pair_right = build_merge_pair_tag(left, result)
-            upsert_tag(right_path, pair_right, ("kind", "with"))
+            upsert_tag(right_path, pair_right, unique_keys=("kind", "with"))
 
     for idx in written_indices:
         best_tag = build_merge_best_tag(best_partners.get(idx, {}))
@@ -599,7 +599,7 @@ def _build_problem_cases_lean(
             continue
         path = tag_paths.get(idx)
         if path is not None:
-            upsert_tag(path, best_tag, ("kind",))
+            upsert_tag(path, best_tag, unique_keys=("kind",))
 
     logger.info(
         "PROBLEM_CASES done sid=%s total=%d problematic=%d out=%s",

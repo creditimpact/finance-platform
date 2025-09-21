@@ -89,16 +89,16 @@ def write_tags_atomic(account_dir: os.PathLike | str, tags: Iterable[Mapping[str
         raise
 
 
-def _build_key(tag: Mapping[str, object], key_fields: Sequence[str]) -> Tuple[object, ...]:
-    return tuple(tag.get(field) for field in key_fields)
+def _build_key(tag: Mapping[str, object], unique_keys: Sequence[str]) -> Tuple[object, ...]:
+    return tuple(tag.get(field) for field in unique_keys)
 
 
 def upsert_tag(
     account_dir: os.PathLike | str,
     new_tag: Mapping[str, object],
-    key_fields: Sequence[str] = ("kind", "with", "source"),
+    unique_keys: Sequence[str] = ("kind", "with", "source"),
 ) -> None:
-    """Upsert ``new_tag`` keyed by ``key_fields`` without introducing duplicates."""
+    """Upsert ``new_tag`` keyed by ``unique_keys`` without introducing duplicates."""
 
     if not isinstance(new_tag, MappingABC):
         raise TypeError("new_tag must be a mapping")
@@ -111,7 +111,7 @@ def upsert_tag(
 
     for entry in tags:
         mapping = _ensure_mapping(entry, location=tag_path)
-        key = _build_key(mapping, key_fields)
+        key = _build_key(mapping, unique_keys)
         if key in index_by_key:
             existing = unique[index_by_key[key]].copy()
             existing.update(mapping)
@@ -120,7 +120,7 @@ def upsert_tag(
             index_by_key[key] = len(unique)
             unique.append(dict(mapping))
 
-    new_key = _build_key(new_tag, key_fields)
+    new_key = _build_key(new_tag, unique_keys)
     if new_key in index_by_key:
         idx = index_by_key[new_key]
         merged = unique[idx].copy()

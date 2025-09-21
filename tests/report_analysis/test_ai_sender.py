@@ -212,6 +212,64 @@ def test_write_decision_tags_same_debt(tmp_path: Path) -> None:
     ]
 
 
+def test_write_decision_tags_idempotent(tmp_path: Path) -> None:
+    args = (
+        tmp_path,
+        "case-010",
+        5,
+        6,
+        "same_debt",
+        "matching tradeline",
+        "2024-06-30T12:00:00Z",
+    )
+
+    ai_sender.write_decision_tags(*args)
+    # Calling a second time should not create duplicate tags.
+    ai_sender.write_decision_tags(*args)
+
+    base = tmp_path / "case-010" / "cases" / "accounts"
+    tags_a = json.loads((base / "5" / "tags.json").read_text(encoding="utf-8"))
+    tags_b = json.loads((base / "6" / "tags.json").read_text(encoding="utf-8"))
+
+    expected_a = [
+        {
+            "at": "2024-06-30T12:00:00Z",
+            "decision": "same_debt",
+            "kind": "ai_decision",
+            "reason": "matching tradeline",
+            "source": "ai_adjudicator",
+            "tag": "ai_decision",
+            "with": 6,
+        },
+        {
+            "at": "2024-06-30T12:00:00Z",
+            "kind": "same_debt_pair",
+            "source": "ai_adjudicator",
+            "with": 6,
+        },
+    ]
+    expected_b = [
+        {
+            "at": "2024-06-30T12:00:00Z",
+            "decision": "same_debt",
+            "kind": "ai_decision",
+            "reason": "matching tradeline",
+            "source": "ai_adjudicator",
+            "tag": "ai_decision",
+            "with": 5,
+        },
+        {
+            "at": "2024-06-30T12:00:00Z",
+            "kind": "same_debt_pair",
+            "source": "ai_adjudicator",
+            "with": 5,
+        },
+    ]
+
+    assert tags_a == expected_a
+    assert tags_b == expected_b
+
+
 def test_write_error_tags(tmp_path: Path) -> None:
     ai_sender.write_error_tags(
         tmp_path,

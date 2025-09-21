@@ -82,3 +82,44 @@ def test_build_ai_pack_for_pair_creates_packs(tmp_path, monkeypatch):
     assert saved_b["pair"] == {"a": 16, "b": 11}
     assert saved_b["context"]["a"][0] == "U S BANK"
     assert saved_b["context"]["b"][0] == "US BK CACS"
+
+
+def test_build_ai_pack_for_pair_writes_symmetrically(tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_PACK_MAX_LINES_PER_SIDE", "3")
+
+    sid = "sample-symmetric"
+    runs_root = tmp_path
+    accounts_root = runs_root / sid / "cases" / "accounts"
+
+    account_a_dir = accounts_root / "201"
+    account_b_dir = accounts_root / "305"
+
+    _write_raw_lines(
+        account_a_dir / "raw_lines.json",
+        ["Creditor A", "Account # 1111", "Balance Owed: $100"],
+    )
+    _write_raw_lines(
+        account_b_dir / "raw_lines.json",
+        ["Creditor B", "Account # 2222", "Balance Owed: $200"],
+    )
+
+    highlights = {"total": 42, "triggers": ["strong:balance"]}
+
+    first_pack = build_ai_pack_for_pair(sid, runs_root, 201, 305, highlights)
+
+    pack_a_path = account_a_dir / "ai" / "pack_pair_201_305.json"
+    pack_b_path = account_b_dir / "ai" / "pack_pair_305_201.json"
+
+    assert pack_a_path.exists()
+    assert pack_b_path.exists()
+
+    second_pack = build_ai_pack_for_pair(sid, runs_root, 305, 201, highlights)
+
+    # Reversing the inputs should still leave the artifacts mirrored correctly.
+    saved_a = json.loads(pack_a_path.read_text(encoding="utf-8"))
+    saved_b = json.loads(pack_b_path.read_text(encoding="utf-8"))
+
+    assert saved_a == first_pack
+    assert saved_b["pair"] == {"a": 305, "b": 201}
+    assert second_pack["pair"] == {"a": 305, "b": 201}
+    assert saved_b == second_pack

@@ -333,7 +333,11 @@ def write_decision_tags(
 
     for source_idx, other_idx in ((account_a, account_b), (account_b, account_a)):
         tag_path = os.path.join(base, str(source_idx), "tags.json")
-        upsert_tag(tag_path, _tag_payload(source_idx, other_idx), ("kind", "with", "source"))
+        upsert_tag(
+            tag_path,
+            _tag_payload(source_idx, other_idx),
+            unique_keys=("kind", "with", "source"),
+        )
         if decision == "same_debt":
             same_debt_tag = {
                 "kind": "same_debt_pair",
@@ -341,7 +345,11 @@ def write_decision_tags(
                 "source": "ai_adjudicator",
                 "at": at,
             }
-            upsert_tag(tag_path, same_debt_tag, ("kind", "with", "source"))
+            upsert_tag(
+                tag_path,
+                same_debt_tag,
+                unique_keys=("kind", "with", "source"),
+            )
 
 
 def write_error_tags(
@@ -372,7 +380,11 @@ def write_error_tags(
 
     for source_idx, other_idx in ((account_a, account_b), (account_b, account_a)):
         tag_path = os.path.join(base, str(source_idx), "tags.json")
-        upsert_tag(tag_path, _payload(other_idx), ("kind", "with", "source"))
+        upsert_tag(
+            tag_path,
+            _payload(other_idx),
+            unique_keys=("kind", "with", "source"),
+        )
 
 
 __all__ = [

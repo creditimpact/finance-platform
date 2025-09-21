@@ -1412,12 +1412,12 @@ def persist_merge_tags(
             if left_tag.get("decision") in valid_decisions:
                 left_path = tag_paths.get(left)
                 if left_path is not None:
-                    upsert_tag(left_path, left_tag, ("kind", "with"))
+                    upsert_tag(left_path, left_tag, unique_keys=("kind", "with"))
 
                 right_tag = build_merge_pair_tag(left, result)
                 right_path = tag_paths.get(right)
                 if right_path is not None:
-                    upsert_tag(right_path, right_tag, ("kind", "with"))
+                    upsert_tag(right_path, right_tag, unique_keys=("kind", "with"))
 
                 if left_tag.get("decision") == "ai":
                     highlights_from_pair = _build_ai_highlights(result)
@@ -1474,7 +1474,7 @@ def persist_merge_tags(
             continue
         path = tag_paths.get(idx)
         if path is not None:
-            upsert_tag(path, best_tag, ("kind",))
+            upsert_tag(path, best_tag, unique_keys=("kind",))
 
     for idx in all_indices:
         partner_scores = scores_by_idx.get(idx, {})

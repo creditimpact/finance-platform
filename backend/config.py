@@ -1,5 +1,7 @@
 import json
+import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Tuple
 
@@ -7,6 +9,23 @@ from environs import Env
 
 env = Env()
 env.read_env()
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AIAdjudicatorConfig:
+    """Environment-backed configuration for the merge AI adjudicator."""
+
+    enabled: bool
+    base_url: str
+    api_key: str | None
+    model: str
+    request_timeout: int
+    pack_max_lines_per_side: int
+
+
+_WARNED_DEFAULT_KEYS: set[str] = set()
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -57,6 +76,106 @@ def env_list(name: str, default: list[str]) -> list[str]:
 _env_bool = env_bool
 
 
+def _warn_default(key: str, raw: object, default: object, reason: str) -> None:
+    """Emit a structured warning when falling back to a default value."""
+
+    if key in _WARNED_DEFAULT_KEYS:
+        return
+
+    _WARNED_DEFAULT_KEYS.add(key)
+    payload = {
+        "key": key,
+        "value": "" if raw is None else str(raw),
+        "default": default,
+        "reason": reason,
+    }
+    logger.warning("MERGE_V2_CONFIG_DEFAULT %s", json.dumps(payload, sort_keys=True))
+
+
+def _coerce_non_empty_str(key: str, default: str, *, fallback_keys: tuple[str, ...] = ()) -> str:
+    """Return a sanitized string value for ``key`` or ``default`` when empty."""
+
+    raw = os.getenv(key)
+    if raw is not None:
+        value = str(raw).strip()
+        if value:
+            return value
+        _warn_default(key, raw, default, "empty")
+        return default
+
+    for fallback in fallback_keys:
+        fallback_raw = os.getenv(fallback)
+        if fallback_raw is None:
+            continue
+        value = str(fallback_raw).strip()
+        if value:
+            return value
+        _warn_default(fallback, fallback_raw, default, "empty")
+        return default
+
+    return default
+
+
+def _coerce_positive_int(key: str, default: int, *, min_value: int) -> int:
+    """Return a positive integer parsed from the environment."""
+
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+
+    try:
+        value = int(str(raw).strip())
+    except Exception:
+        _warn_default(key, raw, default, "invalid_int")
+        return default
+
+    if value < min_value:
+        _warn_default(key, raw, default, f"min_{min_value}")
+        return default
+
+    return value
+
+
+def _warn_ai_disabled(reason: str) -> None:
+    """Emit a structured warning when the AI adjudicator is disabled."""
+
+    payload = {"reason": reason}
+    logger.warning("MERGE_V2_AI_DISABLED %s", json.dumps(payload, sort_keys=True))
+
+
+def _load_ai_adjudicator_config() -> AIAdjudicatorConfig:
+    """Parse adjudicator-specific environment configuration."""
+
+    enabled = env_bool("ENABLE_AI_ADJUDICATOR", False)
+    base_url_default = "https://api.openai.com/v1"
+    base_url = _coerce_non_empty_str("OPENAI_BASE_URL", base_url_default)
+    base_url = base_url.rstrip("/") or base_url_default
+
+    model = _coerce_non_empty_str("AI_MODEL", "gpt-4o-mini", fallback_keys=("AI_MODEL_ID",))
+    request_timeout = _coerce_positive_int("AI_REQUEST_TIMEOUT", 30, min_value=1)
+    pack_max_lines = _coerce_positive_int(
+        "AI_PACK_MAX_LINES_PER_SIDE", 20, min_value=5
+    )
+
+    api_key_raw = os.getenv("OPENAI_API_KEY")
+    api_key = api_key_raw.strip() if isinstance(api_key_raw, str) else None
+    if api_key == "":
+        api_key = None
+
+    if enabled and not api_key:
+        _warn_ai_disabled("missing_api_key")
+        enabled = False
+
+    return AIAdjudicatorConfig(
+        enabled=enabled,
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        request_timeout=request_timeout,
+        pack_max_lines_per_side=pack_max_lines,
+    )
+
+
 def _load_keyword_lists() -> Tuple[dict, dict, dict]:
     """Load tiered keyword dictionaries from JSON/YAML config.
 
@@ -85,9 +204,15 @@ ENABLE_TIER2_KEYWORDS = _env_bool("ENABLE_TIER2_KEYWORDS", False)
 ENABLE_TIER3_KEYWORDS = _env_bool("ENABLE_TIER3_KEYWORDS", False)
 ENABLE_TIER2_NUMERIC = _env_bool("ENABLE_TIER2_NUMERIC", True)
 
-ENABLE_AI_ADJUDICATOR = env_bool("ENABLE_AI_ADJUDICATOR", False)
+_AI_ADJUDICATOR_CONFIG = _load_ai_adjudicator_config()
+ENABLE_AI_ADJUDICATOR = _AI_ADJUDICATOR_CONFIG.enabled
+AI_PACK_MAX_LINES_PER_SIDE = _AI_ADJUDICATOR_CONFIG.pack_max_lines_per_side
+AI_MODEL = _AI_ADJUDICATOR_CONFIG.model
+AI_MODEL_ID = AI_MODEL
+AI_REQUEST_TIMEOUT = _AI_ADJUDICATOR_CONFIG.request_timeout
+OPENAI_BASE_URL = _AI_ADJUDICATOR_CONFIG.base_url
+OPENAI_API_KEY = _AI_ADJUDICATOR_CONFIG.api_key
 AI_MIN_CONFIDENCE = env_float("AI_MIN_CONFIDENCE", 0.70)
-AI_MODEL_ID = env_str("AI_MODEL_ID", "gpt-4o-mini")
 AI_TEMPERATURE_DEFAULT = env_float("AI_TEMPERATURE_DEFAULT", 0.0)
 AI_REQUEST_TIMEOUT_S = env_int("AI_REQUEST_TIMEOUT_S", 8)
 AI_MAX_TOKENS = env_int("AI_MAX_TOKENS", 600)
@@ -100,6 +225,12 @@ _raw_t1, _raw_t2, _raw_t3 = _load_keyword_lists()
 TIER1_KEYWORDS = _raw_t1 if ENABLE_TIER1_KEYWORDS else {}
 TIER2_KEYWORDS = _raw_t2 if ENABLE_TIER2_KEYWORDS else {}
 TIER3_KEYWORDS = _raw_t3 if ENABLE_TIER3_KEYWORDS else {}
+
+
+def get_ai_adjudicator_config() -> AIAdjudicatorConfig:
+    """Return the parsed AI adjudicator configuration."""
+
+    return _AI_ADJUDICATOR_CONFIG
 
 
 def _default_casestore_dir() -> str:

@@ -20,11 +20,14 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = (
     "You are an adjudicator deciding if A & B are the same account.\n"
     "Consider high-precision cues (account number last4/exact, exact balances with tolerances, dates);"
-    " also consider lender/brand name strings.\n"
+    " also consider lender/brand name strings and normalize variants (e.g., US BK CACS ≈ U S BANK).\n"
     "Use the numeric summary as a strong hint but override if raw context contradicts it.\n"
     "Decisions allowed: merge, same_debt, different.\n"
     "same_debt when details show the same obligation/story (brand, amounts, dates consistent) but identifiers"
-    " differ/are missing (e.g., OC vs CA).\n"
+    " differ/are missing (e.g., OC vs CA). If amounts/dates align and descriptors agree, prefer same_debt even"
+    " without matching account numbers.\n"
+    "Do not choose merge unless evidence strongly supports a single tradeline (e.g., matching account numbers or"
+    " multiple tight corroborations).\n"
     "Be conservative when critical fields conflict.\n"
     "Return strict JSON only: {\"decision\":\"merge|same_debt|different\",\"reason\":\"short natural language\"}."
 )

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
 from backend.pipeline.runs import RunManifest, write_breadcrumb
+from backend.core.io.tags import read_tags, upsert_tag, write_tags
 from backend.core.logic.report_analysis.problem_extractor import (
     build_rule_fields_from_triad,
     load_stagea_accounts_from_manifest,
@@ -248,6 +249,24 @@ def _build_merge_best_tag(best_info: Mapping[str, Any]) -> Dict[str, Any] | None
     return payload
 
 
+def _build_issue_tag(summary: Mapping[str, Any]) -> Dict[str, Any] | None:
+    issue_value = summary.get("primary_issue")
+    if not isinstance(issue_value, str) or not issue_value.strip():
+        return None
+
+    tag: Dict[str, Any] = {
+        "kind": "issue",
+        "type": issue_value.strip(),
+    }
+
+    reasons = summary.get("problem_reasons")
+    normalized_reasons = _normalize_str_list(reasons)
+    if normalized_reasons:
+        tag["details"] = {"problem_reasons": normalized_reasons}
+
+    return tag
+
+
 def _tag_sort_key(entry: Mapping[str, Any]) -> Tuple[str, int, str]:
     kind = str(entry.get("kind", ""))
     partner = entry.get("with")
@@ -448,7 +467,6 @@ def _build_problem_cases_lean(
     written_ids: List[str] = []
     merge_groups: Dict[str, str] = {}
     tag_paths: Dict[int, Path] = {}
-    issue_by_idx: Dict[int, str] = {}
     written_indices: List[int] = []
 
     for cand in candidates:
@@ -560,9 +578,9 @@ def _build_problem_cases_lean(
         if account_id is not None:
             artifact_keys.add(str(account_id))
 
-        issue_value = summary_obj.get("primary_issue")
-        if isinstance(issue_value, str) and issue_value.strip():
-            issue_by_idx[idx] = issue_value.strip()
+        issue_tag = _build_issue_tag(summary_obj)
+        if issue_tag is not None:
+            upsert_tag(tags_path, issue_tag, ("kind",))
 
         if manifest is None:
             legacy_id = str(account_id) if account_id is not None else f"idx-{idx:03d}"
@@ -661,16 +679,14 @@ def _build_problem_cases_lean(
             merge_scores = {}
             best_partners = {}
 
-    tags_by_idx: Dict[int, List[Dict[str, Any]]] = {idx: [] for idx in tag_paths}
-    for idx, issue_value in issue_by_idx.items():
-        tags_by_idx.setdefault(idx, []).append(
-            {
-                "tag": f"issue:{issue_value}",
-                "kind": "issue",
-                "source": "analyzer",
-                "value": issue_value,
-            }
-        )
+    tags_by_idx: Dict[int, List[Dict[str, Any]]] = {
+        idx: read_tags(path) for idx, path in tag_paths.items()
+    }
+    merge_kinds = {"merge_pair", "merge_best"}
+    for idx, existing_tags in list(tags_by_idx.items()):
+        tags_by_idx[idx] = [
+            tag for tag in existing_tags if tag.get("kind") not in merge_kinds
+        ]
 
     valid_decisions = {"ai", "auto"}
     for left, right in gen_unordered_pairs(written_indices):
@@ -695,7 +711,7 @@ def _build_problem_cases_lean(
     for idx, path in tag_paths.items():
         tags = tags_by_idx.get(idx, [])
         ordered = sorted(tags, key=_tag_sort_key)
-        _write_json(path, ordered)
+        write_tags(path, ordered)
 
     logger.info(
         "PROBLEM_CASES done sid=%s total=%d problematic=%d out=%s",

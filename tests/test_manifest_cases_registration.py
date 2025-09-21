@@ -111,7 +111,9 @@ def test_build_problem_cases_writes_tags(tmp_path):
 
     issue_a = [tag for tag in tags_a if tag.get("kind") == "issue"][0]
     issue_b = [tag for tag in tags_b if tag.get("kind") == "issue"][0]
-    assert issue_a["value"] == issue_b["value"] == "collection"
+    assert issue_a["type"] == issue_b["type"] == "collection"
+    assert "details" not in issue_a
+    assert "details" not in issue_b
 
     pair_a = [tag for tag in tags_a if tag.get("kind") == "merge_pair"][0]
     pair_b = [tag for tag in tags_b if tag.get("kind") == "merge_pair"][0]

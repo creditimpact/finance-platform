@@ -215,7 +215,7 @@ def process_pack(
         attempts += 1
         if log is not None:
             log(
-                "ATTEMPT",
+                "REQUEST",
                 {
                     "attempt": attempts,
                     "max_attempts": max_attempts,
@@ -226,7 +226,7 @@ def process_pack(
             decision, reason = send_single_attempt(pack, config, request=request)
             if log is not None:
                 log(
-                    "SUCCESS",
+                    "RESPONSE",
                     {
                         "attempt": attempts,
                         "decision": decision,
@@ -235,16 +235,16 @@ def process_pack(
             return SendOutcome(success=True, attempts=attempts, decision=decision, reason=reason)
         except Exception as exc:  # pragma: no cover - diverse error sources
             last_error = exc
-            if log is not None:
-                log(
-                    "ERROR",
-                    {
-                        "attempt": attempts,
-                        "error": exc.__class__.__name__,
-                    },
-                )
+            will_retry = attempts <= MAX_RETRIES
+            if log is not None and will_retry:
+                payload = {
+                    "attempt": attempts,
+                    "error": exc.__class__.__name__,
+                    "will_retry": True,
+                }
+                log("ERROR", payload)
 
-            if attempts > MAX_RETRIES:
+            if not will_retry:
                 break
 
             delay = RETRY_BACKOFF_SECONDS[min(attempts - 1, len(RETRY_BACKOFF_SECONDS) - 1)]
@@ -260,12 +260,14 @@ def process_pack(
 
     error_kind = last_error.__class__.__name__ if last_error is not None else "UnknownError"
     error_message = str(last_error) if last_error is not None else "unknown"
-    if log is not None:
+    if log is not None and last_error is not None:
         log(
-            "FAILURE",
+            "ERROR",
             {
                 "attempt": attempts,
                 "error": error_kind,
+                "will_retry": False,
+                "final": True,
             },
         )
     return SendOutcome(

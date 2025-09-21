@@ -162,13 +162,13 @@ def test_score_all_pairs_emits_structured_logs(tmp_path, caplog) -> None:
     ):
         score_all_pairs_0_100(sid, [0, 1], runs_root=tmp_path)
 
-    score_messages = [
+    v2_score_messages = [
         record.getMessage()
         for record in caplog.records
-        if record.getMessage().startswith("MERGE_SCORE ")
+        if record.getMessage().startswith("MERGE_V2_SCORE ")
     ]
-    assert score_messages
-    score_payload = json.loads(score_messages[0].split(" ", 1)[1])
+    assert v2_score_messages
+    score_payload = json.loads(v2_score_messages[0].split(" ", 1)[1])
     assert score_payload["sid"] == sid
     assert score_payload["i"] == 0
     assert score_payload["j"] == 1
@@ -177,13 +177,13 @@ def test_score_all_pairs_emits_structured_logs(tmp_path, caplog) -> None:
     assert "matched_pairs" in score_payload
     assert "account_number" in score_payload["matched_pairs"]
 
-    trigger_messages = [
+    v2_trigger_messages = [
         record.getMessage()
         for record in caplog.records
-        if record.getMessage().startswith("MERGE_TRIGGER ")
+        if record.getMessage().startswith("MERGE_V2_TRIGGER ")
     ]
-    assert trigger_messages
-    trigger_payload = json.loads(trigger_messages[0].split(" ", 1)[1])
+    assert v2_trigger_messages
+    trigger_payload = json.loads(v2_trigger_messages[0].split(" ", 1)[1])
     assert {
         "sid",
         "i",
@@ -192,36 +192,15 @@ def test_score_all_pairs_emits_structured_logs(tmp_path, caplog) -> None:
         "details",
     }.issubset(trigger_payload)
 
-    decision_messages = [
-        record.getMessage()
-        for record in caplog.records
-        if record.getMessage().startswith("MERGE_DECISION ")
-    ]
-    assert decision_messages
-    decision_payload = json.loads(decision_messages[0].split(" ", 1)[1])
-    for key in ("sid", "i", "j", "decision", "total"):
-        assert key in decision_payload
-
-    v2_score_messages = [
-        record.getMessage()
-        for record in caplog.records
-        if record.getMessage().startswith("MERGE_V2_SCORE ")
-    ]
-    assert v2_score_messages
-
-    v2_trigger_messages = [
-        record.getMessage()
-        for record in caplog.records
-        if record.getMessage().startswith("MERGE_V2_TRIGGER ")
-    ]
-    assert v2_trigger_messages
-
     v2_decision_messages = [
         record.getMessage()
         for record in caplog.records
         if record.getMessage().startswith("MERGE_V2_DECISION ")
     ]
     assert v2_decision_messages
+    decision_payload = json.loads(v2_decision_messages[0].split(" ", 1)[1])
+    for key in ("sid", "i", "j", "decision", "total"):
+        assert key in decision_payload
 
 
 def test_score_all_pairs_debug_pair_logs(tmp_path, caplog) -> None:

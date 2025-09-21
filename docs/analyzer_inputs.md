@@ -145,14 +145,12 @@ consumers.【F:backend/core/logic/report_analysis/account_merge.py†L272-L352�
 
 ### Observability and logs
 
-- Pairwise scoring emits the detailed `MERGE_SCORE ...` / `MERGE_DECISION ...`
+- Pairwise scoring emits `MERGE_V2_SCORE ...` / `MERGE_V2_DECISION ...`
   logs for every comparison. Use ripgrep to inspect them, e.g. `rg
-  "MERGE_DECISION" runs/<sid>/ -g"*.log"`.
-- Compact counterparts (`MERGE_V2_SCORE`, `MERGE_V2_TRIGGER`,
-  `MERGE_V2_DECISION`) mirror the same activity with just the essential
-  identifiers so dashboards can efficiently trace merge traffic. The
-  scorer continues to expose the richer `MERGE_TRIGGER` entries whenever a
-  strong, mid, dates, or total trigger fires.【F:backend/core/logic/report_analysis/account_merge.py†L821-L878】
+  "MERGE_V2_DECISION" runs/<sid>/ -g"*.log"`.【F:backend/core/logic/report_analysis/account_merge.py†L855-L895】
+- `MERGE_V2_TRIGGER` entries capture every trigger the scorer evaluates so
+  dashboards can efficiently trace merge traffic alongside the per-pair
+  scores.【F:backend/core/logic/report_analysis/account_merge.py†L855-L895】
 
 ### Where merge conclusions are stored
 

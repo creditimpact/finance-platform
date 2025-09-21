@@ -111,7 +111,12 @@ def test_process_pack_retries_then_success(monkeypatch) -> None:
     assert outcome.reason == "oc vs ca"
     assert outcome.attempts == 3
     assert delays == [1.0, 3.0]
-    assert any(event == "SUCCESS" for event, _ in events)
+    assert any(event == "RESPONSE" for event, _ in events)
+
+    requests = [payload for event, payload in events if event == "REQUEST"]
+    assert len(requests) == outcome.attempts
+    errors = [payload for event, payload in events if event == "ERROR"]
+    assert errors and all(payload.get("will_retry") is True for payload in errors)
 
 
 def test_process_pack_failure_records_error() -> None:
@@ -120,18 +125,24 @@ def test_process_pack_failure_records_error() -> None:
     def _request(url, payload, headers, timeout):
         raise httpx.ReadTimeout("timed out")
 
+    events: list[tuple[str, dict]] = []
+
     outcome = ai_sender.process_pack(
         _sample_pack(),
         _config(),
         request=_request,
         sleep=delays.append,
-        log=lambda event, payload: None,
+        log=lambda event, payload: events.append((event, dict(payload))),
     )
 
     assert outcome.success is False
     assert outcome.error_kind == "ReadTimeout"
     assert outcome.attempts == 4
     assert delays == [1.0, 3.0, 7.0]
+
+    error_events = [payload for event, payload in events if event == "ERROR"]
+    assert error_events
+    assert error_events[-1]["final"] is True
 
 
 def test_write_decision_tags_same_debt(tmp_path: Path) -> None:

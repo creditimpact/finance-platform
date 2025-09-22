@@ -154,6 +154,17 @@ class RunManifest:
         self.data.setdefault("base_dirs", {})[label] = str(resolved)
         return self.save()
 
+    def set_artifact(self, group: str, name: str, path: str | Path) -> "RunManifest":
+        """Record an artifact path under artifacts.<group>.<name> = <path>."""
+
+        from pathlib import Path as _P
+
+        path_str = str(_P(path))
+        data = self.data.setdefault("artifacts", {})
+        grp = data.setdefault(group, {})
+        grp[name] = path_str
+        return self
+
     def _ensure_ai_section(self) -> tuple[dict[str, object], dict[str, object]]:
         ai = self.data.setdefault("ai", {})
         packs = ai.setdefault(

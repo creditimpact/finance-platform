@@ -31,6 +31,37 @@ LEGACY_MARKER_FILENAME = "auto_ai_pipeline_in_progress.json"
 logger = logging.getLogger(__name__)
 
 
+def _append_run_log_entry(
+    *,
+    runs_root: Path,
+    sid: str,
+    packs: int,
+    pairs: int,
+    reason: str | None = None,
+) -> None:
+    """Append a compact JSON line describing the AI run outcome."""
+
+    logs_path = runs_root / sid / "ai_packs" / "logs.txt"
+    entry = {
+        "sid": sid,
+        "at": datetime.now(timezone.utc).isoformat(),
+        "packs": int(packs),
+        "pairs": int(pairs),
+    }
+    if reason:
+        entry["reason"] = reason
+
+    try:
+        logs_path.parent.mkdir(parents=True, exist_ok=True)
+        with logs_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:  # pragma: no cover - defensive logging
+        logger.warning(
+            "AUTO_AI_LOG_APPEND_FAILED sid=%s path=%s", sid, logs_path, exc_info=True
+        )
+
+
+
 def _ensure_payload(prev: Mapping[str, object] | None) -> dict[str, object]:
     if isinstance(prev, Mapping):
         return dict(prev)
@@ -142,7 +173,7 @@ def _cleanup_lock(payload: Mapping[str, object], *, reason: str) -> bool:
 def ai_score_step(self, sid: str, runs_root: str | None = None) -> dict[str, object]:
     """Recompute merge scores and persist merge tags for ``sid``."""
 
-    logger.info("AUTO_AI_SCORE_START sid=%s", sid)
+    logger.info("AI_SCORE_START sid=%s", sid)
 
     payload: dict[str, object] = {"sid": sid}
     if runs_root is not None:
@@ -161,9 +192,7 @@ def ai_score_step(self, sid: str, runs_root: str | None = None) -> dict[str, obj
     touched_accounts = sorted(_normalize_indices(result.indices))
     payload["touched_accounts"] = touched_accounts
 
-    logger.info(
-        "AUTO_AI_SCORE_END sid=%s touched=%d", sid, len(touched_accounts)
-    )
+    logger.info("AI_SCORE_END sid=%s touched=%d", sid, len(touched_accounts))
     return payload
 
 
@@ -180,10 +209,10 @@ def ai_build_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, ob
     _populate_common_paths(payload)
     runs_root = Path(payload["runs_root"])
 
-    logger.info("AUTO_AI_BUILD_START sid=%s", sid)
+    logger.info("AI_BUILD_START sid=%s", sid)
 
     if not has_ai_merge_best_pairs(sid, runs_root):
-        logger.info("AUTO_AI_NO_CANDIDATES sid=%s", sid)
+        logger.info("AUTO_AI_SKIP_NO_CANDIDATES sid=%s", sid)
         payload["ai_index"] = []
         payload["skip_reason"] = "no_candidates"
         return payload
@@ -209,7 +238,8 @@ def ai_build_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, ob
     touched.update(_indices_from_index(index_entries))
     payload["touched_accounts"] = sorted(touched)
 
-    logger.info("AUTO_AI_BUILD_END sid=%s packs=%d", sid, len(index_entries))
+    logger.info("AI_PACKS_INDEX sid=%s path=%s count=%d", sid, index_path, len(index_entries))
+    logger.info("AI_BUILD_END sid=%s packs=%d", sid, len(index_entries))
     return payload
 
 
@@ -226,12 +256,12 @@ def ai_send_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, obj
     _populate_common_paths(payload)
     runs_root = Path(payload["runs_root"])
 
-    logger.info("AUTO_AI_SEND_START sid=%s", sid)
+    logger.info("AI_SEND_START sid=%s", sid)
 
     index_entries = payload.get("ai_index")
     if not index_entries:
         reason = str(payload.get("skip_reason") or "no_packs")
-        logger.info("AUTO_AI_SEND_SKIP sid=%s reason=%s", sid, reason)
+        logger.info("AI_SEND_SKIP sid=%s reason=%s", sid, reason)
         return payload
 
     try:
@@ -241,7 +271,7 @@ def ai_send_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, obj
         _cleanup_lock(payload, reason="send_failed")
         raise
 
-    logger.info("AUTO_AI_SEND_END sid=%s", sid)
+    logger.info("AI_SEND_END sid=%s", sid)
     return payload
 
 
@@ -261,9 +291,7 @@ def ai_compact_tags_step(self, prev: Mapping[str, object] | None) -> dict[str, o
     accounts_dir = Path(str(accounts_dir_value)) if accounts_dir_value else None
     indices = sorted(_normalize_indices(payload.get("touched_accounts", [])))
 
-    logger.info(
-        "AUTO_AI_COMPACT_START sid=%s accounts=%d", sid, len(indices)
-    )
+    logger.info("AI_COMPACT_START sid=%s accounts=%d", sid, len(indices))
 
     if accounts_dir and accounts_dir.exists() and indices:
         try:
@@ -275,7 +303,7 @@ def ai_compact_tags_step(self, prev: Mapping[str, object] | None) -> dict[str, o
             _cleanup_lock(payload, reason="compact_failed")
             raise
 
-    logger.info("AUTO_AI_COMPACT_END sid=%s", sid)
+    logger.info("AI_COMPACT_END sid=%s", sid)
 
     packs_count = len(payload.get("ai_index", []) or [])
     pairs_count = len(indices)
@@ -304,9 +332,31 @@ def ai_compact_tags_step(self, prev: Mapping[str, object] | None) -> dict[str, o
                 exc_info=True,
             )
 
+    runs_root_value = payload.get("runs_root")
+    if runs_root_value:
+        try:
+            runs_root_path = Path(str(runs_root_value))
+        except Exception:  # pragma: no cover - defensive logging
+            logger.debug(
+                "AUTO_AI_LOG_ROOT_INVALID sid=%s runs_root=%r",
+                sid,
+                runs_root_value,
+                exc_info=True,
+            )
+        else:
+            skip_reason = payload.get("skip_reason")
+            reason_text = str(skip_reason) if isinstance(skip_reason, str) else None
+            _append_run_log_entry(
+                runs_root=runs_root_path,
+                sid=sid,
+                packs=packs_count,
+                pairs=pairs_count,
+                reason=reason_text,
+            )
+
     removed = _cleanup_lock(payload, reason="chain_complete")
     logger.info(
-        "AUTO_AI_CHAIN_DONE sid=%s lock_removed=%s packs=%s pairs=%s",
+        "AUTO_AI_CHAIN_END sid=%s lock_removed=%s packs=%s pairs=%s",
         sid,
         1 if removed else 0,
         packs_count,

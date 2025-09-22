@@ -230,14 +230,14 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
     )
 
     if os.environ.get("ENABLE_AUTO_AI_PIPELINE", "1") in ("1", "true", "True"):
-        try:
-            manifest = RunManifest.for_sid(sid)
-        except Exception:
-            log.error("AUTO_AI_ENQUEUE_MANIFEST_FAILED sid=%s", sid, exc_info=True)
-        else:
-            if has_ai_merge_best_tags(sid):
-                if sid in _AUTO_AI_PIPELINE_ENQUEUED:
-                    log.info("AUTO_AI_ALREADY_ENQUEUED sid=%s", sid)
+        if has_ai_merge_best_tags(sid):
+            if sid in _AUTO_AI_PIPELINE_ENQUEUED:
+                log.info("AUTO_AI_ALREADY_ENQUEUED sid=%s", sid)
+            else:
+                try:
+                    manifest = RunManifest.for_sid(sid)
+                except Exception:
+                    log.error("AUTO_AI_ENQUEUE_MANIFEST_FAILED sid=%s", sid, exc_info=True)
                 else:
                     try:
                         manifest.set_ai_enqueued()
@@ -249,8 +249,8 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
                     else:
                         _AUTO_AI_PIPELINE_ENQUEUED.add(sid)
                         log.info("AUTO_AI_ENQUEUED sid=%s", sid)
-            else:
-                log.info("AUTO_AI_SKIP_NO_CANDIDATES sid=%s", sid)
+        else:
+            log.info("AUTO_AI_SKIP_NO_CANDIDATES sid=%s", sid)
 
     return summary
 

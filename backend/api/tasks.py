@@ -15,7 +15,7 @@ load_dotenv()
 from backend.core.logic.report_analysis.block_exporter import export_stage_a, run_stage_a
 from backend.pipeline.auto_ai import (
     has_ai_merge_best_tags,
-    maybe_run_ai_pipeline,
+    maybe_queue_auto_ai_pipeline,
 )
 from backend.pipeline.runs import RunManifest
 from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
@@ -236,10 +236,19 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
             runs_root = manifest.path.parent.parent
             if has_ai_merge_best_tags(runs_root, sid):
                 try:
-                    maybe_run_ai_pipeline.delay(sid)
-                    log.info("AUTO_AI_ENQUEUED sid=%s", sid)
+                    result = maybe_queue_auto_ai_pipeline(
+                        sid,
+                        runs_root=runs_root,
+                        flag_env=os.environ,
+                    )
                 except Exception:
                     log.error("AUTO_AI_ENQUEUE_FAILED sid=%s", sid, exc_info=True)
+                else:
+                    reason = result.get("reason")
+                    if result.get("queued"):
+                        log.info("AUTO_AI_ENQUEUED sid=%s", sid)
+                    else:
+                        log.info("AUTO_AI_SKIP sid=%s reason=%s", sid, reason)
             else:
                 log.info("AUTO_AI_SKIP_NO_CANDIDATES sid=%s", sid)
 

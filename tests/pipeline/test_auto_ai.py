@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -125,7 +126,11 @@ def test_has_ai_merge_best_pairs_detects_missing_partner(tmp_path: Path) -> None
     assert auto_ai.has_ai_merge_best_pairs(sid, runs_root) is True
 
 
-def test_maybe_queue_auto_ai_pipeline_queues_when_candidates(monkeypatch, tmp_path: Path) -> None:
+def test_maybe_queue_auto_ai_pipeline_queues_when_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     sid = "queue-me"
     runs_root = tmp_path / "runs"
     flag_env = {"ENABLE_AUTO_AI_PIPELINE": "1"}
@@ -142,11 +147,14 @@ def test_maybe_queue_auto_ai_pipeline_queues_when_candidates(monkeypatch, tmp_pa
 
     monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_chain", fake_enqueue)
 
-    result = auto_ai.maybe_queue_auto_ai_pipeline(
-        sid,
-        runs_root=runs_root,
-        flag_env=flag_env,
-    )
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="backend.pipeline.auto_ai"):
+        result = auto_ai.maybe_queue_auto_ai_pipeline(
+            sid,
+            runs_root=runs_root,
+            flag_env=flag_env,
+        )
+    messages = [record.getMessage() for record in caplog.records]
 
     lock_path = (
         runs_root
@@ -164,6 +172,8 @@ def test_maybe_queue_auto_ai_pipeline_queues_when_candidates(monkeypatch, tmp_pa
     assert result["last_ok_path"] == str(
         lock_path.parent / auto_ai.LAST_OK_FILENAME
     )
+
+    assert any(f"MANIFEST_AI_ENQUEUED sid={sid}" in message for message in messages)
 
 
 def test_maybe_queue_auto_ai_pipeline_skips_without_candidates(monkeypatch, tmp_path: Path) -> None:

@@ -1,5 +1,8 @@
 import json
+import logging
 from pathlib import Path
+
+import pytest
 
 from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
 from backend.pipeline.runs import RUNS_ROOT_ENV
@@ -226,7 +229,9 @@ def test_build_merge_ai_packs_caps_context_to_env_limit(tmp_path: Path, monkeypa
     assert pack["limits"]["max_lines_per_side"] == 7
 
 
-def test_build_ai_merge_packs_cli_updates_manifest(tmp_path: Path, monkeypatch) -> None:
+def test_build_ai_merge_packs_cli_updates_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     sid = "cli-sid"
     runs_root = tmp_path / "runs"
     accounts_root = runs_root / sid / "cases" / "accounts"
@@ -255,24 +260,36 @@ def test_build_ai_merge_packs_cli_updates_manifest(tmp_path: Path, monkeypatch) 
 
     monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
 
-    build_packs_main(
-        [
-            "--sid",
-            sid,
-            "--runs-root",
-            str(runs_root),
-            "--max-lines-per-side",
-            "5",
-        ]
-    )
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="scripts.build_ai_merge_packs"):
+        build_packs_main(
+            [
+                "--sid",
+                sid,
+                "--runs-root",
+                str(runs_root),
+                "--max-lines-per-side",
+                "5",
+            ]
+        )
+    log_messages = [record.getMessage() for record in caplog.records]
 
     out_dir = runs_root / sid / "ai_packs"
     index_path = out_dir / "index.json"
     manifest_path = runs_root / sid / "manifest.json"
 
+    assert any(f"PACKS_DIR_USED sid={sid}" in message for message in log_messages)
+    assert any(
+        f"PACK_WRITTEN sid={sid} file=pair_011_016.jsonl" in message
+        for message in log_messages
+    )
+    assert any("INDEX_WRITTEN sid=cli-sid" in message for message in log_messages)
+    assert any("MANIFEST_AI_PACKS_UPDATED sid=cli-sid" in message for message in log_messages)
+
     index_payload = json.loads(index_path.read_text(encoding="utf-8"))
     assert index_payload["sid"] == sid
-    pairs = index_payload.get("pairs", [])
+    assert index_payload["pairs_count"] == 1
+    pairs = index_payload.get("packs", [])
     assert len(pairs) == 1
     pair_entry = pairs[0]
     assert pair_entry["a"] == 11
@@ -285,4 +302,14 @@ def test_build_ai_merge_packs_cli_updates_manifest(tmp_path: Path, monkeypatch) 
 
     logs_path = out_dir / "logs.txt"
     assert not logs_path.exists()
-    assert not manifest_path.exists()
+    assert manifest_path.exists()
+
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    ai_section = manifest_payload["ai"]
+    packs_info = ai_section["packs"]
+    status_info = ai_section["status"]
+
+    assert packs_info["dir"] == str(out_dir.resolve())
+    assert packs_info["index"] == str(index_path.resolve())
+    assert packs_info["pairs"] == 1
+    assert status_info["built"] is True

@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -66,7 +67,9 @@ def runs_root(tmp_path: Path) -> Path:
 
 
 def test_send_ai_merge_packs_records_merge_decision(
-    monkeypatch: pytest.MonkeyPatch, runs_root: Path
+    monkeypatch: pytest.MonkeyPatch,
+    runs_root: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     sid = "codex-smoke"
     accounts_root = runs_root / sid / "cases" / "accounts"
@@ -128,7 +131,17 @@ def test_send_ai_merge_packs_records_merge_decision(
         lambda dt=None: "2024-07-01T09:30:00Z",
     )
 
-    send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="scripts.send_ai_merge_packs"):
+        send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        f"SENDER_PACKS_DIR_FROM_MANIFEST sid={sid} dir=" in message
+        for message in messages
+    )
+    assert any(f"MANIFEST_AI_SENT sid={sid}" in message for message in messages)
+    assert any(f"MANIFEST_AI_COMPACTED sid={sid}" in message for message in messages)
 
     manifest = RunManifest.for_sid(sid)
     status_info = manifest.data.get("ai", {}).get("status", {})
@@ -168,7 +181,10 @@ def test_send_ai_merge_packs_records_merge_decision(
 
 
 def test_send_ai_merge_packs_writes_same_debt_tags(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], runs_root: Path
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    runs_root: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     sid = "merge-case"
     packs_dir = runs_root / sid / "ai_packs"
@@ -227,7 +243,16 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
         lambda dt=None: "2024-06-15T10:00:00Z",
     )
 
-    send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="scripts.send_ai_merge_packs"):
+        send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        f"SENDER_PACKS_DIR_FALLBACK sid={sid} dir=" in message for message in messages
+    )
+    assert any(f"MANIFEST_AI_SENT sid={sid}" in message for message in messages)
+    assert any(f"MANIFEST_AI_COMPACTED sid={sid}" in message for message in messages)
 
     stdout = capsys.readouterr().out
     assert "[AI] adjudicated 1 packs (1 success, 0 errors)" in stdout

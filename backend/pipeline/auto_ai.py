@@ -18,7 +18,7 @@ from backend.core.logic.tags.compact import (
     compact_account_tags,
     compact_tags_for_sid,
 )
-from backend.pipeline.runs import RUNS_ROOT, RunManifest
+from backend.pipeline.runs import RUNS_ROOT, RunManifest, persist_manifest
 from scripts.build_ai_merge_packs import main as build_ai_merge_packs_main
 from scripts.send_ai_merge_packs import main as send_ai_merge_packs_main
 
@@ -474,12 +474,14 @@ def _run_auto_ai_pipeline(sid: str):
 
     run_send_for_sid(sid, runs_root=RUNS_ROOT)
     manifest.set_ai_sent()
+    persist_manifest(manifest)
     logger.info("MANIFEST_AI_SENT sid=%s", sid)
 
     # === 4) compact tags (keep only tags; push explanations to summary.json)
     try:
         compact_tags_for_sid(sid)
         manifest.set_ai_compacted()
+        persist_manifest(manifest)
         logger.info("MANIFEST_AI_COMPACTED sid=%s", sid)
         logger.info("TAGS_COMPACTED sid=%s", sid)
     except Exception as exc:  # pragma: no cover - defensive logging

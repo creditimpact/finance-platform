@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from celery import shared_task
+
 from backend.core.io.tags_minimize import compact_account_tags
 from backend.pipeline.runs import RunManifest
 from scripts.build_ai_merge_packs import main as build_ai_merge_packs_main
@@ -388,4 +390,61 @@ def ai_inflight_lock(runs_root: Path, sid: str):
             lock.unlink()
         except FileNotFoundError:
             pass
+
+
+RUNS_ROOT = Path(os.environ.get("RUNS_ROOT", "runs"))
+
+
+def _env_flag(name: str, default: str = "0") -> bool:
+    return os.environ.get(name, default) in ("1", "true", "True")
+
+
+@shared_task(name="pipeline.maybe_run_ai_pipeline")
+def maybe_run_ai_pipeline(sid: str):
+    """Queue the lightweight automatic AI pipeline after case building."""
+
+    if not _env_flag("ENABLE_AUTO_AI_PIPELINE", "1"):
+        return {"sid": sid, "skipped": "feature_off"}
+
+    if not has_ai_merge_best_tags(RUNS_ROOT, sid):
+        return {"sid": sid, "skipped": "no_ai_candidates"}
+
+    try:
+        with ai_inflight_lock(RUNS_ROOT, sid):
+            return _run_auto_ai_pipeline(sid)
+    except RuntimeError:
+        return {"sid": sid, "skipped": "inflight"}
+
+
+def _run_auto_ai_pipeline(sid: str):
+    # === 1) score → (re)write merge_* tags
+    from backend.core.logic.merge.scorer import score_bureau_pairs_cli
+
+    score_bureau_pairs_cli(sid=sid, write_tags=True, runs_root=RUNS_ROOT)
+
+    if not has_ai_merge_best_tags(RUNS_ROOT, sid):
+        return {"sid": sid, "skipped": "candidates_disappeared_after_score"}
+
+    # === 2) build packs
+    from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
+
+    max_lines = int(os.environ.get("AI_PACK_MAX_LINES_PER_SIDE", "20"))
+    build_merge_ai_packs(
+        sid,
+        RUNS_ROOT,
+        only_merge_best=True,
+        max_lines_per_side=max_lines,
+    )
+
+    # === 3) send to AI (writes ai_decision / same_debt_pair)
+    from backend.core.logic.ai.send_ai_merge_packs import run_send_for_sid
+
+    run_send_for_sid(sid, runs_root=RUNS_ROOT)
+
+    # === 4) compact tags (keep only tags; push explanations to summary.json)
+    from backend.core.io.tags_compactor import compact_tags_for_sid
+
+    compact_tags_for_sid(sid, runs_root=RUNS_ROOT)
+
+    return {"sid": sid, "ok": True}
 

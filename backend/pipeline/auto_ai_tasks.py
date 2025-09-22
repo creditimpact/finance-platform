@@ -1,14 +1,17 @@
-"""Celery tasks implementing the automatic AI adjudication pipeline."""
+"""Celery task chain used by the automatic AI adjudication pipeline."""
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, MutableMapping
 
 from celery import chain, shared_task
 
 from backend.pipeline.auto_ai import (
+    PIPELINE_MARKER_FILENAME,
     _build_ai_packs,
     _compact_accounts,
     _indices_from_index,
@@ -27,187 +30,208 @@ def _ensure_payload(prev: Mapping[str, object] | None) -> dict[str, object]:
     return {}
 
 
-@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
-def auto_ai_score_task(self, sid: str, runs_root: str) -> dict[str, object]:
-    """Recompute merge scores and persist tags for ``sid``."""
+def _resolve_runs_root(payload: Mapping[str, object], sid: str) -> Path:
+    runs_root_value = payload.get("runs_root")
+    if isinstance(runs_root_value, (str, os.PathLike)):
+        return Path(runs_root_value)
 
-    runs_root_path = Path(runs_root)
-    logger.info("AUTO_AI_SCORE start sid=%s", sid)
+    env_root = os.environ.get("RUNS_ROOT")
+    if env_root:
+        return Path(env_root)
+
+    marker_dir = Path("runs") / sid / "ai_packs"
+    marker_path = marker_dir / PIPELINE_MARKER_FILENAME
+    if marker_path.exists():
+        try:
+            data = json.loads(marker_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            logger.debug(
+                "AUTO_AI_MARKER_READ_FAILED sid=%s path=%s", sid, marker_path, exc_info=True
+            )
+        else:
+            marker_root = data.get("runs_root")
+            if isinstance(marker_root, str) and marker_root:
+                return Path(marker_root)
+        return marker_dir.parent.parent
+
+    return Path("runs")
+
+
+def _populate_common_paths(payload: MutableMapping[str, object]) -> None:
+    sid = str(payload.get("sid") or "")
+    if not sid:
+        return
+
+    runs_root = _resolve_runs_root(payload, sid)
+    accounts_dir = runs_root / sid / "cases" / "accounts"
+    marker_path = runs_root / sid / "ai_packs" / PIPELINE_MARKER_FILENAME
+
+    payload["runs_root"] = str(runs_root)
+    payload["accounts_dir"] = str(accounts_dir)
+    payload["marker_path"] = str(marker_path)
+
+
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def ai_score_step(self, sid: str) -> dict[str, object]:
+    """Recompute merge scores and persist merge tags for ``sid``."""
+
+    logger.info("AUTO_AI_SCORE_START sid=%s", sid)
+
+    payload: dict[str, object] = {"sid": sid}
+    _populate_common_paths(payload)
+
+    runs_root = Path(payload["runs_root"])
 
     try:
-        result = score_accounts(sid, runs_root=runs_root_path, write_tags=True)
+        result = score_accounts(sid, runs_root=runs_root, write_tags=True)
     except Exception:  # pragma: no cover - defensive logging
-        logger.error("AUTO_AI_SCORE failed sid=%s", sid, exc_info=True)
+        logger.error("AUTO_AI_SCORE_FAILED sid=%s", sid, exc_info=True)
         raise
 
     touched_accounts = sorted(_normalize_indices(result.indices))
-    payload = {
-        "sid": sid,
-        "runs_root": str(runs_root_path),
-        "touched_accounts": touched_accounts,
-    }
+    payload["touched_accounts"] = touched_accounts
 
     logger.info(
-        "AUTO_AI_SCORE done sid=%s touched=%d",
-        sid,
-        len(touched_accounts),
+        "AUTO_AI_SCORE_END sid=%s touched=%d", sid, len(touched_accounts)
     )
     return payload
 
 
 @shared_task(bind=True, autoretry_for=(), retry_backoff=False)
-def auto_ai_build_packs_task(
-    self, prev: Mapping[str, object] | None
-) -> dict[str, object]:
-    """Build AI merge packs for merge_best AI candidates."""
+def ai_build_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, object]:
+    """Build AI merge packs for accounts requiring AI decisions."""
 
     payload = _ensure_payload(prev)
     sid = str(payload.get("sid") or "")
     if not sid:
-        logger.info("AUTO_AI_BUILD skip: missing sid in payload=%s", payload)
+        logger.info("AUTO_AI_BUILD_SKIP payload=%s", payload)
         return payload
 
-    runs_root_value = payload.get("runs_root")
-    runs_root_path = Path(str(runs_root_value)) if runs_root_value else Path("runs")
-    payload["runs_root"] = str(runs_root_path)
+    _populate_common_paths(payload)
+    runs_root = Path(payload["runs_root"])
 
-    logger.info("AUTO_AI_BUILD start sid=%s", sid)
+    logger.info("AUTO_AI_BUILD_START sid=%s", sid)
 
     try:
-        _build_ai_packs(sid, runs_root_path)
+        _build_ai_packs(sid, runs_root)
     except Exception:  # pragma: no cover - defensive logging
-        logger.error("AUTO_AI_BUILD failed sid=%s", sid, exc_info=True)
+        logger.error("AUTO_AI_BUILD_FAILED sid=%s", sid, exc_info=True)
         raise
 
-    index_path = runs_root_path / sid / "ai_packs" / "index.json"
+    index_path = runs_root / sid / "ai_packs" / "index.json"
     try:
         index_entries = _load_ai_index(index_path)
     except Exception:  # pragma: no cover - defensive logging
-        logger.error("AUTO_AI_BUILD invalid index sid=%s path=%s", sid, index_path, exc_info=True)
+        logger.error("AUTO_AI_BUILD_INVALID_INDEX sid=%s path=%s", sid, index_path, exc_info=True)
         raise
 
     payload["ai_index"] = index_entries
 
-    touched = set()
-    for value in payload.get("touched_accounts", []):
-        try:
-            touched.add(int(value))
-        except (TypeError, ValueError):
-            continue
+    touched: set[int] = set(_normalize_indices(payload.get("touched_accounts", [])))
     touched.update(_indices_from_index(index_entries))
     payload["touched_accounts"] = sorted(touched)
 
-    logger.info(
-        "AUTO_AI_BUILD done sid=%s packs=%d", sid, len(index_entries)
-    )
+    logger.info("AUTO_AI_BUILD_END sid=%s packs=%d", sid, len(index_entries))
     return payload
 
 
 @shared_task(bind=True, autoretry_for=(), retry_backoff=False)
-def auto_ai_send_packs_task(
-    self, prev: Mapping[str, object] | None
-) -> dict[str, object]:
-    """Send AI packs for adjudication and persist AI decision tags."""
+def ai_send_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, object]:
+    """Send AI merge packs for adjudication and persist AI decision tags."""
 
     payload = _ensure_payload(prev)
     sid = str(payload.get("sid") or "")
     if not sid:
-        logger.info("AUTO_AI_SEND skip: missing sid in payload=%s", payload)
+        logger.info("AUTO_AI_SEND_SKIP payload=%s", payload)
         return payload
 
-    runs_root_value = payload.get("runs_root")
-    runs_root_path = Path(str(runs_root_value)) if runs_root_value else None
+    _populate_common_paths(payload)
+    runs_root = Path(payload["runs_root"])
 
-    logger.info("AUTO_AI_SEND start sid=%s", sid)
+    logger.info("AUTO_AI_SEND_START sid=%s", sid)
 
     try:
-        _send_ai_packs(sid, runs_root=runs_root_path)
+        _send_ai_packs(sid, runs_root=runs_root)
     except Exception:  # pragma: no cover - defensive logging
-        logger.error("AUTO_AI_SEND failed sid=%s", sid, exc_info=True)
+        logger.error("AUTO_AI_SEND_FAILED sid=%s", sid, exc_info=True)
         raise
 
-    logger.info("AUTO_AI_SEND done sid=%s", sid)
+    logger.info("AUTO_AI_SEND_END sid=%s", sid)
     return payload
 
 
 @shared_task(bind=True, autoretry_for=(), retry_backoff=False)
-def auto_ai_compact_task(
-    self, prev: Mapping[str, object] | None, accounts_dir: str
-) -> dict[str, object]:
-    """Compact tags for accounts touched by the AI pipeline."""
-
-    payload = _ensure_payload(prev)
-    indices = payload.get("touched_accounts", [])
-    accounts_path = Path(accounts_dir)
-
-    if not accounts_path.exists():
-        logger.info(
-            "AUTO_AI_COMPACT skip: accounts_dir missing sid=%s dir=%s",
-            payload.get("sid"),
-            accounts_path,
-        )
-        return payload
-
-    logger.info(
-        "AUTO_AI_COMPACT start sid=%s accounts=%d dir=%s",
-        payload.get("sid"),
-        len(indices) if isinstance(indices, list) else 0,
-        accounts_path,
-    )
-
-    try:
-        _compact_accounts(accounts_path, indices)
-    except Exception:  # pragma: no cover - defensive logging
-        logger.error(
-            "AUTO_AI_COMPACT failed sid=%s dir=%s",
-            payload.get("sid"),
-            accounts_path,
-            exc_info=True,
-        )
-        raise
-
-    logger.info("AUTO_AI_COMPACT done sid=%s", payload.get("sid"))
-    return payload
-
-
-@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
-def auto_ai_finalize_task(
-    self, prev: Mapping[str, object] | None, marker_path: str | None
-) -> dict[str, object]:
-    """Remove the pipeline-in-progress marker once the workflow completes."""
+def ai_compact_tags_step(self, prev: Mapping[str, object] | None) -> dict[str, object]:
+    """Compact tags and summaries for accounts touched by the AI pipeline."""
 
     payload = _ensure_payload(prev)
     sid = str(payload.get("sid") or "")
-    path = Path(marker_path) if marker_path else None
-
-    if path is None:
-        logger.info("AUTO_AI_FINALIZE sid=%s marker=None", sid)
+    if not sid:
+        logger.info("AUTO_AI_COMPACT_SKIP payload=%s", payload)
         return payload
 
-    try:
-        if path.exists():
-            path.unlink()
-            logger.info("AUTO_AI_FINALIZE sid=%s marker_removed=%s", sid, path)
-        else:
-            logger.info("AUTO_AI_FINALIZE sid=%s marker_missing=%s", sid, path)
-    except Exception:  # pragma: no cover - defensive logging
-        logger.warning(
-            "AUTO_AI_FINALIZE sid=%s marker_cleanup_failed=%s", sid, path, exc_info=True
-        )
+    _populate_common_paths(payload)
+
+    accounts_dir_value = payload.get("accounts_dir")
+    accounts_dir = Path(str(accounts_dir_value)) if accounts_dir_value else None
+    indices = sorted(_normalize_indices(payload.get("touched_accounts", [])))
+
+    logger.info(
+        "AUTO_AI_COMPACT_START sid=%s accounts=%d", sid, len(indices)
+    )
+
+    if accounts_dir and accounts_dir.exists() and indices:
+        try:
+            _compact_accounts(accounts_dir, indices)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.error(
+                "AUTO_AI_COMPACT_FAILED sid=%s dir=%s", sid, accounts_dir, exc_info=True
+            )
+            raise
+
+    logger.info("AUTO_AI_COMPACT_END sid=%s", sid)
+
+    marker_value = payload.get("marker_path")
+    if marker_value:
+        marker_path = Path(str(marker_value))
+        try:
+            if marker_path.exists():
+                marker_path.unlink()
+                logger.info(
+                    "AUTO_AI_CHAIN_DONE sid=%s marker_removed=%s", sid, marker_path
+                )
+            else:
+                logger.info(
+                    "AUTO_AI_CHAIN_DONE sid=%s marker_missing=%s", sid, marker_path
+                )
+        except Exception:  # pragma: no cover - defensive logging
+            logger.warning(
+                "AUTO_AI_CHAIN_DONE sid=%s marker_cleanup_failed=%s",
+                sid,
+                marker_path,
+                exc_info=True,
+            )
+    else:
+        logger.info("AUTO_AI_CHAIN_DONE sid=%s marker_missing=None", sid)
+
     return payload
 
 
-def enqueue_auto_ai_pipeline(*, sid: str, runs_root: str, marker_path: str | None = None):
-    """Queue the Celery task chain for the auto AI adjudication pipeline."""
+def enqueue_auto_ai_chain(sid: str) -> str:
+    """Queue the AI adjudication Celery chain and return the root task id."""
 
-    runs_root_path = Path(runs_root)
-    accounts_dir = runs_root_path / sid / "cases" / "accounts"
+    logger.info("AUTO_AI_CHAIN_START sid=%s", sid)
+
     workflow = chain(
-        auto_ai_score_task.s(sid, runs_root),
-        auto_ai_build_packs_task.s(),
-        auto_ai_send_packs_task.s(),
-        auto_ai_compact_task.s(str(accounts_dir)),
+        ai_score_step.s(sid),
+        ai_build_packs_step.s(),
+        ai_send_packs_step.s(),
+        ai_compact_tags_step.s(),
     )
-    if marker_path is not None:
-        workflow = chain(workflow, auto_ai_finalize_task.s(marker_path))
-    return workflow.apply_async()
+
+    result = workflow.apply_async()
+    task_id = str(result.id)
+
+    logger.info("AUTO_AI_CHAIN_ENQUEUED sid=%s task_id=%s", sid, task_id)
+    return task_id
+

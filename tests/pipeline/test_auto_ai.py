@@ -37,16 +37,11 @@ def test_maybe_queue_auto_ai_pipeline_queues_when_candidates(monkeypatch, tmp_pa
 
     recorded: dict[str, object] = {}
 
-    class DummyResult:
-        id = "async-result"
-
-    def fake_enqueue(*, sid: str, runs_root: str, marker_path: str | None = None):
+    def fake_enqueue(sid: str) -> str:
         recorded["sid"] = sid
-        recorded["runs_root"] = Path(runs_root)
-        recorded["marker_path"] = Path(marker_path) if marker_path else None
-        return DummyResult()
+        return "async-result"
 
-    monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_pipeline", fake_enqueue)
+    monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_chain", fake_enqueue)
 
     result = auto_ai.maybe_queue_auto_ai_pipeline(
         sid,
@@ -57,11 +52,7 @@ def test_maybe_queue_auto_ai_pipeline_queues_when_candidates(monkeypatch, tmp_pa
     marker_path = runs_root / sid / "ai_packs" / auto_ai.PIPELINE_MARKER_FILENAME
 
     assert result["queued"] is True
-    assert recorded == {
-        "sid": sid,
-        "runs_root": runs_root,
-        "marker_path": marker_path,
-    }
+    assert recorded == {"sid": sid}
     assert marker_path.exists()
 
 
@@ -74,7 +65,7 @@ def test_maybe_queue_auto_ai_pipeline_skips_without_candidates(monkeypatch, tmp_
     _write_json(tags_path, [{"kind": "merge_best", "decision": "human", "with": 44}])
 
     calls: list[object] = []
-    monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_pipeline", lambda **_: calls.append(1))
+    monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_chain", lambda sid: calls.append(sid))
 
     result = auto_ai.maybe_queue_auto_ai_pipeline(sid, runs_root=runs_root, flag_env=flag_env)
 
@@ -91,7 +82,7 @@ def test_maybe_queue_auto_ai_pipeline_skips_when_disabled(monkeypatch, tmp_path:
     _write_json(tags_path, [{"kind": "merge_best", "decision": "ai", "with": 56}])
 
     calls: list[object] = []
-    monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_pipeline", lambda **_: calls.append(1))
+    monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_chain", lambda sid: calls.append(sid))
 
     result = auto_ai.maybe_queue_auto_ai_pipeline(sid, runs_root=runs_root, flag_env=flag_env)
 
@@ -112,7 +103,7 @@ def test_maybe_queue_auto_ai_pipeline_skips_when_marker_present(monkeypatch, tmp
     marker_path.write_text("{}", encoding="utf-8")
 
     calls: list[object] = []
-    monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_pipeline", lambda **_: calls.append(1))
+    monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_chain", lambda sid: calls.append(sid))
 
     result = auto_ai.maybe_queue_auto_ai_pipeline(sid, runs_root=runs_root, flag_env=flag_env)
 

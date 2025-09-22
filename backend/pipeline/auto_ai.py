@@ -85,11 +85,7 @@ def maybe_queue_auto_ai_pipeline(
     try:
         from backend.pipeline import auto_ai_tasks
 
-        result = auto_ai_tasks.enqueue_auto_ai_pipeline(
-            sid=sid,
-            runs_root=str(runs_root_path),
-            marker_path=str(marker_path),
-        )
+        task_id = auto_ai_tasks.enqueue_auto_ai_chain(sid)
     except Exception:  # pragma: no cover - defensive logging
         logger.error("AUTO_AI_QUEUE_FAILED sid=%s", sid, exc_info=True)
         try:
@@ -103,8 +99,7 @@ def maybe_queue_auto_ai_pipeline(
 
     logger.info("AUTO_AI_QUEUED sid=%s", sid)
     payload: dict[str, object] = {"queued": True}
-    task_id = getattr(result, "id", None)
-    if task_id is not None:
+    if task_id:
         payload["task_id"] = task_id
     payload["marker_path"] = str(marker_path)
     return payload

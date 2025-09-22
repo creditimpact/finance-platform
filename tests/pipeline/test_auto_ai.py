@@ -52,6 +52,7 @@ def test_maybe_queue_auto_ai_pipeline_queues_when_candidates(monkeypatch, tmp_pa
     marker_path = runs_root / sid / "ai_packs" / auto_ai.PIPELINE_MARKER_FILENAME
 
     assert result["queued"] is True
+    assert result["reason"] == "queued"
     assert recorded == {"sid": sid}
     assert marker_path.exists()
 

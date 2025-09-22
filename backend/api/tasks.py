@@ -224,17 +224,25 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
         cases_info.get("dir"),
     )
 
+    ai_result: dict[str, object] = {"queued": False, "reason": "unknown"}
     try:
         manifest = RunManifest.for_sid(sid)
         runs_root = manifest.path.parent.parent
-        maybe_queue_auto_ai_pipeline(
+        ai_result = maybe_queue_auto_ai_pipeline(
             sid,
             runs_root=runs_root,
             flag_env=os.environ,
         )
     except Exception:
         log.error("AUTO_AI_PIPELINE_FAILED sid=%s", sid, exc_info=True)
-        raise
+        ai_result = {"queued": False, "reason": "error"}
+
+    log.info(
+        "AUTO_AI_MAYBE_QUEUE sid=%s queued=%d reason=%s",
+        sid,
+        1 if ai_result.get("queued") else 0,
+        ai_result.get("reason", "unknown"),
+    )
 
     return summary
 

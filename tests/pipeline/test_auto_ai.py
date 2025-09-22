@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 from backend.pipeline import auto_ai, auto_ai_tasks
-from backend.pipeline.runs import RunManifest
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -31,13 +30,9 @@ def test_has_ai_merge_best_pairs_handles_missing(tmp_path: Path) -> None:
 def test_maybe_queue_auto_ai_pipeline_queues_when_candidates(monkeypatch, tmp_path: Path) -> None:
     sid = "queue-me"
     runs_root = tmp_path / "runs"
-    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
-    monkeypatch.setenv("ENABLE_AUTO_AI_PIPELINE", "1")
+    flag_env = {"ENABLE_AUTO_AI_PIPELINE": "1"}
 
-    manifest = RunManifest.for_sid(sid)
-    run_dir = manifest.path.parent
-    accounts_dir = run_dir / "cases" / "accounts"
-    tags_path = accounts_dir / "11" / "tags.json"
+    tags_path = runs_root / sid / "cases" / "accounts" / "11" / "tags.json"
     _write_json(tags_path, [{"kind": "merge_best", "decision": "ai", "with": 16}])
 
     recorded: dict[str, object] = {}
@@ -45,64 +40,81 @@ def test_maybe_queue_auto_ai_pipeline_queues_when_candidates(monkeypatch, tmp_pa
     class DummyResult:
         id = "async-result"
 
-    def fake_enqueue(*, sid: str, runs_root: str, accounts_dir: str):
+    def fake_enqueue(*, sid: str, runs_root: str, marker_path: str | None = None):
         recorded["sid"] = sid
         recorded["runs_root"] = Path(runs_root)
-        recorded["accounts_dir"] = Path(accounts_dir)
+        recorded["marker_path"] = Path(marker_path) if marker_path else None
         return DummyResult()
 
     monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_pipeline", fake_enqueue)
 
     result = auto_ai.maybe_queue_auto_ai_pipeline(
         sid,
-        summary={"cases": {"dir": str(accounts_dir)}},
+        runs_root=runs_root,
+        flag_env=flag_env,
     )
 
-    assert isinstance(result, DummyResult)
+    marker_path = runs_root / sid / "ai_packs" / auto_ai.PIPELINE_MARKER_FILENAME
+
+    assert result["queued"] is True
     assert recorded == {
         "sid": sid,
         "runs_root": runs_root,
-        "accounts_dir": accounts_dir,
+        "marker_path": marker_path,
     }
+    assert marker_path.exists()
 
 
 def test_maybe_queue_auto_ai_pipeline_skips_without_candidates(monkeypatch, tmp_path: Path) -> None:
     sid = "skip-me"
     runs_root = tmp_path / "runs"
-    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
-    monkeypatch.setenv("ENABLE_AUTO_AI_PIPELINE", "1")
+    flag_env = {"ENABLE_AUTO_AI_PIPELINE": "1"}
 
-    manifest = RunManifest.for_sid(sid)
-    run_dir = manifest.path.parent
-    accounts_dir = run_dir / "cases" / "accounts"
-    tags_path = accounts_dir / "33" / "tags.json"
+    tags_path = runs_root / sid / "cases" / "accounts" / "33" / "tags.json"
     _write_json(tags_path, [{"kind": "merge_best", "decision": "human", "with": 44}])
 
     calls: list[object] = []
     monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_pipeline", lambda **_: calls.append(1))
 
-    result = auto_ai.maybe_queue_auto_ai_pipeline(sid)
+    result = auto_ai.maybe_queue_auto_ai_pipeline(sid, runs_root=runs_root, flag_env=flag_env)
 
-    assert result is None
+    assert result == {"queued": False, "reason": "no_candidates"}
     assert calls == []
 
 
 def test_maybe_queue_auto_ai_pipeline_skips_when_disabled(monkeypatch, tmp_path: Path) -> None:
     sid = "disabled"
     runs_root = tmp_path / "runs"
-    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
-    monkeypatch.delenv("ENABLE_AUTO_AI_PIPELINE", raising=False)
+    flag_env = {}
 
-    manifest = RunManifest.for_sid(sid)
-    run_dir = manifest.path.parent
-    accounts_dir = run_dir / "cases" / "accounts"
-    tags_path = accounts_dir / "55" / "tags.json"
+    tags_path = runs_root / sid / "cases" / "accounts" / "55" / "tags.json"
     _write_json(tags_path, [{"kind": "merge_best", "decision": "ai", "with": 56}])
 
     calls: list[object] = []
     monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_pipeline", lambda **_: calls.append(1))
 
-    result = auto_ai.maybe_queue_auto_ai_pipeline(sid)
+    result = auto_ai.maybe_queue_auto_ai_pipeline(sid, runs_root=runs_root, flag_env=flag_env)
 
-    assert result is None
+    assert result == {"queued": False, "reason": "disabled"}
+    assert calls == []
+
+
+def test_maybe_queue_auto_ai_pipeline_skips_when_marker_present(monkeypatch, tmp_path: Path) -> None:
+    sid = "in-progress"
+    runs_root = tmp_path / "runs"
+    flag_env = {"ENABLE_AUTO_AI_PIPELINE": "1"}
+
+    tags_path = runs_root / sid / "cases" / "accounts" / "11" / "tags.json"
+    _write_json(tags_path, [{"kind": "merge_best", "decision": "ai", "with": 99}])
+
+    marker_path = runs_root / sid / "ai_packs" / auto_ai.PIPELINE_MARKER_FILENAME
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text("{}", encoding="utf-8")
+
+    calls: list[object] = []
+    monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_pipeline", lambda **_: calls.append(1))
+
+    result = auto_ai.maybe_queue_auto_ai_pipeline(sid, runs_root=runs_root, flag_env=flag_env)
+
+    assert result == {"queued": False, "reason": "in_progress"}
     assert calls == []

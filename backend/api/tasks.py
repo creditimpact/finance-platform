@@ -225,7 +225,13 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
     )
 
     try:
-        maybe_queue_auto_ai_pipeline(sid, summary=summary)
+        manifest = RunManifest.for_sid(sid)
+        runs_root = manifest.path.parent.parent
+        maybe_queue_auto_ai_pipeline(
+            sid,
+            runs_root=runs_root,
+            flag_env=os.environ,
+        )
     except Exception:
         log.error("AUTO_AI_PIPELINE_FAILED sid=%s", sid, exc_info=True)
         raise

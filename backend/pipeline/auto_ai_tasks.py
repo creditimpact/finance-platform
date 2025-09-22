@@ -21,6 +21,7 @@ from backend.pipeline.auto_ai import (
     _load_ai_index,
     _normalize_indices,
     _send_ai_packs,
+    has_ai_merge_best_pairs,
 )
 from scripts.score_bureau_pairs import score_accounts
 
@@ -181,6 +182,12 @@ def ai_build_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, ob
 
     logger.info("AUTO_AI_BUILD_START sid=%s", sid)
 
+    if not has_ai_merge_best_pairs(sid, runs_root):
+        logger.info("AUTO_AI_NO_CANDIDATES sid=%s", sid)
+        payload["ai_index"] = []
+        payload["skip_reason"] = "no_candidates"
+        return payload
+
     try:
         _build_ai_packs(sid, runs_root)
     except Exception:  # pragma: no cover - defensive logging
@@ -220,6 +227,12 @@ def ai_send_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, obj
     runs_root = Path(payload["runs_root"])
 
     logger.info("AUTO_AI_SEND_START sid=%s", sid)
+
+    index_entries = payload.get("ai_index")
+    if not index_entries:
+        reason = str(payload.get("skip_reason") or "no_packs")
+        logger.info("AUTO_AI_SEND_SKIP sid=%s reason=%s", sid, reason)
+        return payload
 
     try:
         _send_ai_packs(sid, runs_root=runs_root)

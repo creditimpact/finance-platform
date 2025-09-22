@@ -396,6 +396,16 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     assert first_result["packs"] == 1
     assert first_result["pairs"] == 2
 
+    logs_path = runs_root / sid / "ai_packs" / "logs.txt"
+    first_logs = [
+        json.loads(line)
+        for line in logs_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(first_logs) == 1
+    assert first_logs[0]["packs"] == 1
+    assert first_logs[0]["pairs"] == 2
+
     tags_a_first = json.loads((account_a / "tags.json").read_text(encoding="utf-8"))
     tags_b_first = json.loads((account_b / "tags.json").read_text(encoding="utf-8"))
     summary_a_first = json.loads((account_a / "summary.json").read_text(encoding="utf-8"))
@@ -413,6 +423,14 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
 
     assert second_result["packs"] == 1
     assert second_result["pairs"] == 2
+
+    second_logs = [
+        json.loads(line)
+        for line in logs_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [entry["packs"] for entry in second_logs] == [1, 1]
+    assert [entry["pairs"] for entry in second_logs] == [2, 2]
 
     tags_a_second = json.loads((account_a / "tags.json").read_text(encoding="utf-8"))
     tags_b_second = json.loads((account_b / "tags.json").read_text(encoding="utf-8"))

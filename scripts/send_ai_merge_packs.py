@@ -45,12 +45,14 @@ DEFAULT_BACKOFF_SCHEDULE = "1,3,7"
 def _load_index(path: Path) -> list[Mapping[str, object]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(data, MappingABC):
-        pairs = data.get("pairs")
-        if pairs is None:
+        entries = data.get("pairs")
+        if entries is None:
+            entries = data.get("packs")
+        if entries is None:
             return []
-        if not isinstance(pairs, list):
-            raise ValueError(f"Pack index 'pairs' must be a list: {path}")
-        return [dict(entry) for entry in pairs if isinstance(entry, MappingABC)]
+        if not isinstance(entries, list):
+            raise ValueError(f"Pack index entries must be a list: {path}")
+        return [dict(entry) for entry in entries if isinstance(entry, MappingABC)]
     if isinstance(data, list):  # pragma: no cover - legacy support
         return [dict(entry) for entry in data if isinstance(entry, MappingABC)]
     raise ValueError(f"Pack index must be a mapping or list: {path}")
@@ -463,8 +465,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         pack = _load_pack(pack_path)
         total += 1
 
-        log = _log_factory(logs_path, sid, {"a": a_idx, "b": b_idx}, pack_path.name)
-        log(
+        pack_log = _log_factory(logs_path, sid, {"a": a_idx, "b": b_idx}, pack_path.name)
+        pack_log(
             "PACK_START",
             {
                 "max_attempts": max_attempts,
@@ -476,7 +478,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         while attempts < max_attempts:
             attempts += 1
-            log(
+            pack_log(
                 "REQUEST",
                 {"attempt": attempts, "max_attempts": max_attempts},
             )
@@ -488,7 +490,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 raise
             except Exception as exc:
                 last_error = exc
-                log(
+                pack_log(
                     "ERROR",
                     {
                         "attempt": attempts,
@@ -501,7 +503,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     break
                 next_attempt = attempts + 1
                 delay = _backoff_delay(backoff_schedule, attempts)
-                log(
+                pack_log(
                     "RETRY",
                     {
                         "attempt": next_attempt,
@@ -512,7 +514,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 if delay > 0:
                     time.sleep(delay)
             else:
-                log(
+                pack_log(
                     "RESPONSE",
                     {
                         "attempt": attempts,
@@ -524,7 +526,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         if decision_payload is None:
             error_name = last_error.__class__.__name__ if last_error else "UnknownError"
             message = str(last_error) if last_error else ""
-            log(
+            pack_log(
                 "PACK_FAILURE",
                 {
                     "attempts": attempts,
@@ -541,7 +543,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         decision_value = str(decision_raw).strip().lower() if decision_raw is not None else ""
         reason = str(reason_raw).strip() if reason_raw is not None else ""
         if decision_value not in {"merge", "different", "same_debt"} or not reason:
-            log(
+            pack_log(
                 "ERROR",
                 {
                     "attempt": attempts,
@@ -549,7 +551,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "message": "Decision payload missing required fields",
                 },
             )
-            log(
+            pack_log(
                 "PACK_FAILURE",
                 {
                     "attempts": attempts,
@@ -585,7 +587,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             timestamp,
             payload_for_tags,
         )
-        log(
+        pack_log(
             "PACK_SUCCESS",
             {
                 "attempts": attempts,

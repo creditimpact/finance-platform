@@ -299,7 +299,16 @@ def compact_account_tags(account_dir: Path) -> None:
         if ai_payloads:
             ai_explanations.extend(ai_payloads)
 
-    write_tags_atomic(account_path, minimal_tags)
+    deduped_tags: list[dict[str, Any]] = []
+    seen_signatures: set[str] = set()
+    for tag in minimal_tags:
+        signature = json.dumps(tag, sort_keys=True, separators=(",", ":"))
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+        deduped_tags.append(tag)
+
+    write_tags_atomic(account_path, deduped_tags)
 
     summary_path = account_path / "summary.json"
     summary_data = _load_summary(summary_path)

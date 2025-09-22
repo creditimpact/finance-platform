@@ -84,28 +84,27 @@ class RunManifest:
                 "exports_dir": None,
                 "logs_dir": None,
             },
+            "ai": {
+                "packs": {
+                    "dir": None,
+                    "index": None,
+                    "pairs": 0,
+                    "last_built_at": None,
+                },
+                "status": {
+                    "enqueued": False,
+                    "built": False,
+                    "sent": False,
+                    "compacted": False,
+                    "skipped_reason": None,
+                },
+            },
             "artifacts": {
                 "uploads": {},
                 "traces": {"accounts_table": {}},
                 "cases": {},
                 "exports": {},
                 "logs": {},
-                "ai": {
-                    "packs": {
-                        "dir": None,
-                        "index": None,
-                        "pairs": 0,
-                        "last_built_at": None,
-                    },
-                    "status": {
-                        "enqueued": False,
-                        "built": False,
-                        "sent": False,
-                        "compacted": False,
-                        "skipped_reason": None,
-                    },
-                },
-                "ai_packs": {},
             },
             "env_snapshot": {}
         }
@@ -121,10 +120,34 @@ class RunManifest:
     def save(self) -> "RunManifest":
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
+        self._mirror_ai_to_legacy_artifacts()
         with tmp.open("w", encoding="utf-8") as fh:
             json.dump(self.data, fh, ensure_ascii=False, indent=2)
         safe_replace(tmp, self.path)
         return self
+
+    def _mirror_ai_to_legacy_artifacts(self) -> None:
+        ai_section = self.data.get("ai")
+        if not isinstance(ai_section, dict):
+            return
+
+        artifacts = self.data.setdefault("artifacts", {})
+        artifacts.pop("ai_packs", None)
+
+        legacy_ai = artifacts.setdefault("ai", {})
+
+        packs = ai_section.get("packs")
+        if isinstance(packs, dict):
+            legacy_packs = legacy_ai.setdefault("packs", {})
+            for key in ("dir", "index", "pairs", "last_built_at"):
+                if key in packs:
+                    legacy_packs[key] = packs[key]
+
+        status = ai_section.get("status")
+        if isinstance(status, dict):
+            legacy_status = legacy_ai.setdefault("status", {})
+            for key, value in status.items():
+                legacy_status[key] = value
 
     def _update_index(self, sid: str) -> None:
         idx = _runs_root() / "index.json"
@@ -207,6 +230,11 @@ class RunManifest:
         )
         return packs, status
 
+    def upsert_ai_packs_dir(self, packs_dir: Path) -> "RunManifest":
+        self.data.setdefault("ai", {}).setdefault("packs", {})
+        self.data["ai"]["packs"]["dir"] = str(Path(packs_dir).resolve())
+        return self
+
     def set_ai_enqueued(self) -> "RunManifest":
         _, status = self._ensure_ai_section()
         status["enqueued"] = True
@@ -216,7 +244,7 @@ class RunManifest:
     def set_ai_built(self, packs_dir: Path, pairs: int) -> "RunManifest":
         packs, status = self._ensure_ai_section()
         packs_path = Path(packs_dir).resolve()
-        packs["dir"] = str(packs_path)
+        self.upsert_ai_packs_dir(packs_path)
         packs["index"] = str((packs_path / "index.json").resolve())
         packs["pairs"] = int(pairs)
         packs["last_built_at"] = _utc_now()
@@ -265,12 +293,18 @@ class RunManifest:
         if not isinstance(packs, dict):
             return None
         path_value = packs.get("index")
-        if not path_value:
-            return None
-        try:
-            return Path(path_value)
-        except (TypeError, ValueError):
-            return None
+        candidates: list[Path | str | None] = [path_value]
+        dir_value = packs.get("dir")
+        if not path_value and dir_value:
+            candidates.append(Path(dir_value) / "index.json")
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                return Path(candidate)
+            except (TypeError, ValueError):
+                continue
+        return None
 
     def ensure_run_subdir(self, label: str, rel: str) -> Path:
         """
@@ -303,7 +337,7 @@ def write_breadcrumb(target_manifest: Path, breadcrumb_file: Path) -> None:
 def persist_manifest(
     manifest: RunManifest,
     *,
-    artifacts: Mapping[str, Mapping[str, Path | str]] | None = None,
+    artifacts: Mapping[str, Mapping[str, Path | str | int]] | None = None,
 ) -> RunManifest:
     """Persist ``manifest`` after applying artifact path updates.
 
@@ -319,6 +353,43 @@ def persist_manifest(
     if artifacts:
         manifest_artifacts = manifest.data.setdefault("artifacts", {})
         for group, entries in artifacts.items():
+            if group == "ai_packs":
+                packs_updates = dict(entries)
+                packs, _ = manifest._ensure_ai_section()
+
+                dir_value = packs_updates.pop("dir", None)
+                if dir_value is not None and str(dir_value) != "":
+                    manifest.upsert_ai_packs_dir(Path(dir_value))
+
+                index_value = packs_updates.pop("index", None)
+                if index_value is not None and str(index_value) != "":
+                    packs["index"] = str(Path(index_value).resolve())
+                elif packs.get("dir") and not packs.get("index"):
+                    packs["index"] = str((Path(packs["dir"]) / "index.json").resolve())
+
+                pairs_value = packs_updates.pop("pairs", None)
+                if pairs_value is not None:
+                    packs["pairs"] = int(pairs_value)
+
+                pairs_count_value = packs_updates.pop("pairs_count", None)
+                if pairs_count_value is not None:
+                    packs["pairs"] = int(pairs_count_value)
+
+                last_built_value = packs_updates.pop("last_built_at", None)
+                if last_built_value is not None:
+                    packs["last_built_at"] = str(last_built_value)
+
+                logs_value = packs_updates.pop("logs", None)
+                if logs_value is not None and str(logs_value) != "":
+                    manifest_artifacts.setdefault("ai", {})["logs"] = str(
+                        Path(logs_value).resolve()
+                    )
+
+                for extra_key, extra_value in packs_updates.items():
+                    packs[str(extra_key)] = extra_value
+
+                continue
+
             cursor = manifest_artifacts
             for part in str(group).split("."):
                 cursor = cursor.setdefault(part, {})

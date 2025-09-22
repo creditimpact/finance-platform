@@ -1,0 +1,167 @@
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+Transunion
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+Experian
+--
+$0
+--
+1.5.2025
+31.7.2025
+1.11.2022
+$12,091
+--
+Derogatory
+Individual
+Account not disputed
+Bank Credit Cards
+Closed
+Collection/Chargeoff
+Account has been closed due to
+inactivity.
+Unpaid balance reported as a
+loss by the credit grantor.
+$0
+13.9.2024
+--
+$12,091
+Credit Card
+--
+$11,000
+Equifax
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+Two-Year Payment History
+Transunion
+NONE REPORTED
+Experian
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+30
+נוב׳
+60
+דצמ׳
+90
+ינו׳
+120
+פבר׳
+150
+מרץ
+אפר׳
+CO
+מאי
+CO
+יוני
+CO
+יולי
+Equifax
+NONE REPORTED
+Days Late - 7 Year History
+Transunion
+30: --
+60: --
+90: --
+Experian
+30: 1
+60: 1
+90: 3
+Equifax
+30: --
+60: --
+90: --
+Public Information
+®
+®
+®
+®
+®
+®

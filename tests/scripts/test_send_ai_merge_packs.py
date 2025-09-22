@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from backend.core.logic.report_analysis.tags_compact import compact_tags_for_account
+from backend.pipeline.runs import RunManifest
 from backend.pipeline.runs import RUNS_ROOT_ENV
 from scripts import send_ai_merge_packs
 from scripts.build_ai_merge_packs import main as build_ai_merge_packs_main
@@ -103,6 +104,15 @@ def test_send_ai_merge_packs_records_merge_decision(
         ["--sid", sid, "--runs-root", str(runs_root), "--max-lines-per-side", "6"]
     )
 
+    manifest = RunManifest.for_sid(sid)
+    packs_info = manifest.data.get("ai", {}).get("packs", {})
+    status_info = manifest.data.get("ai", {}).get("status", {})
+    packs_dir = (runs_root / sid / "ai_packs").resolve()
+    assert Path(packs_info.get("dir")) == packs_dir
+    assert Path(packs_info.get("index")).exists()
+    assert packs_info.get("pairs") == 1
+    assert status_info.get("built") is True
+
     monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("RUNS_ROOT", str(runs_root))
@@ -119,6 +129,12 @@ def test_send_ai_merge_packs_records_merge_decision(
     )
 
     send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
+
+    manifest = RunManifest.for_sid(sid)
+    status_info = manifest.data.get("ai", {}).get("status", {})
+    assert status_info.get("sent") is True
+    assert status_info.get("compacted") is True
+    assert status_info.get("skipped_reason") is None
 
     account_a_tags = json.loads((account_a_dir / "tags.json").read_text(encoding="utf-8"))
     account_b_tags = json.loads((account_b_dir / "tags.json").read_text(encoding="utf-8"))
@@ -167,10 +183,23 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
             },
         ]
     }
-    pack_path = packs_dir / "011-016.json"
-    pack_path.write_text(json.dumps(pack_payload), encoding="utf-8")
-    index_payload = [{"a": 11, "b": 16, "file": pack_path.name}]
-    (packs_dir / "index.json").write_text(json.dumps(index_payload), encoding="utf-8")
+    pack_filename = "pair_011_016.jsonl"
+    pack_path = packs_dir / pack_filename
+    pack_path.write_text(json.dumps(pack_payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    index_payload = {
+        "sid": sid,
+        "pairs": [
+            {
+                "a": 11,
+                "b": 16,
+                "pack_file": pack_filename,
+                "lines_a": 0,
+                "lines_b": 0,
+                "score_total": 0,
+            }
+        ],
+    }
+    (packs_dir / "index.json").write_text(json.dumps(index_payload, ensure_ascii=False), encoding="utf-8")
 
     monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -241,12 +270,17 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
     assert any("AI_ADJUDICATOR_RESPONSE" in line for line in log_lines)
     assert any("AI_ADJUDICATOR_PACK_SUCCESS" in line for line in log_lines)
 
-    manifest_path = runs_root / sid / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    ai_artifacts = manifest["artifacts"]["ai_packs"]
+    manifest = RunManifest.for_sid(sid)
+    manifest_data = json.loads((runs_root / sid / "manifest.json").read_text(encoding="utf-8"))
+    ai_artifacts = manifest_data["artifacts"]["ai_packs"]
     assert Path(ai_artifacts["dir"]) == packs_dir.resolve()
     assert Path(ai_artifacts["index"]) == (packs_dir / "index.json").resolve()
     assert Path(ai_artifacts["logs"]) == logs_path.resolve()
+
+    status_info = manifest.data.get("ai", {}).get("status", {})
+    assert status_info.get("sent") is True
+    assert status_info.get("compacted") is True
+    assert status_info.get("skipped_reason") is None
 
 
 def test_send_ai_merge_packs_logs_failure(monkeypatch: pytest.MonkeyPatch, runs_root: Path) -> None:
@@ -260,10 +294,23 @@ def test_send_ai_merge_packs_logs_failure(monkeypatch: pytest.MonkeyPatch, runs_
             {"role": "user", "content": "Account pair"},
         ]
     }
-    pack_path = packs_dir / "001-002.json"
-    pack_path.write_text(json.dumps(pack_payload), encoding="utf-8")
-    index_payload = [{"a": 1, "b": 2, "file": pack_path.name}]
-    (packs_dir / "index.json").write_text(json.dumps(index_payload), encoding="utf-8")
+    pack_filename = "pair_001_002.jsonl"
+    pack_path = packs_dir / pack_filename
+    pack_path.write_text(json.dumps(pack_payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    index_payload = {
+        "sid": sid,
+        "pairs": [
+            {
+                "a": 1,
+                "b": 2,
+                "pack_file": pack_filename,
+                "lines_a": 0,
+                "lines_b": 0,
+                "score_total": 0,
+            }
+        ],
+    }
+    (packs_dir / "index.json").write_text(json.dumps(index_payload, ensure_ascii=False), encoding="utf-8")
 
     monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -464,6 +511,18 @@ def test_ai_pairing_flow_compaction(
         "balance_owed": True,
         "last_payment": True,
     }
+
+    merge_score_a = summary_a.get("merge_scoring")
+    assert merge_score_a
+    assert merge_score_a["best_with"] == 16
+    assert merge_score_a["score_total"] >= 0
+    assert merge_score_a["reasons"]
+    assert merge_score_a["matched_fields"].get("balance_owed") is True
+
+    merge_score_b = summary_b.get("merge_scoring")
+    assert merge_score_b
+    assert merge_score_b["best_with"] == 11
+    assert merge_score_b["matched_fields"].get("balance_owed") is True
 
     # Tags should remain compact on repeated compaction.
     snapshot_a = json.loads((account_a_dir / "tags.json").read_text(encoding="utf-8"))

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Sequence
 
 try:  # pragma: no cover - convenience bootstrap
     import scripts._bootstrap  # type: ignore  # noqa: F401
@@ -20,56 +21,34 @@ from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
 from backend.pipeline.runs import RunManifest, persist_manifest
 
 
-def _write_json_file(path: Path, payload: object) -> None:
+logger = logging.getLogger(__name__)
+
+
+def _packs_dir_for(sid: str, runs_root: Path) -> Path:
+    """Return the canonical ``ai_packs`` directory for ``sid``."""
+
+    from backend.pipeline.auto_ai import packs_dir_for as _packs_dest  # local import to avoid cycles
+
+    return _packs_dest(sid, runs_root=runs_root)
+
+
+def _write_pack(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    path.write_text(serialized + "\n", encoding="utf-8")
+
+
+def _write_index(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(payload, ensure_ascii=False, indent=2)
     path.write_text(serialized + "\n", encoding="utf-8")
 
 
-def _update_run_manifest_stub(
-    run_dir: Path,
-    sid: str,
-    *,
-    ai_packs: Mapping[str, Path | str],
-) -> None:
-    """Update ``runs/<SID>/.manifest`` with the AI pack artifact metadata.
-
-    The ``.manifest`` file serves as a lightweight manifest for tooling that
-    consumes the run outputs directly (e.g., Codex automations).  Historical
-    runs may have stored only a plain-text pointer in this location.  For
-    compatibility, retain that information while merging in the structured
-    ``artifacts.ai_packs`` payload required by the automation stack.
-    """
-
-    manifest_path = run_dir / ".manifest"
-    if manifest_path.exists():
-        raw = manifest_path.read_text(encoding="utf-8").strip()
-        if raw:
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError:
-                data = {"manifest_path": raw}
-        else:
-            data = {}
-    else:
-        data = {}
-
-    if not isinstance(data, dict):
-        data = {}
-
-    data.setdefault("sid", sid)
-
-    artifacts = data.get("artifacts")
-    if not isinstance(artifacts, dict):
-        artifacts = {}
-        data["artifacts"] = artifacts
-
-    artifacts["ai_packs"] = {
-        key: str(Path(value).resolve()) for key, value in ai_packs.items()
-    }
-
-    serialized = json.dumps(data, ensure_ascii=False, indent=2)
-    manifest_path.write_text(serialized + "\n", encoding="utf-8")
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(str(value))
+    except Exception:
+        return default
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -79,6 +58,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--runs-root",
         default="runs",
         help="Root directory containing runs/<SID> outputs",
+    )
+    parser.add_argument(
+        "--packs-dir",
+        help="Destination directory for generated AI packs (defaults to runs/<SID>/ai_packs)",
     )
     parser.add_argument(
         "--max-lines-per-side",
@@ -104,7 +87,9 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     sid = str(args.sid)
     runs_root = Path(args.runs_root)
-    out_dir = runs_root / sid / "ai_packs"
+    packs_dir = Path(args.packs_dir) if args.packs_dir else _packs_dir_for(sid, runs_root)
+    packs_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("PACKS_DIR_USED sid=%s dir=%s", sid, packs_dir)
 
     packs = build_merge_ai_packs(
         sid,
@@ -113,9 +98,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         max_lines_per_side=int(args.max_lines_per_side),
     )
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    index: list[dict[str, object]] = []
+    index_entries: list[dict[str, object]] = []
     for pack in packs:
         pair = pack.get("pair") or {}
         try:
@@ -123,42 +106,50 @@ def main(argv: Sequence[str] | None = None) -> None:
             b_idx = int(pair.get("b"))
         except (TypeError, ValueError) as exc:
             raise ValueError("Pack is missing pair indices") from exc
-        filename = f"{a_idx:03d}-{b_idx:03d}.json"
-        path = out_dir / filename
-        _write_json_file(path, pack)
-        index.append({"a": a_idx, "b": b_idx, "file": filename})
 
-    index_path = out_dir / "index.json"
-    _write_json_file(index_path, index)
+        pack_filename = f"pair_{a_idx:03d}_{b_idx:03d}.jsonl"
+        pack_path = packs_dir / pack_filename
+        context = pack.get("context") if isinstance(pack.get("context"), dict) else {}
+        context_a = context.get("a") if isinstance(context.get("a"), list) else []
+        context_b = context.get("b") if isinstance(context.get("b"), list) else []
+        highlights = pack.get("highlights") if isinstance(pack.get("highlights"), dict) else {}
+        score_total = _safe_int(highlights.get("total"))
 
-    logs_path = out_dir / "logs.txt"
-    logs_path.touch(exist_ok=True)
+        _write_pack(pack_path, pack)
+        logger.info("PACK_WRITTEN sid=%s pack_file=%s lines_a=%d lines_b=%d score_total=%s", sid, pack_path.name, len(context_a), len(context_b), score_total)
 
-    manifest = RunManifest.for_sid(sid)
-    persist_manifest(
-        manifest,
-        artifacts={
-            "ai_packs": {
-                "dir": out_dir,
-                "index": index_path,
-                "logs": logs_path,
+        index_entries.append(
+            {
+                "a": a_idx,
+                "b": b_idx,
+                "pack_file": pack_filename,
+                "lines_a": len(context_a),
+                "lines_b": len(context_b),
+                "score_total": score_total,
             }
-        },
-    )
+        )
 
-    _update_run_manifest_stub(
-        runs_root / sid,
-        sid,
-        ai_packs={
-            "dir": out_dir,
-            "index": index_path,
-            "logs": logs_path,
-        },
-    )
+    pairs_count = len(index_entries)
+    if pairs_count > 0:
+        index_path = packs_dir / "index.json"
+        index_payload = {
+            "sid": sid,
+            "pairs": index_entries,
+            "pairs_count": pairs_count,
+        }
+        _write_index(index_path, index_payload)
+        logger.info("INDEX_WRITTEN sid=%s index=%s pairs=%d", sid, index_path, pairs_count)
 
-    print(f"[BUILD] wrote {len(packs)} packs to {out_dir}")
+        try:
+            manifest = RunManifest.for_sid(sid)
+            manifest.set_ai_built(packs_dir, pairs_count)
+            persist_manifest(manifest)
+            logger.info("MANIFEST_AI_PACKS_UPDATED sid=%s dir=%s index=%s pairs=%d", sid, packs_dir, index_path, pairs_count)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("MANIFEST_AI_PACKS_UPDATE_FAILED sid=%s err=%s", sid, exc)
+
+    print(f"[BUILD] wrote {len(index_entries)} packs to {packs_dir}")
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
     main()
-

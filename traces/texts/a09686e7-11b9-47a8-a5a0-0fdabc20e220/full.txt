@@ -1,0 +1,3735 @@
+*Vantage Score® 3.0 credit score
+Your 3B Report & Vantage Scores  3.0
+Transunion
+583
+Experian
+563
+Equifax
+563
+***SECURITY FREEZE: THE FOLLOWING CREDIT BUREAUS REPORT THAT YOU HAVE PLACED A SECURITY
+FREEZE OR LOCK ON THIS FILE. HOWEVER, THE FILE HAS BEEN DELIVERED TO YOU UNDER THE APPLICABLE EXEMPTION PROVISIONS
+(PROVIDING A CONSUMER WITH A COPY OF HIS OR HER CREDIT REPORT UPON THE CONSUMER'S REQUEST):
+TRANSUNION
+Personal Information
+Credit Report Date
+Name
+Also Known As:
+Date of Birth
+Current Address
+Previous Address
+Employer
+Transunion
+19.8.2025
+BRUCE CRONKHITE
+CRONKHITE,BRUCE,E
+1948
+8710 DELGANY
+PLAYA DEL REY, CA 90293
+2762 ARMACOST
+LOS ANGELES, CA 90064
+1910 GLYNDON
+VENICE, CA 90291
+HUGHES HELIOCOPTER
+Date Updated: 1.10.1975
+ST JOHNS HOSPITAL
+Date Updated: 1.7.1973
+Experian
+19.8.2025
+BRUCE E CRONKHITE
+1948
+8710 DELGANY AVE UNIT 17
+PLAYA DEL REY, CA 902938100
+2762 ARMACOST AVE
+LOS ANGELES, CA 900643504
+1910 GLYNDON AVE
+VENICE, CA 902912904
+RETIRED
+Date Updated: 1.3.2024
+Equifax
+19.8.2025
+BRUCE E CRONKHITE
+1948
+8710 DELGANY AVE UNIT 17
+PLAYA DEL REY, CA 90293
+2762 ARMACOST AVE
+LOS ANGELES, CA 90064
+1259 S 2ND ST
+SPRINGFIELD, OR 97477
+--
+Consumer Statement
+Transunion
+NONE REPORTED
+Experian
+NONE REPORTED
+Equifax
+NONE REPORTED
+Summary
+Total Accounts
+Open Accounts:
+Closed Accounts:
+Delinquent:
+Transunion
+15
+5
+10
+0
+Experian
+15
+5
+10
+0
+Equifax
+15
+5
+10
+0
+®
+®
+®
+®
+®
+®
+®
+®
+®
+®
+®
+®
+®
+
+Derogatory:
+Balances:
+Payments:
+Public Records:
+Inquiries (2 years):
+3
+$31,247
+$115
+0
+0
+3
+$31,247
+$115
+0
+1
+3
+$31,247
+$115
+0
+0
+Account History
+At-a-glance viewing of your payment history
+Unknown
+OK
+Current
+30
+30 Days
+Late
+60
+60 Days
+Late
+90
+90 Days
+Late
+120
+120 Days
+Late
+150
+150+ Days
+Late
+PP
+Payment
+Plan
+RF
+Repossession
+Foreclosure
+CO
+Collection Chargeoff
+Real Estate Accounts : Primary and secondary mortgages on your home
+BANKAMERICA
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Transunion
+208743***
+$149,500
+3.6.2019
+3.6.2019
+3.6.2019
+20.8.2009
+$0
+3.6.2019
+Closed
+Individual
+Account not disputed
+Bank - Mortgage Loans
+Closed
+Current
+Closed
+$0
+3.6.2019
+360 Month(s)
+$0
+Experian
+208743***
+$149,500
+--
+1.6.2019
+3.6.2019
+1.8.2009
+$0
+--
+Paid
+Individual
+Account not disputed
+Bank - Mortgage Loans
+Closed
+Current
+--
+$0
+3.6.2019
+360 Month(s)
+$0
+Equifax
+208743***
+$149,500
+--
+1.6.2019
+1.6.2019
+1.8.2009
+$0
+--
+Paid
+Individual
+Account not disputed
+Mortgage Companies - Finance
+Closed
+Current
+Closed or paid account/zero
+balance
+Fannie Mae account
+$0
+1.6.2019
+360 Month(s)
+$0
+®
+®
+®
+
+Account Type:
+Payment Frequency:
+Credit Limit:
+Conventional real estate
+mortgage
+Monthly (every month)
+$0
+Conventional real estate
+mortgage
+--
+$0
+Real estate mortgage
+--
+$0
+Two-Year Payment History
+Transunion
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+Experian
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+יוני
+Equifax
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+NSTAR/COOPER
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Transunion
+658671***
+$123,000
+21.10.2019
+21.10.2019
+21.10.2019
+6.12.2004
+$0
+21.10.2019
+Closed
+Joint
+Account not disputed
+Mortgage Companies - Finance
+Experian
+658671***
+$123,000
+--
+1.10.2019
+21.10.2019
+1.12.2004
+$0
+--
+Paid
+Joint
+Account not disputed
+Mortgage Companies - Finance
+Equifax
+658671***
+$123,000
+--
+1.10.2019
+1.10.2019
+1.12.2004
+$0
+--
+Paid
+Joint
+Account not disputed
+Mortgage Companies - Finance
+®
+®
+®
+®
+®
+®
+
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+Closed
+Current
+Closed
+$0
+21.10.2019
+360 Month(s)
+$0
+Conventional real estate
+mortgage
+Monthly (every month)
+$0
+Closed
+Current
+--
+$0
+21.10.2019
+360 Month(s)
+$0
+Conventional real estate
+mortgage
+--
+$0
+Closed
+Current
+Closed or paid account/zero
+balance
+Fannie Mae account
+$0
+1.10.2019
+360 Month(s)
+$0
+Real estate mortgage
+--
+$0
+Two-Year Payment History
+Transunion
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+Experian
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+אוק׳
+Equifax
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+SETERUS INC
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Transunion
+659001*******
+$123,000
+1.3.2019
+1.3.2019
+Experian
+659001*******
+$123,000
+--
+1.3.2019
+Equifax
+659001*******
+$123,000
+--
+1.2.2019
+®
+®
+®
+®
+®
+®
+
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+1.3.2019
+6.12.2004
+$0
+1.3.2019
+Transferred
+Joint
+Account not disputed
+Mortgage Companies - Finance
+Closed
+Current
+Transferred to another lender
+$0
+11.2.2019
+360 Month(s)
+$0
+Conventional real estate
+mortgage
+Monthly (every month)
+$0
+1.3.2019
+1.12.2004
+$0
+--
+Transferred
+Joint
+Account not disputed
+Mortgage Companies - Finance
+Closed
+Current
+Transferred to another lender
+or claim purchased.
+$0
+11.2.2019
+360 Month(s)
+$0
+Conventional real estate
+mortgage
+--
+$0
+1.3.2019
+1.12.2004
+$0
+--
+Transferred
+Joint
+Account not disputed
+Miscellaneous Finance
+Closed
+Current
+Account transferred or sold
+Fannie Mae account
+$0
+1.2.2019
+360 Month(s)
+$0
+Real estate mortgage
+--
+$0
+Two-Year Payment History
+Transunion
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+Experian
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+פבר׳
+Equifax
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+®
+®
+®
+
+TRUISTMRTG
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+Transunion
+942029*******
+$109,000
+8.8.2019
+8.8.2019
+8.8.2019
+30.8.2013
+$0
+8.8.2019
+Closed
+Individual
+Account not disputed
+Bank - Mortgage Loans
+Closed
+Current
+Closed
+$0
+8.8.2019
+360 Month(s)
+$0
+Conventional real estate
+mortgage
+Monthly (every month)
+$0
+Experian
+942029*******
+$109,000
+--
+1.9.2019
+5.9.2019
+1.8.2013
+$0
+--
+Paid
+Individual
+Account not disputed
+Mortgage Companies - Finance
+Closed
+Current
+--
+$0
+8.8.2019
+360 Month(s)
+$0
+Conventional real estate
+mortgage
+--
+$0
+Equifax
+942029*******
+$109,000
+--
+1.8.2019
+1.9.2019
+1.8.2013
+$0
+--
+Paid
+Individual
+Account not disputed
+Mortgage Companies - Finance
+Closed
+Current
+Closed or paid account/zero
+balance
+Fannie Mae account
+$0
+1.8.2019
+360 Month(s)
+$0
+Real estate mortgage
+--
+$0
+Two-Year Payment History
+Transunion
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+Experian
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+ספט׳
+Equifax
+®
+®
+®
+
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+TRUISTMRTG
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+Transunion
+942023*******
+$108,415
+24.7.2019
+24.7.2019
+24.7.2019
+7.10.2013
+$0
+24.7.2019
+Closed
+Individual
+Account not disputed
+Bank - Mortgage Loans
+Closed
+Current
+Closed
+$0
+24.7.2019
+360 Month(s)
+$0
+Conventional real estate
+mortgage
+Monthly (every month)
+$0
+Experian
+942023*******
+$108,415
+--
+1.8.2019
+5.8.2019
+1.10.2013
+$0
+--
+Paid
+Individual
+Account not disputed
+Mortgage Companies - Finance
+Closed
+Current
+--
+$0
+24.7.2019
+360 Month(s)
+$0
+Conventional real estate
+mortgage
+--
+$0
+Equifax
+942023*******
+$108,415
+--
+1.7.2019
+1.8.2019
+1.10.2013
+$0
+--
+Paid
+Individual
+Account not disputed
+Mortgage Companies - Finance
+Closed
+Current
+Closed or paid account/zero
+balance
+Fannie Mae account
+$0
+1.7.2019
+360 Month(s)
+$0
+Real estate mortgage
+--
+$0
+Two-Year Payment History
+Transunion
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+®
+®
+®
+®
+®
+®
+
+Experian
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+אוג׳
+Equifax
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+ROUNDPOINT
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Transunion
+596200*******
+$400,000
+1.6.2018
+1.6.2018
+1.6.2018
+30.9.2013
+$0
+1.6.2018
+Closed
+Individual
+Account not disputed
+Sales Financing
+Closed
+Current
+Closed
+$0
+1.6.2018
+360 Month(s)
+$0
+Conventional real estate
+mortgage
+Monthly (every month)
+Experian
+596200*******
+$400,000
+--
+1.6.2018
+1.6.2018
+1.9.2013
+$0
+--
+Paid
+Individual
+Account not disputed
+Savings and Loans - Mortgage
+Closed
+Current
+--
+$0
+1.6.2018
+360 Month(s)
+$0
+Conventional real estate
+mortgage
+--
+Equifax
+596200*******
+$400,000
+--
+1.6.2018
+1.6.2018
+1.9.2013
+$0
+--
+Paid
+Individual
+Account not disputed
+Mortgage Companies - Finance
+Closed
+Current
+Closed or paid account/zero
+balance
+Fannie Mae account
+$0
+1.6.2018
+360 Month(s)
+$0
+Real estate mortgage
+--
+®
+®
+®
+®
+®
+®
+
+Credit Limit:
+$0
+$0
+$0
+Two-Year Payment History
+Transunion
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+Experian
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+מאי
+Equifax
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+Revolving Accounts : Accounts with an open-end term
+JPMCB CARD
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Transunion
+432562**********
+$6,032
+24.7.2025
+24.7.2025
+24.7.2025
+1.10.1990
+$315
+--
+Open
+Individual
+Account not disputed
+Bank Credit Cards
+Open
+Experian
+432562******
+$6,032
+--
+1.7.2025
+24.7.2025
+1.10.1990
+$315
+--
+Open
+Individual
+Account not disputed
+Bank Credit Cards
+Open
+Equifax
+432562******
+$0
+--
+1.7.2025
+1.7.2025
+1.10.1990
+$315
+--
+Open
+Individual
+Account not disputed
+National Credit Card Companies
+Open
+®
+®
+®
+®
+®
+®
+
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+Current
+--
+$40
+21.7.2025
+--
+$0
+Credit Card
+--
+$10,800
+Current
+--
+$40
+21.7.2025
+--
+$0
+Credit Card
+--
+$10,800
+Current
+Credit card
+Amount in H/C column is credit
+limit
+$40
+1.7.2025
+--
+$0
+Credit Card
+--
+$10,800
+Two-Year Payment History
+Transunion
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+Experian
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+Equifax
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+BK OF AMER
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Transunion
+****
+$12,028
+11.8.2025
+30.3.2024
+11.8.2025
+Experian
+****
+$0
+--
+1.6.2025
+4.8.2025
+Equifax
+552433**********
+$6,217
+--
+1.2.2025
+1.8.2025
+®
+®
+®
+®
+®
+®
+
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+20.11.2021
+$6,217
+30.3.2024
+Derogatory
+Individual
+Account not disputed
+Bank Credit Cards
+Closed
+Collection/Chargeoff
+Charged off as bad debt
+Canceled by credit grantor
+$0
+18.6.2025
+--
+$6,217
+Credit Card
+--
+$12,000
+1.11.2021
+$6,217
+--
+Derogatory
+Individual
+Account not disputed
+Bank Credit Cards
+Closed
+Collection/Chargeoff
+Account has been closed due to
+inactivity.
+Unpaid balance reported as a
+loss by the credit grantor.
+$0
+18.6.2025
+--
+$6,217
+Credit Card
+--
+$12,000
+1.11.2021
+$6,217
+--
+Derogatory
+Individual
+Account not disputed
+National Credit Card Companies
+Closed
+Collection/Chargeoff
+Charged off account
+Accounts closed by credit
+grantor
+$0
+1.2.2025
+--
+$6,217
+--
+--
+$0
+Two-Year Payment History
+Transunion
+NONE REPORTED
+Experian
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+30
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+30
+יולי
+60
+אוג׳
+90
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+30
+דצמ׳
+60
+ינו׳
+90
+פבר׳
+120
+מרץ
+150
+אפר׳
+מאי
+CO
+יוני
+CO
+יולי
+CO
+אוג׳
+Equifax
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+30
+פבר׳
+מרץ
+אפר׳
+מאי
+30
+יוני
+60
+יולי
+90
+אוג׳
+ספט׳
+אוק׳
+30
+נוב׳
+60
+דצמ׳
+90
+ינו׳
+120
+פבר׳
+120
+מרץ
+120
+אפר׳
+מאי
+יוני
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 3
+60: 2
+90: 5
+Equifax
+30: 3
+60: 2
+90: 6
+JPMCB CARD
+Account #
+Transunion
+426290**********
+Experian
+426290******
+Equifax
+426290******
+®
+®
+®
+®
+®
+®
+
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+$13,020
+8.8.2025
+5.8.2025
+8.8.2025
+10.4.1995
+$0
+--
+Open
+Individual
+Account not disputed
+Bank Credit Cards
+Open
+Current
+--
+$0
+5.8.2025
+--
+$0
+Flexible spending credit card
+--
+$18,900
+$13,020
+--
+1.8.2025
+8.8.2025
+1.4.1995
+$0
+--
+Open
+Individual
+Account not disputed
+Bank Credit Cards
+Open
+Current
+--
+$0
+5.8.2025
+--
+$0
+Credit Card
+--
+$18,900
+$0
+--
+1.8.2025
+1.8.2025
+1.4.1995
+$0
+--
+Open
+Individual
+Account not disputed
+National Credit Card Companies
+Open
+Current
+Flexible spending credit card
+Amount in H/C column is credit
+limit
+$0
+1.8.2025
+--
+$0
+Flexible spending credit card
+--
+$18,900
+Two-Year Payment History
+Transunion
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+Experian
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+Equifax
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+Days Late - 7 Year History
+
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+AMEX
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+Transunion
+349992**********
+$10,964
+13.8.2025
+13.8.2025
+13.8.2025
+14.9.2018
+$261
+--
+Open
+Individual
+Account not disputed
+Bank Credit Cards
+Open
+Current
+--
+$40
+--
+--
+$0
+Credit Card
+--
+$1,000
+Experian
+349992**********
+$10,964
+--
+1.8.2025
+13.8.2025
+1.9.2018
+$261
+--
+Open
+Individual
+Account not disputed
+Bank Credit Cards
+Open
+Current
+--
+$40
+--
+--
+$0
+Credit Card
+--
+$1,000
+Equifax
+-34999***********
+$0
+--
+1.8.2025
+1.8.2025
+1.9.2018
+$261
+--
+Open
+Individual
+Account not disputed
+All Banks
+Open
+Current
+Credit card
+Amount in H/C column is credit
+limit
+$40
+1.8.2025
+--
+$0
+Credit Card
+--
+$1,000
+Two-Year Payment History
+Transunion
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+Experian
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+®
+®
+®
+®
+®
+®
+
+Equifax
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+US BK CACS
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+Transunion
+409451******
+$12,091
+30.6.2025
+1.1.2025
+30.6.2025
+10.11.2022
+$12,091
+1.1.2025
+Derogatory
+Individual
+Account not disputed
+Bank Credit Cards
+Closed
+Collection/Chargeoff
+Charged off as bad debt
+Canceled by credit grantor
+$0
+13.9.2024
+--
+$12,091
+Flexible spending credit card
+--
+$11,000
+Experian
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+Equifax
+409451******
+$10,273
+--
+1.11.2024
+1.8.2025
+1.11.2022
+$12,091
+--
+Derogatory
+Individual
+Account not disputed
+National Credit Card Companies
+Closed
+Collection/Chargeoff
+Charged off account
+Accounts closed by credit
+grantor
+$0
+1.11.2024
+--
+$12,091
+--
+--
+$0
+Two-Year Payment History
+Transunion
+NONE REPORTED
+Experian
+NONE REPORTED
+®
+®
+®
+®
+®
+®
+
+Equifax
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+30
+אוק׳
+60
+נוב׳
+90
+דצמ׳
+120
+ינו׳
+120
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: --
+60: --
+90: --
+Equifax
+30: 1
+60: 1
+90: 4
+WFBNA CARD
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+Transunion
+414718******
+$11,374
+5.8.2025
+17.2.2025
+5.8.2025
+8.3.2024
+$10,792
+17.2.2025
+Derogatory
+Individual
+Account not disputed
+Bank Credit Cards
+Closed
+Collection/Chargeoff
+Charged off as bad debt
+Canceled by credit grantor
+$0
+11.10.2024
+--
+$10,792
+Credit Card
+--
+$12,000
+Experian
+414718****
+$0
+--
+1.5.2025
+1.8.2025
+1.3.2024
+$10,792
+--
+Derogatory
+Individual
+Account not disputed
+Bank Credit Cards
+Closed
+Collection/Chargeoff
+Account has been closed due to
+inactivity.
+Unpaid balance reported as a
+loss by the credit grantor.
+$0
+11.10.2024
+--
+$10,792
+Credit Card
+--
+$12,000
+Equifax
+414718**********
+$10,792
+--
+1.11.2024
+1.8.2025
+1.3.2024
+$10,792
+--
+Derogatory
+Individual
+Account not disputed
+All Banks
+Closed
+Collection/Chargeoff
+Charged off account
+Accounts closed by credit
+grantor
+$0
+1.11.2024
+--
+$10,792
+--
+--
+$0
+Two-Year Payment History
+Transunion
+NONE REPORTED
+Experian
+OK
+OK
+OK
+OK
+OK
+OK
+OK
+OK
+OK
+30
+60
+90
+120
+150
+CO
+®
+®
+®
+®
+®
+®
+
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+CO
+מאי
+CO
+יוני
+CO
+יולי
+Equifax
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+30
+נוב׳
+60
+דצמ׳
+90
+ינו׳
+120
+פבר׳
+120
+מרץ
+אפר׳
+מאי
+יוני
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 1
+60: 1
+90: 3
+Equifax
+30: 1
+60: 1
+90: 6
+SYNCB/JCP DC
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+Transunion
+546680**********
+$206
+5.8.2025
+28.7.2023
+5.8.2025
+26.6.2023
+$0
+--
+Open
+Individual
+Account not disputed
+Bank Credit Cards
+Open
+Current
+--
+$0
+28.7.2023
+--
+$0
+Credit Card
+--
+$524
+Experian
+546680******
+$206
+--
+1.7.2025
+4.7.2025
+1.6.2023
+$0
+--
+Open
+Individual
+Account not disputed
+Bank Credit Cards
+Open
+Current
+--
+$0
+28.7.2023
+--
+$0
+Credit Card
+--
+$524
+Equifax
+546680******
+$0
+--
+1.7.2023
+1.8.2025
+1.6.2023
+$0
+--
+Open
+Individual
+Account not disputed
+National Credit Card Companies
+Open
+Current
+Credit card
+Amount in H/C column is credit
+limit
+$0
+1.7.2023
+--
+$0
+Credit Card
+--
+$524
+Two-Year Payment History
+®
+®
+®
+®
+®
+®
+
+Transunion
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+Experian
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+Equifax
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+JPMCB CARD
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Transunion
+464018**********
+$8,894
+18.7.2025
+18.7.2025
+18.7.2025
+3.12.2008
+$1,571
+--
+Open
+Individual
+Account not disputed
+Bank Credit Cards
+Open
+Current
+--
+$35
+Experian
+464018******
+$8,894
+--
+1.7.2025
+18.7.2025
+1.12.2008
+$1,571
+--
+Open
+Individual
+Account not disputed
+Bank Credit Cards
+Open
+Current
+--
+$35
+Equifax
+464018******
+$0
+--
+1.7.2025
+1.7.2025
+1.12.2008
+$1,571
+--
+Open
+Individual
+Account not disputed
+National Credit Card Companies
+Open
+Current
+Flexible spending credit card
+Amount in H/C column is credit
+limit
+$35
+®
+®
+®
+®
+®
+®
+
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+16.7.2025
+--
+$0
+Flexible spending credit card
+--
+$9,000
+16.7.2025
+--
+$0
+Credit Card
+--
+$9,000
+1.7.2025
+--
+$0
+Flexible spending credit card
+--
+$9,000
+Two-Year Payment History
+Transunion
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+Experian
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+Equifax
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+CBNA
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Transunion
+512107******
+$1,861
+26.10.2021
+8.12.2017
+26.10.2021
+10.11.2008
+$0
+21.7.2021
+Paid
+Experian
+512107**********
+$1,861
+--
+1.7.2021
+26.7.2021
+1.11.2008
+$0
+--
+Paid
+Equifax
+512107******
+$0
+--
+1.12.2017
+1.10.2021
+1.11.2008
+$0
+--
+Paid
+®
+®
+®
+®
+®
+®
+
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+Individual
+Account not disputed
+Bank Credit Cards
+Closed
+Current
+Inactive account
+$0
+8.12.2017
+--
+$0
+Credit Card
+--
+$2,001
+Individual
+Account not disputed
+Bank Credit Cards
+Closed
+Current
+Account has been closed due to
+inactivity.
+$0
+8.12.2017
+--
+$0
+Credit Card
+--
+$2,001
+Individual
+Account not disputed
+All Banks
+Closed
+Current
+Closed or paid account/zero
+balance
+Amount in H/C column is credit
+limit
+$0
+1.12.2017
+--
+$0
+--
+--
+$2,001
+Two-Year Payment History
+Transunion
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+Experian
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+יולי
+Equifax
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+Unknown
+U S BANK
+®
+®
+®
+
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+Transunion
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+Experian
+--
+$0
+--
+1.5.2025
+31.7.2025
+1.11.2022
+$12,091
+--
+Derogatory
+Individual
+Account not disputed
+Bank Credit Cards
+Closed
+Collection/Chargeoff
+Account has been closed due to
+inactivity.
+Unpaid balance reported as a
+loss by the credit grantor.
+$0
+13.9.2024
+--
+$12,091
+Credit Card
+--
+$11,000
+Equifax
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+Two-Year Payment History
+Transunion
+NONE REPORTED
+Experian
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+30
+נוב׳
+60
+דצמ׳
+90
+ינו׳
+120
+פבר׳
+150
+מרץ
+אפר׳
+CO
+מאי
+CO
+יוני
+CO
+יולי
+Equifax
+NONE REPORTED
+Days Late - 7 Year History
+Transunion
+30: --
+60: --
+90: --
+Experian
+30: 1
+60: 1
+90: 3
+Equifax
+30: --
+60: --
+90: --
+Public Information
+®
+®
+®
+®
+®
+®
+
+None Reported
+Inquiries
+Creditor Name
+Date of Inquiry
+Credit Bureau
+WFBNA CARD
+8.3.2024
+Experian
+Creditor Contacts Show
+Company
+About Us
+Partner with Us
+Affiliates
+FAQ
+Contact Us
+Resources
+Credit Report
+Credit Scores
+Credit Monitoring
+Identity Theft Insurance
+Dispute Credit Report
+Credit 101
+Debt 101
+Who's Looking
+Credit & Financial Glossary
+Blog
+Service Agreement
+Terms of Use
+Security
+Privacy Policy
+© smartcredit.com  - Powered by the ConsumerDirect  Platform - All Rights Reserved
+IMPORTANT DISCLAIMER: Any credit scores, score changes or available plus points shown or inferred are estimates only.
+Individual results and speed of results may vary, and results are not guaranteed.
+®
+®

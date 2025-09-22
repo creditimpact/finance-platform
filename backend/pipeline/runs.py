@@ -12,6 +12,8 @@ def _runs_root() -> Path:
     rr = os.getenv(RUNS_ROOT_ENV)
     return Path(rr) if rr else Path("runs")
 
+RUNS_ROOT = _runs_root()
+
 def _utc_now():
     # timezone-aware UTC to avoid deprecation; normalize suffix to 'Z'
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -88,7 +90,21 @@ class RunManifest:
                 "cases": {},
                 "exports": {},
                 "logs": {},
-                "ai": {},
+                "ai": {
+                    "packs": {
+                        "dir": None,
+                        "index": None,
+                        "pairs": 0,
+                        "last_built_at": None,
+                    },
+                    "status": {
+                        "enqueued": False,
+                        "built": False,
+                        "sent": False,
+                        "compacted": False,
+                        "skipped_reason": None,
+                    },
+                },
                 "ai_packs": {},
             },
             "env_snapshot": {}
@@ -138,14 +154,93 @@ class RunManifest:
         self.data.setdefault("base_dirs", {})[label] = str(resolved)
         return self.save()
 
-    def set_artifact(self, group: str, key: str, value: Path | str) -> "RunManifest":
-        artifacts = self.data.setdefault("artifacts", {})
-        # nested group keys like "traces.accounts_table"
-        cursor = artifacts
-        for part in group.split("."):
-            cursor = cursor.setdefault(part, {})
-        cursor[key] = str(Path(value).resolve())
+    def _ensure_ai_section(self) -> tuple[dict[str, object], dict[str, object]]:
+        ai = self.data.setdefault("ai", {})
+        packs = ai.setdefault(
+            "packs",
+            {
+                "dir": None,
+                "index": None,
+                "pairs": 0,
+                "last_built_at": None,
+            },
+        )
+        status = ai.setdefault(
+            "status",
+            {
+                "enqueued": False,
+                "built": False,
+                "sent": False,
+                "compacted": False,
+                "skipped_reason": None,
+            },
+        )
+        return packs, status
+
+    def set_ai_enqueued(self) -> "RunManifest":
+        _, status = self._ensure_ai_section()
+        status["enqueued"] = True
+        status["skipped_reason"] = None
         return self.save()
+
+    def set_ai_built(self, packs_dir: Path, pairs: int) -> "RunManifest":
+        packs, status = self._ensure_ai_section()
+        packs_path = Path(packs_dir).resolve()
+        packs["dir"] = str(packs_path)
+        packs["index"] = str((packs_path / "index.json").resolve())
+        packs["pairs"] = int(pairs)
+        packs["last_built_at"] = _utc_now()
+        status["built"] = True
+        status["skipped_reason"] = None
+        return self.save()
+
+    def set_ai_sent(self) -> "RunManifest":
+        _, status = self._ensure_ai_section()
+        status["sent"] = True
+        return self.save()
+
+    def set_ai_compacted(self) -> "RunManifest":
+        _, status = self._ensure_ai_section()
+        status["compacted"] = True
+        return self.save()
+
+    def set_ai_skipped(self, reason: str) -> "RunManifest":
+        _, status = self._ensure_ai_section()
+        status["skipped_reason"] = str(reason)
+        status["built"] = False
+        status["sent"] = False
+        status["compacted"] = False
+        return self.save()
+
+    def get_ai_packs_dir(self) -> Path | None:
+        ai_section = self.data.get("ai")
+        if not isinstance(ai_section, dict):
+            return None
+        packs = ai_section.get("packs")
+        if not isinstance(packs, dict):
+            return None
+        path_value = packs.get("dir")
+        if not path_value:
+            return None
+        try:
+            return Path(path_value)
+        except (TypeError, ValueError):
+            return None
+
+    def get_ai_index_path(self) -> Path | None:
+        ai_section = self.data.get("ai")
+        if not isinstance(ai_section, dict):
+            return None
+        packs = ai_section.get("packs")
+        if not isinstance(packs, dict):
+            return None
+        path_value = packs.get("index")
+        if not path_value:
+            return None
+        try:
+            return Path(path_value)
+        except (TypeError, ValueError):
+            return None
 
     def ensure_run_subdir(self, label: str, rel: str) -> Path:
         """

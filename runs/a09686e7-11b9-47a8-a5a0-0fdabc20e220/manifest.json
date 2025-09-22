@@ -1,0 +1,110 @@
+{
+  "sid": "a09686e7-11b9-47a8-a5a0-0fdabc20e220",
+  "created_at": "2025-09-22T17:50:22Z",
+  "status": "in_progress",
+  "base_dirs": {
+    "uploads_dir": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\uploads",
+    "traces_dir": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\traces",
+    "cases_dir": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases",
+    "exports_dir": null,
+    "logs_dir": null,
+    "traces_accounts_table": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\traces\\accounts_table",
+    "cases_accounts_dir": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts"
+  },
+  "artifacts": {
+    "uploads": {
+      "smartcredit_report": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\uploads\\smartcredit_report.pdf"
+    },
+    "traces": {
+      "accounts_table": {
+        "accounts_json": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\traces\\accounts_table\\accounts_from_full.json",
+        "general_json": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\traces\\accounts_table\\general_info_from_full.json",
+        "debug_full_tsv": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\traces\\accounts_table\\_debug_full.tsv",
+        "per_account_tsv_dir": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\traces\\accounts_table\\per_account_tsv"
+      }
+    },
+    "cases": {
+      "accounts": {
+        "idx-008": {
+          "dir": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\8",
+          "meta": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\8\\meta.json",
+          "raw": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\8\\raw_lines.json",
+          "bureaus": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\8\\bureaus.json",
+          "flat": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\8\\fields_flat.json",
+          "summary": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\8\\summary.json",
+          "tags": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\8\\tags.json"
+        },
+        "8": {
+          "dir": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\8",
+          "meta": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\8\\meta.json",
+          "raw": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\8\\raw_lines.json",
+          "bureaus": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\8\\bureaus.json",
+          "flat": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\8\\fields_flat.json",
+          "summary": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\8\\summary.json",
+          "tags": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\8\\tags.json"
+        },
+        "idx-011": {
+          "dir": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\11",
+          "meta": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\11\\meta.json",
+          "raw": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\11\\raw_lines.json",
+          "bureaus": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\11\\bureaus.json",
+          "flat": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\11\\fields_flat.json",
+          "summary": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\11\\summary.json",
+          "tags": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\11\\tags.json"
+        },
+        "11": {
+          "dir": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\11",
+          "meta": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\11\\meta.json",
+          "raw": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\11\\raw_lines.json",
+          "bureaus": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\11\\bureaus.json",
+          "flat": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\11\\fields_flat.json",
+          "summary": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\11\\summary.json",
+          "tags": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\11\\tags.json"
+        },
+        "idx-012": {
+          "dir": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\12",
+          "meta": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\12\\meta.json",
+          "raw": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\12\\raw_lines.json",
+          "bureaus": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\12\\bureaus.json",
+          "flat": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\12\\fields_flat.json",
+          "summary": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\12\\summary.json",
+          "tags": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\12\\tags.json"
+        },
+        "12": {
+          "dir": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\12",
+          "meta": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\12\\meta.json",
+          "raw": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\12\\raw_lines.json",
+          "bureaus": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\12\\bureaus.json",
+          "flat": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\12\\fields_flat.json",
+          "summary": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\12\\summary.json",
+          "tags": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\12\\tags.json"
+        },
+        "idx-016": {
+          "dir": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\16",
+          "meta": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\16\\meta.json",
+          "raw": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\16\\raw_lines.json",
+          "bureaus": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\16\\bureaus.json",
+          "flat": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\16\\fields_flat.json",
+          "summary": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\16\\summary.json",
+          "tags": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\16\\tags.json"
+        },
+        "16": {
+          "dir": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\16",
+          "meta": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\16\\meta.json",
+          "raw": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\16\\raw_lines.json",
+          "bureaus": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\16\\bureaus.json",
+          "flat": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\16\\fields_flat.json",
+          "summary": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\16\\summary.json",
+          "tags": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\16\\tags.json"
+        }
+      },
+      "accounts_index": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\accounts\\index.json",
+      "problematic_ids": "C:\\dev\\credit-analyzer\\runs\\a09686e7-11b9-47a8-a5a0-0fdabc20e220\\cases\\index.json"
+    },
+    "exports": {},
+    "logs": {},
+    "ai": {},
+    "ai_packs": {}
+  },
+  "env_snapshot": {}
+}

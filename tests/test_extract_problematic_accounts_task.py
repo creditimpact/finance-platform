@@ -33,9 +33,9 @@ def test_extract_problematic_accounts_task_builder(tmp_path, monkeypatch, caplog
             ai_calls.append(sid_value)
             return {"sid": sid_value}
 
-    monkeypatch.setattr(task_module, "maybe_run_ai_pipeline", _DummyTask())
+    monkeypatch.setattr(task_module, "maybe_run_ai_pipeline_task", _DummyTask())
     monkeypatch.setattr(
-        task_module, "has_ai_merge_best_tags", lambda runs_root, sid: True
+        task_module, "has_ai_merge_best_tags", lambda sid: True
     )
 
     # Create Stage-A account artifacts
@@ -91,9 +91,9 @@ def test_extract_problematic_accounts_task_no_candidates(tmp_path, monkeypatch, 
             ai_calls.append(sid_value)
             return {"sid": sid_value}
 
-    monkeypatch.setattr(task_module, "maybe_run_ai_pipeline", _DummyTask())
+    monkeypatch.setattr(task_module, "maybe_run_ai_pipeline_task", _DummyTask())
     monkeypatch.setattr(
-        task_module, "has_ai_merge_best_tags", lambda runs_root, sid: False
+        task_module, "has_ai_merge_best_tags", lambda sid: False
     )
 
     acc_path = (

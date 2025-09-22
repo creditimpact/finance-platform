@@ -1,0 +1,16 @@
+{
+  "account_index": 11,
+  "heading_guess": "US BK CACS",
+  "page_start": 14,
+  "line_start": 7,
+  "page_end": 15,
+  "line_end": 7,
+  "pointers": {
+    "raw": "raw_lines.json",
+    "bureaus": "bureaus.json",
+    "flat": "fields_flat.json",
+    "tags": "tags.json",
+    "summary": "summary.json"
+  },
+  "account_id": "idx-011"
+}

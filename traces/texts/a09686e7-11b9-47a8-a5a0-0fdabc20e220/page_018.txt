@@ -1,0 +1,207 @@
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Credit Limit:
+16.7.2025
+--
+$0
+Flexible spending credit card
+--
+$9,000
+16.7.2025
+--
+$0
+Credit Card
+--
+$9,000
+1.7.2025
+--
+$0
+Flexible spending credit card
+--
+$9,000
+Two-Year Payment History
+Transunion
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+Experian
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+Equifax
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+CBNA
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Transunion
+512107******
+$1,861
+26.10.2021
+8.12.2017
+26.10.2021
+10.11.2008
+$0
+21.7.2021
+Paid
+Experian
+512107**********
+$1,861
+--
+1.7.2021
+26.7.2021
+1.11.2008
+$0
+--
+Paid
+Equifax
+512107******
+$0
+--
+1.12.2017
+1.10.2021
+1.11.2008
+$0
+--
+Paid
+®
+®
+®
+®
+®
+®

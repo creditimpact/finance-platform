@@ -601,6 +601,43 @@ def _build_problem_cases_lean(
         if path is not None:
             upsert_tag(path, best_tag, unique_keys=("kind",))
 
+        summary_path = accounts_dir / str(idx) / "summary.json"
+        summary_data, _ = _load_summary_json(summary_path)
+        if not isinstance(summary_data, dict):
+            summary_data = {}
+
+        merge_summary: dict[str, object] = {
+            "best_with": best_tag.get("with"),
+            "score_total": int(best_tag.get("score_total") or best_tag.get("total") or 0),
+            "reasons": [
+                str(reason)
+                for reason in (best_tag.get("reasons") or [])
+                if isinstance(reason, str) and reason
+            ],
+            "conflicts": [
+                str(conflict)
+                for conflict in (best_tag.get("conflicts") or [])
+                if isinstance(conflict, str) and conflict
+            ],
+        }
+
+        aux_payload = best_tag.get("aux")
+        matched_fields: dict[str, bool] = {}
+        if isinstance(aux_payload, Mapping):
+            raw_matched = aux_payload.get("matched_fields")
+            if isinstance(raw_matched, Mapping):
+                matched_fields = {
+                    str(field): bool(flag)
+                    for field, flag in raw_matched.items()
+                }
+            acct_level = aux_payload.get("acctnum_level")
+            if isinstance(acct_level, str) and acct_level:
+                merge_summary["acctnum_level"] = acct_level
+        merge_summary["matched_fields"] = matched_fields
+
+        summary_data["merge_scoring"] = merge_summary
+        _write_json(summary_path, summary_data)
+
     logger.info(
         "PROBLEM_CASES done sid=%s total=%d problematic=%d out=%s",
         sid,

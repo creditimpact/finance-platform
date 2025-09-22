@@ -6,7 +6,7 @@ from os import PathLike
 from pathlib import Path
 from typing import Union
 
-from backend.core.io.tags_minimize import compact_account_tags
+from backend.core.logic.tags.compact import compact_account_tags
 
 
 def compact_tags_for_account(account_dir: Union[str, Path, PathLike[str]]) -> None:

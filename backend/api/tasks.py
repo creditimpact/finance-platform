@@ -13,8 +13,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from backend.core.logic.report_analysis.block_exporter import export_stage_a, run_stage_a
-from backend.pipeline.auto_ai import has_ai_merge_best_tags, maybe_run_ai_pipeline
-from backend.pipeline.runs import RunManifest
+from backend.pipeline.auto_ai import (
+    has_ai_merge_best_tags,
+    maybe_run_ai_pipeline_task,
+)
+from backend.pipeline.runs import RunManifest, persist_manifest
 from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
 from backend.core.logic.report_analysis.problem_extractor import detect_problem_accounts
 from backend.core.logic.report_analysis.text_provider import (
@@ -232,16 +235,18 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
         except Exception:
             log.error("AUTO_AI_ENQUEUE_MANIFEST_FAILED sid=%s", sid, exc_info=True)
         else:
-            runs_root = manifest.path.parent.parent
-            if has_ai_merge_best_tags(runs_root, sid):
+            if has_ai_merge_best_tags(sid):
                 if sid in _AUTO_AI_PIPELINE_ENQUEUED:
                     log.info("AUTO_AI_ALREADY_ENQUEUED sid=%s", sid)
                 else:
                     try:
-                        maybe_run_ai_pipeline.delay(sid)
+                        maybe_run_ai_pipeline_task.delay(sid)
                     except Exception:
                         log.error("AUTO_AI_ENQUEUE_FAILED sid=%s", sid, exc_info=True)
                     else:
+                        manifest.set_ai_enqueued()
+                        persist_manifest(manifest)
+                        log.info("MANIFEST_AI_ENQUEUED sid=%s", sid)
                         _AUTO_AI_PIPELINE_ENQUEUED.add(sid)
                         log.info("AUTO_AI_ENQUEUED sid=%s", sid)
             else:

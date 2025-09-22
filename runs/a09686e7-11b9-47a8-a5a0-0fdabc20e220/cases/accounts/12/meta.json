@@ -1,0 +1,16 @@
+{
+  "account_index": 12,
+  "heading_guess": "WFBNA CARD",
+  "page_start": 15,
+  "line_start": 8,
+  "page_end": 16,
+  "line_end": 10,
+  "pointers": {
+    "raw": "raw_lines.json",
+    "bureaus": "bureaus.json",
+    "flat": "fields_flat.json",
+    "tags": "tags.json",
+    "summary": "summary.json"
+  },
+  "account_id": "idx-012"
+}

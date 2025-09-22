@@ -271,17 +271,18 @@ def test_build_ai_merge_packs_cli_updates_manifest(tmp_path: Path, monkeypatch) 
     manifest_path = runs_root / sid / "manifest.json"
 
     index_payload = json.loads(index_path.read_text(encoding="utf-8"))
-    assert index_payload == [{"a": 11, "b": 16, "file": "011-016.json"}]
+    assert index_payload["sid"] == sid
+    pairs = index_payload.get("pairs", [])
+    assert len(pairs) == 1
+    pair_entry = pairs[0]
+    assert pair_entry["a"] == 11
+    assert pair_entry["b"] == 16
+    assert pair_entry["pack_file"].startswith("pair_011_016")
+    assert pair_entry["pack_file"].endswith(".jsonl")
+    assert isinstance(pair_entry["lines_a"], int)
+    assert isinstance(pair_entry["lines_b"], int)
+    assert isinstance(pair_entry["score_total"], int)
 
-    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    ai_artifacts = manifest_data["artifacts"]["ai_packs"]
-
-    expected_dir = str(out_dir.resolve())
-    expected_index = str(index_path.resolve())
-    expected_logs = str((out_dir / "logs.txt").resolve())
-
-    assert ai_artifacts == {
-        "dir": expected_dir,
-        "index": expected_index,
-        "logs": expected_logs,
-    }
+    logs_path = out_dir / "logs.txt"
+    assert not logs_path.exists()
+    assert not manifest_path.exists()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import glob
 import json
 import logging
 import os
@@ -13,29 +14,27 @@ from typing import Iterable, Mapping, Sequence
 
 from celery import shared_task
 
-from backend.core.io.tags_minimize import compact_account_tags
-from backend.pipeline.runs import RunManifest
+from backend.core.logic.tags.compact import (
+    compact_account_tags,
+    compact_tags_for_sid,
+)
+from backend.pipeline.runs import RUNS_ROOT, RunManifest
 from scripts.build_ai_merge_packs import main as build_ai_merge_packs_main
 from scripts.send_ai_merge_packs import main as send_ai_merge_packs_main
 
 logger = logging.getLogger(__name__)
 
-AUTO_AI_PIPELINE_DIRNAME = ".ai_pipeline"
+AUTO_AI_PIPELINE_DIRNAME = "ai_packs"
 INFLIGHT_LOCK_FILENAME = "inflight.lock"
 LAST_OK_FILENAME = "last_ok.json"
 DEFAULT_INFLIGHT_TTL_SECONDS = 30 * 60
 
 
-def _pipeline_dir(runs_root: Path, sid: str) -> Path:
-    return runs_root / sid / AUTO_AI_PIPELINE_DIRNAME
+def packs_dir_for(sid: str, *, runs_root: Path | str | None = None) -> Path:
+    """Return the canonical ``ai_packs`` directory for ``sid``."""
 
-
-def _inflight_lock_path(runs_root: Path, sid: str) -> Path:
-    return _pipeline_dir(runs_root, sid) / INFLIGHT_LOCK_FILENAME
-
-
-def _last_ok_path(runs_root: Path, sid: str) -> Path:
-    return _pipeline_dir(runs_root, sid) / LAST_OK_FILENAME
+    base = Path(runs_root) if runs_root is not None else RUNS_ROOT
+    return Path(base) / sid / AUTO_AI_PIPELINE_DIRNAME
 
 
 def _lock_age_seconds(path: Path, *, now: float | None = None) -> float | None:
@@ -101,8 +100,9 @@ def maybe_queue_auto_ai_pipeline(
         return {"queued": False, "reason": "disabled"}
 
     runs_root_path = Path(runs_root)
-    lock_path = _inflight_lock_path(runs_root_path, sid)
-    pipeline_dir = lock_path.parent
+    packs_dir = packs_dir_for(sid, runs_root=runs_root_path)
+    lock_path = packs_dir / INFLIGHT_LOCK_FILENAME
+    last_ok_path = packs_dir / LAST_OK_FILENAME
 
     lock_exists = lock_path.exists()
     lock_age = _lock_age_seconds(lock_path, now=now) if lock_exists else None
@@ -152,7 +152,7 @@ def maybe_queue_auto_ai_pipeline(
         lock_payload["force"] = True
 
     try:
-        pipeline_dir.mkdir(parents=True, exist_ok=True)
+        packs_dir.mkdir(parents=True, exist_ok=True)
         lock_path.write_text(json.dumps(lock_payload, ensure_ascii=False), encoding="utf-8")
     except OSError:  # pragma: no cover - defensive logging
         logger.warning("AUTO_AI_LOCK_WRITE_FAILED sid=%s path=%s", sid, lock_path)
@@ -181,48 +181,45 @@ def maybe_queue_auto_ai_pipeline(
         raise
 
     logger.info("AUTO_AI_QUEUED sid=%s", sid)
+    RunManifest.for_sid(sid).set_ai_enqueued()
+    logger.info("MANIFEST_AI_ENQUEUED sid=%s", sid)
     payload: dict[str, object] = {"queued": True, "reason": "queued"}
     if task_id:
         payload["task_id"] = task_id
     payload["lock_path"] = str(lock_path)
-    payload["pipeline_dir"] = str(pipeline_dir)
-    payload["last_ok_path"] = str(_last_ok_path(runs_root_path, sid))
+    payload["pipeline_dir"] = str(packs_dir)
+    payload["last_ok_path"] = str(last_ok_path)
     return payload
 
 
-def has_ai_merge_best_tags(runs_root: Path, sid: str) -> bool:
-    """
-    True iff any cases/accounts/<idx>/tags.json contains:
-      {"kind":"merge_best","decision":"ai", ...}
-    """
+def has_ai_merge_best_tags(sid: str) -> bool:
+    """Return ``True`` when any account tags request AI merge adjudication."""
 
-    accounts_root = runs_root / sid / "cases" / "accounts"
-    if not accounts_root.exists():
-        return False
-
-    for account_dir in accounts_root.iterdir():
-        if not account_dir.is_dir():
-            continue
-        tags_path = account_dir / "tags.json"
-        if not tags_path.exists():
-            continue
+    acc_glob = Path(RUNS_ROOT) / sid / "cases" / "accounts" / "*" / "tags.json"
+    for path in glob.glob(str(acc_glob)):
         try:
-            raw = tags_path.read_text(encoding="utf-8")
+            raw = Path(path).read_text(encoding="utf-8")
         except OSError:
             continue
-        if not raw.strip():
-            continue
         try:
-            tags = json.loads(raw)
+            payload = json.loads(raw)
         except Exception:
             continue
-        for tag in _iter_tag_entries(tags):
-            if (
-                isinstance(tag, Mapping)
-                and tag.get("kind") == "merge_best"
-                and tag.get("decision") == "ai"
-            ):
-                return True
+
+        if isinstance(payload, list):
+            entries = payload
+        elif isinstance(payload, Mapping):
+            tags = payload.get("tags")
+            entries = tags if isinstance(tags, list) else []
+        else:
+            entries = []
+
+        for tag in entries:
+            if isinstance(tag, Mapping):
+                kind = str(tag.get("kind", "")).strip().lower()
+                decision = str(tag.get("decision", "")).strip().lower()
+                if kind == "merge_best" and decision == "ai":
+                    return True
 
     return False
 
@@ -296,13 +293,25 @@ def _load_ai_index(path: Path) -> list[Mapping[str, object]]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:  # pragma: no cover - defensive
         raise ValueError(f"Invalid AI pack index JSON: {path}") from exc
-    if not isinstance(data, list):
-        raise ValueError(f"AI pack index must be a list: {path}")
-    entries: list[Mapping[str, object]] = []
-    for entry in data:
-        if isinstance(entry, Mapping):
-            entries.append(entry)
-    return entries
+
+    if isinstance(data, Mapping):
+        pairs = data.get("pairs")
+        if not isinstance(pairs, list):
+            return []
+        entries: list[Mapping[str, object]] = []
+        for entry in pairs:
+            if isinstance(entry, Mapping):
+                entries.append(entry)
+        return entries
+
+    if isinstance(data, list):  # pragma: no cover - legacy support
+        entries: list[Mapping[str, object]] = []
+        for entry in data:
+            if isinstance(entry, Mapping):
+                entries.append(entry)
+        return entries
+
+    raise ValueError(f"AI pack index must be a list or mapping: {path}")
 
 
 def _indices_from_index(index_entries: Iterable[Mapping[str, object]]) -> set[int]:
@@ -373,12 +382,12 @@ def _is_ai_merge_best_tag(tag: Mapping[str, object]) -> bool:
 def ai_inflight_lock(runs_root: Path, sid: str):
     """
     Prevents concurrent AI runs on the same SID.
-    Creates runs/<sid>/.ai_pipeline/inflight.lock; removes it on exit.
+    Creates runs/<sid>/ai_packs/inflight.lock; removes it on exit.
     """
 
-    ai_dir = runs_root / sid / ".ai_pipeline"
+    ai_dir = packs_dir_for(sid, runs_root=runs_root)
     ai_dir.mkdir(parents=True, exist_ok=True)
-    lock = ai_dir / "inflight.lock"
+    lock = ai_dir / INFLIGHT_LOCK_FILENAME
     if lock.exists():
         # Someone else is running; caller should skip.
         raise RuntimeError("AI pipeline already inflight")
@@ -392,21 +401,19 @@ def ai_inflight_lock(runs_root: Path, sid: str):
             pass
 
 
-RUNS_ROOT = Path(os.environ.get("RUNS_ROOT", "runs"))
-
-
 def _env_flag(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default) in ("1", "true", "True")
 
 
-@shared_task(name="pipeline.maybe_run_ai_pipeline")
-def maybe_run_ai_pipeline(sid: str):
+def maybe_run_ai_pipeline(sid: str) -> dict[str, object]:
     """Queue the lightweight automatic AI pipeline after case building."""
 
     if not _env_flag("ENABLE_AUTO_AI_PIPELINE", "1"):
         return {"sid": sid, "skipped": "feature_off"}
 
-    if not has_ai_merge_best_tags(RUNS_ROOT, sid):
+    if not has_ai_merge_best_tags(sid):
+        RunManifest.for_sid(sid).set_ai_skipped("no_candidates")
+        logger.info("AUTO_AI_SKIPPED sid=%s reason=no_ai_merge_best", sid)
         return {"sid": sid, "skipped": "no_ai_candidates"}
 
     try:
@@ -416,35 +423,68 @@ def maybe_run_ai_pipeline(sid: str):
         return {"sid": sid, "skipped": "inflight"}
 
 
+@shared_task(name="pipeline.maybe_run_ai_pipeline")
+def maybe_run_ai_pipeline_task(sid: str):
+    """Celery task wrapper that launches the auto-AI pipeline asynchronously."""
+
+    return maybe_run_ai_pipeline(sid)
+
+
 def _run_auto_ai_pipeline(sid: str):
     # === 1) score → (re)write merge_* tags
     from backend.core.logic.merge.scorer import score_bureau_pairs_cli
 
     score_bureau_pairs_cli(sid=sid, write_tags=True, runs_root=RUNS_ROOT)
 
-    if not has_ai_merge_best_tags(RUNS_ROOT, sid):
+    if not has_ai_merge_best_tags(sid):
         return {"sid": sid, "skipped": "candidates_disappeared_after_score"}
 
     # === 2) build packs
-    from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
+    _build_ai_packs(sid, RUNS_ROOT)
 
-    max_lines = int(os.environ.get("AI_PACK_MAX_LINES_PER_SIDE", "20"))
-    build_merge_ai_packs(
-        sid,
-        RUNS_ROOT,
-        only_merge_best=True,
-        max_lines_per_side=max_lines,
-    )
+    manifest = RunManifest.for_sid(sid)
+    packs_dir = packs_dir_for(sid, runs_root=RUNS_ROOT)
+    index_path = packs_dir / "index.json"
+    if not index_path.exists():
+        manifest.set_ai_skipped("no_packs")
+        logger.info("AUTO_AI_SKIP_NO_PACKS sid=%s packs_dir=%s", sid, packs_dir)
+        return {"sid": sid, "skipped": "no_packs"}
+
+    try:
+        index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+    except Exception:
+        index_payload = {}
+
+    pairs_entries = []
+    if isinstance(index_payload, dict):
+        pairs_entries = index_payload.get("pairs")
+    if not isinstance(pairs_entries, list):
+        pairs_entries = []
+
+    pairs_count = len(pairs_entries)
+    if pairs_count <= 0:
+        manifest.set_ai_skipped("no_packs")
+        logger.info("AUTO_AI_SKIP_NO_PACKS sid=%s packs_dir=%s", sid, packs_dir)
+        return {"sid": sid, "skipped": "no_packs"}
+
+    manifest.set_ai_built(packs_dir, pairs_count)
 
     # === 3) send to AI (writes ai_decision / same_debt_pair)
     from backend.core.logic.ai.send_ai_merge_packs import run_send_for_sid
 
     run_send_for_sid(sid, runs_root=RUNS_ROOT)
+    manifest.set_ai_sent()
+    logger.info("MANIFEST_AI_SENT sid=%s", sid)
 
     # === 4) compact tags (keep only tags; push explanations to summary.json)
-    from backend.core.io.tags_compactor import compact_tags_for_sid
+    try:
+        compact_tags_for_sid(sid)
+        manifest.set_ai_compacted()
+        logger.info("MANIFEST_AI_COMPACTED sid=%s", sid)
+        logger.info("TAGS_COMPACTED sid=%s", sid)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("TAGS_COMPACT_SKIP sid=%s err=%s", sid, exc)
 
-    compact_tags_for_sid(sid, runs_root=RUNS_ROOT)
-
+    logger.info("AUTO_AI_DONE sid=%s", sid)
     return {"sid": sid, "ok": True}
 

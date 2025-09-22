@@ -1,0 +1,126 @@
+{
+  "transunion": {
+    "account_number_display": "414718******",
+    "high_balance": "$11,374",
+    "last_verified": "5.8.2025",
+    "date_of_last_activity": "17.2.2025",
+    "date_reported": "5.8.2025",
+    "date_opened": "8.3.2024",
+    "balance_owed": "$10,792",
+    "closed_date": "17.2.2025",
+    "account_rating": "Derogatory",
+    "account_description": "Individual",
+    "dispute_status": "Account not disputed",
+    "creditor_type": "Bank Credit Cards",
+    "account_status": "Closed",
+    "payment_status": "Collection/Chargeoff",
+    "creditor_remarks": "Charged off as bad debt Canceled by credit grantor",
+    "payment_amount": "$0",
+    "last_payment": "11.10.2024",
+    "term_length": "--",
+    "past_due_amount": "$10,792",
+    "account_type": "Credit Card",
+    "payment_frequency": "--",
+    "credit_limit": "$12,000"
+  },
+  "experian": {
+    "account_number_display": "414718****",
+    "high_balance": "$0",
+    "last_verified": "--",
+    "date_of_last_activity": "1.5.2025",
+    "date_reported": "1.8.2025",
+    "date_opened": "1.3.2024",
+    "balance_owed": "$10,792",
+    "closed_date": "--",
+    "account_rating": "Derogatory",
+    "account_description": "Individual",
+    "dispute_status": "Account not disputed",
+    "creditor_type": "Bank Credit Cards",
+    "account_status": "Closed",
+    "payment_status": "Collection/Chargeoff",
+    "creditor_remarks": "Account has been closed due to inactivity. Unpaid balance reported as a loss by the credit grantor.",
+    "payment_amount": "$0",
+    "last_payment": "11.10.2024",
+    "term_length": "--",
+    "past_due_amount": "$10,792",
+    "account_type": "Credit Card",
+    "payment_frequency": "--",
+    "credit_limit": "$12,000"
+  },
+  "equifax": {
+    "account_number_display": "414718**********",
+    "high_balance": "$10,792",
+    "last_verified": "--",
+    "date_of_last_activity": "1.11.2024",
+    "date_reported": "1.8.2025",
+    "date_opened": "1.3.2024",
+    "balance_owed": "$10,792",
+    "closed_date": "--",
+    "account_rating": "Derogatory",
+    "account_description": "Individual",
+    "dispute_status": "Account not disputed",
+    "creditor_type": "All Banks",
+    "account_status": "Closed",
+    "payment_status": "Collection/Chargeoff",
+    "creditor_remarks": "Charged off account Accounts closed by credit grantor",
+    "payment_amount": "$0",
+    "last_payment": "1.11.2024",
+    "term_length": "--",
+    "past_due_amount": "$10,792",
+    "account_type": "--",
+    "payment_frequency": "--",
+    "credit_limit": "$0"
+  },
+  "two_year_payment_history": {
+    "transunion": [],
+    "experian": [
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "OK",
+      "30",
+      "60",
+      "90",
+      "120",
+      "150",
+      "CO",
+      "CO",
+      "CO",
+      "CO"
+    ],
+    "equifax": [
+      "30",
+      "60",
+      "90",
+      "120",
+      "120"
+    ]
+  },
+  "seven_year_history": {
+    "transunion": {
+      "late30": 0,
+      "late60": 0,
+      "late90": 0
+    },
+    "experian": {
+      "late30": 1,
+      "late60": 1,
+      "late90": 3
+    },
+    "equifax": {
+      "late30": 1,
+      "late60": 1,
+      "late90": 6
+    }
+  },
+  "order": [
+    "transunion",
+    "experian",
+    "equifax"
+  ]
+}

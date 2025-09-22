@@ -1,0 +1,184 @@
+Experian
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+אוג׳
+Equifax
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+ROUNDPOINT
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Last Payment:
+Term Length:
+Past Due Amount:
+Account Type:
+Payment Frequency:
+Transunion
+596200*******
+$400,000
+1.6.2018
+1.6.2018
+1.6.2018
+30.9.2013
+$0
+1.6.2018
+Closed
+Individual
+Account not disputed
+Sales Financing
+Closed
+Current
+Closed
+$0
+1.6.2018
+360 Month(s)
+$0
+Conventional real estate
+mortgage
+Monthly (every month)
+Experian
+596200*******
+$400,000
+--
+1.6.2018
+1.6.2018
+1.9.2013
+$0
+--
+Paid
+Individual
+Account not disputed
+Savings and Loans - Mortgage
+Closed
+Current
+--
+$0
+1.6.2018
+360 Month(s)
+$0
+Conventional real estate
+mortgage
+--
+Equifax
+596200*******
+$400,000
+--
+1.6.2018
+1.6.2018
+1.9.2013
+$0
+--
+Paid
+Individual
+Account not disputed
+Mortgage Companies - Finance
+Closed
+Current
+Closed or paid account/zero
+balance
+Fannie Mae account
+$0
+1.6.2018
+360 Month(s)
+$0
+Real estate mortgage
+--
+®
+®
+®
+®
+®
+®

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import time
 from collections.abc import Mapping as MappingABC
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping, Sequence, overload
+from typing import Iterable, Mapping, Sequence, overload
 
 try:  # pragma: no cover - convenience bootstrap for direct execution
     import scripts._bootstrap  # type: ignore  # noqa: F401
@@ -22,8 +23,19 @@ except Exception:  # pragma: no cover - fallback when bootstrap is unavailable
 
 from backend.config import AI_REQUEST_TIMEOUT
 from backend.core.ai.adjudicator import decide_merge_or_different
-from backend.core.io.tags import upsert_tag
+from backend.core.io.tags import read_tags, upsert_tag
 from backend.pipeline.runs import RunManifest, persist_manifest
+
+logger = logging.getLogger(__name__)
+
+
+def _packs_dir_for(sid: str, runs_root: Path) -> Path:
+    """Return the canonical ``ai_packs`` directory for ``sid``."""
+
+    from backend.pipeline.auto_ai import packs_dir_for as _packs_dest  # local import to avoid cycles
+
+    return _packs_dest(sid, runs_root=runs_root)
+
 
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_BACKOFF_SCHEDULE = "1,3,7"
@@ -31,9 +43,16 @@ DEFAULT_BACKOFF_SCHEDULE = "1,3,7"
 
 def _load_index(path: Path) -> list[Mapping[str, object]]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, list):
-        raise ValueError(f"Pack index must be a list: {path}")
-    return [dict(entry) for entry in data]
+    if isinstance(data, MappingABC):
+        pairs = data.get("pairs")
+        if pairs is None:
+            return []
+        if not isinstance(pairs, list):
+            raise ValueError(f"Pack index 'pairs' must be a list: {path}")
+        return [dict(entry) for entry in pairs if isinstance(entry, MappingABC)]
+    if isinstance(data, list):  # pragma: no cover - legacy support
+        return [dict(entry) for entry in data if isinstance(entry, MappingABC)]
+    raise ValueError(f"Pack index must be a mapping or list: {path}")
 
 
 def _load_pack(path: Path) -> Mapping[str, object]:
@@ -86,15 +105,11 @@ def _backoff_delay(schedule: Sequence[float], attempt_number: int) -> float:
     return schedule[index]
 
 
-def _resolve_packs_dir(manifest: RunManifest, override: str | None) -> Path:
+def _resolve_packs_dir(sid: str, runs_root: Path, override: str | None) -> Path:
     if override:
         return Path(override)
 
-    try:
-        path = Path(manifest.get("ai_packs", "dir"))
-    except KeyError:
-        path = manifest.path.parent / "ai_packs"
-    return path
+    return _packs_dir_for(sid, runs_root)
 
 
 def _append_log(path: Path, line: str) -> None:
@@ -103,12 +118,27 @@ def _append_log(path: Path, line: str) -> None:
         fh.write(line)
 
 
-def _log_factory(path: Path, sid: str, pair: Mapping[str, int], file_name: str):
+def _load_summary(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_summary(path: Path, payload: Mapping[str, object]) -> None:
+    serialized = json.dumps(dict(payload), ensure_ascii=False, indent=2)
+    path.write_text(f"{serialized}\n", encoding="utf-8")
+
+
+def _log_factory(path: Path, sid: str, pair: Mapping[str, int], pack_file: str):
     def _log(event: str, payload: Mapping[str, object] | None = None) -> None:
         extras: dict[str, object] = {
             "sid": sid,
             "pair": {"a": pair["a"], "b": pair["b"]},
-            "file": file_name,
+            "pack_file": pack_file,
         }
         if payload:
             extras.update(payload)
@@ -246,6 +276,80 @@ def _write_decision_tags_resolved(
             }
             upsert_tag(tag_path, same_debt_tag, unique_keys=("kind", "with", "source"))
 
+        merge_tag: Mapping[str, object] | None = None
+        for entry in read_tags(tag_path):
+            if str(entry.get("kind", "")) != "merge_best":
+                continue
+            partner_idx = entry.get("with")
+            try:
+                partner_val = int(partner_idx) if partner_idx is not None else None
+            except (TypeError, ValueError):
+                partner_val = None
+            if partner_val == other_idx:
+                merge_tag = entry
+                break
+
+        if merge_tag is not None:
+            summary_path = tag_path.parent / "summary.json"
+            summary_payload = _load_summary(summary_path)
+            if not isinstance(summary_payload, dict):
+                summary_payload = {}
+            score_total = merge_tag.get("score_total") or merge_tag.get("total") or 0
+            try:
+                score_total_int = int(score_total)
+            except (TypeError, ValueError):
+                score_total_int = 0
+            reasons_raw = merge_tag.get("reasons") or []
+            if isinstance(reasons_raw, Iterable) and not isinstance(reasons_raw, (str, bytes)):
+                reasons = [str(item) for item in reasons_raw if item is not None]
+            else:
+                reasons = []
+            conflicts_raw = merge_tag.get("conflicts") or []
+            if isinstance(conflicts_raw, Iterable) and not isinstance(conflicts_raw, (str, bytes)):
+                conflicts = [str(item) for item in conflicts_raw if item is not None]
+            else:
+                conflicts = []
+            extras: list[str] = []
+            if bool(merge_tag.get("strong")):
+                extras.append("strong")
+            mid_value = merge_tag.get("mid")
+            try:
+                mid_int = int(mid_value)
+            except (TypeError, ValueError):
+                mid_int = 0
+            if mid_int > 0:
+                extras.append("mid")
+            extras.append("total")
+            unique_reasons: list[str] = []
+            for item in reasons + extras:
+                if not isinstance(item, str):
+                    continue
+                if item not in unique_reasons:
+                    unique_reasons.append(item)
+            reasons = unique_reasons
+            matched_fields: dict[str, bool] = {}
+            aux_payload = merge_tag.get("aux")
+            acctnum_level: str | None = None
+            if isinstance(aux_payload, MappingABC):
+                raw_matched = aux_payload.get("matched_fields")
+                if isinstance(raw_matched, MappingABC):
+                    matched_fields = {
+                        str(field): bool(flag) for field, flag in raw_matched.items()
+                    }
+                acct_val = aux_payload.get("acctnum_level")
+                if isinstance(acct_val, str) and acct_val:
+                    acctnum_level = acct_val
+            merge_summary: dict[str, object] = {
+                "best_with": other_idx,
+                "score_total": score_total_int,
+                "reasons": reasons,
+                "matched_fields": matched_fields,
+                "conflicts": conflicts,
+            }
+            if acctnum_level:
+                merge_summary["acctnum_level"] = acctnum_level
+            summary_payload["merge_scoring"] = merge_summary
+            _write_summary(summary_path, summary_payload)
 
 def _write_error_tags(
     run_dir: Path,
@@ -296,18 +400,28 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     sid = str(args.sid)
-    runs_root_override = args.runs_root
-    if runs_root_override:
-        manifest_path = Path(runs_root_override) / sid / "manifest.json"
-        manifest = RunManifest.load_or_create(manifest_path, sid=sid)
-    else:
-        manifest = RunManifest.for_sid(sid)
 
-    run_dir = manifest.path.parent
-    packs_dir = _resolve_packs_dir(manifest, args.packs_dir)
+    if args.runs_root:
+        runs_root_path = Path(args.runs_root)
+    else:
+        runs_root_path = Path(os.environ.get("RUNS_ROOT", "runs"))
+
+    manifest = RunManifest.for_sid(sid)
+    preferred_dir = manifest.get_ai_packs_dir()
+    packs_dir = Path(preferred_dir) if preferred_dir else _resolve_packs_dir(sid, runs_root_path, args.packs_dir)
+    if preferred_dir:
+        logger.info("SENDER_PACKS_DIR_FROM_MANIFEST sid=%s dir=%s", sid, packs_dir)
+    else:
+        logger.info("SENDER_PACKS_DIR_FALLBACK sid=%s dir=%s", sid, packs_dir)
+
+    if not packs_dir.exists():
+        raise SystemExit(f"No AI packs for SID (directory not found at {packs_dir})")
+
     index_path = packs_dir / "index.json"
     if not index_path.exists():
-        raise FileNotFoundError(f"Pack index not found: {index_path}")
+        raise SystemExit(f"No AI packs for SID (index.json not found at {index_path})")
+
+    run_dir = manifest.path.parent
 
     index = _load_index(index_path)
     logs_path = packs_dir / "logs.txt"
@@ -338,11 +452,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     max_attempts = max(0, max_retries) + 1
 
     for entry in index:
-        if "a" not in entry or "b" not in entry or "file" not in entry:
+        if "a" not in entry or "b" not in entry or "pack_file" not in entry:
             raise ValueError(f"Invalid pack index entry: {entry}")
         a_idx = int(entry["a"])
         b_idx = int(entry["b"])
-        pack_path = packs_dir / str(entry["file"])
+        pack_path = packs_dir / str(entry["pack_file"])
         if not pack_path.exists():
             raise FileNotFoundError(f"Pack file missing: {pack_path}")
 
@@ -481,11 +595,26 @@ def main(argv: Sequence[str] | None = None) -> None:
         )
         successes += 1
 
+    manifest.set_ai_sent()
+    persist_manifest(manifest)
+    logger.info("MANIFEST_AI_SENT sid=%s", sid)
+
     print(
         "[AI] adjudicated {total} packs ({successes} success, {failures} errors)".format(
             total=total, successes=successes, failures=failures
         )
     )
+
+    try:
+        from backend.core.logic.tags.compact import compact_tags_for_sid
+
+        compact_tags_for_sid(sid)
+        manifest.set_ai_compacted()
+        manifest.save()
+        logger.info("MANIFEST_AI_COMPACTED sid=%s", sid)
+        logger.info("TAGS_COMPACTED sid=%s", sid)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("TAGS_COMPACT_SKIP sid=%s err=%s", sid, exc)
 
     if failures:
         raise SystemExit(1)

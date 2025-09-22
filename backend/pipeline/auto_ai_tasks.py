@@ -15,6 +15,7 @@ from backend.pipeline.auto_ai import (
     AUTO_AI_PIPELINE_DIRNAME,
     INFLIGHT_LOCK_FILENAME,
     LAST_OK_FILENAME,
+    packs_dir_for,
     _build_ai_packs,
     _compact_accounts,
     _indices_from_index,
@@ -41,7 +42,7 @@ def _append_run_log_entry(
 ) -> None:
     """Append a compact JSON line describing the AI run outcome."""
 
-    logs_path = runs_root / sid / "ai_packs" / "logs.txt"
+    logs_path = packs_dir_for(sid, runs_root=runs_root) / "logs.txt"
     entry = {
         "sid": sid,
         "at": datetime.now(timezone.utc).isoformat(),
@@ -79,7 +80,7 @@ def _resolve_runs_root(payload: Mapping[str, object], sid: str) -> Path:
 
     default_root = Path("runs")
 
-    pipeline_dir = default_root / sid / AUTO_AI_PIPELINE_DIRNAME
+    pipeline_dir = packs_dir_for(sid, runs_root=default_root)
     lock_path = pipeline_dir / INFLIGHT_LOCK_FILENAME
     if lock_path.exists():
         try:
@@ -122,7 +123,7 @@ def _populate_common_paths(payload: MutableMapping[str, object]) -> None:
 
     runs_root = _resolve_runs_root(payload, sid)
     accounts_dir = runs_root / sid / "cases" / "accounts"
-    pipeline_dir = runs_root / sid / AUTO_AI_PIPELINE_DIRNAME
+    pipeline_dir = packs_dir_for(sid, runs_root=runs_root)
     lock_path = pipeline_dir / INFLIGHT_LOCK_FILENAME
     last_ok_path = pipeline_dir / LAST_OK_FILENAME
 
@@ -224,7 +225,7 @@ def ai_build_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, ob
         _cleanup_lock(payload, reason="build_failed")
         raise
 
-    index_path = runs_root / sid / "ai_packs" / "index.json"
+    index_path = packs_dir_for(sid, runs_root=runs_root) / "index.json"
     try:
         index_entries = _load_ai_index(index_path)
     except Exception:  # pragma: no cover - defensive logging

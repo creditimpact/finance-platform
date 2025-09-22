@@ -9,7 +9,19 @@ import pytest
 from backend.core.ai import adjudicator
 from backend.core.io.tags import upsert_tag
 from backend.pipeline import auto_ai, auto_ai_tasks
+from backend.pipeline.runs import RunManifest
 from scripts.score_bureau_pairs import ScoreComputationResult
+
+
+from tests.scripts.test_send_ai_merge_packs import (
+    _merge_best_tag,
+    _write_raw_lines,
+)
+
+from scripts.build_ai_merge_packs import main as build_ai_merge_packs_main
+from scripts.send_ai_merge_packs import main as send_ai_merge_packs_main
+from backend.core.logic.report_analysis.tags_compact import compact_tags_for_account
+
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -48,6 +60,36 @@ def _expected_minimal_tags(partner: int, *, timestamp: str) -> list[dict[str, An
         {"kind": "same_debt_pair", "with": partner, "at": timestamp},
     ]
 
+
+
+
+def _setup_merge_case(runs_root: Path, sid: str = "codex-flow") -> tuple[str, Path, Path]:
+    accounts_root = runs_root / sid / "cases" / "accounts"
+    account_a = accounts_root / "11"
+    account_b = accounts_root / "16"
+    _write_raw_lines(
+        account_a / "raw_lines.json",
+        [
+            "US BK CACS",
+            "Account # 409451******",
+            "Balance Owed: $12,091",
+            "Last Payment: 2024-02-11",
+            "Creditor Remarks: Transferred",
+        ],
+    )
+    _write_raw_lines(
+        account_b / "raw_lines.json",
+        [
+            "U S BANK",
+            "Account # -- 409451******",
+            "Balance Owed: -- $12,091 --",
+            "Last Payment: 2024-02-11",
+            "Remarks: Referred to collections",
+        ],
+    )
+    _write_json(account_a / "tags.json", [_merge_best_tag(16)])
+    _write_json(account_b / "tags.json", [_merge_best_tag(11)])
+    return sid, account_a, account_b
 
 def test_has_ai_merge_best_pairs_guard_handles_structured_tags(tmp_path: Path) -> None:
     runs_root = tmp_path / "runs"
@@ -361,9 +403,30 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
         assert sid_value == sid
         packs_dir = runs_root_value / sid_value / "ai_packs"
         packs_dir.mkdir(parents=True, exist_ok=True)
-        pack_payload = {"sid": sid_value, "pair": {"a": 11, "b": 16}, "context": []}
-        _write_json(packs_dir / "011-016.json", pack_payload)
-        _write_json(packs_dir / "index.json", [{"a": 11, "b": 16, "file": "011-016.json"}])
+        pack_payload = {
+            "sid": sid_value,
+            "pair": {"a": 11, "b": 16},
+            "context": {"a": [], "b": []},
+            "highlights": {"total": 0},
+        }
+        pack_filename = "pair_011_016.jsonl"
+        (packs_dir / pack_filename).write_text(json.dumps(pack_payload, ensure_ascii=False) + "\n", encoding="utf-8")
+        _write_json(
+            packs_dir / "index.json",
+            {
+                "sid": sid_value,
+                "pairs": [
+                    {
+                        "a": 11,
+                        "b": 16,
+                        "pack_file": pack_filename,
+                        "lines_a": 0,
+                        "lines_b": 0,
+                        "score_total": 0,
+                    }
+                ],
+            },
+        )
 
     def fake_send_packs(sid_value: str, runs_root: Path | None = None) -> None:
         assert sid_value == sid
@@ -402,7 +465,7 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     packs_index = json.loads(
         (runs_root / sid / "ai_packs" / "index.json").read_text(encoding="utf-8")
     )
-    assert packs_index == [{"a": 11, "b": 16, "file": "011-016.json"}]
+    assert packs_index == {"sid": sid, "pairs": [{"a": 11, "b": 16, "pack_file": "pair_011_016.jsonl", "lines_a": 0, "lines_b": 0, "score_total": 0}]}
     assert first_result["packs"] == 1
     assert first_result["pairs"] == 2
 
@@ -498,3 +561,168 @@ def test_auto_ai_project_key_header(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result == {"decision": "merge", "reason": "test"}
     assert recorded["headers"]["Authorization"].startswith("Bearer sk-proj-abc123")
     assert recorded["headers"]["OpenAI-Project"] == "proj-789"
+
+
+def test_maybe_run_ai_pipeline_skips_without_candidates_logs(monkeypatch, tmp_path, caplog):
+    runs_root = tmp_path / "runs"
+    sid = "no-ai"
+    account_dir = runs_root / sid / "cases" / "accounts" / "01"
+    _write_json(account_dir / "tags.json", [{"kind": "merge_best", "decision": "human", "with": 7}])
+
+    monkeypatch.setenv("ENABLE_AUTO_AI_PIPELINE", "1")
+    monkeypatch.setattr(auto_ai, "RUNS_ROOT", runs_root)
+
+    def _boom(_sid: str):  # pragma: no cover - defensive
+        raise AssertionError("pipeline should not run when no candidates")
+
+    monkeypatch.setattr(auto_ai, "_run_auto_ai_pipeline", _boom)
+
+    with caplog.at_level("INFO"):
+        result = auto_ai.maybe_run_ai_pipeline(sid)
+
+    assert result == {"sid": sid, "skipped": "no_ai_candidates"}
+    manifest = RunManifest.for_sid(sid)
+    status = manifest.data.get("ai", {}).get("status", {})
+    assert status.get("skipped_reason") == "no_candidates"
+    assert status.get("built") is False
+    assert status.get("sent") is False
+    assert status.get("compacted") is False
+    assert any("AUTO_AI_SKIPPED" in record.getMessage() for record in caplog.records)
+
+
+def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch):
+    runs_root = tmp_path / "runs"
+    sid, account_a, account_b = _setup_merge_case(runs_root)
+    packs_dir = auto_ai.packs_dir_for(sid, runs_root=runs_root)
+
+    build_ai_merge_packs_main([
+        "--sid",
+        sid,
+        "--runs-root",
+        str(runs_root),
+        "--max-lines-per-side",
+        "6",
+    ])
+
+    assert packs_dir.exists()
+    index_path = packs_dir / "index.json"
+    assert index_path.exists()
+
+    manifest = RunManifest.for_sid(sid)
+    ai_info = manifest.data.get("ai", {})
+    packs_info = ai_info.get("packs", {})
+    status_info = ai_info.get("status", {})
+    assert Path(packs_info.get("dir")) == packs_dir.resolve()
+    assert Path(packs_info.get("index")) == index_path.resolve()
+    assert packs_info.get("pairs") == 1
+    assert status_info.get("built") is True
+    assert status_info.get("skipped_reason") is None
+
+    monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+
+    from scripts import send_ai_merge_packs as send_mod
+
+    monkeypatch.setattr(
+        send_mod,
+        "decide_merge_or_different",
+        lambda pack, timeout: {
+            "decision": "different",
+            "reason": "These tradelines describe the same debt from different collectors.",
+        },
+    )
+    timestamp = "2024-07-04T12:00:00Z"
+    monkeypatch.setattr(send_mod, "_isoformat_timestamp", lambda dt=None: timestamp)
+
+    send_ai_merge_packs_main(["--sid", sid, "--runs-root", str(runs_root)])
+
+    logs_path = packs_dir / "logs.txt"
+    assert logs_path.exists()
+    assert logs_path.read_text(encoding="utf-8")
+
+    manifest = RunManifest.for_sid(sid)
+    manifest_data = json.loads((runs_root / sid / "manifest.json").read_text(encoding="utf-8"))
+    ai_artifacts = manifest_data["artifacts"]["ai_packs"]
+    assert Path(ai_artifacts["dir"]) == packs_dir.resolve()
+    assert Path(ai_artifacts["index"]) == (packs_dir / "index.json").resolve()
+
+    status_info = manifest.data.get("ai", {}).get("status", {})
+    assert status_info.get("sent") is True
+    assert status_info.get("compacted") is True
+    assert status_info.get("skipped_reason") is None
+
+    compact_tags_for_account(account_a)
+    compact_tags_for_account(account_b)
+
+    tags_a = json.loads((account_a / "tags.json").read_text(encoding="utf-8"))
+    tags_b = json.loads((account_b / "tags.json").read_text(encoding="utf-8"))
+    assert tags_a == [
+        {"kind": "merge_best", "with": 16, "decision": "ai"},
+        {"kind": "ai_decision", "with": 16, "decision": "different", "at": timestamp},
+        {"kind": "same_debt_pair", "with": 16, "at": timestamp},
+    ]
+    assert tags_b == [
+        {"kind": "merge_best", "with": 11, "decision": "ai"},
+        {"kind": "ai_decision", "with": 11, "decision": "different", "at": timestamp},
+        {"kind": "same_debt_pair", "with": 11, "at": timestamp},
+    ]
+
+    summary_a = json.loads((account_a / "summary.json").read_text(encoding="utf-8"))
+    summary_b = json.loads((account_b / "summary.json").read_text(encoding="utf-8"))
+
+    assert summary_a["merge_explanations"]
+    assert summary_b["merge_explanations"]
+    assert summary_a["ai_explanations"]
+    assert summary_b["ai_explanations"]
+
+    merge_score_a = summary_a.get("merge_scoring")
+    assert merge_score_a
+    assert merge_score_a["best_with"] == 16
+    assert merge_score_a["score_total"] >= 0
+    assert "total" in merge_score_a["reasons"]
+    assert merge_score_a["matched_fields"].get("balance_owed") is True
+
+    merge_score_b = summary_b.get("merge_scoring")
+    assert merge_score_b
+    assert merge_score_b["best_with"] == 11
+    assert merge_score_b["matched_fields"].get("balance_owed") is True
+
+
+
+
+
+def test_run_auto_ai_pipeline_skips_when_index_missing(monkeypatch, tmp_path):
+    runs_root = tmp_path / 'runs'
+    monkeypatch.setattr(auto_ai, 'RUNS_ROOT', runs_root)
+    sid, account_a, account_b = _setup_merge_case(runs_root, sid='missing-index')
+
+    import backend.core.logic.merge.scorer as merge_scorer
+    import backend.core.logic.ai.send_ai_merge_packs as send_module
+
+    monkeypatch.setattr(merge_scorer, 'score_bureau_pairs_cli', lambda *_, **__: None)
+
+    def fake_build_cli(sid_value, runs_root_value):
+        packs_dir = auto_ai.packs_dir_for(sid_value, runs_root=runs_root_value)
+        packs_dir.mkdir(parents=True, exist_ok=True)
+        # intentionally do not create index.json to trigger no_packs path
+
+    monkeypatch.setattr(auto_ai, '_build_ai_packs', fake_build_cli)
+
+    def fake_send(*args, **kwargs):  # pragma: no cover - ensure not called
+        raise AssertionError('send should not run when index is missing')
+
+    monkeypatch.setattr(send_module, 'run_send_for_sid', fake_send)
+
+    manifest_before = RunManifest.for_sid(sid)
+
+    result = auto_ai._run_auto_ai_pipeline(sid)
+
+    assert result == {'sid': sid, 'skipped': 'no_packs'}
+
+    manifest_after = RunManifest.for_sid(sid)
+    status = manifest_after.data.get('ai', {}).get('status', {})
+    assert status.get('skipped_reason') == 'no_packs'
+    assert status.get('sent') is False
+    assert status.get('compacted') is False
+

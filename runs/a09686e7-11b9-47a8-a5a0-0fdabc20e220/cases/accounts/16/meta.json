@@ -1,0 +1,16 @@
+{
+  "account_index": 16,
+  "heading_guess": "U S BANK",
+  "page_start": 19,
+  "line_start": 35,
+  "page_end": 20,
+  "line_end": 37,
+  "pointers": {
+    "raw": "raw_lines.json",
+    "bureaus": "bureaus.json",
+    "flat": "fields_flat.json",
+    "tags": "tags.json",
+    "summary": "summary.json"
+  },
+  "account_id": "idx-016"
+}

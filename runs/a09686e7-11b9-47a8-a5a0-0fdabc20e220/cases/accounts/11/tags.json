@@ -1,0 +1,185 @@
+[
+  {
+    "details": {
+      "problem_reasons": [
+        "past_due_amount: 12091.00",
+        "late_history: days_late_7y=6",
+        "bad_payment_status: Collection/Chargeoff",
+        "positive_balance_on_closed"
+      ]
+    },
+    "kind": "issue",
+    "type": "collection"
+  },
+  {
+    "aux": {
+      "acctnum_level": "none",
+      "by_field_pairs": {
+        "account_type": [
+          "transunion",
+          "experian"
+        ],
+        "balance_owed": [
+          "transunion",
+          "experian"
+        ],
+        "credit_limit": [
+          "transunion",
+          "experian"
+        ],
+        "creditor_type": [
+          "transunion",
+          "experian"
+        ],
+        "date_opened": [
+          "equifax",
+          "experian"
+        ],
+        "last_payment": [
+          "transunion",
+          "experian"
+        ],
+        "past_due_amount": [
+          "transunion",
+          "experian"
+        ]
+      },
+      "matched_fields": {
+        "account_number": false,
+        "account_type": true,
+        "balance_owed": true,
+        "closed_date": false,
+        "credit_limit": true,
+        "creditor_type": true,
+        "date_of_last_activity": false,
+        "date_opened": true,
+        "date_reported": false,
+        "high_balance": false,
+        "last_payment": true,
+        "last_verified": false,
+        "past_due_amount": true,
+        "payment_amount": false
+      }
+    },
+    "conflicts": [
+      "amount_conflict:high_balance"
+    ],
+    "dates_all": false,
+    "decision": "ai",
+    "kind": "merge_pair",
+    "mid": 27,
+    "parts": {
+      "account_number": 0,
+      "account_type": 3,
+      "balance_owed": 31,
+      "closed_date": 0,
+      "credit_limit": 1,
+      "creditor_type": 3,
+      "date_of_last_activity": 0,
+      "date_opened": 1,
+      "date_reported": 0,
+      "high_balance": 0,
+      "last_payment": 12,
+      "last_verified": 0,
+      "past_due_amount": 8,
+      "payment_amount": 0
+    },
+    "reasons": [
+      "strong:balance_owed",
+      "mid",
+      "total"
+    ],
+    "source": "merge_scorer",
+    "strong": true,
+    "tag": "merge_pair",
+    "total": 59,
+    "with": 16
+  },
+  {
+    "aux": {
+      "acctnum_level": "none",
+      "by_field_pairs": {
+        "account_type": [
+          "transunion",
+          "experian"
+        ],
+        "balance_owed": [
+          "transunion",
+          "experian"
+        ],
+        "credit_limit": [
+          "transunion",
+          "experian"
+        ],
+        "creditor_type": [
+          "transunion",
+          "experian"
+        ],
+        "date_opened": [
+          "equifax",
+          "experian"
+        ],
+        "last_payment": [
+          "transunion",
+          "experian"
+        ],
+        "past_due_amount": [
+          "transunion",
+          "experian"
+        ]
+      },
+      "matched_fields": {
+        "account_number": false,
+        "account_type": true,
+        "balance_owed": true,
+        "closed_date": false,
+        "credit_limit": true,
+        "creditor_type": true,
+        "date_of_last_activity": false,
+        "date_opened": true,
+        "date_reported": false,
+        "high_balance": false,
+        "last_payment": true,
+        "last_verified": false,
+        "past_due_amount": true,
+        "payment_amount": false
+      }
+    },
+    "conflicts": [
+      "amount_conflict:high_balance"
+    ],
+    "dates_all": false,
+    "decision": "ai",
+    "kind": "merge_best",
+    "mid": 27,
+    "parts": {
+      "account_number": 0,
+      "account_type": 3,
+      "balance_owed": 31,
+      "closed_date": 0,
+      "credit_limit": 1,
+      "creditor_type": 3,
+      "date_of_last_activity": 0,
+      "date_opened": 1,
+      "date_reported": 0,
+      "high_balance": 0,
+      "last_payment": 12,
+      "last_verified": 0,
+      "past_due_amount": 8,
+      "payment_amount": 0
+    },
+    "reasons": [
+      "strong:balance_owed",
+      "mid",
+      "total"
+    ],
+    "score_total": 59,
+    "source": "merge_scorer",
+    "strong": true,
+    "strong_rank": 2,
+    "tag": "merge_best",
+    "tiebreaker": "strong",
+    "total": 59,
+    "with": 16
+  }
+]

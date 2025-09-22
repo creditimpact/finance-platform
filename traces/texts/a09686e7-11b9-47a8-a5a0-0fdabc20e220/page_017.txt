@@ -1,0 +1,212 @@
+Transunion
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+Experian
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+OK
+אוג׳
+OK
+ספט׳
+OK
+אוק׳
+OK
+נוב׳
+OK
+דצמ׳
+OK
+ינו׳
+OK
+פבר׳
+OK
+מרץ
+OK
+אפר׳
+OK
+מאי
+OK
+יוני
+OK
+יולי
+Equifax
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+יולי
+אוג׳
+ספט׳
+אוק׳
+נוב׳
+דצמ׳
+ינו׳
+פבר׳
+מרץ
+אפר׳
+מאי
+יוני
+Days Late - 7 Year History
+Transunion
+30: 0
+60: 0
+90: 0
+Experian
+30: 0
+60: 0
+90: 0
+Equifax
+30: 0
+60: 0
+90: 0
+JPMCB CARD
+Account #
+High Balance:
+Last Verified:
+Date of Last Activity:
+Date Reported:
+Date Opened:
+Balance Owed:
+Closed Date:
+Account Rating:
+Account Description:
+Dispute Status:
+Creditor Type:
+Account Status:
+Payment Status:
+Creditor Remarks:
+Payment Amount:
+Transunion
+464018**********
+$8,894
+18.7.2025
+18.7.2025
+18.7.2025
+3.12.2008
+$1,571
+--
+Open
+Individual
+Account not disputed
+Bank Credit Cards
+Open
+Current
+--
+$35
+Experian
+464018******
+$8,894
+--
+1.7.2025
+18.7.2025
+1.12.2008
+$1,571
+--
+Open
+Individual
+Account not disputed
+Bank Credit Cards
+Open
+Current
+--
+$35
+Equifax
+464018******
+$0
+--
+1.7.2025
+1.7.2025
+1.12.2008
+$1,571
+--
+Open
+Individual
+Account not disputed
+National Credit Card Companies
+Open
+Current
+Flexible spending credit card
+Amount in H/C column is credit
+limit
+$35
+®
+®
+®
+®
+®
+®

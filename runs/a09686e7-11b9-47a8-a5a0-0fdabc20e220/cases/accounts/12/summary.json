@@ -1,0 +1,19 @@
+{
+  "account_index": 12,
+  "pointers": {
+    "raw": "raw_lines.json",
+    "bureaus": "bureaus.json",
+    "flat": "fields_flat.json",
+    "tags": "tags.json",
+    "summary": "summary.json"
+  },
+  "account_id": "idx-012",
+  "problem_reasons": [
+    "past_due_amount: 10792.00",
+    "late_history: days_late_7y=8",
+    "bad_payment_status: Collection/Chargeoff",
+    "positive_balance_on_closed"
+  ],
+  "problem_tags": [],
+  "primary_issue": "collection"
+}

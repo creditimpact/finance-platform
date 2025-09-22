@@ -597,9 +597,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         )
         successes += 1
 
-    manifest.set_ai_sent()
-    persist_manifest(manifest)
-    log.info("MANIFEST_AI_SENT sid=%s", sid)
+    if failures == 0:
+        manifest.set_ai_sent()
+        persist_manifest(manifest)
+        log.info("MANIFEST_AI_SENT sid=%s", sid)
 
     print(
         "[AI] adjudicated {total} packs ({successes} success, {failures} errors)".format(

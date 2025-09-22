@@ -10,9 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
-from backend.core.logic.report_analysis.tags_compact import (
-    compact_tags_for_account,
-)
+from backend.core.io.tags_minimize import compact_account_tags
 from backend.pipeline.runs import RunManifest
 from scripts.build_ai_merge_packs import main as build_ai_merge_packs_main
 from scripts.send_ai_merge_packs import main as send_ai_merge_packs_main
@@ -290,7 +288,7 @@ def _compact_accounts(accounts_dir: Path, indices: Iterable[int]) -> None:
         if not account_dir.exists():
             continue
         try:
-            compact_tags_for_account(account_dir)
+            compact_account_tags(account_dir)
         except Exception:  # pragma: no cover - defensive logging
             logger.warning(
                 "AUTO_AI_PIPELINE compact failed account=%s dir=%s",

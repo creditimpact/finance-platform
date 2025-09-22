@@ -73,6 +73,16 @@ def test_has_ai_merge_best_pairs_guard_handles_structured_tags(tmp_path: Path) -
     assert auto_ai.has_ai_merge_best_pairs(sid, runs_root) is False
 
 
+def test_has_ai_merge_best_pairs_detects_missing_partner(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "no-partner"
+    account_tags = runs_root / sid / "cases" / "accounts"
+
+    _write_json(account_tags / "11" / "tags.json", [{"kind": "merge_best", "decision": "ai"}])
+
+    assert auto_ai.has_ai_merge_best_pairs(sid, runs_root) is True
+
+
 def test_maybe_queue_auto_ai_pipeline_queues_when_candidates(monkeypatch, tmp_path: Path) -> None:
     sid = "queue-me"
     runs_root = tmp_path / "runs"

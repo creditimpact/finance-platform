@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
@@ -363,5 +364,28 @@ def _is_ai_merge_best_tag(tag: Mapping[str, object]) -> bool:
     if decision != "ai":
         return False
 
-    return tag.get("with") is not None
+    return True
+
+
+@contextmanager
+def ai_inflight_lock(runs_root: Path, sid: str):
+    """
+    Prevents concurrent AI runs on the same SID.
+    Creates runs/<sid>/.ai_pipeline/inflight.lock; removes it on exit.
+    """
+
+    ai_dir = runs_root / sid / ".ai_pipeline"
+    ai_dir.mkdir(parents=True, exist_ok=True)
+    lock = ai_dir / "inflight.lock"
+    if lock.exists():
+        # Someone else is running; caller should skip.
+        raise RuntimeError("AI pipeline already inflight")
+    lock.write_text("1", encoding="utf-8")
+    try:
+        yield
+    finally:
+        try:
+            lock.unlink()
+        except FileNotFoundError:
+            pass
 

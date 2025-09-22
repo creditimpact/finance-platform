@@ -170,13 +170,44 @@ def auto_ai_compact_task(
     return payload
 
 
-def enqueue_auto_ai_pipeline(*, sid: str, runs_root: str, accounts_dir: str):
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def auto_ai_finalize_task(
+    self, prev: Mapping[str, object] | None, marker_path: str | None
+) -> dict[str, object]:
+    """Remove the pipeline-in-progress marker once the workflow completes."""
+
+    payload = _ensure_payload(prev)
+    sid = str(payload.get("sid") or "")
+    path = Path(marker_path) if marker_path else None
+
+    if path is None:
+        logger.info("AUTO_AI_FINALIZE sid=%s marker=None", sid)
+        return payload
+
+    try:
+        if path.exists():
+            path.unlink()
+            logger.info("AUTO_AI_FINALIZE sid=%s marker_removed=%s", sid, path)
+        else:
+            logger.info("AUTO_AI_FINALIZE sid=%s marker_missing=%s", sid, path)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.warning(
+            "AUTO_AI_FINALIZE sid=%s marker_cleanup_failed=%s", sid, path, exc_info=True
+        )
+    return payload
+
+
+def enqueue_auto_ai_pipeline(*, sid: str, runs_root: str, marker_path: str | None = None):
     """Queue the Celery task chain for the auto AI adjudication pipeline."""
 
+    runs_root_path = Path(runs_root)
+    accounts_dir = runs_root_path / sid / "cases" / "accounts"
     workflow = chain(
         auto_ai_score_task.s(sid, runs_root),
         auto_ai_build_packs_task.s(),
         auto_ai_send_packs_task.s(),
-        auto_ai_compact_task.s(accounts_dir),
+        auto_ai_compact_task.s(str(accounts_dir)),
     )
+    if marker_path is not None:
+        workflow = chain(workflow, auto_ai_finalize_task.s(marker_path))
     return workflow.apply_async()

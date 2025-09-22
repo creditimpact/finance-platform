@@ -17,39 +17,69 @@ from scripts.send_ai_merge_packs import main as send_ai_merge_packs_main
 
 logger = logging.getLogger(__name__)
 
+PIPELINE_MARKER_FILENAME = "auto_ai_pipeline_in_progress.json"
+
+
+def _pipeline_marker_path(runs_root: Path, sid: str) -> Path:
+    return runs_root / sid / "ai_packs" / PIPELINE_MARKER_FILENAME
+
 
 def maybe_run_auto_ai_pipeline(
     sid: str, *, summary: Mapping[str, object] | None = None
 ):
     """Backward-compatible shim that queues the auto-AI pipeline."""
 
-    return maybe_queue_auto_ai_pipeline(sid, summary=summary)
+    _ = summary  # preserved for compatibility with older call sites
+    manifest = RunManifest.for_sid(sid)
+    runs_root = manifest.path.parent.parent
+    return maybe_queue_auto_ai_pipeline(
+        sid,
+        runs_root=runs_root,
+        flag_env=os.environ,
+    )
 
 
 def maybe_queue_auto_ai_pipeline(
-    sid: str, *, summary: Mapping[str, object] | None = None
-):
+    sid: str,
+    *,
+    runs_root: Path,
+    flag_env: Mapping[str, str],
+) -> dict[str, object]:
     """Queue the automatic AI adjudication pipeline when enabled."""
 
-    if os.getenv("ENABLE_AUTO_AI_PIPELINE", "0") != "1":
-        logger.info("AUTO_AI_SKIPPED sid=%s reason=disabled", sid)
-        return None
+    flag_value = str(flag_env.get("ENABLE_AUTO_AI_PIPELINE", "0"))
+    if flag_value != "1":
+        logger.info("AUTO_AI_SKIP_DISABLED sid=%s", sid)
+        return {"queued": False, "reason": "disabled"}
 
-    manifest = RunManifest.for_sid(sid)
-    run_dir = manifest.path.parent
-    runs_root = run_dir.parent
+    runs_root_path = Path(runs_root)
+    marker_path = _pipeline_marker_path(runs_root_path, sid)
+    if marker_path.exists():
+        logger.info("AUTO_AI_SKIP_IN_PROGRESS sid=%s marker=%s", sid, marker_path)
+        return {"queued": False, "reason": "in_progress"}
 
-    if not has_ai_merge_best_pairs(sid, runs_root):
-        logger.info("AUTO_AI_SKIPPED sid=%s reason=no_ai_candidates", sid)
-        return None
+    if not has_ai_merge_best_pairs(sid, runs_root_path):
+        logger.info("AUTO_AI_SKIP_NO_CANDIDATES sid=%s", sid)
+        return {"queued": False, "reason": "no_candidates"}
 
-    accounts_dir = _resolve_accounts_dir(run_dir, summary)
+    run_dir = runs_root_path / sid
+    accounts_dir = run_dir / "cases" / "accounts"
+
+    marker_payload = {"sid": sid, "runs_root": str(runs_root_path)}
+    try:
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_path.write_text(
+            json.dumps(marker_payload, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError:  # pragma: no cover - defensive logging
+        logger.warning("AUTO_AI_MARKER_WRITE_FAILED sid=%s path=%s", sid, marker_path)
 
     logger.info(
-        "AUTO_AI_QUEUING sid=%s runs_root=%s accounts_dir=%s",
+        "AUTO_AI_QUEUING sid=%s runs_root=%s accounts_dir=%s marker=%s",
         sid,
-        runs_root,
+        runs_root_path,
         accounts_dir,
+        marker_path,
     )
 
     try:
@@ -57,15 +87,27 @@ def maybe_queue_auto_ai_pipeline(
 
         result = auto_ai_tasks.enqueue_auto_ai_pipeline(
             sid=sid,
-            runs_root=str(runs_root),
-            accounts_dir=str(accounts_dir),
+            runs_root=str(runs_root_path),
+            marker_path=str(marker_path),
         )
     except Exception:  # pragma: no cover - defensive logging
         logger.error("AUTO_AI_QUEUE_FAILED sid=%s", sid, exc_info=True)
+        try:
+            if marker_path.exists():
+                marker_path.unlink()
+        except OSError:
+            logger.warning(
+                "AUTO_AI_MARKER_CLEANUP_FAILED sid=%s path=%s", sid, marker_path
+            )
         raise
 
     logger.info("AUTO_AI_QUEUED sid=%s", sid)
-    return result
+    payload: dict[str, object] = {"queued": True}
+    task_id = getattr(result, "id", None)
+    if task_id is not None:
+        payload["task_id"] = task_id
+    payload["marker_path"] = str(marker_path)
+    return payload
 
 
 def has_ai_merge_best_pairs(sid: str, runs_root: Path | str) -> bool:
@@ -128,19 +170,6 @@ def _normalize_indices(indices: Sequence[object]) -> set[int]:
         except (TypeError, ValueError):
             continue
     return normalized
-
-
-def _resolve_accounts_dir(
-    run_dir: Path, summary: Mapping[str, object] | None
-) -> Path:
-    if isinstance(summary, Mapping):
-        cases = summary.get("cases")
-        if isinstance(cases, Mapping):
-            dir_value = cases.get("dir")
-            if isinstance(dir_value, (str, Path)) and str(dir_value):
-                candidate = Path(dir_value)
-                return candidate
-    return run_dir / "cases" / "accounts"
 
 
 def _load_ai_index(path: Path) -> list[Mapping[str, object]]:

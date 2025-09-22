@@ -72,8 +72,12 @@ def decide_merge_or_different(pack: dict, *, timeout: int) -> dict:
     headers = {
         "Authorization": f"Bearer {api_key}",
     }
-    project_id = os.getenv("OPENAI_PROJECT_ID")
-    if api_key.startswith("sk-proj-") and project_id:
+    project_id = (os.getenv("OPENAI_PROJECT_ID") or "").strip()
+    if api_key.startswith("sk-proj-"):
+        if not project_id:
+            raise RuntimeError(
+                "OPENAI_PROJECT_ID must be set when using project-scoped OpenAI API keys"
+            )
         headers["OpenAI-Project"] = project_id
 
     org_id = os.getenv("OPENAI_ORG_ID")

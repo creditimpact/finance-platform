@@ -74,15 +74,6 @@ def test_persist_ai_decision_overwrites_with_new_result(tmp_path):
     persist_ai_decision(sid, runs_root, 303, 101, second_response)
 
     base = runs_root / sid / "cases" / "accounts"
-    path_a = base / "101" / "ai" / "decision_pair_101_303.json"
-    path_b = base / "303" / "ai" / "decision_pair_303_101.json"
-
-    saved_a = json.loads(path_a.read_text(encoding="utf-8"))
-    saved_b = json.loads(path_b.read_text(encoding="utf-8"))
-
-    assert saved_a["decision"] == "no_merge"
-    assert saved_b["decision"] == "no_merge"
-
     expected_tag_a = {
         "kind": "merge_result",
         "with": 303,
@@ -102,4 +93,6 @@ def test_persist_ai_decision_overwrites_with_new_result(tmp_path):
 
     assert tags_a == [expected_tag_a]
     assert tags_b == [expected_tag_b]
+    assert not (base / "101" / "ai").exists()
+    assert not (base / "303" / "ai").exists()
 

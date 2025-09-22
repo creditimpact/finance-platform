@@ -187,6 +187,43 @@ def maybe_queue_auto_ai_pipeline(
     return payload
 
 
+def has_ai_merge_best_tags(runs_root: Path, sid: str) -> bool:
+    """
+    True iff any cases/accounts/<idx>/tags.json contains:
+      {"kind":"merge_best","decision":"ai", ...}
+    """
+
+    accounts_root = runs_root / sid / "cases" / "accounts"
+    if not accounts_root.exists():
+        return False
+
+    for account_dir in accounts_root.iterdir():
+        if not account_dir.is_dir():
+            continue
+        tags_path = account_dir / "tags.json"
+        if not tags_path.exists():
+            continue
+        try:
+            raw = tags_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if not raw.strip():
+            continue
+        try:
+            tags = json.loads(raw)
+        except Exception:
+            continue
+        for tag in _iter_tag_entries(tags):
+            if (
+                isinstance(tag, Mapping)
+                and tag.get("kind") == "merge_best"
+                and tag.get("decision") == "ai"
+            ):
+                return True
+
+    return False
+
+
 def has_ai_merge_best_pairs(sid: str, runs_root: Path | str) -> bool:
     """Return ``True`` if any account tags require AI merge adjudication."""
 

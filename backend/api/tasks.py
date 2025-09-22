@@ -240,13 +240,13 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
                     log.info("AUTO_AI_ALREADY_ENQUEUED sid=%s", sid)
                 else:
                     try:
+                        manifest.set_ai_enqueued()
+                        persist_manifest(manifest)
+                        log.info("MANIFEST_AI_ENQUEUED sid=%s", sid)
                         maybe_run_ai_pipeline_task.delay(sid)
                     except Exception:
                         log.error("AUTO_AI_ENQUEUE_FAILED sid=%s", sid, exc_info=True)
                     else:
-                        manifest.set_ai_enqueued()
-                        persist_manifest(manifest)
-                        log.info("MANIFEST_AI_ENQUEUED sid=%s", sid)
                         _AUTO_AI_PIPELINE_ENQUEUED.add(sid)
                         log.info("AUTO_AI_ENQUEUED sid=%s", sid)
             else:

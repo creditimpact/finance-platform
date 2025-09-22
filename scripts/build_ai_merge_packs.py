@@ -91,6 +91,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     packs_dir.mkdir(parents=True, exist_ok=True)
     log.info("PACKS_DIR_USED sid=%s dir=%s", sid, packs_dir)
 
+    manifest = RunManifest.for_sid(sid)
+    manifest.upsert_ai_packs_dir(packs_dir)
+    persist_manifest(manifest)
+    log.info("MANIFEST_AI_PACKS_DIR_SET sid=%s dir=%s", sid, packs_dir)
+
     packs = build_merge_ai_packs(
         sid,
         runs_root,

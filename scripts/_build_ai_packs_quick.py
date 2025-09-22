@@ -135,11 +135,11 @@ dump_json(index_path, out_index)
 
 # עדכון המניפסט
 manifest = load_json(manifest_path, default={})
-ai_packs = manifest.setdefault("artifacts",{}).setdefault("ai_packs",{})
-ai_packs["dir"] = str(PACKS_ROOT.resolve())
-ai_packs["index"] = str(index_path.resolve())
-ai_packs["logs"] = str((PACKS_ROOT/"logs.txt").resolve())
-manifest["artifacts"]["logs"] = manifest.get("artifacts",{}).get("logs",{})
+ai_section = manifest.setdefault("ai", {}).setdefault("packs", {})
+ai_section["dir"] = str(PACKS_ROOT.resolve())
+ai_section["index"] = str(index_path.resolve())
+ai_section["logs"] = str((PACKS_ROOT/"logs.txt").resolve())
+ai_section["pairs"] = len(out_index)
 dump_json(manifest_path, manifest)
 
 print(f"[BUILD] wrote {len(out_index)} packs to {PACKS_ROOT}")

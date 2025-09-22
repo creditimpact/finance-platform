@@ -20,7 +20,7 @@ except Exception:  # pragma: no cover - fallback to ensure repo modules are impo
 from backend.core.io.tags import read_tags
 from backend.core.logic.report_analysis import ai_sender
 from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
-from backend.pipeline.runs import RunManifest, persist_manifest
+from backend.pipeline.runs import RunManifest
 
 from scripts.score_bureau_pairs import (
     AUTO_DECISIONS,
@@ -146,15 +146,11 @@ def build_packs_for_sid(
     logs_path = output_dir / "logs.txt"
 
     manifest = RunManifest.for_sid(sid_str)
-    persist_manifest(
-        manifest,
-        artifacts={
-            "ai_packs": {
-                "dir": output_dir,
-                "index": index_path,
-                "logs": logs_path,
-            }
-        },
+    manifest.update_ai_packs(
+        dir=output_dir,
+        index=index_path,
+        logs=logs_path,
+        pairs=len(items),
     )
 
     return PackBuildResult(

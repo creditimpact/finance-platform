@@ -297,10 +297,10 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
 
     manifest = RunManifest.for_sid(sid)
     manifest_data = json.loads((runs_root / sid / "manifest.json").read_text(encoding="utf-8"))
-    ai_artifacts = manifest_data["artifacts"]["ai_packs"]
-    assert Path(ai_artifacts["dir"]) == packs_dir.resolve()
-    assert Path(ai_artifacts["index"]) == (packs_dir / "index.json").resolve()
-    assert Path(ai_artifacts["logs"]) == logs_path.resolve()
+    ai_packs = manifest_data["ai"]["packs"]
+    assert Path(ai_packs["dir"]) == packs_dir.resolve()
+    assert Path(ai_packs["index"]) == (packs_dir / "index.json").resolve()
+    assert Path(ai_packs["logs"]) == logs_path.resolve()
 
     status_info = manifest.data.get("ai", {}).get("status", {})
     assert status_info.get("sent") is True

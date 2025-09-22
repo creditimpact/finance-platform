@@ -409,8 +409,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         log.info("SENDER_PACKS_DIR_OVERRIDE sid=%s dir=%s", sid, packs_dir)
     else:
         preferred_dir = manifest.get_ai_packs_dir()
-        if preferred_dir and Path(preferred_dir).exists():
-            packs_dir = Path(preferred_dir)
+        preferred_dir_path = Path(preferred_dir) if preferred_dir else None
+        if preferred_dir_path and preferred_dir_path.exists():
+            packs_dir = preferred_dir_path
             log.info("SENDER_PACKS_DIR_FROM_MANIFEST sid=%s dir=%s", sid, packs_dir)
         else:
             packs_dir = _packs_dir_for(sid, runs_root_path)

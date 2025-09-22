@@ -181,7 +181,9 @@ def maybe_queue_auto_ai_pipeline(
         raise
 
     logger.info("AUTO_AI_QUEUED sid=%s", sid)
-    RunManifest.for_sid(sid).set_ai_enqueued()
+    manifest = RunManifest.for_sid(sid)
+    manifest.set_ai_enqueued()
+    persist_manifest(manifest)
     logger.info("MANIFEST_AI_ENQUEUED sid=%s", sid)
     payload: dict[str, object] = {"queued": True, "reason": "queued"}
     if task_id:
@@ -412,7 +414,9 @@ def maybe_run_ai_pipeline(sid: str) -> dict[str, object]:
         return {"sid": sid, "skipped": "feature_off"}
 
     if not has_ai_merge_best_tags(sid):
-        RunManifest.for_sid(sid).set_ai_skipped("no_candidates")
+        manifest = RunManifest.for_sid(sid)
+        manifest.set_ai_skipped("no_candidates")
+        persist_manifest(manifest)
         logger.info("AUTO_AI_SKIPPED sid=%s reason=no_ai_merge_best", sid)
         return {"sid": sid, "skipped": "no_ai_candidates"}
 
@@ -447,6 +451,7 @@ def _run_auto_ai_pipeline(sid: str):
     index_path = packs_dir / "index.json"
     if not index_path.exists():
         manifest.set_ai_skipped("no_packs")
+        persist_manifest(manifest)
         logger.info("AUTO_AI_SKIP_NO_PACKS sid=%s packs_dir=%s", sid, packs_dir)
         return {"sid": sid, "skipped": "no_packs"}
 
@@ -464,10 +469,12 @@ def _run_auto_ai_pipeline(sid: str):
     pairs_count = len(pairs_entries)
     if pairs_count <= 0:
         manifest.set_ai_skipped("no_packs")
+        persist_manifest(manifest)
         logger.info("AUTO_AI_SKIP_NO_PACKS sid=%s packs_dir=%s", sid, packs_dir)
         return {"sid": sid, "skipped": "no_packs"}
 
     manifest.set_ai_built(packs_dir, pairs_count)
+    persist_manifest(manifest)
 
     # === 3) send to AI (writes ai_decision / same_debt_pair)
     from backend.core.logic.ai.send_ai_merge_packs import run_send_for_sid

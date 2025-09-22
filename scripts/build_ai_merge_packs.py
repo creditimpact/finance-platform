@@ -21,7 +21,7 @@ from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
 from backend.pipeline.runs import RunManifest, persist_manifest
 
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 def _packs_dir_for(sid: str, runs_root: Path) -> Path:
@@ -89,7 +89,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     runs_root = Path(args.runs_root)
     packs_dir = Path(args.packs_dir) if args.packs_dir else _packs_dir_for(sid, runs_root)
     packs_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("PACKS_DIR_USED sid=%s dir=%s", sid, packs_dir)
+    log.info("PACKS_DIR_USED sid=%s dir=%s", sid, packs_dir)
 
     packs = build_merge_ai_packs(
         sid,
@@ -116,7 +116,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         score_total = _safe_int(highlights.get("total"))
 
         _write_pack(pack_path, pack)
-        logger.info("PACK_WRITTEN sid=%s pack_file=%s lines_a=%d lines_b=%d score_total=%s", sid, pack_path.name, len(context_a), len(context_b), score_total)
+        log.info("PACK_WRITTEN sid=%s file=%s", sid, pack_filename)
 
         index_entries.append(
             {
@@ -134,19 +134,28 @@ def main(argv: Sequence[str] | None = None) -> None:
         index_path = packs_dir / "index.json"
         index_payload = {
             "sid": sid,
-            "pairs": index_entries,
+            "packs": index_entries,
             "pairs_count": pairs_count,
         }
         _write_index(index_path, index_payload)
-        logger.info("INDEX_WRITTEN sid=%s index=%s pairs=%d", sid, index_path, pairs_count)
+        log.info(
+            "INDEX_WRITTEN sid=%s index=%s pairs=%s",
+            sid,
+            index_path,
+            len(index_payload.get("packs", [])),
+        )
 
-        try:
-            manifest = RunManifest.for_sid(sid)
-            manifest.set_ai_built(packs_dir, pairs_count)
-            persist_manifest(manifest)
-            logger.info("MANIFEST_AI_PACKS_UPDATED sid=%s dir=%s index=%s pairs=%d", sid, packs_dir, index_path, pairs_count)
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.warning("MANIFEST_AI_PACKS_UPDATE_FAILED sid=%s err=%s", sid, exc)
+        manifest = RunManifest.for_sid(sid)
+        manifest.set_ai_built(packs_dir, len(index_payload.get("packs", [])))
+        persist_manifest(manifest)
+        log.info(
+            "MANIFEST_AI_PACKS_UPDATED sid=%s dir=%s pairs=%s",
+            sid,
+            packs_dir,
+            len(index_payload.get("packs", [])),
+        )
+    else:
+        log.info("INDEX_SKIPPED_NO_PAIRS sid=%s dir=%s", sid, packs_dir)
 
     print(f"[BUILD] wrote {len(index_entries)} packs to {packs_dir}")
 

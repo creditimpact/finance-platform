@@ -24,13 +24,16 @@ def test_extract_problematic_accounts_task_builder(tmp_path, monkeypatch, caplog
     monkeypatch.setattr(task_module, "PROJECT_ROOT", tmp_path, raising=False)
     monkeypatch.setenv("ENABLE_AUTO_AI_PIPELINE", "1")
 
+    task_module._AUTO_AI_PIPELINE_ENQUEUED.clear()
+
     ai_calls: list[str] = []
 
-    def _fake_queue(sid_value: str, *, runs_root=None, flag_env=None):
-        ai_calls.append(sid_value)
-        return {"queued": True, "reason": "queued"}
+    class _DummyTask:
+        def delay(self, sid_value: str):
+            ai_calls.append(sid_value)
+            return {"sid": sid_value}
 
-    monkeypatch.setattr(task_module, "maybe_queue_auto_ai_pipeline", _fake_queue)
+    monkeypatch.setattr(task_module, "maybe_run_ai_pipeline", _DummyTask())
     monkeypatch.setattr(
         task_module, "has_ai_merge_best_tags", lambda runs_root, sid: True
     )
@@ -79,13 +82,16 @@ def test_extract_problematic_accounts_task_no_candidates(tmp_path, monkeypatch, 
     monkeypatch.setattr(task_module, "PROJECT_ROOT", tmp_path, raising=False)
     monkeypatch.setenv("ENABLE_AUTO_AI_PIPELINE", "1")
 
+    task_module._AUTO_AI_PIPELINE_ENQUEUED.clear()
+
     ai_calls: list[str] = []
 
-    def _fake_queue(sid_value: str, *, runs_root=None, flag_env=None):
-        ai_calls.append(sid_value)
-        return {"queued": False, "reason": "no_candidates"}
+    class _DummyTask:
+        def delay(self, sid_value: str):
+            ai_calls.append(sid_value)
+            return {"sid": sid_value}
 
-    monkeypatch.setattr(task_module, "maybe_queue_auto_ai_pipeline", _fake_queue)
+    monkeypatch.setattr(task_module, "maybe_run_ai_pipeline", _DummyTask())
     monkeypatch.setattr(
         task_module, "has_ai_merge_best_tags", lambda runs_root, sid: False
     )

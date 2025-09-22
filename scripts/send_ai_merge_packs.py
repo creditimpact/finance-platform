@@ -428,15 +428,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     index = _load_index(index_path)
     logs_path = packs_dir / "logs.txt"
 
-    persist_manifest(
-        manifest,
-        artifacts={
-            "ai_packs": {
-                "dir": packs_dir,
-                "index": index_path,
-                "logs": logs_path,
-            }
-        },
+    manifest.update_ai_packs(
+        dir=packs_dir,
+        index=index_path,
+        logs=logs_path,
+        pairs=len(index),
     )
 
     total = 0

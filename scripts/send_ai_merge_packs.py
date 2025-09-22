@@ -409,10 +409,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         log.info("SENDER_PACKS_DIR_OVERRIDE sid=%s dir=%s", sid, packs_dir)
     else:
         preferred_dir = manifest.get_ai_packs_dir()
-        preferred_dir_path = Path(preferred_dir) if preferred_dir else None
-        if preferred_dir_path and preferred_dir_path.exists():
-            log.info("SENDER_PACKS_DIR_FROM_MANIFEST sid=%s dir=%s", sid, preferred_dir_path)
-            packs_dir = preferred_dir_path
+        if preferred_dir is not None:
+            packs_dir = Path(preferred_dir)
+            log.info("SENDER_PACKS_DIR_FROM_MANIFEST sid=%s dir=%s", sid, packs_dir)
         else:
             packs_dir = _packs_dir_for(sid, runs_root_path)
             log.info("SENDER_PACKS_DIR_FALLBACK sid=%s dir=%s", sid, packs_dir)
@@ -609,16 +608,18 @@ def main(argv: Sequence[str] | None = None) -> None:
         )
     )
 
-    try:
-        from backend.core.logic.tags.compact import compact_tags_for_sid
+    if failures == 0:
+        try:
+            from backend.core.logic.tags.compact import compact_tags_for_sid
 
-        compact_tags_for_sid(sid)
-        manifest.set_ai_compacted()
-        persist_manifest(manifest)
-        log.info("MANIFEST_AI_COMPACTED sid=%s", sid)
-        log.info("TAGS_COMPACTED sid=%s", sid)
-    except Exception as exc:  # pragma: no cover - defensive logging
-        log.warning("TAGS_COMPACT_SKIP sid=%s err=%s", sid, exc)
+            compact_tags_for_sid(sid)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            log.warning("TAGS_COMPACT_SKIP sid=%s err=%s", sid, exc)
+        else:
+            manifest.set_ai_compacted()
+            persist_manifest(manifest)
+            log.info("MANIFEST_AI_COMPACTED sid=%s", sid)
+            log.info("TAGS_COMPACTED sid=%s", sid)
 
     if failures:
         raise SystemExit(1)

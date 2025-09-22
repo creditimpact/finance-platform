@@ -22,6 +22,19 @@ def test_extract_problematic_accounts_task_builder(tmp_path, monkeypatch, caplog
     monkeypatch.setattr(problem_case_builder, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(problem_extractor, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(task_module, "PROJECT_ROOT", tmp_path, raising=False)
+    monkeypatch.setenv("ENABLE_AUTO_AI_PIPELINE", "1")
+
+    ai_calls: list[str] = []
+
+    class _DummyAITask:
+        def delay(self, sid: str):  # pragma: no cover - trivial return
+            ai_calls.append(sid)
+            return {"sid": sid}
+
+    monkeypatch.setattr(task_module, "maybe_run_ai_pipeline", _DummyAITask())
+    monkeypatch.setattr(
+        task_module, "has_ai_merge_best_tags", lambda runs_root, sid: True
+    )
 
     # Create Stage-A account artifacts
     acc_path = (
@@ -55,6 +68,7 @@ def test_extract_problematic_accounts_task_builder(tmp_path, monkeypatch, caplog
     assert result["summary"]["problematic"] == 1
     assert any(f"PROBLEMATIC start sid={sid}" in m for m in caplog.messages)
     assert any(f"PROBLEMATIC done sid={sid} found=1" in m for m in caplog.messages)
+    assert ai_calls == [sid]
 
 
 def test_extract_problematic_accounts_task_no_candidates(tmp_path, monkeypatch, caplog):
@@ -64,6 +78,19 @@ def test_extract_problematic_accounts_task_no_candidates(tmp_path, monkeypatch, 
     monkeypatch.setattr(problem_case_builder, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(problem_extractor, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(task_module, "PROJECT_ROOT", tmp_path, raising=False)
+    monkeypatch.setenv("ENABLE_AUTO_AI_PIPELINE", "1")
+
+    ai_calls: list[str] = []
+
+    class _DummyAITask:
+        def delay(self, sid: str):  # pragma: no cover - trivial return
+            ai_calls.append(sid)
+            return {"sid": sid}
+
+    monkeypatch.setattr(task_module, "maybe_run_ai_pipeline", _DummyAITask())
+    monkeypatch.setattr(
+        task_module, "has_ai_merge_best_tags", lambda runs_root, sid: False
+    )
 
     acc_path = (
         tmp_path / "traces" / "blocks" / sid / "accounts_table" / "accounts_from_full.json"
@@ -92,3 +119,4 @@ def test_extract_problematic_accounts_task_no_candidates(tmp_path, monkeypatch, 
     assert sorted(p.name for p in accounts_dir.iterdir()) == ["index.json"]
     assert any(f"PROBLEMATIC start sid={sid}" in m for m in caplog.messages)
     assert any(f"PROBLEMATIC done sid={sid} found=0" in m for m in caplog.messages)
+    assert ai_calls == []

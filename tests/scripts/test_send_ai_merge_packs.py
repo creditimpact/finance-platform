@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.core.logic.report_analysis.tags_compact import compact_tags_for_account
 from backend.pipeline.runs import RUNS_ROOT_ENV
 from scripts import send_ai_merge_packs
 from scripts.build_ai_merge_packs import main as build_ai_merge_packs_main
@@ -350,3 +351,121 @@ def test_write_decision_tags_idempotent(tmp_path: Path) -> None:
 
     assert tags_a == [expected_decision_a, expected_same_debt_a]
     assert tags_b == [expected_decision_b, expected_same_debt_b]
+
+
+def test_ai_pairing_flow_compaction(
+    monkeypatch: pytest.MonkeyPatch, runs_root: Path
+) -> None:
+    sid = "codex-flow"
+    accounts_root = runs_root / sid / "cases" / "accounts"
+    account_a_dir = accounts_root / "11"
+    account_b_dir = accounts_root / "16"
+
+    _write_raw_lines(
+        account_a_dir / "raw_lines.json",
+        [
+            "US BK CACS",
+            "Account # 409451******",
+            "Balance Owed: $12,091",
+            "Last Payment: 2024-02-11",
+            "Creditor Remarks: Transferred",
+        ],
+    )
+    _write_raw_lines(
+        account_b_dir / "raw_lines.json",
+        [
+            "U S BANK",
+            "Account # -- 409451******",
+            "Balance Owed: -- $12,091 --",
+            "Last Payment: 2024-02-11",
+            "Remarks: Referred to collections",
+        ],
+    )
+
+    _write_json(account_a_dir / "tags.json", [_merge_best_tag(16)])
+    _write_json(account_b_dir / "tags.json", [_merge_best_tag(11)])
+
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+    build_ai_merge_packs_main(
+        ["--sid", sid, "--runs-root", str(runs_root), "--max-lines-per-side", "6"]
+    )
+
+    packs_dir = runs_root / sid / "ai_packs"
+    assert (packs_dir / "index.json").exists()
+
+    timestamp = "2024-07-04T12:00:00Z"
+
+    def _fake_decide(pack, *, timeout):
+        assert pack["pair"] == {"a": 11, "b": 16}
+        return {
+            "decision": "different",
+            "reason": "These tradelines describe the same debt from different collectors.",
+        }
+
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(send_ai_merge_packs, "decide_merge_or_different", _fake_decide)
+    monkeypatch.setattr(send_ai_merge_packs, "_isoformat_timestamp", lambda dt=None: timestamp)
+
+    send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
+
+    for account_dir in (account_a_dir, account_b_dir):
+        compact_tags_for_account(account_dir)
+
+    tags_a = json.loads((account_a_dir / "tags.json").read_text(encoding="utf-8"))
+    tags_b = json.loads((account_b_dir / "tags.json").read_text(encoding="utf-8"))
+
+    assert tags_a == [
+        {"kind": "merge_best", "with": 16, "decision": "ai"},
+        {
+            "kind": "ai_decision",
+            "with": 16,
+            "decision": "different",
+            "at": timestamp,
+        },
+        {"kind": "same_debt_pair", "with": 16, "at": timestamp},
+    ]
+    assert tags_b == [
+        {"kind": "merge_best", "with": 11, "decision": "ai"},
+        {
+            "kind": "ai_decision",
+            "with": 11,
+            "decision": "different",
+            "at": timestamp,
+        },
+        {"kind": "same_debt_pair", "with": 11, "at": timestamp},
+    ]
+
+    summary_a = json.loads((account_a_dir / "summary.json").read_text(encoding="utf-8"))
+    summary_b = json.loads((account_b_dir / "summary.json").read_text(encoding="utf-8"))
+
+    def _ai_summary(entry_list: list[dict[str, object]], *, partner: int) -> dict[str, object]:
+        return next(item for item in entry_list if item.get("with") == partner)
+
+    ai_a = summary_a["ai_explanations"]
+    assert {item["kind"] for item in ai_a} == {"ai_decision", "same_debt_pair"}
+    ai_entry_a = _ai_summary(ai_a, partner=16)
+    assert "reason" in ai_entry_a
+    assert "same debt" in ai_entry_a["reason"].lower()
+
+    ai_b = summary_b["ai_explanations"]
+    assert {item["kind"] for item in ai_b} == {"ai_decision", "same_debt_pair"}
+    ai_entry_b = _ai_summary(ai_b, partner=11)
+    assert "reason" in ai_entry_b
+    assert "same debt" in ai_entry_b["reason"].lower()
+
+    merge_summary_a = summary_a.get("merge_explanations", [])
+    assert merge_summary_a
+    merge_entry = _ai_summary(merge_summary_a, partner=16)
+    assert merge_entry["kind"] == "merge_best"
+    assert merge_entry["parts"] == {"balance_owed": 31, "account_number": 28}
+    assert merge_entry["conflicts"] == ["credit_limit:conflict"]
+    assert merge_entry["matched_fields"] == {
+        "balance_owed": True,
+        "last_payment": True,
+    }
+
+    # Tags should remain compact on repeated compaction.
+    snapshot_a = json.loads((account_a_dir / "tags.json").read_text(encoding="utf-8"))
+    compact_tags_for_account(account_a_dir)
+    assert json.loads((account_a_dir / "tags.json").read_text(encoding="utf-8")) == snapshot_a

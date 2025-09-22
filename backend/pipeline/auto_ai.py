@@ -452,47 +452,52 @@ def _run_auto_ai_pipeline(sid: str):
     if not index_path.exists():
         manifest.set_ai_skipped("no_packs")
         persist_manifest(manifest)
-        logger.info("AUTO_AI_SKIP_NO_PACKS sid=%s packs_dir=%s", sid, packs_dir)
+        logger.info(
+            "AUTO_AI_SKIP_NO_PACKS sid=%s packs_dir=%s (index missing)", sid, packs_dir
+        )
         return {"sid": sid, "skipped": "no_packs"}
 
     try:
-        index_payload = json.loads(index_path.read_text(encoding="utf-8"))
-    except Exception:
-        index_payload = {}
+        index_data = json.loads(index_path.read_text(encoding="utf-8"))
+        if not isinstance(index_data, dict):
+            index_data = {}
+        pairs_count = int(
+            index_data.get("pairs_count")
+            or len(index_data.get("packs") or [])
+        )
+    except Exception as exc:
+        logger.exception(
+            "AUTO_AI_SKIP_NO_PACKS sid=%s reason=index_load_error error=%s", sid, exc
+        )
+        manifest.set_ai_skipped("no_packs")
+        persist_manifest(manifest)
+        return {"sid": sid, "skipped": "no_packs"}
 
-    pairs_entries = []
-    if isinstance(index_payload, dict):
-        pairs_entries = index_payload.get("pairs")
-    if not isinstance(pairs_entries, list):
-        pairs_entries = []
-
-    pairs_count = len(pairs_entries)
     if pairs_count <= 0:
         manifest.set_ai_skipped("no_packs")
         persist_manifest(manifest)
-        logger.info("AUTO_AI_SKIP_NO_PACKS sid=%s packs_dir=%s", sid, packs_dir)
+        logger.info(
+            "AUTO_AI_SKIP_NO_PACKS sid=%s packs_dir=%s (pairs_count=0)", sid, packs_dir
+        )
         return {"sid": sid, "skipped": "no_packs"}
 
+    logger.info("AUTO_AI_PACKS_FOUND sid=%s dir=%s pairs=%d", sid, packs_dir, pairs_count)
     manifest.set_ai_built(packs_dir, pairs_count)
     persist_manifest(manifest)
 
     # === 3) send to AI (writes ai_decision / same_debt_pair)
-    from backend.core.logic.ai.send_ai_merge_packs import run_send_for_sid
+    argv = ["--sid", sid, "--packs-dir", str(packs_dir)]
+    send_ai_merge_packs_main(argv)
 
-    run_send_for_sid(sid, runs_root=RUNS_ROOT)
     manifest.set_ai_sent()
     persist_manifest(manifest)
-    logger.info("MANIFEST_AI_SENT sid=%s", sid)
+    logger.info("AUTO_AI_SENT sid=%s dir=%s", sid, packs_dir)
 
     # === 4) compact tags (keep only tags; push explanations to summary.json)
-    try:
-        compact_tags_for_sid(sid)
-        manifest.set_ai_compacted()
-        persist_manifest(manifest)
-        logger.info("MANIFEST_AI_COMPACTED sid=%s", sid)
-        logger.info("TAGS_COMPACTED sid=%s", sid)
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning("TAGS_COMPACT_SKIP sid=%s err=%s", sid, exc)
+    compact_tags_for_sid(sid)
+    manifest.set_ai_compacted()
+    persist_manifest(manifest)
+    logger.info("AUTO_AI_COMPACTED sid=%s", sid)
 
     logger.info("AUTO_AI_DONE sid=%s", sid)
     return {"sid": sid, "ok": True}

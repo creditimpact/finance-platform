@@ -1,12 +1,35 @@
 import json
 from pathlib import Path
 
-from backend.pipeline import auto_ai
+from backend.pipeline import auto_ai, auto_ai_tasks
 from backend.pipeline.runs import RunManifest
 
 
-def test_maybe_run_auto_ai_pipeline_runs_full_flow(monkeypatch, tmp_path):
-    sid = "SID123"
+def _write_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def test_has_ai_merge_best_pairs_detects_candidates(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "sample"
+    tags_path = runs_root / sid / "cases" / "accounts" / "11" / "tags.json"
+    _write_json(tags_path, [{"kind": "merge_best", "decision": "ai", "with": 16}])
+
+    assert auto_ai.has_ai_merge_best_pairs(sid, runs_root) is True
+
+
+def test_has_ai_merge_best_pairs_handles_missing(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "missing"
+    tags_path = runs_root / sid / "cases" / "accounts" / "22" / "tags.json"
+    _write_json(tags_path, [{"kind": "merge_best", "decision": "human", "with": 9}])
+
+    assert auto_ai.has_ai_merge_best_pairs(sid, runs_root) is False
+
+
+def test_maybe_queue_auto_ai_pipeline_queues_when_candidates(monkeypatch, tmp_path: Path) -> None:
+    sid = "queue-me"
     runs_root = tmp_path / "runs"
     monkeypatch.setenv("RUNS_ROOT", str(runs_root))
     monkeypatch.setenv("ENABLE_AUTO_AI_PIPELINE", "1")
@@ -14,75 +37,72 @@ def test_maybe_run_auto_ai_pipeline_runs_full_flow(monkeypatch, tmp_path):
     manifest = RunManifest.for_sid(sid)
     run_dir = manifest.path.parent
     accounts_dir = run_dir / "cases" / "accounts"
-    (accounts_dir / "1").mkdir(parents=True, exist_ok=True)
-    (accounts_dir / "2").mkdir(parents=True, exist_ok=True)
+    tags_path = accounts_dir / "11" / "tags.json"
+    _write_json(tags_path, [{"kind": "merge_best", "decision": "ai", "with": 16}])
 
     recorded: dict[str, object] = {}
 
-    class DummyScore:
-        def __init__(self, indices):
-            self.indices = indices
+    class DummyResult:
+        id = "async-result"
 
-    def fake_score_accounts(
-        sid_arg: str,
-        *,
-        runs_root: Path,
-        write_tags: bool,
-        only_ai_rows: bool = False,
-    ):
-        recorded["score"] = {
-            "sid": sid_arg,
-            "runs_root": Path(runs_root),
-            "write_tags": write_tags,
-            "only_ai_rows": only_ai_rows,
-        }
-        return DummyScore(indices=[1])
+    def fake_enqueue(*, sid: str, runs_root: str, accounts_dir: str):
+        recorded["sid"] = sid
+        recorded["runs_root"] = Path(runs_root)
+        recorded["accounts_dir"] = Path(accounts_dir)
+        return DummyResult()
 
-    def fake_build(argv):
-        recorded["build"] = list(argv)
-        packs_dir = run_dir / "ai_packs"
-        packs_dir.mkdir(parents=True, exist_ok=True)
-        index_payload = [{"a": 1, "b": 2, "file": "001-002.json"}]
-        (packs_dir / "index.json").write_text(
-            json.dumps(index_payload), encoding="utf-8"
-        )
+    monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_pipeline", fake_enqueue)
 
-    def fake_send(argv):
-        recorded["send"] = list(argv)
+    result = auto_ai.maybe_queue_auto_ai_pipeline(
+        sid,
+        summary={"cases": {"dir": str(accounts_dir)}},
+    )
 
-    compact_calls: list[Path] = []
-
-    def fake_compact(account_dir: Path):
-        compact_calls.append(Path(account_dir))
-
-    monkeypatch.setattr(auto_ai, "score_accounts", fake_score_accounts)
-    monkeypatch.setattr(auto_ai, "build_ai_merge_packs_main", fake_build)
-    monkeypatch.setattr(auto_ai, "send_ai_merge_packs_main", fake_send)
-    monkeypatch.setattr(auto_ai, "compact_tags_for_account", fake_compact)
-
-    auto_ai.maybe_run_auto_ai_pipeline(sid, summary={"cases": {"dir": str(accounts_dir)}})
-
-    assert recorded["score"] == {
+    assert isinstance(result, DummyResult)
+    assert recorded == {
         "sid": sid,
-        "runs_root": run_dir.parent,
-        "write_tags": True,
-        "only_ai_rows": False,
+        "runs_root": runs_root,
+        "accounts_dir": accounts_dir,
     }
-    assert recorded["build"] == ["--sid", sid, "--runs-root", str(run_dir.parent)]
-    assert recorded["send"] == ["--sid", sid]
-    assert sorted(path.name for path in compact_calls) == ["1", "2"]
 
 
-def test_maybe_run_auto_ai_pipeline_noop_when_disabled(monkeypatch):
+def test_maybe_queue_auto_ai_pipeline_skips_without_candidates(monkeypatch, tmp_path: Path) -> None:
+    sid = "skip-me"
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("ENABLE_AUTO_AI_PIPELINE", "1")
+
+    manifest = RunManifest.for_sid(sid)
+    run_dir = manifest.path.parent
+    accounts_dir = run_dir / "cases" / "accounts"
+    tags_path = accounts_dir / "33" / "tags.json"
+    _write_json(tags_path, [{"kind": "merge_best", "decision": "human", "with": 44}])
+
+    calls: list[object] = []
+    monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_pipeline", lambda **_: calls.append(1))
+
+    result = auto_ai.maybe_queue_auto_ai_pipeline(sid)
+
+    assert result is None
+    assert calls == []
+
+
+def test_maybe_queue_auto_ai_pipeline_skips_when_disabled(monkeypatch, tmp_path: Path) -> None:
+    sid = "disabled"
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
     monkeypatch.delenv("ENABLE_AUTO_AI_PIPELINE", raising=False)
 
-    called: list[object] = []
+    manifest = RunManifest.for_sid(sid)
+    run_dir = manifest.path.parent
+    accounts_dir = run_dir / "cases" / "accounts"
+    tags_path = accounts_dir / "55" / "tags.json"
+    _write_json(tags_path, [{"kind": "merge_best", "decision": "ai", "with": 56}])
 
-    def fake_runner(*args, **kwargs):
-        called.append((args, kwargs))
+    calls: list[object] = []
+    monkeypatch.setattr(auto_ai_tasks, "enqueue_auto_ai_pipeline", lambda **_: calls.append(1))
 
-    monkeypatch.setattr(auto_ai, "_run_auto_ai_pipeline", fake_runner)
+    result = auto_ai.maybe_queue_auto_ai_pipeline(sid)
 
-    auto_ai.maybe_run_auto_ai_pipeline("SID", summary=None)
-
-    assert not called
+    assert result is None
+    assert calls == []

@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from backend.core.logic.report_analysis.block_exporter import export_stage_a, run_stage_a
-from backend.pipeline.auto_ai import maybe_run_auto_ai_pipeline
+from backend.pipeline.auto_ai import maybe_queue_auto_ai_pipeline
 from backend.pipeline.runs import RunManifest
 from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
 from backend.core.logic.report_analysis.problem_extractor import detect_problem_accounts
@@ -225,7 +225,7 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
     )
 
     try:
-        maybe_run_auto_ai_pipeline(sid, summary=summary)
+        maybe_queue_auto_ai_pipeline(sid, summary=summary)
     except Exception:
         log.error("AUTO_AI_PIPELINE_FAILED sid=%s", sid, exc_info=True)
         raise

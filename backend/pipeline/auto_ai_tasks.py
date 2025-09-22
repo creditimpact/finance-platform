@@ -5,13 +5,16 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, MutableMapping
 
 from celery import chain, shared_task
 
 from backend.pipeline.auto_ai import (
-    PIPELINE_MARKER_FILENAME,
+    AUTO_AI_PIPELINE_DIRNAME,
+    INFLIGHT_LOCK_FILENAME,
+    LAST_OK_FILENAME,
     _build_ai_packs,
     _compact_accounts,
     _indices_from_index,
@@ -20,6 +23,9 @@ from backend.pipeline.auto_ai import (
     _send_ai_packs,
 )
 from scripts.score_bureau_pairs import score_accounts
+
+LEGACY_PIPELINE_DIRNAME = "ai_packs"
+LEGACY_MARKER_FILENAME = "auto_ai_pipeline_in_progress.json"
 
 logger = logging.getLogger(__name__)
 
@@ -39,22 +45,42 @@ def _resolve_runs_root(payload: Mapping[str, object], sid: str) -> Path:
     if env_root:
         return Path(env_root)
 
-    marker_dir = Path("runs") / sid / "ai_packs"
-    marker_path = marker_dir / PIPELINE_MARKER_FILENAME
-    if marker_path.exists():
+    default_root = Path("runs")
+
+    pipeline_dir = default_root / sid / AUTO_AI_PIPELINE_DIRNAME
+    lock_path = pipeline_dir / INFLIGHT_LOCK_FILENAME
+    if lock_path.exists():
         try:
-            data = json.loads(marker_path.read_text(encoding="utf-8"))
+            data = json.loads(lock_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             logger.debug(
-                "AUTO_AI_MARKER_READ_FAILED sid=%s path=%s", sid, marker_path, exc_info=True
+                "AUTO_AI_LOCK_READ_FAILED sid=%s path=%s", sid, lock_path, exc_info=True
             )
         else:
             marker_root = data.get("runs_root")
             if isinstance(marker_root, str) and marker_root:
                 return Path(marker_root)
-        return marker_dir.parent.parent
+        return pipeline_dir.parent.parent
 
-    return Path("runs")
+    legacy_dir = default_root / sid / LEGACY_PIPELINE_DIRNAME
+    legacy_marker = legacy_dir / LEGACY_MARKER_FILENAME
+    if legacy_marker.exists():
+        try:
+            data = json.loads(legacy_marker.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            logger.debug(
+                "AUTO_AI_LEGACY_MARKER_READ_FAILED sid=%s path=%s",
+                sid,
+                legacy_marker,
+                exc_info=True,
+            )
+        else:
+            marker_root = data.get("runs_root")
+            if isinstance(marker_root, str) and marker_root:
+                return Path(marker_root)
+        return legacy_dir.parent.parent
+
+    return default_root
 
 
 def _populate_common_paths(payload: MutableMapping[str, object]) -> None:
@@ -64,20 +90,62 @@ def _populate_common_paths(payload: MutableMapping[str, object]) -> None:
 
     runs_root = _resolve_runs_root(payload, sid)
     accounts_dir = runs_root / sid / "cases" / "accounts"
-    marker_path = runs_root / sid / "ai_packs" / PIPELINE_MARKER_FILENAME
+    pipeline_dir = runs_root / sid / AUTO_AI_PIPELINE_DIRNAME
+    lock_path = pipeline_dir / INFLIGHT_LOCK_FILENAME
+    last_ok_path = pipeline_dir / LAST_OK_FILENAME
 
     payload["runs_root"] = str(runs_root)
     payload["accounts_dir"] = str(accounts_dir)
-    payload["marker_path"] = str(marker_path)
+    payload["pipeline_dir"] = str(pipeline_dir)
+    payload["lock_path"] = str(lock_path)
+    payload["marker_path"] = str(lock_path)
+    payload["last_ok_path"] = str(last_ok_path)
+
+
+def _cleanup_lock(payload: Mapping[str, object], *, reason: str) -> bool:
+    sid = str(payload.get("sid") or "")
+    lock_value = payload.get("lock_path") or payload.get("marker_path")
+    if not lock_value:
+        return False
+
+    lock_path = Path(str(lock_value))
+    try:
+        if lock_path.exists():
+            lock_path.unlink()
+            logger.info(
+                "AUTO_AI_LOCK_REMOVED sid=%s reason=%s lock=%s",
+                sid,
+                reason,
+                lock_path,
+            )
+            return True
+        logger.info(
+            "AUTO_AI_LOCK_MISSING sid=%s reason=%s lock=%s",
+            sid,
+            reason,
+            lock_path,
+        )
+        return False
+    except Exception:  # pragma: no cover - defensive logging
+        logger.warning(
+            "AUTO_AI_LOCK_CLEANUP_FAILED sid=%s reason=%s lock=%s",
+            sid,
+            reason,
+            lock_path,
+            exc_info=True,
+        )
+        return False
 
 
 @shared_task(bind=True, autoretry_for=(), retry_backoff=False)
-def ai_score_step(self, sid: str) -> dict[str, object]:
+def ai_score_step(self, sid: str, runs_root: str | None = None) -> dict[str, object]:
     """Recompute merge scores and persist merge tags for ``sid``."""
 
     logger.info("AUTO_AI_SCORE_START sid=%s", sid)
 
     payload: dict[str, object] = {"sid": sid}
+    if runs_root is not None:
+        payload["runs_root"] = runs_root
     _populate_common_paths(payload)
 
     runs_root = Path(payload["runs_root"])
@@ -86,6 +154,7 @@ def ai_score_step(self, sid: str) -> dict[str, object]:
         result = score_accounts(sid, runs_root=runs_root, write_tags=True)
     except Exception:  # pragma: no cover - defensive logging
         logger.error("AUTO_AI_SCORE_FAILED sid=%s", sid, exc_info=True)
+        _cleanup_lock(payload, reason="score_failed")
         raise
 
     touched_accounts = sorted(_normalize_indices(result.indices))
@@ -116,6 +185,7 @@ def ai_build_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, ob
         _build_ai_packs(sid, runs_root)
     except Exception:  # pragma: no cover - defensive logging
         logger.error("AUTO_AI_BUILD_FAILED sid=%s", sid, exc_info=True)
+        _cleanup_lock(payload, reason="build_failed")
         raise
 
     index_path = runs_root / sid / "ai_packs" / "index.json"
@@ -123,6 +193,7 @@ def ai_build_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, ob
         index_entries = _load_ai_index(index_path)
     except Exception:  # pragma: no cover - defensive logging
         logger.error("AUTO_AI_BUILD_INVALID_INDEX sid=%s path=%s", sid, index_path, exc_info=True)
+        _cleanup_lock(payload, reason="build_invalid_index")
         raise
 
     payload["ai_index"] = index_entries
@@ -154,6 +225,7 @@ def ai_send_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, obj
         _send_ai_packs(sid, runs_root=runs_root)
     except Exception:  # pragma: no cover - defensive logging
         logger.error("AUTO_AI_SEND_FAILED sid=%s", sid, exc_info=True)
+        _cleanup_lock(payload, reason="send_failed")
         raise
 
     logger.info("AUTO_AI_SEND_END sid=%s", sid)
@@ -187,43 +259,59 @@ def ai_compact_tags_step(self, prev: Mapping[str, object] | None) -> dict[str, o
             logger.error(
                 "AUTO_AI_COMPACT_FAILED sid=%s dir=%s", sid, accounts_dir, exc_info=True
             )
+            _cleanup_lock(payload, reason="compact_failed")
             raise
 
     logger.info("AUTO_AI_COMPACT_END sid=%s", sid)
 
-    marker_value = payload.get("marker_path")
-    if marker_value:
-        marker_path = Path(str(marker_value))
+    packs_count = len(payload.get("ai_index", []) or [])
+    pairs_count = len(indices)
+    payload["packs"] = packs_count
+    payload["pairs"] = pairs_count
+
+    last_ok_value = payload.get("last_ok_path")
+    if last_ok_value:
+        last_ok_path = Path(str(last_ok_value))
+        last_ok_payload = {
+            "sid": sid,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "packs": packs_count,
+            "pairs": pairs_count,
+        }
         try:
-            if marker_path.exists():
-                marker_path.unlink()
-                logger.info(
-                    "AUTO_AI_CHAIN_DONE sid=%s marker_removed=%s", sid, marker_path
-                )
-            else:
-                logger.info(
-                    "AUTO_AI_CHAIN_DONE sid=%s marker_missing=%s", sid, marker_path
-                )
+            last_ok_path.write_text(
+                json.dumps(last_ok_payload, ensure_ascii=False), encoding="utf-8"
+            )
+            logger.info("AUTO_AI_LAST_OK sid=%s path=%s", sid, last_ok_path)
         except Exception:  # pragma: no cover - defensive logging
             logger.warning(
-                "AUTO_AI_CHAIN_DONE sid=%s marker_cleanup_failed=%s",
+                "AUTO_AI_LAST_OK_WRITE_FAILED sid=%s path=%s",
                 sid,
-                marker_path,
+                last_ok_path,
                 exc_info=True,
             )
-    else:
-        logger.info("AUTO_AI_CHAIN_DONE sid=%s marker_missing=None", sid)
+
+    removed = _cleanup_lock(payload, reason="chain_complete")
+    logger.info(
+        "AUTO_AI_CHAIN_DONE sid=%s lock_removed=%s packs=%s pairs=%s",
+        sid,
+        1 if removed else 0,
+        packs_count,
+        pairs_count,
+    )
 
     return payload
 
 
-def enqueue_auto_ai_chain(sid: str) -> str:
+def enqueue_auto_ai_chain(sid: str, runs_root: Path | str | None = None) -> str:
     """Queue the AI adjudication Celery chain and return the root task id."""
 
-    logger.info("AUTO_AI_CHAIN_START sid=%s", sid)
+    runs_root_value = str(runs_root) if runs_root is not None else None
+
+    logger.info("AUTO_AI_CHAIN_START sid=%s runs_root=%s", sid, runs_root_value)
 
     workflow = chain(
-        ai_score_step.s(sid),
+        ai_score_step.s(sid, runs_root_value),
         ai_build_packs_step.s(),
         ai_send_packs_step.s(),
         ai_compact_tags_step.s(),
@@ -232,6 +320,11 @@ def enqueue_auto_ai_chain(sid: str) -> str:
     result = workflow.apply_async()
     task_id = str(result.id)
 
-    logger.info("AUTO_AI_CHAIN_ENQUEUED sid=%s task_id=%s", sid, task_id)
+    logger.info(
+        "AUTO_AI_CHAIN_ENQUEUED sid=%s task_id=%s runs_root=%s",
+        sid,
+        task_id,
+        runs_root_value,
+    )
     return task_id
 

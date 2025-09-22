@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
@@ -17,16 +19,55 @@ from scripts.send_ai_merge_packs import main as send_ai_merge_packs_main
 
 logger = logging.getLogger(__name__)
 
-PIPELINE_MARKER_FILENAME = "auto_ai_pipeline_in_progress.json"
+AUTO_AI_PIPELINE_DIRNAME = ".ai_pipeline"
+INFLIGHT_LOCK_FILENAME = "inflight.lock"
+LAST_OK_FILENAME = "last_ok.json"
+DEFAULT_INFLIGHT_TTL_SECONDS = 30 * 60
 
 
-def _pipeline_marker_path(runs_root: Path, sid: str) -> Path:
-    return runs_root / sid / "ai_packs" / PIPELINE_MARKER_FILENAME
+def _pipeline_dir(runs_root: Path, sid: str) -> Path:
+    return runs_root / sid / AUTO_AI_PIPELINE_DIRNAME
+
+
+def _inflight_lock_path(runs_root: Path, sid: str) -> Path:
+    return _pipeline_dir(runs_root, sid) / INFLIGHT_LOCK_FILENAME
+
+
+def _last_ok_path(runs_root: Path, sid: str) -> Path:
+    return _pipeline_dir(runs_root, sid) / LAST_OK_FILENAME
+
+
+def _lock_age_seconds(path: Path, *, now: float | None = None) -> float | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    reference = now if now is not None else time.time()
+    return max(0.0, reference - stat.st_mtime)
+
+
+def _lock_is_stale(
+    path: Path,
+    *,
+    ttl_seconds: int,
+    now: float | None = None,
+) -> bool:
+    if ttl_seconds <= 0:
+        return True
+    age = _lock_age_seconds(path, now=now)
+    if age is None:
+        return True
+    return age >= ttl_seconds
 
 
 def maybe_run_auto_ai_pipeline(
-    sid: str, *, summary: Mapping[str, object] | None = None
-):
+    sid: str,
+    *,
+    summary: Mapping[str, object] | None = None,
+    force: bool = False,
+    inflight_ttl_seconds: int = DEFAULT_INFLIGHT_TTL_SECONDS,
+    now: float | None = None,
+) -> dict[str, object]:
     """Backward-compatible shim that queues the auto-AI pipeline."""
 
     _ = summary  # preserved for compatibility with older call sites
@@ -36,6 +77,9 @@ def maybe_run_auto_ai_pipeline(
         sid,
         runs_root=runs_root,
         flag_env=os.environ,
+        force=force,
+        inflight_ttl_seconds=inflight_ttl_seconds,
+        now=now,
     )
 
 
@@ -44,6 +88,9 @@ def maybe_queue_auto_ai_pipeline(
     *,
     runs_root: Path,
     flag_env: Mapping[str, str],
+    force: bool = False,
+    inflight_ttl_seconds: int = DEFAULT_INFLIGHT_TTL_SECONDS,
+    now: float | None = None,
 ) -> dict[str, object]:
     """Queue the automatic AI adjudication pipeline when enabled."""
 
@@ -53,10 +100,40 @@ def maybe_queue_auto_ai_pipeline(
         return {"queued": False, "reason": "disabled"}
 
     runs_root_path = Path(runs_root)
-    marker_path = _pipeline_marker_path(runs_root_path, sid)
-    if marker_path.exists():
-        logger.info("AUTO_AI_SKIP_IN_PROGRESS sid=%s marker=%s", sid, marker_path)
-        return {"queued": False, "reason": "in_progress"}
+    lock_path = _inflight_lock_path(runs_root_path, sid)
+    pipeline_dir = lock_path.parent
+
+    lock_exists = lock_path.exists()
+    lock_age = _lock_age_seconds(lock_path, now=now) if lock_exists else None
+    lock_stale = lock_exists and _lock_is_stale(
+        lock_path, ttl_seconds=inflight_ttl_seconds, now=now
+    )
+
+    if lock_exists and not (lock_stale or force):
+        logger.info(
+            "AUTO_AI_SKIP_INFLIGHT sid=%s lock=%s age=%s ttl=%s",
+            sid,
+            lock_path,
+            f"{lock_age:.1f}" if lock_age is not None else "unknown",
+            inflight_ttl_seconds,
+        )
+        return {"queued": False, "reason": "inflight"}
+
+    if lock_exists and (lock_stale or force):
+        logger.info(
+            "AUTO_AI_LOCK_CLEAR sid=%s lock=%s stale=%s force=%s age=%s",
+            sid,
+            lock_path,
+            1 if lock_stale else 0,
+            1 if force else 0,
+            f"{lock_age:.1f}" if lock_age is not None else "unknown",
+        )
+        try:
+            lock_path.unlink()
+        except OSError:  # pragma: no cover - defensive logging
+            logger.warning(
+                "AUTO_AI_LOCK_CLEAR_FAILED sid=%s lock=%s", sid, lock_path, exc_info=True
+            )
 
     if not has_ai_merge_best_pairs(sid, runs_root_path):
         logger.info("AUTO_AI_SKIP_NO_CANDIDATES sid=%s", sid)
@@ -65,35 +142,40 @@ def maybe_queue_auto_ai_pipeline(
     run_dir = runs_root_path / sid
     accounts_dir = run_dir / "cases" / "accounts"
 
-    marker_payload = {"sid": sid, "runs_root": str(runs_root_path)}
+    lock_payload = {
+        "sid": sid,
+        "runs_root": str(runs_root_path),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if force:
+        lock_payload["force"] = True
+
     try:
-        marker_path.parent.mkdir(parents=True, exist_ok=True)
-        marker_path.write_text(
-            json.dumps(marker_payload, ensure_ascii=False), encoding="utf-8"
-        )
+        pipeline_dir.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text(json.dumps(lock_payload, ensure_ascii=False), encoding="utf-8")
     except OSError:  # pragma: no cover - defensive logging
-        logger.warning("AUTO_AI_MARKER_WRITE_FAILED sid=%s path=%s", sid, marker_path)
+        logger.warning("AUTO_AI_LOCK_WRITE_FAILED sid=%s path=%s", sid, lock_path)
 
     logger.info(
-        "AUTO_AI_QUEUING sid=%s runs_root=%s accounts_dir=%s marker=%s",
+        "AUTO_AI_QUEUING sid=%s runs_root=%s accounts_dir=%s lock=%s",
         sid,
         runs_root_path,
         accounts_dir,
-        marker_path,
+        lock_path,
     )
 
     try:
         from backend.pipeline import auto_ai_tasks
 
-        task_id = auto_ai_tasks.enqueue_auto_ai_chain(sid)
+        task_id = auto_ai_tasks.enqueue_auto_ai_chain(sid, runs_root=runs_root_path)
     except Exception:  # pragma: no cover - defensive logging
         logger.error("AUTO_AI_QUEUE_FAILED sid=%s", sid, exc_info=True)
         try:
-            if marker_path.exists():
-                marker_path.unlink()
+            if lock_path.exists():
+                lock_path.unlink()
         except OSError:
             logger.warning(
-                "AUTO_AI_MARKER_CLEANUP_FAILED sid=%s path=%s", sid, marker_path
+                "AUTO_AI_LOCK_CLEANUP_FAILED sid=%s path=%s", sid, lock_path
             )
         raise
 
@@ -101,7 +183,9 @@ def maybe_queue_auto_ai_pipeline(
     payload: dict[str, object] = {"queued": True, "reason": "queued"}
     if task_id:
         payload["task_id"] = task_id
-    payload["marker_path"] = str(marker_path)
+    payload["lock_path"] = str(lock_path)
+    payload["pipeline_dir"] = str(pipeline_dir)
+    payload["last_ok_path"] = str(_last_ok_path(runs_root_path, sid))
     return payload
 
 

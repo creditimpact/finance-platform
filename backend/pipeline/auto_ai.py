@@ -98,7 +98,7 @@ def maybe_queue_auto_ai_pipeline(
         raise
 
     logger.info("AUTO_AI_QUEUED sid=%s", sid)
-    payload: dict[str, object] = {"queued": True}
+    payload: dict[str, object] = {"queued": True, "reason": "queued"}
     if task_id:
         payload["task_id"] = task_id
     payload["marker_path"] = str(marker_path)

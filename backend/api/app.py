@@ -40,7 +40,7 @@ from backend.api.session_manager import (
 )
 from backend.api.tasks import run_credit_repair_process  # noqa: F401
 from backend.api.tasks import app as celery_app, smoke_task
-from backend.pipeline.runs import RunManifest
+from backend.pipeline.runs import RunManifest, persist_manifest
 from backend.api.routes_smoke import bp as smoke_bp
 from backend.api.ui_events import ui_event_bp
 from backend.core import orchestrators as orch
@@ -180,6 +180,7 @@ def start_process():
         if pdf_path.resolve() != dst:
             copy2(pdf_path, dst)
         manifest.set_artifact("uploads", "smartcredit_report", dst)
+        persist_manifest(manifest)
 
         set_session(
             session_id,
@@ -319,6 +320,7 @@ def api_upload():
         if pdf_path.resolve() != dst:
             copy2(pdf_path, dst)
         manifest.set_artifact("uploads", "smartcredit_report", dst)
+        persist_manifest(manifest)
 
         # Persist initial session state
         set_session(

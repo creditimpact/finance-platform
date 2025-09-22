@@ -155,14 +155,33 @@ class RunManifest:
         return self.save()
 
     def set_artifact(self, group: str, name: str, path: str | Path) -> "RunManifest":
-        """Record an artifact path under artifacts.<group>.<name> = <path>."""
+        """Record an artifact path under ``artifacts.<group>.<name>``.
 
-        from pathlib import Path as _P
+        Parameters
+        ----------
+        group:
+            Dotted path indicating the artifact grouping (for example
+            ``"traces.accounts_table"``).  Missing intermediate dictionaries are
+            created automatically.
+        name:
+            Artifact identifier within the group.
+        path:
+            Filesystem location to store.  The path is normalized to an absolute
+            string representation.
+        """
 
-        path_str = str(_P(path))
-        data = self.data.setdefault("artifacts", {})
-        grp = data.setdefault(group, {})
-        grp[name] = path_str
+        resolved_path = str(Path(path).resolve())
+        cursor: dict[str, object] = self.data.setdefault("artifacts", {})
+        for part in str(group).split("."):
+            if not part:
+                continue
+            next_cursor = cursor.setdefault(part, {})
+            if not isinstance(next_cursor, dict):
+                raise TypeError(
+                    f"Cannot assign artifact into non-mapping at group '{group}'"
+                )
+            cursor = next_cursor
+        cursor[str(name)] = resolved_path
         return self
 
     def _ensure_ai_section(self) -> tuple[dict[str, object], dict[str, object]]:

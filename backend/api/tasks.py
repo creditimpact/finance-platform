@@ -13,7 +13,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from backend.core.logic.report_analysis.block_exporter import export_stage_a, run_stage_a
-from backend.pipeline.auto_ai import maybe_queue_auto_ai_pipeline
+from backend.pipeline.auto_ai import (
+    has_ai_merge_best_tags,
+    maybe_run_ai_pipeline,
+)
 from backend.pipeline.runs import RunManifest
 from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
 from backend.core.logic.report_analysis.problem_extractor import detect_problem_accounts
@@ -224,25 +227,21 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
         cases_info.get("dir"),
     )
 
-    ai_result: dict[str, object] = {"queued": False, "reason": "unknown"}
-    try:
-        manifest = RunManifest.for_sid(sid)
-        runs_root = manifest.path.parent.parent
-        ai_result = maybe_queue_auto_ai_pipeline(
-            sid,
-            runs_root=runs_root,
-            flag_env=os.environ,
-        )
-    except Exception:
-        log.error("AUTO_AI_PIPELINE_FAILED sid=%s", sid, exc_info=True)
-        ai_result = {"queued": False, "reason": "error"}
-
-    log.info(
-        "AUTO_AI_MAYBE_QUEUE sid=%s queued=%d reason=%s",
-        sid,
-        1 if ai_result.get("queued") else 0,
-        ai_result.get("reason", "unknown"),
-    )
+    if os.environ.get("ENABLE_AUTO_AI_PIPELINE", "1") in ("1", "true", "True"):
+        try:
+            manifest = RunManifest.for_sid(sid)
+        except Exception:
+            log.error("AUTO_AI_ENQUEUE_MANIFEST_FAILED sid=%s", sid, exc_info=True)
+        else:
+            runs_root = manifest.path.parent.parent
+            if has_ai_merge_best_tags(runs_root, sid):
+                try:
+                    maybe_run_ai_pipeline.delay(sid)
+                    log.info("AUTO_AI_ENQUEUED sid=%s", sid)
+                except Exception:
+                    log.error("AUTO_AI_ENQUEUE_FAILED sid=%s", sid, exc_info=True)
+            else:
+                log.info("AUTO_AI_SKIP_NO_CANDIDATES sid=%s", sid)
 
     return summary
 

@@ -11,7 +11,6 @@ import httpx
 
 import backend.config as config
 from backend.core.io.tags import upsert_tag
-from backend.core.utils.atomic_io import atomic_write_json
 
 from . import config as merge_config
 from .ai_pack import DEFAULT_MAX_LINES
@@ -308,7 +307,7 @@ def adjudicate_pair(pack: dict) -> dict[str, Any]:
         raise
 
 
-def _prune_legacy_pack_pairs(base: Path, account_idx: int) -> None:
+def _remove_legacy_ai_artifacts(base: Path, account_idx: int) -> None:
     ai_dir = base / str(account_idx) / "ai"
     if not ai_dir.exists():
         return
@@ -320,19 +319,27 @@ def _prune_legacy_pack_pairs(base: Path, account_idx: int) -> None:
         return
     except OSError:
         logger.debug(
-            "AI_ADJUDICATOR_PRUNE_PACK_PAIR_LIST_FAILED path=%s", ai_dir, exc_info=True
+            "AI_ADJUDICATOR_PRUNE_AI_DIR_LIST_FAILED path=%s", ai_dir, exc_info=True
         )
         return
 
     for entry in entries:
         if not entry.is_file():
             continue
-        if not entry.name.startswith("pack_pair_"):
-            continue
         try:
             entry.unlink()
         except OSError:
-            logger.debug("AI_ADJUDICATOR_PRUNE_PACK_PAIR_FAILED path=%s", entry, exc_info=True)
+            logger.debug(
+                "AI_ADJUDICATOR_PRUNE_AI_ENTRY_FAILED path=%s", entry, exc_info=True
+            )
+
+    try:
+        ai_dir.rmdir()
+    except OSError:
+        # Directory may remain when other non-file entries exist or concurrent writes happen.
+        logger.debug(
+            "AI_ADJUDICATOR_PRUNE_AI_DIR_RMDIR_FAILED path=%s", ai_dir, exc_info=True
+        )
 
 
 def persist_ai_decision(
@@ -353,44 +360,23 @@ def persist_ai_decision(
     sid_str = str(sid)
     base = Path(runs_root) / sid_str / "cases" / "accounts"
 
-    _prune_legacy_pack_pairs(base, account_a)
-    _prune_legacy_pack_pairs(base, account_b)
-
-    artifact_a = {
-        "sid": sid_str,
-        "pair": {"a": account_a, "b": account_b},
-        "decision": sanitized["decision"],
-        "confidence": sanitized["confidence"],
-        "reasons": sanitized["reasons"],
-    }
-    artifact_b = {
-        "sid": sid_str,
-        "pair": {"a": account_b, "b": account_a},
-        "decision": sanitized["decision"],
-        "confidence": sanitized["confidence"],
-        "reasons": sanitized["reasons"],
-    }
-
-    path_a = base / str(account_a) / "ai" / f"decision_pair_{account_a}_{account_b}.json"
-    path_b = base / str(account_b) / "ai" / f"decision_pair_{account_b}_{account_a}.json"
-
-    atomic_write_json(path_a.as_posix(), artifact_a, ensure_ascii=False)
-    atomic_write_json(path_b.as_posix(), artifact_b, ensure_ascii=False)
+    _remove_legacy_ai_artifacts(base, account_a)
+    _remove_legacy_ai_artifacts(base, account_b)
 
     tag_a = {
         "kind": "merge_result",
         "with": account_b,
-        "decision": artifact_a["decision"],
-        "confidence": artifact_a["confidence"],
-        "reasons": list(artifact_a["reasons"]),
+        "decision": sanitized["decision"],
+        "confidence": sanitized["confidence"],
+        "reasons": list(sanitized["reasons"]),
         "source": "ai_adjudicator",
     }
     tag_b = {
         "kind": "merge_result",
         "with": account_a,
-        "decision": artifact_b["decision"],
-        "confidence": artifact_b["confidence"],
-        "reasons": list(artifact_b["reasons"]),
+        "decision": sanitized["decision"],
+        "confidence": sanitized["confidence"],
+        "reasons": list(sanitized["reasons"]),
         "source": "ai_adjudicator",
     }
 

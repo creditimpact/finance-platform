@@ -56,20 +56,6 @@ def test_adjudicate_pair_disabled(monkeypatch, tmp_path):
 
     ai_adjudicator.persist_ai_decision("case-123", tmp_path, 11, 16, resp)
 
-    path_a = base / "11" / "ai" / "decision_pair_11_16.json"
-    path_b = base / "16" / "ai" / "decision_pair_16_11.json"
-
-    assert path_a.exists()
-    assert path_b.exists()
-
-    saved_a = jsonlib.loads(path_a.read_text(encoding="utf-8"))
-    saved_b = jsonlib.loads(path_b.read_text(encoding="utf-8"))
-
-    assert saved_a["decision"] == "ai_disabled"
-    assert saved_a["pair"] == {"a": 11, "b": 16}
-    assert saved_b["pair"] == {"a": 16, "b": 11}
-    assert saved_b["decision"] == "ai_disabled"
-
     tags_a_path = base / "11" / "tags.json"
     tags_b_path = base / "16" / "tags.json"
 
@@ -91,8 +77,8 @@ def test_adjudicate_pair_disabled(monkeypatch, tmp_path):
     assert tags_b == [expected_tag_b]
     assert not legacy_a.exists()
     assert not legacy_b.exists()
-    assert not list((path_a.parent).glob("pack_pair_*"))
-    assert not list((path_b.parent).glob("pack_pair_*"))
+    assert not (base / "11" / "ai").exists()
+    assert not (base / "16" / "ai").exists()
 
 
 def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
@@ -156,18 +142,6 @@ def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
 
     ai_adjudicator.persist_ai_decision("case-123", tmp_path, 11, 16, resp)
 
-    path_a = base / "11" / "ai" / "decision_pair_11_16.json"
-    path_b = base / "16" / "ai" / "decision_pair_16_11.json"
-
-    saved_a = jsonlib.loads(path_a.read_text(encoding="utf-8"))
-    saved_b = jsonlib.loads(path_b.read_text(encoding="utf-8"))
-
-    assert saved_a["decision"] == "merge"
-    assert saved_a["confidence"] == 0.83
-    assert saved_a["pair"] == {"a": 11, "b": 16}
-    assert saved_b["pair"] == {"a": 16, "b": 11}
-    assert saved_b["reasons"] == ["matched creditor names"]
-
     tags_a_path = base / "11" / "tags.json"
     tags_b_path = base / "16" / "tags.json"
 
@@ -195,8 +169,8 @@ def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
     assert tags_b == [expected_b]
     assert not legacy_a.exists()
     assert not legacy_b.exists()
-    assert not list((path_a.parent).glob("pack_pair_*"))
-    assert not list((path_b.parent).glob("pack_pair_*"))
+    assert not (base / "11" / "ai").exists()
+    assert not (base / "16" / "ai").exists()
 
 
 def test_adjudicate_pair_enabled_no_merge(monkeypatch, tmp_path):
@@ -240,17 +214,6 @@ def test_adjudicate_pair_enabled_no_merge(monkeypatch, tmp_path):
     ai_adjudicator.persist_ai_decision("case-123", tmp_path, 11, 16, resp)
 
     base = tmp_path / "case-123" / "cases" / "accounts"
-    path_a = base / "11" / "ai" / "decision_pair_11_16.json"
-    path_b = base / "16" / "ai" / "decision_pair_16_11.json"
-
-    saved_a = jsonlib.loads(path_a.read_text(encoding="utf-8"))
-    saved_b = jsonlib.loads(path_b.read_text(encoding="utf-8"))
-
-    assert saved_a["decision"] == "no_merge"
-    assert saved_a["confidence"] == 0.41
-    assert saved_b["decision"] == "no_merge"
-    assert saved_b["reasons"] == ["conflicting payment history"]
-
     tags_a_path = base / "11" / "tags.json"
     tags_b_path = base / "16" / "tags.json"
 
@@ -276,3 +239,5 @@ def test_adjudicate_pair_enabled_no_merge(monkeypatch, tmp_path):
 
     assert tags_a == [expected_a]
     assert tags_b == [expected_b]
+    assert not (base / "11" / "ai").exists()
+    assert not (base / "16" / "ai").exists()

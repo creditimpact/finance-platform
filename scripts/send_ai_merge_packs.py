@@ -26,7 +26,8 @@ from backend.core.ai.adjudicator import decide_merge_or_different
 from backend.core.io.tags import read_tags, upsert_tag
 from backend.pipeline.runs import RunManifest, persist_manifest
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
+
 
 
 def _packs_dir_for(sid: str, runs_root: Path) -> Path:
@@ -103,13 +104,6 @@ def _backoff_delay(schedule: Sequence[float], attempt_number: int) -> float:
         return 0.0
     index = min(max(attempt_number - 1, 0), len(schedule) - 1)
     return schedule[index]
-
-
-def _resolve_packs_dir(sid: str, runs_root: Path, override: str | None) -> Path:
-    if override:
-        return Path(override)
-
-    return _packs_dir_for(sid, runs_root)
 
 
 def _append_log(path: Path, line: str) -> None:
@@ -407,12 +401,18 @@ def main(argv: Sequence[str] | None = None) -> None:
         runs_root_path = Path(os.environ.get("RUNS_ROOT", "runs"))
 
     manifest = RunManifest.for_sid(sid)
-    preferred_dir = manifest.get_ai_packs_dir()
-    packs_dir = Path(preferred_dir) if preferred_dir else _resolve_packs_dir(sid, runs_root_path, args.packs_dir)
-    if preferred_dir:
-        logger.info("SENDER_PACKS_DIR_FROM_MANIFEST sid=%s dir=%s", sid, packs_dir)
+
+    if args.packs_dir:
+        packs_dir = Path(args.packs_dir)
+        log.info("SENDER_PACKS_DIR_OVERRIDE sid=%s dir=%s", sid, packs_dir)
     else:
-        logger.info("SENDER_PACKS_DIR_FALLBACK sid=%s dir=%s", sid, packs_dir)
+        preferred_dir = manifest.get_ai_packs_dir()
+        if preferred_dir and Path(preferred_dir).exists():
+            packs_dir = Path(preferred_dir)
+            log.info("SENDER_PACKS_DIR_FROM_MANIFEST sid=%s dir=%s", sid, packs_dir)
+        else:
+            packs_dir = _packs_dir_for(sid, runs_root_path)
+            log.info("SENDER_PACKS_DIR_FALLBACK sid=%s dir=%s", sid, packs_dir)
 
     if not packs_dir.exists():
         raise SystemExit(f"No AI packs for SID (directory not found at {packs_dir})")
@@ -597,7 +597,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     manifest.set_ai_sent()
     persist_manifest(manifest)
-    logger.info("MANIFEST_AI_SENT sid=%s", sid)
+    log.info("MANIFEST_AI_SENT sid=%s", sid)
 
     print(
         "[AI] adjudicated {total} packs ({successes} success, {failures} errors)".format(
@@ -610,11 +610,11 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         compact_tags_for_sid(sid)
         manifest.set_ai_compacted()
-        manifest.save()
-        logger.info("MANIFEST_AI_COMPACTED sid=%s", sid)
-        logger.info("TAGS_COMPACTED sid=%s", sid)
+        persist_manifest(manifest)
+        log.info("MANIFEST_AI_COMPACTED sid=%s", sid)
+        log.info("TAGS_COMPACTED sid=%s", sid)
     except Exception as exc:  # pragma: no cover - defensive logging
-        logger.warning("TAGS_COMPACT_SKIP sid=%s err=%s", sid, exc)
+        log.warning("TAGS_COMPACT_SKIP sid=%s err=%s", sid, exc)
 
     if failures:
         raise SystemExit(1)

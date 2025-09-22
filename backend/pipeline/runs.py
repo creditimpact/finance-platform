@@ -182,7 +182,7 @@ class RunManifest:
                 )
             cursor = next_cursor
         cursor[str(name)] = resolved_path
-        return self
+        return self.save()
 
     def _ensure_ai_section(self) -> tuple[dict[str, object], dict[str, object]]:
         ai = self.data.setdefault("ai", {})

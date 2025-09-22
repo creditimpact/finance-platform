@@ -58,6 +58,7 @@ from backend.core.logic.letters.explanations_normalizer import (
 from backend.core.materialize.casestore_view import build_account_view
 
 logger = logging.getLogger(__name__)
+log = logger
 
 api_bp = Blueprint("api", __name__)
 
@@ -181,6 +182,13 @@ def start_process():
             copy2(pdf_path, dst)
         manifest.set_artifact("uploads", "smartcredit_report", dst)
         persist_manifest(manifest)
+        log.info(
+            "MANIFEST_ARTIFACT_ADDED sid=%s group=%s name=%s path=%s",
+            manifest.sid,
+            "uploads",
+            "smartcredit_report",
+            dst,
+        )
 
         set_session(
             session_id,

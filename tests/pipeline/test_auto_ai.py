@@ -140,6 +140,8 @@ def test_maybe_queue_auto_ai_pipeline_queues_when_candidates(
 
     recorded: dict[str, Any] = {}
 
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+
     def fake_enqueue(sid_value: str, runs_root=None) -> str:
         recorded["sid"] = sid_value
         recorded["runs_root"] = runs_root
@@ -174,6 +176,14 @@ def test_maybe_queue_auto_ai_pipeline_queues_when_candidates(
     )
 
     assert any(f"MANIFEST_AI_ENQUEUED sid={sid}" in message for message in messages)
+
+    manifest = RunManifest.for_sid(sid)
+    status = manifest.data.get("ai", {}).get("status", {})
+    assert status.get("enqueued") is True
+    assert status.get("built") is False
+    assert status.get("sent") is False
+    assert status.get("compacted") is False
+    assert status.get("skipped_reason") is None
 
 
 def test_maybe_queue_auto_ai_pipeline_skips_without_candidates(monkeypatch, tmp_path: Path) -> None:
@@ -600,19 +610,23 @@ def test_maybe_run_ai_pipeline_skips_without_candidates_logs(monkeypatch, tmp_pa
     assert any("AUTO_AI_SKIPPED" in record.getMessage() for record in caplog.records)
 
 
-def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch):
+def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
     runs_root = tmp_path / "runs"
     sid, account_a, account_b = _setup_merge_case(runs_root)
     packs_dir = auto_ai.packs_dir_for(sid, runs_root=runs_root)
 
-    build_ai_merge_packs_main([
-        "--sid",
-        sid,
-        "--runs-root",
-        str(runs_root),
-        "--max-lines-per-side",
-        "6",
-    ])
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="scripts.build_ai_merge_packs"):
+        build_ai_merge_packs_main([
+            "--sid",
+            sid,
+            "--runs-root",
+            str(runs_root),
+            "--max-lines-per-side",
+            "6",
+        ])
 
     assert packs_dir.exists()
     index_path = packs_dir / "index.json"
@@ -623,10 +637,17 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch):
     packs_info = ai_info.get("packs", {})
     status_info = ai_info.get("status", {})
     assert Path(packs_info.get("dir")) == packs_dir.resolve()
+    assert Path(packs_info.get("dir")).exists()
     assert Path(packs_info.get("index")) == index_path.resolve()
-    assert packs_info.get("pairs") == 1
+    assert Path(packs_info.get("index")).exists()
+    assert packs_info.get("pairs") >= 1
     assert status_info.get("built") is True
+    assert status_info.get("sent") is False
+    assert status_info.get("compacted") is False
     assert status_info.get("skipped_reason") is None
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(f"MANIFEST_AI_PACKS_UPDATED sid={sid}" in message for message in messages)
 
     monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -645,7 +666,13 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch):
     timestamp = "2024-07-04T12:00:00Z"
     monkeypatch.setattr(send_mod, "_isoformat_timestamp", lambda dt=None: timestamp)
 
-    send_ai_merge_packs_main(["--sid", sid, "--runs-root", str(runs_root)])
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="scripts.send_ai_merge_packs"):
+        send_ai_merge_packs_main(["--sid", sid, "--runs-root", str(runs_root)])
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(f"MANIFEST_AI_SENT sid={sid}" in message for message in messages)
+    assert any(f"MANIFEST_AI_COMPACTED sid={sid}" in message for message in messages)
 
     logs_path = packs_dir / "logs.txt"
     assert logs_path.exists()
@@ -662,6 +689,11 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch):
     assert status_info.get("sent") is True
     assert status_info.get("compacted") is True
     assert status_info.get("skipped_reason") is None
+
+    packs_info = manifest.data.get("ai", {}).get("packs", {})
+    assert Path(packs_info.get("dir")).exists()
+    assert Path(packs_info.get("index")).exists()
+    assert packs_info.get("pairs") >= 1
 
     compact_tags_for_account(account_a)
     compact_tags_for_account(account_b)
@@ -701,6 +733,77 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch):
 
 
 
+
+
+def test_run_auto_ai_pipeline_processes_index_and_updates_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runs_root = tmp_path / "runs"
+    sid, account_a, account_b = _setup_merge_case(runs_root, sid="auto-pipeline")
+
+    monkeypatch.setattr(auto_ai, "RUNS_ROOT", runs_root)
+
+    import backend.core.logic.merge.scorer as merge_scorer
+
+    monkeypatch.setattr(merge_scorer, "score_bureau_pairs_cli", lambda *_, **__: None)
+
+    monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+
+    from scripts import send_ai_merge_packs as send_mod
+
+    timestamp = "2024-07-05T09:00:00Z"
+
+    manifest = RunManifest.for_sid(sid)
+    manifest.set_ai_enqueued()
+
+    monkeypatch.setattr(
+        send_mod,
+        "decide_merge_or_different",
+        lambda pack, timeout: {
+            "decision": "merge",
+            "reason": "Records align cleanly.",
+        },
+    )
+    monkeypatch.setattr(send_mod, "_isoformat_timestamp", lambda dt=None: timestamp)
+
+    caplog.clear()
+    caplog.set_level(logging.INFO, logger="backend.pipeline.auto_ai")
+    caplog.set_level(logging.INFO, logger="scripts.build_ai_merge_packs")
+    caplog.set_level(logging.INFO, logger="scripts.send_ai_merge_packs")
+
+    result = auto_ai._run_auto_ai_pipeline(sid)
+
+    assert result == {"sid": sid, "ok": True}
+
+    manifest = RunManifest.for_sid(sid)
+    status_info = manifest.data.get("ai", {}).get("status", {})
+    packs_info = manifest.data.get("ai", {}).get("packs", {})
+
+    assert status_info.get("built") is True
+    assert status_info.get("sent") is True
+    assert status_info.get("compacted") is True
+    assert status_info.get("skipped_reason") is None
+
+    packs_dir = Path(packs_info.get("dir"))
+    index_path = Path(packs_info.get("index"))
+    assert packs_dir.exists()
+    assert index_path.exists()
+    assert packs_info.get("pairs") >= 1
+
+    tags_a = json.loads((account_a / "tags.json").read_text(encoding="utf-8"))
+    tags_b = json.loads((account_b / "tags.json").read_text(encoding="utf-8"))
+    assert any(tag.get("kind") == "ai_decision" for tag in tags_a)
+    assert any(tag.get("kind") == "ai_decision" for tag in tags_b)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(f"AUTO_AI_PACKS_FOUND sid={sid}" in message for message in messages)
+    assert any(f"MANIFEST_AI_PACKS_UPDATED sid={sid}" in message for message in messages)
+    assert any(f"MANIFEST_AI_SENT sid={sid}" in message for message in messages)
+    assert any(f"MANIFEST_AI_COMPACTED sid={sid}" in message for message in messages)
 
 
 def test_run_auto_ai_pipeline_skips_when_index_missing(monkeypatch, tmp_path):

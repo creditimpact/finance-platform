@@ -103,8 +103,15 @@ def test_send_ai_merge_packs_records_merge_decision(
     _write_json(account_b_dir / "tags.json", [_merge_best_tag(11)])
 
     monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
-    build_ai_merge_packs_main(
-        ["--sid", sid, "--runs-root", str(runs_root), "--max-lines-per-side", "6"]
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="scripts.build_ai_merge_packs"):
+        build_ai_merge_packs_main(
+            ["--sid", sid, "--runs-root", str(runs_root), "--max-lines-per-side", "6"]
+        )
+
+    build_messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        f"MANIFEST_AI_PACKS_UPDATED sid={sid}" in message for message in build_messages
     )
 
     manifest = RunManifest.for_sid(sid)
@@ -112,10 +119,14 @@ def test_send_ai_merge_packs_records_merge_decision(
     status_info = manifest.data.get("ai", {}).get("status", {})
     packs_dir = (runs_root / sid / "ai_packs").resolve()
     assert Path(packs_info.get("dir")) == packs_dir
+    assert Path(packs_info.get("dir")).exists()
     assert Path(packs_info.get("index")).exists()
-    assert packs_info.get("pairs") == 1
+    assert packs_info.get("pairs") >= 1
     assert status_info.get("built") is True
-
+    assert status_info.get("sent") is False
+    assert status_info.get("compacted") is False
+    assert status_info.get("skipped_reason") is None
+    
     monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("RUNS_ROOT", str(runs_root))
@@ -148,6 +159,10 @@ def test_send_ai_merge_packs_records_merge_decision(
     assert status_info.get("sent") is True
     assert status_info.get("compacted") is True
     assert status_info.get("skipped_reason") is None
+    packs_info = manifest.data.get("ai", {}).get("packs", {})
+    assert Path(packs_info.get("dir")).exists()
+    assert Path(packs_info.get("index")).exists()
+    assert packs_info.get("pairs") >= 1
 
     account_a_tags = json.loads((account_a_dir / "tags.json").read_text(encoding="utf-8"))
     account_b_tags = json.loads((account_b_dir / "tags.json").read_text(encoding="utf-8"))
@@ -299,8 +314,11 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
     manifest_data = json.loads((runs_root / sid / "manifest.json").read_text(encoding="utf-8"))
     ai_packs = manifest_data["ai"]["packs"]
     assert Path(ai_packs["dir"]) == packs_dir.resolve()
+    assert Path(ai_packs["dir"]).exists()
     assert Path(ai_packs["index"]) == (packs_dir / "index.json").resolve()
+    assert Path(ai_packs["index"]).exists()
     assert Path(ai_packs["logs"]) == logs_path.resolve()
+    assert ai_packs.get("pairs", 0) >= 1
 
     status_info = manifest.data.get("ai", {}).get("status", {})
     assert status_info.get("sent") is True

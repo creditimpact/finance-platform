@@ -116,7 +116,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         score_total = _safe_int(highlights.get("total"))
 
         _write_pack(pack_path, pack)
-        log.info("PACK_WRITTEN sid=%s file=%s", sid, pack_filename)
+        log.info("PACK_WRITTEN sid=%s file=%s a=%s b=%s", sid, pack_filename, a_idx, b_idx)
 
         index_entries.append(
             {
@@ -138,21 +138,18 @@ def main(argv: Sequence[str] | None = None) -> None:
             "pairs_count": pairs_count,
         }
         _write_index(index_path, index_payload)
-        log.info(
-            "INDEX_WRITTEN sid=%s index=%s pairs=%s",
-            sid,
-            index_path,
-            len(index_payload.get("packs", [])),
-        )
+        packs_in_index = len(index_payload.get("packs", []))
+        log.info("INDEX_WRITTEN sid=%s index=%s pairs=%d", sid, index_path, packs_in_index)
 
         manifest = RunManifest.for_sid(sid)
-        manifest.set_ai_built(packs_dir, len(index_payload.get("packs", [])))
+        manifest.set_ai_built(packs_dir, packs_in_index)
         persist_manifest(manifest)
         log.info(
-            "MANIFEST_AI_PACKS_UPDATED sid=%s dir=%s pairs=%s",
+            "MANIFEST_AI_PACKS_UPDATED sid=%s dir=%s index=%s pairs=%d",
             sid,
             packs_dir,
-            len(index_payload.get("packs", [])),
+            index_path,
+            packs_in_index,
         )
     else:
         log.info("INDEX_SKIPPED_NO_PAIRS sid=%s dir=%s", sid, packs_dir)

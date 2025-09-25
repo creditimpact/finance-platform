@@ -44,3 +44,13 @@ def test_acctnum_match_level_masked_last4() -> None:
 def test_acctnum_match_level_prefers_last6() -> None:
     level, _ = account_merge.acctnum_match_level("99123456", "123456")
     assert level == "last6"
+
+
+def test_acctnum_match_level_trims_leading_zero_for_exact() -> None:
+    level, _ = account_merge.acctnum_match_level("000012345678", "12345678")
+    assert level == "exact"
+
+
+def test_acctnum_match_level_fully_masked_returns_none() -> None:
+    level, _ = account_merge.acctnum_match_level("********", "XXXX")
+    assert level == "none"

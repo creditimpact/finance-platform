@@ -18,6 +18,12 @@ MATCH_CASES = [
     ("****-**789012", "789012", "last6", account_merge.POINTS_ACCTNUM_LAST6),
     ("****-****-****-0423", "X X X X 0423", "last4", account_merge.POINTS_ACCTNUM_LAST4),
     ("****-****-****-1111", "....2222", "none", 0),
+    (
+        "0000 1234 5678 9000",
+        "123456789000",
+        "exact",
+        account_merge.POINTS_ACCTNUM_EXACT,
+    ),
 ]
 
 

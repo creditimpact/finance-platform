@@ -7,6 +7,23 @@ from os import PathLike
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence, Union
 
+_IDENTITY_PART_FIELDS = {
+    "account_number",
+    "creditor_type",
+    "date_opened",
+    "closed_date",
+    "date_of_last_activity",
+    "date_reported",
+    "last_verified",
+}
+
+_DEBT_PART_FIELDS = {
+    "balance_owed",
+    "high_balance",
+    "past_due_amount",
+    "last_payment",
+}
+
 Pathish = Union[str, Path, PathLike[str]]
 
 
@@ -34,6 +51,104 @@ def _has_value(value: Any) -> bool:
     if isinstance(value, (list, tuple, set, dict)):
         return bool(value)
     return True
+
+
+def _sum_parts(parts: Mapping[str, object] | None, fields: Iterable[str]) -> int:
+    total = 0
+    if isinstance(parts, Mapping):
+        for field in fields:
+            part_value = parts.get(field)
+            coerced = _coerce_int(part_value)
+            if coerced is not None:
+                total += coerced
+    return total
+
+
+def _normalize_matched_fields(raw: Mapping[str, object] | None) -> dict[str, bool]:
+    matched: dict[str, bool] = {}
+    if not isinstance(raw, Mapping):
+        return matched
+    for field, flag in raw.items():
+        matched[str(field)] = bool(flag)
+    return matched
+
+
+def _build_merge_scoring_summary(
+    best_tag: Mapping[str, object] | None,
+    existing: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    summary: dict[str, object] = {}
+    if isinstance(existing, Mapping):
+        summary.update(existing)
+
+    if not isinstance(best_tag, Mapping):
+        return summary or None
+
+    parts = best_tag.get("parts") if isinstance(best_tag.get("parts"), Mapping) else None
+    identity_score = _sum_parts(parts, _IDENTITY_PART_FIELDS)
+    debt_score = _sum_parts(parts, _DEBT_PART_FIELDS)
+
+    aux_payload = best_tag.get("aux") if isinstance(best_tag.get("aux"), Mapping) else {}
+    acctnum_level = "none"
+    if isinstance(aux_payload, Mapping):
+        acctnum_level = str(aux_payload.get("acctnum_level") or "none")
+        if acctnum_level == "none":
+            account_number_aux = aux_payload.get("account_number")
+            if isinstance(account_number_aux, Mapping):
+                acctnum_level = str(account_number_aux.get("acctnum_level") or "none")
+        matched_fields = _normalize_matched_fields(aux_payload.get("matched_fields"))
+    else:
+        matched_fields = {}
+
+    conflicts_raw = best_tag.get("conflicts")
+    conflicts: list[str] = []
+    if isinstance(conflicts_raw, Iterable) and not isinstance(conflicts_raw, (str, bytes)):
+        for conflict in conflicts_raw:
+            if conflict is None:
+                continue
+            conflict_text = str(conflict)
+            if conflict_text:
+                conflicts.append(conflict_text)
+
+    reasons_raw = best_tag.get("reasons")
+    reasons: list[str] = []
+    if isinstance(reasons_raw, Iterable) and not isinstance(reasons_raw, (str, bytes)):
+        for reason in reasons_raw:
+            if reason is None:
+                continue
+            reason_text = str(reason)
+            if reason_text:
+                reasons.append(reason_text)
+
+    partner = _coerce_int(best_tag.get("with"))
+    score_total = _coerce_int(best_tag.get("score_total"))
+    if score_total is None:
+        score_total = _coerce_int(best_tag.get("total"))
+    if score_total is None:
+        score_total = 0
+
+    summary.update(
+        {
+            "identity_score": identity_score,
+            "debt_score": debt_score,
+            "acctnum_level": acctnum_level,
+            "matched_fields": matched_fields,
+            "conflicts": conflicts,
+            "score_total": score_total,
+        }
+    )
+
+    if reasons:
+        summary["reasons"] = reasons
+    elif "reasons" in summary:
+        summary.pop("reasons")
+
+    if partner is not None:
+        summary["best_with"] = partner
+    elif "best_with" in summary:
+        summary.pop("best_with")
+
+    return summary
 
 
 def _minimal_issue(tag: Mapping[str, object]) -> dict[str, object]:
@@ -286,6 +401,7 @@ def compact_account_tags(
     merge_explanations: list[dict[str, object]] = []
     ai_explanations: list[dict[str, object]] = []
     decision_reasons: dict[int, str] = {}
+    best_merge_tag: Mapping[str, object] | None = None
 
     for tag in tags:
         kind = str(tag.get("kind", "")).strip().lower()
@@ -306,10 +422,14 @@ def compact_account_tags(
                 merge_payload = _merge_explanation_from_tag(tag)
                 if merge_payload is not None:
                     merge_explanations.append(merge_payload)
+                if kind == "merge_best":
+                    best_merge_tag = dict(tag)
             elif kind in {"ai_decision", "same_debt_pair", "same_account_pair"}:
                 ai_explanations.extend(
                     _ai_explanations_from_tag(tag, decision_reason_map=decision_reasons)
                 )
+        elif kind == "merge_best":
+            best_merge_tag = dict(tag)
 
     if minimal_only:
         minimal_tags = [tag for tag in minimal_tags if tag]
@@ -333,9 +453,16 @@ def compact_account_tags(
 
     existing_merge = summary_data.get("merge_explanations")
     existing_ai = summary_data.get("ai_explanations")
+    existing_scoring = summary_data.get("merge_scoring")
 
     summary_data["merge_explanations"] = _merge_summary_entries(existing_merge, merge_explanations)
     summary_data["ai_explanations"] = _merge_summary_entries(existing_ai, ai_explanations)
+
+    merge_scoring_summary = _build_merge_scoring_summary(best_merge_tag, existing_scoring)
+    if merge_scoring_summary is not None:
+        summary_data["merge_scoring"] = merge_scoring_summary
+    elif "merge_scoring" in summary_data:
+        summary_data.pop("merge_scoring", None)
 
     _write_json(summary_path, summary_data)
 

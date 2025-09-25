@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from os import PathLike
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence, Union
+
+from backend.core.io.json_io import _atomic_write_json
 
 _IDENTITY_PART_FIELDS = {
     "account_number",
@@ -25,6 +28,9 @@ _DEBT_PART_FIELDS = {
 }
 
 Pathish = Union[str, Path, PathLike[str]]
+
+
+log = logging.getLogger(__name__)
 
 
 def _coerce_int(value: object) -> int | None:
@@ -416,9 +422,20 @@ def _merge_summary_entries(
     return _dedupe(combined)
 
 
-def _write_json(path: Path, payload: object) -> None:
-    serialized = json.dumps(payload, ensure_ascii=False, indent=2)
-    path.write_text(f"{serialized}\n", encoding="utf-8")
+def _write_tags(tags_path: Path, payload: Iterable[Mapping[str, object]]) -> None:
+    entries = [dict(entry) for entry in payload]
+    _atomic_write_json(tags_path, entries)
+    log.info("TAGS_WRITTEN_ATOMIC path=%s entries=%d", tags_path, len(entries))
+
+
+def _write_summary(summary_path: Path, payload: Mapping[str, object]) -> None:
+    data = dict(payload)
+    _atomic_write_json(summary_path, data)
+    log.info(
+        "SUMMARY_WRITTEN_ATOMIC path=%s keys=%d",
+        summary_path,
+        len(data),
+    )
 
 
 def compact_account_tags(
@@ -507,7 +524,7 @@ def compact_account_tags(
         minimal_tags = [tag for tag in minimal_tags if tag]
         minimal_tags = _dedupe(minimal_tags)
 
-    _write_json(tags_path, minimal_tags)
+    _write_tags(tags_path, minimal_tags)
 
     if not explanations_to_summary:
         return
@@ -536,7 +553,7 @@ def compact_account_tags(
     elif "merge_scoring" in summary_data:
         summary_data.pop("merge_scoring", None)
 
-    _write_json(summary_path, summary_data)
+    _write_summary(summary_path, summary_data)
 
 
 def compact_tags_for_run(

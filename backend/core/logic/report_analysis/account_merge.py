@@ -374,6 +374,8 @@ _DATE_FORMATS = (
 )
 
 _AMOUNT_FIELDS = {"past_due_amount", "high_balance", "credit_limit"}
+_ZERO_AMOUNT_FIELDS = {"balance_owed", "past_due_amount"}
+_AMOUNT_ZERO_EPSILON = 1e-9
 _DATE_FIELDS_DET = {
     "last_verified",
     "date_of_last_activity",
@@ -462,6 +464,22 @@ def _serialize_normalized_pair(a: Any, b: Any) -> Tuple[Any, Any]:
     return (_serialize_normalized_value(a), _serialize_normalized_value(b))
 
 
+def _is_zero_amount(value: Any) -> bool:
+    try:
+        return abs(float(value)) <= _AMOUNT_ZERO_EPSILON
+    except (TypeError, ValueError):
+        return False
+
+
+def _both_amounts_positive(pair: Any) -> bool:
+    if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+        return False
+    try:
+        return float(pair[0]) > 0 and float(pair[1]) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _match_field_values(
     field: str,
     norm_a: Any,
@@ -481,7 +499,10 @@ def _match_field_values(
         return matched, aux
 
     if field == "balance_owed":
-        return match_balance_owed(norm_a, norm_b), aux
+        matched = match_balance_owed(norm_a, norm_b)
+        if matched and (_is_zero_amount(norm_a) or _is_zero_amount(norm_b)):
+            return False, aux
+        return matched, aux
 
     if field == "payment_amount":
         tol_abs = float(cfg.tolerances.get("AMOUNT_TOL_ABS", 0.0))
@@ -500,6 +521,10 @@ def _match_field_values(
         tol_abs = float(cfg.tolerances.get("AMOUNT_TOL_ABS", 0.0))
         tol_ratio = float(cfg.tolerances.get("AMOUNT_TOL_RATIO", 0.0))
         matched = match_amount_field(norm_a, norm_b, tol_abs=tol_abs, tol_ratio=tol_ratio)
+        if field in _ZERO_AMOUNT_FIELDS and (
+            _is_zero_amount(norm_a) or _is_zero_amount(norm_b)
+        ):
+            return False, aux
         return matched, aux
 
     if field == "last_payment":
@@ -704,8 +729,12 @@ def score_pair_0_100(
     dates_triggered = False
     total_triggered = False
 
-    if cfg.triggers.get("MERGE_AI_ON_BALOWED_EXACT", True) and field_matches.get(
-        "balance_owed"
+    balance_aux = aux.get("balance_owed", {})
+    balance_pair = balance_aux.get("normalized_values") if isinstance(balance_aux, Mapping) else None
+    if (
+        cfg.triggers.get("MERGE_AI_ON_BALOWED_EXACT", True)
+        and field_matches.get("balance_owed")
+        and _both_amounts_positive(balance_pair)
     ):
         triggers.append("strong:balance_owed")
         strong_triggered = True

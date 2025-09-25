@@ -50,7 +50,14 @@ def test_send_single_attempt_success() -> None:
                     {
                         "message": {
                             "content": json.dumps(
-                                {"decision": "merge", "reason": "strong match"}
+                                {
+                                    "decision": "merge",
+                                    "reason": "strong match",
+                                    "flags": {
+                                        "account_match": True,
+                                        "debt_match": True,
+                                    },
+                                }
                             )
                         }
                     }
@@ -58,7 +65,7 @@ def test_send_single_attempt_success() -> None:
             }
         )
 
-    decision, reason = ai_sender.send_single_attempt(
+    decision, reason, flags = ai_sender.send_single_attempt(
         _sample_pack(),
         _config(),
         request=_request,
@@ -66,6 +73,7 @@ def test_send_single_attempt_success() -> None:
 
     assert decision == "merge"
     assert reason == "strong match"
+    assert flags == {"account_match": True, "debt_match": True}
     assert captured["url"] == "https://example.test/v1/chat/completions"
     assert captured["headers"] == {
         "Authorization": "Bearer key-123",
@@ -91,7 +99,14 @@ def test_process_pack_retries_then_success(monkeypatch) -> None:
                     {
                         "message": {
                             "content": json.dumps(
-                                {"decision": "same_debt", "reason": "oc vs ca"}
+                                {
+                                    "decision": "same_debt",
+                                    "reason": "oc vs ca",
+                                    "flags": {
+                                        "account_match": "unknown",
+                                        "debt_match": True,
+                                    },
+                                }
                             )
                         }
                     }
@@ -110,6 +125,7 @@ def test_process_pack_retries_then_success(monkeypatch) -> None:
     assert outcome.success is True
     assert outcome.decision == "same_debt"
     assert outcome.reason == "oc vs ca"
+    assert outcome.flags == {"account_match": "unknown", "debt_match": True}
     assert outcome.attempts == 3
     assert delays == [1.0, 3.0]
     assert any(event == "RESPONSE" for event, _ in events)
@@ -147,18 +163,25 @@ def test_process_pack_failure_records_error() -> None:
 
 
 def test_parse_model_payload_accepts_code_fences() -> None:
-    payload = """```json\n{\"decision\": \"merge\", \"reason\": \"context ok\"}\n```"""
+    payload = """```json\n{\"decision\": \"merge\", \"reason\": \"context ok\", \"flags\": {\"account_match\": true, \"debt_match\": true}}\n```"""
 
     parsed = ai_sender._parse_model_payload(payload)
-    decision, reason = ai_sender._sanitize_decision(parsed)
+    decision, reason, flags = ai_sender._sanitize_decision(parsed)
 
     assert decision == "merge"
     assert reason == "context ok"
+    assert flags == {"account_match": True, "debt_match": True}
 
 
 def test_sanitize_decision_rejects_unknown_value() -> None:
     with pytest.raises(ValueError, match="Unsupported decision"):
-        ai_sender._sanitize_decision({"decision": "skip", "reason": "n/a"})
+        ai_sender._sanitize_decision(
+            {
+                "decision": "skip",
+                "reason": "n/a",
+                "flags": {"account_match": True, "debt_match": True},
+            }
+        )
 
 
 def test_write_decision_tags_same_debt(tmp_path: Path) -> None:
@@ -170,6 +193,7 @@ def test_write_decision_tags_same_debt(tmp_path: Path) -> None:
         "same_debt",
         "matching oc and ca",
         "2024-06-01T00:00:00Z",
+        {"account_match": "unknown", "debt_match": True},
     )
 
     base = tmp_path / "case-001" / "cases" / "accounts"
@@ -185,10 +209,12 @@ def test_write_decision_tags_same_debt(tmp_path: Path) -> None:
             "source": "ai_adjudicator",
             "tag": "ai_decision",
             "with": 16,
+            "flags": {"account_match": "unknown", "debt_match": True},
         },
         {
             "at": "2024-06-01T00:00:00Z",
             "kind": "same_debt_pair",
+            "reason": "matching oc and ca",
             "source": "ai_adjudicator",
             "with": 16,
         },
@@ -202,10 +228,12 @@ def test_write_decision_tags_same_debt(tmp_path: Path) -> None:
             "source": "ai_adjudicator",
             "tag": "ai_decision",
             "with": 11,
+            "flags": {"account_match": "unknown", "debt_match": True},
         },
         {
             "at": "2024-06-01T00:00:00Z",
             "kind": "same_debt_pair",
+            "reason": "matching oc and ca",
             "source": "ai_adjudicator",
             "with": 11,
         },
@@ -221,6 +249,7 @@ def test_write_decision_tags_idempotent(tmp_path: Path) -> None:
         "same_debt",
         "matching tradeline",
         "2024-06-30T12:00:00Z",
+        {"account_match": "unknown", "debt_match": True},
     )
 
     ai_sender.write_decision_tags(*args)
@@ -240,10 +269,12 @@ def test_write_decision_tags_idempotent(tmp_path: Path) -> None:
             "source": "ai_adjudicator",
             "tag": "ai_decision",
             "with": 6,
+            "flags": {"account_match": "unknown", "debt_match": True},
         },
         {
             "at": "2024-06-30T12:00:00Z",
             "kind": "same_debt_pair",
+            "reason": "matching tradeline",
             "source": "ai_adjudicator",
             "with": 6,
         },
@@ -257,10 +288,12 @@ def test_write_decision_tags_idempotent(tmp_path: Path) -> None:
             "source": "ai_adjudicator",
             "tag": "ai_decision",
             "with": 5,
+            "flags": {"account_match": "unknown", "debt_match": True},
         },
         {
             "at": "2024-06-30T12:00:00Z",
             "kind": "same_debt_pair",
+            "reason": "matching tradeline",
             "source": "ai_adjudicator",
             "with": 5,
         },

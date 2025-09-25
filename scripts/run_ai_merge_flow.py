@@ -190,10 +190,11 @@ def send_packs(
                 outcome.decision,
                 outcome.reason,
                 timestamp,
+                outcome.flags,
             )
             log(
                 "PACK_SUCCESS",
-                {"decision": outcome.decision, "reason": outcome.reason},
+                {"decision": outcome.decision, "reason": outcome.reason, "flags": outcome.flags},
             )
             successes += 1
         else:

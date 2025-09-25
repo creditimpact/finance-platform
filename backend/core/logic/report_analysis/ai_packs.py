@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence
 
 from backend.core.io.tags import read_tags
+from backend.core.logic.normalize import last4 as normalize_last4
+from backend.core.logic.normalize import normalize_acctnum
 from backend.core.logic.report_analysis.account_merge import get_merge_cfg
 from backend.core.logic.report_analysis.keys import normalize_issuer
 
@@ -20,19 +22,38 @@ logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = (
-    "You are an adjudicator deciding if A & B are the same account.\n"
-    "Consider high-precision cues (account number last4/exact, exact balances with tolerances, dates);"
-    " also consider lender/brand name strings and normalize variants (e.g., US BK CACS ≈ U S BANK).\n"
-    "Use the numeric summary as a strong hint but override if raw context contradicts it.\n"
-    "Decisions allowed: merge, same_debt, different.\n"
-    "same_debt when details show the same obligation/story (brand, amounts, dates consistent) but identifiers"
-    " differ/are missing (e.g., OC vs CA). If amounts/dates align and descriptors agree, prefer same_debt even"
-    " without matching account numbers.\n"
-    "Do not choose merge unless evidence strongly supports a single tradeline (e.g., matching account numbers or"
-    " multiple tight corroborations).\n"
-    "Be conservative when critical fields conflict.\n"
-    "Return strict JSON only: {\"decision\":\"merge|same_debt|different\",\"reason\":\"short natural language\"}."
+    "You are a meticulous adjudicator for credit tradeline pairing. Decide if A & B "
+    "describe the same obligation. Consider high-precision cues (account numbers, "
+    "balances, dates) and lender/brand name variants. Use the numeric summary as a "
+    "hint but override it if context contradicts the data.\n"
+    "Allowed decisions (exact strings): merge, same_debt, same_debt_account_different, "
+    "same_account, same_account_debt_different, different.\n"
+    "When account identifiers align but debt facts conflict, choose "
+    "same_account_debt_different. When debt details align but tradelines are clearly "
+    "different, choose same_debt_account_different. If identifiers align yet debt is "
+    "uncertain, choose same_account; if debt aligns but account identity is unclear, "
+    "choose same_debt. Only pick merge when BOTH account and debt match.\n"
+    "Return strict JSON only: {\"decision\":\"<one above>\",\"reason\":\"short natural "
+    "language\",\"flags\":{\"account_match\":true|false|\"unknown\",\"debt_match\":true|false|"
+    "\"unknown\"}}. Do not add commentary or extra keys."
 )
+
+IDENTITY_PART_FIELDS = {
+    "account_number",
+    "creditor_type",
+    "date_opened",
+    "closed_date",
+    "date_of_last_activity",
+    "date_reported",
+    "last_verified",
+}
+
+DEBT_PART_FIELDS = {
+    "balance_owed",
+    "high_balance",
+    "past_due_amount",
+    "last_payment",
+}
 
 MAX_CONTEXT_LINE_LENGTH = 240
 
@@ -270,6 +291,18 @@ def _safe_int(value: object, default: int = 0) -> int:
         return default
 
 
+def _sum_parts(parts: Mapping[str, object] | None, fields: Iterable[str]) -> int:
+    total = 0
+    if not isinstance(parts, Mapping):
+        return total
+    for field in fields:
+        try:
+            total += int(parts.get(field, 0) or 0)
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
 def _select_primary_tag(entries: Sequence[_PairTag]) -> Mapping[str, object] | None:
     if not entries:
         return None
@@ -287,18 +320,29 @@ def _select_primary_tag(entries: Sequence[_PairTag]) -> Mapping[str, object] | N
 
 def _build_highlights(tag_payload: Mapping[str, object]) -> Mapping[str, object]:
     aux = tag_payload.get("aux") if isinstance(tag_payload.get("aux"), Mapping) else {}
-    parts = tag_payload.get("parts") if isinstance(tag_payload.get("parts"), Mapping) else {}
+    raw_parts = tag_payload.get("parts") if isinstance(tag_payload.get("parts"), Mapping) else {}
+    parts: dict[str, int] = {}
+    for key, value in raw_parts.items():
+        try:
+            parts[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
     conflicts = (
         list(tag_payload.get("conflicts"))
         if isinstance(tag_payload.get("conflicts"), Sequence)
         else []
     )
 
+    identity_score = _sum_parts(parts, IDENTITY_PART_FIELDS)
+    debt_score = _sum_parts(parts, DEBT_PART_FIELDS)
+
     return {
         "total": _safe_int(tag_payload.get("total")),
         "strong": bool(tag_payload.get("strong")),
         "mid_sum": _safe_int(tag_payload.get("mid") or tag_payload.get("mid_sum")),
         "parts": dict(parts),
+        "identity_score": identity_score,
+        "debt_score": debt_score,
         "matched_fields": dict(aux.get("matched_fields", {})) if isinstance(aux, Mapping) else {},
         "conflicts": conflicts,
         "acctnum_level": str(aux.get("acctnum_level", "none")) if isinstance(aux, Mapping) else "none",
@@ -478,9 +522,25 @@ def build_merge_ai_packs(
 
         account_number_a = account_a.get("account_number")
         account_number_b = account_b.get("account_number")
+        normalized_a = (
+            normalize_acctnum(str(account_number_a)) if account_number_a else None
+        )
+        normalized_b = (
+            normalize_acctnum(str(account_number_b)) if account_number_b else None
+        )
+        last4_a = (
+            normalize_last4(str(account_number_a)) if account_number_a is not None else None
+        )
+        last4_b = (
+            normalize_last4(str(account_number_b)) if account_number_b is not None else None
+        )
         ids_payload = {
             "account_number_a": account_number_a if account_number_a else None,
             "account_number_b": account_number_b if account_number_b else None,
+            "account_number_a_normalized": normalized_a,
+            "account_number_b_normalized": normalized_b,
+            "account_number_a_last4": last4_a,
+            "account_number_b_last4": last4_b,
         }
 
         summary = dict(highlights)
@@ -494,8 +554,19 @@ def build_merge_ai_packs(
             "limits": {"max_lines_per_side": context_limit},
             "context": {"a": context_a, "b": context_b},
             "output_contract": {
-                "decision": ["merge", "same_debt", "different"],
+                "decision": [
+                    "merge",
+                    "same_debt",
+                    "same_debt_account_different",
+                    "same_account",
+                    "same_account_debt_different",
+                    "different",
+                ],
                 "reason": "short natural language",
+                "flags": {
+                    "account_match": ["true", "false", "unknown"],
+                    "debt_match": ["true", "false", "unknown"],
+                },
             },
         }
 

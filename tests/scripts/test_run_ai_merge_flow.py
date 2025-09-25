@@ -45,6 +45,7 @@ def test_prepare_summary_rows_with_ai_decision(tmp_path: Path) -> None:
         "same_debt",
         "matching balances",
         "2024-01-01T00:00:00Z",
+        {"account_match": "unknown", "debt_match": True},
     )
 
     outcomes = _load_ai_outcomes(sid, runs_root)

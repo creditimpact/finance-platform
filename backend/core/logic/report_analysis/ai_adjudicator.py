@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 HIGHLIGHT_KEYS: tuple[str, ...] = (
     "total",
+    "identity_score",
+    "debt_score",
     "triggers",
     "parts",
     "matched_fields",
@@ -28,18 +30,28 @@ HIGHLIGHT_KEYS: tuple[str, ...] = (
     "acctnum_level",
 )
 
+ALLOWED_DECISIONS: tuple[str, ...] = (
+    "merge",
+    "same_debt",
+    "same_debt_account_different",
+    "same_account",
+    "same_account_debt_different",
+    "different",
+)
+
 SYSTEM_MESSAGE = (
     "You are an expert credit tradeline merge adjudicator. Review the provided "
     "highlights and short context snippets to decide if the two accounts refer to "
-    "the same underlying obligation. Treat the token '--' as missing or "
-    "unknown data. Strong triggers represent decisive evidence and take "
-    "priority over mid triggers; mid triggers offer supporting evidence but cannot "
-    "override conflicts backed by strong signals. Creditor names may appear with "
-    "aliases, abbreviations, or formatting differences—treat reasonable variants "
-    "as referring to the same source when supported by other evidence. Respond "
-    "ONLY with strict JSON following this schema: "
-    '{"decision":"merge"|"no_merge","confidence":0..1,"reasons":[...]}. '
-    "Do not add commentary or extra keys."
+    "the same underlying obligation. Treat the token '--' as missing or unknown "
+    "data. Prioritize strong triggers over mid triggers; mid triggers offer "
+    "supporting evidence but cannot override conflicts backed by strong signals. "
+    "Creditor names may appear with aliases, abbreviations, or formatting "
+    "differences—treat reasonable variants as referring to the same source when "
+    "supported by other evidence. Respond ONLY with strict JSON following this "
+    "schema: {\"decision\": \"merge|same_debt|same_debt_account_different|same_account|"
+    "same_account_debt_different|different\", \"reason\": \"short natural language\", "
+    "\"flags\": {\"account_match\": true|false|\"unknown\", \"debt_match\": "
+    "true|false|\"unknown\"}}. Do not add commentary or extra keys."
 )
 
 
@@ -93,6 +105,14 @@ def _build_user_message(pack: dict, max_lines: int) -> str:
             "a": ids.get("account_number_a", "--"),
             "b": ids.get("account_number_b", "--"),
         },
+        "account_numbers_normalized": {
+            "a": ids.get("account_number_a_normalized", "--"),
+            "b": ids.get("account_number_b_normalized", "--"),
+        },
+        "account_numbers_last4": {
+            "a": ids.get("account_number_a_last4", "--"),
+            "b": ids.get("account_number_b_last4", "--"),
+        },
         "highlights": highlights,
         "context": {
             "a": context_a,
@@ -137,18 +157,68 @@ def _normalize_reasons(value: Any) -> list[str]:
     return [str(value)]
 
 
+def _normalize_flag(value: Any) -> bool | str | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+        if lowered == "unknown":
+            return "unknown"
+    return None
+
+
+def _expected_decision_for_flags(account_flag: bool | str, debt_flag: bool | str) -> str:
+    signature = (
+        "true" if account_flag is True else "false" if account_flag is False else "unknown",
+        "true" if debt_flag is True else "false" if debt_flag is False else "unknown",
+    )
+
+    mapping = {
+        ("true", "true"): "merge",
+        ("true", "false"): "same_account_debt_different",
+        ("true", "unknown"): "same_account",
+        ("false", "true"): "same_debt_account_different",
+        ("false", "false"): "different",
+        ("false", "unknown"): "different",
+        ("unknown", "true"): "same_debt",
+        ("unknown", "false"): "different",
+        ("unknown", "unknown"): "different",
+    }
+
+    expected = mapping.get(signature)
+    if expected is None:
+        raise ValueError("Invalid flag combination in AI decision")
+    return expected
+
+
 def _sanitize_ai_decision(resp: Mapping[str, Any] | None, *, allow_disabled: bool) -> dict[str, Any]:
     if not isinstance(resp, Mapping):
         raise ValueError("AI decision payload must be a mapping")
 
-    decision = str(resp.get("decision", "")).strip()
+    decision = str(resp.get("decision", "")).strip().lower()
     if decision == "ai_disabled":
         if not allow_disabled:
             raise ValueError("ai_disabled decision not permitted in this context")
-        return {"decision": "ai_disabled", "confidence": 0.0, "reasons": []}
+        reason = str(resp.get("reason", "")) or "AI adjudication disabled"
+        return {
+            "decision": "ai_disabled",
+            "confidence": 0.0,
+            "reason": reason,
+            "reasons": [reason] if reason else [],
+            "flags": {"account_match": "unknown", "debt_match": "unknown"},
+        }
 
-    if decision not in {"merge", "no_merge"}:
+    if decision not in ALLOWED_DECISIONS:
         raise ValueError(f"Unsupported AI decision: {decision!r}")
+
+    reason_raw = resp.get("reason")
+    if not isinstance(reason_raw, str) or not reason_raw.strip():
+        raise ValueError("AI decision payload missing reason")
+    reason = reason_raw.strip()
 
     confidence_raw = resp.get("confidence", 0.0)
     confidence = _coerce_float(confidence_raw, 0.0)
@@ -156,11 +226,28 @@ def _sanitize_ai_decision(resp: Mapping[str, Any] | None, *, allow_disabled: boo
         raise ValueError(f"Confidence must be between 0 and 1: {confidence_raw!r}")
 
     reasons = _normalize_reasons(resp.get("reasons"))
+    if not reasons:
+        reasons = [reason]
+
+    flags_raw = resp.get("flags")
+    if not isinstance(flags_raw, Mapping):
+        raise ValueError("AI decision payload missing flags")
+
+    account_flag = _normalize_flag(flags_raw.get("account_match"))
+    debt_flag = _normalize_flag(flags_raw.get("debt_match"))
+    if account_flag is None or debt_flag is None:
+        raise ValueError("AI decision flags must include account_match and debt_match")
+
+    expected = _expected_decision_for_flags(account_flag, debt_flag)
+    if decision != expected:
+        raise ValueError("AI decision does not align with flags.account_match/debt_match")
 
     return {
         "decision": decision,
         "confidence": float(confidence),
+        "reason": reason,
         "reasons": reasons,
+        "flags": {"account_match": account_flag, "debt_match": debt_flag},
     }
 
 
@@ -251,7 +338,14 @@ def adjudicate_pair(pack: dict) -> dict[str, Any]:
             "reason": "disabled",
         }
         logger.info("AI_ADJUDICATOR_SKIPPED %s", json.dumps(log_payload, sort_keys=True))
-        return {"decision": "ai_disabled", "confidence": 0.0, "reasons": []}
+        reason = "AI adjudication disabled"
+        return {
+            "decision": "ai_disabled",
+            "confidence": 0.0,
+            "reason": reason,
+            "reasons": [reason],
+            "flags": {"account_match": "unknown", "debt_match": "unknown"},
+        }
 
     url, payload, headers, metadata = _build_request_payload(pack)
     prompt_tokens_est = _estimate_token_count(payload.get("messages"))
@@ -289,7 +383,9 @@ def adjudicate_pair(pack: dict) -> dict[str, Any]:
             "sid": sid,
             "pair": {"a": a_idx, "b": b_idx},
             "decision": sanitized["decision"],
-            "confidence": sanitized["confidence"],
+            "reason": sanitized.get("reason"),
+            "flags": sanitized.get("flags", {}),
+            "confidence": sanitized.get("confidence", 0.0),
             "reasons_count": len(sanitized.get("reasons", [])),
             "latency_ms": round(duration_ms, 3),
         }
@@ -367,16 +463,20 @@ def persist_ai_decision(
         "kind": "merge_result",
         "with": account_b,
         "decision": sanitized["decision"],
-        "confidence": sanitized["confidence"],
-        "reasons": list(sanitized["reasons"]),
+        "confidence": sanitized.get("confidence", 0.0),
+        "reason": sanitized.get("reason"),
+        "reasons": list(sanitized.get("reasons", [])),
+        "flags": dict(sanitized.get("flags", {})),
         "source": "ai_adjudicator",
     }
     tag_b = {
         "kind": "merge_result",
         "with": account_a,
         "decision": sanitized["decision"],
-        "confidence": sanitized["confidence"],
-        "reasons": list(sanitized["reasons"]),
+        "confidence": sanitized.get("confidence", 0.0),
+        "reason": sanitized.get("reason"),
+        "reasons": list(sanitized.get("reasons", [])),
+        "flags": dict(sanitized.get("flags", {})),
         "source": "ai_adjudicator",
     }
 
@@ -390,8 +490,10 @@ def persist_ai_decision(
         "sid": sid_str,
         "pair": {"a": account_a, "b": account_b},
         "decision": sanitized["decision"],
-        "confidence": sanitized["confidence"],
-        "reasons": list(sanitized["reasons"]),
+        "confidence": sanitized.get("confidence", 0.0),
+        "reason": sanitized.get("reason"),
+        "reasons": list(sanitized.get("reasons", [])),
+        "flags": dict(sanitized.get("flags", {})),
     }
     logger.info("MERGE_V2_TAG_UPDATE %s", json.dumps(tag_log, sort_keys=True))
 

@@ -14,9 +14,15 @@ def test_build_prompt_from_pack_limits_context(monkeypatch):
         "ids": {
             "account_number_a": "1234",
             "account_number_b": "5678",
+            "account_number_a_normalized": "1234",
+            "account_number_b_normalized": "5678",
+            "account_number_a_last4": "1234",
+            "account_number_b_last4": "5678",
         },
         "highlights": {
             "total": 81,
+            "identity_score": 38,
+            "debt_score": 22,
             "triggers": ["strong:balance_owed", "mid:dates"],
             "parts": {"balance_owed": 42, "account_number": 10},
             "matched_fields": {"balance_owed": True},
@@ -46,7 +52,11 @@ def test_build_prompt_from_pack_limits_context(monkeypatch):
     assert user_payload["sid"] == "sample-sid"
     assert user_payload["pair"] == {"a": 11, "b": 16}
     assert user_payload["account_numbers"] == {"a": "1234", "b": "5678"}
+    assert user_payload["account_numbers_normalized"] == {"a": "1234", "b": "5678"}
+    assert user_payload["account_numbers_last4"] == {"a": "1234", "b": "5678"}
     assert user_payload["highlights"]["total"] == 81
+    assert user_payload["highlights"]["identity_score"] == 38
+    assert user_payload["highlights"]["debt_score"] == 22
     assert "ignored" not in user_payload["highlights"]
     assert len(user_payload["context"]["a"]) == 3
     assert user_payload["context"]["a"][-1] == "Balance: 500"

@@ -242,6 +242,35 @@ _EXPECTED_DECISION_BY_FLAGS = {
     ("unknown", "unknown"): "different",
 }
 
+_IDENTITY_PART_FIELDS = {
+    "account_number",
+    "creditor_type",
+    "date_opened",
+    "closed_date",
+    "date_of_last_activity",
+    "date_reported",
+    "last_verified",
+}
+
+_DEBT_PART_FIELDS = {
+    "balance_owed",
+    "high_balance",
+    "past_due_amount",
+    "last_payment",
+}
+
+
+def _sum_parts(parts: Mapping[str, object] | None, fields: Iterable[str]) -> int:
+    total = 0
+    if not isinstance(parts, MappingABC):
+        return total
+    for field in fields:
+        try:
+            total += int(parts.get(field, 0) or 0)
+        except (TypeError, ValueError):
+            continue
+    return total
+
 
 @overload
 def _write_decision_tags(
@@ -415,6 +444,13 @@ def _write_decision_tags_resolved(
                 conflicts = [str(item) for item in conflicts_raw if item is not None]
             else:
                 conflicts = []
+            parts_payload = merge_tag.get("parts")
+            if isinstance(parts_payload, MappingABC):
+                identity_score = _sum_parts(parts_payload, _IDENTITY_PART_FIELDS)
+                debt_score = _sum_parts(parts_payload, _DEBT_PART_FIELDS)
+            else:
+                identity_score = 0
+                debt_score = 0
             extras: list[str] = []
             if bool(merge_tag.get("strong")):
                 extras.append("strong")
@@ -451,6 +487,8 @@ def _write_decision_tags_resolved(
                 "reasons": reasons,
                 "matched_fields": matched_fields,
                 "conflicts": conflicts,
+                "identity_score": identity_score,
+                "debt_score": debt_score,
             }
             if acctnum_level:
                 merge_summary["acctnum_level"] = acctnum_level

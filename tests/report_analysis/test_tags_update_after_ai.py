@@ -12,7 +12,9 @@ def test_persist_ai_decision_idempotent(tmp_path):
     response = {
         "decision": "merge",
         "confidence": 0.67,
+        "reason": "matching account number",
         "reasons": ["matching account number", "aligned balances"],
+        "flags": {"account_match": True, "debt_match": True},
     }
 
     persist_ai_decision(sid, runs_root, 101, 202, response)
@@ -33,22 +35,20 @@ def test_persist_ai_decision_idempotent(tmp_path):
     assert len(first_tags_a) == len(second_tags_a) == 1
     assert len(first_tags_b) == len(second_tags_b) == 1
 
-    assert second_tags_a[0] == {
+    expected = {
         "kind": "merge_result",
         "with": 202,
         "decision": "merge",
         "confidence": 0.67,
+        "reason": "matching account number",
         "reasons": ["matching account number", "aligned balances"],
+        "flags": {"account_match": True, "debt_match": True},
         "source": "ai_adjudicator",
     }
-    assert second_tags_b[0] == {
-        "kind": "merge_result",
-        "with": 101,
-        "decision": "merge",
-        "confidence": 0.67,
-        "reasons": ["matching account number", "aligned balances"],
-        "source": "ai_adjudicator",
-    }
+    expected_b = dict(expected)
+    expected_b["with"] = 101
+    assert second_tags_a[0] == expected
+    assert second_tags_b[0] == expected_b
 
 
 def test_persist_ai_decision_overwrites_with_new_result(tmp_path):
@@ -58,16 +58,19 @@ def test_persist_ai_decision_overwrites_with_new_result(tmp_path):
     first_response = {
         "decision": "merge",
         "confidence": 0.9,
+        "reason": "identical creditor",
         "reasons": ["identical creditor"],
+        "flags": {"account_match": True, "debt_match": True},
     }
 
     # Initial write with one ordering of the pair.
     persist_ai_decision(sid, runs_root, 101, 303, first_response)
 
     second_response = {
-        "decision": "no_merge",
+        "decision": "different",
         "confidence": 0.2,
-        "reasons": ["different payment history"],
+        "reason": "different payment history",
+        "flags": {"account_match": False, "debt_match": False},
     }
 
     # Re-running with the reversed ordering should still update both artifacts.
@@ -77,9 +80,11 @@ def test_persist_ai_decision_overwrites_with_new_result(tmp_path):
     expected_tag_a = {
         "kind": "merge_result",
         "with": 303,
-        "decision": "no_merge",
+        "decision": "different",
         "confidence": 0.2,
+        "reason": "different payment history",
         "reasons": ["different payment history"],
+        "flags": {"account_match": False, "debt_match": False},
         "source": "ai_adjudicator",
     }
     expected_tag_b = dict(expected_tag_a)

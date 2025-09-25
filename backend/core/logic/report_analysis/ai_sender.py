@@ -7,11 +7,12 @@ import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 import httpx
 
-from backend.core.io.tags import upsert_tag
+from backend.core.io.tags import read_tags, upsert_tag
 
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -22,7 +23,34 @@ DEFAULT_TIMEOUT = 30.0
 RETRY_BACKOFF_SECONDS: Sequence[float] = (1.0, 3.0, 7.0)
 MAX_RETRIES = len(RETRY_BACKOFF_SECONDS)
 
-ALLOWED_DECISIONS = {"merge", "same_debt", "different"}
+ALLOWED_DECISIONS = {
+    "merge",
+    "same_debt",
+    "same_debt_account_different",
+    "same_account",
+    "same_account_debt_different",
+    "different",
+}
+
+PAIR_TAG_BY_DECISION: dict[str, str] = {
+    "merge": "same_account_pair",
+    "same_account": "same_account_pair",
+    "same_account_debt_different": "same_account_pair",
+    "same_debt": "same_debt_pair",
+    "same_debt_account_different": "same_debt_pair",
+}
+
+_EXPECTED_DECISION_BY_FLAGS = {
+    ("true", "true"): "merge",
+    ("true", "false"): "same_account_debt_different",
+    ("true", "unknown"): "same_account",
+    ("false", "true"): "same_debt_account_different",
+    ("false", "false"): "different",
+    ("false", "unknown"): "different",
+    ("unknown", "true"): "same_debt",
+    ("unknown", "false"): "different",
+    ("unknown", "unknown"): "different",
+}
 
 
 @dataclass(frozen=True)
@@ -43,6 +71,7 @@ class SendOutcome:
     attempts: int
     decision: str | None = None
     reason: str | None = None
+    flags: dict[str, bool | str] | None = None
     error_kind: str | None = None
     error_message: str | None = None
 
@@ -136,7 +165,39 @@ def _parse_model_payload(content: str) -> MutableMapping[str, Any]:
     return data
 
 
-def _sanitize_decision(payload: Mapping[str, Any]) -> tuple[str, str]:
+def _normalize_match_flag(value: Any) -> bool | str | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+        if lowered == "unknown":
+            return "unknown"
+    return None
+
+
+def _flag_signature(value: bool | str) -> str:
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return "unknown"
+
+
+def _normalize_flags(flags: object) -> dict[str, bool | str]:
+    if not isinstance(flags, Mapping):
+        raise ValueError("Model response missing flags")
+    account_flag = _normalize_match_flag(flags.get("account_match"))
+    debt_flag = _normalize_match_flag(flags.get("debt_match"))
+    if account_flag is None or debt_flag is None:
+        raise ValueError("Model response must include account_match and debt_match flags")
+    return {"account_match": account_flag, "debt_match": debt_flag}
+
+
+def _sanitize_decision(payload: Mapping[str, Any]) -> tuple[str, str, dict[str, bool | str]]:
     raw_decision = payload.get("decision")
     decision = str(raw_decision).strip().lower()
     if decision not in ALLOWED_DECISIONS:
@@ -149,7 +210,15 @@ def _sanitize_decision(payload: Mapping[str, Any]) -> tuple[str, str]:
     if not reason:
         raise ValueError("Model response reason must be non-empty")
 
-    return decision, reason
+    flags = _normalize_flags(payload.get("flags"))
+    signature = (_flag_signature(flags["account_match"]), _flag_signature(flags["debt_match"]))
+    expected = _EXPECTED_DECISION_BY_FLAGS.get(signature)
+    if expected is None:
+        raise ValueError("Model response flags contained an invalid combination")
+    if decision != expected:
+        raise ValueError("Model decision does not align with flags.account_match/debt_match")
+
+    return decision, reason, flags
 
 
 def send_single_attempt(
@@ -157,8 +226,8 @@ def send_single_attempt(
     config: AISenderConfig,
     *,
     request: Callable[[str, Mapping[str, Any], Mapping[str, str], float], httpx.Response] | None = None,
-) -> tuple[str, str]:
-    """Send ``pack`` once and return the decision and reason."""
+) -> tuple[str, str, dict[str, bool | str]]:
+    """Send ``pack`` once and return the decision, reason, and flags."""
 
     messages = pack.get("messages")
     if not isinstance(messages, Sequence):
@@ -223,16 +292,23 @@ def process_pack(
             )
 
         try:
-            decision, reason = send_single_attempt(pack, config, request=request)
+            decision, reason, flags = send_single_attempt(pack, config, request=request)
             if log is not None:
                 log(
                     "RESPONSE",
                     {
                         "attempt": attempts,
                         "decision": decision,
+                        "flags": flags,
                     },
                 )
-            return SendOutcome(success=True, attempts=attempts, decision=decision, reason=reason)
+            return SendOutcome(
+                success=True,
+                attempts=attempts,
+                decision=decision,
+                reason=reason,
+                flags=flags,
+            )
         except Exception as exc:  # pragma: no cover - diverse error sources
             last_error = exc
             will_retry = attempts <= MAX_RETRIES
@@ -312,44 +388,88 @@ def write_decision_tags(
     decision: str,
     reason: str,
     at: str,
+    flags: Mapping[str, Any] | None = None,
 ) -> None:
-    """Write symmetric ai_decision (and optional same_debt) tags for the pair."""
+    """Write symmetric ai_decision and supplemental pair tags for the pair."""
 
     account_a = _ensure_int(a_idx, "a_idx")
     account_b = _ensure_int(b_idx, "b_idx")
 
     base = _account_tags_dir(runs_root, sid)
 
-    def _tag_payload(source: int, other: int) -> dict[str, Any]:
-        return {
+    normalized_flags: dict[str, bool | str] | None = None
+    if flags is not None:
+        try:
+            normalized_flags = _normalize_flags(flags)
+        except ValueError:
+            normalized_flags = None
+
+    pair_tag_kind = PAIR_TAG_BY_DECISION.get(decision)
+
+    for source_idx, other_idx in ((account_a, account_b), (account_b, account_a)):
+        tag_path = os.path.join(base, str(source_idx), "tags.json")
+        decision_tag = {
             "kind": "ai_decision",
             "tag": "ai_decision",
             "source": "ai_adjudicator",
-            "with": other,
+            "with": other_idx,
             "decision": decision,
             "reason": reason,
             "at": at,
         }
+        if normalized_flags is not None:
+            decision_tag["flags"] = dict(normalized_flags)
+        upsert_tag(tag_path, decision_tag, unique_keys=("kind", "with", "source"))
 
-    for source_idx, other_idx in ((account_a, account_b), (account_b, account_a)):
-        tag_path = os.path.join(base, str(source_idx), "tags.json")
-        upsert_tag(
-            tag_path,
-            _tag_payload(source_idx, other_idx),
-            unique_keys=("kind", "with", "source"),
-        )
-        if decision == "same_debt":
-            same_debt_tag = {
-                "kind": "same_debt_pair",
+        if pair_tag_kind is not None:
+            pair_tag = {
+                "kind": pair_tag_kind,
                 "with": other_idx,
                 "source": "ai_adjudicator",
                 "at": at,
+                "reason": reason,
             }
-            upsert_tag(
-                tag_path,
-                same_debt_tag,
-                unique_keys=("kind", "with", "source"),
-            )
+            upsert_tag(tag_path, pair_tag, unique_keys=("kind", "with", "source"))
+            _prune_pair_tags(tag_path, other_idx, keep_kind=pair_tag_kind)
+        else:
+            _prune_pair_tags(tag_path, other_idx, keep_kind=None)
+
+
+def _prune_pair_tags(tag_path: str, other_idx: int, *, keep_kind: str | None) -> None:
+    try:
+        tags = read_tags(tag_path)
+    except FileNotFoundError:
+        return
+
+    filtered: list[dict[str, Any]] = []
+    modified = False
+    for entry in tags:
+        kind = str(entry.get("kind", "")).lower()
+        if kind not in {"same_account_pair", "same_debt_pair"}:
+            filtered.append(dict(entry))
+            continue
+        source = str(entry.get("source", ""))
+        if source != "ai_adjudicator":
+            filtered.append(dict(entry))
+            continue
+        partner_raw = entry.get("with")
+        try:
+            partner = int(partner_raw) if partner_raw is not None else None
+        except (TypeError, ValueError):
+            partner = None
+        if partner != other_idx:
+            filtered.append(dict(entry))
+            continue
+        if keep_kind is not None and kind == keep_kind:
+            filtered.append(dict(entry))
+            continue
+        modified = True
+
+    if not modified:
+        return
+
+    serialized = json.dumps(filtered, ensure_ascii=False, indent=2)
+    Path(tag_path).write_text(f"{serialized}\n", encoding="utf-8")
 
 
 def write_error_tags(

@@ -192,13 +192,16 @@ def adjudicate_pairs_for_sid(
             "pair": {"a": a_idx, "b": b_idx},
             "decision": decision.get("decision"),
             "confidence": decision.get("confidence"),
+            "reason": decision.get("reason"),
             "reasons": list(decision.get("reasons", [])),
+            "flags": dict(decision.get("flags", {})),
         }
         logger.info("MERGE_V2_MANUAL_DONE %s", json.dumps(summary, sort_keys=True))
 
+        reason = decision.get("reason") or ""
         print(
             f"{sid} pair {a_idx}-{b_idx}: {decision.get('decision')} "
-            f"(confidence={decision.get('confidence')})"
+            f"flags={decision.get('flags', {})} reason={reason}"
         )
         reasons = decision.get("reasons") or []
         for reason in reasons:

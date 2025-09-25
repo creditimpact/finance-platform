@@ -186,7 +186,7 @@ _TOLERANCE_DEFAULTS: Dict[str, Union[int, float]] = {
     "COUNT_ZERO_PAYMENT_MATCH": 0,
 }
 
-_ACCTNUM_LEVEL_CHOICES: Set[str] = {"any", "last4", "exact"}
+_ACCTNUM_LEVEL_CHOICES: Set[str] = {"any", "last4", "last5", "last6", "exact"}
 
 
 def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
@@ -269,86 +269,80 @@ _ACCOUNT_LEVEL_ORDER = {
     "any": 1,
     "last4": 2,
     "last5": 3,
-    "exact": 4,
+    "last6": 4,
+    "exact": 5,
 }
 _ACCOUNT_NUMBER_WEIGHTS = {
     "masked_match": app_config.ACCTNUM_MASKED_WEIGHT,
     "last4": app_config.ACCTNUM_LAST4_WEIGHT,
     "last5": app_config.ACCTNUM_LAST5_WEIGHT,
+    "last6": app_config.ACCTNUM_LAST5_WEIGHT,
     "exact": app_config.ACCTNUM_EXACT_WEIGHT,
 }
 _MASK_CHARS = {"*", "x", "X", "•", "●"}
 
 
-@dataclass(frozen=True)
-class AcctnumToken:
-    value: str
-    masked_value: str
-    signature: str
+def normalize_acctnum(raw: str | None) -> Dict[str, object]:
+    """Return canonical metadata for account-number comparisons.
 
-    @property
-    def is_masked(self) -> bool:
-        return "M" in self.signature
+    Returns a dictionary with:
 
-    def last_digits(self, count: int) -> Optional[str]:
-        if len(self.value) >= count:
-            return self.value[-count:]
-        return None
+    ``raw``
+        Original input string (or ``None``).
+    ``digits``
+        Concatenated digits extracted from the account number (may be empty).
+    ``digits_last4``
+        Last four digits when available, otherwise ``None``.
+    ``digits_last6``
+        Last six digits when available, otherwise ``None``.
+    ``canon_mask``
+        Canonical masked form after removing whitespace, dashes, dots, and
+        collapsing mask runs.
+    ``has_digits``
+        Boolean indicating whether any digits were observed.
+    """
 
+    raw_value = raw if isinstance(raw, str) else ("" if raw is None else str(raw))
+    if raw_value is None:
+        raw_value = ""
 
-def normalize_acctnum(raw: str | None) -> Dict[str, Set[str | AcctnumToken]]:
-    last4: Set[str] = set()
-    last5: Set[str] = set()
-    tokens: Set[AcctnumToken] = set()
+    stripped = re.sub(r"[\s\-.]+", "", raw_value)
+    if not stripped:
+        return {
+            "raw": raw,
+            "digits": "",
+            "digits_last4": None,
+            "digits_last6": None,
+            "canon_mask": "",
+            "has_digits": False,
+        }
 
-    if not raw:
-        return {"last4": last4, "last5": last5, "tokens": tokens}
+    translated_chars: List[str] = []
+    digits_chars: List[str] = []
+    for char in stripped:
+        if char.isdigit():
+            digits_chars.append(char)
+            translated_chars.append(char)
+        elif char in _MASK_CHARS:
+            translated_chars.append("*")
+        else:
+            translated_chars.append(char.upper())
 
-    text = str(raw)
-    parts = re.split(r"[\s,;]+", text)
-    for part in parts:
-        chunk = part.strip()
-        if not chunk:
-            continue
-        sanitized = re.sub(r"[\s\-]", "", chunk)
-        if not sanitized:
-            continue
+    canon_mask = re.sub(r"\*+", "*", "".join(translated_chars))
+    digits = "".join(digits_chars)
+    has_digits = bool(digits)
 
-        masked_chars: List[str] = []
-        digits_only: List[str] = []
-        signature: List[str] = []
+    digits_last4 = digits[-4:] if len(digits) >= 4 else None
+    digits_last6 = digits[-6:] if len(digits) >= 6 else None
 
-        for char in sanitized:
-            if char.isdigit():
-                digits_only.append(char)
-                masked_chars.append(char)
-                signature.append("D")
-            elif char in _MASK_CHARS:
-                masked_chars.append("*")
-                signature.append("M")
-            else:
-                continue
-
-        digits_value = "".join(digits_only)
-        mask_signature = "".join(signature)
-        masked_value = "".join(masked_chars)
-
-        if digits_value:
-            if len(digits_value) >= 4:
-                last4.add(digits_value[-4:])
-            if len(digits_value) >= 5:
-                last5.add(digits_value[-5:])
-
-        if masked_value or digits_value:
-            tokens.add(
-                AcctnumToken(
-                    value=digits_value,
-                    masked_value=masked_value,
-                    signature=mask_signature,
-                )
-            )
-
-    return {"last4": last4, "last5": last5, "tokens": tokens}
+    return {
+        "raw": raw,
+        "digits": digits,
+        "digits_last4": digits_last4,
+        "digits_last6": digits_last6,
+        "canon_mask": canon_mask,
+        "has_digits": has_digits,
+    }
 _TYPE_ALIAS_MAP = {
     "us bk cacs": "u s bank",
     "us bk cac": "u s bank",
@@ -496,6 +490,21 @@ def _match_field_values(
         min_level = str(cfg.triggers.get("MERGE_AI_ON_ACCTNUM_LEVEL", "last4")).lower()
         matched, level = account_numbers_match(raw_a, raw_b, min_level=min_level)
         aux["acctnum_level"] = level
+        if matched:
+            norm_left = normalize_acctnum(str(raw_a))
+            norm_right = normalize_acctnum(str(raw_b))
+            logger.info(
+                "MERGE_V2_ACCTNUM_MATCH %s",
+                json.dumps(
+                    {
+                        "left": norm_left,
+                        "right": norm_right,
+                        "level": level,
+                        "min_level": min_level,
+                    },
+                    sort_keys=True,
+                ),
+            )
         return matched, aux
 
     if field == "balance_owed":
@@ -1733,58 +1742,38 @@ def account_number_level(a: Any, b: Any) -> str:
 
     norm_a = normalize_acctnum(str(a))
     norm_b = normalize_acctnum(str(b))
-    tokens_a: Set[AcctnumToken] = set(norm_a.get("tokens", set()))
-    tokens_b: Set[AcctnumToken] = set(norm_b.get("tokens", set()))
 
-    if not tokens_a or not tokens_b:
-        return "none"
+    digits_a = str(norm_a.get("digits", ""))
+    digits_b = str(norm_b.get("digits", ""))
 
-    def _masked_values(tokens: Set[AcctnumToken]) -> Set[str]:
-        values = set()
-        for token in tokens:
-            if token.masked_value and token.value:
-                values.add(token.masked_value)
-        return values
+    def _normalize_digits(value: str) -> Optional[str]:
+        if not value:
+            return None
+        stripped = value.lstrip("0")
+        return stripped or ("0" if value else None)
 
-    def _unmasked_normalized(tokens: Set[AcctnumToken]) -> Set[str]:
-        values = set()
-        for token in tokens:
-            if token.value and not token.is_masked:
-                stripped = token.value.lstrip("0") or "0"
-                values.add(stripped)
-        return values
-
-    masked_values_a = _masked_values(tokens_a)
-    masked_values_b = _masked_values(tokens_b)
-    if masked_values_a & masked_values_b:
+    normalized_digits_a = _normalize_digits(digits_a)
+    normalized_digits_b = _normalize_digits(digits_b)
+    if normalized_digits_a and normalized_digits_b and normalized_digits_a == normalized_digits_b:
         return "exact"
 
-    unmasked_a = _unmasked_normalized(tokens_a)
-    unmasked_b = _unmasked_normalized(tokens_b)
-    if unmasked_a & unmasked_b:
-        return "exact"
+    last6_a = norm_a.get("digits_last6")
+    last6_b = norm_b.get("digits_last6")
+    if last6_a and last6_b and last6_a == last6_b:
+        return "last6"
 
-    last5_a = set(norm_a.get("last5", set()))
-    last5_b = set(norm_b.get("last5", set()))
-    if last5_a & last5_b:
+    if len(digits_a) >= 5 and len(digits_b) >= 5 and digits_a[-5:] == digits_b[-5:]:
         return "last5"
 
-    last4_a = set(norm_a.get("last4", set()))
-    last4_b = set(norm_b.get("last4", set()))
-    if last4_a & last4_b:
+    last4_a = norm_a.get("digits_last4")
+    last4_b = norm_b.get("digits_last4")
+    if last4_a and last4_b and last4_a == last4_b:
         return "last4"
 
-    pattern_a = {
-        (token.value, token.signature)
-        for token in tokens_a
-        if token.is_masked and token.value
-    }
-    pattern_b = {
-        (token.value, token.signature)
-        for token in tokens_b
-        if token.is_masked and token.value
-    }
-    if pattern_a & pattern_b:
+    canon_a = str(norm_a.get("canon_mask") or "")
+    canon_b = str(norm_b.get("canon_mask") or "")
+    has_digits = bool(norm_a.get("has_digits")) or bool(norm_b.get("has_digits"))
+    if has_digits and canon_a and canon_b and canon_a == canon_b:
         return "masked_match"
 
     return "none"

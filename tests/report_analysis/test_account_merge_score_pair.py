@@ -37,6 +37,7 @@ def test_strong_balance_owed_trigger(cfg) -> None:
 
 ACCOUNT_POINTS = {
     "exact": 50,
+    "last6": 35,
     "last5": 35,
     "last4": 25,
     "masked_match": 15,
@@ -48,6 +49,8 @@ ACCOUNT_POINTS = {
     [
         ("1234", "001234", "exact"),
         ("XXXX1234", "99991234", "last4"),
+        ("99-123456", "123456", "last6"),
+        ("**** ****3000", "***3000", "exact"),
     ],
 )
 def test_strong_account_number_trigger_levels(

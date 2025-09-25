@@ -10,7 +10,8 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from decimal import Decimal, InvalidOperation
+from typing import Iterable, Mapping, MutableMapping, Sequence
 
 from celery import shared_task
 
@@ -226,6 +227,67 @@ def has_ai_merge_best_tags(sid: str) -> bool:
     return False
 
 
+def _as_amount(value: object) -> Decimal:
+    """Best-effort conversion of ``value`` into a Decimal amount."""
+
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            return Decimal(0)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return Decimal(0)
+        cleaned = cleaned.replace("$", "").replace(",", "")
+        try:
+            return Decimal(cleaned)
+        except InvalidOperation:
+            return Decimal(0)
+    if isinstance(value, Mapping):
+        if "amount" in value:
+            return _as_amount(value.get("amount"))
+    return Decimal(0)
+
+
+def _load_account_flat_fields(
+    accounts_root: Path, account_idx: int, cache: MutableMapping[int, Mapping[str, object] | None]
+) -> Mapping[str, object] | None:
+    if account_idx in cache:
+        return cache[account_idx]
+
+    fields_path = accounts_root / str(account_idx) / "fields_flat.json"
+    try:
+        raw = fields_path.read_text(encoding="utf-8")
+    except OSError:
+        cache[account_idx] = None
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        cache[account_idx] = None
+        return None
+    if not isinstance(payload, Mapping):
+        cache[account_idx] = None
+        return None
+
+    cache[account_idx] = payload
+    return payload
+
+
+def _is_zero_debt_pair(a: Mapping[str, object] | None, b: Mapping[str, object] | None) -> bool:
+    if not isinstance(a, Mapping) or not isinstance(b, Mapping):
+        return False
+
+    a_bal = _as_amount(a.get("balance_owed", 0))
+    b_bal = _as_amount(b.get("balance_owed", 0))
+    a_due = _as_amount(a.get("past_due_amount", 0))
+    b_due = _as_amount(b.get("past_due_amount", 0))
+    return (a_bal == 0 == b_bal) and (a_due == 0 == b_due)
+
+
 def has_ai_merge_best_pairs(sid: str, runs_root: Path | str) -> bool:
     """Return ``True`` if any account tags require AI merge adjudication."""
 
@@ -234,7 +296,13 @@ def has_ai_merge_best_pairs(sid: str, runs_root: Path | str) -> bool:
     if not accounts_root.exists():
         return False
 
+    cache: dict[int, Mapping[str, object] | None] = {}
+
     for tags_path in sorted(accounts_root.glob("*/tags.json")):
+        try:
+            account_idx = int(tags_path.parent.name)
+        except ValueError:
+            account_idx = None
         try:
             raw = tags_path.read_text(encoding="utf-8")
         except OSError:
@@ -248,8 +316,25 @@ def has_ai_merge_best_pairs(sid: str, runs_root: Path | str) -> bool:
             continue
 
         for tag in _iter_tag_entries(payload):
-            if _is_ai_merge_best_tag(tag):
+            if not _is_ai_merge_best_tag(tag):
+                continue
+
+            if account_idx is None:
                 return True
+
+            partner_idx_raw = tag.get("with")
+            try:
+                partner_idx = int(partner_idx_raw)
+            except (TypeError, ValueError):
+                return True
+
+            account_fields = _load_account_flat_fields(accounts_root, account_idx, cache)
+            partner_fields = _load_account_flat_fields(accounts_root, partner_idx, cache)
+
+            if _is_zero_debt_pair(account_fields, partner_fields):
+                continue
+
+            return True
 
     return False
 

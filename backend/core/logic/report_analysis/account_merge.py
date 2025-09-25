@@ -533,6 +533,7 @@ _ACCOUNT_LAST4_KEYS = (
     "account_last4",
     "last4",
     "account_number",
+    "account_number_display",
 )
 _TYPE_FIELDS = {"creditor_type", "account_type"}
 
@@ -678,6 +679,8 @@ def match_field_best_of_9(
         if not isinstance(left_branch, Mapping):
             continue
         raw_left = left_branch.get(field_key)
+        if field_key == "account_number" and is_missing(raw_left):
+            raw_left = left_branch.get("account_number_display")
         if is_missing(raw_left):
             continue
         norm_left = _normalize_field_value(field_key, raw_left)
@@ -689,6 +692,8 @@ def match_field_best_of_9(
             if not isinstance(right_branch, Mapping):
                 continue
             raw_right = right_branch.get(field_key)
+            if field_key == "account_number" and is_missing(raw_right):
+                raw_right = right_branch.get("account_number_display")
             if is_missing(raw_right):
                 continue
             norm_right = _normalize_field_value(field_key, raw_right)

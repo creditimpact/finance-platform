@@ -32,6 +32,27 @@ def cfg() -> account_merge.MergeCfg:
     return account_merge.get_merge_cfg({})
 
 
+def test_account_number_display_is_used_for_matching(cfg: account_merge.MergeCfg) -> None:
+    bureaus_a = {
+        "transunion": {"account_number_display": "****1234"},
+        "experian": {},
+        "equifax": {},
+    }
+    bureaus_b = {
+        "transunion": {},
+        "experian": {"account_number_display": "XX1234"},
+        "equifax": {},
+    }
+
+    result = account_merge.score_pair_0_100(bureaus_a, bureaus_b, cfg)
+
+    assert result["aux"]["account_number"]["acctnum_level"] == "last4"
+    assert (
+        result["parts"]["account_number"]
+        == account_merge.POINTS_ACCTNUM_LAST4
+    )
+
+
 @pytest.mark.parametrize("left,right,expected_level,expected_points", MATCH_CASES)
 def test_acctnum_match_scoring(
     cfg: account_merge.MergeCfg,

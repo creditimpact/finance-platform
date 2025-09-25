@@ -57,6 +57,10 @@ def env_int(name: str, default: int) -> int:
     val = os.getenv(name)
     if val is None:
         return default
+    try:
+        return int(val)
+    except ValueError:
+        return default
 
 
 def env_list(name: str, default: list[str]) -> list[str]:
@@ -66,10 +70,6 @@ def env_list(name: str, default: list[str]) -> list[str]:
         return default
     parts = [p.strip() for p in val.split(",") if p.strip()]
     return parts or default
-    try:
-        return int(val)
-    except ValueError:
-        return default
 
 
 # Backwards compatibility for older imports
@@ -198,6 +198,11 @@ UTILIZATION_PROBLEM_THRESHOLD = float(
     os.getenv("UTILIZATION_PROBLEM_THRESHOLD", "0.90")
 )
 SERIOUS_DELINQUENCY_MIN_DPD = int(os.getenv("SERIOUS_DELINQUENCY_MIN_DPD", "60"))
+
+ACCTNUM_EXACT_WEIGHT = env_int("ACCTNUM_EXACT_WEIGHT", 50)
+ACCTNUM_LAST5_WEIGHT = env_int("ACCTNUM_LAST5_WEIGHT", 35)
+ACCTNUM_LAST4_WEIGHT = env_int("ACCTNUM_LAST4_WEIGHT", 25)
+ACCTNUM_MASKED_WEIGHT = env_int("ACCTNUM_MASKED_WEIGHT", 15)
 
 ENABLE_TIER1_KEYWORDS = _env_bool("ENABLE_TIER1_KEYWORDS", False)
 ENABLE_TIER2_KEYWORDS = _env_bool("ENABLE_TIER2_KEYWORDS", False)

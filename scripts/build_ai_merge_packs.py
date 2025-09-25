@@ -6,7 +6,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 try:  # pragma: no cover - convenience bootstrap
     import scripts._bootstrap  # type: ignore  # noqa: F401
@@ -17,6 +17,7 @@ except Exception:  # pragma: no cover - fallback for direct execution
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
+from backend.core.logic.normalize import last4, normalize_acctnum
 from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
 from backend.pipeline.runs import RunManifest, persist_manifest
 
@@ -49,6 +50,49 @@ def _safe_int(value: object, default: int = 0) -> int:
         return int(str(value))
     except Exception:
         return default
+
+
+_IDENTITY_PART_FIELDS = {
+    "account_number",
+    "creditor_type",
+    "date_opened",
+    "closed_date",
+    "date_of_last_activity",
+    "date_reported",
+    "last_verified",
+}
+
+_DEBT_PART_FIELDS = {
+    "balance_owed",
+    "high_balance",
+    "past_due_amount",
+    "last_payment",
+}
+
+
+def _normalize_account_number(value: object) -> str | None:
+    if value is None:
+        return None
+    normalized = normalize_acctnum(str(value))
+    return normalized if normalized else None
+
+
+def _account_last4(value: object) -> str | None:
+    if value is None:
+        return None
+    return last4(str(value))
+
+
+def _compute_identity_score(parts: Mapping[str, object] | None) -> int:
+    if not isinstance(parts, Mapping):
+        return 0
+    return sum(_safe_int(parts.get(field)) for field in _IDENTITY_PART_FIELDS)
+
+
+def _compute_debt_score(parts: Mapping[str, object] | None) -> int:
+    if not isinstance(parts, Mapping):
+        return 0
+    return sum(_safe_int(parts.get(field)) for field in _DEBT_PART_FIELDS)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -117,7 +161,46 @@ def main(argv: Sequence[str] | None = None) -> None:
         context = pack.get("context") if isinstance(pack.get("context"), dict) else {}
         context_a = context.get("a") if isinstance(context.get("a"), list) else []
         context_b = context.get("b") if isinstance(context.get("b"), list) else []
-        highlights = pack.get("highlights") if isinstance(pack.get("highlights"), dict) else {}
+        highlights_raw = pack.get("highlights") if isinstance(pack.get("highlights"), dict) else {}
+        highlights = dict(highlights_raw)
+        parts = highlights.get("parts") if isinstance(highlights.get("parts"), Mapping) else {}
+        identity_score = _compute_identity_score(parts)
+        debt_score = _compute_debt_score(parts)
+        highlights["identity_score"] = identity_score
+        highlights["debt_score"] = debt_score
+        pack["highlights"] = highlights
+
+        ids_raw = pack.get("ids") if isinstance(pack.get("ids"), dict) else {}
+        account_number_a = ids_raw.get("account_number_a")
+        account_number_b = ids_raw.get("account_number_b")
+        ids_payload = dict(ids_raw)
+        account_a_norm = _normalize_account_number(account_number_a)
+        account_b_norm = _normalize_account_number(account_number_b)
+        ids_payload["account_number_a_norm"] = account_a_norm
+        ids_payload["account_number_b_norm"] = account_b_norm
+        ids_payload["account_last4_a"] = _account_last4(account_a_norm or account_number_a)
+        ids_payload["account_last4_b"] = _account_last4(account_b_norm or account_number_b)
+        pack["ids"] = ids_payload
+
+        messages = pack.get("messages") if isinstance(pack.get("messages"), list) else []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            if message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if not isinstance(content, str):
+                continue
+            try:
+                payload = json.loads(content)
+            except json.JSONDecodeError:
+                continue
+
+            payload["ids"] = ids_payload
+            payload["numeric_match_summary"] = highlights
+            message["content"] = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+            break
+
         score_total = _safe_int(highlights.get("total"))
 
         _write_pack(pack_path, pack)

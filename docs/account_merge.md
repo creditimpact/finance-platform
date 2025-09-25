@@ -23,14 +23,16 @@ paths, including the new account-number trigger.
 
 ## `acctnum_level`
 
-During scoring we normalize account numbers (strip non-digits, capture the raw
-string, detect masking, and record the final four digits when available). Each
-pair receives an `acctnum_level`:
+During scoring we normalize account numbers (strip formatting characters,
+capture the raw string, collapse repeated masks, and extract the trailing
+digits). Each pair receives an `acctnum_level`:
 
-- `exact` – The normalized digits are identical.
-- `last4` – The normalized digits differ overall but share the same last four.
-- `masked` – Both sides only provide masked characters (e.g., `XXXX` or `****`) with the
-  same mask pattern.
+- `exact` – The normalized digits are identical (after trimming leading zeros).
+- `last6` – The numbers disagree overall but share the same last six digits.
+- `last5` – The numbers disagree overall but share the same last five digits.
+- `last4` – The numbers disagree overall but share the same last four digits.
+- `masked_match` – Both sides include masking characters with the same
+  canonical mask signature and at least one side reveals digits.
 - `none` – No usable match.
 
 We also track `acctnum_masked_any`, a boolean indicating whether *either* side

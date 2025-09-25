@@ -377,6 +377,12 @@ def acctnum_match_level(a: str | None, b: str | None) -> Tuple[str, Dict[str, Di
     digits_a = str(norm_a.get("digits") or "")
     digits_b = str(norm_b.get("digits") or "")
 
+    has_digits_a = bool(norm_a.get("has_digits"))
+    has_digits_b = bool(norm_b.get("has_digits"))
+
+    if not has_digits_a and not has_digits_b:
+        return "none", debug
+
     has_mask_a = bool(norm_a.get("has_mask"))
     has_mask_b = bool(norm_b.get("has_mask"))
 
@@ -395,8 +401,21 @@ def acctnum_match_level(a: str | None, b: str | None) -> Tuple[str, Dict[str, Di
             return "last4"
         return "masked_match"
 
-    if digits_a and digits_b and len(digits_a) == len(digits_b) and digits_a == digits_b:
-        level = _level_for_visible_digits(len(digits_a), has_mask_a, has_mask_b)
+    def _normalize_for_exact(digits: str) -> str:
+        if not digits:
+            return ""
+        trimmed = digits.lstrip("0")
+        return trimmed if trimmed else "0"
+
+    normalized_a = _normalize_for_exact(digits_a)
+    normalized_b = _normalize_for_exact(digits_b)
+
+    if normalized_a and normalized_b and normalized_a == normalized_b:
+        visible_digits = max(
+            int(norm_a.get("visible_digits") or 0),
+            int(norm_b.get("visible_digits") or 0),
+        )
+        level = _level_for_visible_digits(visible_digits, has_mask_a, has_mask_b)
         return level, debug
 
     canon_a = str(norm_a.get("canon_mask") or "")

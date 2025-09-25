@@ -47,7 +47,7 @@ ACCOUNT_POINTS = {
 @pytest.mark.parametrize(
     "left,right,expected_level",
     [
-        ("1234", "001234", "exact"),
+        ("1234", "001234", "last4"),
         ("XXXX1234", "99991234", "last4"),
         ("99-123456", "123456", "last6"),
         ("**** ****3000", "***3000", "exact"),

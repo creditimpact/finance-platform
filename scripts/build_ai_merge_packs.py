@@ -229,15 +229,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         packs_in_index = len(index_payload.get("packs", []))
         log.info("INDEX_WRITTEN sid=%s index=%s pairs=%d", sid, index_path, packs_in_index)
 
-        manifest = RunManifest.for_sid(sid)
-        manifest.set_ai_built(packs_dir, packs_in_index)
+        manifest = RunManifest.for_sid(sid).set_ai_built(packs_dir, pairs_count)
         persist_manifest(manifest)
         log.info(
             "MANIFEST_AI_PACKS_UPDATED sid=%s dir=%s index=%s pairs=%d",
             sid,
             packs_dir,
             index_path,
-            packs_in_index,
+            pairs_count,
         )
     else:
         log.info("INDEX_SKIPPED_NO_PAIRS sid=%s dir=%s", sid, packs_dir)

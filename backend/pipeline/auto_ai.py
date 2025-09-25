@@ -449,7 +449,25 @@ def _run_auto_ai_pipeline(sid: str):
     manifest = RunManifest.for_sid(sid)
     packs_dir = packs_dir_for(sid, runs_root=RUNS_ROOT)
     index_path = packs_dir / "index.json"
+
+    manifest_pairs = 0
+    ai_section = manifest.data.get("ai") if isinstance(manifest.data, dict) else {}
+    if isinstance(ai_section, dict):
+        packs_section = ai_section.get("packs")
+        if isinstance(packs_section, dict):
+            try:
+                manifest_pairs = int(packs_section.get("pairs") or 0)
+            except (TypeError, ValueError):
+                manifest_pairs = 0
+
     if not index_path.exists():
+        if manifest_pairs > 0:
+            logger.error(
+                "AUTO_AI_NO_PACKS_INDEX_MISSING sid=%s manifest_pairs=%d",
+                sid,
+                manifest_pairs,
+            )
+            return {"sid": sid, "skipped": "no_packs"}
         manifest.set_ai_skipped("no_packs")
         persist_manifest(manifest)
         logger.info(
@@ -469,11 +487,25 @@ def _run_auto_ai_pipeline(sid: str):
         logger.exception(
             "AUTO_AI_SKIP_NO_PACKS sid=%s reason=index_load_error error=%s", sid, exc
         )
+        if manifest_pairs > 0:
+            logger.error(
+                "AUTO_AI_NO_PACKS_INDEX_ERROR sid=%s manifest_pairs=%d",
+                sid,
+                manifest_pairs,
+            )
+            return {"sid": sid, "skipped": "no_packs"}
         manifest.set_ai_skipped("no_packs")
         persist_manifest(manifest)
         return {"sid": sid, "skipped": "no_packs"}
 
     if pairs_count <= 0:
+        if manifest_pairs > 0:
+            logger.error(
+                "AUTO_AI_NO_PACKS_COUNT_MISMATCH sid=%s manifest_pairs=%d",
+                sid,
+                manifest_pairs,
+            )
+            return {"sid": sid, "skipped": "no_packs"}
         manifest.set_ai_skipped("no_packs")
         persist_manifest(manifest)
         logger.info(
@@ -482,7 +514,8 @@ def _run_auto_ai_pipeline(sid: str):
         return {"sid": sid, "skipped": "no_packs"}
 
     logger.info("AUTO_AI_PACKS_FOUND sid=%s dir=%s pairs=%d", sid, packs_dir, pairs_count)
-    manifest.set_ai_built(packs_dir, pairs_count)
+    logger.info("AUTO_AI_BUILT sid=%s pairs=%d", sid, pairs_count)
+    manifest = manifest.set_ai_built(packs_dir, pairs_count)
     persist_manifest(manifest)
 
     # === 3) send to AI (writes ai_decision / same_debt_pair)

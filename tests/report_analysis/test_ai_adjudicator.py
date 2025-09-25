@@ -51,7 +51,13 @@ def test_adjudicate_pair_disabled(monkeypatch, tmp_path):
     pack = _sample_pack()
     resp = ai_adjudicator.adjudicate_pair(pack)
 
-    assert resp == {"decision": "ai_disabled", "confidence": 0.0, "reasons": []}
+    assert resp == {
+        "decision": "ai_disabled",
+        "confidence": 0.0,
+        "reason": "AI adjudication disabled",
+        "reasons": ["AI adjudication disabled"],
+        "flags": {"account_match": "unknown", "debt_match": "unknown"},
+    }
     assert not called
 
     ai_adjudicator.persist_ai_decision("case-123", tmp_path, 11, 16, resp)
@@ -67,7 +73,9 @@ def test_adjudicate_pair_disabled(monkeypatch, tmp_path):
         "with": 16,
         "decision": "ai_disabled",
         "confidence": 0.0,
-        "reasons": [],
+        "reason": "AI adjudication disabled",
+        "reasons": ["AI adjudication disabled"],
+        "flags": {"account_match": "unknown", "debt_match": "unknown"},
         "source": "ai_adjudicator",
     }
     expected_tag_b = dict(expected_tag_a)
@@ -105,7 +113,12 @@ def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
                                     {
                                         "decision": "merge",
                                         "confidence": 0.83,
+                                        "reason": "accounts align",
                                         "reasons": ["matched creditor names"],
+                                        "flags": {
+                                            "account_match": True,
+                                            "debt_match": True,
+                                        },
                                     }
                                 )
                             }
@@ -131,7 +144,9 @@ def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
     assert resp == {
         "decision": "merge",
         "confidence": 0.83,
+        "reason": "accounts align",
         "reasons": ["matched creditor names"],
+        "flags": {"account_match": True, "debt_match": True},
     }
 
     assert captured["url"] == "https://example.test/v1/chat/completions"
@@ -153,7 +168,9 @@ def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
         "with": 16,
         "decision": "merge",
         "confidence": 0.83,
+        "reason": "accounts align",
         "reasons": ["matched creditor names"],
+        "flags": {"account_match": True, "debt_match": True},
         "source": "ai_adjudicator",
     }
     expected_b = {
@@ -161,7 +178,9 @@ def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
         "with": 11,
         "decision": "merge",
         "confidence": 0.83,
+        "reason": "accounts align",
         "reasons": ["matched creditor names"],
+        "flags": {"account_match": True, "debt_match": True},
         "source": "ai_adjudicator",
     }
 
@@ -188,9 +207,13 @@ def test_adjudicate_pair_enabled_no_merge(monkeypatch, tmp_path):
                             "message": {
                                 "content": jsonlib.dumps(
                                     {
-                                        "decision": "no_merge",
+                                        "decision": "different",
                                         "confidence": 0.41,
-                                        "reasons": ["conflicting payment history"],
+                                        "reason": "conflicting payment history",
+                                        "flags": {
+                                            "account_match": False,
+                                            "debt_match": False,
+                                        },
                                     }
                                 )
                             }
@@ -206,9 +229,11 @@ def test_adjudicate_pair_enabled_no_merge(monkeypatch, tmp_path):
     resp = ai_adjudicator.adjudicate_pair(pack)
 
     assert resp == {
-        "decision": "no_merge",
+        "decision": "different",
         "confidence": 0.41,
+        "reason": "conflicting payment history",
         "reasons": ["conflicting payment history"],
+        "flags": {"account_match": False, "debt_match": False},
     }
 
     ai_adjudicator.persist_ai_decision("case-123", tmp_path, 11, 16, resp)
@@ -223,17 +248,21 @@ def test_adjudicate_pair_enabled_no_merge(monkeypatch, tmp_path):
     expected_a = {
         "kind": "merge_result",
         "with": 16,
-        "decision": "no_merge",
+        "decision": "different",
         "confidence": 0.41,
+        "reason": "conflicting payment history",
         "reasons": ["conflicting payment history"],
+        "flags": {"account_match": False, "debt_match": False},
         "source": "ai_adjudicator",
     }
     expected_b = {
         "kind": "merge_result",
         "with": 11,
-        "decision": "no_merge",
+        "decision": "different",
         "confidence": 0.41,
+        "reason": "conflicting payment history",
         "reasons": ["conflicting payment history"],
+        "flags": {"account_match": False, "debt_match": False},
         "source": "ai_adjudicator",
     }
 

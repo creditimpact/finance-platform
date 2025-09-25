@@ -343,6 +343,47 @@ def normalize_acctnum(raw: str | None) -> Dict[str, object]:
         "canon_mask": canon_mask,
         "has_digits": has_digits,
     }
+
+
+def acctnum_match_level(a: str | None, b: str | None) -> Tuple[str, Dict[str, Dict[str, object]]]:
+    """Return the account-number match level and debug payload."""
+
+    norm_a = normalize_acctnum(a)
+    norm_b = normalize_acctnum(b)
+    debug = {"left": norm_a, "right": norm_b}
+
+    digits_a = str(norm_a.get("digits") or "")
+    digits_b = str(norm_b.get("digits") or "")
+
+    if digits_a and digits_b and len(digits_a) == len(digits_b) and digits_a == digits_b:
+        return "exact", debug
+
+    canon_a = str(norm_a.get("canon_mask") or "")
+    canon_b = str(norm_b.get("canon_mask") or "")
+    if (
+        canon_a
+        and canon_b
+        and canon_a == canon_b
+        and any(char.isdigit() for char in canon_a)
+        and all(
+            (char_left == char_right)
+            for char_left, char_right in zip(canon_a, canon_b)
+            if char_left != "*"
+        )
+    ):
+        return "exact", debug
+
+    last6_a = norm_a.get("digits_last6")
+    last6_b = norm_b.get("digits_last6")
+    if last6_a and last6_b and last6_a == last6_b:
+        return "last6", debug
+
+    last4_a = norm_a.get("digits_last4")
+    last4_b = norm_b.get("digits_last4")
+    if last4_a and last4_b and last4_a == last4_b:
+        return "last4", debug
+
+    return "none", debug
 _TYPE_ALIAS_MAP = {
     "us bk cacs": "u s bank",
     "us bk cac": "u s bank",
@@ -488,17 +529,20 @@ def _match_field_values(
 
     if field == "account_number":
         min_level = str(cfg.triggers.get("MERGE_AI_ON_ACCTNUM_LEVEL", "last4")).lower()
-        matched, level = account_numbers_match(raw_a, raw_b, min_level=min_level)
+        level, debug = acctnum_match_level(
+            str(raw_a) if not is_missing(raw_a) else None,
+            str(raw_b) if not is_missing(raw_b) else None,
+        )
+        threshold = _ACCOUNT_LEVEL_ORDER.get(min_level, 0)
+        matched = level != "none" and _ACCOUNT_LEVEL_ORDER.get(level, 0) >= threshold
         aux["acctnum_level"] = level
         if matched:
-            norm_left = normalize_acctnum(str(raw_a))
-            norm_right = normalize_acctnum(str(raw_b))
             logger.info(
                 "MERGE_V2_ACCTNUM_MATCH %s",
                 json.dumps(
                     {
-                        "left": norm_left,
-                        "right": norm_right,
+                        "left": debug.get("left"),
+                        "right": debug.get("right"),
                         "level": level,
                         "min_level": min_level,
                     },
@@ -1124,7 +1168,10 @@ def _build_aux_payload(aux: Mapping[str, Any]) -> Dict[str, Any]:
             field_aux = aux.get(field) if isinstance(aux, Mapping) else None
             if not isinstance(field_aux, Mapping):
                 continue
-            if "matched" in field_aux:
+            if field == "account_number":
+                level = str(field_aux.get("acctnum_level") or acct_level)
+                matched_fields[field] = level != "none"
+            elif "matched" in field_aux:
                 matched_fields[field] = bool(field_aux.get("matched"))
             best_pair = field_aux.get("best_pair")
             if best_pair and isinstance(best_pair, (list, tuple)) and len(best_pair) == 2:
@@ -1740,49 +1787,17 @@ def account_number_level(a: Any, b: Any) -> str:
     if is_missing(a) or is_missing(b):
         return "none"
 
-    norm_a = normalize_acctnum(str(a))
-    norm_b = normalize_acctnum(str(b))
-
-    digits_a = str(norm_a.get("digits", ""))
-    digits_b = str(norm_b.get("digits", ""))
-
-    def _normalize_digits(value: str) -> Optional[str]:
-        if not value:
-            return None
-        stripped = value.lstrip("0")
-        return stripped or ("0" if value else None)
-
-    normalized_digits_a = _normalize_digits(digits_a)
-    normalized_digits_b = _normalize_digits(digits_b)
-    if normalized_digits_a and normalized_digits_b and normalized_digits_a == normalized_digits_b:
-        return "exact"
-
-    last6_a = norm_a.get("digits_last6")
-    last6_b = norm_b.get("digits_last6")
-    if last6_a and last6_b and last6_a == last6_b:
-        return "last6"
-
-    if len(digits_a) >= 5 and len(digits_b) >= 5 and digits_a[-5:] == digits_b[-5:]:
-        return "last5"
-
-    last4_a = norm_a.get("digits_last4")
-    last4_b = norm_b.get("digits_last4")
-    if last4_a and last4_b and last4_a == last4_b:
-        return "last4"
-
-    canon_a = str(norm_a.get("canon_mask") or "")
-    canon_b = str(norm_b.get("canon_mask") or "")
-    has_digits = bool(norm_a.get("has_digits")) or bool(norm_b.get("has_digits"))
-    if has_digits and canon_a and canon_b and canon_a == canon_b:
-        return "masked_match"
-
-    return "none"
+    level, _ = acctnum_match_level(str(a), str(b))
+    return level
 
 
 def account_numbers_match(a: Any, b: Any, min_level: str = "last4") -> Tuple[bool, str]:
-    level = account_number_level(a, b)
+    if is_missing(a) or is_missing(b):
+        return False, "none"
+
+    level, _ = acctnum_match_level(str(a), str(b))
     threshold = _ACCOUNT_LEVEL_ORDER.get(min_level, 0)
-    match = _ACCOUNT_LEVEL_ORDER.get(level, 0) >= threshold and level != "none"
+    match = level != "none" and _ACCOUNT_LEVEL_ORDER.get(level, 0) >= threshold
     return match, level
 
 

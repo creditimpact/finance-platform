@@ -23,7 +23,7 @@ def test_normalize_acctnum_handles_mask_only() -> None:
 
 
 def test_account_number_level_exact() -> None:
-    assert account_merge.account_number_level("001234567890", "1234567890") == "exact"
+    assert account_merge.account_number_level("1234567890", "1234567890") == "exact"
 
 
 def test_account_number_level_last6() -> None:
@@ -32,3 +32,15 @@ def test_account_number_level_last6() -> None:
 
 def test_account_number_level_last4() -> None:
     assert account_merge.account_number_level("12345678", "005678") == "last4"
+
+
+def test_acctnum_match_level_masked_exact() -> None:
+    level, debug = account_merge.acctnum_match_level("**12**34", "**12**34")
+    assert level == "exact"
+    assert debug["left"]["canon_mask"] == "*12*34"
+    assert debug["right"]["canon_mask"] == "*12*34"
+
+
+def test_acctnum_match_level_prefers_last6() -> None:
+    level, _ = account_merge.acctnum_match_level("99123456", "123456")
+    assert level == "last6"

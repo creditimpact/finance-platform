@@ -75,7 +75,7 @@ def test_payment_amount_zero_rule_respected():
     "a,b,expected",
     [
         ("123456", "123456", "exact"),
-        ("000123456", "123456", "exact"),
+        ("000123456", "123456", "last6"),
         ("1111123456", "222223456", "last4"),
         ("abcd", "****", "none"),
     ],

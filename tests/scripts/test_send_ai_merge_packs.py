@@ -133,7 +133,11 @@ def test_send_ai_merge_packs_records_merge_decision(
 
     def _fake_decide(pack: dict, *, timeout: float):
         assert pack["pair"] == {"a": 11, "b": 16}
-        return {"decision": "merge", "reason": "Records align cleanly."}
+        return {
+            "decision": "merge",
+            "reason": "Records align cleanly.",
+            "flags": {"account_match": True, "debt_match": True},
+        }
 
     monkeypatch.setattr(send_ai_merge_packs, "decide_merge_or_different", _fake_decide)
     monkeypatch.setattr(
@@ -184,11 +188,38 @@ def test_send_ai_merge_packs_records_merge_decision(
         "source": "ai_adjudicator",
         "decision": "merge",
         "reason": "Records align cleanly.",
+        "flags": {"account_match": True, "debt_match": True},
         "at": "2024-07-01T09:30:00Z",
     }
 
     assert decision_tag_a == {"with": 16, **expected_decision}
     assert decision_tag_b == {"with": 11, **expected_decision}
+
+    pair_tag_a = next(
+        tag
+        for tag in account_a_tags
+        if tag.get("kind") == "same_account_pair" and tag.get("with") == 16
+    )
+    pair_tag_b = next(
+        tag
+        for tag in account_b_tags
+        if tag.get("kind") == "same_account_pair" and tag.get("with") == 11
+    )
+
+    assert pair_tag_a == {
+        "kind": "same_account_pair",
+        "source": "ai_adjudicator",
+        "with": 16,
+        "reason": "Records align cleanly.",
+        "at": "2024-07-01T09:30:00Z",
+    }
+    assert pair_tag_b == {
+        "kind": "same_account_pair",
+        "source": "ai_adjudicator",
+        "with": 11,
+        "reason": "Records align cleanly.",
+        "at": "2024-07-01T09:30:00Z",
+    }
 
     logs_path = runs_root / sid / "ai_packs" / "logs.txt"
     logs_text = logs_path.read_text(encoding="utf-8")
@@ -244,7 +275,7 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
         return {
             "decision": "same_debt",
             "reason": "Same open date and balance",
-            "flags": {"same_debt": True},
+            "flags": {"account_match": "unknown", "debt_match": True},
         }
 
     monkeypatch.setattr(
@@ -286,6 +317,7 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
         "with": 16,
         "decision": "same_debt",
         "reason": "Same open date and balance",
+        "flags": {"account_match": "unknown", "debt_match": True},
         "at": "2024-06-15T10:00:00Z",
     }
     expected_same_debt_tag_a = {
@@ -326,6 +358,151 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
     assert status_info.get("skipped_reason") is None
 
 
+@pytest.mark.parametrize(
+    "decision,flags,expected_pair",
+    [
+        (
+            "same_account_debt_different",
+            {"account_match": True, "debt_match": False},
+            "same_account_pair",
+        ),
+        (
+            "same_debt_account_different",
+            {"account_match": False, "debt_match": True},
+            "same_debt_pair",
+        ),
+        (
+            "same_account",
+            {"account_match": True, "debt_match": "unknown"},
+            "same_account_pair",
+        ),
+        (
+            "same_debt",
+            {"account_match": "unknown", "debt_match": True},
+            "same_debt_pair",
+        ),
+        (
+            "different",
+            {"account_match": False, "debt_match": False},
+            None,
+        ),
+    ],
+)
+def test_send_ai_merge_packs_writes_decision_variants(
+    monkeypatch: pytest.MonkeyPatch,
+    runs_root: Path,
+    decision: str,
+    flags: dict[str, bool | str],
+    expected_pair: str | None,
+) -> None:
+    sid = f"variant-{decision}"
+    packs_dir = runs_root / sid / "ai_packs"
+    packs_dir.mkdir(parents=True, exist_ok=True)
+
+    pack_payload = {
+        "messages": [
+            {"role": "system", "content": "instructions"},
+            {
+                "role": "user",
+                "content": "Account 11 and 16 require adjudication",
+            },
+        ]
+    }
+    pack_filename = "pair_011_016.jsonl"
+    (packs_dir / pack_filename).write_text(
+        json.dumps(pack_payload, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    index_payload = {
+        "sid": sid,
+        "pairs": [
+            {
+                "a": 11,
+                "b": 16,
+                "pack_file": pack_filename,
+                "lines_a": 0,
+                "lines_b": 0,
+                "score_total": 0,
+            }
+        ],
+    }
+    (packs_dir / "index.json").write_text(
+        json.dumps(index_payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+    monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+
+    reason = f"Reason for {decision}"
+    timestamp = "2024-06-20T12:00:00Z"
+
+    def _fake_decide(pack: dict, *, timeout: float):
+        assert pack == pack_payload
+        return {"decision": decision, "reason": reason, "flags": dict(flags)}
+
+    monkeypatch.setattr(send_ai_merge_packs, "decide_merge_or_different", _fake_decide)
+    monkeypatch.setattr(
+        send_ai_merge_packs,
+        "_isoformat_timestamp",
+        lambda dt=None: timestamp,
+    )
+
+    send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
+
+    account_tags_dir = runs_root / sid / "cases" / "accounts"
+    tags_a = json.loads((account_tags_dir / "11" / "tags.json").read_text(encoding="utf-8"))
+    tags_b = json.loads((account_tags_dir / "16" / "tags.json").read_text(encoding="utf-8"))
+
+    def _expected_flags(raw_flags: dict[str, bool | str]) -> dict[str, bool | str]:
+        normalized: dict[str, bool | str] = {}
+        for key, value in raw_flags.items():
+            if isinstance(value, str):
+                lowered = value.strip().lower()
+                normalized[key] = "unknown" if lowered == "unknown" else lowered == "true"
+            else:
+                normalized[key] = bool(value)
+        return normalized
+
+    expected_flags = _expected_flags(flags)
+    expected_decision_tag = {
+        "kind": "ai_decision",
+        "tag": "ai_decision",
+        "source": "ai_adjudicator",
+        "with": 16,
+        "decision": decision,
+        "reason": reason,
+        "flags": expected_flags,
+        "at": timestamp,
+    }
+    expected_tags_a = [expected_decision_tag]
+    if expected_pair is not None:
+        expected_tags_a.append(
+            {
+                "kind": expected_pair,
+                "source": "ai_adjudicator",
+                "with": 16,
+                "reason": reason,
+                "at": timestamp,
+            }
+        )
+
+    mirrored_decision = dict(expected_decision_tag)
+    mirrored_decision["with"] = 11
+    mirrored_pair = None
+    if expected_pair is not None:
+        mirrored_pair = {
+            "kind": expected_pair,
+            "source": "ai_adjudicator",
+            "with": 11,
+            "reason": reason,
+            "at": timestamp,
+        }
+
+    assert tags_a == expected_tags_a
+    expected_tags_b = [mirrored_decision]
+    if mirrored_pair is not None:
+        expected_tags_b.append(mirrored_pair)
+    assert tags_b == expected_tags_b
 def test_send_ai_merge_packs_logs_failure(monkeypatch: pytest.MonkeyPatch, runs_root: Path) -> None:
     sid = "merge-case-errors"
     packs_dir = runs_root / sid / "ai_packs"

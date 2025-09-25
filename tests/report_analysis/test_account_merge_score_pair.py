@@ -35,6 +35,14 @@ def test_strong_balance_owed_trigger(cfg) -> None:
     assert result["triggers"] == ["strong:balance_owed", "total"]
 
 
+ACCOUNT_POINTS = {
+    "exact": 50,
+    "last5": 35,
+    "last4": 25,
+    "masked_match": 15,
+}
+
+
 @pytest.mark.parametrize(
     "left,right,expected_level",
     [
@@ -50,11 +58,15 @@ def test_strong_account_number_trigger_levels(
 
     result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
-    assert result["total"] == cfg.points["account_number"]
-    assert result["parts"]["account_number"] == cfg.points["account_number"]
+    expected_points = ACCOUNT_POINTS[expected_level]
+    assert result["total"] == expected_points
+    assert result["parts"]["account_number"] == expected_points
     assert result["decision"] == "ai"
     assert result["conflicts"] == []
-    assert result["triggers"] == ["strong:account_number", "total"]
+    expected_triggers = ["strong:account_number"]
+    if expected_points >= cfg.thresholds["AI_THRESHOLD"]:
+        expected_triggers.append("total")
+    assert result["triggers"] == expected_triggers
     assert (
         result["aux"]["account_number"].get("acctnum_level")
         == expected_level
@@ -181,7 +193,7 @@ def test_auto_merge_success(cfg) -> None:
 
     result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
-    assert result["total"] == 71
+    assert result["total"] == 93
     assert result["decision"] == "auto"
     assert result["conflicts"] == []
     assert result["triggers"] == ["strong:balance_owed", "strong:account_number", "total"]
@@ -234,7 +246,7 @@ def test_auto_merge_blocked_by_amount_conflict(cfg) -> None:
 
     result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
-    assert result["total"] == 71
+    assert result["total"] == 93
     assert result["decision"] == "ai"
     assert "amount_conflict:past_due_amount" in result["conflicts"]
     assert result["triggers"] == ["strong:balance_owed", "strong:account_number", "total"]

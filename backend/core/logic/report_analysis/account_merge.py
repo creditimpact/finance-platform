@@ -15,7 +15,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Uni
 from backend.core.io.tags import read_tags, upsert_tag, write_tags_atomic
 from backend.core.logic.normalize.accounts import (
     last4 as normalize_last4,
-    normalize_acctnum,
+    normalize_acctnum as _normalize_acctnum_basic,
 )
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
@@ -261,7 +261,93 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
 
 _AMOUNT_SANITIZE_RE = re.compile(r"[\s$,/]")
 _AMOUNT_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
-_ACCOUNT_LEVEL_ORDER = {"none": 0, "any": 1, "last4": 2, "exact": 3}
+_ACCOUNT_LEVEL_ORDER = {
+    "none": 0,
+    "masked_match": 1,
+    "masked": 1,
+    "any": 1,
+    "last4": 2,
+    "last5": 3,
+    "exact": 4,
+}
+_ACCOUNT_NUMBER_WEIGHTS = {
+    "masked_match": 15,
+    "last4": 25,
+    "last5": 35,
+    "exact": 50,
+}
+_MASK_CHARS = {"*", "x", "X", "•", "●"}
+
+
+@dataclass(frozen=True)
+class AcctnumToken:
+    value: str
+    masked_value: str
+    signature: str
+
+    @property
+    def is_masked(self) -> bool:
+        return "M" in self.signature
+
+    def last_digits(self, count: int) -> Optional[str]:
+        if len(self.value) >= count:
+            return self.value[-count:]
+        return None
+
+
+def normalize_acctnum(raw: str | None) -> Dict[str, Set[str | AcctnumToken]]:
+    last4: Set[str] = set()
+    last5: Set[str] = set()
+    tokens: Set[AcctnumToken] = set()
+
+    if not raw:
+        return {"last4": last4, "last5": last5, "tokens": tokens}
+
+    text = str(raw)
+    parts = re.split(r"[\s,;]+", text)
+    for part in parts:
+        chunk = part.strip()
+        if not chunk:
+            continue
+        sanitized = re.sub(r"[\s\-]", "", chunk)
+        if not sanitized:
+            continue
+
+        masked_chars: List[str] = []
+        digits_only: List[str] = []
+        signature: List[str] = []
+
+        for char in sanitized:
+            if char.isdigit():
+                digits_only.append(char)
+                masked_chars.append(char)
+                signature.append("D")
+            elif char in _MASK_CHARS:
+                masked_chars.append("*")
+                signature.append("M")
+            else:
+                continue
+
+        digits_value = "".join(digits_only)
+        mask_signature = "".join(signature)
+        masked_value = "".join(masked_chars)
+
+        if digits_value:
+            if len(digits_value) >= 4:
+                last4.add(digits_value[-4:])
+            if len(digits_value) >= 5:
+                last5.add(digits_value[-5:])
+
+        if masked_value or digits_value:
+            tokens.add(
+                AcctnumToken(
+                    value=digits_value,
+                    masked_value=masked_value,
+                    signature=mask_signature,
+                )
+            )
+
+    return {"last4": last4, "last5": last5, "tokens": tokens}
 _TYPE_ALIAS_MAP = {
     "us bk cacs": "u s bank",
     "us bk cac": "u s bank",
@@ -588,12 +674,18 @@ def score_pair_0_100(
 
     for field in _FIELD_SEQUENCE:
         matched, match_aux = match_field_best_of_9(field, A_data, B_data, cfg)
-        points = int(cfg.points.get(field, 0))
+        base_points = int(cfg.points.get(field, 0))
+        awarded_points = 0
         if matched:
-            total += points
+            if field == "account_number":
+                acct_level = str(match_aux.get("acctnum_level") or "none")
+                awarded_points = _ACCOUNT_NUMBER_WEIGHTS.get(acct_level, base_points)
+            else:
+                awarded_points = base_points
+            total += awarded_points
             if field in _MID_FIELD_SET:
-                mid_sum += points
-        parts[field] = points if matched else 0
+                mid_sum += awarded_points
+        parts[field] = awarded_points
 
         per_field_aux: Dict[str, Any] = dict(match_aux)
         per_field_aux["matched"] = matched
@@ -1601,7 +1693,7 @@ def digits_only(value: Any) -> Optional[str]:
 def normalize_account_number(value: Any) -> Optional[str]:
     if is_missing(value):
         return None
-    normalized = normalize_acctnum(str(value))
+    normalized = _normalize_acctnum_basic(str(value))
     return normalized
 
 
@@ -1611,43 +1703,59 @@ def account_number_level(a: Any, b: Any) -> str:
 
     norm_a = normalize_acctnum(str(a))
     norm_b = normalize_acctnum(str(b))
-    if not norm_a or not norm_b:
+    tokens_a: Set[AcctnumToken] = set(norm_a.get("tokens", set()))
+    tokens_b: Set[AcctnumToken] = set(norm_b.get("tokens", set()))
+
+    if not tokens_a or not tokens_b:
         return "none"
 
-    has_mask = any("*" in str(value) for value in (a, b) if isinstance(value, str))
+    def _masked_values(tokens: Set[AcctnumToken]) -> Set[str]:
+        values = set()
+        for token in tokens:
+            if token.masked_value and token.value:
+                values.add(token.masked_value)
+        return values
 
-    if norm_a == norm_b:
-        digits_a = digits_only(norm_a)
-        digits_b = digits_only(norm_b)
-        if has_mask and digits_a == digits_b and digits_a and len(digits_a) <= 4:
-            return "last4"
-        if len(norm_a) > 4 or len(norm_b) > 4:
-            return "exact"
-        if digits_a and len(digits_a) > 4:
-            return "exact"
-        if digits_b and len(digits_b) > 4:
-            return "exact"
-        if digits_a == digits_b and digits_a and len(digits_a) == 4:
-            return "last4"
+    def _unmasked_normalized(tokens: Set[AcctnumToken]) -> Set[str]:
+        values = set()
+        for token in tokens:
+            if token.value and not token.is_masked:
+                stripped = token.value.lstrip("0") or "0"
+                values.add(stripped)
+        return values
+
+    masked_values_a = _masked_values(tokens_a)
+    masked_values_b = _masked_values(tokens_b)
+    if masked_values_a & masked_values_b:
         return "exact"
 
-    digits_a = digits_only(norm_a)
-    digits_b = digits_only(norm_b)
-    if digits_a and digits_b:
-        stripped_a = digits_a.lstrip("0") or "0"
-        stripped_b = digits_b.lstrip("0") or "0"
-        if stripped_a == stripped_b:
-            if has_mask and len(stripped_a) <= 4:
-                return "last4"
-            if len(stripped_a) > 4 or len(stripped_b) > 4:
-                return "exact"
-            if len(stripped_a) == 4 and len(stripped_b) == 4:
-                return "last4"
+    unmasked_a = _unmasked_normalized(tokens_a)
+    unmasked_b = _unmasked_normalized(tokens_b)
+    if unmasked_a & unmasked_b:
+        return "exact"
 
-    last4_a = normalize_last4(norm_a)
-    last4_b = normalize_last4(norm_b)
-    if last4_a and last4_b and last4_a == last4_b:
+    last5_a = set(norm_a.get("last5", set()))
+    last5_b = set(norm_b.get("last5", set()))
+    if last5_a & last5_b:
+        return "last5"
+
+    last4_a = set(norm_a.get("last4", set()))
+    last4_b = set(norm_b.get("last4", set()))
+    if last4_a & last4_b:
         return "last4"
+
+    pattern_a = {
+        (token.value, token.signature)
+        for token in tokens_a
+        if token.is_masked and token.value
+    }
+    pattern_b = {
+        (token.value, token.signature)
+        for token in tokens_b
+        if token.is_masked and token.value
+    }
+    if pattern_a & pattern_b:
+        return "masked_match"
 
     return "none"
 

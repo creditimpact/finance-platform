@@ -60,6 +60,13 @@ def _expected_minimal_tags(partner: int, *, timestamp: str) -> list[dict[str, An
             "flags": {"account_match": True, "debt_match": True},
         },
         {"kind": "same_account_pair", "with": partner, "at": timestamp},
+        {
+            "kind": "ai_resolution",
+            "with": partner,
+            "decision": "merge",
+            "flags": {"account_match": True, "debt_match": True},
+            "reason": "Records align cleanly.",
+        },
     ]
 
 
@@ -125,6 +132,29 @@ def test_has_ai_merge_best_pairs_detects_missing_partner(tmp_path: Path) -> None
     _write_json(account_tags / "11" / "tags.json", [{"kind": "merge_best", "decision": "ai"}])
 
     assert auto_ai.has_ai_merge_best_pairs(sid, runs_root) is True
+
+
+def test_has_ai_merge_best_pairs_skips_zero_debt(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "zero-guard"
+    accounts = runs_root / sid / "cases" / "accounts"
+
+    _write_json(accounts / "11" / "tags.json", [{"kind": "merge_best", "decision": "ai", "with": 16}])
+    _write_json(accounts / "16" / "tags.json", [{"kind": "merge_best", "decision": "ai", "with": 11}])
+
+    zero_payload = {"balance_owed": 0, "past_due_amount": 0}
+    _write_json(accounts / "11" / "fields_flat.json", zero_payload)
+    _write_json(accounts / "16" / "fields_flat.json", zero_payload)
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="backend.pipeline.auto_ai"):
+        assert auto_ai.has_ai_merge_best_pairs(sid, runs_root) is False
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        f"AI_CANDIDATE_SKIPPED_ZERO_DEBT sid={sid} a=11 b=16" in message
+        for message in messages
+    )
 
 
 def test_maybe_queue_auto_ai_pipeline_queues_when_candidates(
@@ -614,6 +644,43 @@ def test_maybe_run_ai_pipeline_skips_without_candidates_logs(monkeypatch, tmp_pa
     assert any("AUTO_AI_SKIPPED" in record.getMessage() for record in caplog.records)
 
 
+def test_maybe_run_ai_pipeline_skips_zero_debt_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "zero-skip"
+    account_root = runs_root / sid / "cases" / "accounts"
+
+    _write_json(account_root / "11" / "tags.json", [{"kind": "merge_best", "decision": "ai", "with": 16}])
+    _write_json(account_root / "16" / "tags.json", [{"kind": "merge_best", "decision": "ai", "with": 11}])
+
+    zero_payload = {"balance_owed": 0, "past_due_amount": 0}
+    _write_json(account_root / "11" / "fields_flat.json", zero_payload)
+    _write_json(account_root / "16" / "fields_flat.json", zero_payload)
+
+    monkeypatch.setenv("ENABLE_AUTO_AI_PIPELINE", "1")
+    monkeypatch.setattr(auto_ai, "RUNS_ROOT", runs_root)
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="backend.pipeline.auto_ai"):
+        result = auto_ai.maybe_run_ai_pipeline(sid)
+
+    assert result == {"sid": sid, "skipped": "no_ai_candidates"}
+
+    manifest = RunManifest.for_sid(sid)
+    status = manifest.data.get("ai", {}).get("status", {})
+    assert status.get("skipped_reason") == "no_candidates"
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(f"AUTO_AI_SKIPPED sid={sid} reason=no_candidates" in message for message in messages)
+    assert any(
+        f"AI_CANDIDATE_SKIPPED_ZERO_DEBT sid={sid} a=11 b=16" in message
+        for message in messages
+    )
+
+
 def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
     runs_root = tmp_path / "runs"
     sid, account_a, account_b = _setup_merge_case(runs_root)
@@ -714,6 +781,13 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
             "at": timestamp,
             "flags": {"account_match": False, "debt_match": False},
         },
+        {
+            "kind": "ai_resolution",
+            "with": 16,
+            "decision": "different",
+            "flags": {"account_match": False, "debt_match": False},
+            "reason": "These tradelines describe the same debt from different collectors.",
+        },
     ]
     assert tags_b == [
         {"kind": "merge_best", "with": 11, "decision": "ai"},
@@ -723,6 +797,13 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
             "decision": "different",
             "at": timestamp,
             "flags": {"account_match": False, "debt_match": False},
+        },
+        {
+            "kind": "ai_resolution",
+            "with": 11,
+            "decision": "different",
+            "flags": {"account_match": False, "debt_match": False},
+            "reason": "These tradelines describe the same debt from different collectors.",
         },
     ]
 

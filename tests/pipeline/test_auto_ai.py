@@ -39,10 +39,13 @@ def _merge_best_verbose(partner: int) -> dict[str, Any]:
         "kind": "merge_best",
         "decision": "ai",
         "with": partner,
-        "total": 59,
+        "total": 53,
         "mid": 20,
-        "parts": {"balance_owed": 31},
-        "aux": {"acctnum_level": "last4", "matched_fields": {"balance_owed": True}},
+        "parts": {"balance_owed": 31, "account_number": 22},
+        "aux": {
+            "acctnum_level": "last4",
+            "matched_fields": {"balance_owed": True, "account_number": True},
+        },
         "conflicts": ["credit_limit:conflict"],
         "strong": True,
     }

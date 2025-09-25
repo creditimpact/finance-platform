@@ -544,26 +544,13 @@ def _match_field_values(
 
     if field == "account_number":
         min_level = str(cfg.triggers.get("MERGE_AI_ON_ACCTNUM_LEVEL", "last4")).lower()
-        level, debug = acctnum_match_level(
+        level, _ = acctnum_match_level(
             str(raw_a) if not is_missing(raw_a) else None,
             str(raw_b) if not is_missing(raw_b) else None,
         )
         threshold = _ACCOUNT_LEVEL_ORDER.get(min_level, 0)
         matched = level != "none" and _ACCOUNT_LEVEL_ORDER.get(level, 0) >= threshold
         aux["acctnum_level"] = level
-        if matched:
-            logger.info(
-                "MERGE_V2_ACCTNUM_MATCH %s",
-                json.dumps(
-                    {
-                        "left": debug.get("left"),
-                        "right": debug.get("right"),
-                        "level": level,
-                        "min_level": min_level,
-                    },
-                    sort_keys=True,
-                ),
-            )
         return matched, aux
 
     if field == "balance_owed":
@@ -1041,9 +1028,11 @@ def score_all_pairs_0_100(
             }
             logger.debug("MERGE_PAIR_STEP %s", json.dumps(step_log, sort_keys=True))
 
+            left_bureaus = bureaus_by_idx.get(left, {})
+            right_bureaus = bureaus_by_idx.get(right, {})
             result = score_pair_0_100(
-                bureaus_by_idx.get(left, {}),
-                bureaus_by_idx.get(right, {}),
+                left_bureaus,
+                right_bureaus,
                 cfg,
             )
 
@@ -1051,13 +1040,44 @@ def score_all_pairs_0_100(
             sanitized_parts = _sanitize_parts(result.get("parts"))
             aux_payload = _build_aux_payload(result.get("aux", {}))
 
+            acct_level = str(aux_payload.get("acctnum_level", "none") or "none")
+            raw_aux = result.get("aux") if isinstance(result.get("aux"), Mapping) else {}
+            acct_aux = raw_aux.get("account_number") if isinstance(raw_aux, Mapping) else None
+            if not isinstance(acct_aux, Mapping):
+                acct_aux = {}
+            level_value = str(acct_aux.get("acctnum_level") or acct_level or "none")
+            if level_value and level_value != "none":
+                normalized_values = acct_aux.get("normalized_values")
+                last4_a = "none"
+                last4_b = "none"
+                if (
+                    isinstance(normalized_values, (list, tuple))
+                    and len(normalized_values) == 2
+                ):
+                    digits_a = digits_only(normalized_values[0])
+                    digits_b = digits_only(normalized_values[1])
+                    if digits_a and len(digits_a) >= 4:
+                        last4_a = digits_a[-4:]
+                    if digits_b and len(digits_b) >= 4:
+                        last4_b = digits_b[-4:]
+
+                logger.info(
+                    "MERGE_V2_ACCTNUM_MATCH sid=<%s> i=<%s> j=<%s> level=<%s> a_digits_last4=<%s> b_digits_last4=<%s>",
+                    sid,
+                    left,
+                    right,
+                    level_value,
+                    last4_a,
+                    last4_b,
+                )
+
             score_log = {
                 "sid": sid,
                 "i": left,
                 "j": right,
                 "total": total_score,
                 "parts": sanitized_parts,
-                "acctnum_level": aux_payload.get("acctnum_level", "none"),
+                "acctnum_level": acct_level,
                 "matched_pairs": aux_payload.get("by_field_pairs", {}),
                 "matched_fields": aux_payload.get("matched_fields", {}),
             }
@@ -1175,7 +1195,8 @@ def choose_best_partner(
 def _build_aux_payload(aux: Mapping[str, Any]) -> Dict[str, Any]:
     acct_level = "none"
     by_field_pairs: Dict[str, List[str]] = {}
-    matched_fields: Dict[str, bool] = {}
+    matched_fields: Dict[str, bool] = {"account_number": False}
+    account_number_matched = False
 
     if isinstance(aux, Mapping):
         acct_aux = aux.get("account_number")
@@ -1183,6 +1204,10 @@ def _build_aux_payload(aux: Mapping[str, Any]) -> Dict[str, Any]:
             level = acct_aux.get("acctnum_level")
             if isinstance(level, str) and level:
                 acct_level = level
+            if "matched" in acct_aux:
+                account_number_matched = bool(acct_aux.get("matched"))
+            elif acct_level != "none":
+                account_number_matched = True
 
         for field in _FIELD_SEQUENCE:
             field_aux = aux.get(field) if isinstance(aux, Mapping) else None
@@ -1190,12 +1215,19 @@ def _build_aux_payload(aux: Mapping[str, Any]) -> Dict[str, Any]:
                 continue
             if field == "account_number":
                 level = str(field_aux.get("acctnum_level") or acct_level)
-                matched_fields[field] = level != "none"
+                if level and level != "none":
+                    acct_level = level
+                if "matched" in field_aux:
+                    account_number_matched = bool(field_aux.get("matched"))
+                elif level != "none":
+                    account_number_matched = True
             elif "matched" in field_aux:
                 matched_fields[field] = bool(field_aux.get("matched"))
             best_pair = field_aux.get("best_pair")
             if best_pair and isinstance(best_pair, (list, tuple)) and len(best_pair) == 2:
                 by_field_pairs[field] = [str(best_pair[0]), str(best_pair[1])]
+
+    matched_fields["account_number"] = account_number_matched
 
     return {
         "acctnum_level": acct_level,
@@ -1327,12 +1359,15 @@ def _build_best_match_entry(
     total = 0
     decision = "different"
 
+    acct_level = "none"
+
     if isinstance(entry, Mapping):
         try:
             total = int(entry.get("total", 0) or 0)
         except (TypeError, ValueError):
             total = 0
         decision = str(entry.get("decision", "different"))
+        acct_level = str(entry.get("acctnum_level", acct_level) or acct_level)
     else:
         result_payload = best_info.get("result")
         if isinstance(result_payload, Mapping):
@@ -1341,6 +1376,8 @@ def _build_best_match_entry(
             except (TypeError, ValueError):
                 total = 0
             decision = str(result_payload.get("decision", "different"))
+            aux_payload = _build_aux_payload(result_payload.get("aux", {}))
+            acct_level = str(aux_payload.get("acctnum_level", acct_level) or acct_level)
         try:
             total = int(best_info.get("score_total", total) or total)
         except (TypeError, ValueError):
@@ -1353,6 +1390,7 @@ def _build_best_match_entry(
         "total": total,
         "decision": decision,
         "tiebreaker": tiebreaker,
+        "acctnum_level": acct_level,
     }
 
 
@@ -1380,7 +1418,8 @@ def _tag_normalize_merge_parts(parts: Any) -> Dict[str, int]:
 def _tag_normalize_merge_aux(aux: Any) -> Dict[str, Any]:
     acct_level = "none"
     by_field_pairs: Dict[str, List[str]] = {}
-    matched_fields: Dict[str, bool] = {}
+    matched_fields: Dict[str, bool] = {"account_number": False}
+    account_number_matched = False
 
     if isinstance(aux, Mapping):
         acct_aux = aux.get("account_number")
@@ -1388,22 +1427,34 @@ def _tag_normalize_merge_aux(aux: Any) -> Dict[str, Any]:
             level = acct_aux.get("acctnum_level")
             if isinstance(level, str) and level:
                 acct_level = level
+            if "matched" in acct_aux:
+                account_number_matched = bool(acct_aux.get("matched"))
+            elif acct_level != "none":
+                account_number_matched = True
 
         for field, field_aux in aux.items():
             if not isinstance(field_aux, Mapping):
                 continue
-            if "matched" in field_aux:
-                matched_fields[str(field)] = bool(field_aux.get("matched"))
+            field_name = str(field)
+            if field_name == "account_number":
+                if "matched" in field_aux:
+                    account_number_matched = bool(field_aux.get("matched"))
+                elif account_number_matched:
+                    account_number_matched = True
+            elif "matched" in field_aux:
+                matched_fields[field_name] = bool(field_aux.get("matched"))
             best_pair = field_aux.get("best_pair")
             if (
                 isinstance(best_pair, (list, tuple))
                 and len(best_pair) == 2
                 and all(part is not None for part in best_pair)
             ):
-                by_field_pairs[str(field)] = [
+                by_field_pairs[field_name] = [
                     str(best_pair[0]),
                     str(best_pair[1]),
                 ]
+
+    matched_fields["account_number"] = account_number_matched
 
     return {
         "acctnum_level": acct_level,

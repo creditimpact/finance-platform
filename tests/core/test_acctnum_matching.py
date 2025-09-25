@@ -11,18 +11,24 @@ MATCH_CASES = [
     (
         "349992********** 349992********** -34999***********",
         "349992********** 349992********** -34999***********",
-        "exact",
-        account_merge.POINTS_ACCTNUM_EXACT,
+        "last6_bin",
+        account_merge.POINTS_ACCTNUM_LAST6_BIN,
     ),
     ("1234-5678-9999", "123456789999", "exact", account_merge.POINTS_ACCTNUM_EXACT),
-    ("****-**789012", "789012", "last6", account_merge.POINTS_ACCTNUM_LAST6),
-    ("****-****-****-0423", "X X X X 0423", "last4", account_merge.POINTS_ACCTNUM_LAST4),
+    (
+        "12345678901234",
+        "12345600901234",
+        "last6_bin",
+        account_merge.POINTS_ACCTNUM_LAST6_BIN,
+    ),
+    ("****-**789012", "789012", "none", 0),
+    ("****-****-****-0423", "X X X X 0423", "none", 0),
     ("****-****-****-1111", "....2222", "none", 0),
     (
         "0000 1234 5678 9000",
         "123456789000",
-        "exact",
-        account_merge.POINTS_ACCTNUM_EXACT,
+        "last6",
+        account_merge.POINTS_ACCTNUM_LAST6,
     ),
 ]
 
@@ -46,11 +52,8 @@ def test_account_number_display_is_used_for_matching(cfg: account_merge.MergeCfg
 
     result = account_merge.score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
-    assert result["aux"]["account_number"]["acctnum_level"] == "last4"
-    assert (
-        result["parts"]["account_number"]
-        == account_merge.POINTS_ACCTNUM_LAST4
-    )
+    assert result["aux"]["account_number"]["acctnum_level"] == "none"
+    assert result["parts"]["account_number"] == 0
 
 
 @pytest.mark.parametrize("left,right,expected_level,expected_points", MATCH_CASES)
@@ -63,8 +66,8 @@ def test_acctnum_match_scoring(
 ) -> None:
     level, debug = account_merge.acctnum_match_level(left, right)
     assert level == expected_level
-    assert debug["left"]["canon_mask"]
-    assert debug["right"]["canon_mask"]
+    assert debug["a"]["digits"] is not None
+    assert debug["b"]["digits"] is not None
 
     bureaus_a = {"transunion": {"account_number": left}}
     bureaus_b = {"experian": {"account_number": right}}
@@ -79,17 +82,17 @@ def test_acctnum_match_scoring(
     aux_payload = account_merge._build_aux_payload(result["aux"])
     assert aux_payload["acctnum_level"] == expected_level
     matched_flag = aux_payload["matched_fields"].get("account_number")
-    assert matched_flag is (expected_level != "none")
+    assert matched_flag is (expected_level in {"exact", "last6_bin", "last6"})
 
     expected_triggers = set(result["triggers"])
     crosses_threshold = expected_points >= cfg.thresholds["AI_THRESHOLD"]
     assert ("total" in expected_triggers) is crosses_threshold
-    if expected_level == "none":
+    if expected_level in {"none", "last6"}:
         assert "strong:account_number" not in expected_triggers
         assert result["decision"] == "different"
     else:
         assert "strong:account_number" in expected_triggers
         assert result["decision"] == "ai"
 
-    expected_match = expected_level != "none"
+    expected_match = expected_level in {"exact", "last6_bin", "last6"}
     assert result["aux"]["account_number"]["matched"] is expected_match

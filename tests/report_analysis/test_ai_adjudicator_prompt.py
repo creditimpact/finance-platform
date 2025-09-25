@@ -27,7 +27,7 @@ def test_build_prompt_from_pack_limits_context(monkeypatch):
             "parts": {"balance_owed": 42, "account_number": 10},
             "matched_fields": {"balance_owed": True},
             "conflicts": ["amount_conflict:high_balance"],
-            "acctnum_level": "partial",
+            "acctnum_level": "last6_bin",
             "ignored": "value",
         },
         "context": {

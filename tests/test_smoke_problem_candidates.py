@@ -50,15 +50,15 @@ def test_build_merge_summary_includes_override_columns():
             score=0.42,
             decision="ai",
             account_decision="ai",
-            reasons=[{"kind": "acctnum", "level": "last4", "masked_any": True}],
+            reasons=[{"kind": "acctnum", "level": "last6_bin", "masked_any": True}],
             aux={
-                "acctnum_level": "last4",
+                "acctnum_level": "last6_bin",
                 "override_reasons": {
                     "acctnum_only_triggers_ai": True,
-                    "acctnum_match_level": "last4",
+                    "acctnum_match_level": "last6_bin",
                 },
                 "override_reason_entries": [
-                    {"kind": "acctnum", "level": "last4", "masked_any": True}
+                    {"kind": "acctnum", "level": "last6_bin", "masked_any": True}
                 ],
             },
             parts={"acct_num": 0.7},
@@ -93,7 +93,7 @@ def test_build_merge_summary_includes_override_columns():
 
     first = pairs[0]
     assert first["decision"] == "ai"
-    assert first["acctnum_level"] == "last4"
+    assert first["acctnum_level"] == "last6_bin"
     assert first["balowed_ok"] is False
     assert any(item.startswith("acctnum(") for item in first["reasons"])
 

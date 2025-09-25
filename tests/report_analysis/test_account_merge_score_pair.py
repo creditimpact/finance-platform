@@ -37,43 +37,100 @@ def test_strong_balance_owed_trigger(cfg) -> None:
 
 ACCOUNT_POINTS = {
     "exact": 40,
-    "last6": 28,
-    "last5": 28,
-    "last4": 22,
-    "masked_match": 15,
+    "last6_bin": 32,
+    "last6": 24,
+    "last5": 0,
+    "last4": 0,
+    "masked_match": 0,
+    "none": 0,
 }
 
 
 @pytest.mark.parametrize(
-    "left,right,expected_level",
+    "left,right,expected_level,expected_points,strong_expected,decision",
     [
         (
             "349992********** 349992********** -34999***********",
             "349992********** 349992********** -34999***********",
-            "exact",
+            "last6_bin",
+            ACCOUNT_POINTS["last6_bin"],
+            True,
+            "ai",
         ),
-        ("1234-5678-9999", "123456789999", "exact"),
-        ("99-123456", "123456", "last6"),
-        ("****-**789012", "789012", "last6"),
-        ("****-****-****-0423", "X X X X 0423", "last4"),
-        ("XXXX1234", "99991234", "last4"),
+        (
+            "1234-5678-9999",
+            "123456789999",
+            "exact",
+            ACCOUNT_POINTS["exact"],
+            True,
+            "ai",
+        ),
+        (
+            "99-123456",
+            "123456",
+            "none",
+            ACCOUNT_POINTS["none"],
+            False,
+            "different",
+        ),
+        (
+            "****-**789012",
+            "789012",
+            "none",
+            ACCOUNT_POINTS["none"],
+            False,
+            "different",
+        ),
+        (
+            "****-****-****-0423",
+            "X X X X 0423",
+            "none",
+            ACCOUNT_POINTS["none"],
+            False,
+            "different",
+        ),
+        (
+            "XXXX1234",
+            "99991234",
+            "none",
+            ACCOUNT_POINTS["none"],
+            False,
+            "different",
+        ),
+        (
+            "12345678901234",
+            "12345600901234",
+            "last6_bin",
+            ACCOUNT_POINTS["last6_bin"],
+            True,
+            "ai",
+        ),
+        (
+            "111111789012",
+            "999999789012",
+            "last6",
+            ACCOUNT_POINTS["last6"],
+            False,
+            "different",
+        ),
     ],
 )
 def test_strong_account_number_trigger_levels(
-    cfg, left: str, right: str, expected_level: str
+    cfg, left: str, right: str, expected_level: str, expected_points: int, strong_expected: bool, decision: str
 ) -> None:
     bureaus_a = _make_bureaus(transunion={"account_number": left})
     bureaus_b = _make_bureaus(equifax={"account_number": right})
 
     result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
-    expected_points = ACCOUNT_POINTS[expected_level]
     assert result["total"] == expected_points
     assert result["parts"]["account_number"] == expected_points
     assert result["identity_score"] == expected_points
-    assert result["decision"] == "ai"
+    assert result["decision"] == decision
     assert result["conflicts"] == []
-    expected_triggers = ["strong:account_number"]
+    expected_triggers: list[str] = []
+    if strong_expected:
+        expected_triggers.append("strong:account_number")
     if expected_points >= cfg.thresholds["AI_THRESHOLD"]:
         expected_triggers.append("total")
     assert result["triggers"] == expected_triggers

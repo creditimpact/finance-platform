@@ -74,9 +74,9 @@ def test_payment_amount_zero_rule_respected():
 @pytest.mark.parametrize(
     "a,b,expected",
     [
-        ("123456", "123456", "exact"),
-        ("000123456", "123456", "last6"),
-        ("1111123456", "222223456", "last4"),
+        ("123456789012", "123456789012", "exact"),
+        ("12345678123456", "12345699123456", "last6_bin"),
+        ("111111789012", "222222789012", "last6"),
         ("abcd", "****", "none"),
     ],
 )
@@ -85,9 +85,11 @@ def test_account_number_levels(a, b, expected):
 
 
 def test_account_numbers_match_thresholds():
-    match, level = account_numbers_match("1234", "01234", min_level="last4")
+    match, level = account_numbers_match(
+        "12345678123456", "12345699123456", min_level="last6"
+    )
     assert match is True
-    assert level == "last4"
+    assert level == "last6_bin"
 
     match_low, level_low = account_numbers_match("123", "456", min_level="any")
     assert match_low is False
@@ -152,9 +154,9 @@ def test_match_field_best_of_9_account_number_aux():
 
     matched, aux = match_field_best_of_9("account_number", account_a, account_b, cfg)
 
-    assert matched is True
+    assert matched is False
     assert aux["best_pair"] == ("experian", "equifax")
-    assert aux["acctnum_level"] == "last4"
+    assert aux["acctnum_level"] == "none"
     assert aux["normalized_values"] == ("1234", "00001234")
 
 

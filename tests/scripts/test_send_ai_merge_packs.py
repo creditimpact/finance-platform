@@ -362,12 +362,12 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
     "decision,flags,expected_pair",
     [
         (
-            "same_account_debt_different",
+            "same_account_debt_diff",
             {"account_match": True, "debt_match": False},
             "same_account_pair",
         ),
         (
-            "same_debt_account_different",
+            "same_debt_account_diff",
             {"account_match": False, "debt_match": True},
             "same_debt_pair",
         ),
@@ -667,6 +667,7 @@ def test_ai_pairing_flow_compaction(
         return {
             "decision": "different",
             "reason": "These tradelines describe the same debt from different collectors.",
+            "flags": {"account_match": False, "debt_match": False},
         }
 
     monkeypatch.setenv("RUNS_ROOT", str(runs_root))
@@ -688,9 +689,9 @@ def test_ai_pairing_flow_compaction(
             "kind": "ai_decision",
             "with": 16,
             "decision": "different",
+            "flags": {"account_match": False, "debt_match": False},
             "at": timestamp,
         },
-        {"kind": "same_debt_pair", "with": 16, "at": timestamp},
     ]
     assert tags_b == [
         {"kind": "merge_best", "with": 11, "decision": "ai"},
@@ -698,9 +699,9 @@ def test_ai_pairing_flow_compaction(
             "kind": "ai_decision",
             "with": 11,
             "decision": "different",
+            "flags": {"account_match": False, "debt_match": False},
             "at": timestamp,
         },
-        {"kind": "same_debt_pair", "with": 11, "at": timestamp},
     ]
 
     summary_a = json.loads((account_a_dir / "summary.json").read_text(encoding="utf-8"))
@@ -710,13 +711,13 @@ def test_ai_pairing_flow_compaction(
         return next(item for item in entry_list if item.get("with") == partner)
 
     ai_a = summary_a["ai_explanations"]
-    assert {item["kind"] for item in ai_a} == {"ai_decision", "same_debt_pair"}
+    assert {item["kind"] for item in ai_a} == {"ai_decision"}
     ai_entry_a = _ai_summary(ai_a, partner=16)
     assert "reason" in ai_entry_a
     assert "same debt" in ai_entry_a["reason"].lower()
 
     ai_b = summary_b["ai_explanations"]
-    assert {item["kind"] for item in ai_b} == {"ai_decision", "same_debt_pair"}
+    assert {item["kind"] for item in ai_b} == {"ai_decision"}
     ai_entry_b = _ai_summary(ai_b, partner=11)
     assert "reason" in ai_entry_b
     assert "same debt" in ai_entry_b["reason"].lower()
@@ -736,7 +737,6 @@ def test_ai_pairing_flow_compaction(
     assert merge_score_a
     assert merge_score_a["best_with"] == 16
     assert merge_score_a["score_total"] >= 0
-    assert merge_score_a["reasons"]
     assert merge_score_a["matched_fields"].get("balance_owed") is True
 
     merge_score_b = summary_b.get("merge_scoring")

@@ -57,8 +57,9 @@ def _expected_minimal_tags(partner: int, *, timestamp: str) -> list[dict[str, An
             "decision": "merge",
             "with": partner,
             "at": timestamp,
+            "flags": {"account_match": True, "debt_match": True},
         },
-        {"kind": "same_debt_pair", "with": partner, "at": timestamp},
+        {"kind": "same_account_pair", "with": partner, "at": timestamp},
     ]
 
 
@@ -460,10 +461,11 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
                 "with": partner_idx,
                 "decision": "merge",
                 "reason": "Records align cleanly.",
+                "flags": {"account_match": True, "debt_match": True},
                 "at": timestamp,
             }
-            same_debt_tag = {
-                "kind": "same_debt_pair",
+            pair_tag = {
+                "kind": "same_account_pair",
                 "with": partner_idx,
                 "source": "ai_adjudicator",
                 "reason": "Records align cleanly.",
@@ -471,7 +473,7 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
             }
             account_dir = run_dir / "cases" / "accounts" / f"{source_idx}"
             upsert_tag(account_dir, decision_tag, unique_keys=("kind", "with", "source"))
-            upsert_tag(account_dir, same_debt_tag, unique_keys=("kind", "with", "source"))
+            upsert_tag(account_dir, pair_tag, unique_keys=("kind", "with", "source"))
 
     monkeypatch.setattr(auto_ai_tasks, "score_accounts", fake_score_accounts)
     monkeypatch.setattr(auto_ai_tasks, "_build_ai_packs", fake_build_packs)
@@ -661,6 +663,7 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
         lambda pack, timeout: {
             "decision": "different",
             "reason": "These tradelines describe the same debt from different collectors.",
+            "flags": {"account_match": False, "debt_match": False},
         },
     )
     timestamp = "2024-07-04T12:00:00Z"
@@ -702,13 +705,23 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
     tags_b = json.loads((account_b / "tags.json").read_text(encoding="utf-8"))
     assert tags_a == [
         {"kind": "merge_best", "with": 16, "decision": "ai"},
-        {"kind": "ai_decision", "with": 16, "decision": "different", "at": timestamp},
-        {"kind": "same_debt_pair", "with": 16, "at": timestamp},
+        {
+            "kind": "ai_decision",
+            "with": 16,
+            "decision": "different",
+            "at": timestamp,
+            "flags": {"account_match": False, "debt_match": False},
+        },
     ]
     assert tags_b == [
         {"kind": "merge_best", "with": 11, "decision": "ai"},
-        {"kind": "ai_decision", "with": 11, "decision": "different", "at": timestamp},
-        {"kind": "same_debt_pair", "with": 11, "at": timestamp},
+        {
+            "kind": "ai_decision",
+            "with": 11,
+            "decision": "different",
+            "at": timestamp,
+            "flags": {"account_match": False, "debt_match": False},
+        },
     ]
 
     summary_a = json.loads((account_a / "summary.json").read_text(encoding="utf-8"))
@@ -766,6 +779,7 @@ def test_run_auto_ai_pipeline_processes_index_and_updates_manifest(
         lambda pack, timeout: {
             "decision": "merge",
             "reason": "Records align cleanly.",
+            "flags": {"account_match": True, "debt_match": True},
         },
     )
     monkeypatch.setattr(send_mod, "_isoformat_timestamp", lambda dt=None: timestamp)

@@ -105,7 +105,13 @@ def test_build_merge_ai_packs_curates_context_and_prompt(tmp_path: Path) -> None
     assert "Two-Year Payment History" not in " ".join(context_a)
     assert pack["ids"]["account_number_a"] == "409451******"
     assert pack["ids"]["account_number_b"] == "409451******"
+    assert pack["ids"]["account_number_a_norm"] == "409451"
+    assert pack["ids"]["account_number_b_norm"] == "409451"
+    assert pack["ids"]["account_last4_a"] == "9451"
+    assert pack["ids"]["account_last4_b"] == "9451"
     assert pack["highlights"]["total"] == 59
+    assert pack["highlights"]["identity_score"] == 28
+    assert pack["highlights"]["debt_score"] == 31
     assert pack["highlights"]["matched_fields"]["balance_owed"] is True
     assert pack["limits"]["max_lines_per_side"] == 6
     assert set(pack["tolerances_hint"].keys()) == {
@@ -122,9 +128,18 @@ def test_build_merge_ai_packs_curates_context_and_prompt(tmp_path: Path) -> None
     user_payload = json.loads(messages[1]["content"])
     assert user_payload["pair"] == {"a": 11, "b": 16}
     assert user_payload["numeric_match_summary"]["total"] == 59
+    assert user_payload["numeric_match_summary"]["identity_score"] == 28
+    assert user_payload["numeric_match_summary"]["debt_score"] == 31
+    assert user_payload["ids"]["account_number_a_norm"] == "409451"
+    assert user_payload["ids"]["account_number_b_norm"] == "409451"
+    assert user_payload["ids"]["account_last4_a"] == "9451"
+    assert user_payload["ids"]["account_last4_b"] == "9451"
     assert user_payload["output_contract"]["decision"] == [
         "merge",
+        "same_account",
+        "same_account_debt_different",
         "same_debt",
+        "same_debt_account_different",
         "different",
     ]
 

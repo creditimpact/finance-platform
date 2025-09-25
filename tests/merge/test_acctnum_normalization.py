@@ -34,9 +34,9 @@ def test_account_number_level_last4() -> None:
     assert account_merge.account_number_level("12345678", "005678") == "last4"
 
 
-def test_acctnum_match_level_masked_exact() -> None:
+def test_acctnum_match_level_masked_last4() -> None:
     level, debug = account_merge.acctnum_match_level("**12**34", "**12**34")
-    assert level == "exact"
+    assert level == "last4"
     assert debug["left"]["canon_mask"] == "*12*34"
     assert debug["right"]["canon_mask"] == "*12*34"
 

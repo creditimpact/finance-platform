@@ -334,10 +334,12 @@ def normalize_acctnum(raw: str | None) -> Dict[str, object]:
 
     translated_chars: List[str] = []
     digits_chars: List[str] = []
+    visible_digit_count = 0
     for char in stripped:
         if char.isdigit():
             digits_chars.append(char)
             translated_chars.append(char)
+            visible_digit_count += 1
         elif char in _MASK_CHARS:
             translated_chars.append("*")
         else:
@@ -348,15 +350,20 @@ def normalize_acctnum(raw: str | None) -> Dict[str, object]:
     has_digits = bool(digits)
 
     digits_last4 = digits[-4:] if len(digits) >= 4 else None
+    digits_last5 = digits[-5:] if len(digits) >= 5 else None
     digits_last6 = digits[-6:] if len(digits) >= 6 else None
+    has_mask = "*" in canon_mask
 
     return {
         "raw": raw,
         "digits": digits,
         "digits_last4": digits_last4,
+        "digits_last5": digits_last5,
         "digits_last6": digits_last6,
         "canon_mask": canon_mask,
         "has_digits": has_digits,
+        "has_mask": has_mask,
+        "visible_digits": visible_digit_count,
     }
 
 
@@ -370,8 +377,27 @@ def acctnum_match_level(a: str | None, b: str | None) -> Tuple[str, Dict[str, Di
     digits_a = str(norm_a.get("digits") or "")
     digits_b = str(norm_b.get("digits") or "")
 
+    has_mask_a = bool(norm_a.get("has_mask"))
+    has_mask_b = bool(norm_b.get("has_mask"))
+
+    def _level_for_visible_digits(count: int, masked_left: bool, masked_right: bool) -> str:
+        if count <= 0:
+            return "none"
+        if not masked_left and not masked_right:
+            return "exact"
+        if count >= 7:
+            return "exact"
+        if count == 6:
+            return "last6"
+        if count == 5:
+            return "last5"
+        if count == 4:
+            return "last4"
+        return "masked_match"
+
     if digits_a and digits_b and len(digits_a) == len(digits_b) and digits_a == digits_b:
-        return "exact", debug
+        level = _level_for_visible_digits(len(digits_a), has_mask_a, has_mask_b)
+        return level, debug
 
     canon_a = str(norm_a.get("canon_mask") or "")
     canon_b = str(norm_b.get("canon_mask") or "")
@@ -386,12 +412,22 @@ def acctnum_match_level(a: str | None, b: str | None) -> Tuple[str, Dict[str, Di
             if char_left != "*"
         )
     ):
-        return "exact", debug
+        visible_digits = max(
+            int(norm_a.get("visible_digits") or 0),
+            int(norm_b.get("visible_digits") or 0),
+        )
+        level = _level_for_visible_digits(visible_digits, has_mask_a, has_mask_b)
+        return level, debug
 
     last6_a = norm_a.get("digits_last6")
     last6_b = norm_b.get("digits_last6")
     if last6_a and last6_b and last6_a == last6_b:
         return "last6", debug
+
+    last5_a = norm_a.get("digits_last5")
+    last5_b = norm_b.get("digits_last5")
+    if last5_a and last5_b and last5_a == last5_b:
+        return "last5", debug
 
     last4_a = norm_a.get("digits_last4")
     last4_b = norm_b.get("digits_last4")
@@ -613,6 +649,11 @@ def match_field_best_of_9(
     bureaus = ("transunion", "experian", "equifax")
     field_key = str(field_name)
 
+    best_aux: Dict[str, Any] | None = None
+    best_score = -1
+    best_matched_aux: Dict[str, Any] | None = None
+    best_matched_score = -1
+
     for left in bureaus:
         left_branch = A.get(left)
         if not isinstance(left_branch, Mapping):
@@ -638,15 +679,33 @@ def match_field_best_of_9(
             matched, aux = _match_field_values(
                 field_key, norm_left, norm_right, raw_left, raw_right, cfg
             )
-            if not matched:
-                continue
 
             result_aux = {
                 "best_pair": (left, right),
                 "normalized_values": _serialize_normalized_pair(norm_left, norm_right),
             }
             result_aux.update(aux)
-            return True, result_aux
+
+            if field_key == "account_number":
+                level = str(aux.get("acctnum_level", "none") or "none")
+                level_score = _ACCOUNT_LEVEL_ORDER.get(level, 0)
+                if level_score > best_score:
+                    best_score = level_score
+                    best_aux = dict(result_aux)
+                if matched and level_score >= best_matched_score:
+                    best_matched_score = level_score
+                    best_matched_aux = dict(result_aux)
+                # Continue searching for a better match even after finding one.
+                continue
+
+            if matched:
+                return True, result_aux
+
+    if field_key == "account_number":
+        if best_matched_aux is not None:
+            return True, best_matched_aux
+        if best_aux is not None:
+            return False, best_aux
 
     return False, {}
 

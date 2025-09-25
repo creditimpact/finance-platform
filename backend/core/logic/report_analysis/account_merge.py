@@ -13,6 +13,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
 from backend.core.io.tags import read_tags, upsert_tag, write_tags_atomic
+from backend.core.logic.normalize.accounts import (
+    last4 as normalize_last4,
+    normalize_acctnum,
+)
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
 
@@ -514,10 +518,10 @@ def _collect_account_last4(bureaus: Mapping[str, Mapping[str, Any]]) -> Set[str]
             raw_value = branch.get(key)
             if is_missing(raw_value):
                 continue
-            digits = digits_only(raw_value)
-            if not digits or len(digits) < 4:
+            last_four = normalize_last4(str(raw_value))
+            if not last_four:
                 continue
-            last4_values.add(digits[-4:])
+            last4_values.add(last_four)
     return last4_values
 
 
@@ -1595,23 +1599,55 @@ def digits_only(value: Any) -> Optional[str]:
 
 
 def normalize_account_number(value: Any) -> Optional[str]:
-    return digits_only(value)
+    if is_missing(value):
+        return None
+    normalized = normalize_acctnum(str(value))
+    return normalized
 
 
 def account_number_level(a: Any, b: Any) -> str:
-    digits_a = digits_only(a)
-    digits_b = digits_only(b)
-    if not digits_a or not digits_b:
+    if is_missing(a) or is_missing(b):
         return "none"
 
-    norm_a = digits_a.lstrip("0") or "0"
-    norm_b = digits_b.lstrip("0") or "0"
+    norm_a = normalize_acctnum(str(a))
+    norm_b = normalize_acctnum(str(b))
+    if not norm_a or not norm_b:
+        return "none"
+
+    has_mask = any("*" in str(value) for value in (a, b) if isinstance(value, str))
+
     if norm_a == norm_b:
+        digits_a = digits_only(norm_a)
+        digits_b = digits_only(norm_b)
+        if has_mask and digits_a == digits_b and digits_a and len(digits_a) <= 4:
+            return "last4"
+        if len(norm_a) > 4 or len(norm_b) > 4:
+            return "exact"
+        if digits_a and len(digits_a) > 4:
+            return "exact"
+        if digits_b and len(digits_b) > 4:
+            return "exact"
+        if digits_a == digits_b and digits_a and len(digits_a) == 4:
+            return "last4"
         return "exact"
 
-    if len(digits_a) >= 4 and len(digits_b) >= 4:
-        if digits_a[-4:] == digits_b[-4:]:
-            return "last4"
+    digits_a = digits_only(norm_a)
+    digits_b = digits_only(norm_b)
+    if digits_a and digits_b:
+        stripped_a = digits_a.lstrip("0") or "0"
+        stripped_b = digits_b.lstrip("0") or "0"
+        if stripped_a == stripped_b:
+            if has_mask and len(stripped_a) <= 4:
+                return "last4"
+            if len(stripped_a) > 4 or len(stripped_b) > 4:
+                return "exact"
+            if len(stripped_a) == 4 and len(stripped_b) == 4:
+                return "last4"
+
+    last4_a = normalize_last4(norm_a)
+    last4_b = normalize_last4(norm_b)
+    if last4_a and last4_b and last4_a == last4_b:
+        return "last4"
 
     return "none"
 

@@ -87,7 +87,7 @@ def test_account_number_levels(a, b, expected):
 def test_account_numbers_match_thresholds():
     match, level = account_numbers_match("1234", "01234", min_level="last4")
     assert match is True
-    assert level == "exact"
+    assert level == "last4"
 
     match_low, level_low = account_numbers_match("123", "456", min_level="any")
     assert match_low is False
@@ -154,7 +154,7 @@ def test_match_field_best_of_9_account_number_aux():
 
     assert matched is True
     assert aux["best_pair"] == ("experian", "equifax")
-    assert aux["acctnum_level"] == "exact"
+    assert aux["acctnum_level"] == "last4"
     assert aux["normalized_values"] == ("1234", "00001234")
 
 

@@ -509,7 +509,9 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     assert tags_a_first == _expected_minimal_tags(16, timestamp=timestamp)
     assert tags_b_first == _expected_minimal_tags(11, timestamp=timestamp)
     assert summary_a_first["merge_explanations"][0]["with"] == 16
+    assert any(entry.get("origin") == "ai" for entry in summary_a_first["merge_explanations"])
     assert summary_b_first["ai_explanations"][0]["decision"] == "merge"
+    assert summary_b_first["ai_explanations"][0]["normalized"] is False
 
     payload = auto_ai_tasks.ai_score_step.run(sid, str(runs_root))
     payload = auto_ai_tasks.ai_build_packs_step.run(payload)

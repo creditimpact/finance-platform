@@ -427,6 +427,9 @@ def _build_problem_cases_lean(
             for key in ("problem_reasons", "problem_tags", "primary_issue"):
                 if key in existing_summary:
                     summary_obj[key] = existing_summary[key]
+            for key in ("merge_explanations", "ai_explanations", "merge_scoring"):
+                if key in existing_summary:
+                    summary_obj[key] = existing_summary[key]
         else:
             primary_issue, problem_reasons, problem_tags = _extract_candidate_reason(cand)
             reasons_list = _coerce_list(problem_reasons) or []

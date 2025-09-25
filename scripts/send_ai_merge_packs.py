@@ -166,22 +166,6 @@ def _ensure_int(value: object, label: str) -> int:
         raise ValueError(f"{label} must be an integer") from exc
 
 
-def _should_mark_same_debt(payload: Mapping[str, object]) -> bool:
-    decision = str(payload.get("decision") or "").strip().lower()
-    if decision in {"same_debt", "same_debt_account_different", "merge"}:
-        return True
-
-    flags = payload.get("flags")
-    if isinstance(flags, MappingABC):
-        debt_flag = flags.get("debt_match")
-        if isinstance(debt_flag, str):
-            if debt_flag.strip().lower() == "true":
-                return True
-        elif debt_flag is True:
-            return True
-    return False
-
-
 def _normalize_match_flag(value: object) -> bool | str | None:
     if isinstance(value, bool):
         return value
@@ -214,6 +198,20 @@ def _flag_signature(value: bool | str) -> str:
     return "unknown"
 
 
+def _serialize_match_flag(value: bool | str | object) -> bool | str:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+        if lowered == "unknown":
+            return "unknown"
+    return "unknown"
+
+
 _ALLOWED_DECISIONS = {
     "merge",
     "same_account",
@@ -221,6 +219,14 @@ _ALLOWED_DECISIONS = {
     "same_debt",
     "same_debt_account_different",
     "different",
+}
+
+_PAIR_TAG_BY_DECISION: dict[str, str] = {
+    "same_account": "same_account_pair",
+    "same_account_debt_different": "same_account_pair",
+    "merge": "same_account_pair",
+    "same_debt": "same_debt_pair",
+    "same_debt_account_different": "same_debt_pair",
 }
 
 
@@ -291,6 +297,42 @@ def _write_decision_tags(run_path: Path | str, *args: object) -> None:
     )
 
 
+def _prune_pair_tags(tag_path: Path, other_idx: int, *, keep_kind: str | None) -> None:
+    existing_tags = read_tags(tag_path)
+    if not existing_tags:
+        return
+
+    filtered: list[dict[str, object]] = []
+    modified = False
+    for entry in existing_tags:
+        kind = str(entry.get("kind", "")).strip().lower()
+        if kind not in {"same_account_pair", "same_debt_pair"}:
+            filtered.append(dict(entry))
+            continue
+        source = str(entry.get("source", ""))
+        if source != "ai_adjudicator":
+            filtered.append(dict(entry))
+            continue
+        partner_raw = entry.get("with")
+        try:
+            partner = int(partner_raw) if partner_raw is not None else None
+        except (TypeError, ValueError):
+            partner = None
+        if partner != other_idx:
+            filtered.append(dict(entry))
+            continue
+        if keep_kind is not None and kind == keep_kind:
+            filtered.append(dict(entry))
+            continue
+        modified = True
+
+    if not modified:
+        return
+
+    serialized = json.dumps(filtered, ensure_ascii=False, indent=2)
+    tag_path.write_text(f"{serialized}\n", encoding="utf-8")
+
+
 def _write_decision_tags_resolved(
     run_dir: Path,
     a_idx: int,
@@ -301,7 +343,13 @@ def _write_decision_tags_resolved(
     payload: Mapping[str, object],
 ) -> None:
     base = _accounts_root(run_dir)
-    same_debt = _should_mark_same_debt(payload)
+    raw_flags = payload.get("flags")
+    flags_payload: dict[str, bool | str] | None = None
+    if isinstance(raw_flags, MappingABC):
+        account_flag = _serialize_match_flag(raw_flags.get("account_match"))
+        debt_flag = _serialize_match_flag(raw_flags.get("debt_match"))
+        flags_payload = {"account_match": account_flag, "debt_match": debt_flag}
+    pair_tag_kind = _PAIR_TAG_BY_DECISION.get(decision)
 
     for source_idx, other_idx in ((a_idx, b_idx), (b_idx, a_idx)):
         tag_path = base / str(source_idx) / "tags.json"
@@ -314,17 +362,25 @@ def _write_decision_tags_resolved(
             "reason": reason,
             "at": timestamp,
         }
+        if flags_payload is not None:
+            decision_tag["flags"] = dict(flags_payload)
+        raw_response = payload.get("raw_response")
+        if raw_response is not None:
+            decision_tag["raw_response"] = raw_response
         upsert_tag(tag_path, decision_tag, unique_keys=("kind", "with", "source"))
 
-        if same_debt:
-            same_debt_tag = {
-                "kind": "same_debt_pair",
+        if pair_tag_kind is not None:
+            pair_tag = {
+                "kind": pair_tag_kind,
                 "with": other_idx,
                 "source": "ai_adjudicator",
                 "reason": reason,
                 "at": timestamp,
             }
-            upsert_tag(tag_path, same_debt_tag, unique_keys=("kind", "with", "source"))
+            upsert_tag(tag_path, pair_tag, unique_keys=("kind", "with", "source"))
+            _prune_pair_tags(tag_path, other_idx, keep_kind=pair_tag_kind)
+        else:
+            _prune_pair_tags(tag_path, other_idx, keep_kind=None)
 
         merge_tag: Mapping[str, object] | None = None
         for entry in read_tags(tag_path):
@@ -400,6 +456,14 @@ def _write_decision_tags_resolved(
                 merge_summary["acctnum_level"] = acctnum_level
             summary_payload["merge_scoring"] = merge_summary
             _write_summary(summary_path, summary_payload)
+
+    log.info(
+        "AI_TAGS_WRITTEN a=%s b=%s decision=%s pair_tag=%s",
+        a_idx,
+        b_idx,
+        decision,
+        pair_tag_kind or "none",
+    )
 
 def _write_error_tags(
     run_dir: Path,

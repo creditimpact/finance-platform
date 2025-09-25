@@ -12,6 +12,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
+from backend import config as app_config
 from backend.core.io.tags import read_tags, upsert_tag, write_tags_atomic
 from backend.core.logic.normalize.accounts import (
     last4 as normalize_last4,
@@ -271,10 +272,10 @@ _ACCOUNT_LEVEL_ORDER = {
     "exact": 4,
 }
 _ACCOUNT_NUMBER_WEIGHTS = {
-    "masked_match": 15,
-    "last4": 25,
-    "last5": 35,
-    "exact": 50,
+    "masked_match": app_config.ACCTNUM_MASKED_WEIGHT,
+    "last4": app_config.ACCTNUM_LAST4_WEIGHT,
+    "last5": app_config.ACCTNUM_LAST5_WEIGHT,
+    "exact": app_config.ACCTNUM_EXACT_WEIGHT,
 }
 _MASK_CHARS = {"*", "x", "X", "•", "●"}
 

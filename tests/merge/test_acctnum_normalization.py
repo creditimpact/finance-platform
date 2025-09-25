@@ -27,27 +27,41 @@ def test_account_number_level_exact() -> None:
 
 
 def test_account_number_level_last6() -> None:
-    assert account_merge.account_number_level("99123456", "123456") == "last6"
+    assert account_merge.account_number_level("99123456", "123456") == "none"
 
 
 def test_account_number_level_last4() -> None:
-    assert account_merge.account_number_level("12345678", "005678") == "last4"
+    assert account_merge.account_number_level("12345678", "005678") == "none"
 
 
 def test_acctnum_match_level_masked_last4() -> None:
     level, debug = account_merge.acctnum_match_level("**12**34", "**12**34")
-    assert level == "last4"
-    assert debug["left"]["canon_mask"] == "*12*34"
-    assert debug["right"]["canon_mask"] == "*12*34"
+    assert level == "none"
+    assert debug["a"]["digits_last4"] == "1234"
+    assert debug["b"]["digits_last4"] == "1234"
 
 
-def test_acctnum_match_level_prefers_last6() -> None:
-    level, _ = account_merge.acctnum_match_level("99123456", "123456")
+def test_acctnum_match_level_last6_bin() -> None:
+    level, _ = account_merge.acctnum_match_level(
+        "123456XXXXXX789012",
+        "123456YYYYYY789012",
+    )
+    assert level == "last6_bin"
+
+
+def test_acctnum_match_level_last6_diff_bin() -> None:
+    level, _ = account_merge.acctnum_match_level(
+        "111111XXXXXX789012",
+        "222222YYYYYY789012",
+    )
     assert level == "last6"
 
 
-def test_acctnum_match_level_trims_leading_zero_for_exact() -> None:
-    level, _ = account_merge.acctnum_match_level("000012345678", "12345678")
+def test_acctnum_match_level_exact_requires_unmasked() -> None:
+    level, _ = account_merge.acctnum_match_level(
+        "0000123456789012",
+        "0000123456789012",
+    )
     assert level == "exact"
 
 

@@ -367,91 +367,64 @@ def normalize_acctnum(raw: str | None) -> Dict[str, object]:
     }
 
 
-def acctnum_match_level(a: str | None, b: str | None) -> Tuple[str, Dict[str, Dict[str, object]]]:
-    """Return the account-number match level and debug payload."""
+DIGITS_RE = re.compile(r"\d")
 
-    norm_a = normalize_acctnum(a)
-    norm_b = normalize_acctnum(b)
-    debug = {"left": norm_a, "right": norm_b}
 
-    digits_a = str(norm_a.get("digits") or "")
-    digits_b = str(norm_b.get("digits") or "")
+def _digits_only(raw: str | None) -> str:
+    return "".join(DIGITS_RE.findall(raw or ""))
 
-    has_digits_a = bool(norm_a.get("has_digits"))
-    has_digits_b = bool(norm_b.get("has_digits"))
 
-    if not has_digits_a and not has_digits_b:
+def _has_mask(raw: str | None) -> bool:
+    if not raw:
+        return False
+    return any(ch in _MASK_CHARS for ch in str(raw))
+
+
+def acctnum_match_level(a_raw: str | None, b_raw: str | None) -> Tuple[str, Dict[str, Dict[str, str]]]:
+    """Return the hardened account-number match level with debug payload."""
+
+    a_digits = _digits_only(a_raw)
+    b_digits = _digits_only(b_raw)
+
+    debug: Dict[str, Dict[str, str]] = {
+        "a": {
+            "raw": str(a_raw) if a_raw is not None else "",
+            "digits": a_digits,
+            "digits_last4": a_digits[-4:],
+            "digits_last6": a_digits[-6:],
+            "digits_first6": a_digits[:6],
+        },
+        "b": {
+            "raw": str(b_raw) if b_raw is not None else "",
+            "digits": b_digits,
+            "digits_last4": b_digits[-4:],
+            "digits_last6": b_digits[-6:],
+            "digits_first6": b_digits[:6],
+        },
+    }
+
+    if not a_digits or not b_digits:
         return "none", debug
 
-    has_mask_a = bool(norm_a.get("has_mask"))
-    has_mask_b = bool(norm_b.get("has_mask"))
+    a_len = len(a_digits)
+    b_len = len(b_digits)
 
-    def _level_for_visible_digits(count: int, masked_left: bool, masked_right: bool) -> str:
-        if count <= 0:
-            return "none"
-        if not masked_left and not masked_right:
-            return "exact"
-        if count >= 7:
-            return "exact"
-        if count == 6:
-            return "last6"
-        if count == 5:
-            return "last5"
-        if count == 4:
-            return "last4"
-        return "masked_match"
+    a_masked = _has_mask(a_raw)
+    b_masked = _has_mask(b_raw)
 
-    def _normalize_for_exact(digits: str) -> str:
-        if not digits:
-            return ""
-        trimmed = digits.lstrip("0")
-        return trimmed if trimmed else "0"
+    if a_digits == b_digits and a_len >= 10 and not a_masked and not b_masked:
+        return "exact", debug
 
-    normalized_a = _normalize_for_exact(digits_a)
-    normalized_b = _normalize_for_exact(digits_b)
+    if a_len < 10 or b_len < 10:
+        return "none", debug
 
-    if normalized_a and normalized_b and normalized_a == normalized_b:
-        visible_digits = max(
-            int(norm_a.get("visible_digits") or 0),
-            int(norm_b.get("visible_digits") or 0),
-        )
-        level = _level_for_visible_digits(visible_digits, has_mask_a, has_mask_b)
-        return level, debug
+    same_last6 = a_digits[-6:] == b_digits[-6:]
+    same_bin = a_digits[:6] == b_digits[:6] and a_digits[:6] and b_digits[:6]
 
-    canon_a = str(norm_a.get("canon_mask") or "")
-    canon_b = str(norm_b.get("canon_mask") or "")
-    if (
-        canon_a
-        and canon_b
-        and canon_a == canon_b
-        and any(char.isdigit() for char in canon_a)
-        and all(
-            (char_left == char_right)
-            for char_left, char_right in zip(canon_a, canon_b)
-            if char_left != "*"
-        )
-    ):
-        visible_digits = max(
-            int(norm_a.get("visible_digits") or 0),
-            int(norm_b.get("visible_digits") or 0),
-        )
-        level = _level_for_visible_digits(visible_digits, has_mask_a, has_mask_b)
-        return level, debug
-
-    last6_a = norm_a.get("digits_last6")
-    last6_b = norm_b.get("digits_last6")
-    if last6_a and last6_b and last6_a == last6_b:
+    if same_last6 and same_bin:
+        return "last6_bin", debug
+    if same_last6:
         return "last6", debug
-
-    last5_a = norm_a.get("digits_last5")
-    last5_b = norm_b.get("digits_last5")
-    if last5_a and last5_b and last5_a == last5_b:
-        return "last5", debug
-
-    last4_a = norm_a.get("digits_last4")
-    last4_b = norm_b.get("digits_last4")
-    if last4_a and last4_b and last4_a == last4_b:
-        return "last4", debug
 
     return "none", debug
 _TYPE_ALIAS_MAP = {

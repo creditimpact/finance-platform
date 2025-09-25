@@ -570,6 +570,39 @@ def _serialize_normalized_pair(a: Any, b: Any) -> Tuple[Any, Any]:
     return (_serialize_normalized_value(a), _serialize_normalized_value(b))
 
 
+def _extract_account_number_string(
+    bureaus: Mapping[str, Mapping[str, Any]],
+    preferred_bureau: Optional[str] = None,
+) -> str:
+    """Return the best raw account-number string for a bureau mapping."""
+
+    if not isinstance(bureaus, Mapping):
+        return ""
+
+    ordered_candidates: List[str] = []
+    if preferred_bureau:
+        ordered_candidates.append(str(preferred_bureau))
+    ordered_candidates.extend(["transunion", "experian", "equifax"])
+
+    seen: Set[str] = set()
+    for bureau_key in ordered_candidates:
+        if bureau_key in seen:
+            continue
+        seen.add(bureau_key)
+
+        branch = bureaus.get(bureau_key)
+        if not isinstance(branch, Mapping):
+            continue
+
+        for field_name in ("account_number", "account_number_display"):
+            raw_value = branch.get(field_name)
+            if is_missing(raw_value):
+                continue
+            return str(raw_value)
+
+    return ""
+
+
 def _is_zero_amount(value: Any) -> bool:
     try:
         return abs(float(value)) <= _AMOUNT_ZERO_EPSILON
@@ -837,16 +870,51 @@ def score_pair_0_100(
     date_matches: Dict[str, bool] = {field: False for field in _DATE_FIELDS_ORDER}
     trigger_events: List[Dict[str, Any]] = []
 
+    acct_match_raw, acct_aux_raw = match_field_best_of_9(
+        "account_number", A_data, B_data, cfg
+    )
+    acct_aux: Dict[str, Any] = dict(acct_aux_raw) if isinstance(acct_aux_raw, Mapping) else {}
+    best_pair = acct_aux.get("best_pair") if isinstance(acct_aux, Mapping) else None
+    left_pref: Optional[str]
+    right_pref: Optional[str]
+    if isinstance(best_pair, (list, tuple)) and len(best_pair) == 2:
+        left_pref = str(best_pair[0])
+        right_pref = str(best_pair[1])
+    else:
+        left_pref = None
+        right_pref = None
+
+    a_account_str = _extract_account_number_string(A_data, left_pref)
+    b_account_str = _extract_account_number_string(B_data, right_pref)
+
+    acct_level, acct_debug = acctnum_match_level(a_account_str, b_account_str)
+    acct_points = int(_ACCOUNT_NUMBER_WEIGHTS.get(acct_level, 0) or 0)
+    acct_matched = acct_level != "none"
+
+    field_matches["account_number"] = acct_matched
+    parts["account_number"] = acct_points
+    identity_sum += acct_points
+    total += acct_points
+
+    acct_aux.update(
+        {
+            "acctnum_level": acct_level,
+            "matched": acct_matched,
+            "acctnum_debug": acct_debug,
+            "raw_values": {"a": a_account_str, "b": b_account_str},
+            "threshold_matched": bool(acct_match_raw),
+        }
+    )
+    aux["account_number"] = acct_aux
+
     for field in _FIELD_SEQUENCE:
+        if field == "account_number":
+            continue
         matched, match_aux = match_field_best_of_9(field, A_data, B_data, cfg)
         base_points = int(cfg.points.get(field, 0))
         awarded_points = 0
         if matched:
-            if field == "account_number":
-                acct_level = str(match_aux.get("acctnum_level") or "none")
-                awarded_points = _ACCOUNT_NUMBER_WEIGHTS.get(acct_level, base_points)
-            else:
-                awarded_points = base_points
+            awarded_points = base_points
             total += awarded_points
             if field in _MID_FIELD_SET:
                 mid_sum += awarded_points

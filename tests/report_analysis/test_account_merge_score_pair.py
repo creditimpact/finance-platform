@@ -36,10 +36,10 @@ def test_strong_balance_owed_trigger(cfg) -> None:
 
 
 ACCOUNT_POINTS = {
-    "exact": 50,
-    "last6": 35,
-    "last5": 35,
-    "last4": 25,
+    "exact": 40,
+    "last6": 28,
+    "last5": 28,
+    "last4": 22,
     "masked_match": 15,
 }
 
@@ -64,6 +64,7 @@ def test_strong_account_number_trigger_levels(
     expected_points = ACCOUNT_POINTS[expected_level]
     assert result["total"] == expected_points
     assert result["parts"]["account_number"] == expected_points
+    assert result["identity_score"] == expected_points
     assert result["decision"] == "ai"
     assert result["conflicts"] == []
     expected_triggers = ["strong:account_number"]
@@ -196,7 +197,7 @@ def test_auto_merge_success(cfg) -> None:
 
     result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
-    assert result["total"] == 93
+    assert result["total"] == 83
     assert result["decision"] == "auto"
     assert result["conflicts"] == []
     assert result["triggers"] == ["strong:balance_owed", "strong:account_number", "total"]
@@ -249,7 +250,7 @@ def test_auto_merge_blocked_by_amount_conflict(cfg) -> None:
 
     result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
-    assert result["total"] == 93
+    assert result["total"] == 83
     assert result["decision"] == "ai"
     assert "amount_conflict:past_due_amount" in result["conflicts"]
     assert result["triggers"] == ["strong:balance_owed", "strong:account_number", "total"]

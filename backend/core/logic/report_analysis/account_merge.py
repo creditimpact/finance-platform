@@ -39,6 +39,11 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
+POINTS_ACCTNUM_EXACT = 40
+POINTS_ACCTNUM_LAST6 = 28
+POINTS_ACCTNUM_LAST4 = 22
+
+
 def is_missing(value: Any) -> bool:
     """Return True when a value represents an explicit missing sentinel."""
 
@@ -152,7 +157,7 @@ class MergeCfg:
 
 _POINT_DEFAULTS: Dict[str, int] = {
     "balance_owed": 31,
-    "account_number": 28,
+    "account_number": POINTS_ACCTNUM_LAST6,
     "last_payment": 12,
     "past_due_amount": 8,
     "high_balance": 6,
@@ -274,12 +279,22 @@ _ACCOUNT_LEVEL_ORDER = {
 }
 _ACCOUNT_NUMBER_WEIGHTS = {
     "masked_match": app_config.ACCTNUM_MASKED_WEIGHT,
-    "last4": app_config.ACCTNUM_LAST4_WEIGHT,
-    "last5": app_config.ACCTNUM_LAST5_WEIGHT,
-    "last6": app_config.ACCTNUM_LAST5_WEIGHT,
-    "exact": app_config.ACCTNUM_EXACT_WEIGHT,
+    "last4": POINTS_ACCTNUM_LAST4,
+    "last5": POINTS_ACCTNUM_LAST6,
+    "last6": POINTS_ACCTNUM_LAST6,
+    "exact": POINTS_ACCTNUM_EXACT,
 }
 _MASK_CHARS = {"*", "x", "X", "•", "●"}
+
+_IDENTITY_FIELD_SET = {
+    "account_number",
+    "creditor_type",
+    "date_opened",
+    "closed_date",
+    "date_of_last_activity",
+    "date_reported",
+    "last_verified",
+}
 
 
 def normalize_acctnum(raw: str | None) -> Dict[str, object]:
@@ -745,6 +760,7 @@ def score_pair_0_100(
 
     total = 0
     mid_sum = 0
+    identity_sum = 0
     parts: Dict[str, int] = {}
     aux: Dict[str, Dict[str, Any]] = {}
     field_matches: Dict[str, bool] = {}
@@ -764,6 +780,8 @@ def score_pair_0_100(
             total += awarded_points
             if field in _MID_FIELD_SET:
                 mid_sum += awarded_points
+            if field in _IDENTITY_FIELD_SET:
+                identity_sum += awarded_points
         parts[field] = awarded_points
 
         per_field_aux: Dict[str, Any] = dict(match_aux)
@@ -896,6 +914,8 @@ def score_pair_0_100(
         "total": int(total),
         "parts": parts,
         "mid_sum": int(mid_sum),
+        "identity_sum": int(identity_sum),
+        "identity_score": int(identity_sum),
         "dates_all": dates_all,
         "aux": aux,
         "triggers": triggers,

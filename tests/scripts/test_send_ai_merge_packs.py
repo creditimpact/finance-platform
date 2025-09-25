@@ -1,5 +1,6 @@
 import json
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,29 @@ def _write_raw_lines(path: Path, lines: list[str]) -> None:
     _write_json(path, [{"text": line} for line in lines])
 
 
+def _assert_pack_messages_with_rules(
+    pack: Mapping[str, object], expected: Mapping[str, object]
+) -> None:
+    actual_messages = pack.get("messages")
+    expected_messages = expected.get("messages")
+    assert isinstance(actual_messages, list)
+    assert isinstance(expected_messages, list)
+    assert len(actual_messages) == len(expected_messages)
+    assert actual_messages[1:] == expected_messages[1:]
+    actual_system = actual_messages[0]
+    expected_system = expected_messages[0]
+    assert isinstance(actual_system, Mapping)
+    assert isinstance(expected_system, Mapping)
+    assert actual_system.get("role") == expected_system.get("role")
+    expected_content = expected_system.get("content")
+    actual_content = actual_system.get("content")
+    assert isinstance(expected_content, str)
+    assert isinstance(actual_content, str)
+    trimmed_expected = expected_content.rstrip()
+    assert actual_content.startswith(trimmed_expected)
+    assert "Debt rules:" in actual_content
+
+
 def _merge_pair_tag(partner: int) -> dict:
     return {
         "tag": "merge_pair",
@@ -27,13 +51,17 @@ def _merge_pair_tag(partner: int) -> dict:
         "source": "merge_scorer",
         "with": partner,
         "decision": "ai",
-        "total": 59,
+        "total": 53,
         "mid": 20,
         "dates_all": False,
-        "parts": {"balance_owed": 31, "account_number": 28},
+        "parts": {"balance_owed": 31, "account_number": 22},
         "aux": {
             "acctnum_level": "last4",
-            "matched_fields": {"balance_owed": True, "last_payment": True},
+            "matched_fields": {
+                "balance_owed": True,
+                "last_payment": True,
+                "account_number": True,
+            },
         },
         "conflicts": ["credit_limit:conflict"],
         "strong": True,
@@ -47,12 +75,16 @@ def _merge_best_tag(partner: int) -> dict:
         "source": "merge_scorer",
         "with": partner,
         "decision": "ai",
-        "total": 59,
+        "total": 53,
         "mid": 20,
-        "parts": {"balance_owed": 31, "account_number": 28},
+        "parts": {"balance_owed": 31, "account_number": 22},
         "aux": {
             "acctnum_level": "last4",
-            "matched_fields": {"balance_owed": True, "last_payment": True},
+            "matched_fields": {
+                "balance_owed": True,
+                "last_payment": True,
+                "account_number": True,
+            },
         },
         "conflicts": ["credit_limit:conflict"],
         "strong": True,
@@ -270,8 +302,8 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
     captured_decisions: list[dict] = []
 
     def _fake_decide(pack, *, timeout):
+        _assert_pack_messages_with_rules(pack, pack_payload)
         captured_decisions.append({"pack": dict(pack), "timeout": timeout})
-        assert pack == pack_payload
         return {
             "decision": "same_debt",
             "reason": "Same open date and balance",
@@ -304,7 +336,7 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
     assert "[AI] adjudicated 1 packs (1 success, 0 errors)" in stdout
 
     assert captured_decisions
-    assert captured_decisions[0]["pack"] == pack_payload
+    _assert_pack_messages_with_rules(captured_decisions[0]["pack"], pack_payload)
 
     account_tags_dir = runs_root / sid / "cases" / "accounts"
     tags_a = json.loads((account_tags_dir / "11" / "tags.json").read_text(encoding="utf-8"))
@@ -437,7 +469,7 @@ def test_send_ai_merge_packs_writes_decision_variants(
     timestamp = "2024-06-20T12:00:00Z"
 
     def _fake_decide(pack: dict, *, timeout: float):
-        assert pack == pack_payload
+        _assert_pack_messages_with_rules(pack, pack_payload)
         return {"decision": decision, "reason": reason, "flags": dict(flags)}
 
     monkeypatch.setattr(send_ai_merge_packs, "decide_merge_or_different", _fake_decide)
@@ -538,7 +570,7 @@ def test_send_ai_merge_packs_logs_failure(monkeypatch: pytest.MonkeyPatch, runs_
     monkeypatch.setenv("AI_MAX_RETRIES", "0")
 
     def _fake_decide(pack, *, timeout):
-        assert pack == pack_payload
+        _assert_pack_messages_with_rules(pack, pack_payload)
         return {"decision": "maybe", "reason": ""}
 
     monkeypatch.setattr(send_ai_merge_packs, "decide_merge_or_different", _fake_decide)
@@ -692,6 +724,13 @@ def test_ai_pairing_flow_compaction(
             "flags": {"account_match": False, "debt_match": False},
             "at": timestamp,
         },
+        {
+            "kind": "ai_resolution",
+            "with": 16,
+            "decision": "different",
+            "flags": {"account_match": False, "debt_match": False},
+            "reason": "These tradelines describe the same debt from different collectors.",
+        },
     ]
     assert tags_b == [
         {"kind": "merge_best", "with": 11, "decision": "ai"},
@@ -701,6 +740,13 @@ def test_ai_pairing_flow_compaction(
             "decision": "different",
             "flags": {"account_match": False, "debt_match": False},
             "at": timestamp,
+        },
+        {
+            "kind": "ai_resolution",
+            "with": 11,
+            "decision": "different",
+            "flags": {"account_match": False, "debt_match": False},
+            "reason": "These tradelines describe the same debt from different collectors.",
         },
     ]
 
@@ -726,11 +772,12 @@ def test_ai_pairing_flow_compaction(
     assert merge_summary_a
     merge_entry = _ai_summary(merge_summary_a, partner=16)
     assert merge_entry["kind"] == "merge_best"
-    assert merge_entry["parts"] == {"balance_owed": 31, "account_number": 28}
+    assert merge_entry["parts"] == {"balance_owed": 31, "account_number": 22}
     assert merge_entry["conflicts"] == ["credit_limit:conflict"]
     assert merge_entry["matched_fields"] == {
         "balance_owed": True,
         "last_payment": True,
+        "account_number": True,
     }
 
     merge_score_a = summary_a.get("merge_scoring")

@@ -58,6 +58,20 @@ def _minimal_merge_best(tag: Mapping[str, object]) -> dict[str, object]:
     return payload
 
 
+def _normalize_flag(value: object) -> bool | str | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "unknown":
+            return "unknown"
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+    return None
+
+
 def _minimal_ai_decision(tag: Mapping[str, object]) -> dict[str, object]:
     payload: dict[str, object] = {"kind": "ai_decision"}
     partner = _coerce_int(tag.get("with"))
@@ -69,11 +83,22 @@ def _minimal_ai_decision(tag: Mapping[str, object]) -> dict[str, object]:
     timestamp = _coerce_str(tag.get("at"))
     if timestamp:
         payload["at"] = timestamp
+    flags = tag.get("flags")
+    if isinstance(flags, Mapping):
+        account_flag = _normalize_flag(flags.get("account_match"))
+        debt_flag = _normalize_flag(flags.get("debt_match"))
+        filtered_flags = {}
+        if account_flag is not None:
+            filtered_flags["account_match"] = account_flag
+        if debt_flag is not None:
+            filtered_flags["debt_match"] = debt_flag
+        if filtered_flags:
+            payload["flags"] = filtered_flags
     return payload
 
 
-def _minimal_same_debt(tag: Mapping[str, object]) -> dict[str, object]:
-    payload: dict[str, object] = {"kind": "same_debt_pair"}
+def _minimal_pair(tag: Mapping[str, object], *, kind: str) -> dict[str, object]:
+    payload: dict[str, object] = {"kind": kind}
     partner = _coerce_int(tag.get("with"))
     if partner is not None:
         payload["with"] = partner
@@ -154,12 +179,23 @@ def _ai_explanations_from_tag(
             payload["decision"] = decision
         if _has_value(reason):
             payload["reason"] = reason
+        flags = tag.get("flags")
+        if isinstance(flags, Mapping):
+            filtered_flags: dict[str, object] = {}
+            account_flag = _normalize_flag(flags.get("account_match"))
+            debt_flag = _normalize_flag(flags.get("debt_match"))
+            if account_flag is not None:
+                filtered_flags["account_match"] = account_flag
+            if debt_flag is not None:
+                filtered_flags["debt_match"] = debt_flag
+            if filtered_flags:
+                payload["flags"] = filtered_flags
         if _has_value(raw_response):
             payload["raw_response"] = raw_response
         entries.append(payload)
         return entries
 
-    if kind == "same_debt_pair":
+    if kind in {"same_debt_pair", "same_account_pair"}:
         if not _has_value(reason) and isinstance(partner, int):
             reason = decision_reason_map.get(partner)
         if not _has_value(reason):
@@ -260,8 +296,8 @@ def compact_account_tags(
                 minimal_tags.append(_minimal_merge_best(tag))
             elif kind == "ai_decision":
                 minimal_tags.append(_minimal_ai_decision(tag))
-            elif kind == "same_debt_pair":
-                minimal_tags.append(_minimal_same_debt(tag))
+            elif kind in {"same_debt_pair", "same_account_pair"}:
+                minimal_tags.append(_minimal_pair(tag, kind=kind))
         else:
             minimal_tags.append(dict(tag))
 
@@ -270,7 +306,7 @@ def compact_account_tags(
                 merge_payload = _merge_explanation_from_tag(tag)
                 if merge_payload is not None:
                     merge_explanations.append(merge_payload)
-            elif kind in {"ai_decision", "same_debt_pair"}:
+            elif kind in {"ai_decision", "same_debt_pair", "same_account_pair"}:
                 ai_explanations.extend(
                     _ai_explanations_from_tag(tag, decision_reason_map=decision_reasons)
                 )

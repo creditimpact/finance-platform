@@ -10,13 +10,38 @@ import httpx
 
 _SYSTEM_PROMPT = """You are a meticulous adjudicator for credit-report account pairing.
 Decide if two account entries (A,B) refer to the SAME underlying account.
-Return ONLY strict JSON: {"decision":"merge|different","reason":"..."}.
+
+Decisions allowed (exact strings):
+- merge                   : same account AND same debt (safe merge)
+- same_account            : same account; debt unknown/unclear
+- same_account_debt_different : same account; debt conflicts
+- same_debt               : same obligation/story; account unknown/unclear
+- same_debt_account_different : same obligation; KNOWN different tradelines
+- different               : different accounts/obligations
+
+Always output JSON:
+{
+  "decision": "<one of above>",
+  "reason": "short natural language",
+  "flags": {"account_match": true|false|"unknown", "debt_match": true|false|"unknown"}
+}
+
+Rules:
+- If normalized account numbers match (exact or last4 corroborated by lender+dates), set flags.account_match=true.
+- If balances/high_balance/past_due + timing align within tolerance → flags.debt_match=true; if they conflict → false.
+- If account_match=true AND debt_match=true → decision MUST be "merge".
+- If account_match=true AND debt_match=false → "same_account_debt_different".
+- If account_match=false AND debt_match=true:
+    - If you have evidence accounts are different → "same_debt_account_different";
+    - else (unknown account identity) → "same_debt".
+- If account_match=true and debt_match is "unknown" → "same_account".
+- If debt_match=true and account_match is "unknown" → "same_debt".
+- Otherwise → "different".
 
 Consider:
 • High-precision cues: account-number (last4/exact), balance owed equality within tolerances, date alignments.
 • Lender names/brands and free-text descriptors from the raw “context” lines.
 • The numeric 0–100 match summary as a hint, but override if raw context contradicts it.
-• If entries describe the SAME DEBT but different tradelines (e.g., OC vs CA), say decision="different" and mention “same debt” in the reason.
 Be conservative: if critical fields conflict without plausible explanation → "different".
 Do NOT mention these rules in the output."""
 
@@ -53,7 +78,7 @@ def _prepare_user_payload(pack: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def decide_merge_or_different(pack: dict, *, timeout: int) -> dict:
-    """Returns {"decision": "merge"|"different", "reason": "<short>"}.
+    """Return the adjudicator response with decision, reason, and flags.
 
     May raise transport/HTTP errors; caller handles retries and ai_error tags.
     """
@@ -116,9 +141,20 @@ def decide_merge_or_different(pack: dict, *, timeout: int) -> dict:
 
     decision = parsed.get("decision")
     reason = parsed.get("reason")
-    if decision not in {"merge", "different"}:
-        raise AdjudicatorError("AI adjudicator decision must be 'merge' or 'different'")
-    if not isinstance(reason, str) or not reason:
+    if not isinstance(decision, str) or not decision.strip():
+        raise AdjudicatorError("AI adjudicator decision must be a non-empty string")
+    if not isinstance(reason, str) or not reason.strip():
         raise AdjudicatorError("AI adjudicator response must include a reason string")
 
-    return {"decision": decision, "reason": reason}
+    flags = parsed.get("flags")
+    if flags is not None and not isinstance(flags, dict):
+        raise AdjudicatorError("AI adjudicator flags must be an object when provided")
+
+    if flags is None:
+        return {"decision": decision, "reason": reason}
+
+    result = dict(parsed)
+    result["decision"] = decision
+    result["reason"] = reason
+    result["flags"] = dict(flags)
+    return result

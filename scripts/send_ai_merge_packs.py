@@ -34,6 +34,93 @@ log = logging.getLogger(__name__)
 
 
 
+_DEBT_RULES_TEXT = (
+    "Debt rules:\n"
+    "- If Balance Owed and Past Due are both zero on both sides, this indicates no active debt; do NOT treat this as \"same debt\".\n"
+    '- Do not use "0 == 0" as evidence of the same obligation.\n'
+    '- Only consider "same_debt" (or variants) when there is a positive amount or explicit textual corroboration.\n'
+    '- If both balances and past-due are zero and identifiers do not strongly match, prefer "different".'
+)
+_DEBT_RULES_MARKER = (
+    "- If Balance Owed and Past Due are both zero on both sides, this indicates no active debt; do NOT treat this as \"same debt\"."
+)
+
+
+def _append_zero_debt_rules(pack: Mapping[str, object]) -> dict[str, object]:
+    """Ensure the system prompt contains explicit zero-debt guidance."""
+
+    def _list_contains_marker(items: Iterable[object]) -> bool:
+        for item in items:
+            if isinstance(item, str) and _DEBT_RULES_MARKER in item:
+                return True
+        return False
+
+    updated_pack = dict(pack)
+
+    messages = updated_pack.get("messages")
+    if isinstance(messages, list):
+        new_messages: list[object] = []
+        system_found = False
+        for message in messages:
+            if isinstance(message, MappingABC):
+                msg_copy = dict(message)
+                role = str(msg_copy.get("role", "")).strip().lower()
+                if role == "system":
+                    system_found = True
+                    content = msg_copy.get("content")
+                    if isinstance(content, str):
+                        if _DEBT_RULES_MARKER not in content:
+                            trimmed = content.rstrip()
+                            if trimmed:
+                                trimmed += "\n"
+                            msg_copy["content"] = f"{trimmed}{_DEBT_RULES_TEXT}"
+                    elif isinstance(content, list):
+                        if not _list_contains_marker(content):
+                            msg_copy["content"] = [*content, _DEBT_RULES_TEXT]
+                    elif isinstance(content, MappingABC):
+                        content_copy = dict(content)
+                        rules = content_copy.get("rules")
+                        if isinstance(rules, list):
+                            if not _list_contains_marker(rules):
+                                content_copy["rules"] = [*rules, _DEBT_RULES_TEXT]
+                        else:
+                            content_copy["rules"] = [_DEBT_RULES_TEXT]
+                        msg_copy["content"] = content_copy
+                new_messages.append(msg_copy)
+            else:
+                new_messages.append(message)
+
+        if not system_found:
+            new_messages = [{"role": "system", "content": _DEBT_RULES_TEXT}, *new_messages]
+        updated_pack["messages"] = new_messages
+        return updated_pack
+
+    system_content = updated_pack.get("system")
+    if isinstance(system_content, str):
+        if _DEBT_RULES_MARKER not in system_content:
+            trimmed = system_content.rstrip()
+            if trimmed:
+                trimmed += "\n"
+            updated_pack["system"] = f"{trimmed}{_DEBT_RULES_TEXT}"
+    elif isinstance(system_content, list):
+        if not _list_contains_marker(system_content):
+            updated_pack["system"] = [*system_content, _DEBT_RULES_TEXT]
+    elif isinstance(system_content, MappingABC):
+        content_copy = dict(system_content)
+        rules = content_copy.get("rules")
+        if isinstance(rules, list):
+            if not _list_contains_marker(rules):
+                content_copy["rules"] = [*rules, _DEBT_RULES_TEXT]
+        else:
+            content_copy["rules"] = [_DEBT_RULES_TEXT]
+        updated_pack["system"] = content_copy
+    else:
+        updated_pack["system"] = _DEBT_RULES_TEXT
+
+    return updated_pack
+
+
+
 def _packs_dir_for(sid: str, runs_root: Path) -> Path:
     """Return the canonical ``ai_packs`` directory for ``sid``."""
 
@@ -579,7 +666,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         if not pack_path.exists():
             raise FileNotFoundError(f"Pack file missing: {pack_path}")
 
-        pack = _load_pack(pack_path)
+        pack = _append_zero_debt_rules(_load_pack(pack_path))
         total += 1
 
         pack_log = _log_factory(logs_path, sid, {"a": a_idx, "b": b_idx}, pack_path.name)

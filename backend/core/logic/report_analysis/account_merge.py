@@ -40,8 +40,8 @@ logger = logging.getLogger(__name__)
 
 
 POINTS_ACCTNUM_EXACT = 40
-POINTS_ACCTNUM_LAST6 = 28
-POINTS_ACCTNUM_LAST4 = 22
+POINTS_ACCTNUM_LAST6_BIN = 32
+POINTS_ACCTNUM_LAST6 = 24
 
 
 def is_missing(value: Any) -> bool:
@@ -191,7 +191,14 @@ _TOLERANCE_DEFAULTS: Dict[str, Union[int, float]] = {
     "COUNT_ZERO_PAYMENT_MATCH": 0,
 }
 
-_ACCTNUM_LEVEL_CHOICES: Set[str] = {"any", "last4", "last5", "last6", "exact"}
+_ACCTNUM_LEVEL_CHOICES: Set[str] = {
+    "any",
+    "last4",
+    "last5",
+    "last6",
+    "last6_bin",
+    "exact",
+}
 
 
 def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
@@ -272,15 +279,14 @@ _ACCOUNT_LEVEL_ORDER = {
     "masked_match": 1,
     "masked": 1,
     "any": 1,
-    "last4": 2,
-    "last5": 3,
-    "last6": 4,
-    "exact": 5,
+    "last4": 1,
+    "last5": 1,
+    "last6": 2,
+    "last6_bin": 3,
+    "exact": 4,
 }
 _ACCOUNT_NUMBER_WEIGHTS = {
-    "masked_match": app_config.ACCTNUM_MASKED_WEIGHT,
-    "last4": POINTS_ACCTNUM_LAST4,
-    "last5": POINTS_ACCTNUM_LAST6,
+    "last6_bin": POINTS_ACCTNUM_LAST6_BIN,
     "last6": POINTS_ACCTNUM_LAST6,
     "exact": POINTS_ACCTNUM_EXACT,
 }
@@ -862,7 +868,7 @@ def score_pair_0_100(
 
     acct_level, acct_debug = acctnum_match_level(a_account_str, b_account_str)
     acct_points = int(_ACCOUNT_NUMBER_WEIGHTS.get(acct_level, 0) or 0)
-    acct_matched = acct_level != "none"
+    acct_matched = acct_level in {"exact", "last6_bin", "last6"}
 
     field_matches["account_number"] = acct_matched
     parts["account_number"] = acct_points
@@ -931,24 +937,19 @@ def score_pair_0_100(
         )
 
     acctnum_aux = aux.get("account_number", {})
-    acct_level = str(acctnum_aux.get("acctnum_level") or "")
-    min_level = str(cfg.triggers.get("MERGE_AI_ON_ACCTNUM_LEVEL", "last4")).lower()
-    if field_matches.get("account_number") and acct_level:
-        if _ACCOUNT_LEVEL_ORDER.get(acct_level, 0) >= _ACCOUNT_LEVEL_ORDER.get(
-            min_level, 0
-        ) and acct_level != "none":
-            triggers.append("strong:account_number")
-            strong_triggered = True
-            trigger_events.append(
-                {
-                    "kind": "strong",
-                    "details": {
-                        "field": "account_number",
-                        "acctnum_level": acct_level,
-                        "required_level": min_level,
-                    },
-                }
-            )
+    acct_level = str(acctnum_aux.get("acctnum_level") or "none")
+    if field_matches.get("account_number") and acct_level in {"exact", "last6_bin"}:
+        triggers.append("strong:account_number")
+        strong_triggered = True
+        trigger_events.append(
+            {
+                "kind": "strong",
+                "details": {
+                    "field": "account_number",
+                    "level": acct_level,
+                },
+            }
+        )
 
     mid_threshold = int(cfg.triggers.get("MERGE_AI_ON_MID_K", 0))
     if mid_sum >= mid_threshold and mid_threshold > 0:
@@ -1170,30 +1171,24 @@ def score_all_pairs_0_100(
             if not isinstance(acct_aux, Mapping):
                 acct_aux = {}
             level_value = str(acct_aux.get("acctnum_level") or acct_level or "none")
-            if level_value and level_value != "none":
-                normalized_values = acct_aux.get("normalized_values")
-                last4_a = "none"
-                last4_b = "none"
-                if (
-                    isinstance(normalized_values, (list, tuple))
-                    and len(normalized_values) == 2
-                ):
-                    digits_a = digits_only(normalized_values[0])
-                    digits_b = digits_only(normalized_values[1])
-                    if digits_a and len(digits_a) >= 4:
-                        last4_a = digits_a[-4:]
-                    if digits_b and len(digits_b) >= 4:
-                        last4_b = digits_b[-4:]
-
-                logger.info(
-                    "MERGE_V2_ACCTNUM_MATCH sid=<%s> i=<%s> j=<%s> level=<%s> a_digits_last4=<%s> b_digits_last4=<%s>",
-                    sid,
-                    left,
-                    right,
-                    level_value,
-                    last4_a,
-                    last4_b,
-                )
+            debug_payload = {}
+            if isinstance(acct_aux, Mapping):
+                debug_candidate = acct_aux.get("acctnum_debug")
+                if isinstance(debug_candidate, Mapping):
+                    debug_payload = debug_candidate
+            a_debug = debug_payload.get("a") if isinstance(debug_payload, Mapping) else {}
+            b_debug = debug_payload.get("b") if isinstance(debug_payload, Mapping) else {}
+            logger.info(
+                "MERGE_V2_ACCTNUM_MATCH sid=%s i=%s j=%s level=%s a_last6=%s b_last6=%s a_bin=%s b_bin=%s",
+                sid,
+                left,
+                right,
+                level_value,
+                (a_debug or {}).get("digits_last6"),
+                (b_debug or {}).get("digits_last6"),
+                (a_debug or {}).get("digits_first6"),
+                (b_debug or {}).get("digits_first6"),
+            )
 
             score_log = {
                 "sid": sid,

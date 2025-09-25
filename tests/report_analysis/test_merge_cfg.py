@@ -23,7 +23,7 @@ def test_get_merge_cfg_defaults(monkeypatch):
 
     cfg = get_merge_cfg()
 
-    assert sum(cfg.points.values()) == 100
+    assert sum(cfg.points.values()) == 96
     assert cfg.thresholds["AI_THRESHOLD"] == 26
     assert cfg.thresholds["AUTO_MERGE_THRESHOLD"] == 70
     assert cfg.triggers["MERGE_AI_ON_BALOWED_EXACT"] is True
@@ -63,4 +63,4 @@ def test_get_merge_cfg_env_overrides():
     assert cfg.tolerances["LAST_PAYMENT_DAY_TOL"] == 10
     assert cfg.tolerances["COUNT_ZERO_PAYMENT_MATCH"] == 1
 
-    assert sum(cfg.points.values()) == 100
+    assert sum(cfg.points.values()) == 96

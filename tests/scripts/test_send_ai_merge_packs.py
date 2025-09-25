@@ -51,12 +51,12 @@ def _merge_pair_tag(partner: int) -> dict:
         "source": "merge_scorer",
         "with": partner,
         "decision": "ai",
-        "total": 53,
+        "total": 63,
         "mid": 20,
         "dates_all": False,
-        "parts": {"balance_owed": 31, "account_number": 22},
+        "parts": {"balance_owed": 31, "account_number": 32},
         "aux": {
-            "acctnum_level": "last4",
+            "acctnum_level": "last6_bin",
             "matched_fields": {
                 "balance_owed": True,
                 "last_payment": True,
@@ -75,11 +75,11 @@ def _merge_best_tag(partner: int) -> dict:
         "source": "merge_scorer",
         "with": partner,
         "decision": "ai",
-        "total": 53,
+        "total": 63,
         "mid": 20,
-        "parts": {"balance_owed": 31, "account_number": 22},
+        "parts": {"balance_owed": 31, "account_number": 32},
         "aux": {
-            "acctnum_level": "last4",
+            "acctnum_level": "last6_bin",
             "matched_fields": {
                 "balance_owed": True,
                 "last_payment": True,
@@ -772,7 +772,7 @@ def test_ai_pairing_flow_compaction(
     assert merge_summary_a
     merge_entry = _ai_summary(merge_summary_a, partner=16)
     assert merge_entry["kind"] == "merge_best"
-    assert merge_entry["parts"] == {"balance_owed": 31, "account_number": 22}
+    assert merge_entry["parts"] == {"balance_owed": 31, "account_number": 32}
     assert merge_entry["conflicts"] == ["credit_limit:conflict"]
     assert merge_entry["matched_fields"] == {
         "balance_owed": True,

@@ -22,7 +22,11 @@ except Exception:  # pragma: no cover - fallback when bootstrap is unavailable
         sys.path.insert(0, str(repo_root))
 
 from backend.config import AI_REQUEST_TIMEOUT
-from backend.core.ai.adjudicator import decide_merge_or_different
+from backend.core.ai.adjudicator import (
+    AdjudicatorError,
+    _normalize_and_validate_decision,
+    decide_merge_or_different,
+)
 from backend.core.io.tags import read_tags, upsert_tag
 from backend.pipeline.runs import RunManifest, persist_manifest
 
@@ -166,38 +170,6 @@ def _ensure_int(value: object, label: str) -> int:
         raise ValueError(f"{label} must be an integer") from exc
 
 
-def _normalize_match_flag(value: object) -> bool | str | None:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered == "unknown":
-            return "unknown"
-        if lowered == "true":
-            return True
-        if lowered == "false":
-            return False
-    return None
-
-
-def _normalize_flags(flags: object) -> dict[str, bool | str] | None:
-    if not isinstance(flags, MappingABC):
-        return None
-    account_flag = _normalize_match_flag(flags.get("account_match"))
-    debt_flag = _normalize_match_flag(flags.get("debt_match"))
-    if account_flag is None or debt_flag is None:
-        return None
-    return {"account_match": account_flag, "debt_match": debt_flag}
-
-
-def _flag_signature(value: bool | str) -> str:
-    if value is True:
-        return "true"
-    if value is False:
-        return "false"
-    return "unknown"
-
-
 def _serialize_match_flag(value: bool | str | object) -> bool | str:
     if isinstance(value, bool):
         return value
@@ -212,34 +184,27 @@ def _serialize_match_flag(value: bool | str | object) -> bool | str:
     return "unknown"
 
 
-_ALLOWED_DECISIONS = {
+_DECISION_CONTRACT = [
     "merge",
-    "same_account",
-    "same_account_debt_different",
     "same_debt",
-    "same_debt_account_different",
+    "same_debt_account_diff",
+    "same_account",
+    "same_account_debt_diff",
     "different",
-}
+]
+
+_DECISION_CONTRACT_TEXT = (
+    '"decision": ["merge", "same_debt", "same_debt_account_diff", '
+    '"same_account", "same_account_debt_diff", "different"]'
+)
+
 
 _PAIR_TAG_BY_DECISION: dict[str, str] = {
     "same_account": "same_account_pair",
-    "same_account_debt_different": "same_account_pair",
+    "same_account_debt_diff": "same_account_pair",
     "merge": "same_account_pair",
     "same_debt": "same_debt_pair",
-    "same_debt_account_different": "same_debt_pair",
-}
-
-
-_EXPECTED_DECISION_BY_FLAGS = {
-    ("true", "true"): "merge",
-    ("true", "false"): "same_account_debt_different",
-    ("true", "unknown"): "same_account",
-    ("false", "true"): "same_debt_account_different",
-    ("false", "false"): "different",
-    ("false", "unknown"): "different",
-    ("unknown", "true"): "same_debt",
-    ("unknown", "false"): "different",
-    ("unknown", "unknown"): "different",
+    "same_debt_account_diff": "same_debt_pair",
 }
 
 _IDENTITY_PART_FIELDS = {
@@ -690,37 +655,17 @@ def main(argv: Sequence[str] | None = None) -> None:
             failures += 1
             continue
 
-        decision_raw = decision_payload.get("decision")
-        reason_raw = decision_payload.get("reason")
-        decision_value = str(decision_raw).strip().lower() if decision_raw is not None else ""
-        reason = str(reason_raw).strip() if reason_raw is not None else ""
-        flags_normalized = _normalize_flags(decision_payload.get("flags"))
-
-        invalid_message: str | None = None
-        if decision_value not in _ALLOWED_DECISIONS:
-            invalid_message = "Decision payload has unsupported decision"
-        elif not reason:
-            invalid_message = "Decision payload missing reason"
-        elif flags_normalized is None:
-            invalid_message = "Decision payload missing flags.account_match/debt_match"
-        else:
-            account_sig = _flag_signature(flags_normalized["account_match"])
-            debt_sig = _flag_signature(flags_normalized["debt_match"])
-            expected_decision = _EXPECTED_DECISION_BY_FLAGS.get((account_sig, debt_sig))
-            if expected_decision is None:
-                invalid_message = "Decision payload contained invalid flag combination"
-            elif decision_value != expected_decision:
-                invalid_message = (
-                    "Decision does not align with flags.account_match/debt_match"
-                )
-
-        if invalid_message is not None:
+        try:
+            normalized_payload, was_normalized = _normalize_and_validate_decision(
+                decision_payload
+            )
+        except AdjudicatorError as exc:
             pack_log(
                 "ERROR",
                 {
                     "attempt": attempts,
                     "error": "InvalidDecision",
-                    "message": invalid_message,
+                    "message": str(exc),
                 },
             )
             pack_log(
@@ -736,27 +681,58 @@ def main(argv: Sequence[str] | None = None) -> None:
                 a_idx,
                 b_idx,
                 "InvalidDecision",
-                invalid_message,
+                str(exc),
                 timestamp,
             )
             failures += 1
             continue
 
-        decision = decision_value
+        original_decision_raw = decision_payload.get("decision")
+        original_decision = (
+            str(original_decision_raw).strip().lower()
+            if original_decision_raw is not None
+            else ""
+        )
+        decision = normalized_payload["decision"]
+        reason = normalized_payload["reason"]
+        flags_normalized = normalized_payload["flags"]
+
+        if decision not in _DECISION_CONTRACT:
+            raise AdjudicatorError(
+                f"Decision outside contract: {decision!r}"
+            )
+
+        if was_normalized:
+            log.info(
+                "AI_DECISION_NORMALIZED sid=%s a=%s b=%s from=%s to=%s",
+                sid,
+                a_idx,
+                b_idx,
+                original_decision or "<missing>",
+                decision,
+            )
+
         timestamp = _isoformat_timestamp()
 
         a_int = _ensure_int(a_idx, "a_idx")
         b_int = _ensure_int(b_idx, "b_idx")
-        payload_for_tags = dict(decision_payload)
-        payload_for_tags["decision"] = decision
-        payload_for_tags["reason"] = reason
-        payload_for_tags["flags"] = flags_normalized
+        payload_for_tags = dict(normalized_payload)
+
+        log.info(
+            "AI_DECISION_FINAL sid=%s a=%s b=%s decision=%s flags=%s",
+            sid,
+            a_idx,
+            b_idx,
+            decision,
+            json.dumps(flags_normalized, sort_keys=True),
+        )
 
         pack_log(
             "AI_DECISION_PARSED",
             {
                 "decision": decision,
                 "flags": flags_normalized,
+                "normalized": was_normalized,
             },
         )
 

@@ -198,6 +198,50 @@ def _coerce_bool(value: object) -> bool:
     return False
 
 
+def _final_resolution_tag(
+    idx_with: int, decision: str, flags: dict, reason: str
+) -> dict[str, object]:
+    return {
+        "kind": "ai_resolution",
+        "with": idx_with,
+        "decision": decision,
+        "flags": flags,
+        "reason": reason[:200],
+    }
+
+
+def _update_resolution_candidate(
+    resolution_by_partner: MutableMapping[int, dict[str, object]],
+    partner: int | None,
+    *,
+    decision: str | None,
+    flags: Mapping[str, object] | None,
+    reason: str | None,
+    normalized: bool,
+) -> None:
+    if partner is None or not decision:
+        return
+    flags_dict = dict(flags) if isinstance(flags, Mapping) else {}
+    reason_text = reason or decision
+    candidate = {
+        "decision": decision,
+        "flags": flags_dict,
+        "reason": reason_text,
+        "normalized": bool(normalized),
+    }
+    existing = resolution_by_partner.get(partner)
+    if existing is None:
+        resolution_by_partner[partner] = candidate
+        return
+    existing_normalized = bool(existing.get("normalized"))
+    candidate_normalized = candidate["normalized"]
+    if candidate_normalized and not existing_normalized:
+        resolution_by_partner[partner] = candidate
+        return
+    if candidate_normalized == existing_normalized:
+        resolution_by_partner[partner] = candidate
+
+
 def _minimal_ai_decision(tag: Mapping[str, object]) -> dict[str, object]:
     payload: dict[str, object] = {"kind": "ai_decision"}
     partner = _coerce_int(tag.get("with"))
@@ -460,6 +504,7 @@ def compact_account_tags(
     best_merge_tag: Mapping[str, object] | None = None
     summary_path = account_path / "summary.json"
     summary_data: dict[str, object] | None = None
+    resolution_by_partner: dict[int, dict[str, object]] = {}
 
     if explanations_to_summary:
         if summary_path.exists():
@@ -489,6 +534,40 @@ def compact_account_tags(
 
     for tag in tags:
         kind = str(tag.get("kind", "")).strip().lower()
+        if kind == "ai_resolution":
+            partner = _coerce_int(tag.get("with"))
+            decision_text = _coerce_str(tag.get("decision"))
+            flags_payload = tag.get("flags")
+            if not isinstance(flags_payload, Mapping):
+                flags_payload = None
+            reason_text = _coerce_str(tag.get("reason"))
+            normalized_flag = _coerce_bool(tag.get("normalized"))
+            _update_resolution_candidate(
+                resolution_by_partner,
+                partner,
+                decision=decision_text,
+                flags=flags_payload,
+                reason=reason_text,
+                normalized=normalized_flag,
+            )
+            continue
+        if kind == "ai_error":
+            partner = _coerce_int(tag.get("with"))
+            error_kind = _coerce_str(tag.get("error_kind")) or "error"
+            message = _coerce_str(tag.get("message"))
+            if message and error_kind and message != error_kind:
+                reason_text = f"{error_kind}: {message}"
+            else:
+                reason_text = message or error_kind
+            _update_resolution_candidate(
+                resolution_by_partner,
+                partner,
+                decision="error",
+                flags=None,
+                reason=reason_text,
+                normalized=False,
+            )
+            continue
         if minimal_only:
             if kind == "issue":
                 minimal_tags.append(_minimal_issue(tag))
@@ -520,9 +599,47 @@ def compact_account_tags(
         elif kind == "merge_best":
             best_merge_tag = dict(tag)
 
+        if kind == "ai_decision":
+            partner = _coerce_int(tag.get("with"))
+            decision_text = _coerce_str(tag.get("decision"))
+            if partner is not None and decision_text:
+                reason_text = _coerce_str(tag.get("reason"))
+                if not reason_text and partner in decision_reasons:
+                    reason_text = decision_reasons.get(partner)
+                if reason_text:
+                    decision_reasons[partner] = reason_text
+                minimal_entry = _minimal_ai_decision(tag)
+                flags_payload = minimal_entry.get("flags")
+                normalized_flag = _coerce_bool(tag.get("normalized"))
+                _update_resolution_candidate(
+                    resolution_by_partner,
+                    partner,
+                    decision=decision_text,
+                    flags=flags_payload if isinstance(flags_payload, Mapping) else None,
+                    reason=reason_text,
+                    normalized=normalized_flag,
+                )
+
     if minimal_only:
         minimal_tags = [tag for tag in minimal_tags if tag]
-        minimal_tags = _dedupe(minimal_tags)
+
+    if resolution_by_partner:
+        for partner, data in sorted(resolution_by_partner.items()):
+            decision_value = _coerce_str(data.get("decision"))
+            if not decision_value:
+                continue
+            flags_obj = data.get("flags")
+            flags_value = dict(flags_obj) if isinstance(flags_obj, Mapping) else {}
+            reason_value = _coerce_str(data.get("reason")) or decision_value
+            resolution_tag = _final_resolution_tag(
+                partner,
+                decision_value,
+                flags_value,
+                reason_value,
+            )
+            minimal_tags.append(resolution_tag)
+
+    minimal_tags = _dedupe(minimal_tags)
 
     _write_tags(tags_path, minimal_tags)
 

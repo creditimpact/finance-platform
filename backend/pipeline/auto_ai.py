@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import glob
 import json
 import logging
 import os
@@ -139,6 +138,7 @@ def maybe_queue_auto_ai_pipeline(
 
     if not has_ai_merge_best_pairs(sid, runs_root_path):
         logger.info("AUTO_AI_SKIP_NO_CANDIDATES sid=%s", sid)
+        logger.info("AUTO_AI_SKIPPED sid=%s reason=no_candidates", sid)
         return {"queued": False, "reason": "no_candidates"}
 
     run_dir = runs_root_path / sid
@@ -198,33 +198,7 @@ def maybe_queue_auto_ai_pipeline(
 def has_ai_merge_best_tags(sid: str) -> bool:
     """Return ``True`` when any account tags request AI merge adjudication."""
 
-    acc_glob = Path(RUNS_ROOT) / sid / "cases" / "accounts" / "*" / "tags.json"
-    for path in glob.glob(str(acc_glob)):
-        try:
-            raw = Path(path).read_text(encoding="utf-8")
-        except OSError:
-            continue
-        try:
-            payload = json.loads(raw)
-        except Exception:
-            continue
-
-        if isinstance(payload, list):
-            entries = payload
-        elif isinstance(payload, Mapping):
-            tags = payload.get("tags")
-            entries = tags if isinstance(tags, list) else []
-        else:
-            entries = []
-
-        for tag in entries:
-            if isinstance(tag, Mapping):
-                kind = str(tag.get("kind", "")).strip().lower()
-                decision = str(tag.get("decision", "")).strip().lower()
-                if kind == "merge_best" and decision == "ai":
-                    return True
-
-    return False
+    return has_ai_merge_best_pairs(sid, RUNS_ROOT)
 
 
 def _as_amount(value: object) -> Decimal:
@@ -328,10 +302,20 @@ def has_ai_merge_best_pairs(sid: str, runs_root: Path | str) -> bool:
             except (TypeError, ValueError):
                 return True
 
-            account_fields = _load_account_flat_fields(accounts_root, account_idx, cache)
+            account_fields = (
+                _load_account_flat_fields(accounts_root, account_idx, cache)
+                if account_idx is not None
+                else None
+            )
             partner_fields = _load_account_flat_fields(accounts_root, partner_idx, cache)
 
             if _is_zero_debt_pair(account_fields, partner_fields):
+                logger.info(
+                    "AI_CANDIDATE_SKIPPED_ZERO_DEBT sid=%s a=%s b=%s",
+                    sid,
+                    account_idx,
+                    partner_idx,
+                )
                 continue
 
             return True
@@ -412,6 +396,39 @@ def _indices_from_index(index_entries: Iterable[Mapping[str, object]]) -> set[in
             except (TypeError, ValueError):
                 continue
     return values
+
+
+def _filter_zero_debt_index_entries(
+    sid: str, runs_root: Path | str, entries: Sequence[Mapping[str, object]]
+) -> tuple[list[Mapping[str, object]], list[tuple[int, int]]]:
+    accounts_root = Path(runs_root) / sid / "cases" / "accounts"
+    cache: dict[int, Mapping[str, object] | None] = {}
+
+    kept: list[Mapping[str, object]] = []
+    skipped: list[tuple[int, int]] = []
+
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        a_raw = entry.get("a")
+        b_raw = entry.get("b")
+        try:
+            a_idx = int(a_raw)
+            b_idx = int(b_raw)
+        except (TypeError, ValueError):
+            kept.append(entry)
+            continue
+
+        account_fields = _load_account_flat_fields(accounts_root, a_idx, cache)
+        partner_fields = _load_account_flat_fields(accounts_root, b_idx, cache)
+
+        if _is_zero_debt_pair(account_fields, partner_fields):
+            skipped.append((a_idx, b_idx))
+            continue
+
+        kept.append(entry)
+
+    return kept, skipped
 
 
 def _compact_accounts(accounts_dir: Path, indices: Iterable[int]) -> None:
@@ -502,7 +519,7 @@ def maybe_run_ai_pipeline(sid: str) -> dict[str, object]:
         manifest = RunManifest.for_sid(sid)
         manifest.set_ai_skipped("no_candidates")
         persist_manifest(manifest)
-        logger.info("AUTO_AI_SKIPPED sid=%s reason=no_ai_merge_best", sid)
+        logger.info("AUTO_AI_SKIPPED sid=%s reason=no_candidates", sid)
         return {"sid": sid, "skipped": "no_ai_candidates"}
 
     try:
@@ -525,8 +542,13 @@ def _run_auto_ai_pipeline(sid: str):
 
     score_bureau_pairs_cli(sid=sid, write_tags=True, runs_root=RUNS_ROOT)
 
-    if not has_ai_merge_best_tags(sid):
-        return {"sid": sid, "skipped": "candidates_disappeared_after_score"}
+    if not has_ai_merge_best_pairs(sid, RUNS_ROOT):
+        logger.info("AUTO_AI_BUILDER_BYPASSED_ZERO_DEBT sid=%s", sid)
+        manifest = RunManifest.for_sid(sid)
+        manifest.set_ai_skipped("no_candidates")
+        persist_manifest(manifest)
+        logger.info("AUTO_AI_SKIPPED sid=%s reason=no_candidates", sid)
+        return {"sid": sid, "skipped": "no_ai_candidates"}
 
     # === 2) build packs
     _build_ai_packs(sid, RUNS_ROOT)
@@ -564,10 +586,6 @@ def _run_auto_ai_pipeline(sid: str):
         index_data = json.loads(index_path.read_text(encoding="utf-8"))
         if not isinstance(index_data, dict):
             index_data = {}
-        pairs_count = int(
-            index_data.get("pairs_count")
-            or len(index_data.get("packs") or [])
-        )
     except Exception as exc:
         logger.exception(
             "AUTO_AI_SKIP_NO_PACKS sid=%s reason=index_load_error error=%s", sid, exc
@@ -582,6 +600,40 @@ def _run_auto_ai_pipeline(sid: str):
         manifest.set_ai_skipped("no_packs")
         persist_manifest(manifest)
         return {"sid": sid, "skipped": "no_packs"}
+
+    packs_entries = index_data.get("packs")
+    if isinstance(packs_entries, list):
+        non_zero_entries, skipped_pairs = _filter_zero_debt_index_entries(
+            sid, RUNS_ROOT, packs_entries
+        )
+        if skipped_pairs:
+            for a_idx, b_idx in skipped_pairs:
+                logger.info(
+                    "AI_CANDIDATE_SKIPPED_ZERO_DEBT sid=%s a=%s b=%s", sid, a_idx, b_idx
+                )
+        if not non_zero_entries:
+            logger.info("INDEX_ONLY_ZERO_DEBT_PAIRS sid=%s", sid)
+            manifest.set_ai_skipped("no_packs")
+            persist_manifest(manifest)
+            try:
+                index_path.unlink()
+            except OSError:
+                logger.debug(
+                    "AUTO_AI_INDEX_UNLINK_FAILED sid=%s path=%s",
+                    sid,
+                    index_path,
+                    exc_info=True,
+                )
+            return {"sid": sid, "skipped": "no_packs"}
+        if len(non_zero_entries) != len(packs_entries):
+            index_data["packs"] = non_zero_entries
+            index_data["pairs_count"] = len(non_zero_entries)
+            index_path.write_text(
+                json.dumps(index_data, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+    pairs_count = int(index_data.get("pairs_count") or len(index_data.get("packs") or []))
 
     if pairs_count <= 0:
         if manifest_pairs > 0:

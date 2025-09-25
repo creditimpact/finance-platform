@@ -214,6 +214,8 @@ def ai_build_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, ob
 
     if not has_ai_merge_best_pairs(sid, runs_root):
         logger.info("AUTO_AI_SKIP_NO_CANDIDATES sid=%s", sid)
+        logger.info("AUTO_AI_BUILDER_BYPASSED_ZERO_DEBT sid=%s", sid)
+        logger.info("AUTO_AI_SKIPPED sid=%s reason=no_candidates", sid)
         payload["ai_index"] = []
         payload["skip_reason"] = "no_candidates"
         return payload

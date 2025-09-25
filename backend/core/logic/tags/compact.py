@@ -311,16 +311,24 @@ def _merge_explanation_from_tag(tag: Mapping[str, object]) -> dict[str, object] 
             payload[key] = value
             meaningful = True
 
+    acct_level_value: str | None = None
     aux = tag.get("aux")
     if isinstance(aux, Mapping):
         acct_level = aux.get("acctnum_level")
-        if _has_value(acct_level):
-            payload.setdefault("acctnum_level", acct_level)
-            meaningful = True
+        if isinstance(acct_level, str) and acct_level:
+            acct_level_value = acct_level
         matched_fields = aux.get("matched_fields")
         if isinstance(matched_fields, Mapping) and matched_fields:
             payload.setdefault("matched_fields", dict(matched_fields))
             meaningful = True
+
+    if acct_level_value is None:
+        direct_level = tag.get("acctnum_level")
+        if isinstance(direct_level, str) and direct_level:
+            acct_level_value = direct_level
+    if acct_level_value is not None:
+        payload["acctnum_level"] = acct_level_value
+        meaningful = True
 
     return payload if meaningful else None
 

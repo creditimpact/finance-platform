@@ -109,6 +109,9 @@ def test_compact_tags_moves_verbose_data_to_summary(tmp_path: Path) -> None:
     assert {entry.get("kind") for entry in ai_entries} == {"ai_decision", "same_debt_pair"}
     ai_decision_entry = next(entry for entry in ai_entries if entry.get("kind") == "ai_decision")
     assert ai_decision_entry["with"] == 16
+    assert ai_decision_entry["normalized"] is False
+    assert ai_decision_entry["decision"] == "different"
+    assert ai_decision_entry["reason"].startswith("Different account numbers")
     assert "raw_response" in ai_decision_entry
     same_debt_entry = next(entry for entry in ai_entries if entry.get("kind") == "same_debt_pair")
     assert same_debt_entry["reason"].startswith("Different account numbers")

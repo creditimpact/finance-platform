@@ -84,64 +84,57 @@ def _build_merge_scoring_summary(
     if not isinstance(best_tag, Mapping):
         return summary or None
 
-    parts = best_tag.get("parts") if isinstance(best_tag.get("parts"), Mapping) else None
-    identity_score = _sum_parts(parts, _IDENTITY_PART_FIELDS)
-    debt_score = _sum_parts(parts, _DEBT_PART_FIELDS)
+    updates: dict[str, object] = {}
 
-    aux_payload = best_tag.get("aux") if isinstance(best_tag.get("aux"), Mapping) else {}
-    acctnum_level = "none"
-    if isinstance(aux_payload, Mapping):
+    has_parts = "parts" in best_tag
+    parts = best_tag.get("parts") if isinstance(best_tag.get("parts"), Mapping) else None
+    if has_parts:
+        updates["identity_score"] = _sum_parts(parts, _IDENTITY_PART_FIELDS)
+        updates["debt_score"] = _sum_parts(parts, _DEBT_PART_FIELDS)
+
+    aux_payload = best_tag.get("aux") if isinstance(best_tag.get("aux"), Mapping) else None
+    if "aux" in best_tag and isinstance(aux_payload, Mapping):
         acctnum_level = str(aux_payload.get("acctnum_level") or "none")
         if acctnum_level == "none":
             account_number_aux = aux_payload.get("account_number")
             if isinstance(account_number_aux, Mapping):
                 acctnum_level = str(account_number_aux.get("acctnum_level") or "none")
+        updates["acctnum_level"] = acctnum_level
         matched_fields = _normalize_matched_fields(aux_payload.get("matched_fields"))
-    else:
-        matched_fields = {}
+        updates["matched_fields"] = matched_fields
 
-    conflicts_raw = best_tag.get("conflicts")
-    conflicts: list[str] = []
+    conflicts_raw = best_tag.get("conflicts") if "conflicts" in best_tag else None
     if isinstance(conflicts_raw, Iterable) and not isinstance(conflicts_raw, (str, bytes)):
+        conflicts: list[str] = []
         for conflict in conflicts_raw:
             if conflict is None:
                 continue
             conflict_text = str(conflict)
             if conflict_text:
                 conflicts.append(conflict_text)
+        updates["conflicts"] = conflicts
 
-    reasons_raw = best_tag.get("reasons")
-    reasons: list[str] = []
+    reasons_raw = best_tag.get("reasons") if "reasons" in best_tag else None
     if isinstance(reasons_raw, Iterable) and not isinstance(reasons_raw, (str, bytes)):
+        reasons: list[str] = []
         for reason in reasons_raw:
             if reason is None:
                 continue
             reason_text = str(reason)
             if reason_text:
                 reasons.append(reason_text)
+        if reasons:
+            updates["reasons"] = reasons
 
     partner = _coerce_int(best_tag.get("with"))
     score_total = _coerce_int(best_tag.get("score_total"))
     if score_total is None:
         score_total = _coerce_int(best_tag.get("total"))
-    if score_total is None:
-        score_total = 0
+    if score_total is not None and ("score_total" in best_tag or "total" in best_tag):
+        updates["score_total"] = score_total
 
-    summary.update(
-        {
-            "identity_score": identity_score,
-            "debt_score": debt_score,
-            "acctnum_level": acctnum_level,
-            "matched_fields": matched_fields,
-            "conflicts": conflicts,
-            "score_total": score_total,
-        }
-    )
-
-    if reasons:
-        summary["reasons"] = reasons
-    elif "reasons" in summary:
-        summary.pop("reasons")
+    if updates:
+        summary.update(updates)
 
     if partner is not None:
         summary["best_with"] = partner
@@ -185,6 +178,18 @@ def _normalize_flag(value: object) -> bool | str | None:
         if lowered == "false":
             return False
     return None
+
+
+def _coerce_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "y"}:
+            return True
+        if lowered in {"false", "0", "no", "n"}:
+            return False
+    return False
 
 
 def _minimal_ai_decision(tag: Mapping[str, object]) -> dict[str, object]:
@@ -274,26 +279,39 @@ def _ai_explanations_from_tag(
     tag: Mapping[str, object],
     *,
     decision_reason_map: dict[int, str],
-) -> list[dict[str, object]]:
+    existing_ai_lookup: Mapping[int, Mapping[str, object]] | None = None,
+) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     kind = str(tag.get("kind", ""))
     partner = _coerce_int(tag.get("with"))
     decision = _coerce_str(tag.get("decision"))
     reason = tag.get("reason")
     raw_response = tag.get("raw_response")
     entries: list[dict[str, object]] = []
+    merge_entry: dict[str, object] | None = None
 
+    # Summary entries include a normalized flag, e.g. {"kind": "ai_decision", "normalized": true}.
     if kind == "ai_decision":
-        if isinstance(partner, int) and isinstance(reason, str) and reason:
-            decision_reason_map[partner] = reason
-        if not _has_value(reason) and not _has_value(raw_response):
-            return entries
-        payload: dict[str, object] = {"kind": kind}
+        existing_entry = (
+            existing_ai_lookup.get(partner)
+            if existing_ai_lookup is not None and partner is not None
+            else None
+        )
+        reason_text = _coerce_str(reason)
+        if reason_text is None and isinstance(existing_entry, Mapping):
+            reason_text = _coerce_str(existing_entry.get("reason"))
+        if isinstance(partner, int) and reason_text:
+            decision_reason_map[partner] = reason_text
+
+        payload: dict[str, object] = {
+            "kind": kind,
+            "normalized": _coerce_bool(tag.get("normalized")),
+        }
         if partner is not None:
             payload["with"] = partner
         if decision:
             payload["decision"] = decision
-        if _has_value(reason):
-            payload["reason"] = reason
+        if reason_text is not None:
+            payload["reason"] = reason_text
         flags = tag.get("flags")
         if isinstance(flags, Mapping):
             filtered_flags: dict[str, object] = {}
@@ -305,23 +323,43 @@ def _ai_explanations_from_tag(
                 filtered_flags["debt_match"] = debt_flag
             if filtered_flags:
                 payload["flags"] = filtered_flags
-        if _has_value(raw_response):
-            payload["raw_response"] = raw_response
+        response_payload = raw_response if _has_value(raw_response) else None
+        if response_payload is None and isinstance(existing_entry, Mapping):
+            existing_response = existing_entry.get("raw_response")
+            if _has_value(existing_response):
+                response_payload = existing_response
+        if _has_value(response_payload):
+            payload["raw_response"] = response_payload
         entries.append(payload)
-        return entries
+
+        if decision == "merge":
+            merge_entry = {
+                "kind": "ai_merge_decision",
+                "origin": "ai",
+                "normalized": payload["normalized"],
+            }
+            if partner is not None:
+                merge_entry["with"] = partner
+            if decision:
+                merge_entry["decision"] = decision
+            if reason_text is not None:
+                merge_entry["reason"] = reason_text
+            if "flags" in payload:
+                merge_entry["flags"] = payload["flags"]
+        return entries, merge_entry
 
     if kind in {"same_debt_pair", "same_account_pair"}:
         if not _has_value(reason) and isinstance(partner, int):
             reason = decision_reason_map.get(partner)
         if not _has_value(reason):
-            return entries
+            return entries, None
         payload = {"kind": kind}
         if partner is not None:
             payload["with"] = partner
         payload["reason"] = reason
         entries.append(payload)
 
-    return entries
+    return entries, merge_entry
 
 
 def _load_tags(tags_path: Path) -> list[Mapping[str, object]]:
@@ -401,7 +439,36 @@ def compact_account_tags(
     merge_explanations: list[dict[str, object]] = []
     ai_explanations: list[dict[str, object]] = []
     decision_reasons: dict[int, str] = {}
+    existing_ai_lookup: dict[int, Mapping[str, object]] = {}
     best_merge_tag: Mapping[str, object] | None = None
+    summary_path = account_path / "summary.json"
+    summary_data: dict[str, object] | None = None
+
+    if explanations_to_summary:
+        if summary_path.exists():
+            try:
+                summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
+            except Exception:
+                summary_data = {}
+        else:
+            summary_data = {}
+        if not isinstance(summary_data, dict):
+            summary_data = {}
+
+        existing_ai_entries = summary_data.get("ai_explanations")
+        if isinstance(existing_ai_entries, Sequence):
+            for entry in existing_ai_entries:
+                if not isinstance(entry, Mapping):
+                    continue
+                kind = str(entry.get("kind", ""))
+                if kind != "ai_decision":
+                    continue
+                partner = _coerce_int(entry.get("with"))
+                reason_text = _coerce_str(entry.get("reason"))
+                if partner is not None and reason_text:
+                    decision_reasons[partner] = reason_text
+                if partner is not None:
+                    existing_ai_lookup[partner] = entry
 
     for tag in tags:
         kind = str(tag.get("kind", "")).strip().lower()
@@ -425,9 +492,14 @@ def compact_account_tags(
                 if kind == "merge_best":
                     best_merge_tag = dict(tag)
             elif kind in {"ai_decision", "same_debt_pair", "same_account_pair"}:
-                ai_explanations.extend(
-                    _ai_explanations_from_tag(tag, decision_reason_map=decision_reasons)
+                ai_entries, ai_merge_entry = _ai_explanations_from_tag(
+                    tag,
+                    decision_reason_map=decision_reasons,
+                    existing_ai_lookup=existing_ai_lookup,
                 )
+                ai_explanations.extend(ai_entries)
+                if ai_merge_entry is not None:
+                    merge_explanations.append(ai_merge_entry)
         elif kind == "merge_best":
             best_merge_tag = dict(tag)
 
@@ -440,16 +512,16 @@ def compact_account_tags(
     if not explanations_to_summary:
         return
 
-    summary_path = account_path / "summary.json"
-    if summary_path.exists():
-        try:
-            summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
-        except Exception:
+    if summary_data is None:
+        if summary_path.exists():
+            try:
+                summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
+            except Exception:
+                summary_data = {}
+        else:
             summary_data = {}
-    else:
-        summary_data = {}
-    if not isinstance(summary_data, dict):
-        summary_data = {}
+        if not isinstance(summary_data, dict):
+            summary_data = {}
 
     existing_merge = summary_data.get("merge_explanations")
     existing_ai = summary_data.get("ai_explanations")

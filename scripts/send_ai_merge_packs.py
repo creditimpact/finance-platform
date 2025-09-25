@@ -167,20 +167,74 @@ def _ensure_int(value: object, label: str) -> int:
 
 
 def _should_mark_same_debt(payload: Mapping[str, object]) -> bool:
-    decision = str(payload.get("decision") or "")
-    if decision.strip().lower() == "same_debt":
-        return True
-
-    reason = str(payload.get("reason") or "")
-    if "same debt" in reason.lower():
+    decision = str(payload.get("decision") or "").strip().lower()
+    if decision in {"same_debt", "same_debt_account_different", "merge"}:
         return True
 
     flags = payload.get("flags")
     if isinstance(flags, MappingABC):
-        flag_value = flags.get("same_debt")
-        if isinstance(flag_value, bool) and flag_value:
+        debt_flag = flags.get("debt_match")
+        if isinstance(debt_flag, str):
+            if debt_flag.strip().lower() == "true":
+                return True
+        elif debt_flag is True:
             return True
     return False
+
+
+def _normalize_match_flag(value: object) -> bool | str | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "unknown":
+            return "unknown"
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+    return None
+
+
+def _normalize_flags(flags: object) -> dict[str, bool | str] | None:
+    if not isinstance(flags, MappingABC):
+        return None
+    account_flag = _normalize_match_flag(flags.get("account_match"))
+    debt_flag = _normalize_match_flag(flags.get("debt_match"))
+    if account_flag is None or debt_flag is None:
+        return None
+    return {"account_match": account_flag, "debt_match": debt_flag}
+
+
+def _flag_signature(value: bool | str) -> str:
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return "unknown"
+
+
+_ALLOWED_DECISIONS = {
+    "merge",
+    "same_account",
+    "same_account_debt_different",
+    "same_debt",
+    "same_debt_account_different",
+    "different",
+}
+
+
+_EXPECTED_DECISION_BY_FLAGS = {
+    ("true", "true"): "merge",
+    ("true", "false"): "same_account_debt_different",
+    ("true", "unknown"): "same_account",
+    ("false", "true"): "same_debt_account_different",
+    ("false", "false"): "different",
+    ("false", "unknown"): "different",
+    ("unknown", "true"): "same_debt",
+    ("unknown", "false"): "different",
+    ("unknown", "unknown"): "different",
+}
 
 
 @overload
@@ -538,13 +592,33 @@ def main(argv: Sequence[str] | None = None) -> None:
         reason_raw = decision_payload.get("reason")
         decision_value = str(decision_raw).strip().lower() if decision_raw is not None else ""
         reason = str(reason_raw).strip() if reason_raw is not None else ""
-        if decision_value not in {"merge", "different", "same_debt"} or not reason:
+        flags_normalized = _normalize_flags(decision_payload.get("flags"))
+
+        invalid_message: str | None = None
+        if decision_value not in _ALLOWED_DECISIONS:
+            invalid_message = "Decision payload has unsupported decision"
+        elif not reason:
+            invalid_message = "Decision payload missing reason"
+        elif flags_normalized is None:
+            invalid_message = "Decision payload missing flags.account_match/debt_match"
+        else:
+            account_sig = _flag_signature(flags_normalized["account_match"])
+            debt_sig = _flag_signature(flags_normalized["debt_match"])
+            expected_decision = _EXPECTED_DECISION_BY_FLAGS.get((account_sig, debt_sig))
+            if expected_decision is None:
+                invalid_message = "Decision payload contained invalid flag combination"
+            elif decision_value != expected_decision:
+                invalid_message = (
+                    "Decision does not align with flags.account_match/debt_match"
+                )
+
+        if invalid_message is not None:
             pack_log(
                 "ERROR",
                 {
                     "attempt": attempts,
                     "error": "InvalidDecision",
-                    "message": "Decision payload missing required fields",
+                    "message": invalid_message,
                 },
             )
             pack_log(
@@ -560,11 +634,12 @@ def main(argv: Sequence[str] | None = None) -> None:
                 a_idx,
                 b_idx,
                 "InvalidDecision",
-                "Decision payload missing required fields",
+                invalid_message,
                 timestamp,
             )
             failures += 1
             continue
+
         decision = decision_value
         timestamp = _isoformat_timestamp()
 
@@ -573,6 +648,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         payload_for_tags = dict(decision_payload)
         payload_for_tags["decision"] = decision
         payload_for_tags["reason"] = reason
+        payload_for_tags["flags"] = flags_normalized
+
+        pack_log(
+            "AI_DECISION_PARSED",
+            {
+                "decision": decision,
+                "flags": flags_normalized,
+            },
+        )
 
         _write_decision_tags(
             run_dir,

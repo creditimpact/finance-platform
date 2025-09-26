@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
 
 from backend.core.io.tags import read_tags, write_tags_atomic
+from backend.core.merge.acctnum import normalize_level
 
 
 def _coerce_int(value: Any) -> Any:
@@ -207,8 +208,8 @@ def _merge_explanation_from_tag(tag: Mapping[str, Any]) -> dict[str, Any] | None
 
     aux = tag.get("aux")
     if isinstance(aux, Mapping):
-        acct_level = aux.get("acctnum_level")
-        if _has_value(acct_level):
+        acct_level = normalize_level(aux.get("acctnum_level"))
+        if acct_level != "none":
             payload.setdefault("acctnum_level", acct_level)
         matched_fields = aux.get("matched_fields")
         if isinstance(matched_fields, Mapping) and matched_fields:

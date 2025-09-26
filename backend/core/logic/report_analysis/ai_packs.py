@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence
 
 from backend.core.io.tags import read_tags
+from backend.core.merge.acctnum import normalize_level
 from backend.core.logic.normalize import last4 as normalize_last4
 from backend.core.logic.normalize import normalize_acctnum
 from backend.core.logic.report_analysis.account_merge import get_merge_cfg
@@ -345,7 +346,9 @@ def _build_highlights(tag_payload: Mapping[str, object]) -> Mapping[str, object]
         "debt_score": debt_score,
         "matched_fields": dict(aux.get("matched_fields", {})) if isinstance(aux, Mapping) else {},
         "conflicts": conflicts,
-        "acctnum_level": str(aux.get("acctnum_level", "none")) if isinstance(aux, Mapping) else "none",
+        "acctnum_level": normalize_level(aux.get("acctnum_level"))
+        if isinstance(aux, Mapping)
+        else "none",
     }
 
 

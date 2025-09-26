@@ -28,6 +28,7 @@ from backend.core.ai.adjudicator import (
     decide_merge_or_different,
 )
 from backend.core.io.tags import read_tags, upsert_tag
+from backend.core.merge.acctnum import normalize_level
 from backend.pipeline.runs import RunManifest, persist_manifest
 
 log = logging.getLogger(__name__)
@@ -523,7 +524,7 @@ def _write_decision_tags_resolved(
             reasons = unique_reasons
             matched_fields: dict[str, bool] = {}
             aux_payload = merge_tag.get("aux")
-            acctnum_level = "none"
+            acctnum_level = normalize_level(None)
             if isinstance(aux_payload, MappingABC):
                 raw_matched = aux_payload.get("matched_fields")
                 if isinstance(raw_matched, MappingABC):
@@ -531,8 +532,7 @@ def _write_decision_tags_resolved(
                         str(field): bool(flag) for field, flag in raw_matched.items()
                     }
                 acct_val = aux_payload.get("acctnum_level")
-                if isinstance(acct_val, str) and acct_val:
-                    acctnum_level = acct_val
+                acctnum_level = normalize_level(acct_val)
             merge_summary: dict[str, object] = {
                 "best_with": other_idx,
                 "score_total": score_total_int,

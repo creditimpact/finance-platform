@@ -26,7 +26,7 @@ def first_n_lines(raw_lines, n):
     out = []
     for row in raw_lines:
         t = str(row.get("text","")).strip()
-        if not t: 
+        if not t:
             continue
         # דלג על בלוקים הארוכים של payment history
         if re.search(r"(Two-Year Payment History|Days Late - 7 Year History)", t, re.I):
@@ -35,6 +35,13 @@ def first_n_lines(raw_lines, n):
         if len(out) >= n:
             break
     return out
+
+
+def _normalize_level(value):
+    if isinstance(value, str) and value.strip().lower() == "exact_or_known_match":
+        return "exact_or_known_match"
+    return "none"
+
 
 def build_prompt(pair_summary, context_a, context_b):
     # SYSTEM + USER messages
@@ -57,7 +64,9 @@ def build_prompt(pair_summary, context_a, context_b):
             "strong": pair_summary.get("strong"),
             "mid_sum": pair_summary.get("mid"),
             "dates_all": pair_summary.get("dates"),
-            "acctnum_level": pair_summary.get("aux",{}).get("acctnum_level"),
+            "acctnum_level": _normalize_level(
+                pair_summary.get("aux",{}).get("acctnum_level")
+            ),
             "parts": pair_summary.get("parts",{})
         },
         "tolerances_hint": {
@@ -99,7 +108,9 @@ for pr in pairs:
             "account_number_b": pr["record"].get("aux",{}).get("acct_num_b"),
         },
         "highlights": {
-            "acctnum_level": pr["record"].get("aux",{}).get("acctnum_level"),
+            "acctnum_level": _normalize_level(
+                pr["record"].get("aux",{}).get("acctnum_level")
+            ),
             "matched_fields": pr["record"].get("aux",{}).get("matched_fields"),
             "parts": pr["record"].get("parts"),
             "total": pr["record"].get("total"),
@@ -117,7 +128,7 @@ for pr in pairs:
               "strong": pr["record"].get("strong"),
               "mid": pr["record"].get("mid"),
               "dates": pr["record"].get("dates_all"),
-              "aux": {"acctnum_level": pr["record"].get("aux",{}).get("acctnum_level")},
+                "aux": {"acctnum_level": _normalize_level(pr["record"].get("aux",{}).get("acctnum_level"))},
               "parts": pr["record"].get("parts",{})
             },
             context_a, context_b

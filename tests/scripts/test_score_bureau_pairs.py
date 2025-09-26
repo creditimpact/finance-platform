@@ -70,7 +70,7 @@ def test_score_bureau_pairs_cli_helpers(runs_root: Path) -> None:
     assert row["i"] == 1 and row["j"] == 2
     assert row["decision"] == "auto"
     assert row["strong_flag"] is True
-    assert row["acctnum_level"] == "exact"
+    assert row["acctnum_level"] == "exact_or_known_match"
     assert "balance_owed" in row["parts"]
     assert row["parts"]["balance_owed"] == 31
     assert row["matched_pairs_map"]["balance_owed"] == ["transunion", "transunion"]
@@ -78,7 +78,7 @@ def test_score_bureau_pairs_cli_helpers(runs_root: Path) -> None:
     merge_tags = build_merge_tags(scores)
     assert merge_tags[1]["decision"] == "auto"
     assert merge_tags[1]["score_total"] >= 70
-    assert merge_tags[1]["aux"]["acctnum_level"] == "exact"
+    assert merge_tags[1]["aux"]["acctnum_level"] == "exact_or_known_match"
     assert merge_tags[2]["decision"] == "auto"
 
 

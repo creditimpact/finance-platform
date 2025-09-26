@@ -133,17 +133,6 @@ def _read_env_flag(env: Mapping[str, str], key: str, default: bool) -> bool:
     return bool(default)
 
 
-def _read_env_choice(
-    env: Mapping[str, str], key: str, default: str, choices: Iterable[str]
-) -> str:
-    lowered_choices = {str(choice).lower(): str(choice) for choice in choices}
-    raw = env.get(key)
-    if raw is None:
-        return str(default)
-    lowered = str(raw).strip().lower()
-    return lowered_choices.get(lowered, str(default))
-
-
 def merge_v2_only_enabled() -> bool:
     """Return True when legacy merge artefact writes must be skipped."""
 
@@ -230,7 +219,7 @@ _THRESHOLD_DEFAULTS: Dict[str, int] = {
 
 _TRIGGER_DEFAULTS: Dict[str, Union[int, str, bool]] = {
     "MERGE_AI_ON_BALOWED_EXACT": 1,
-    "MERGE_AI_ON_ACCTNUM_LEVEL": "exact_or_known_match",
+    "MERGE_AI_ON_HARD_ACCTNUM": 1,
     "MERGE_AI_ON_MID_K": 26,
     "MERGE_AI_ON_ALL_DATES": 1,
 }
@@ -241,12 +230,6 @@ _TOLERANCE_DEFAULTS: Dict[str, Union[int, float]] = {
     "LAST_PAYMENT_DAY_TOL": 7,
     "COUNT_ZERO_PAYMENT_MATCH": 0,
 }
-
-_ACCTNUM_LEVEL_CHOICES: Set[str] = {
-    "none",
-    "exact_or_known_match",
-}
-
 
 def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
     """Return merge configuration using environment overrides when provided."""
@@ -270,11 +253,10 @@ def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:
         "MERGE_AI_ON_BALOWED_EXACT",
         bool(_TRIGGER_DEFAULTS["MERGE_AI_ON_BALOWED_EXACT"]),
     )
-    triggers["MERGE_AI_ON_ACCTNUM_LEVEL"] = _read_env_choice(
+    triggers["MERGE_AI_ON_HARD_ACCTNUM"] = _read_env_flag(
         env_mapping,
-        "MERGE_AI_ON_ACCTNUM_LEVEL",
-        str(_TRIGGER_DEFAULTS["MERGE_AI_ON_ACCTNUM_LEVEL"]),
-        _ACCTNUM_LEVEL_CHOICES,
+        "MERGE_AI_ON_HARD_ACCTNUM",
+        bool(_TRIGGER_DEFAULTS["MERGE_AI_ON_HARD_ACCTNUM"]),
     )
     triggers["MERGE_AI_ON_MID_K"] = _read_env_int(
         env_mapping,
@@ -356,15 +338,15 @@ def normalize_acctnum(raw: str | None) -> Dict[str, object]:
         Original input string (or ``None``).
     ``digits``
         Concatenated digits extracted from the account number (may be empty).
-    ``digits_last4``
-        Last four digits when available, otherwise ``None``.
-    ``digits_last6``
-        Last six digits when available, otherwise ``None``.
     ``canon_mask``
         Canonical masked form after removing whitespace, dashes, dots, and
         collapsing mask runs.
     ``has_digits``
         Boolean indicating whether any digits were observed.
+    ``has_mask``
+        Boolean indicating whether any masking characters were present.
+    ``visible_digits``
+        Count of visible digits observed after removing masks and spacing.
     """
 
     raw_value = raw if isinstance(raw, str) else ("" if raw is None else str(raw))
@@ -376,10 +358,10 @@ def normalize_acctnum(raw: str | None) -> Dict[str, object]:
         return {
             "raw": raw,
             "digits": "",
-            "digits_last4": None,
-            "digits_last6": None,
             "canon_mask": "",
             "has_digits": False,
+            "has_mask": False,
+            "visible_digits": 0,
         }
 
     translated_chars: List[str] = []
@@ -399,17 +381,11 @@ def normalize_acctnum(raw: str | None) -> Dict[str, object]:
     digits = "".join(digits_chars)
     has_digits = bool(digits)
 
-    digits_last4 = digits[-4:] if len(digits) >= 4 else None
-    digits_last5 = digits[-5:] if len(digits) >= 5 else None
-    digits_last6 = digits[-6:] if len(digits) >= 6 else None
     has_mask = "*" in canon_mask
 
     return {
         "raw": raw,
         "digits": digits,
-        "digits_last4": digits_last4,
-        "digits_last5": digits_last5,
-        "digits_last6": digits_last6,
         "canon_mask": canon_mask,
         "has_digits": has_digits,
         "has_mask": has_mask,
@@ -615,10 +591,7 @@ def _match_account_number_best_pair(
     bureaus = ("transunion", "experian", "equifax")
     bureau_positions = {name: idx for idx, name in enumerate(bureaus)}
 
-    min_level = str(
-        cfg.triggers.get("MERGE_AI_ON_ACCTNUM_LEVEL", "exact_or_known_match")
-    ).lower()
-    threshold = _ACCOUNT_LEVEL_ORDER.get(min_level, 0)
+    hard_enabled = bool(cfg.triggers.get("MERGE_AI_ON_HARD_ACCTNUM", True))
 
     normalized_a = {name: _normalize_account_display(A.get(name)) for name in bureaus}
     normalized_b = {name: _normalize_account_display(B.get(name)) for name in bureaus}
@@ -641,7 +614,7 @@ def _match_account_number_best_pair(
 
             level = acctnum.match_level(left_norm, right_norm)
             level_rank = _ACCOUNT_LEVEL_ORDER.get(level, 0)
-            matched = level != "none" and level_rank >= threshold
+            matched = hard_enabled and level == "exact_or_known_match"
 
             result_aux: Dict[str, Any] = {
                 "best_pair": (left, right),
@@ -701,7 +674,8 @@ def _match_account_number_best_pair(
 def soft_acct_suspicious(a_display: str, b_display: str) -> bool:
     ad = re.sub(r"\D", "", a_display or "")
     bd = re.sub(r"\D", "", b_display or "")
-    return len(ad) >= 5 and len(bd) >= 5 and ad[-5:] == bd[-5:]
+    short, long_ = (ad, bd) if len(ad) <= len(bd) else (bd, ad)
+    return len(short) >= 5 and short in long_
 
 
 def _detect_soft_acct_match(
@@ -1310,6 +1284,18 @@ def score_all_pairs_0_100(
             acct_aux = raw_aux.get("account_number") if isinstance(raw_aux, Mapping) else None
             if not isinstance(acct_aux, Mapping):
                 acct_aux = {}
+            raw_values: Dict[str, Any] = {}
+            if isinstance(acct_aux, Mapping):
+                raw_values_candidate = acct_aux.get("raw_values")
+                if isinstance(raw_values_candidate, Mapping):
+                    raw_values = raw_values_candidate
+            a_acct_str = str(raw_values.get("a") or "")
+            b_acct_str = str(raw_values.get("b") or "")
+            if not a_acct_str:
+                a_acct_str = _extract_account_number_string(left_bureaus)
+            if not b_acct_str:
+                b_acct_str = _extract_account_number_string(right_bureaus)
+            gate_level, gate_detail = acctnum_level(a_acct_str, b_acct_str)
             level_value = str(
                 acct_aux.get("acctnum_level") or acct_level or gate_level or "none"
             )
@@ -1384,19 +1370,6 @@ def score_all_pairs_0_100(
                 "MERGE_V2_DECISION %s", json.dumps(decision_log, sort_keys=True)
             )
 
-            raw_values = {}
-            if isinstance(acct_aux, Mapping):
-                raw_values_candidate = acct_aux.get("raw_values")
-                if isinstance(raw_values_candidate, Mapping):
-                    raw_values = raw_values_candidate
-            a_acct_str = str(raw_values.get("a") or "")
-            b_acct_str = str(raw_values.get("b") or "")
-            if not a_acct_str:
-                a_acct_str = _extract_account_number_string(left_bureaus)
-            if not b_acct_str:
-                b_acct_str = _extract_account_number_string(right_bureaus)
-
-            gate_level, gate_detail = acctnum_level(a_acct_str, b_acct_str)
             hard_acct = gate_level == "exact_or_known_match"
             allow_by_dates = bool(result.get("dates_all"))
             allow_by_total = ai_threshold > 0 and total_score >= ai_threshold
@@ -1422,9 +1395,15 @@ def score_all_pairs_0_100(
 
             mid_sum = int(result.get("mid_sum", 0) or 0)
             identity_sum = int(result.get("identity_sum", 0) or 0)
+            soft_match = False
+            if not hard_acct:
+                soft_match = _detect_soft_acct_match(left_bureaus, right_bureaus)
+
             priority_category, priority_subscore, priority_label = _priority_category(
                 level_value, allow_by_dates, allow_by_total
             )
+            if soft_match and priority_label == "default":
+                priority_label = "soft_acctnum"
 
             candidate_records.append(
                 {
@@ -1443,6 +1422,7 @@ def score_all_pairs_0_100(
                     "total": total_score,
                     "mid_sum": mid_sum,
                     "identity_sum": identity_sum,
+                    "soft": soft_match,
                     "priority": {
                         "category": priority_category,
                         "subscore": priority_subscore,
@@ -1574,6 +1554,7 @@ def score_all_pairs_0_100(
                 "mid": mid_val,
                 "dates_all": bool(record.get("dates_all")),
                 "score_gate": bool(record.get("score_gate")),
+                "soft": bool(record.get("soft")),
             }
             logger.info("CANDIDATE_LIMIT_DROP %s", json.dumps(drop_log, sort_keys=True))
 

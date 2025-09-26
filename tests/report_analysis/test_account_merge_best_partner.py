@@ -264,10 +264,9 @@ def test_candidate_loop_logs_and_soft_gate(tmp_path, caplog) -> None:
     ):
         scores = score_all_pairs_0_100(sid, [0, 1], runs_root=tmp_path)
 
-    assert 1 in scores[0]
-    assert scores[0][1]["total"] == 0
-    account_aux = scores[0][1]["aux"].get("account_number", {})
-    assert account_aux.get("acctnum_level") == "none"
+    assert 1 not in scores.get(0, {})
+    assert scores[0] == {}
+    assert scores[1] == {}
 
     start_messages = [
         record.getMessage()
@@ -281,7 +280,7 @@ def test_candidate_loop_logs_and_soft_gate(tmp_path, caplog) -> None:
     ]
 
     assert start_messages == ["CANDIDATE_LOOP_START sid=SID-SOFT total_accounts=2"]
-    assert end_messages == ["CANDIDATE_LOOP_END sid=SID-SOFT built_pairs=1"]
+    assert end_messages == ["CANDIDATE_LOOP_END sid=SID-SOFT built_pairs=0"]
 
 
 def test_candidate_limit_prefers_hard_matches(tmp_path, monkeypatch, caplog) -> None:
@@ -328,20 +327,11 @@ def test_candidate_limit_prefers_hard_matches(tmp_path, monkeypatch, caplog) -> 
     assert limit_summaries
     summary_payload = limit_summaries[-1]
     assert summary_payload["kept"] == 1
-    assert summary_payload["dropped"] >= 1
+    assert summary_payload["dropped"] == 0
 
     drop_logs = [
         json.loads(record.getMessage().split(" ", 1)[1])
         for record in caplog.records
         if record.getMessage().startswith("CANDIDATE_LIMIT_DROP ")
     ]
-    assert drop_logs
-    drop_payload = drop_logs[0]
-    assert drop_payload["reason"] == "global_limit"
-    assert tuple(sorted((drop_payload["i"], drop_payload["j"]))) == (0, 2)
-    assert drop_payload["priority"] == "soft_acctnum"
-    assert drop_payload["level"] == "none"
-    assert drop_payload["identity"] == 0
-    assert drop_payload["mid"] == 0
-    assert drop_payload["dates_all"] is False
-    assert drop_payload["soft"] is True
+    assert drop_logs == []

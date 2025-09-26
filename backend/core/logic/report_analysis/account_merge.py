@@ -728,6 +728,87 @@ def _detect_soft_acct_match(
     return False
 
 
+def _log_candidate_considered(
+    sid: str,
+    left: int,
+    right: int,
+    *,
+    reason: str | None = None,
+    record: Mapping[str, Any] | None = None,
+    allow_flags: Mapping[str, Any] | None = None,
+    total: Any | None = None,
+    gate_level: str | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> None:
+    payload: Dict[str, Any] = {
+        "sid": sid,
+        "i": int(left),
+        "j": int(right),
+    }
+
+    if record is not None:
+        payload["allowed"] = bool(record.get("allowed"))
+        payload["acctnum_level"] = _sanitize_acct_level(record.get("level"))
+        payload["dates_all"] = bool(record.get("dates_all"))
+        payload["score_gate"] = bool(record.get("score_gate"))
+        payload["soft"] = bool(record.get("soft"))
+        try:
+            payload["mid_sum"] = int(record.get("mid_sum", 0) or 0)
+        except (TypeError, ValueError):
+            payload["mid_sum"] = 0
+        try:
+            payload["identity_sum"] = int(record.get("identity_sum", 0) or 0)
+        except (TypeError, ValueError):
+            payload["identity_sum"] = 0
+
+        priority = record.get("priority")
+        if isinstance(priority, Mapping):
+            priority_payload: Dict[str, Any] = {}
+            try:
+                priority_payload["category"] = int(priority.get("category", 0) or 0)
+            except (TypeError, ValueError):
+                priority_payload["category"] = 0
+            try:
+                priority_payload["subscore"] = int(priority.get("subscore", 0) or 0)
+            except (TypeError, ValueError):
+                priority_payload["subscore"] = 0
+            priority_payload["label"] = str(priority.get("label", ""))
+            payload["priority"] = priority_payload
+
+        if reason is None:
+            reason = record.get("reason")
+
+    if reason is not None:
+        payload["reason"] = str(reason)
+
+    if allow_flags is None and isinstance(record, Mapping):
+        allow_flags = record.get("allow_flags")
+    if isinstance(allow_flags, Mapping):
+        payload["allow_flags"] = {
+            "hard_acct": bool(allow_flags.get("hard_acct")),
+            "dates": bool(allow_flags.get("dates")),
+            "total": bool(allow_flags.get("total")),
+        }
+
+    if total is None and isinstance(record, Mapping):
+        total = record.get("total", 0)
+    try:
+        payload["total"] = int(total or 0)
+    except (TypeError, ValueError):
+        payload["total"] = 0
+
+    if gate_level is None and isinstance(record, Mapping):
+        gate_level = record.get("level")
+    if gate_level is not None:
+        payload["acctnum_gate_level"] = _sanitize_acct_level(gate_level)
+
+    if isinstance(extra, Mapping):
+        for key, value in extra.items():
+            payload[key] = value
+
+    logger.info("CANDIDATE_CONSIDERED %s", json.dumps(payload, sort_keys=True))
+
+
 def _log_candidate_skipped(
     sid: str,
     left: int,
@@ -1360,7 +1441,7 @@ def score_all_pairs_0_100(
                 a_acct_str = _extract_account_number_string(left_bureaus)
             if not b_acct_str:
                 b_acct_str = _extract_account_number_string(right_bureaus)
-            gate_level, gate_detail = acctnum_level(a_acct_str, b_acct_str)
+            gate_level, gate_detail = acctnum_match_level(a_acct_str, b_acct_str)
             level_candidate = (
                 acct_aux.get("acctnum_level")
                 or acct_level
@@ -1456,68 +1537,72 @@ def score_all_pairs_0_100(
             if soft_match and priority_label == "default":
                 priority_label = "soft_acctnum"
 
-            if hard_acct:
-                admit_reason = "hard_account_number"
-                allowed = True
-            elif allow_by_total:
-                admit_reason = "score_gate"
-                allowed = True
-            elif dates_all_equal:
-                admit_reason = "dates_all_equal"
-                allowed = True
-            else:
-                admit_reason = "below_threshold_no_acctnum"
-                allowed = False
-
-            record = {
-                "left": left,
-                "right": right,
-                "result": deepcopy(result),
-                "allowed": allowed,
-                "allow_flags": {
-                    "hard_acct": hard_acct,
-                    "dates": allow_by_dates,
-                    "total": allow_by_total,
-                },
-                "level": level_value,
-                "dates_all": dates_all_equal,
-                "score_gate": allow_by_total,
-                "total": total_score,
-                "mid_sum": mid_sum,
-                "identity_sum": identity_sum,
-                "soft": soft_match,
-                "reason": admit_reason,
-                "priority": {
-                    "category": priority_category,
-                    "subscore": priority_subscore,
-                    "label": priority_label,
-                },
+            allow_flags = {
+                "hard_acct": hard_acct,
+                "dates": allow_by_dates,
+                "total": allow_by_total,
             }
-            candidate_records.append(record)
 
-            logger.info(
-                (
-                    "CANDIDATE_CONSIDERED sid=%s i=%s j=%s reason=%s score=%s "
-                    "acct=%s dates_all=%s hard=%s total=%s allowed=%s"
-                ),
-                sid,
-                left,
-                right,
-                admit_reason,
-                total_score,
-                level_value,
-                dates_all_equal,
-                hard_acct,
-                allow_by_total,
-                allowed,
-            )
+            def add_candidate(
+                i: int,
+                j: int,
+                *,
+                reason: str,
+                allowed: bool = True,
+            ) -> Dict[str, Any]:
+                record = {
+                    "left": i,
+                    "right": j,
+                    "result": deepcopy(result),
+                    "allowed": allowed,
+                    "allow_flags": dict(allow_flags),
+                    "level": level_value,
+                    "dates_all": dates_all_equal,
+                    "score_gate": allow_by_total,
+                    "total": total_score,
+                    "mid_sum": mid_sum,
+                    "identity_sum": identity_sum,
+                    "soft": soft_match,
+                    "reason": reason,
+                    "priority": {
+                        "category": priority_category,
+                        "subscore": priority_subscore,
+                        "label": priority_label,
+                    },
+                }
+                candidate_records.append(record)
+                _log_candidate_considered(
+                    sid,
+                    i,
+                    j,
+                    reason=reason,
+                    record=record,
+                    allow_flags=dict(allow_flags),
+                    total=total_score,
+                    gate_level=gate_level,
+                )
+                return record
 
-            if not allowed:
+            if hard_acct:
+                add_candidate(left, right, reason="hard_acctnum")
+                continue
+
+            if allow_by_total:
+                add_candidate(left, right, reason="score_gate")
+            elif dates_all_equal:
+                add_candidate(left, right, reason="dates_all_equal")
+            else:
+                record = add_candidate(
+                    left,
+                    right,
+                    reason="below_threshold_no_acctnum",
+                    allowed=False,
+                )
                 _log_candidate_skipped(
                     sid,
                     left,
                     right,
-                    reason=admit_reason,
+                    reason="below_threshold_no_acctnum",
                     record=record,
                 )
 

@@ -1482,8 +1482,8 @@ def score_all_pairs_0_100(
 
         return (
             -level_rank,
-            -identity_val,
             -mid_val,
+            -identity_val,
             -dates_flag,
             soft_flag,
             -total_val,

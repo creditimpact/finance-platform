@@ -1496,7 +1496,10 @@ def score_all_pairs_0_100(
             candidate_records.append(record)
 
             logger.info(
-                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s reason=%s score=%s acct=%s dates_all=%s",
+                (
+                    "CANDIDATE_CONSIDERED sid=%s i=%s j=%s reason=%s score=%s "
+                    "acct=%s dates_all=%s hard=%s total=%s allowed=%s"
+                ),
                 sid,
                 left,
                 right,
@@ -1504,6 +1507,9 @@ def score_all_pairs_0_100(
                 total_score,
                 level_value,
                 dates_all_equal,
+                hard_acct,
+                allow_by_total,
+                allowed,
             )
 
             if not allowed:
@@ -1643,6 +1649,24 @@ def score_all_pairs_0_100(
         left = int(record.get("left"))
         right = int(record.get("right"))
         result = record.get("result") if isinstance(record.get("result"), Mapping) else {}
+        allow_flags = record.get("allow_flags") if isinstance(record.get("allow_flags"), Mapping) else {}
+        hard_flag = bool(allow_flags.get("hard_acct"))
+        total_flag = bool(allow_flags.get("total"))
+        dates_flag = bool(allow_flags.get("dates"))
+        logger.info(
+            (
+                "CANDIDATE_SELECTED sid=%s i=%s j=%s hard=%s total=%s dates=%s "
+                "reason=%s score=%s"
+            ),
+            sid,
+            left,
+            right,
+            hard_flag,
+            total_flag,
+            dates_flag,
+            record.get("reason"),
+            record.get("total"),
+        )
         scores[left][right] = deepcopy(result)
         scores[right][left] = deepcopy(result)
 

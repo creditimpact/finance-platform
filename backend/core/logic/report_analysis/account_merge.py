@@ -17,6 +17,7 @@ from backend import config as app_config
 from backend.core.io.tags import read_tags, upsert_tag, write_tags_atomic
 from backend.core.logic.normalize.accounts import normalize_acctnum as _normalize_acctnum_basic
 from backend.core.merge import acctnum
+from backend.core.merge.acctnum import acctnum_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
 
@@ -433,7 +434,7 @@ def acctnum_match_level(
     a_digits = _digits_only(a_value)
     b_digits = _digits_only(b_value)
 
-    matched, detail = acctnum.acctnum_match_visible(a_value, b_value)
+    level, detail = acctnum_level(a_value, b_value)
 
     debug: Dict[str, Dict[str, str]] = {
         "a": {
@@ -444,13 +445,12 @@ def acctnum_match_level(
             "raw": b_value,
             "digits": b_digits,
         },
-        "short": detail.get("short", ""),
-        "long": detail.get("long", ""),
+        "short": str(detail.get("short", "")),
+        "long": str(detail.get("long", "")),
     }
     if "why" in detail:
-        debug["why"] = detail["why"]
+        debug["why"] = str(detail["why"])
 
-    level = "exact_or_known_match" if matched else "none"
     return level, debug
 _TYPE_ALIAS_MAP = {
     "us bk cacs": "u s bank",
@@ -1310,7 +1310,9 @@ def score_all_pairs_0_100(
             acct_aux = raw_aux.get("account_number") if isinstance(raw_aux, Mapping) else None
             if not isinstance(acct_aux, Mapping):
                 acct_aux = {}
-            level_value = str(acct_aux.get("acctnum_level") or acct_level or "none")
+            level_value = str(
+                acct_aux.get("acctnum_level") or acct_level or gate_level or "none"
+            )
             debug_payload = {}
             if isinstance(acct_aux, Mapping):
                 debug_candidate = acct_aux.get("acctnum_debug")
@@ -1323,6 +1325,12 @@ def score_all_pairs_0_100(
                 short_debug = str(debug_payload.get("short", ""))
                 long_debug = str(debug_payload.get("long", ""))
                 why_debug = str(debug_payload.get("why", ""))
+            if not short_debug and isinstance(gate_detail, Mapping):
+                short_debug = str(gate_detail.get("short", ""))
+            if not long_debug and isinstance(gate_detail, Mapping):
+                long_debug = str(gate_detail.get("long", ""))
+            if not why_debug and isinstance(gate_detail, Mapping):
+                why_debug = str(gate_detail.get("why", ""))
             logger.info(
                 "MERGE_V2_ACCTNUM_MATCH sid=%s i=%s j=%s level=%s short=%s long=%s why=%s",
                 sid,
@@ -1388,39 +1396,29 @@ def score_all_pairs_0_100(
             if not b_acct_str:
                 b_acct_str = _extract_account_number_string(right_bureaus)
 
-            level_value, _ = acctnum_match_level(a_acct_str or None, b_acct_str or None)
-            allow_by_acct = level_value in _ACCOUNT_STRONG_LEVELS
+            gate_level, gate_detail = acctnum_level(a_acct_str, b_acct_str)
+            hard_acct = gate_level == "exact_or_known_match"
             allow_by_dates = bool(result.get("dates_all"))
             allow_by_total = ai_threshold > 0 and total_score >= ai_threshold
-            allowed = allow_by_acct or allow_by_dates or allow_by_total
-
-            gate_flags = {
-                "acct": allow_by_acct,
-                "dates": allow_by_dates,
-                "total": allow_by_total,
-            }
+            allowed = hard_acct or allow_by_dates or allow_by_total
 
             logger.info(
-                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s hard=%s dates=%s total=%s",
+                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s hard_acct=%s total=%s",
                 sid,
                 left,
                 right,
-                allow_by_acct,
-                allow_by_dates,
-                allow_by_total,
+                hard_acct,
+                total_score,
             )
 
             if not allowed:
-                skipped_reasons = [flag for flag, value in gate_flags.items() if not value]
-                skip_log = {
-                    "sid": sid,
-                    "i": left,
-                    "j": right,
-                    "level": level_value,
-                    "reasons": skipped_reasons,
-                    "flags": gate_flags,
-                }
-                logger.info("CANDIDATE_SKIPPED %s", json.dumps(skip_log, sort_keys=True))
+                logger.info(
+                    "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s",
+                    sid,
+                    left,
+                    right,
+                    "no_gate",
+                )
 
             mid_sum = int(result.get("mid_sum", 0) or 0)
             identity_sum = int(result.get("identity_sum", 0) or 0)
@@ -1435,7 +1433,7 @@ def score_all_pairs_0_100(
                     "result": deepcopy(result),
                     "allowed": allowed,
                     "allow_flags": {
-                        "acct": allow_by_acct,
+                        "hard_acct": hard_acct,
                         "dates": allow_by_dates,
                         "total": allow_by_total,
                     },

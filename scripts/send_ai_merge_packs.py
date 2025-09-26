@@ -523,7 +523,7 @@ def _write_decision_tags_resolved(
             reasons = unique_reasons
             matched_fields: dict[str, bool] = {}
             aux_payload = merge_tag.get("aux")
-            acctnum_level: str | None = None
+            acctnum_level = "none"
             if isinstance(aux_payload, MappingABC):
                 raw_matched = aux_payload.get("matched_fields")
                 if isinstance(raw_matched, MappingABC):
@@ -542,8 +542,7 @@ def _write_decision_tags_resolved(
                 "identity_score": identity_score,
                 "debt_score": debt_score,
             }
-            if acctnum_level:
-                merge_summary["acctnum_level"] = acctnum_level
+            merge_summary["acctnum_level"] = acctnum_level
             summary_payload["merge_scoring"] = merge_summary
             _write_summary(summary_path, summary_payload)
 

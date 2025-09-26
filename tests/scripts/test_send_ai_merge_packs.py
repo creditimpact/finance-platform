@@ -779,17 +779,20 @@ def test_ai_pairing_flow_compaction(
         "last_payment": True,
         "account_number": True,
     }
+    assert "acctnum_level" in merge_entry
 
     merge_score_a = summary_a.get("merge_scoring")
     assert merge_score_a
     assert merge_score_a["best_with"] == 16
     assert merge_score_a["score_total"] >= 0
     assert merge_score_a["matched_fields"].get("balance_owed") is True
+    assert "acctnum_level" in merge_score_a
 
     merge_score_b = summary_b.get("merge_scoring")
     assert merge_score_b
     assert merge_score_b["best_with"] == 11
     assert merge_score_b["matched_fields"].get("balance_owed") is True
+    assert "acctnum_level" in merge_score_b
 
     # Tags should remain compact on repeated compaction.
     snapshot_a = json.loads((account_a_dir / "tags.json").read_text(encoding="utf-8"))

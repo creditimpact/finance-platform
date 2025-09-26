@@ -340,3 +340,8 @@ def test_candidate_limit_prefers_hard_matches(tmp_path, monkeypatch, caplog) -> 
     assert drop_payload["reason"] == "global_limit"
     assert tuple(sorted((drop_payload["i"], drop_payload["j"]))) == (0, 2)
     assert drop_payload["priority"] == "soft_acctnum"
+    assert drop_payload["level"] == "none"
+    assert drop_payload["identity"] == 0
+    assert drop_payload["mid"] == 0
+    assert drop_payload["dates_all"] is False
+    assert drop_payload["soft"] is True

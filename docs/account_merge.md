@@ -101,3 +101,24 @@ These examples assume `MERGE_AI_MIN=0.35`, `MERGE_AI_HARD_MIN=0.30`, and
 
 These behaviors ensure deterministic handling of strong account-number signals
 without altering the underlying part score.
+
+## Telemetry & verification
+
+- Candidate gating emits `CANDIDATE_LOOP_START`, `CANDIDATE_CONSIDERED`,
+  `CANDIDATE_SKIPPED`, and `CANDIDATE_LOOP_END` lines. To review them for a
+  specific session, run:
+
+  ```bash
+  rg "CANDIDATE_(CONSIDERED|SKIPPED)" runs/<sid>/ai_packs/logs.txt
+  ```
+
+- Account-number normalization logs the winning bureau pair via
+  `MERGE_V2_ACCT_BEST`. Inspect those entries with:
+
+  ```bash
+  rg "MERGE_V2_ACCT_BEST" runs/<sid>/ai_packs/logs.txt
+  ```
+
+These commands make it easy to confirm which account pairs were considered,
+why candidates were rejected, and which bureaus supplied the matched
+account-number digits.

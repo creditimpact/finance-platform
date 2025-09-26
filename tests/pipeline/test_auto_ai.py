@@ -45,9 +45,15 @@ def _merge_best_verbose(partner: int) -> dict[str, Any]:
         "aux": {
             "acctnum_level": "last6_bin",
             "matched_fields": {"balance_owed": True, "account_number": True},
+            "by_field_pairs": {"account_number": ["transunion", "experian"]},
+            "acctnum_digits_len_a": 12,
+            "acctnum_digits_len_b": 12,
         },
         "conflicts": ["credit_limit:conflict"],
         "strong": True,
+        "matched_pairs": {"account_number": ["transunion", "experian"]},
+        "acctnum_digits_len_a": 12,
+        "acctnum_digits_len_b": 12,
     }
 
 
@@ -533,6 +539,9 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     assert len(first_logs) == 1
     assert first_logs[0]["packs"] == 1
     assert first_logs[0]["pairs"] == 2
+    assert "keywords" in first_logs[0]
+    assert "CANDIDATE_CONSIDERED" in first_logs[0]["keywords"]
+    assert any("MERGE_V2_ACCT_BEST" in cmd for cmd in first_logs[0]["verify"])
 
     tags_a_first = json.loads((account_a / "tags.json").read_text(encoding="utf-8"))
     tags_b_first = json.loads((account_b / "tags.json").read_text(encoding="utf-8"))

@@ -62,9 +62,15 @@ def _merge_pair_tag(partner: int) -> dict:
                 "last_payment": True,
                 "account_number": True,
             },
+            "by_field_pairs": {"account_number": ["transunion", "experian"]},
+            "acctnum_digits_len_a": 12,
+            "acctnum_digits_len_b": 12,
         },
         "conflicts": ["credit_limit:conflict"],
         "strong": True,
+        "matched_pairs": {"account_number": ["transunion", "experian"]},
+        "acctnum_digits_len_a": 12,
+        "acctnum_digits_len_b": 12,
     }
 
 
@@ -85,9 +91,15 @@ def _merge_best_tag(partner: int) -> dict:
                 "last_payment": True,
                 "account_number": True,
             },
+            "by_field_pairs": {"account_number": ["transunion", "experian"]},
+            "acctnum_digits_len_a": 12,
+            "acctnum_digits_len_b": 12,
         },
         "conflicts": ["credit_limit:conflict"],
         "strong": True,
+        "matched_pairs": {"account_number": ["transunion", "experian"]},
+        "acctnum_digits_len_a": 12,
+        "acctnum_digits_len_b": 12,
     }
 
 
@@ -780,6 +792,11 @@ def test_ai_pairing_flow_compaction(
         "account_number": True,
     }
     assert "acctnum_level" in merge_entry
+    acct_pair = merge_entry["matched_pairs"]["account_number"]
+    assert isinstance(acct_pair, list)
+    assert len(acct_pair) == 2
+    assert "acctnum_digits_len_a" in merge_entry
+    assert "acctnum_digits_len_b" in merge_entry
 
     merge_score_a = summary_a.get("merge_scoring")
     assert merge_score_a
@@ -787,12 +804,20 @@ def test_ai_pairing_flow_compaction(
     assert merge_score_a["score_total"] >= 0
     assert merge_score_a["matched_fields"].get("balance_owed") is True
     assert "acctnum_level" in merge_score_a
+    assert "matched_pairs" in merge_score_a
+    assert "account_number" in merge_score_a["matched_pairs"]
+    assert "acctnum_digits_len_a" in merge_score_a
+    assert "acctnum_digits_len_b" in merge_score_a
 
     merge_score_b = summary_b.get("merge_scoring")
     assert merge_score_b
     assert merge_score_b["best_with"] == 11
     assert merge_score_b["matched_fields"].get("balance_owed") is True
     assert "acctnum_level" in merge_score_b
+    assert "matched_pairs" in merge_score_b
+    assert "account_number" in merge_score_b["matched_pairs"]
+    assert "acctnum_digits_len_a" in merge_score_b
+    assert "acctnum_digits_len_b" in merge_score_b
 
     # Tags should remain compact on repeated compaction.
     snapshot_a = json.loads((account_a_dir / "tags.json").read_text(encoding="utf-8"))

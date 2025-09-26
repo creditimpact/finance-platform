@@ -48,6 +48,17 @@ def _append_run_log_entry(
         "at": datetime.now(timezone.utc).isoformat(),
         "packs": int(packs),
         "pairs": int(pairs),
+        "keywords": [
+            "CANDIDATE_LOOP_START",
+            "CANDIDATE_CONSIDERED",
+            "CANDIDATE_SKIPPED",
+            "CANDIDATE_LOOP_END",
+            "MERGE_V2_ACCT_BEST",
+        ],
+        "verify": [
+            f"rg \"CANDIDATE_(CONSIDERED|SKIPPED)\" {logs_path}",
+            f"rg \"MERGE_V2_ACCT_BEST\" {logs_path}",
+        ],
     }
     if reason:
         entry["reason"] = reason

@@ -111,6 +111,8 @@ def _sanitize_parts(parts: Optional[Mapping[str, Any]]) -> Dict[str, int]:
 def _extract_aux_payload(aux: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     acct_level = "none"
     by_field_pairs: Dict[str, List[str]] = {}
+    acct_digits_len_a: Optional[int] = None
+    acct_digits_len_b: Optional[int] = None
 
     if isinstance(aux, Mapping):
         acct_aux = aux.get("account_number")
@@ -118,6 +120,16 @@ def _extract_aux_payload(aux: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             level = acct_aux.get("acctnum_level")
             if isinstance(level, str) and level:
                 acct_level = level
+            len_a = acct_aux.get("acctnum_digits_len_a")
+            len_b = acct_aux.get("acctnum_digits_len_b")
+            try:
+                acct_digits_len_a = int(len_a) if len_a is not None else acct_digits_len_a
+            except (TypeError, ValueError):
+                acct_digits_len_a = acct_digits_len_a
+            try:
+                acct_digits_len_b = int(len_b) if len_b is not None else acct_digits_len_b
+            except (TypeError, ValueError):
+                acct_digits_len_b = acct_digits_len_b
 
         for field in FIELD_SEQUENCE:
             field_aux = aux.get(field)
@@ -132,7 +144,18 @@ def _extract_aux_payload(aux: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 if len(pair_list) == 2:
                     by_field_pairs[field] = [str(pair_list[0]), str(pair_list[1])]
 
-    return {"acctnum_level": acct_level, "by_field_pairs": by_field_pairs}
+    if "account_number" not in by_field_pairs:
+        by_field_pairs["account_number"] = []
+
+    payload: Dict[str, Any] = {
+        "acctnum_level": acct_level,
+        "by_field_pairs": by_field_pairs,
+    }
+    if acct_digits_len_a is not None:
+        payload["acctnum_digits_len_a"] = acct_digits_len_a
+    if acct_digits_len_b is not None:
+        payload["acctnum_digits_len_b"] = acct_digits_len_b
+    return payload
 
 
 def _build_row(
@@ -154,6 +177,8 @@ def _build_row(
     aux_payload = _extract_aux_payload(result.get("aux", {}))
     acctnum_level = aux_payload.get("acctnum_level", "none")
     matched_pairs_map = aux_payload.get("by_field_pairs", {})
+    acct_digits_len_a = aux_payload.get("acctnum_digits_len_a")
+    acct_digits_len_b = aux_payload.get("acctnum_digits_len_b")
 
     strong_flag = any(str(trigger).startswith("strong:") for trigger in triggers)
 
@@ -171,6 +196,8 @@ def _build_row(
         "parts_top": _format_top_parts(parts),
         "matched_pairs_map": matched_pairs_map,
         "matched_pairs_display": _format_matched_pairs(matched_pairs_map),
+        "acctnum_digits_len_a": acct_digits_len_a,
+        "acctnum_digits_len_b": acct_digits_len_b,
         "result": deepcopy(result),
     }
     return row

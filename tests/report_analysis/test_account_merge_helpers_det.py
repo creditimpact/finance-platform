@@ -178,6 +178,9 @@ def test_match_field_best_of_9_account_number_aux():
     assert aux["best_pair"] == ("experian", "equifax")
     assert aux["acctnum_level"] == "none"
     assert aux["normalized_values"] == ("1234", "00001234")
+    assert aux["acctnum_digits_len_a"] == 4
+    assert aux["acctnum_digits_len_b"] == 8
+    assert aux["matched"] is False
 
 
 def test_match_field_best_of_9_missing_values_do_not_match():

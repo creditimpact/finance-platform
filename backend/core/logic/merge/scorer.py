@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, Mapping as TypingMapping
 
 from backend import config as app_config
 from backend.core.merge import acctnum
+from backend.core.merge.acctnum import acctnum_level
 from scripts.score_bureau_pairs import (
     ScoreComputationResult,
     build_merge_tags,
@@ -29,6 +30,10 @@ SCORER_WEIGHTS = {
     "acctnum_exact": app_config.ACCTNUM_EXACT_WEIGHT,
     "masked": app_config.ACCTNUM_MASKED_WEIGHT,
 }
+
+POINTS_ACCTNUM = 28
+
+_EMPTY_NORMALIZED = acctnum.normalize_display("")
 
 
 def _ensure_tag_levels(
@@ -104,7 +109,7 @@ def _update_result_with_match(
 ) -> None:
     parts = dict(result.get("parts") or {})
     old_points = int(parts.get("account_number", 0) or 0)
-    new_points = match.points
+    new_points = POINTS_ACCTNUM if match.level == "exact_or_known_match" else 0
     parts["account_number"] = new_points
     result["parts"] = parts
 
@@ -121,7 +126,7 @@ def _update_result_with_match(
     result["highlights"] = highlights
 
     matched_fields = dict(result.get("matched_fields") or {})
-    matched = match.level != "none"
+    matched = match.level == "exact_or_known_match"
     matched_fields["account_number"] = matched
     result["matched_fields"] = matched_fields
 
@@ -141,6 +146,7 @@ def _update_result_with_match(
     acct_aux["acctnum_debug"] = {
         "a": match.a.to_debug_dict(),
         "b": match.b.to_debug_dict(),
+        "visible_match": dict(match.debug),
     }
     acct_aux["acctnum_digits_len_a"] = len(match.a.digits)
     acct_aux["acctnum_digits_len_b"] = len(match.b.digits)
@@ -165,7 +171,36 @@ def _apply_account_number_scoring(
             if not isinstance(result, dict):
                 continue
             b_norm = normalized_by_idx.get(j, {})
-            match = acctnum.best_account_number_match(a_norm, b_norm)
+            best_match = acctnum.AccountNumberMatch(
+                "none",
+                "",
+                "",
+                _EMPTY_NORMALIZED,
+                _EMPTY_NORMALIZED,
+                {"short": "", "long": ""},
+            )
+            best_rank = -1
+            for a_bureau in ("transunion", "experian", "equifax"):
+                a_norm_value = a_norm.get(a_bureau, _EMPTY_NORMALIZED)
+                for b_bureau in ("transunion", "experian", "equifax"):
+                    b_norm_value = b_norm.get(b_bureau, _EMPTY_NORMALIZED)
+                    level, debug = acctnum_level(a_norm_value.raw, b_norm_value.raw)
+                    rank = 1 if level == "exact_or_known_match" else 0
+                    if rank > best_rank:
+                        best_rank = rank
+                        best_match = acctnum.AccountNumberMatch(
+                            level,
+                            a_bureau,
+                            b_bureau,
+                            a_norm_value,
+                            b_norm_value,
+                            debug,
+                        )
+                    if rank == 1:
+                        break
+                if best_rank == 1:
+                    break
+            match = best_match
             _update_result_with_match(result, match)
             right_scores = scores_by_idx.get(j)
             if isinstance(right_scores, Mapping):
@@ -173,15 +208,13 @@ def _apply_account_number_scoring(
                 if isinstance(reverse, dict):
                     _update_result_with_match(reverse, match.swapped())
             logger.info(
-                "MERGE_V2_ACCT_BEST sid=%s i=%s j=%s level=%s a_bureau=%s b_bureau=%s a_digits=%s b_digits=%s",
+                "MERGE_V2_ACCTNUM_MATCH sid=%s i=%s j=%s level=%s short=%s long=%s",
                 sid,
                 i,
                 j,
                 match.level,
-                match.a_bureau,
-                match.b_bureau,
-                match.a.digits,
-                match.b.digits,
+                match.debug.get("short"),
+                match.debug.get("long"),
             )
 
 

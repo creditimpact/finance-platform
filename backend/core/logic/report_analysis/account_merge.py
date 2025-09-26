@@ -290,6 +290,7 @@ _ACCOUNT_NUMBER_WEIGHTS = {
     "last6": POINTS_ACCTNUM_LAST6,
     "exact": POINTS_ACCTNUM_EXACT,
 }
+_ACCOUNT_STRONG_LEVELS = {"exact", "last6_bin", "last6"}
 _MASK_CHARS = {"*", "x", "X", "•", "●"}
 
 _IDENTITY_FIELD_SET = {
@@ -1058,6 +1059,7 @@ def score_all_pairs_0_100(
     """Score all unordered account pairs for a case run."""
 
     cfg = get_merge_cfg()
+    mid_threshold = int(cfg.triggers.get("MERGE_AI_ON_MID_K", 0) or 0)
 
     requested_raw = list(idx_list) if idx_list is not None else []
     requested_indices: List[int] = []
@@ -1231,6 +1233,33 @@ def score_all_pairs_0_100(
             logger.info(
                 "MERGE_V2_DECISION %s", json.dumps(decision_log, sort_keys=True)
             )
+
+            raw_values = {}
+            if isinstance(acct_aux, Mapping):
+                raw_values_candidate = acct_aux.get("raw_values")
+                if isinstance(raw_values_candidate, Mapping):
+                    raw_values = raw_values_candidate
+            a_acct_str = str(raw_values.get("a") or "")
+            b_acct_str = str(raw_values.get("b") or "")
+            if not a_acct_str:
+                a_acct_str = _extract_account_number_string(left_bureaus)
+            if not b_acct_str:
+                b_acct_str = _extract_account_number_string(right_bureaus)
+
+            level_value, _ = acctnum_match_level(a_acct_str or None, b_acct_str or None)
+            allow_by_acct = level_value in _ACCOUNT_STRONG_LEVELS
+            allow_by_dates = bool(result.get("dates_all"))
+            triggers = [str(trigger) for trigger in result.get("triggers", [])]
+            allow_by_strong = any(trigger.startswith("strong:") for trigger in triggers)
+            allow_by_mid = False
+            if mid_threshold > 0:
+                try:
+                    allow_by_mid = int(result.get("mid_sum") or 0) >= mid_threshold
+                except (TypeError, ValueError):
+                    allow_by_mid = False
+
+            if not (allow_by_acct or allow_by_dates or allow_by_strong or allow_by_mid):
+                continue
 
             scores[left][right] = deepcopy(result)
             scores[right][left] = deepcopy(result)

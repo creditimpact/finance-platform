@@ -626,6 +626,7 @@ def _build_problem_cases_lean(
 
         aux_payload = best_tag.get("aux")
         matched_fields: dict[str, bool] = {}
+        matched_pairs: dict[str, list[str]] = {}
         if isinstance(aux_payload, Mapping):
             raw_matched = aux_payload.get("matched_fields")
             if isinstance(raw_matched, Mapping):
@@ -636,6 +637,28 @@ def _build_problem_cases_lean(
             acct_level = aux_payload.get("acctnum_level")
             if isinstance(acct_level, str) and acct_level:
                 merge_summary["acctnum_level"] = acct_level
+            raw_pairs = aux_payload.get("by_field_pairs")
+            if isinstance(raw_pairs, Mapping):
+                matched_pairs = {
+                    str(field): [str(item) for item in pair]
+                    for field, pair in raw_pairs.items()
+                    if isinstance(pair, (list, tuple))
+                }
+            digits_a = aux_payload.get("acctnum_digits_len_a")
+            digits_b = aux_payload.get("acctnum_digits_len_b")
+            if digits_a is not None:
+                try:
+                    merge_summary["acctnum_digits_len_a"] = int(digits_a)
+                except (TypeError, ValueError):
+                    pass
+            if digits_b is not None:
+                try:
+                    merge_summary["acctnum_digits_len_b"] = int(digits_b)
+                except (TypeError, ValueError):
+                    pass
+        if not matched_pairs:
+            matched_pairs = {"account_number": []}
+        merge_summary["matched_pairs"] = matched_pairs
         merge_summary["matched_fields"] = matched_fields
 
         summary_data["merge_scoring"] = merge_summary

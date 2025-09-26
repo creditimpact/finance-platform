@@ -108,6 +108,21 @@ def _build_merge_scoring_summary(
         updates["acctnum_level"] = acctnum_level
         matched_fields = _normalize_matched_fields(aux_payload.get("matched_fields"))
         updates["matched_fields"] = matched_fields
+        by_field_pairs = aux_payload.get("by_field_pairs")
+        if isinstance(by_field_pairs, Mapping):
+            updates["matched_pairs"] = {
+                str(field): [str(item) for item in pair]
+                for field, pair in by_field_pairs.items()
+                if isinstance(pair, (list, tuple))
+            }
+        for key in ("acctnum_digits_len_a", "acctnum_digits_len_b"):
+            value = aux_payload.get(key)
+            if value is None:
+                continue
+            try:
+                updates[key] = int(value)
+            except (TypeError, ValueError):
+                continue
 
     conflicts_raw = best_tag.get("conflicts") if "conflicts" in best_tag else None
     if isinstance(conflicts_raw, Iterable) and not isinstance(conflicts_raw, (str, bytes)):
@@ -146,6 +161,14 @@ def _build_merge_scoring_summary(
         summary["best_with"] = partner
     elif "best_with" in summary:
         summary.pop("best_with")
+
+    matched_pairs_payload = summary.get("matched_pairs")
+    if isinstance(matched_pairs_payload, Mapping):
+        matched_pairs_payload = dict(matched_pairs_payload)
+        matched_pairs_payload.setdefault("account_number", [])
+        summary["matched_pairs"] = matched_pairs_payload
+    else:
+        summary["matched_pairs"] = {"account_number": []}
 
     return summary
 
@@ -303,6 +326,9 @@ def _merge_explanation_from_tag(tag: Mapping[str, object]) -> dict[str, object] 
         "strong_rank": tag.get("strong_rank"),
         "score_total": tag.get("score_total"),
         "tiebreaker": tag.get("tiebreaker"),
+        "matched_pairs": tag.get("matched_pairs"),
+        "acctnum_digits_len_a": tag.get("acctnum_digits_len_a"),
+        "acctnum_digits_len_b": tag.get("acctnum_digits_len_b"),
     }
 
     meaningful = False
@@ -321,6 +347,22 @@ def _merge_explanation_from_tag(tag: Mapping[str, object]) -> dict[str, object] 
         if isinstance(matched_fields, Mapping) and matched_fields:
             payload.setdefault("matched_fields", dict(matched_fields))
             meaningful = True
+        by_field_pairs = aux.get("by_field_pairs")
+        if isinstance(by_field_pairs, Mapping):
+            non_empty_pairs = {
+                str(field): [str(item) for item in pair]
+                for field, pair in by_field_pairs.items()
+                if isinstance(pair, (list, tuple)) and len(pair) == 2
+            }
+            if non_empty_pairs:
+                payload.setdefault("matched_pairs", non_empty_pairs)
+                meaningful = True
+        for key in ("acctnum_digits_len_a", "acctnum_digits_len_b"):
+            if key not in payload and key in aux:
+                value = aux.get(key)
+                if _has_value(value):
+                    payload[key] = value
+                    meaningful = True
 
     if acct_level_value is None:
         direct_level = tag.get("acctnum_level")
@@ -329,6 +371,21 @@ def _merge_explanation_from_tag(tag: Mapping[str, object]) -> dict[str, object] 
     if acct_level_value is not None:
         payload["acctnum_level"] = acct_level_value
         meaningful = True
+
+    matched_pairs_payload = payload.get("matched_pairs")
+    if isinstance(matched_pairs_payload, Mapping):
+        matched_pairs_payload = dict(matched_pairs_payload)
+        if not any(
+            isinstance(pair, (list, tuple)) and len(pair) == 2
+            for pair in matched_pairs_payload.values()
+        ):
+            payload.pop("matched_pairs", None)
+            matched_pairs_payload = None
+        else:
+            matched_pairs_payload.setdefault("account_number", [])
+            payload["matched_pairs"] = matched_pairs_payload
+    if "matched_pairs" not in payload:
+        payload["matched_pairs"] = {"account_number": []}
 
     return payload if meaningful else None
 

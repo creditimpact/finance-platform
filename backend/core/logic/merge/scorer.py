@@ -126,10 +126,10 @@ def _update_result_with_match(
     result["matched_fields"] = matched_fields
 
     matched_pairs = dict(result.get("matched_pairs") or {})
-    if matched:
+    if match.a_bureau and match.b_bureau:
         matched_pairs["account_number"] = [match.a_bureau, match.b_bureau]
-    else:
-        matched_pairs.pop("account_number", None)
+    elif "account_number" not in matched_pairs:
+        matched_pairs["account_number"] = []
     result["matched_pairs"] = matched_pairs
 
     aux = dict(result.get("aux") or {})
@@ -142,6 +142,8 @@ def _update_result_with_match(
         "a": match.a.to_debug_dict(),
         "b": match.b.to_debug_dict(),
     }
+    acct_aux["acctnum_digits_len_a"] = len(match.a.digits)
+    acct_aux["acctnum_digits_len_b"] = len(match.b.digits)
     aux["account_number"] = acct_aux
     result["aux"] = aux
 

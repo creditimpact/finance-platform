@@ -791,7 +791,7 @@ def test_ai_pairing_flow_compaction(
         "last_payment": True,
         "account_number": True,
     }
-    assert "acctnum_level" in merge_entry
+    assert merge_entry.get("acctnum_level") in {"exact_or_known_match", "none"}
     acct_pair = merge_entry["matched_pairs"]["account_number"]
     assert isinstance(acct_pair, list)
     assert len(acct_pair) == 2
@@ -803,9 +803,10 @@ def test_ai_pairing_flow_compaction(
     assert merge_score_a["best_with"] == 16
     assert merge_score_a["score_total"] >= 0
     assert merge_score_a["matched_fields"].get("balance_owed") is True
-    assert "acctnum_level" in merge_score_a
+    assert merge_score_a.get("acctnum_level") in {"exact_or_known_match", "none"}
     assert "matched_pairs" in merge_score_a
     assert "account_number" in merge_score_a["matched_pairs"]
+    assert isinstance(merge_score_a["matched_pairs"]["account_number"], list)
     assert "acctnum_digits_len_a" in merge_score_a
     assert "acctnum_digits_len_b" in merge_score_a
 
@@ -813,9 +814,10 @@ def test_ai_pairing_flow_compaction(
     assert merge_score_b
     assert merge_score_b["best_with"] == 11
     assert merge_score_b["matched_fields"].get("balance_owed") is True
-    assert "acctnum_level" in merge_score_b
+    assert merge_score_b.get("acctnum_level") in {"exact_or_known_match", "none"}
     assert "matched_pairs" in merge_score_b
     assert "account_number" in merge_score_b["matched_pairs"]
+    assert isinstance(merge_score_b["matched_pairs"]["account_number"], list)
     assert "acctnum_digits_len_a" in merge_score_b
     assert "acctnum_digits_len_b" in merge_score_b
 

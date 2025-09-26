@@ -684,10 +684,8 @@ def _match_account_number_best_pair(
 
 
 def soft_acct_suspicious(a_display: str, b_display: str) -> bool:
-    ad = re.sub(r"\D", "", a_display or "")
-    bd = re.sub(r"\D", "", b_display or "")
-    short, long_ = (ad, bd) if len(ad) <= len(bd) else (bd, ad)
-    return len(short) >= 5 and short in long_
+    matched, _ = acctnum.acctnum_visible_match(a_display, b_display)
+    return matched
 
 
 def _detect_soft_acct_match(
@@ -728,6 +726,61 @@ def _detect_soft_acct_match(
                         return True
 
     return False
+
+
+def _log_candidate_skipped(
+    sid: str,
+    left: int,
+    right: int,
+    *,
+    reason: str,
+    record: Mapping[str, Any] | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> None:
+    payload: Dict[str, Any] = {
+        "sid": sid,
+        "i": int(left),
+        "j": int(right),
+        "reason": str(reason),
+    }
+
+    if isinstance(record, Mapping):
+        payload["allowed"] = bool(record.get("allowed"))
+        payload["acctnum_level"] = _sanitize_acct_level(record.get("level"))
+        try:
+            payload["total"] = int(record.get("total", 0) or 0)
+        except (TypeError, ValueError):
+            payload["total"] = 0
+        payload["dates_all"] = bool(record.get("dates_all"))
+        payload["score_gate"] = bool(record.get("score_gate"))
+
+        allow_flags = record.get("allow_flags")
+        if isinstance(allow_flags, Mapping):
+            payload["allow_flags"] = {
+                "hard_acct": bool(allow_flags.get("hard_acct")),
+                "dates": bool(allow_flags.get("dates")),
+                "total": bool(allow_flags.get("total")),
+            }
+
+        priority = record.get("priority")
+        if isinstance(priority, Mapping):
+            priority_payload: Dict[str, Any] = {}
+            try:
+                priority_payload["category"] = int(priority.get("category", 0) or 0)
+            except (TypeError, ValueError):
+                priority_payload["category"] = 0
+            try:
+                priority_payload["subscore"] = int(priority.get("subscore", 0) or 0)
+            except (TypeError, ValueError):
+                priority_payload["subscore"] = 0
+            priority_payload["label"] = str(priority.get("label", ""))
+            payload["priority"] = priority_payload
+
+    if isinstance(extra, Mapping):
+        for key, value in extra.items():
+            payload[key] = value
+
+    logger.info("CANDIDATE_SKIPPED %s", json.dumps(payload, sort_keys=True))
 
 
 def _is_zero_amount(value: Any) -> bool:
@@ -1436,32 +1489,40 @@ def score_all_pairs_0_100(
             if soft_match and priority_label == "default":
                 priority_label = "soft_acctnum"
 
-            candidate_records.append(
-                {
-                    "left": left,
-                    "right": right,
-                    "result": deepcopy(result),
-                    "allowed": allowed,
-                    "allow_flags": {
-                        "hard_acct": hard_acct,
-                        "dates": allow_by_dates,
-                        "total": allow_by_total,
-                    },
-                    "level": level_value,
-                    "dates_all": dates_all_equal,
-                    "score_gate": allow_by_total,
-                    "total": total_score,
-                    "mid_sum": mid_sum,
-                    "identity_sum": identity_sum,
-                    "soft": soft_match,
-                    "reason": admit_reason,
-                    "priority": {
-                        "category": priority_category,
-                        "subscore": priority_subscore,
-                        "label": priority_label,
-                    },
-                }
-            )
+            record = {
+                "left": left,
+                "right": right,
+                "result": deepcopy(result),
+                "allowed": allowed,
+                "allow_flags": {
+                    "hard_acct": hard_acct,
+                    "dates": allow_by_dates,
+                    "total": allow_by_total,
+                },
+                "level": level_value,
+                "dates_all": dates_all_equal,
+                "score_gate": allow_by_total,
+                "total": total_score,
+                "mid_sum": mid_sum,
+                "identity_sum": identity_sum,
+                "soft": soft_match,
+                "reason": admit_reason,
+                "priority": {
+                    "category": priority_category,
+                    "subscore": priority_subscore,
+                    "label": priority_label,
+                },
+            }
+            candidate_records.append(record)
+
+            if not allowed:
+                _log_candidate_skipped(
+                    sid,
+                    left,
+                    right,
+                    reason=admit_reason,
+                    record=record,
+                )
 
     allowed_records = [record for record in candidate_records if record.get("allowed")]
 
@@ -1552,23 +1613,32 @@ def score_all_pairs_0_100(
             or per_account_counts[right] >= per_account_limit
         ):
             dropped_records.append((record, "per_account_limit"))
-            logger.info(
-                "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s",
+            _log_candidate_skipped(
                 sid,
                 left,
                 right,
-                "cap_nonhard_per_account",
+                reason="cap_nonhard_per_account",
+                record=record,
+                extra={
+                    "per_account_limit": int(per_account_limit or 0),
+                    "per_account_count_left": int(per_account_counts[left]),
+                    "per_account_count_right": int(per_account_counts[right]),
+                },
             )
             continue
 
         if remaining_global is not None and len(selected_nonhard) >= remaining_global:
             dropped_records.append((record, "global_limit"))
-            logger.info(
-                "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s",
+            _log_candidate_skipped(
                 sid,
                 left,
                 right,
-                "cap_nonhard_global",
+                reason="cap_nonhard_global",
+                record=record,
+                extra={
+                    "global_limit": int(global_limit or 0),
+                    "selected_nonhard": len(selected_nonhard),
+                },
             )
             continue
 

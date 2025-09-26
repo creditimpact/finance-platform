@@ -109,12 +109,22 @@ def _digits(s: str) -> str:
 def acctnum_visible_match(a_raw: str, b_raw: str) -> Tuple[bool, Dict[str, str]]:
     a = _digits(a_raw)
     b = _digits(b_raw)
+
+    debug: Dict[str, str] = {"a": a, "b": b, "short": "", "long": "", "why": ""}
+
     if not a or not b:
-        return False, {"a": a, "b": b, "short": "", "long": ""}
+        debug["why"] = "missing_visible_digits"
+        return False, debug
 
     short, long_ = (a, b) if len(a) <= len(b) else (b, a)
-    ok = short in long_
-    return ok, {"a": a, "b": b, "short": short, "long": long_}
+    debug["short"] = short
+    debug["long"] = long_
+
+    if short in long_:
+        return True, debug
+
+    debug["why"] = "visible_digits_mismatch"
+    return False, debug
 
 
 def acctnum_match_visible(a_raw: str, b_raw: str) -> Tuple[bool, Dict[str, str]]:

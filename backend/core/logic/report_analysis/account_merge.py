@@ -1444,6 +1444,18 @@ def score_all_pairs_0_100(
             allow_by_dates = dates_all_equal
             allow_by_total = ai_threshold > 0 and total_score >= ai_threshold
 
+            mid_sum = int(result.get("mid_sum", 0) or 0)
+            identity_sum = int(result.get("identity_sum", 0) or 0)
+            soft_match = False
+            if not hard_acct:
+                soft_match = _detect_soft_acct_match(left_bureaus, right_bureaus)
+
+            priority_category, priority_subscore, priority_label = _priority_category(
+                level_value, allow_by_dates, allow_by_total
+            )
+            if soft_match and priority_label == "default":
+                priority_label = "soft_acctnum"
+
             if hard_acct:
                 admit_reason = "hard_account_number"
                 allowed = True
@@ -1456,38 +1468,6 @@ def score_all_pairs_0_100(
             else:
                 admit_reason = "below_threshold_no_acctnum"
                 allowed = False
-
-            logger.info(
-                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s reason=%s score=%s acct=%s dates_all=%s",
-                sid,
-                left,
-                right,
-                admit_reason,
-                total_score,
-                level_value,
-                dates_all_equal,
-            )
-
-            if not allowed:
-                logger.info(
-                    "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s",
-                    sid,
-                    left,
-                    right,
-                    admit_reason,
-                )
-
-            mid_sum = int(result.get("mid_sum", 0) or 0)
-            identity_sum = int(result.get("identity_sum", 0) or 0)
-            soft_match = False
-            if not hard_acct:
-                soft_match = _detect_soft_acct_match(left_bureaus, right_bureaus)
-
-            priority_category, priority_subscore, priority_label = _priority_category(
-                level_value, allow_by_dates, allow_by_total
-            )
-            if soft_match and priority_label == "default":
-                priority_label = "soft_acctnum"
 
             record = {
                 "left": left,
@@ -1514,6 +1494,17 @@ def score_all_pairs_0_100(
                 },
             }
             candidate_records.append(record)
+
+            logger.info(
+                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s reason=%s score=%s acct=%s dates_all=%s",
+                sid,
+                left,
+                right,
+                admit_reason,
+                total_score,
+                level_value,
+                dates_all_equal,
+            )
 
             if not allowed:
                 _log_candidate_skipped(

@@ -347,6 +347,13 @@ _ACCOUNT_NUMBER_WEIGHTS = {
 _ACCOUNT_STRONG_LEVELS = {"exact", "last6_bin", "last6"}
 _MASK_CHARS = {"*", "x", "X", "•", "●"}
 
+_ACCOUNT_LEVEL_PRIORITY = {
+    "none": 0,
+    "last6": 1,
+    "last6_bin": 2,
+    "exact": 3,
+}
+
 _IDENTITY_FIELD_SET = {
     "account_number",
     "creditor_type",
@@ -655,20 +662,32 @@ def _detect_soft_acct_match(
         left_branch = left_bureaus.get(left_key)
         if not isinstance(left_branch, Mapping):
             continue
-        left_display = left_branch.get("account_number_display")
-        if is_missing(left_display):
+        left_candidates = []
+        for field_name in ("account_number_display", "account_number"):
+            candidate = left_branch.get(field_name)
+            if is_missing(candidate):
+                continue
+            left_candidates.append(str(candidate))
+        if not left_candidates:
             continue
 
         for right_key in bureaus:
             right_branch = right_bureaus.get(right_key)
             if not isinstance(right_branch, Mapping):
                 continue
-            right_display = right_branch.get("account_number_display")
-            if is_missing(right_display):
+            right_candidates = []
+            for field_name in ("account_number_display", "account_number"):
+                candidate = right_branch.get(field_name)
+                if is_missing(candidate):
+                    continue
+                right_candidates.append(str(candidate))
+            if not right_candidates:
                 continue
 
-            if soft_acct_suspicious(str(left_display), str(right_display)):
-                return True
+            for left_display in left_candidates:
+                for right_display in right_candidates:
+                    if soft_acct_suspicious(left_display, right_display):
+                        return True
 
     return False
 
@@ -1358,18 +1377,35 @@ def score_all_pairs_0_100(
             level_value, _ = acctnum_match_level(a_acct_str or None, b_acct_str or None)
             allow_by_acct = level_value in _ACCOUNT_STRONG_LEVELS
             allow_by_dates = bool(result.get("dates_all"))
+            triggers = [str(trigger) for trigger in result.get("triggers", [])]
+            allow_by_strong = any(trigger.startswith("strong:") for trigger in triggers)
+
+            allow_by_mid = False
+            if mid_threshold > 0:
+                try:
+                    allow_by_mid = int(result.get("mid_sum") or 0) >= mid_threshold
+                except (TypeError, ValueError):
+                    allow_by_mid = False
 
             allow_by_soft = _detect_soft_acct_match(left_bureaus, right_bureaus)
-            allowed = allow_by_acct or allow_by_dates or allow_by_soft
+            allowed = (
+                allow_by_acct
+                or allow_by_dates
+                or allow_by_strong
+                or allow_by_mid
+                or allow_by_soft
+            )
 
             logger.info(
-                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s hard=%s soft_last5=%s dates=%s",
+                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s hard=%s soft_last5=%s dates=%s strong=%s mid=%s",
                 sid,
                 left,
                 right,
                 allow_by_acct,
                 allow_by_soft,
                 allow_by_dates,
+                allow_by_strong,
+                allow_by_mid,
             )
 
             total_score = int(result.get("total", 0) or 0)
@@ -1388,7 +1424,10 @@ def score_all_pairs_0_100(
                     "allow_flags": {
                         "acct": allow_by_acct,
                         "dates": allow_by_dates,
+                        "strong": allow_by_strong,
+                        "mid": allow_by_mid,
                         "soft_last5": allow_by_soft,
+                        "soft": allow_by_soft,
                     },
                     "level": level_value,
                     "dates_all": bool(result.get("dates_all")),
@@ -1409,16 +1448,50 @@ def score_all_pairs_0_100(
     global_limit, per_account_limit = _read_candidate_limits()
     per_account_counts: Dict[int, int] = defaultdict(int)
 
-    def _sort_key(record: Mapping[str, Any]) -> Tuple[int, int, int, int, int, int]:
+    def _sort_key(record: Mapping[str, Any]) -> Tuple[int, ...]:
         priority = record.get("priority", {}) if isinstance(record.get("priority"), Mapping) else {}
+        level_value = str(record.get("level", "none") or "none").lower()
+        level_rank = _ACCOUNT_LEVEL_PRIORITY.get(level_value, 0)
+
+        identity_raw = record.get("identity_score", record.get("identity_sum", 0))
+        try:
+            identity_val = int(identity_raw or 0)
+        except (TypeError, ValueError):
+            identity_val = 0
+
+        mid_raw = record.get("mid_sum", 0)
+        try:
+            mid_val = int(mid_raw or 0)
+        except (TypeError, ValueError):
+            mid_val = 0
+
+        total_raw = record.get("total", 0)
+        try:
+            total_val = int(total_raw or 0)
+        except (TypeError, ValueError):
+            total_val = 0
+
+        dates_flag = 1 if record.get("dates_all") else 0
+        soft_flag = 1 if record.get("soft_match") else 0
+
         category = int(priority.get("category", 3))
         subscore = int(priority.get("subscore", 0))
-        total_val = int(record.get("total", 0) or 0)
-        mid_val = int(record.get("mid_sum", 0) or 0)
-        identity_val = int(record.get("identity_sum", 0) or 0)
+
         left_idx = int(record.get("left", 0) or 0)
         right_idx = int(record.get("right", 0) or 0)
-        return (category, -subscore, -total_val, -mid_val, -identity_val, left_idx, right_idx)
+
+        return (
+            -level_rank,
+            -identity_val,
+            -mid_val,
+            -dates_flag,
+            soft_flag,
+            -total_val,
+            category,
+            -subscore,
+            left_idx,
+            right_idx,
+        )
 
     sorted_records = sorted(allowed_records, key=_sort_key)
 
@@ -1467,6 +1540,20 @@ def score_all_pairs_0_100(
 
         for record, reason in dropped_records[:10]:
             priority = record.get("priority", {})
+            level_value = str(record.get("level", "none") or "none")
+
+            identity_raw = record.get("identity_score", record.get("identity_sum", 0))
+            try:
+                identity_val = int(identity_raw or 0)
+            except (TypeError, ValueError):
+                identity_val = 0
+
+            mid_raw = record.get("mid_sum", 0)
+            try:
+                mid_val = int(mid_raw or 0)
+            except (TypeError, ValueError):
+                mid_val = 0
+
             drop_log = {
                 "sid": sid,
                 "i": record.get("left"),
@@ -1474,6 +1561,11 @@ def score_all_pairs_0_100(
                 "reason": reason,
                 "priority": priority.get("label"),
                 "total": record.get("total", 0),
+                "level": level_value,
+                "identity": identity_val,
+                "mid": mid_val,
+                "dates_all": bool(record.get("dates_all")),
+                "soft": bool(record.get("soft_match")),
             }
             logger.info("CANDIDATE_LIMIT_DROP %s", json.dumps(drop_log, sort_keys=True))
 

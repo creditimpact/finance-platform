@@ -139,6 +139,26 @@ def test_match_field_best_of_9_cross_bureau_balance():
     assert aux["normalized_values"] == (100.0, 100.0)
 
 
+def test_match_field_best_of_9_unmatched_has_best_pair():
+    cfg = get_merge_cfg()
+    account_a = {
+        "transunion": {"balance_owed": "100"},
+        "experian": {},
+        "equifax": {},
+    }
+    account_b = {
+        "transunion": {},
+        "experian": {"balance_owed": "175"},
+        "equifax": {},
+    }
+
+    matched, aux = match_field_best_of_9("balance_owed", account_a, account_b, cfg)
+
+    assert matched is False
+    assert aux["best_pair"] == ("transunion", "experian")
+    assert aux["normalized_values"] == (100.0, 175.0)
+
+
 def test_match_field_best_of_9_account_number_aux():
     cfg = get_merge_cfg()
     account_a = {

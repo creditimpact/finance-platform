@@ -93,13 +93,15 @@ def acctnum_match_visible(a_raw: str, b_raw: str) -> tuple[bool, dict[str, str]]
     a = _digits_only(a_raw)
     b = _digits_only(b_raw)
 
-    if not a or not b:
-        short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+
+    if not short or not long_:
         return False, {"short": short, "long": long_, "why": "empty"}
 
-    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
-    ok = short in long_
-    return ok, {"short": short, "long": long_}
+    if short in long_:
+        return True, {"short": short, "long": long_, "why": "substring"}
+
+    return False, {"short": short, "long": long_, "why": "mismatch"}
 
 
 def acctnum_level(a_raw: str, b_raw: str) -> tuple[str, dict[str, str]]:

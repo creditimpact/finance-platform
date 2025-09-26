@@ -6,7 +6,7 @@ def _clear_env(monkeypatch):
         "AI_THRESHOLD",
         "AUTO_MERGE_THRESHOLD",
         "MERGE_AI_ON_BALOWED_EXACT",
-        "MERGE_AI_ON_ACCTNUM_LEVEL",
+        "MERGE_AI_ON_HARD_ACCTNUM",
         "MERGE_AI_ON_MID_K",
         "MERGE_AI_ON_ALL_DATES",
         "AMOUNT_TOL_ABS",
@@ -27,7 +27,7 @@ def test_get_merge_cfg_defaults(monkeypatch):
     assert cfg.thresholds["AI_THRESHOLD"] == 26
     assert cfg.thresholds["AUTO_MERGE_THRESHOLD"] == 70
     assert cfg.triggers["MERGE_AI_ON_BALOWED_EXACT"] is True
-    assert cfg.triggers["MERGE_AI_ON_ACCTNUM_LEVEL"] == "exact_or_known_match"
+    assert cfg.triggers["MERGE_AI_ON_HARD_ACCTNUM"] is True
     assert cfg.triggers["MERGE_AI_ON_MID_K"] == 26
     assert cfg.triggers["MERGE_AI_ON_ALL_DATES"] is True
     assert cfg.tolerances["AMOUNT_TOL_ABS"] == 50.0
@@ -41,7 +41,7 @@ def test_get_merge_cfg_env_overrides():
         "AI_THRESHOLD": "33",
         "AUTO_MERGE_THRESHOLD": "80",
         "MERGE_AI_ON_BALOWED_EXACT": "0",
-        "MERGE_AI_ON_ACCTNUM_LEVEL": "NONE",
+        "MERGE_AI_ON_HARD_ACCTNUM": "0",
         "MERGE_AI_ON_MID_K": "30",
         "MERGE_AI_ON_ALL_DATES": "0",
         "AMOUNT_TOL_ABS": "75.5",
@@ -55,7 +55,7 @@ def test_get_merge_cfg_env_overrides():
     assert cfg.thresholds["AI_THRESHOLD"] == 33
     assert cfg.thresholds["AUTO_MERGE_THRESHOLD"] == 80
     assert cfg.triggers["MERGE_AI_ON_BALOWED_EXACT"] is False
-    assert cfg.triggers["MERGE_AI_ON_ACCTNUM_LEVEL"] == "none"
+    assert cfg.triggers["MERGE_AI_ON_HARD_ACCTNUM"] is False
     assert cfg.triggers["MERGE_AI_ON_MID_K"] == 30
     assert cfg.triggers["MERGE_AI_ON_ALL_DATES"] is False
     assert cfg.tolerances["AMOUNT_TOL_ABS"] == 75.5

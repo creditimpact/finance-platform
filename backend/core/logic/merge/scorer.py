@@ -18,8 +18,6 @@ logger = logging.getLogger(__name__)
 
 SCORER_WEIGHTS = {
     "acctnum_exact": app_config.ACCTNUM_EXACT_WEIGHT,
-    "last5": app_config.ACCTNUM_LAST5_WEIGHT,
-    "last4": app_config.ACCTNUM_LAST4_WEIGHT,
     "masked": app_config.ACCTNUM_MASKED_WEIGHT,
 }
 
@@ -69,10 +67,8 @@ def score_bureau_pairs_cli(
 
     sid_str = str(sid)
     logger.info(
-        "SCORER_WEIGHTS acctnum_exact=%s last5=%s last4=%s masked=%s",
+        "SCORER_WEIGHTS acctnum_exact=%s masked=%s",
         SCORER_WEIGHTS["acctnum_exact"],
-        SCORER_WEIGHTS["last5"],
-        SCORER_WEIGHTS["last4"],
         SCORER_WEIGHTS["masked"],
     )
     runs_root_path = Path(runs_root) if runs_root is not None else _DEFAULT_RUNS_ROOT

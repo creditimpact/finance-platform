@@ -12,7 +12,7 @@ paths, including the new account-number trigger.
 
 | Env var | Default | Description |
 | --- | --- | --- |
-| `MERGE_ACCTNUM_TRIGGER_AI` | `any` | Minimum account-number match level that can lift a low overall score into the AI band. Accepted values: `off`, `exact`, `last4`, `masked`, `any`. |
+| `MERGE_ACCTNUM_TRIGGER_AI` | `any` | Minimum account-number match level that can lift a low overall score into the AI band. Accepted values: `exact`, `last6_bin`, `last6`, `any`. |
 | `MERGE_ACCTNUM_MIN_SCORE` | `0.31` | Floor used when forcing an AI decision for account-number matches. The lifted score is the max of the part score, this floor, and `MERGE_AI_HARD_MIN`. |
 | `MERGE_ACCTNUM_REQUIRE_MASKED` | `0` | When set to `1`, the override only fires if at least one side used a masked account number (e.g., `XXXX1234`). |
 
@@ -28,9 +28,8 @@ capture the raw string, collapse repeated masks, and extract the trailing
 digits). Each pair receives an `acctnum_level`:
 
 - `exact` – The normalized digits are identical (after trimming leading zeros).
-- `last6` – The numbers disagree overall but share the same last six digits.
-- `last5` – The numbers disagree overall but share the same last five digits.
-- `last4` – The numbers disagree overall but share the same last four digits.
+- `last6_bin` – Both the first six digits (BIN) and the last six digits match.
+- `last6` – The numbers share the same last six digits but diverge elsewhere.
 - `masked_match` – Both sides include masking characters with the same
   canonical mask signature and at least one side reveals digits.
 - `none` – No usable match.
@@ -38,9 +37,8 @@ digits). Each pair receives an `acctnum_level`:
 We also track `acctnum_masked_any`, a boolean indicating whether *either* side
 included masking characters (`X`, `*`, `•`, etc.).
 
-The account-number part score itself remains unchanged (`1.0` for exact,
-`0.7` for last-four matches, `0.0` otherwise). Overrides act *after* the
-weighted score is computed.
+The account-number part score itself remains unchanged. Overrides act *after*
+the weighted score is computed.
 
 ## How the override works
 
@@ -50,9 +48,9 @@ weighted score is computed.
 3. For account numbers we evaluate the configured trigger (`MERGE_ACCTNUM_TRIGGER_AI`):
    - `off` disables the override.
    - `exact` requires an `acctnum_level` of `exact`.
-   - `last4` only requires `acctnum_level == "last4"`.
-   - `masked` accepts `acctnum_level` values of `masked`, `last4`, or `exact`.
-   - `any` accepts `exact`, `last4`, or `masked`.
+   - `last6_bin` requires `acctnum_level == "last6_bin"`.
+   - `last6` accepts `acctnum_level` values of `last6_bin` or `last6`.
+   - `any` accepts `last6_bin`, `last6`, or `exact`.
 4. When `MERGE_ACCTNUM_REQUIRE_MASKED=1`, the override only activates if
    `acctnum_masked_any` is `True`.
 5. Eligible matches lift the score to `max(current_score, MERGE_ACCTNUM_MIN_SCORE, MERGE_AI_HARD_MIN)`
@@ -81,17 +79,17 @@ These examples assume `MERGE_AI_MIN=0.35`, `MERGE_AI_HARD_MIN=0.30`, and
    - Result: Score lifts to `0.31`, decision = `ai`, reasons include
      `acctnum_only_triggers_ai=True`.
 
-2. **Masked last-four match triggers AI**
+2. **Masked last-six match triggers AI**
 
-   - Config: `MERGE_ACCTNUM_TRIGGER_AI=last4`, `MERGE_ACCTNUM_REQUIRE_MASKED=1`.
-   - Scenario: Weighted score = `0.18`, account A number `XXXX-4321`, account B `***4321`.
-   - Result: `acctnum_level="last4"`, `acctnum_masked_any=True`; score lifts to `0.31`
+   - Config: `MERGE_ACCTNUM_TRIGGER_AI=last6`, `MERGE_ACCTNUM_REQUIRE_MASKED=1`.
+   - Scenario: Weighted score = `0.18`, account A number `XXXX-567890`, account B `***-567890`.
+   - Result: `acctnum_level="last6"`, `acctnum_masked_any=True`; score lifts to `0.31`
      (above `MERGE_AI_HARD_MIN`) and forces `ai`.
 
 3. **Mask required but missing**
 
-   - Config: `MERGE_ACCTNUM_TRIGGER_AI=last4`, `MERGE_ACCTNUM_REQUIRE_MASKED=1`.
-   - Scenario: Weighted score = `0.22`, both sides expose `12344321` with no masking.
+   - Config: `MERGE_ACCTNUM_TRIGGER_AI=last6`, `MERGE_ACCTNUM_REQUIRE_MASKED=1`.
+   - Scenario: Weighted score = `0.22`, both sides expose the same trailing six digits with no masking.
    - Result: `acctnum_masked_any=False`; override does **not** trigger, so the pair
      stays below the AI band (unless the balance-owed override lifts it separately).
 

@@ -761,12 +761,15 @@ def match_field_best_of_9(
         B = {}
 
     bureaus = ("transunion", "experian", "equifax")
+    bureau_positions = {name: idx for idx, name in enumerate(bureaus)}
     field_key = str(field_name)
 
     best_aux: Dict[str, Any] | None = None
     best_score = -1
     best_matched_aux: Dict[str, Any] | None = None
     best_matched_score = -1
+    first_candidate_aux: Dict[str, Any] | None = None
+    best_pair_rank: tuple[int, int] | None = None
 
     for left in bureaus:
         left_branch = A.get(left)
@@ -804,6 +807,9 @@ def match_field_best_of_9(
             }
             result_aux.update(aux)
 
+            if first_candidate_aux is None:
+                first_candidate_aux = dict(result_aux)
+
             if field_key == "account_number":
                 level = str(aux.get("acctnum_level", "none") or "none")
                 level_score = _ACCOUNT_LEVEL_ORDER.get(level, 0)
@@ -817,13 +823,23 @@ def match_field_best_of_9(
                 continue
 
             if matched:
-                return True, result_aux
+                pair_rank = (bureau_positions[left], bureau_positions[right])
+                if best_matched_aux is None or (
+                    best_pair_rank is None or pair_rank < best_pair_rank
+                ):
+                    best_matched_aux = dict(result_aux)
+                    best_pair_rank = pair_rank
 
     if field_key == "account_number":
         if best_matched_aux is not None:
             return True, best_matched_aux
         if best_aux is not None:
             return False, best_aux
+
+    if best_matched_aux is not None:
+        return True, best_matched_aux
+    if first_candidate_aux is not None:
+        return False, first_candidate_aux
 
     return False, {}
 

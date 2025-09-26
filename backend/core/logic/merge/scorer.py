@@ -12,7 +12,7 @@ from typing import Any, Dict, Iterable, Mapping as TypingMapping
 
 from backend import config as app_config
 from backend.core.merge import acctnum
-from backend.core.merge.acctnum import acctnum_level
+from backend.core.merge.acctnum import acctnum_match_level
 from scripts.score_bureau_pairs import (
     ScoreComputationResult,
     build_merge_tags,
@@ -179,12 +179,15 @@ def _apply_account_number_scoring(
                 _EMPTY_NORMALIZED,
                 {"short": "", "long": ""},
             )
+            best_debug = {"a": "", "b": "", "short": "", "long": ""}
             best_rank = -1
             for a_bureau in ("transunion", "experian", "equifax"):
                 a_norm_value = a_norm.get(a_bureau, _EMPTY_NORMALIZED)
                 for b_bureau in ("transunion", "experian", "equifax"):
                     b_norm_value = b_norm.get(b_bureau, _EMPTY_NORMALIZED)
-                    level, debug = acctnum_level(a_norm_value.raw, b_norm_value.raw)
+                    level, debug = acctnum_match_level(
+                        a_norm_value.raw, b_norm_value.raw
+                    )
                     rank = 1 if level == "exact_or_known_match" else 0
                     if rank > best_rank:
                         best_rank = rank
@@ -194,8 +197,9 @@ def _apply_account_number_scoring(
                             b_bureau,
                             a_norm_value,
                             b_norm_value,
-                            debug,
+                            dict(debug),
                         )
+                        best_debug = dict(debug)
                     if rank == 1:
                         break
                 if best_rank == 1:
@@ -207,6 +211,17 @@ def _apply_account_number_scoring(
                 reverse = right_scores.get(i)
                 if isinstance(reverse, dict):
                     _update_result_with_match(reverse, match.swapped())
+            logger.info(
+                "MERGE_V2_ACCT_BEST sid=%s i=%s j=%s level=%s a_bureau=%s b_bureau=%s a_digits=%s b_digits=%s",
+                sid,
+                i,
+                j,
+                match.level,
+                match.a_bureau,
+                match.b_bureau,
+                best_debug.get("a", ""),
+                best_debug.get("b", ""),
+            )
             logger.info(
                 "MERGE_V2_ACCTNUM_MATCH sid=%s i=%s j=%s level=%s short=%s long=%s",
                 sid,

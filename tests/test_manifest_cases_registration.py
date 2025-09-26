@@ -128,6 +128,9 @@ def test_build_problem_cases_writes_tags(tmp_path):
     summary_path = run_dir / "cases" / "accounts" / "0" / "summary.json"
     summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
     assert "merge_tag" not in summary_data
+    merge_scoring_summary = summary_data.get("merge_scoring")
+    if isinstance(merge_scoring_summary, dict):
+        assert "acctnum_level" in merge_scoring_summary
 
     assert summary["merge_scoring"]["scores"][0][1]["decision"] == "ai"
     assert summary["merge_scoring"]["best"][0]["partner_index"] == 1

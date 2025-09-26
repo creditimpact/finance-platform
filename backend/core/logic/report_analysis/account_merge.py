@@ -1645,6 +1645,12 @@ def _normalize_merge_payload_for_tag(
         for reason in payload["reasons"]
     )
 
+    aux_payload = payload.get("aux")
+    acct_level = "none"
+    if isinstance(aux_payload, Mapping):
+        acct_level = str(aux_payload.get("acctnum_level") or "none")
+    payload["acctnum_level"] = acct_level
+
     return payload
 
 
@@ -1734,6 +1740,7 @@ def _merge_tag_from_best(
             "reasons": [],
             "tiebreaker": "none",
         }
+        merge_tag["acctnum_level"] = "none"
         return merge_tag
 
     score_total = int(best_result.get("total", 0) or 0)
@@ -1742,6 +1749,7 @@ def _merge_tag_from_best(
     conflicts = list(best_result.get("conflicts", []))
     parts = _sanitize_parts(best_result.get("parts"))
     aux_payload = _build_aux_payload(best_result.get("aux", {}))
+    acct_level = str(aux_payload.get("acctnum_level", "none") or "none")
 
     score_entries = _build_score_entries(partner_scores, best_partner)
     best_entry = {
@@ -1767,6 +1775,7 @@ def _merge_tag_from_best(
         "reasons": reasons,
         "tiebreaker": tiebreaker,
     }
+    merge_tag["acctnum_level"] = acct_level
     return merge_tag
 
 

@@ -1387,17 +1387,32 @@ def score_all_pairs_0_100(
             )
 
             hard_acct = gate_level == "exact_or_known_match"
-            allow_by_dates = bool(result.get("dates_all"))
+            dates_all_equal = bool(result.get("dates_all"))
+            allow_by_dates = dates_all_equal
             allow_by_total = ai_threshold > 0 and total_score >= ai_threshold
-            allowed = hard_acct or allow_by_dates or allow_by_total
+
+            if hard_acct:
+                admit_reason = "hard_account_number"
+                allowed = True
+            elif allow_by_total:
+                admit_reason = "score_gate"
+                allowed = True
+            elif dates_all_equal:
+                admit_reason = "dates_all_equal"
+                allowed = True
+            else:
+                admit_reason = "below_threshold_no_acctnum"
+                allowed = False
 
             logger.info(
-                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s hard_acct=%s total=%s",
+                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s reason=%s score=%s acct=%s dates_all=%s",
                 sid,
                 left,
                 right,
-                hard_acct,
+                admit_reason,
                 total_score,
+                level_value,
+                dates_all_equal,
             )
 
             if not allowed:
@@ -1406,7 +1421,7 @@ def score_all_pairs_0_100(
                     sid,
                     left,
                     right,
-                    "no_gate",
+                    admit_reason,
                 )
 
             mid_sum = int(result.get("mid_sum", 0) or 0)
@@ -1433,12 +1448,13 @@ def score_all_pairs_0_100(
                         "total": allow_by_total,
                     },
                     "level": level_value,
-                    "dates_all": bool(result.get("dates_all")),
+                    "dates_all": dates_all_equal,
                     "score_gate": allow_by_total,
                     "total": total_score,
                     "mid_sum": mid_sum,
                     "identity_sum": identity_sum,
                     "soft": soft_match,
+                    "reason": admit_reason,
                     "priority": {
                         "category": priority_category,
                         "subscore": priority_subscore,
@@ -1499,10 +1515,35 @@ def score_all_pairs_0_100(
 
     sorted_records = sorted(allowed_records, key=_sort_key)
 
+    hard_records: List[Dict[str, Any]] = []
+    nonhard_records: List[Dict[str, Any]] = []
+    for record in sorted_records:
+        allow_flags = record.get("allow_flags", {})
+        is_hard = False
+        if isinstance(allow_flags, Mapping):
+            is_hard = bool(allow_flags.get("hard_acct"))
+        if is_hard:
+            hard_records.append(record)
+        else:
+            nonhard_records.append(record)
+
+    sorted_hard_records = sorted(hard_records, key=_sort_key)
+    sorted_nonhard_records = sorted(nonhard_records, key=_sort_key)
+
     selected_records: List[Dict[str, Any]] = []
     dropped_records: List[Tuple[Dict[str, Any], str]] = []
 
-    for record in sorted_records:
+    selected_records.extend(sorted_hard_records)
+
+    remaining_global: Optional[int]
+    if global_limit is None:
+        remaining_global = None
+    else:
+        remaining_global = max(global_limit - len(sorted_hard_records), 0)
+
+    selected_nonhard: List[Dict[str, Any]] = []
+
+    for record in sorted_nonhard_records:
         left = int(record.get("left"))
         right = int(record.get("right"))
 
@@ -1511,15 +1552,31 @@ def score_all_pairs_0_100(
             or per_account_counts[right] >= per_account_limit
         ):
             dropped_records.append((record, "per_account_limit"))
+            logger.info(
+                "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s",
+                sid,
+                left,
+                right,
+                "cap_nonhard_per_account",
+            )
             continue
 
-        if global_limit and len(selected_records) >= global_limit:
+        if remaining_global is not None and len(selected_nonhard) >= remaining_global:
             dropped_records.append((record, "global_limit"))
+            logger.info(
+                "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s",
+                sid,
+                left,
+                right,
+                "cap_nonhard_global",
+            )
             continue
 
-        selected_records.append(record)
+        selected_nonhard.append(record)
         per_account_counts[left] += 1
         per_account_counts[right] += 1
+
+    selected_records.extend(selected_nonhard)
 
     for record in selected_records:
         left = int(record.get("left"))

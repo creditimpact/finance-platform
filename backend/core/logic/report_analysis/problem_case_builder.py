@@ -18,6 +18,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
 from backend.pipeline.runs import RunManifest, write_breadcrumb
 from backend.core.io.tags import read_tags, upsert_tag, write_tags_atomic
+from backend.core.merge.acctnum import normalize_level
 from backend.core.logic.report_analysis.problem_extractor import (
     build_rule_fields_from_triad,
     load_stagea_accounts_from_manifest,
@@ -627,6 +628,8 @@ def _build_problem_cases_lean(
         aux_payload = best_tag.get("aux")
         matched_fields: dict[str, bool] = {}
         matched_pairs: dict[str, list[str]] = {}
+        acct_level_value = normalize_level(None)
+        account_pair: list[str] = []
         if isinstance(aux_payload, Mapping):
             raw_matched = aux_payload.get("matched_fields")
             if isinstance(raw_matched, Mapping):
@@ -634,16 +637,19 @@ def _build_problem_cases_lean(
                     str(field): bool(flag)
                     for field, flag in raw_matched.items()
                 }
-            acct_level = aux_payload.get("acctnum_level")
-            if isinstance(acct_level, str) and acct_level:
-                merge_summary["acctnum_level"] = acct_level
+            acct_level_value = normalize_level(aux_payload.get("acctnum_level"))
             raw_pairs = aux_payload.get("by_field_pairs")
             if isinstance(raw_pairs, Mapping):
-                matched_pairs = {
-                    str(field): [str(item) for item in pair]
-                    for field, pair in raw_pairs.items()
-                    if isinstance(pair, (list, tuple))
-                }
+                for field, pair in raw_pairs.items():
+                    if not isinstance(pair, (list, tuple)):
+                        continue
+                    values = [str(item) for item in list(pair)[:2]]
+                    if len(values) != 2:
+                        continue
+                    field_key = str(field)
+                    matched_pairs[field_key] = values
+                    if field_key == "account_number":
+                        account_pair = values
             digits_a = aux_payload.get("acctnum_digits_len_a")
             digits_b = aux_payload.get("acctnum_digits_len_b")
             if digits_a is not None:
@@ -656,8 +662,12 @@ def _build_problem_cases_lean(
                     merge_summary["acctnum_digits_len_b"] = int(digits_b)
                 except (TypeError, ValueError):
                     pass
-        if not matched_pairs:
-            matched_pairs = {"account_number": []}
+        merge_summary["acctnum_level"] = acct_level_value
+
+        if account_pair and len(account_pair) == 2:
+            matched_pairs.setdefault("account_number", account_pair)
+        else:
+            matched_pairs["account_number"] = []
         merge_summary["matched_pairs"] = matched_pairs
         merge_summary["matched_fields"] = matched_fields
 

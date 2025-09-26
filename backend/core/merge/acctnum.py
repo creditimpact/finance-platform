@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, Mapping
+from typing import Dict, Mapping, Tuple
 
 _MATCH_LEVEL = "exact_or_known_match"
 _NONE_LEVEL = "none"
@@ -13,7 +13,9 @@ __all__ = [
     "AccountNumberMatch",
     "NormalizedAccountNumber",
     "acctnum_level",
+    "acctnum_match_level",
     "acctnum_match_visible",
+    "acctnum_visible_match",
     "best_account_number_match",
     "match_level",
     "normalize_display",
@@ -97,32 +99,39 @@ class AccountNumberMatch:
         )
 
 
-def _digits_only(s: str) -> str:
-    return "".join(ch for ch in (s or "") if ch.isdigit())
+DIGITS = re.compile(r"\d")
 
 
-def acctnum_match_visible(a_raw: str, b_raw: str) -> tuple[bool, dict[str, str]]:
-    """Implement the visible-digits substring rule."""
+def _digits(s: str) -> str:
+    return "".join(DIGITS.findall(s or ""))
 
-    a = _digits_only(a_raw)
-    b = _digits_only(b_raw)
+
+def acctnum_visible_match(a_raw: str, b_raw: str) -> Tuple[bool, Dict[str, str]]:
+    a = _digits(a_raw)
+    b = _digits(b_raw)
+    if not a or not b:
+        return False, {"a": a, "b": b, "short": "", "long": ""}
 
     short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    ok = short in long_
+    return ok, {"a": a, "b": b, "short": short, "long": long_}
 
-    if not short or not long_:
-        return False, {"short": short, "long": long_, "why": "empty"}
 
-    if short in long_:
-        return True, {"short": short, "long": long_, "why": "substring"}
+def acctnum_match_visible(a_raw: str, b_raw: str) -> Tuple[bool, Dict[str, str]]:
+    """Compatibility wrapper for legacy call sites."""
 
-    return False, {"short": short, "long": long_, "why": "mismatch"}
+    return acctnum_visible_match(a_raw, b_raw)
+
+
+def acctnum_match_level(a_raw: str, b_raw: str) -> Tuple[str, Dict[str, str]]:
+    ok, dbg = acctnum_visible_match(a_raw, b_raw)
+    return ("exact_or_known_match" if ok else "none"), dbg
 
 
 def acctnum_level(a_raw: str, b_raw: str) -> tuple[str, dict[str, str]]:
     """Return the account-number level and debug metadata."""
 
-    ok, debug = acctnum_match_visible(a_raw, b_raw)
-    level = _MATCH_LEVEL if ok else _NONE_LEVEL
+    level, debug = acctnum_match_level(a_raw, b_raw)
     level = normalize_level(level)
     debug_dict = dict(debug)
     debug_dict.setdefault("short", "")

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence, Union
 
 from backend.core.io.json_io import _atomic_write_json
+from backend.core.merge.acctnum import normalize_level
 
 _IDENTITY_PART_FIELDS = {
     "account_number",
@@ -100,20 +101,20 @@ def _build_merge_scoring_summary(
 
     aux_payload = best_tag.get("aux") if isinstance(best_tag.get("aux"), Mapping) else None
     if "aux" in best_tag and isinstance(aux_payload, Mapping):
-        acctnum_level = str(aux_payload.get("acctnum_level") or "none")
+        acctnum_level = normalize_level(aux_payload.get("acctnum_level"))
         if acctnum_level == "none":
             account_number_aux = aux_payload.get("account_number")
             if isinstance(account_number_aux, Mapping):
-                acctnum_level = str(account_number_aux.get("acctnum_level") or "none")
+                acctnum_level = normalize_level(account_number_aux.get("acctnum_level"))
         updates["acctnum_level"] = acctnum_level
         matched_fields = _normalize_matched_fields(aux_payload.get("matched_fields"))
         updates["matched_fields"] = matched_fields
         by_field_pairs = aux_payload.get("by_field_pairs")
         if isinstance(by_field_pairs, Mapping):
             updates["matched_pairs"] = {
-                str(field): [str(item) for item in pair]
+                str(field): [str(pair[0]), str(pair[1])]
                 for field, pair in by_field_pairs.items()
-                if isinstance(pair, (list, tuple))
+                if isinstance(pair, (list, tuple)) and len(pair) == 2
             }
         for key in ("acctnum_digits_len_a", "acctnum_digits_len_b"):
             value = aux_payload.get(key)
@@ -340,8 +341,8 @@ def _merge_explanation_from_tag(tag: Mapping[str, object]) -> dict[str, object] 
     acct_level_value: str | None = None
     aux = tag.get("aux")
     if isinstance(aux, Mapping):
-        acct_level = aux.get("acctnum_level")
-        if isinstance(acct_level, str) and acct_level:
+        acct_level = normalize_level(aux.get("acctnum_level"))
+        if acct_level != "none":
             acct_level_value = acct_level
         matched_fields = aux.get("matched_fields")
         if isinstance(matched_fields, Mapping) and matched_fields:
@@ -350,7 +351,7 @@ def _merge_explanation_from_tag(tag: Mapping[str, object]) -> dict[str, object] 
         by_field_pairs = aux.get("by_field_pairs")
         if isinstance(by_field_pairs, Mapping):
             non_empty_pairs = {
-                str(field): [str(item) for item in pair]
+                str(field): [str(pair[0]), str(pair[1])]
                 for field, pair in by_field_pairs.items()
                 if isinstance(pair, (list, tuple)) and len(pair) == 2
             }
@@ -365,8 +366,8 @@ def _merge_explanation_from_tag(tag: Mapping[str, object]) -> dict[str, object] 
                     meaningful = True
 
     if acct_level_value is None:
-        direct_level = tag.get("acctnum_level")
-        if isinstance(direct_level, str) and direct_level:
+        direct_level = normalize_level(tag.get("acctnum_level"))
+        if direct_level != "none":
             acct_level_value = direct_level
     if acct_level_value is not None:
         payload["acctnum_level"] = acct_level_value

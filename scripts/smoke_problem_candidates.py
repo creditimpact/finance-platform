@@ -15,6 +15,7 @@ except Exception:
 
 from collections import Counter
 from backend.core.logic.report_analysis.problem_extractor import detect_problem_accounts
+from backend.core.merge.acctnum import normalize_level
 from backend.pipeline.runs import RunManifest
 
 
@@ -318,7 +319,7 @@ def _build_merge_summary(
             "best": best_match.get("account_index"),
             "score": best_score,
             "decision": pair_decision or account_decision,
-            "acctnum_level": aux.get("acctnum_level"),
+            "acctnum_level": normalize_level(aux.get("acctnum_level")),
             "balowed_ok": bool(combined_reasons.get("balance_only_triggers_ai")),
             "reasons": [],
         }

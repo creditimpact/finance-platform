@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from backend.core.logic.report_analysis.account_merge import score_all_pairs_0_100
+from backend.core.merge.acctnum import normalize_level
 
 
 DEFAULT_RUNS_ROOT = Path(os.environ.get("RUNS_ROOT", "runs"))
@@ -109,7 +110,7 @@ def _sanitize_parts(parts: Optional[Mapping[str, Any]]) -> Dict[str, int]:
 
 
 def _extract_aux_payload(aux: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
-    acct_level = "none"
+    acct_level = normalize_level(None)
     by_field_pairs: Dict[str, List[str]] = {}
     acct_digits_len_a: Optional[int] = None
     acct_digits_len_b: Optional[int] = None
@@ -118,8 +119,8 @@ def _extract_aux_payload(aux: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
         acct_aux = aux.get("account_number")
         if isinstance(acct_aux, Mapping):
             level = acct_aux.get("acctnum_level")
-            if isinstance(level, str) and level:
-                acct_level = level
+            if level is not None:
+                acct_level = normalize_level(level)
             len_a = acct_aux.get("acctnum_digits_len_a")
             len_b = acct_aux.get("acctnum_digits_len_b")
             try:

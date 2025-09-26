@@ -17,7 +17,7 @@ from backend import config as app_config
 from backend.core.io.tags import read_tags, upsert_tag, write_tags_atomic
 from backend.core.logic.normalize.accounts import normalize_acctnum as _normalize_acctnum_basic
 from backend.core.merge import acctnum
-from backend.core.merge.acctnum import acctnum_level
+from backend.core.merge.acctnum import acctnum_level, normalize_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
 
@@ -73,10 +73,22 @@ def _read_candidate_limits(env: Optional[Mapping[str, str]] = None) -> Tuple[Opt
     return global_limit, per_account_limit
 
 
+def _sanitize_acct_level(value: Any) -> str:
+    """Return the supported account-number level for arbitrary input."""
+
+    if value is None:
+        candidate: str | None = None
+    elif isinstance(value, str):
+        candidate = value
+    else:
+        candidate = str(value)
+    return normalize_level(candidate)
+
+
 def _priority_label_for_level(level: str) -> Tuple[int, int, str]:
     """Return (category, subscore, label) for the provided account-number level."""
 
-    normalized = str(level or "none").lower()
+    normalized = _sanitize_acct_level(level)
     if normalized == "exact_or_known_match":
         return (0, 1, "hard:acctnum_visible_digits")
     return (3, 0, "default")
@@ -612,7 +624,7 @@ def _match_account_number_best_pair(
             if not right_norm.has_digits:
                 continue
 
-            level = acctnum.match_level(left_norm, right_norm)
+            level = _sanitize_acct_level(acctnum.match_level(left_norm, right_norm))
             level_rank = _ACCOUNT_LEVEL_ORDER.get(level, 0)
             matched = hard_enabled and level == "exact_or_known_match"
 
@@ -642,7 +654,7 @@ def _match_account_number_best_pair(
             if best_match_aux is None:
                 pick = True
             else:
-                prev_level = str(best_match_aux.get("acctnum_level", "none"))
+                prev_level = _sanitize_acct_level(best_match_aux.get("acctnum_level"))
                 prev_rank = _ACCOUNT_LEVEL_ORDER.get(prev_level, 0)
                 if level_rank > prev_rank:
                     pick = True
@@ -855,7 +867,7 @@ def match_field_best_of_9(
                 first_candidate_aux = dict(result_aux)
 
             if field_key == "account_number":
-                level = str(aux.get("acctnum_level", "none") or "none")
+                level = _sanitize_acct_level(aux.get("acctnum_level"))
                 level_score = _ACCOUNT_LEVEL_ORDER.get(level, 0)
                 if level_score > best_score:
                     best_score = level_score
@@ -1053,7 +1065,7 @@ def score_pair_0_100(
         )
 
     acctnum_aux = aux.get("account_number", {})
-    acct_level = str(acctnum_aux.get("acctnum_level") or "none")
+    acct_level = _sanitize_acct_level(acctnum_aux.get("acctnum_level"))
     if field_matches.get("account_number") and acct_level == "exact_or_known_match":
         triggers.append("strong:account_number")
         strong_triggered = True
@@ -1279,7 +1291,7 @@ def score_all_pairs_0_100(
             sanitized_parts = _sanitize_parts(result.get("parts"))
             aux_payload = _build_aux_payload(result.get("aux", {}))
 
-            acct_level = str(aux_payload.get("acctnum_level", "none") or "none")
+            acct_level = _sanitize_acct_level(aux_payload.get("acctnum_level"))
             raw_aux = result.get("aux") if isinstance(result.get("aux"), Mapping) else {}
             acct_aux = raw_aux.get("account_number") if isinstance(raw_aux, Mapping) else None
             if not isinstance(acct_aux, Mapping):
@@ -1296,9 +1308,13 @@ def score_all_pairs_0_100(
             if not b_acct_str:
                 b_acct_str = _extract_account_number_string(right_bureaus)
             gate_level, gate_detail = acctnum_level(a_acct_str, b_acct_str)
-            level_value = str(
-                acct_aux.get("acctnum_level") or acct_level or gate_level or "none"
+            level_candidate = (
+                acct_aux.get("acctnum_level")
+                or acct_level
+                or gate_level
+                or "none"
             )
+            level_value = _sanitize_acct_level(level_candidate)
             debug_payload = {}
             if isinstance(acct_aux, Mapping):
                 debug_candidate = acct_aux.get("acctnum_debug")
@@ -1639,7 +1655,7 @@ def choose_best_partner(
 
 
 def _build_aux_payload(aux: Mapping[str, Any]) -> Dict[str, Any]:
-    acct_level = "none"
+    acct_level = _sanitize_acct_level(None)
     by_field_pairs: Dict[str, List[str]] = {}
     matched_fields: Dict[str, bool] = {"account_number": False}
     account_number_matched = False
@@ -1650,8 +1666,8 @@ def _build_aux_payload(aux: Mapping[str, Any]) -> Dict[str, Any]:
         acct_aux = aux.get("account_number")
         if isinstance(acct_aux, Mapping):
             level = acct_aux.get("acctnum_level")
-            if isinstance(level, str) and level:
-                acct_level = level
+            if level is not None:
+                acct_level = _sanitize_acct_level(level)
             if "matched" in acct_aux:
                 account_number_matched = bool(acct_aux.get("matched"))
             elif acct_level != "none":
@@ -1672,8 +1688,11 @@ def _build_aux_payload(aux: Mapping[str, Any]) -> Dict[str, Any]:
             if not isinstance(field_aux, Mapping):
                 continue
             if field == "account_number":
-                level = str(field_aux.get("acctnum_level") or acct_level)
-                if level and level != "none":
+                level_value = field_aux.get("acctnum_level")
+                level = (
+                    acct_level if level_value is None else _sanitize_acct_level(level_value)
+                )
+                if level != "none":
                     acct_level = level
                 if "matched" in field_aux:
                     account_number_matched = bool(field_aux.get("matched"))
@@ -1731,7 +1750,7 @@ def _build_ai_highlights(result: Mapping[str, Any] | None) -> Dict[str, Any]:
     else:
         matched_fields = {}
 
-    acctnum_level = str(aux_payload.get("acctnum_level", "none") or "none")
+    acctnum_level = _sanitize_acct_level(aux_payload.get("acctnum_level"))
 
     return {
         "total": total,
@@ -1792,7 +1811,7 @@ def _build_pair_entry(partner_idx: int, result: Mapping[str, Any]) -> Dict[str, 
     strong = any(trigger.startswith("strong:") for trigger in triggers)
     sanitized_parts = _sanitize_parts(parts_payload)
     aux_slim = _build_aux_payload(aux_payload)
-    acct_level = str(aux_slim.get("acctnum_level", "none") or "none")
+    acct_level = _sanitize_acct_level(aux_slim.get("acctnum_level"))
 
     entry: Dict[str, Any] = {
         "with": int(partner_idx),
@@ -1826,7 +1845,7 @@ def _build_best_match_entry(
     total = 0
     decision = "different"
 
-    acct_level = "none"
+    acct_level = _sanitize_acct_level(None)
 
     if isinstance(entry, Mapping):
         try:
@@ -1834,7 +1853,7 @@ def _build_best_match_entry(
         except (TypeError, ValueError):
             total = 0
         decision = str(entry.get("decision", "different"))
-        acct_level = str(entry.get("acctnum_level", acct_level) or acct_level)
+        acct_level = _sanitize_acct_level(entry.get("acctnum_level", acct_level))
     else:
         result_payload = best_info.get("result")
         if isinstance(result_payload, Mapping):
@@ -1844,7 +1863,7 @@ def _build_best_match_entry(
                 total = 0
             decision = str(result_payload.get("decision", "different"))
             aux_payload = _build_aux_payload(result_payload.get("aux", {}))
-            acct_level = str(aux_payload.get("acctnum_level", acct_level) or acct_level)
+            acct_level = _sanitize_acct_level(aux_payload.get("acctnum_level", acct_level))
         try:
             total = int(best_info.get("score_total", total) or total)
         except (TypeError, ValueError):
@@ -1883,7 +1902,7 @@ def _tag_normalize_merge_parts(parts: Any) -> Dict[str, int]:
 
 
 def _tag_normalize_merge_aux(aux: Any) -> Dict[str, Any]:
-    acct_level = "none"
+    acct_level = _sanitize_acct_level(None)
     by_field_pairs: Dict[str, List[str]] = {}
     matched_fields: Dict[str, bool] = {"account_number": False}
     account_number_matched = False
@@ -1894,8 +1913,8 @@ def _tag_normalize_merge_aux(aux: Any) -> Dict[str, Any]:
         acct_aux = aux.get("account_number")
         if isinstance(acct_aux, Mapping):
             level = acct_aux.get("acctnum_level")
-            if isinstance(level, str) and level:
-                acct_level = level
+            if level is not None:
+                acct_level = _sanitize_acct_level(level)
             if "matched" in acct_aux:
                 account_number_matched = bool(acct_aux.get("matched"))
             elif acct_level != "none":
@@ -1916,6 +1935,11 @@ def _tag_normalize_merge_aux(aux: Any) -> Dict[str, Any]:
                 continue
             field_name = str(field)
             if field_name == "account_number":
+                level_value = field_aux.get("acctnum_level")
+                if level_value is not None:
+                    level = _sanitize_acct_level(level_value)
+                    if level != "none":
+                        acct_level = level
                 if "matched" in field_aux:
                     account_number_matched = bool(field_aux.get("matched"))
                 elif account_number_matched:
@@ -1987,15 +2011,16 @@ def _normalize_merge_payload_for_tag(
     )
 
     aux_payload = payload.get("aux")
-    acct_level = "none"
+    acct_level = _sanitize_acct_level(None)
     if isinstance(aux_payload, Mapping):
-        acct_level = str(aux_payload.get("acctnum_level") or "none")
+        acct_level = _sanitize_acct_level(aux_payload.get("acctnum_level"))
         matched_pairs = aux_payload.get("by_field_pairs", {})
         if isinstance(matched_pairs, Mapping):
             payload["matched_pairs"] = {
-                str(field): list(pair)
+                str(field): [str(pair[0]), str(pair[1])]
                 for field, pair in matched_pairs.items()
                 if isinstance(pair, (list, tuple))
+                and len(pair) == 2
             }
         for key in ("acctnum_digits_len_a", "acctnum_digits_len_b"):
             value = aux_payload.get(key)
@@ -2108,7 +2133,7 @@ def _merge_tag_from_best(
     conflicts = list(best_result.get("conflicts", []))
     parts = _sanitize_parts(best_result.get("parts"))
     aux_payload = _build_aux_payload(best_result.get("aux", {}))
-    acct_level = str(aux_payload.get("acctnum_level", "none") or "none")
+    acct_level = _sanitize_acct_level(aux_payload.get("acctnum_level"))
 
     score_entries = _build_score_entries(partner_scores, best_partner)
     best_entry = {
@@ -2135,9 +2160,18 @@ def _merge_tag_from_best(
         "tiebreaker": tiebreaker,
     }
     merge_tag["acctnum_level"] = acct_level
-    matched_pairs = dict(aux_payload.get("by_field_pairs", {}))
-    matched_pairs.setdefault("account_number", [])
-    merge_tag["matched_pairs"] = matched_pairs
+    matched_pairs_raw = aux_payload.get("by_field_pairs", {})
+    pairs_payload: Dict[str, List[str]] = {}
+    if isinstance(matched_pairs_raw, Mapping):
+        for field, pair in matched_pairs_raw.items():
+            if (
+                isinstance(pair, (list, tuple))
+                and len(pair) == 2
+                and all(part is not None for part in pair)
+            ):
+                pairs_payload[str(field)] = [str(pair[0]), str(pair[1])]
+    pairs_payload.setdefault("account_number", [])
+    merge_tag["matched_pairs"] = pairs_payload
 
     for key in ("acctnum_digits_len_a", "acctnum_digits_len_b"):
         value = aux_payload.get(key)

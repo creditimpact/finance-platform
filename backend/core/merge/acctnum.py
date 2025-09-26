@@ -6,6 +6,9 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Mapping
 
+_MATCH_LEVEL = "exact_or_known_match"
+_NONE_LEVEL = "none"
+
 __all__ = [
     "AccountNumberMatch",
     "NormalizedAccountNumber",
@@ -14,17 +17,18 @@ __all__ = [
     "best_account_number_match",
     "match_level",
     "normalize_display",
+    "normalize_level",
 ]
 
 _BUREAUS = ("transunion", "experian", "equifax")
 
 _LEVEL_POINTS: Dict[str, int] = {
-    "exact_or_known_match": 28,
+    _MATCH_LEVEL: 28,
 }
 
 _LEVEL_RANK: Dict[str, int] = {
-    "none": 0,
-    "exact_or_known_match": 1,
+    _NONE_LEVEL: 0,
+    _MATCH_LEVEL: 1,
 }
 
 
@@ -55,6 +59,16 @@ def normalize_display(display: str | None) -> NormalizedAccountNumber:
     raw = str(display or "")
     digits = re.sub(r"\D", "", raw)
     return NormalizedAccountNumber(raw, digits)
+
+
+def normalize_level(level: str | None) -> str:
+    """Clamp a free-form level value to the supported enumeration."""
+
+    if isinstance(level, str):
+        candidate = level.strip().lower()
+        if candidate == _MATCH_LEVEL:
+            return _MATCH_LEVEL
+    return _NONE_LEVEL
 
 
 @dataclass(frozen=True)
@@ -108,7 +122,8 @@ def acctnum_level(a_raw: str, b_raw: str) -> tuple[str, dict[str, str]]:
     """Return the account-number level and debug metadata."""
 
     ok, debug = acctnum_match_visible(a_raw, b_raw)
-    level = "exact_or_known_match" if ok else "none"
+    level = _MATCH_LEVEL if ok else _NONE_LEVEL
+    level = normalize_level(level)
     debug_dict = dict(debug)
     debug_dict.setdefault("short", "")
     debug_dict.setdefault("long", "")
@@ -129,7 +144,7 @@ def best_account_number_match(
     """Compute the best bureau pairing by strict account-number level."""
 
     best_match = AccountNumberMatch(
-        "none",
+        _NONE_LEVEL,
         "",
         "",
         _EMPTY_NORMALIZED,

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from backend.core.io.tags import read_tags
+from backend.core.merge.acctnum import normalize_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.pipeline.runs import RUNS_ROOT_ENV
 
@@ -70,7 +71,7 @@ def _extract_highlights_from_tag(tag: Mapping[str, Any] | None) -> dict[str, Any
     except (TypeError, ValueError):
         total = None
 
-    acctnum_level = str(aux.get("acctnum_level", "none") or "none")
+    acctnum_level = normalize_level(aux.get("acctnum_level"))
 
     return {
         "total": total,

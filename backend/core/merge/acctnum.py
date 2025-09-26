@@ -9,6 +9,7 @@ from typing import Dict, Mapping
 __all__ = [
     "AccountNumberMatch",
     "NormalizedAccountNumber",
+    "acctnum_match_visible",
     "best_account_number_match",
     "match_level",
     "normalize_display",
@@ -17,16 +18,12 @@ __all__ = [
 _BUREAUS = ("transunion", "experian", "equifax")
 
 _LEVEL_POINTS: Dict[str, int] = {
-    "exact": 40,
-    "last6_bin": 32,
-    "last6": 28,
+    "exact_or_known_match": 28,
 }
 
 _LEVEL_RANK: Dict[str, int] = {
     "none": 0,
-    "last6": 1,
-    "last6_bin": 2,
-    "exact": 3,
+    "exact_or_known_match": 1,
 }
 
 
@@ -36,10 +33,6 @@ class NormalizedAccountNumber:
 
     raw: str
     digits: str
-    digits_last4: str
-    digits_last5: str
-    digits_last6: str
-    digits_first6: str
 
     @property
     def has_digits(self) -> bool:
@@ -49,26 +42,18 @@ class NormalizedAccountNumber:
         return {
             "raw": self.raw,
             "digits": self.digits,
-            "digits_last4": self.digits_last4,
-            "digits_last5": self.digits_last5,
-            "digits_last6": self.digits_last6,
-            "digits_first6": self.digits_first6,
         }
 
 
-_EMPTY_NORMALIZED = NormalizedAccountNumber("", "", "", "", "", "")
+_EMPTY_NORMALIZED = NormalizedAccountNumber("", "")
 
 
 def normalize_display(display: str | None) -> NormalizedAccountNumber:
-    """Normalize an ``account_number_display`` value to digits and helpers."""
+    """Normalize an ``account_number_display`` value to digits only."""
 
     raw = str(display or "")
     digits = re.sub(r"\D", "", raw)
-    last4 = digits[-4:] if len(digits) >= 4 else ""
-    last5 = digits[-5:] if len(digits) >= 5 else ""
-    last6 = digits[-6:] if len(digits) >= 6 else ""
-    bin6 = digits[:6] if len(digits) >= 6 else ""
-    return NormalizedAccountNumber(raw, digits, last4, last5, last6, bin6)
+    return NormalizedAccountNumber(raw, digits)
 
 
 @dataclass(frozen=True)
@@ -89,22 +74,30 @@ class AccountNumberMatch:
         return AccountNumberMatch(self.level, self.b_bureau, self.a_bureau, self.b, self.a)
 
 
+def _digits_only(s: str) -> str:
+    return "".join(ch for ch in (s or "") if ch.isdigit())
+
+
+def acctnum_match_visible(a_raw: str, b_raw: str) -> tuple[bool, dict[str, str]]:
+    """Implement the visible-digits substring rule."""
+
+    a = _digits_only(a_raw)
+    b = _digits_only(b_raw)
+
+    if not a or not b:
+        short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+        return False, {"short": short, "long": long_, "why": "empty"}
+
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    ok = short in long_
+    return ok, {"short": short, "long": long_}
+
+
 def match_level(a: NormalizedAccountNumber, b: NormalizedAccountNumber) -> str:
     """Return the strict account-number level between two normalized numbers."""
 
-    if not (a.has_digits and b.has_digits):
-        return "none"
-
-    if len(a.digits) >= 8 and a.digits == b.digits:
-        return "exact"
-
-    if a.digits_last6 and b.digits_last6:
-        if a.digits_first6 and a.digits_first6 == b.digits_first6 and a.digits_last6 == b.digits_last6:
-            return "last6_bin"
-        if a.digits_last6 == b.digits_last6:
-            return "last6"
-
-    return "none"
+    ok, _ = acctnum_match_visible(a.raw, b.raw)
+    return "exact_or_known_match" if ok else "none"
 
 
 def best_account_number_match(

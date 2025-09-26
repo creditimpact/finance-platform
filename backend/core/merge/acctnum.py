@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, Mapping, Tuple
+from typing import Dict, Mapping
 
 _MATCH_LEVEL = "exact_or_known_match"
 _NONE_LEVEL = "none"
@@ -106,7 +106,7 @@ def _digits(s: str) -> str:
     return "".join(DIGITS.findall(s or ""))
 
 
-def acctnum_visible_match(a_raw: str, b_raw: str) -> Tuple[bool, Dict[str, str]]:
+def acctnum_visible_match(a_raw: str, b_raw: str) -> tuple[bool, dict[str, str]]:
     a = _digits(a_raw)
     b = _digits(b_raw)
 
@@ -127,13 +127,13 @@ def acctnum_visible_match(a_raw: str, b_raw: str) -> Tuple[bool, Dict[str, str]]
     return False, debug
 
 
-def acctnum_match_visible(a_raw: str, b_raw: str) -> Tuple[bool, Dict[str, str]]:
+def acctnum_match_visible(a_raw: str, b_raw: str) -> tuple[bool, dict[str, str]]:
     """Compatibility wrapper for legacy call sites."""
 
     return acctnum_visible_match(a_raw, b_raw)
 
 
-def acctnum_match_level(a_raw: str, b_raw: str) -> Tuple[str, Dict[str, str]]:
+def acctnum_match_level(a_raw: str, b_raw: str) -> tuple[str, dict[str, str]]:
     ok, dbg = acctnum_visible_match(a_raw, b_raw)
     return ("exact_or_known_match" if ok else "none"), dbg
 

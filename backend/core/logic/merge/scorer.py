@@ -177,17 +177,33 @@ def _apply_account_number_scoring(
                 "",
                 _EMPTY_NORMALIZED,
                 _EMPTY_NORMALIZED,
-                {"short": "", "long": ""},
+                {
+                    "a": {"raw": "", "digits": ""},
+                    "b": {"raw": "", "digits": ""},
+                    "short": "",
+                    "long": "",
+                    "why": "",
+                },
             )
-            best_debug = {"a": "", "b": "", "short": "", "long": ""}
+            best_debug: dict[str, Any] = {
+                "a": {"raw": "", "digits": ""},
+                "b": {"raw": "", "digits": ""},
+                "short": "",
+                "long": "",
+                "why": "",
+            }
             best_rank = -1
             for a_bureau in ("transunion", "experian", "equifax"):
                 a_norm_value = a_norm.get(a_bureau, _EMPTY_NORMALIZED)
+                a_account_str = a_norm_value.raw or a_norm_value.digits
+                if not a_account_str:
+                    continue
                 for b_bureau in ("transunion", "experian", "equifax"):
                     b_norm_value = b_norm.get(b_bureau, _EMPTY_NORMALIZED)
-                    level, debug = acctnum_match_level(
-                        a_norm_value.raw, b_norm_value.raw
-                    )
+                    b_account_str = b_norm_value.raw or b_norm_value.digits
+                    if not b_account_str:
+                        continue
+                    level, debug = acctnum_match_level(a_account_str, b_account_str)
                     rank = 1 if level == "exact_or_known_match" else 0
                     if rank > best_rank:
                         best_rank = rank
@@ -212,24 +228,31 @@ def _apply_account_number_scoring(
                 if isinstance(reverse, dict):
                     _update_result_with_match(reverse, match.swapped())
             logger.info(
-                "MERGE_V2_ACCT_BEST sid=%s i=%s j=%s level=%s a_bureau=%s b_bureau=%s a_digits=%s b_digits=%s",
+                "MERGE_V2_ACCT_BEST sid=%s i=%s j=%s level=%s a_digits=%s b_digits=%s",
                 sid,
                 i,
                 j,
                 match.level,
-                match.a_bureau,
-                match.b_bureau,
-                best_debug.get("a", ""),
-                best_debug.get("b", ""),
+                (
+                    best_debug.get("a", {}).get("digits")
+                    if isinstance(best_debug.get("a"), Mapping)
+                    else best_debug.get("a")
+                ),
+                (
+                    best_debug.get("b", {}).get("digits")
+                    if isinstance(best_debug.get("b"), Mapping)
+                    else best_debug.get("b")
+                ),
             )
             logger.info(
-                "MERGE_V2_ACCTNUM_MATCH sid=%s i=%s j=%s level=%s short=%s long=%s",
+                "MERGE_V2_ACCTNUM_MATCH sid=%s i=%s j=%s level=%s short=%s long=%s why=%s",
                 sid,
                 i,
                 j,
                 match.level,
-                match.debug.get("short"),
-                match.debug.get("long"),
+                str(match.debug.get("short", "")),
+                str(match.debug.get("long", "")),
+                str(match.debug.get("why", "")),
             )
 
 

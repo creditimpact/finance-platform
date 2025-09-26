@@ -106,17 +106,29 @@ def _digits(s: str) -> str:
     return "".join(DIGITS.findall(s or ""))
 
 
-def acctnum_visible_match(a_raw: str, b_raw: str) -> tuple[bool, dict[str, str]]:
-    a = _digits(a_raw)
-    b = _digits(b_raw)
+def acctnum_visible_match(a_raw: str, b_raw: str) -> tuple[bool, dict[str, dict[str, str] | str]]:
+    a_digits = _digits(a_raw)
+    b_digits = _digits(b_raw)
 
-    debug: Dict[str, str] = {"a": a, "b": b, "short": "", "long": "", "why": ""}
+    debug: Dict[str, dict[str, str] | str] = {
+        "a": {
+            "raw": str(a_raw or ""),
+            "digits": a_digits,
+        },
+        "b": {
+            "raw": str(b_raw or ""),
+            "digits": b_digits,
+        },
+        "short": "",
+        "long": "",
+        "why": "",
+    }
 
-    if not a or not b:
+    if not a_digits or not b_digits:
         debug["why"] = "missing_visible_digits"
         return False, debug
 
-    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    short, long_ = (a_digits, b_digits) if len(a_digits) <= len(b_digits) else (b_digits, a_digits)
     debug["short"] = short
     debug["long"] = long_
 
@@ -127,13 +139,17 @@ def acctnum_visible_match(a_raw: str, b_raw: str) -> tuple[bool, dict[str, str]]
     return False, debug
 
 
-def acctnum_match_visible(a_raw: str, b_raw: str) -> tuple[bool, dict[str, str]]:
+def acctnum_match_visible(
+    a_raw: str, b_raw: str
+) -> tuple[bool, dict[str, dict[str, str] | str]]:
     """Compatibility wrapper for legacy call sites."""
 
     return acctnum_visible_match(a_raw, b_raw)
 
 
-def acctnum_match_level(a_raw: str, b_raw: str) -> tuple[str, dict[str, str]]:
+def acctnum_match_level(
+    a_raw: str, b_raw: str
+) -> tuple[str, dict[str, dict[str, str] | str]]:
     ok, dbg = acctnum_visible_match(a_raw, b_raw)
     return ("exact_or_known_match" if ok else "none"), dbg
 

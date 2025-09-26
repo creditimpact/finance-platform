@@ -179,7 +179,7 @@ _THRESHOLD_DEFAULTS: Dict[str, int] = {
 
 _TRIGGER_DEFAULTS: Dict[str, Union[int, str, bool]] = {
     "MERGE_AI_ON_BALOWED_EXACT": 1,
-    "MERGE_AI_ON_ACCTNUM_LEVEL": "last4",
+    "MERGE_AI_ON_ACCTNUM_LEVEL": "last6",
     "MERGE_AI_ON_MID_K": 26,
     "MERGE_AI_ON_ALL_DATES": 1,
 }
@@ -193,8 +193,6 @@ _TOLERANCE_DEFAULTS: Dict[str, Union[int, float]] = {
 
 _ACCTNUM_LEVEL_CHOICES: Set[str] = {
     "any",
-    "last4",
-    "last5",
     "last6",
     "last6_bin",
     "exact",
@@ -279,8 +277,6 @@ _ACCOUNT_LEVEL_ORDER = {
     "masked_match": 1,
     "masked": 1,
     "any": 1,
-    "last4": 1,
-    "last5": 1,
     "last6": 2,
     "last6_bin": 3,
     "exact": 4,
@@ -612,7 +608,7 @@ def _match_field_values(
     aux: Dict[str, Any] = {}
 
     if field == "account_number":
-        min_level = str(cfg.triggers.get("MERGE_AI_ON_ACCTNUM_LEVEL", "last4")).lower()
+        min_level = str(cfg.triggers.get("MERGE_AI_ON_ACCTNUM_LEVEL", "last6")).lower()
         level, _ = acctnum_match_level(
             str(raw_a) if not is_missing(raw_a) else None,
             str(raw_b) if not is_missing(raw_b) else None,
@@ -2019,7 +2015,7 @@ def account_number_level(a: Any, b: Any) -> str:
     return level
 
 
-def account_numbers_match(a: Any, b: Any, min_level: str = "last4") -> Tuple[bool, str]:
+def account_numbers_match(a: Any, b: Any, min_level: str = "last6") -> Tuple[bool, str]:
     if is_missing(a) or is_missing(b):
         return False, "none"
 

@@ -27,7 +27,7 @@ def test_get_merge_cfg_defaults(monkeypatch):
     assert cfg.thresholds["AI_THRESHOLD"] == 26
     assert cfg.thresholds["AUTO_MERGE_THRESHOLD"] == 70
     assert cfg.triggers["MERGE_AI_ON_BALOWED_EXACT"] is True
-    assert cfg.triggers["MERGE_AI_ON_ACCTNUM_LEVEL"] == "last4"
+    assert cfg.triggers["MERGE_AI_ON_ACCTNUM_LEVEL"] == "last6"
     assert cfg.triggers["MERGE_AI_ON_MID_K"] == 26
     assert cfg.triggers["MERGE_AI_ON_ALL_DATES"] is True
     assert cfg.tolerances["AMOUNT_TOL_ABS"] == 50.0

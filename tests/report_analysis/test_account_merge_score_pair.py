@@ -39,8 +39,6 @@ ACCOUNT_POINTS = {
     "exact": 40,
     "last6_bin": 32,
     "last6": 24,
-    "last5": 0,
-    "last4": 0,
     "masked_match": 0,
     "none": 0,
 }

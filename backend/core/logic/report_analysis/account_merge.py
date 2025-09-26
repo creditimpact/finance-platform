@@ -10,6 +10,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
 from backend import config as app_config
@@ -42,6 +43,63 @@ logger = logging.getLogger(__name__)
 POINTS_ACCTNUM_EXACT = 40
 POINTS_ACCTNUM_LAST6_BIN = 32
 POINTS_ACCTNUM_LAST6 = 24
+
+
+def _coerce_positive_int(value: Optional[int]) -> Optional[int]:
+    """Return ``value`` when it is a positive integer, otherwise ``None``."""
+
+    if value is None:
+        return None
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError):
+        return None
+    return coerced if coerced > 0 else None
+
+
+def _read_candidate_limits(env: Optional[Mapping[str, str]] = None) -> Tuple[Optional[int], Optional[int]]:
+    """Return global and per-account candidate limits from the environment."""
+
+    env_mapping: Mapping[str, str]
+    if env is None:
+        env_mapping = os.environ
+    else:
+        env_mapping = env
+
+    global_limit = _coerce_positive_int(env_mapping.get("MERGE_CANDIDATE_LIMIT"))
+    if global_limit is None:
+        legacy_limit = env_mapping.get("MERGE_PAIR_LIMIT")
+        global_limit = _coerce_positive_int(legacy_limit)
+
+    per_account_limit = _coerce_positive_int(env_mapping.get("MAX_CANDIDATES_PER_ACCOUNT"))
+
+    return global_limit, per_account_limit
+
+
+def _priority_label_for_level(level: str) -> Tuple[int, int, str]:
+    """Return (category, subscore, label) for the provided account-number level."""
+
+    normalized = str(level or "none").lower()
+    if normalized == "exact":
+        return (0, 3, "hard:exact")
+    if normalized == "last6_bin":
+        return (0, 2, "hard:last6_bin")
+    if normalized == "last6":
+        return (0, 1, "hard:last6")
+    return (3, 0, "default")
+
+
+def _priority_category(level: str, dates_all: bool, soft_match: bool) -> Tuple[int, int, str]:
+    """Return the ordered priority bucket metadata for a pair."""
+
+    category, subscore, label = _priority_label_for_level(level)
+    if category == 0:
+        return category, subscore, label
+    if dates_all:
+        return 1, 0, "dates_all"
+    if soft_match:
+        return 2, 0, "soft_acctnum"
+    return category, subscore, label
 
 
 def is_missing(value: Any) -> bool:
@@ -395,6 +453,7 @@ def acctnum_match_level(a_raw: str | None, b_raw: str | None) -> Tuple[str, Dict
             "digits": a_digits,
             "digits_last4": a_digits[-4:],
             "digits_last6": a_digits[-6:],
+            "digits_last5": a_digits[-5:],
             "digits_first6": a_digits[:6],
         },
         "b": {
@@ -402,6 +461,7 @@ def acctnum_match_level(a_raw: str | None, b_raw: str | None) -> Tuple[str, Dict
             "digits": b_digits,
             "digits_last4": b_digits[-4:],
             "digits_last6": b_digits[-6:],
+            "digits_last5": b_digits[-5:],
             "digits_first6": b_digits[:6],
         },
     }
@@ -577,6 +637,31 @@ def _extract_account_number_string(
             return str(raw_value)
 
     return ""
+
+
+def _detect_soft_acct_match(a_raw: str, b_raw: str) -> bool:
+    """Return True when account numbers look suspicious despite no hard match."""
+
+    a_meta = normalize_acctnum(a_raw)
+    b_meta = normalize_acctnum(b_raw)
+
+    if not isinstance(a_meta, Mapping) or not isinstance(b_meta, Mapping):
+        return False
+
+    a_last5 = a_meta.get("digits_last5")
+    b_last5 = b_meta.get("digits_last5")
+    if not a_last5 or not b_last5:
+        return False
+
+    if a_last5 != b_last5:
+        return False
+
+    a_last6 = a_meta.get("digits_last6")
+    b_last6 = b_meta.get("digits_last6")
+    if a_last6 and b_last6 and a_last6 == b_last6:
+        return False
+
+    return True
 
 
 def _is_zero_amount(value: Any) -> bool:
@@ -1136,7 +1221,10 @@ def score_all_pairs_0_100(
 
     scores: Dict[int, Dict[int, Dict[str, Any]]] = {idx: {} for idx in indices}
 
+    logger.info("CANDIDATE_LOOP_START sid=%s total_accounts=%s", sid, total_accounts)
+
     pair_counter = 0
+    candidate_records: List[Dict[str, Any]] = []
     for left_pos in range(total_accounts - 1):
         left = indices[left_pos]
         for right_pos in range(left_pos + 1, total_accounts):
@@ -1254,19 +1342,133 @@ def score_all_pairs_0_100(
                 except (TypeError, ValueError):
                     allow_by_mid = False
 
-            if not (allow_by_acct or allow_by_dates or allow_by_strong or allow_by_mid):
-                continue
+            allow_by_soft = _detect_soft_acct_match(a_acct_str, b_acct_str)
+            allowed = (
+                allow_by_acct
+                or allow_by_dates
+                or allow_by_strong
+                or allow_by_mid
+                or allow_by_soft
+            )
 
-            scores[left][right] = deepcopy(result)
-            scores[right][left] = deepcopy(result)
+            total_score = int(result.get("total", 0) or 0)
+            mid_sum = int(result.get("mid_sum", 0) or 0)
+            identity_sum = int(result.get("identity_sum", 0) or 0)
+            priority_category, priority_subscore, priority_label = _priority_category(
+                level_value, allow_by_dates, allow_by_soft
+            )
+
+            candidate_records.append(
+                {
+                    "left": left,
+                    "right": right,
+                    "result": deepcopy(result),
+                    "allowed": allowed,
+                    "allow_flags": {
+                        "acct": allow_by_acct,
+                        "dates": allow_by_dates,
+                        "strong": allow_by_strong,
+                        "mid": allow_by_mid,
+                        "soft": allow_by_soft,
+                    },
+                    "level": level_value,
+                    "dates_all": bool(result.get("dates_all")),
+                    "soft_match": allow_by_soft,
+                    "total": total_score,
+                    "mid_sum": mid_sum,
+                    "identity_sum": identity_sum,
+                    "priority": {
+                        "category": priority_category,
+                        "subscore": priority_subscore,
+                        "label": priority_label,
+                    },
+                }
+            )
+
+    allowed_records = [record for record in candidate_records if record.get("allowed")]
+
+    global_limit, per_account_limit = _read_candidate_limits()
+    per_account_counts: Dict[int, int] = defaultdict(int)
+
+    def _sort_key(record: Mapping[str, Any]) -> Tuple[int, int, int, int, int, int]:
+        priority = record.get("priority", {}) if isinstance(record.get("priority"), Mapping) else {}
+        category = int(priority.get("category", 3))
+        subscore = int(priority.get("subscore", 0))
+        total_val = int(record.get("total", 0) or 0)
+        mid_val = int(record.get("mid_sum", 0) or 0)
+        identity_val = int(record.get("identity_sum", 0) or 0)
+        left_idx = int(record.get("left", 0) or 0)
+        right_idx = int(record.get("right", 0) or 0)
+        return (category, -subscore, -total_val, -mid_val, -identity_val, left_idx, right_idx)
+
+    sorted_records = sorted(allowed_records, key=_sort_key)
+
+    selected_records: List[Dict[str, Any]] = []
+    dropped_records: List[Tuple[Dict[str, Any], str]] = []
+
+    for record in sorted_records:
+        left = int(record.get("left"))
+        right = int(record.get("right"))
+
+        if per_account_limit and (
+            per_account_counts[left] >= per_account_limit
+            or per_account_counts[right] >= per_account_limit
+        ):
+            dropped_records.append((record, "per_account_limit"))
+            continue
+
+        if global_limit and len(selected_records) >= global_limit:
+            dropped_records.append((record, "global_limit"))
+            continue
+
+        selected_records.append(record)
+        per_account_counts[left] += 1
+        per_account_counts[right] += 1
+
+    for record in selected_records:
+        left = int(record.get("left"))
+        right = int(record.get("right"))
+        result = record.get("result") if isinstance(record.get("result"), Mapping) else {}
+        scores[left][right] = deepcopy(result)
+        scores[right][left] = deepcopy(result)
+
+    built_pairs = len(selected_records)
+
+    if global_limit or per_account_limit:
+        limit_log = {
+            "sid": sid,
+            "limit": global_limit or 0,
+            "per_account": per_account_limit or 0,
+            "considered": len(candidate_records),
+            "eligible": len(allowed_records),
+            "kept": built_pairs,
+            "dropped": len(dropped_records),
+        }
+        logger.info("CANDIDATE_LIMIT_SUMMARY %s", json.dumps(limit_log, sort_keys=True))
+
+        for record, reason in dropped_records[:10]:
+            priority = record.get("priority", {})
+            drop_log = {
+                "sid": sid,
+                "i": record.get("left"),
+                "j": record.get("right"),
+                "reason": reason,
+                "priority": priority.get("label"),
+                "total": record.get("total", 0),
+            }
+            logger.info("CANDIDATE_LIMIT_DROP %s", json.dumps(drop_log, sort_keys=True))
 
     summary_log = {
         "sid": sid,
         "total_accounts": total_accounts,
         "expected_pairs": expected_pairs,
         "pairs_scored": pair_counter,
+        "pairs_allowed": len(allowed_records),
+        "pairs_built": built_pairs,
     }
     logger.debug("MERGE_PAIR_SUMMARY %s", json.dumps(summary_log, sort_keys=True))
+
+    logger.info("CANDIDATE_LOOP_END sid=%s built_pairs=%s", sid, built_pairs)
 
     return scores
 

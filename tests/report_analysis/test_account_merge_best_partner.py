@@ -237,3 +237,106 @@ def test_score_all_pairs_debug_pair_logs(tmp_path, caplog) -> None:
     assert logged_pairs == expected_pairs
     assert summary_payload["expected_pairs"] == len(expected_pairs)
     assert summary_payload["pairs_scored"] == len(step_payloads) == len(expected_pairs)
+
+
+def test_candidate_loop_logs_and_soft_gate(tmp_path, caplog) -> None:
+    sid = "SID-SOFT"
+    accounts_root = tmp_path / sid / "cases" / "accounts"
+
+    bureaus_a = {
+        "transunion": {
+            "account_number_display": "0000012345",
+            "balance_owed": "200",
+        }
+    }
+    bureaus_b = {
+        "equifax": {
+            "account_number_display": "9912345",
+            "balance_owed": "350",
+        }
+    }
+
+    _write_account_payload(accounts_root, 0, bureaus_a)
+    _write_account_payload(accounts_root, 1, bureaus_b)
+
+    with caplog.at_level(
+        logging.INFO, logger="backend.core.logic.report_analysis.account_merge"
+    ):
+        scores = score_all_pairs_0_100(sid, [0, 1], runs_root=tmp_path)
+
+    assert 1 in scores[0]
+    assert scores[0][1]["total"] == 0
+    account_aux = scores[0][1]["aux"].get("account_number", {})
+    assert account_aux.get("acctnum_level") == "none"
+
+    start_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("CANDIDATE_LOOP_START ")
+    ]
+    end_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("CANDIDATE_LOOP_END ")
+    ]
+
+    assert start_messages == ["CANDIDATE_LOOP_START sid=SID-SOFT total_accounts=2"]
+    assert end_messages == ["CANDIDATE_LOOP_END sid=SID-SOFT built_pairs=1"]
+
+
+def test_candidate_limit_prefers_hard_matches(tmp_path, monkeypatch, caplog) -> None:
+    monkeypatch.setenv("MERGE_CANDIDATE_LIMIT", "1")
+
+    sid = "SID-LIMIT"
+    accounts_root = tmp_path / sid / "cases" / "accounts"
+
+    bureaus_zero = {
+        "transunion": {
+            "account_number": "1234567890123456",
+        }
+    }
+    bureaus_one = {
+        "experian": {
+            "account_number_display": "1234567890123456",
+        }
+    }
+    bureaus_two = {
+        "equifax": {
+            "account_number_display": "00923456",
+        }
+    }
+
+    _write_account_payload(accounts_root, 0, bureaus_zero)
+    _write_account_payload(accounts_root, 1, bureaus_one)
+    _write_account_payload(accounts_root, 2, bureaus_two)
+
+    with caplog.at_level(
+        logging.INFO, logger="backend.core.logic.report_analysis.account_merge"
+    ):
+        scores = score_all_pairs_0_100(sid, [0, 1, 2], runs_root=tmp_path)
+
+    assert 1 in scores[0]
+    assert 0 in scores[1]
+    assert 2 not in scores[0]
+    assert 0 not in scores[2]
+
+    limit_summaries = [
+        json.loads(record.getMessage().split(" ", 1)[1])
+        for record in caplog.records
+        if record.getMessage().startswith("CANDIDATE_LIMIT_SUMMARY ")
+    ]
+    assert limit_summaries
+    summary_payload = limit_summaries[-1]
+    assert summary_payload["kept"] == 1
+    assert summary_payload["dropped"] >= 1
+
+    drop_logs = [
+        json.loads(record.getMessage().split(" ", 1)[1])
+        for record in caplog.records
+        if record.getMessage().startswith("CANDIDATE_LIMIT_DROP ")
+    ]
+    assert drop_logs
+    drop_payload = drop_logs[0]
+    assert drop_payload["reason"] == "global_limit"
+    assert tuple(sorted((drop_payload["i"], drop_payload["j"]))) == (0, 2)
+    assert drop_payload["priority"] == "soft_acctnum"

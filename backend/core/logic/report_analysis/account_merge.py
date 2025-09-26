@@ -639,29 +639,38 @@ def _extract_account_number_string(
     return ""
 
 
-def _detect_soft_acct_match(a_raw: str, b_raw: str) -> bool:
-    """Return True when account numbers look suspicious despite no hard match."""
+def soft_acct_suspicious(a_display: str, b_display: str) -> bool:
+    ad = re.sub(r"\D", "", a_display or "")
+    bd = re.sub(r"\D", "", b_display or "")
+    return len(ad) >= 5 and len(bd) >= 5 and ad[-5:] == bd[-5:]
 
-    a_meta = normalize_acctnum(a_raw)
-    b_meta = normalize_acctnum(b_raw)
 
-    if not isinstance(a_meta, Mapping) or not isinstance(b_meta, Mapping):
-        return False
+def _detect_soft_acct_match(
+    left_bureaus: Mapping[str, Mapping[str, Any]],
+    right_bureaus: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    bureaus = ("transunion", "experian", "equifax")
 
-    a_last5 = a_meta.get("digits_last5")
-    b_last5 = b_meta.get("digits_last5")
-    if not a_last5 or not b_last5:
-        return False
+    for left_key in bureaus:
+        left_branch = left_bureaus.get(left_key)
+        if not isinstance(left_branch, Mapping):
+            continue
+        left_display = left_branch.get("account_number_display")
+        if is_missing(left_display):
+            continue
 
-    if a_last5 != b_last5:
-        return False
+        for right_key in bureaus:
+            right_branch = right_bureaus.get(right_key)
+            if not isinstance(right_branch, Mapping):
+                continue
+            right_display = right_branch.get("account_number_display")
+            if is_missing(right_display):
+                continue
 
-    a_last6 = a_meta.get("digits_last6")
-    b_last6 = b_meta.get("digits_last6")
-    if a_last6 and b_last6 and a_last6 == b_last6:
-        return False
+            if soft_acct_suspicious(str(left_display), str(right_display)):
+                return True
 
-    return True
+    return False
 
 
 def _is_zero_amount(value: Any) -> bool:
@@ -1349,22 +1358,18 @@ def score_all_pairs_0_100(
             level_value, _ = acctnum_match_level(a_acct_str or None, b_acct_str or None)
             allow_by_acct = level_value in _ACCOUNT_STRONG_LEVELS
             allow_by_dates = bool(result.get("dates_all"))
-            triggers = [str(trigger) for trigger in result.get("triggers", [])]
-            allow_by_strong = any(trigger.startswith("strong:") for trigger in triggers)
-            allow_by_mid = False
-            if mid_threshold > 0:
-                try:
-                    allow_by_mid = int(result.get("mid_sum") or 0) >= mid_threshold
-                except (TypeError, ValueError):
-                    allow_by_mid = False
 
-            allow_by_soft = _detect_soft_acct_match(a_acct_str, b_acct_str)
-            allowed = (
-                allow_by_acct
-                or allow_by_dates
-                or allow_by_strong
-                or allow_by_mid
-                or allow_by_soft
+            allow_by_soft = _detect_soft_acct_match(left_bureaus, right_bureaus)
+            allowed = allow_by_acct or allow_by_dates or allow_by_soft
+
+            logger.info(
+                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s hard=%s soft_last5=%s dates=%s",
+                sid,
+                left,
+                right,
+                allow_by_acct,
+                allow_by_soft,
+                allow_by_dates,
             )
 
             total_score = int(result.get("total", 0) or 0)
@@ -1383,9 +1388,7 @@ def score_all_pairs_0_100(
                     "allow_flags": {
                         "acct": allow_by_acct,
                         "dates": allow_by_dates,
-                        "strong": allow_by_strong,
-                        "mid": allow_by_mid,
-                        "soft": allow_by_soft,
+                        "soft_last5": allow_by_soft,
                     },
                     "level": level_value,
                     "dates_all": bool(result.get("dates_all")),

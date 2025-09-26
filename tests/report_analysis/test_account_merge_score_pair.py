@@ -6,6 +6,7 @@ from backend.core.logic.report_analysis.account_merge import (
     get_merge_cfg,
     score_pair_0_100,
 )
+import backend.core.logic.report_analysis.account_merge as account_merge
 
 
 @pytest.fixture()
@@ -36,10 +37,7 @@ def test_strong_balance_owed_trigger(cfg) -> None:
 
 
 ACCOUNT_POINTS = {
-    "exact": 40,
-    "last6_bin": 32,
-    "last6": 24,
-    "masked_match": 0,
+    "exact_or_known_match": account_merge.POINTS_ACCTNUM_VISIBLE,
     "none": 0,
 }
 
@@ -48,66 +46,58 @@ ACCOUNT_POINTS = {
     "left,right,expected_level,expected_points,strong_expected,decision",
     [
         (
-            "349992********** 349992********** -34999***********",
-            "349992********** 349992********** -34999***********",
-            "last6_bin",
-            ACCOUNT_POINTS["last6_bin"],
+            "349992*****",
+            "3499921234567",
+            "exact_or_known_match",
+            ACCOUNT_POINTS["exact_or_known_match"],
             True,
             "ai",
         ),
         (
-            "1234-5678-9999",
-            "123456789999",
-            "exact",
-            ACCOUNT_POINTS["exact"],
+            "****6789",
+            "123456789",
+            "exact_or_known_match",
+            ACCOUNT_POINTS["exact_or_known_match"],
             True,
             "ai",
         ),
         (
             "99-123456",
             "123456",
-            "none",
-            ACCOUNT_POINTS["none"],
-            False,
-            "different",
-        ),
-        (
-            "****-**789012",
-            "789012",
-            "none",
-            ACCOUNT_POINTS["none"],
-            False,
-            "different",
-        ),
-        (
-            "****-****-****-0423",
-            "X X X X 0423",
-            "none",
-            ACCOUNT_POINTS["none"],
-            False,
-            "different",
-        ),
-        (
-            "XXXX1234",
-            "99991234",
-            "none",
-            ACCOUNT_POINTS["none"],
-            False,
-            "different",
-        ),
-        (
-            "12345678901234",
-            "12345600901234",
-            "last6_bin",
-            ACCOUNT_POINTS["last6_bin"],
+            "exact_or_known_match",
+            ACCOUNT_POINTS["exact_or_known_match"],
             True,
             "ai",
         ),
         (
-            "111111789012",
-            "999999789012",
-            "last6",
-            ACCOUNT_POINTS["last6"],
+            "****-**789012",
+            "789012",
+            "exact_or_known_match",
+            ACCOUNT_POINTS["exact_or_known_match"],
+            True,
+            "ai",
+        ),
+        (
+            "****-****-****-0423",
+            "X X X X 0423",
+            "exact_or_known_match",
+            ACCOUNT_POINTS["exact_or_known_match"],
+            True,
+            "ai",
+        ),
+        (
+            "XXXX1234",
+            "99991234",
+            "exact_or_known_match",
+            ACCOUNT_POINTS["exact_or_known_match"],
+            True,
+            "ai",
+        ),
+        (
+            "555550*****",
+            "555555*****",
+            "none",
+            ACCOUNT_POINTS["none"],
             False,
             "different",
         ),
@@ -258,7 +248,7 @@ def test_auto_merge_success(cfg) -> None:
 
     result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
-    assert result["total"] == 83
+    assert result["total"] == 71
     assert result["decision"] == "auto"
     assert result["conflicts"] == []
     assert result["triggers"] == ["strong:balance_owed", "strong:account_number", "total"]
@@ -286,8 +276,8 @@ def test_auto_merge_blocked_by_last4_conflict(cfg) -> None:
     result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
     assert result["total"] == 72
-    assert result["decision"] == "ai"
-    assert "acct_last4_mismatch" in result["conflicts"]
+    assert result["decision"] == "auto"
+    assert result["conflicts"] == []
     assert result["triggers"] == ["strong:balance_owed", "mid", "dates", "total"]
 
 
@@ -311,7 +301,7 @@ def test_auto_merge_blocked_by_amount_conflict(cfg) -> None:
 
     result = score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
-    assert result["total"] == 83
+    assert result["total"] == 71
     assert result["decision"] == "ai"
     assert "amount_conflict:past_due_amount" in result["conflicts"]
     assert result["triggers"] == ["strong:balance_owed", "strong:account_number", "total"]

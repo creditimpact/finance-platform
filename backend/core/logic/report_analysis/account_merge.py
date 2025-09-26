@@ -15,10 +15,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Uni
 
 from backend import config as app_config
 from backend.core.io.tags import read_tags, upsert_tag, write_tags_atomic
-from backend.core.logic.normalize.accounts import (
-    last4 as normalize_last4,
-    normalize_acctnum as _normalize_acctnum_basic,
-)
+from backend.core.logic.normalize.accounts import normalize_acctnum as _normalize_acctnum_basic
 from backend.core.merge import acctnum
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
@@ -41,9 +38,7 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
-POINTS_ACCTNUM_EXACT = 40
-POINTS_ACCTNUM_LAST6_BIN = 32
-POINTS_ACCTNUM_LAST6 = 24
+POINTS_ACCTNUM_VISIBLE = 28
 
 
 def _coerce_positive_int(value: Optional[int]) -> Optional[int]:
@@ -81,16 +76,12 @@ def _priority_label_for_level(level: str) -> Tuple[int, int, str]:
     """Return (category, subscore, label) for the provided account-number level."""
 
     normalized = str(level or "none").lower()
-    if normalized == "exact":
-        return (0, 3, "hard:exact")
-    if normalized == "last6_bin":
-        return (0, 2, "hard:last6_bin")
-    if normalized == "last6":
-        return (0, 1, "hard:last6")
+    if normalized == "exact_or_known_match":
+        return (0, 1, "hard:acctnum_visible_digits")
     return (3, 0, "default")
 
 
-def _priority_category(level: str, dates_all: bool, soft_match: bool) -> Tuple[int, int, str]:
+def _priority_category(level: str, dates_all: bool, score_gate: bool) -> Tuple[int, int, str]:
     """Return the ordered priority bucket metadata for a pair."""
 
     category, subscore, label = _priority_label_for_level(level)
@@ -98,8 +89,8 @@ def _priority_category(level: str, dates_all: bool, soft_match: bool) -> Tuple[i
         return category, subscore, label
     if dates_all:
         return 1, 0, "dates_all"
-    if soft_match:
-        return 2, 0, "soft_acctnum"
+    if score_gate:
+        return 2, 0, "score_gate"
     return category, subscore, label
 
 
@@ -216,7 +207,7 @@ class MergeCfg:
 
 _POINT_DEFAULTS: Dict[str, int] = {
     "balance_owed": 31,
-    "account_number": POINTS_ACCTNUM_LAST6,
+    "account_number": POINTS_ACCTNUM_VISIBLE,
     "last_payment": 12,
     "past_due_amount": 8,
     "high_balance": 6,
@@ -238,7 +229,7 @@ _THRESHOLD_DEFAULTS: Dict[str, int] = {
 
 _TRIGGER_DEFAULTS: Dict[str, Union[int, str, bool]] = {
     "MERGE_AI_ON_BALOWED_EXACT": 1,
-    "MERGE_AI_ON_ACCTNUM_LEVEL": "last6",
+    "MERGE_AI_ON_ACCTNUM_LEVEL": "exact_or_known_match",
     "MERGE_AI_ON_MID_K": 26,
     "MERGE_AI_ON_ALL_DATES": 1,
 }
@@ -251,10 +242,8 @@ _TOLERANCE_DEFAULTS: Dict[str, Union[int, float]] = {
 }
 
 _ACCTNUM_LEVEL_CHOICES: Set[str] = {
-    "any",
-    "last6",
-    "last6_bin",
-    "exact",
+    "none",
+    "exact_or_known_match",
 }
 
 
@@ -333,26 +322,17 @@ _AMOUNT_SANITIZE_RE = re.compile(r"[\s$,/]")
 _AMOUNT_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 _ACCOUNT_LEVEL_ORDER = {
     "none": 0,
-    "masked_match": 1,
-    "masked": 1,
-    "any": 1,
-    "last6": 2,
-    "last6_bin": 3,
-    "exact": 4,
+    "exact_or_known_match": 1,
 }
 _ACCOUNT_NUMBER_WEIGHTS = {
-    "last6_bin": POINTS_ACCTNUM_LAST6_BIN,
-    "last6": POINTS_ACCTNUM_LAST6,
-    "exact": POINTS_ACCTNUM_EXACT,
+    "exact_or_known_match": POINTS_ACCTNUM_VISIBLE,
 }
-_ACCOUNT_STRONG_LEVELS = {"exact", "last6_bin", "last6"}
+_ACCOUNT_STRONG_LEVELS = {"exact_or_known_match"}
 _MASK_CHARS = {"*", "x", "X", "•", "●"}
 
 _ACCOUNT_LEVEL_PRIORITY = {
     "none": 0,
-    "last6": 1,
-    "last6_bin": 2,
-    "exact": 3,
+    "exact_or_known_match": 1,
 }
 
 _IDENTITY_FIELD_SET = {
@@ -443,61 +423,35 @@ def _digits_only(raw: str | None) -> str:
     return "".join(DIGITS_RE.findall(raw or ""))
 
 
-def _has_mask(raw: str | None) -> bool:
-    if not raw:
-        return False
-    return any(ch in _MASK_CHARS for ch in str(raw))
+def acctnum_match_level(
+    a_raw: str | None, b_raw: str | None
+) -> Tuple[str, Dict[str, Dict[str, str]]]:
+    """Return the visible-digits account-number level with debug payload."""
 
+    a_value = str(a_raw) if a_raw is not None else ""
+    b_value = str(b_raw) if b_raw is not None else ""
+    a_digits = _digits_only(a_value)
+    b_digits = _digits_only(b_value)
 
-def acctnum_match_level(a_raw: str | None, b_raw: str | None) -> Tuple[str, Dict[str, Dict[str, str]]]:
-    """Return the hardened account-number match level with debug payload."""
-
-    a_digits = _digits_only(a_raw)
-    b_digits = _digits_only(b_raw)
+    matched, detail = acctnum.acctnum_match_visible(a_value, b_value)
 
     debug: Dict[str, Dict[str, str]] = {
         "a": {
-            "raw": str(a_raw) if a_raw is not None else "",
+            "raw": a_value,
             "digits": a_digits,
-            "digits_last4": a_digits[-4:],
-            "digits_last6": a_digits[-6:],
-            "digits_last5": a_digits[-5:],
-            "digits_first6": a_digits[:6],
         },
         "b": {
-            "raw": str(b_raw) if b_raw is not None else "",
+            "raw": b_value,
             "digits": b_digits,
-            "digits_last4": b_digits[-4:],
-            "digits_last6": b_digits[-6:],
-            "digits_last5": b_digits[-5:],
-            "digits_first6": b_digits[:6],
         },
+        "short": detail.get("short", ""),
+        "long": detail.get("long", ""),
     }
+    if "why" in detail:
+        debug["why"] = detail["why"]
 
-    if not a_digits or not b_digits:
-        return "none", debug
-
-    a_len = len(a_digits)
-    b_len = len(b_digits)
-
-    a_masked = _has_mask(a_raw)
-    b_masked = _has_mask(b_raw)
-
-    if a_digits == b_digits and a_len >= 10 and not a_masked and not b_masked:
-        return "exact", debug
-
-    if a_len < 10 or b_len < 10:
-        return "none", debug
-
-    same_last6 = a_digits[-6:] == b_digits[-6:]
-    same_bin = a_digits[:6] == b_digits[:6] and a_digits[:6] and b_digits[:6]
-
-    if same_last6 and same_bin:
-        return "last6_bin", debug
-    if same_last6:
-        return "last6", debug
-
-    return "none", debug
+    level = "exact_or_known_match" if matched else "none"
+    return level, debug
 _TYPE_ALIAS_MAP = {
     "us bk cacs": "u s bank",
     "us bk cac": "u s bank",
@@ -571,14 +525,6 @@ _AMOUNT_CONFLICT_FIELDS = {
     "high_balance",
     "credit_limit",
 }
-_ACCOUNT_LAST4_KEYS = (
-    "account_number_last4",
-    "acct_last4",
-    "account_last4",
-    "last4",
-    "account_number",
-    "account_number_display",
-)
 _TYPE_FIELDS = {"creditor_type", "account_type"}
 
 
@@ -669,7 +615,9 @@ def _match_account_number_best_pair(
     bureaus = ("transunion", "experian", "equifax")
     bureau_positions = {name: idx for idx, name in enumerate(bureaus)}
 
-    min_level = str(cfg.triggers.get("MERGE_AI_ON_ACCTNUM_LEVEL", "last6")).lower()
+    min_level = str(
+        cfg.triggers.get("MERGE_AI_ON_ACCTNUM_LEVEL", "exact_or_known_match")
+    ).lower()
     threshold = _ACCOUNT_LEVEL_ORDER.get(min_level, 0)
 
     normalized_a = {name: _normalize_account_display(A.get(name)) for name in bureaus}
@@ -981,26 +929,6 @@ def _collect_normalized_field_values(
     return values
 
 
-def _collect_account_last4(bureaus: Mapping[str, Mapping[str, Any]]) -> Set[str]:
-    last4_values: Set[str] = set()
-    if not isinstance(bureaus, Mapping):
-        return last4_values
-
-    for bureau_key in ("transunion", "experian", "equifax"):
-        branch = bureaus.get(bureau_key)
-        if not isinstance(branch, Mapping):
-            continue
-        for key in _ACCOUNT_LAST4_KEYS:
-            raw_value = branch.get(key)
-            if is_missing(raw_value):
-                continue
-            last_four = normalize_last4(str(raw_value))
-            if not last_four:
-                continue
-            last4_values.add(last_four)
-    return last4_values
-
-
 def _detect_amount_conflicts(
     A: Mapping[str, Mapping[str, Any]],
     B: Mapping[str, Mapping[str, Any]],
@@ -1082,7 +1010,7 @@ def score_pair_0_100(
 
     acct_level, acct_debug = acctnum_match_level(a_account_str, b_account_str)
     acct_points = int(_ACCOUNT_NUMBER_WEIGHTS.get(acct_level, 0) or 0)
-    acct_matched = acct_level in {"exact", "last6_bin", "last6"}
+    acct_matched = acct_level == "exact_or_known_match"
 
     field_matches["account_number"] = acct_matched
     parts["account_number"] = acct_points
@@ -1152,7 +1080,7 @@ def score_pair_0_100(
 
     acctnum_aux = aux.get("account_number", {})
     acct_level = str(acctnum_aux.get("acctnum_level") or "none")
-    if field_matches.get("account_number") and acct_level in {"exact", "last6_bin"}:
+    if field_matches.get("account_number") and acct_level == "exact_or_known_match":
         triggers.append("strong:account_number")
         strong_triggered = True
         trigger_events.append(
@@ -1211,11 +1139,6 @@ def score_pair_0_100(
         )
 
     conflicts: List[str] = []
-    last4_a = _collect_account_last4(A_data)
-    last4_b = _collect_account_last4(B_data)
-    if last4_a and last4_b and last4_a.isdisjoint(last4_b):
-        conflicts.append("acct_last4_mismatch")
-
     for conflict in _detect_amount_conflicts(A_data, B_data, cfg):
         if conflict not in conflicts:
             conflicts.append(conflict)
@@ -1272,8 +1195,7 @@ def score_all_pairs_0_100(
     """Score all unordered account pairs for a case run."""
 
     cfg = get_merge_cfg()
-    mid_threshold = int(cfg.triggers.get("MERGE_AI_ON_MID_K", 0) or 0)
-
+    ai_threshold = int(cfg.thresholds.get("AI_THRESHOLD", 0) or 0)
     requested_raw = list(idx_list) if idx_list is not None else []
     requested_indices: List[int] = []
     for raw_idx in requested_raw:
@@ -1394,18 +1316,22 @@ def score_all_pairs_0_100(
                 debug_candidate = acct_aux.get("acctnum_debug")
                 if isinstance(debug_candidate, Mapping):
                     debug_payload = debug_candidate
-            a_debug = debug_payload.get("a") if isinstance(debug_payload, Mapping) else {}
-            b_debug = debug_payload.get("b") if isinstance(debug_payload, Mapping) else {}
+            short_debug = ""
+            long_debug = ""
+            why_debug = ""
+            if isinstance(debug_payload, Mapping):
+                short_debug = str(debug_payload.get("short", ""))
+                long_debug = str(debug_payload.get("long", ""))
+                why_debug = str(debug_payload.get("why", ""))
             logger.info(
-                "MERGE_V2_ACCTNUM_MATCH sid=%s i=%s j=%s level=%s a_last6=%s b_last6=%s a_bin=%s b_bin=%s",
+                "MERGE_V2_ACCTNUM_MATCH sid=%s i=%s j=%s level=%s short=%s long=%s why=%s",
                 sid,
                 left,
                 right,
                 level_value,
-                (a_debug or {}).get("digits_last6"),
-                (b_debug or {}).get("digits_last6"),
-                (a_debug or {}).get("digits_first6"),
-                (b_debug or {}).get("digits_first6"),
+                short_debug,
+                long_debug,
+                why_debug,
             )
 
             score_log = {
@@ -1465,43 +1391,23 @@ def score_all_pairs_0_100(
             level_value, _ = acctnum_match_level(a_acct_str or None, b_acct_str or None)
             allow_by_acct = level_value in _ACCOUNT_STRONG_LEVELS
             allow_by_dates = bool(result.get("dates_all"))
-            triggers = [str(trigger) for trigger in result.get("triggers", [])]
-            allow_by_strong = any(trigger.startswith("strong:") for trigger in triggers)
-
-            allow_by_mid = False
-            if mid_threshold > 0:
-                try:
-                    allow_by_mid = int(result.get("mid_sum") or 0) >= mid_threshold
-                except (TypeError, ValueError):
-                    allow_by_mid = False
-
-            allow_by_soft = _detect_soft_acct_match(left_bureaus, right_bureaus)
-            allowed = (
-                allow_by_acct
-                or allow_by_dates
-                or allow_by_strong
-                or allow_by_mid
-                or allow_by_soft
-            )
+            allow_by_total = ai_threshold > 0 and total_score >= ai_threshold
+            allowed = allow_by_acct or allow_by_dates or allow_by_total
 
             gate_flags = {
                 "acct": allow_by_acct,
                 "dates": allow_by_dates,
-                "strong": allow_by_strong,
-                "mid": allow_by_mid,
-                "soft_last5": allow_by_soft,
+                "total": allow_by_total,
             }
 
             logger.info(
-                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s hard=%s soft_last5=%s dates=%s strong=%s mid=%s",
+                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s hard=%s dates=%s total=%s",
                 sid,
                 left,
                 right,
                 allow_by_acct,
-                allow_by_soft,
                 allow_by_dates,
-                allow_by_strong,
-                allow_by_mid,
+                allow_by_total,
             )
 
             if not allowed:
@@ -1516,11 +1422,10 @@ def score_all_pairs_0_100(
                 }
                 logger.info("CANDIDATE_SKIPPED %s", json.dumps(skip_log, sort_keys=True))
 
-            total_score = int(result.get("total", 0) or 0)
             mid_sum = int(result.get("mid_sum", 0) or 0)
             identity_sum = int(result.get("identity_sum", 0) or 0)
             priority_category, priority_subscore, priority_label = _priority_category(
-                level_value, allow_by_dates, allow_by_soft
+                level_value, allow_by_dates, allow_by_total
             )
 
             candidate_records.append(
@@ -1532,14 +1437,11 @@ def score_all_pairs_0_100(
                     "allow_flags": {
                         "acct": allow_by_acct,
                         "dates": allow_by_dates,
-                        "strong": allow_by_strong,
-                        "mid": allow_by_mid,
-                        "soft_last5": allow_by_soft,
-                        "soft": allow_by_soft,
+                        "total": allow_by_total,
                     },
                     "level": level_value,
                     "dates_all": bool(result.get("dates_all")),
-                    "soft_match": allow_by_soft,
+                    "score_gate": allow_by_total,
                     "total": total_score,
                     "mid_sum": mid_sum,
                     "identity_sum": identity_sum,
@@ -1580,7 +1482,7 @@ def score_all_pairs_0_100(
             total_val = 0
 
         dates_flag = 1 if record.get("dates_all") else 0
-        soft_flag = 1 if record.get("soft_match") else 0
+        score_gate_flag = 1 if record.get("score_gate") else 0
 
         category = int(priority.get("category", 3))
         subscore = int(priority.get("subscore", 0))
@@ -1593,7 +1495,7 @@ def score_all_pairs_0_100(
             -mid_val,
             -identity_val,
             -dates_flag,
-            soft_flag,
+            score_gate_flag,
             -total_val,
             category,
             -subscore,
@@ -1673,7 +1575,7 @@ def score_all_pairs_0_100(
                 "identity": identity_val,
                 "mid": mid_val,
                 "dates_all": bool(record.get("dates_all")),
-                "soft": bool(record.get("soft_match")),
+                "score_gate": bool(record.get("score_gate")),
             }
             logger.info("CANDIDATE_LIMIT_DROP %s", json.dumps(drop_log, sort_keys=True))
 
@@ -2509,7 +2411,9 @@ def account_number_level(a: Any, b: Any) -> str:
     return level
 
 
-def account_numbers_match(a: Any, b: Any, min_level: str = "last6") -> Tuple[bool, str]:
+def account_numbers_match(
+    a: Any, b: Any, min_level: str = "exact_or_known_match"
+) -> Tuple[bool, str]:
     if is_missing(a) or is_missing(b):
         return False, "none"
 

@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence, Union
 
 from backend.core.io.json_io import _atomic_write_json
-from backend.core.logic.report_analysis.account_merge import merge_summary_sections
+from backend.core.logic.report_analysis.account_merge import (
+    MergeDecision,
+    merge_summary_sections,
+)
 from backend.core.merge.acctnum import normalize_level
 
 _IDENTITY_PART_FIELDS = {
@@ -419,9 +422,10 @@ def _ai_explanations_from_tag(
         if isinstance(partner, int) and reason_text:
             decision_reason_map[partner] = reason_text
 
+        normalized_flag = _coerce_bool(tag.get("normalized"))
         payload: dict[str, object] = {
             "kind": kind,
-            "normalized": _coerce_bool(tag.get("normalized")),
+            "normalized": normalized_flag,
         }
         if partner is not None:
             payload["with"] = partner
@@ -430,16 +434,35 @@ def _ai_explanations_from_tag(
         if reason_text is not None:
             payload["reason"] = reason_text
         flags = tag.get("flags")
+        normalized_flags: dict[str, object] = {}
         if isinstance(flags, Mapping):
-            filtered_flags: dict[str, object] = {}
             account_flag = _normalize_flag(flags.get("account_match"))
             debt_flag = _normalize_flag(flags.get("debt_match"))
             if account_flag is not None:
-                filtered_flags["account_match"] = account_flag
+                normalized_flags["account_match"] = account_flag
             if debt_flag is not None:
-                filtered_flags["debt_match"] = debt_flag
-            if filtered_flags:
-                payload["flags"] = filtered_flags
+                normalized_flags["debt_match"] = debt_flag
+        canonical_decision = MergeDecision.canonical_value(decision)
+        normalized_decision = canonical_decision or (decision or "")
+        if not normalized_decision:
+            normalized_decision = "different"
+        default_flags: dict[str, object] = {}
+        lowered_decision = normalized_decision.strip().lower()
+        if lowered_decision.startswith("same_account_"):
+            default_flags["account_match"] = True
+            if lowered_decision.endswith("_same_debt"):
+                default_flags["debt_match"] = True
+        if lowered_decision.startswith("same_debt_"):
+            default_flags["debt_match"] = True
+        final_flags: dict[str, object] = {}
+        for key in ("account_match", "debt_match"):
+            if key in normalized_flags:
+                final_flags[key] = normalized_flags[key]
+            elif key in default_flags:
+                final_flags[key] = default_flags[key]
+            else:
+                final_flags[key] = "unknown"
+        payload["flags"] = dict(final_flags)
         response_payload = raw_response if _has_value(raw_response) else None
         if response_payload is None and isinstance(existing_entry, Mapping):
             existing_response = existing_entry.get("raw_response")
@@ -447,7 +470,27 @@ def _ai_explanations_from_tag(
                 response_payload = existing_response
         if _has_value(response_payload):
             payload["raw_response"] = response_payload
+        ai_result_payload: dict[str, object] = {
+            "decision": normalized_decision,
+            "flags": {key: final_flags[key] for key in ("account_match", "debt_match")},
+        }
+        if reason_text:
+            ai_result_payload["reason"] = reason_text
+        payload["ai_result"] = dict(ai_result_payload)
         entries.append(payload)
+
+        resolution_entry = {
+            "kind": "ai_resolution",
+            "normalized": normalized_flag,
+            "flags": dict(final_flags),
+            "ai_result": dict(ai_result_payload),
+        }
+        if partner is not None:
+            resolution_entry["with"] = partner
+        resolution_entry["decision"] = normalized_decision
+        if reason_text is not None:
+            resolution_entry["reason"] = reason_text
+        entries.append(resolution_entry)
 
         if decision == "merge":
             merge_entry = {

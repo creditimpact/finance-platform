@@ -2217,9 +2217,21 @@ def build_summary_ai_entries(
     if reason_text:
         ai_result_payload["reason"] = reason_text
 
-    decision_entry["flags"] = final_flags
+    decision_entry["flags"] = dict(final_flags)
     decision_entry["ai_result"] = dict(ai_result_payload)
     entries.append(decision_entry)
+
+    resolution_entry: Dict[str, Any] = {
+        "kind": "ai_resolution",
+        "with": partner,
+        "normalized": normalized_flag,
+        "decision": normalized_decision or "different",
+        "flags": dict(final_flags),
+        "ai_result": dict(ai_result_payload),
+    }
+    if reason_text:
+        resolution_entry["reason"] = reason_text
+    entries.append(resolution_entry)
 
     pair_kind = AI_PAIR_KIND_BY_DECISION.get(normalized_decision or "")
     if pair_kind:

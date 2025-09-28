@@ -45,6 +45,25 @@ logger = logging.getLogger(__name__)
 _candidate_logger = logging.getLogger("ai_packs")
 
 
+AI_DECISIONS_NEW = {
+    "same_account_same_debt",
+    "same_account_diff_debt",
+    "same_account_debt_unknown",
+    "same_debt_diff_account",
+    "same_debt_account_unknown",
+    "different",
+}
+
+LEGACY_TO_NEW = {
+    "merge": "same_account_same_debt",
+    "same_account": "same_account_same_debt",
+    "same_account_debt_different": "same_account_diff_debt",
+    "same_debt_account_different": "same_debt_diff_account",
+    "same_debt": "same_debt_account_unknown",
+    "different": "different",
+}
+
+
 def _configure_candidate_logger(logs_path: Path) -> None:
     """Ensure the candidate logger writes to the provided ``logs.txt`` file."""
 
@@ -2060,14 +2079,44 @@ def build_summary_ai_entries(
         return []
 
     entries: List[Dict[str, Any]] = []
+    normalized_flag = bool(normalized)
     decision_entry: Dict[str, Any] = {
         "kind": "ai_decision",
         "with": partner,
-        "normalized": bool(normalized),
+        "normalized": normalized_flag,
     }
     decision_text = str(decision).strip() if decision is not None else ""
+    normalized_decision = ""
     if decision_text:
-        decision_entry["decision"] = decision_text
+        decision_lower = decision_text.lower()
+        if decision_lower in AI_DECISIONS_NEW:
+            normalized_decision = decision_lower
+        else:
+            mapped_decision = LEGACY_TO_NEW.get(decision_lower)
+            if mapped_decision:
+                normalized_decision = mapped_decision
+                if mapped_decision != decision_lower:
+                    normalized_flag = True
+            else:
+                logger.warning(
+                    "AI_DECISION_UNKNOWN decision=%s partner=%s; falling back to 'different'",
+                    decision_text,
+                    partner,
+                )
+                normalized_decision = "different"
+                normalized_flag = True
+    else:
+        logger.warning(
+            "AI_DECISION_MISSING partner=%s decision=%r; defaulting to 'different'",
+            partner,
+            decision,
+        )
+        normalized_decision = "different"
+        normalized_flag = True
+
+    if normalized_decision:
+        decision_entry["decision"] = normalized_decision
+    decision_entry["normalized"] = normalized_flag
     reason_text = str(reason).strip() if isinstance(reason, str) else (
         str(reason).strip() if reason is not None else ""
     )

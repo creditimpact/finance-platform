@@ -143,11 +143,11 @@ def test_build_merge_ai_packs_curates_context_and_prompt(tmp_path: Path) -> None
     assert user_payload["ids"]["account_number_a_last4"] == "9451"
     assert user_payload["ids"]["account_number_b_last4"] == "9451"
     assert user_payload["output_contract"]["decision"] == [
-        "merge",
-        "same_debt",
-        "same_debt_account_different",
-        "same_account",
-        "same_account_debt_different",
+        "same_account_same_debt",
+        "same_account_diff_debt",
+        "same_account_debt_unknown",
+        "same_debt_diff_account",
+        "same_debt_account_unknown",
         "different",
     ]
     assert user_payload["output_contract"]["flags"] == {

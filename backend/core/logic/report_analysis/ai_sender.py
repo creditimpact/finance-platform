@@ -24,30 +24,30 @@ RETRY_BACKOFF_SECONDS: Sequence[float] = (1.0, 3.0, 7.0)
 MAX_RETRIES = len(RETRY_BACKOFF_SECONDS)
 
 ALLOWED_DECISIONS = {
-    "merge",
-    "same_debt",
-    "same_debt_account_different",
-    "same_account",
-    "same_account_debt_different",
+    "same_account_same_debt",
+    "same_account_diff_debt",
+    "same_account_debt_unknown",
+    "same_debt_diff_account",
+    "same_debt_account_unknown",
     "different",
 }
 
 PAIR_TAG_BY_DECISION: dict[str, str] = {
-    "merge": "same_account_pair",
-    "same_account": "same_account_pair",
-    "same_account_debt_different": "same_account_pair",
-    "same_debt": "same_debt_pair",
-    "same_debt_account_different": "same_debt_pair",
+    "same_account_same_debt": "same_account_pair",
+    "same_account_diff_debt": "same_account_pair",
+    "same_account_debt_unknown": "same_account_pair",
+    "same_debt_diff_account": "same_debt_pair",
+    "same_debt_account_unknown": "same_debt_pair",
 }
 
 _EXPECTED_DECISION_BY_FLAGS = {
-    ("true", "true"): "merge",
-    ("true", "false"): "same_account_debt_different",
-    ("true", "unknown"): "same_account",
-    ("false", "true"): "same_debt_account_different",
+    ("true", "true"): "same_account_same_debt",
+    ("true", "false"): "same_account_diff_debt",
+    ("true", "unknown"): "same_account_debt_unknown",
+    ("false", "true"): "same_debt_diff_account",
     ("false", "false"): "different",
     ("false", "unknown"): "different",
-    ("unknown", "true"): "same_debt",
+    ("unknown", "true"): "same_debt_account_unknown",
     ("unknown", "false"): "different",
     ("unknown", "unknown"): "different",
 }

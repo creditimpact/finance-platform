@@ -27,13 +27,16 @@ SYSTEM_PROMPT = (
     "describe the same obligation. Consider high-precision cues (account numbers, "
     "balances, dates) and lender/brand name variants. Use the numeric summary as a "
     "hint but override it if context contradicts the data.\n"
-    "Allowed decisions (exact strings): merge, same_debt, same_debt_account_different, "
-    "same_account, same_account_debt_different, different.\n"
-    "When account identifiers align but debt facts conflict, choose "
-    "same_account_debt_different. When debt details align but tradelines are clearly "
-    "different, choose same_debt_account_different. If identifiers align yet debt is "
-    "uncertain, choose same_account; if debt aligns but account identity is unclear, "
-    "choose same_debt. Only pick merge when BOTH account and debt match.\n"
+    "Allowed decisions (exact strings, choose one):\n"
+    "- same_account_same_debt        # accounts align and refer to the same debt\n"
+    "- same_account_diff_debt        # same account, but debt details clearly differ\n"
+    "- same_account_debt_unknown     # same account, debt status cannot be confirmed\n"
+    "- same_debt_diff_account        # same debt, but reported under a different account\n"
+    "- same_debt_account_unknown     # same debt, account identity cannot be confirmed\n"
+    "- different                     # neither the account nor the debt matches\n"
+    "Legacy labels (merge, same_debt, same_debt_account_different, same_account, "
+    "same_account_debt_different, different) may appear in reference material, but "
+    "you MUST respond using only the six decisions above.\n"
     "Return strict JSON only: {\"decision\":\"<one above>\",\"reason\":\"short natural "
     "language\",\"flags\":{\"account_match\":true|false|\"unknown\",\"debt_match\":true|false|"
     "\"unknown\"}}. Do not add commentary or extra keys."
@@ -603,11 +606,11 @@ def build_merge_ai_packs(
             "context": {"a": context_a, "b": context_b},
             "output_contract": {
                 "decision": [
-                    "merge",
-                    "same_debt",
-                    "same_debt_account_different",
-                    "same_account",
-                    "same_account_debt_different",
+                    "same_account_same_debt",
+                    "same_account_diff_debt",
+                    "same_account_debt_unknown",
+                    "same_debt_diff_account",
+                    "same_debt_account_unknown",
                     "different",
                 ],
                 "reason": "short natural language",

@@ -1336,275 +1336,288 @@ def score_all_pairs_0_100(
 
     pair_counter = 0
     candidate_records: List[Dict[str, Any]] = []
-    for left_pos in range(total_accounts - 1):
+
+    def score_and_maybe_build_pack(left_pos: int, right_pos: int) -> None:
+        nonlocal pair_counter
+
         left = indices[left_pos]
-        for right_pos in range(left_pos + 1, total_accounts):
-            right = indices[right_pos]
-            pair_counter += 1
-            step_log = {
+        right = indices[right_pos]
+
+        pair_counter += 1
+        step_log = {
+            "sid": sid,
+            "i": left,
+            "j": right,
+            "pair_index": pair_counter,
+            "expected_pairs": expected_pairs,
+        }
+        logger.debug("MERGE_PAIR_STEP %s", json.dumps(step_log, sort_keys=True))
+
+        left_bureaus = bureaus_by_idx.get(left, {})
+        right_bureaus = bureaus_by_idx.get(right, {})
+        result = score_pair_0_100(
+            left_bureaus,
+            right_bureaus,
+            cfg,
+        )
+
+        total_score = int(result.get("total", 0) or 0)
+        sanitized_parts = _sanitize_parts(result.get("parts"))
+        aux_payload = _build_aux_payload(result.get("aux", {}))
+
+        acct_level = _sanitize_acct_level(aux_payload.get("acctnum_level"))
+        raw_aux = result.get("aux") if isinstance(result.get("aux"), Mapping) else {}
+        acct_aux = raw_aux.get("account_number") if isinstance(raw_aux, Mapping) else None
+        if not isinstance(acct_aux, Mapping):
+            acct_aux = {}
+        raw_values: Dict[str, Any] = {}
+        if isinstance(acct_aux, Mapping):
+            raw_values_candidate = acct_aux.get("raw_values")
+            if isinstance(raw_values_candidate, Mapping):
+                raw_values = raw_values_candidate
+        a_acct_str = str(raw_values.get("a") or "")
+        b_acct_str = str(raw_values.get("b") or "")
+        if not a_acct_str:
+            a_acct_str = _extract_account_number_string(left_bureaus)
+        if not b_acct_str:
+            b_acct_str = _extract_account_number_string(right_bureaus)
+        gate_level, gate_detail = acctnum_match_level(a_acct_str, b_acct_str)
+        level_candidate = (
+            acct_aux.get("acctnum_level")
+            or acct_level
+            or gate_level
+            or "none"
+        )
+        level_value = _sanitize_acct_level(level_candidate)
+        debug_payload = {}
+        if isinstance(acct_aux, Mapping):
+            debug_candidate = acct_aux.get("acctnum_debug")
+            if isinstance(debug_candidate, Mapping):
+                debug_payload = debug_candidate
+        short_debug = ""
+        long_debug = ""
+        why_debug = ""
+        if isinstance(debug_payload, Mapping):
+            short_debug = str(debug_payload.get("short", ""))
+            long_debug = str(debug_payload.get("long", ""))
+            why_debug = str(debug_payload.get("why", ""))
+        if not short_debug and isinstance(gate_detail, Mapping):
+            short_debug = str(gate_detail.get("short", ""))
+        if not long_debug and isinstance(gate_detail, Mapping):
+            long_debug = str(gate_detail.get("long", ""))
+        if not why_debug and isinstance(gate_detail, Mapping):
+            why_debug = str(gate_detail.get("why", ""))
+        logger.info(
+            "MERGE_V2_ACCTNUM_MATCH sid=%s i=%s j=%s level=%s short=%s long=%s why=%s",
+            sid,
+            left,
+            right,
+            level_value,
+            short_debug,
+            long_debug,
+            why_debug,
+        )
+
+        score_log = {
+            "sid": sid,
+            "i": left,
+            "j": right,
+            "total": total_score,
+            "parts": sanitized_parts,
+            "acctnum_level": acct_level,
+            "matched_pairs": aux_payload.get("by_field_pairs", {}),
+            "matched_fields": aux_payload.get("matched_fields", {}),
+        }
+        score_log["decision"] = str(result.get("decision", "different"))
+        logger.info("MERGE_V2_SCORE %s", json.dumps(score_log, sort_keys=True))
+
+        for event in result.get("trigger_events", []) or []:
+            if not isinstance(event, Mapping):
+                continue
+            kind = event.get("kind")
+            trigger_log = {
                 "sid": sid,
                 "i": left,
                 "j": right,
-                "pair_index": pair_counter,
-                "expected_pairs": expected_pairs,
-            }
-            logger.debug("MERGE_PAIR_STEP %s", json.dumps(step_log, sort_keys=True))
-
-            left_bureaus = bureaus_by_idx.get(left, {})
-            right_bureaus = bureaus_by_idx.get(right, {})
-            result = score_pair_0_100(
-                left_bureaus,
-                right_bureaus,
-                cfg,
-            )
-
-            total_score = int(result.get("total", 0) or 0)
-            sanitized_parts = _sanitize_parts(result.get("parts"))
-            aux_payload = _build_aux_payload(result.get("aux", {}))
-
-            acct_level = _sanitize_acct_level(aux_payload.get("acctnum_level"))
-            raw_aux = result.get("aux") if isinstance(result.get("aux"), Mapping) else {}
-            acct_aux = raw_aux.get("account_number") if isinstance(raw_aux, Mapping) else None
-            if not isinstance(acct_aux, Mapping):
-                acct_aux = {}
-            raw_values: Dict[str, Any] = {}
-            if isinstance(acct_aux, Mapping):
-                raw_values_candidate = acct_aux.get("raw_values")
-                if isinstance(raw_values_candidate, Mapping):
-                    raw_values = raw_values_candidate
-            a_acct_str = str(raw_values.get("a") or "")
-            b_acct_str = str(raw_values.get("b") or "")
-            if not a_acct_str:
-                a_acct_str = _extract_account_number_string(left_bureaus)
-            if not b_acct_str:
-                b_acct_str = _extract_account_number_string(right_bureaus)
-            gate_level, gate_detail = acctnum_match_level(a_acct_str, b_acct_str)
-            level_candidate = (
-                acct_aux.get("acctnum_level")
-                or acct_level
-                or gate_level
-                or "none"
-            )
-            level_value = _sanitize_acct_level(level_candidate)
-            debug_payload = {}
-            if isinstance(acct_aux, Mapping):
-                debug_candidate = acct_aux.get("acctnum_debug")
-                if isinstance(debug_candidate, Mapping):
-                    debug_payload = debug_candidate
-            short_debug = ""
-            long_debug = ""
-            why_debug = ""
-            if isinstance(debug_payload, Mapping):
-                short_debug = str(debug_payload.get("short", ""))
-                long_debug = str(debug_payload.get("long", ""))
-                why_debug = str(debug_payload.get("why", ""))
-            if not short_debug and isinstance(gate_detail, Mapping):
-                short_debug = str(gate_detail.get("short", ""))
-            if not long_debug and isinstance(gate_detail, Mapping):
-                long_debug = str(gate_detail.get("long", ""))
-            if not why_debug and isinstance(gate_detail, Mapping):
-                why_debug = str(gate_detail.get("why", ""))
-            logger.info(
-                "MERGE_V2_ACCTNUM_MATCH sid=%s i=%s j=%s level=%s short=%s long=%s why=%s",
-                sid,
-                left,
-                right,
-                level_value,
-                short_debug,
-                long_debug,
-                why_debug,
-            )
-
-            score_log = {
-                "sid": sid,
-                "i": left,
-                "j": right,
-                "total": total_score,
-                "parts": sanitized_parts,
-                "acctnum_level": acct_level,
-                "matched_pairs": aux_payload.get("by_field_pairs", {}),
-                "matched_fields": aux_payload.get("matched_fields", {}),
-            }
-            score_log["decision"] = str(result.get("decision", "different"))
-            logger.info("MERGE_V2_SCORE %s", json.dumps(score_log, sort_keys=True))
-
-            for event in result.get("trigger_events", []) or []:
-                if not isinstance(event, Mapping):
-                    continue
-                kind = event.get("kind")
-                trigger_log = {
-                    "sid": sid,
-                    "i": left,
-                    "j": right,
-                    "kind": kind,
-                    "details": event.get("details", {}),
-                }
-                logger.info(
-                    "MERGE_V2_TRIGGER %s",
-                    json.dumps(trigger_log, sort_keys=True),
-                )
-
-            decision_log = {
-                "sid": sid,
-                "i": left,
-                "j": right,
-                "decision": str(result.get("decision", "different")),
-                "total": total_score,
-                "triggers": list(result.get("triggers", [])),
-                "conflicts": list(result.get("conflicts", [])),
+                "kind": kind,
+                "details": event.get("details", {}),
             }
             logger.info(
-                "MERGE_V2_DECISION %s", json.dumps(decision_log, sort_keys=True)
+                "MERGE_V2_TRIGGER %s",
+                json.dumps(trigger_log, sort_keys=True),
             )
 
-            normalized_level = acct_level
-            if normalized_level in {"", "none"}:
-                normalized_level = level_value
-            if normalized_level in {"", "none"}:
-                normalized_level = _sanitize_acct_level(gate_level)
+        decision_log = {
+            "sid": sid,
+            "i": left,
+            "j": right,
+            "decision": str(result.get("decision", "different")),
+            "total": total_score,
+            "triggers": list(result.get("triggers", [])),
+            "conflicts": list(result.get("conflicts", [])),
+        }
+        logger.info(
+            "MERGE_V2_DECISION %s", json.dumps(decision_log, sort_keys=True)
+        )
 
-            gate_level_norm = normalized_level
-            hard_acct = normalized_level == "exact_or_known_match"
-            dates_all_equal = bool(result.get("dates_all"))
-            allow_by_dates = dates_all_equal
-            allow_by_total = ai_threshold > 0 and total_score >= ai_threshold
+        normalized_level = acct_level
+        if normalized_level in {"", "none"}:
+            normalized_level = level_value
+        if normalized_level in {"", "none"}:
+            normalized_level = _sanitize_acct_level(gate_level)
 
-            mid_sum = int(result.get("mid_sum", 0) or 0)
-            identity_sum = int(result.get("identity_sum", 0) or 0)
-            soft_match = False
-            if not hard_acct:
-                soft_match = _detect_soft_acct_match(left_bureaus, right_bureaus)
+        gate_level_norm = normalized_level
+        hard_acct = normalized_level == "exact_or_known_match"
+        dates_all_equal = bool(result.get("dates_all"))
+        allow_by_dates = dates_all_equal
+        allow_by_total = ai_threshold > 0 and total_score >= ai_threshold
 
-            priority_category, priority_subscore, priority_label = _priority_category(
-                level_value, allow_by_dates, allow_by_total
-            )
-            if soft_match and priority_label == "default":
-                priority_label = "soft_acctnum"
+        mid_sum = int(result.get("mid_sum", 0) or 0)
+        identity_sum = int(result.get("identity_sum", 0) or 0)
+        soft_match = False
+        if not hard_acct:
+            soft_match = _detect_soft_acct_match(left_bureaus, right_bureaus)
 
-            allow_flags = {
-                "hard_acct": hard_acct,
-                "dates": allow_by_dates,
+        priority_category, priority_subscore, priority_label = _priority_category(
+            level_value, allow_by_dates, allow_by_total
+        )
+        if soft_match and priority_label == "default":
+            priority_label = "soft_acctnum"
+
+        allow_flags = {
+            "hard_acct": hard_acct,
+            "dates": allow_by_dates,
+            "dates_all": dates_all_equal,
+            "total": allow_by_total,
+            "gate_level_norm": gate_level_norm,
+        }
+
+        def add_candidate(
+            i: int,
+            j: int,
+            *,
+            reason: str,
+            allowed: bool = True,
+        ) -> Dict[str, Any]:
+            try:
+                acct_points = int(sanitized_parts.get("account_number", 0) or 0)
+            except (TypeError, ValueError):
+                acct_points = 0
+            record = {
+                "left": i,
+                "right": j,
+                "result": deepcopy(result),
+                "allowed": allowed,
+                "allow_flags": dict(allow_flags),
+                "level": level_value,
                 "dates_all": dates_all_equal,
-                "total": allow_by_total,
+                "score_gate": allow_by_total,
+                "total": total_score,
+                "mid_sum": mid_sum,
+                "identity_sum": identity_sum,
+                "soft": soft_match,
+                "reason": reason,
+                "account_points": acct_points,
+                "gate_level": gate_level,
                 "gate_level_norm": gate_level_norm,
+                "priority": {
+                    "category": priority_category,
+                    "subscore": priority_subscore,
+                    "label": priority_label,
+                },
             }
-
-            def add_candidate(
-                i: int,
-                j: int,
-                *,
-                reason: str,
-                allowed: bool = True,
-            ) -> Dict[str, Any]:
+            candidate_records.append(record)
+            _log_candidate_considered(
+                sid,
+                i,
+                j,
+                dict(allow_flags),
+                total_score,
+                gate_level,
+                gate_level_norm,
+                level_value,
+                acct_points,
+                mid_sum,
+                identity_sum,
+                allowed=allowed,
+                reason=reason,
+            )
+            if allowed:
+                pack_path: Optional[Path] = None
                 try:
-                    acct_points = int(sanitized_parts.get("account_number", 0) or 0)
+                    left_idx = int(i)
+                    right_idx = int(j)
                 except (TypeError, ValueError):
-                    acct_points = 0
-                record = {
-                    "left": i,
-                    "right": j,
-                    "result": deepcopy(result),
-                    "allowed": allowed,
-                    "allow_flags": dict(allow_flags),
-                    "level": level_value,
-                    "dates_all": dates_all_equal,
-                    "score_gate": allow_by_total,
-                    "total": total_score,
-                    "mid_sum": mid_sum,
-                    "identity_sum": identity_sum,
-                    "soft": soft_match,
-                    "reason": reason,
-                    "account_points": acct_points,
-                    "gate_level": gate_level,
-                    "gate_level_norm": gate_level_norm,
-                    "priority": {
-                        "category": priority_category,
-                        "subscore": priority_subscore,
-                        "label": priority_label,
-                    },
-                }
-                candidate_records.append(record)
-                _log_candidate_considered(
-                    sid,
-                    i,
-                    j,
-                    dict(allow_flags),
-                    total_score,
-                    gate_level,
-                    gate_level_norm,
-                    level_value,
-                    acct_points,
-                    mid_sum,
-                    identity_sum,
-                    allowed=allowed,
-                    reason=reason,
-                )
-                if allowed:
-                    pack_path: Optional[Path] = None
-                    try:
-                        left_idx = int(i)
-                        right_idx = int(j)
-                    except (TypeError, ValueError):
-                        pack_path = None
-                    else:
-                        first_idx, second_idx = sorted((left_idx, right_idx))
-                        pack_path = pack_dir / f"pair_{first_idx:03d}_{second_idx:03d}.jsonl"
-                    if pack_path is not None and pack_path.exists():
-                        return record  # already built
-                return record
+                    pack_path = None
+                else:
+                    first_idx, second_idx = sorted((left_idx, right_idx))
+                    pack_path = pack_dir / f"pair_{first_idx:03d}_{second_idx:03d}.jsonl"
+                if pack_path is not None and pack_path.exists():
+                    logger.debug(
+                        "PACK_ALREADY_EXISTS sid=%s i=%s j=%s path=%s",
+                        sid,
+                        i,
+                        j,
+                        pack_path,
+                    )
+            return record
 
+        logger.info(
+            (
+                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s total=%s hard=%s "
+                "gate_level=%s level_value=%s dates_all=%s"
+            ),
+            sid,
+            left,
+            right,
+            total_score,
+            hard_acct,
+            gate_level,
+            level_value,
+            dates_all_equal,
+        )
+
+        if _should_build_pack(total_score, allow_flags, cfg):
             logger.info(
-                (
-                    "CANDIDATE_CONSIDERED sid=%s i=%s j=%s total=%s hard=%s "
-                    "gate_level=%s level_value=%s dates_all=%s"
-                ),
+                "CANDIDATE_ADDED sid=%s i=%s j=%s reason=%s hard=%s gate_level_norm=%s",
                 sid,
                 left,
                 right,
-                total_score,
+                "score_or_hard_or_dates",
                 hard_acct,
-                gate_level,
-                level_value,
-                dates_all_equal,
+                gate_level_norm,
+            )
+            add_candidate(left, right, reason="score_or_hard_or_dates")
+        else:
+            logger.info(
+                "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s",
+                sid,
+                left,
+                right,
+                "below_threshold_and_no_hard",
+            )
+            record = add_candidate(
+                left,
+                right,
+                reason="below_threshold_and_no_hard",
+                allowed=False,
+            )
+            _log_candidate_skipped(
+                sid,
+                left,
+                right,
+                "below_threshold_and_no_hard",
+                allow_flags=dict(allow_flags),
+                total=total_score,
+                level=level_value,
+                gate_level=gate_level,
+                gate_level_norm=gate_level_norm,
+                account_points=record.get("account_points"),
             )
 
-            if _should_build_pack(total_score, allow_flags, cfg):
-                logger.info(
-                    "CANDIDATE_ADDED sid=%s i=%s j=%s reason=%s hard=%s gate_level_norm=%s",
-                    sid,
-                    left,
-                    right,
-                    "score_or_hard_or_dates",
-                    hard_acct,
-                    gate_level_norm,
-                )
-                add_candidate(left, right, reason="score_or_hard_or_dates")
-            else:
-                logger.info(
-                    "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s",
-                    sid,
-                    left,
-                    right,
-                    "below_threshold_and_no_hard",
-                )
-                record = add_candidate(
-                    left,
-                    right,
-                    reason="below_threshold_and_no_hard",
-                    allowed=False,
-                )
-                _log_candidate_skipped(
-                    sid,
-                    left,
-                    right,
-                    "below_threshold_and_no_hard",
-                    allow_flags=dict(allow_flags),
-                    total=total_score,
-                    level=level_value,
-                    gate_level=gate_level,
-                    gate_level_norm=gate_level_norm,
-                    account_points=record.get("account_points"),
-                )
+    for left_pos in range(total_accounts):
+        for right_pos in range(left_pos + 1, total_accounts):
+            score_and_maybe_build_pack(left_pos, right_pos)
 
     allowed_records = [record for record in candidate_records if record.get("allowed")]
 

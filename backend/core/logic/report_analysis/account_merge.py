@@ -52,6 +52,21 @@ def _sanitize_acct_level(value: Any) -> str:
     return normalize_level(candidate)
 
 
+def _normalized_account_level(
+    acct_level: Any,
+    level_value: Any,
+    gate_level: Any,
+) -> str:
+    """Determine the authoritative account-number level for gating."""
+
+    normalized = _sanitize_acct_level(level_value)
+    if normalized in {"", "none"}:
+        normalized = _sanitize_acct_level(acct_level)
+    if normalized in {"", "none"}:
+        normalized = _sanitize_acct_level(gate_level)
+    return normalized
+
+
 def _priority_label_for_level(level: str) -> Tuple[int, int, str]:
     """Return (category, subscore, label) for the provided account-number level."""
 
@@ -1460,11 +1475,11 @@ def score_all_pairs_0_100(
             "MERGE_V2_DECISION %s", json.dumps(decision_log, sort_keys=True)
         )
 
-        normalized_level = acct_level
-        if normalized_level in {"", "none"}:
-            normalized_level = level_value
-        if normalized_level in {"", "none"}:
-            normalized_level = _sanitize_acct_level(gate_level)
+        normalized_level = _normalized_account_level(
+            acct_level,
+            level_value,
+            gate_level,
+        )
 
         gate_level_norm = normalized_level
         hard_acct = normalized_level == "exact_or_known_match"
@@ -1578,24 +1593,42 @@ def score_all_pairs_0_100(
         )
 
         if _should_build_pack(total_score, allow_flags, cfg):
-            logger.info(
-                "CANDIDATE_ADDED sid=%s i=%s j=%s reason=%s hard=%s gate_level_norm=%s",
+            message = (
+                "CANDIDATE_ADDED sid=%s i=%s j=%s reason=%s total=%s hard=%s "
+                "gate_level=%s level_value=%s dates_all=%s"
+            )
+            message_args = (
                 sid,
                 left,
                 right,
                 "score_or_hard_or_dates",
+                total_score,
                 hard_acct,
-                gate_level_norm,
+                gate_level,
+                level_value,
+                dates_all_equal,
             )
+            logger.info(message, *message_args)
+            _candidate_logger.info(message, *message_args)
             add_candidate(left, right, reason="score_or_hard_or_dates")
         else:
-            logger.info(
-                "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s",
+            message = (
+                "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s total=%s hard=%s "
+                "gate_level=%s level_value=%s dates_all=%s"
+            )
+            message_args = (
                 sid,
                 left,
                 right,
                 "below_threshold_and_no_hard",
+                total_score,
+                hard_acct,
+                gate_level,
+                level_value,
+                dates_all_equal,
             )
+            logger.info(message, *message_args)
+            _candidate_logger.info(message, *message_args)
             record = add_candidate(
                 left,
                 right,

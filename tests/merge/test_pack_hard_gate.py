@@ -21,3 +21,28 @@ def test_should_build_pack_hard_gate_uses_normalized_level() -> None:
     )
 
     assert account_merge._should_build_pack(0, allow_flags, cfg)
+
+
+def test_normalized_account_level_prefers_level_value() -> None:
+    assert (
+        account_merge._normalized_account_level(
+            "none", "exact_or_known_match", "none"
+        )
+        == "exact_or_known_match"
+    )
+
+
+def test_normalized_account_level_falls_back_to_acct_level() -> None:
+    assert (
+        account_merge._normalized_account_level(
+            "exact_or_known_match", "none", "none"
+        )
+        == "exact_or_known_match"
+    )
+
+
+def test_normalized_account_level_uses_gate_level_last() -> None:
+    assert (
+        account_merge._normalized_account_level("none", "none", "exact_or_known_match")
+        == "exact_or_known_match"
+    )

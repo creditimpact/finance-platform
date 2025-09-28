@@ -39,6 +39,43 @@ logger = logging.getLogger(__name__)
 _candidate_logger = logging.getLogger("ai_packs")
 
 
+def _configure_candidate_logger(logs_path: Path) -> None:
+    """Ensure the candidate logger writes to the provided ``logs.txt`` file."""
+
+    try:
+        logs_path = Path(logs_path)
+    except TypeError:  # pragma: no cover - defensive
+        return
+
+    logs_dir = logs_path.parent
+    if logs_dir and not logs_dir.exists():
+        try:
+            logs_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:  # pragma: no cover - defensive
+            return
+
+    target = logs_path.resolve()
+
+    existing_handler: Optional[logging.FileHandler] = None
+    for handler in list(_candidate_logger.handlers):
+        if isinstance(handler, logging.FileHandler):
+            handler_path = Path(handler.baseFilename).resolve()
+            if handler_path == target:
+                existing_handler = handler
+            else:
+                _candidate_logger.removeHandler(handler)
+                handler.close()
+
+    if existing_handler is None:
+        file_handler = logging.FileHandler(target, mode="a", encoding="utf-8")
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(logging.Formatter("%(message)s"))
+        _candidate_logger.addHandler(file_handler)
+
+    _candidate_logger.setLevel(logging.INFO)
+    _candidate_logger.propagate = False
+
+
 POINTS_ACCTNUM_VISIBLE = 28
 
 
@@ -104,13 +141,16 @@ def _should_build_pack(
 ) -> tuple[bool, str]:
     # read toggles safely with defaults
     triggers = getattr(cfg, "triggers", {}) or {}
-    ai_threshold = int(getattr(cfg, "ai_threshold", 0) or 0)
+    try:
+        ai_threshold = int(getattr(cfg, "ai_threshold", 27) or 27)
+    except (TypeError, ValueError):
+        ai_threshold = 27
 
     on_hard = bool(triggers.get("MERGE_AI_ON_HARD_ACCTNUM", True))
     on_dates = bool(triggers.get("MERGE_AI_ON_ALL_DATES", True))
 
     hard_acct = level_value == "exact_or_known_match"
-    allow_by_total = ai_threshold > 0 and total_score >= ai_threshold
+    allow_by_total = total_score >= ai_threshold
 
     if on_hard and hard_acct:
         return True, "hard_acctnum"
@@ -255,7 +295,7 @@ _POINT_DEFAULTS: Dict[str, int] = {
 }
 
 _THRESHOLD_DEFAULTS: Dict[str, int] = {
-    "AI_THRESHOLD": 26,
+    "AI_THRESHOLD": 27,
     "AUTO_MERGE_THRESHOLD": 70,
 }
 
@@ -1293,7 +1333,10 @@ def score_all_pairs_0_100(
 
     runs_root = Path(runs_root)
     cfg = get_merge_cfg()
-    ai_threshold = int(cfg.thresholds.get("AI_THRESHOLD", 0) or 0)
+    try:
+        ai_threshold = int(getattr(cfg, "ai_threshold", 27) or 27)
+    except (TypeError, ValueError):
+        ai_threshold = 27
     requested_raw = list(idx_list) if idx_list is not None else []
     requested_indices: List[int] = []
     for raw_idx in requested_raw:
@@ -1309,6 +1352,7 @@ def score_all_pairs_0_100(
     requested_set = set(requested_indices)
 
     pack_dir = runs_root / sid / "ai_packs"
+    _configure_candidate_logger(pack_dir / "logs.txt")
 
     accounts_root = runs_root / sid / "cases" / "accounts"
     discovered_indices: List[int] = []
@@ -1513,7 +1557,7 @@ def score_all_pairs_0_100(
         hard_acct = normalized_level == "exact_or_known_match"
         dates_all_equal = bool(result.get("dates_all"))
         allow_by_dates = dates_all_equal
-        allow_by_total = ai_threshold > 0 and total_score >= ai_threshold
+        allow_by_total = total_score >= ai_threshold
 
         mid_sum = int(result.get("mid_sum", 0) or 0)
         identity_sum = int(result.get("identity_sum", 0) or 0)

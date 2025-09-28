@@ -24,7 +24,7 @@ def test_get_merge_cfg_defaults(monkeypatch):
     cfg = get_merge_cfg()
 
     assert sum(cfg.points.values()) == 100
-    assert cfg.thresholds["AI_THRESHOLD"] == 26
+    assert cfg.thresholds["AI_THRESHOLD"] == 27
     assert cfg.thresholds["AUTO_MERGE_THRESHOLD"] == 70
     assert cfg.triggers["MERGE_AI_ON_BALOWED_EXACT"] is True
     assert cfg.triggers["MERGE_AI_ON_HARD_ACCTNUM"] is True

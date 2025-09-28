@@ -2,6 +2,7 @@ import json
 import logging
 from pathlib import Path
 
+from backend.core.logic.report_analysis import account_merge
 from backend.core.logic.report_analysis.account_merge import (
     choose_best_partner,
     persist_merge_tags,
@@ -327,3 +328,60 @@ def test_candidate_limit_env_is_ignored(tmp_path, monkeypatch, caplog) -> None:
         if record.getMessage().startswith("CANDIDATE_LOOP_END ")
     ]
     assert loop_end_messages == ["CANDIDATE_LOOP_END sid=SID-LIMIT built_pairs=3"]
+
+
+def test_score_pairs_respect_normalized_hard_gate(tmp_path, monkeypatch) -> None:
+    sid = "SID-HARD-GATE"
+    accounts_root = tmp_path / sid / "cases" / "accounts"
+
+    for idx in (14, 29, 30):
+        _write_account_payload(
+            accounts_root,
+            idx,
+            {"transunion": {"account_number": f"{idx:03d}"}},
+        )
+
+    def fake_load_bureaus(_sid: str, idx: int, *, runs_root: Path) -> dict:
+        return {"meta": {"idx": idx}}
+
+    def fake_score_pair(left_bureaus: dict, right_bureaus: dict, _cfg: object) -> dict:
+        left_idx = left_bureaus["meta"]["idx"]
+        right_idx = right_bureaus["meta"]["idx"]
+        return {
+            "total": 0,
+            "parts": {"account_number": account_merge.POINTS_ACCTNUM_VISIBLE},
+            "aux": {
+                "account_number": {
+                    "acctnum_level": "exact_or_known_match",
+                    "raw_values": {
+                        "a": f"{left_idx:03d}",
+                        "b": f"{right_idx:03d}",
+                    },
+                }
+            },
+            "decision": "ai",
+            "triggers": [],
+        }
+
+    monkeypatch.setattr(account_merge, "load_bureaus", fake_load_bureaus)
+    monkeypatch.setattr(account_merge, "score_pair_0_100", fake_score_pair)
+
+    scores = account_merge.score_all_pairs_0_100(
+        sid,
+        [14, 29, 30],
+        runs_root=tmp_path,
+    )
+
+    assert sorted(scores[14]) == [29, 30]
+    assert sorted(scores[29]) == [14, 30]
+    assert sorted(scores[30]) == [14, 29]
+
+    for left, right in ((14, 29), (14, 30), (29, 30)):
+        result = scores[left][right]
+        assert result["total"] == 0
+        assert (
+            result.get("aux", {})
+            .get("account_number", {})
+            .get("acctnum_level")
+            == "exact_or_known_match"
+        )

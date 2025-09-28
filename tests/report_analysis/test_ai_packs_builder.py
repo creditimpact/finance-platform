@@ -171,7 +171,8 @@ def test_build_merge_ai_packs_only_merge_best_filter(tmp_path: Path) -> None:
     _write_json(account_b_dir / "tags.json", [])
 
     packs_only_best = build_merge_ai_packs(sid, runs_root, max_lines_per_side=3)
-    assert packs_only_best == []
+    assert len(packs_only_best) == 1
+    assert packs_only_best[0]["pair"] == {"a": 21, "b": 22}
 
     packs_all = build_merge_ai_packs(
         sid,

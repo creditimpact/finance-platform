@@ -257,6 +257,49 @@ def test_build_merge_ai_packs_caps_context_to_env_limit(tmp_path: Path, monkeypa
     assert pack["limits"]["max_lines_per_side"] == 7
 
 
+def test_build_merge_ai_packs_includes_hard_auto_pairs(tmp_path: Path) -> None:
+    sid = "hard-auto-sid"
+    runs_root = tmp_path
+    accounts_root = runs_root / sid / "cases" / "accounts"
+
+    account_a_dir = accounts_root / "41"
+    account_b_dir = accounts_root / "42"
+
+    _write_raw_lines(account_a_dir / "raw_lines.json", ["Creditor A", "Account # 9999"])
+    _write_raw_lines(account_b_dir / "raw_lines.json", ["Creditor B", "Account # 9999"])
+
+    hard_auto_tag = {
+        "tag": "merge_pair",
+        "kind": "merge_pair",
+        "source": "merge_scorer",
+        "with": 42,
+        "decision": "auto",
+        "total": 88,
+        "mid": 24,
+        "parts": {"account_number": 28, "balance_owed": 60},
+        "aux": {
+            "acctnum_level": "exact_or_known_match",
+            "matched_fields": {
+                "account_number": True,
+                "balance_owed": True,
+            },
+        },
+        "conflicts": [],
+        "strong": True,
+    }
+
+    _write_json(account_a_dir / "tags.json", [hard_auto_tag])
+    _write_json(account_b_dir / "tags.json", [])
+
+    packs = build_merge_ai_packs(sid, runs_root, max_lines_per_side=2)
+
+    assert len(packs) == 1
+    pack = packs[0]
+    assert pack["pair"] == {"a": 41, "b": 42}
+    assert pack["highlights"]["total"] == 88
+    assert pack["highlights"]["acctnum_level"] == "exact_or_known_match"
+
+
 def test_build_ai_merge_packs_cli_updates_manifest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

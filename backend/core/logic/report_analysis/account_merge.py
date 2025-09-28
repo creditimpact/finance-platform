@@ -1568,14 +1568,14 @@ def score_all_pairs_0_100(
                     right,
                     pack_path,
                 )
-            else:
-                build_ai_pack_for_pair(
-                    sid,
-                    runs_root,
-                    left,
-                    right,
-                    highlights,
-                )
+
+            build_ai_pack_for_pair(
+                sid,
+                runs_root,
+                left,
+                right,
+                highlights,
+            )
         else:
             skipped_message = (
                 "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s total=%s gate_level=%s level_value=%s dates_all=%s"
@@ -1605,7 +1605,7 @@ def score_all_pairs_0_100(
                 allowed=allowed,
             )
 
-    for left_pos in range(total_accounts):
+    for left_pos in range(total_accounts - 1):
         for right_pos in range(left_pos + 1, total_accounts):
             score_and_maybe_build_pack(left_pos, right_pos)
 

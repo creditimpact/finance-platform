@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence, Union
 
 from backend.core.io.json_io import _atomic_write_json
+from backend.core.logic.report_analysis.account_merge import merge_summary_sections
 from backend.core.merge.acctnum import normalize_level
 
 _IDENTITY_PART_FIELDS = {
@@ -735,6 +736,8 @@ def compact_account_tags(
         summary_data["merge_scoring"] = merge_scoring_summary
     elif "merge_scoring" in summary_data:
         summary_data.pop("merge_scoring", None)
+
+    merge_summary_sections(summary_data)
 
     _write_summary(summary_path, summary_data)
 

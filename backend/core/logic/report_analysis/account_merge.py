@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
 from backend import config as app_config
+from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, upsert_tag, write_tags_atomic
 from backend.core.logic.normalize.accounts import normalize_acctnum as _normalize_acctnum_basic
 from backend.core.merge import acctnum
@@ -32,6 +34,10 @@ __all__ = [
     "merge_v2_only_enabled",
     "build_merge_pair_tag",
     "build_merge_best_tag",
+    "build_summary_merge_entry",
+    "build_summary_ai_entries",
+    "apply_summary_updates",
+    "merge_summary_sections",
 ]
 
 
@@ -1891,11 +1897,17 @@ def _normalize_merge_payload_for_tag(
     if isinstance(result, Mapping):
         payload["decision"] = str(result.get("decision", "different"))
         payload["total"] = _tag_safe_int(result.get("total"))
-        payload["mid"] = _tag_safe_int(result.get("mid_sum"))
+        mid_value = result.get("mid_sum")
+        if mid_value is None:
+            mid_value = result.get("mid")
+        payload["mid"] = _tag_safe_int(mid_value)
         payload["dates_all"] = bool(result.get("dates_all"))
         payload["parts"] = _tag_normalize_merge_parts(result.get("parts"))
         payload["aux"] = _tag_normalize_merge_aux(result.get("aux"))
-        payload["reasons"] = _tag_normalize_str_list(result.get("triggers"))
+        triggers_source = result.get("triggers")
+        if not triggers_source:
+            triggers_source = result.get("reasons")
+        payload["reasons"] = _tag_normalize_str_list(triggers_source)
         payload["conflicts"] = _tag_normalize_str_list(result.get("conflicts"))
 
     payload["strong"] = any(
@@ -1928,6 +1940,330 @@ def _normalize_merge_payload_for_tag(
     payload["acctnum_level"] = acct_level
 
     return payload
+
+
+def _copy_summary_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _copy_summary_value(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_copy_summary_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_copy_summary_value(item) for item in value]
+    return value
+
+
+def _is_empty_summary_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) == 0
+    if isinstance(value, str):
+        return value.strip() == ""
+    return False
+
+
+def _merge_summary_mapping(
+    existing: Mapping[str, Any], new_data: Mapping[str, Any]
+) -> Tuple[Dict[str, Any], bool]:
+    merged = {key: _copy_summary_value(val) for key, val in existing.items()}
+    changed = False
+    for key, value in new_data.items():
+        existing_value = merged.get(key)
+        if key not in merged or _is_empty_summary_value(existing_value) or (
+            isinstance(value, bool) and value and existing_value is False
+        ):
+            merged[key] = _copy_summary_value(value)
+            changed = True
+            continue
+        if isinstance(existing_value, Mapping) and isinstance(value, Mapping):
+            nested_merged, nested_changed = _merge_summary_mapping(existing_value, value)
+            if nested_changed:
+                merged[key] = nested_merged
+                changed = True
+    return merged, changed
+
+
+def _coerce_partner_index(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    try:
+        partner = int(value)
+    except (TypeError, ValueError):
+        return None
+    return partner
+
+
+def build_summary_merge_entry(
+    kind: str,
+    partner_idx: Any,
+    payload: Mapping[str, Any] | None,
+    *,
+    extra: Mapping[str, Any] | None = None,
+) -> Optional[Dict[str, Any]]:
+    partner = _coerce_partner_index(partner_idx)
+    if partner is None:
+        return None
+
+    normalized = _normalize_merge_payload_for_tag(payload)
+    normalized["kind"] = str(kind)
+    normalized["with"] = partner
+
+    aux_payload = normalized.get("aux")
+    if isinstance(aux_payload, Mapping):
+        matched_fields = aux_payload.get("matched_fields")
+        if isinstance(matched_fields, Mapping) and matched_fields:
+            existing_fields = normalized.get("matched_fields")
+            if isinstance(existing_fields, Mapping):
+                merged_fields = dict(existing_fields)
+                for field, flag in matched_fields.items():
+                    merged_fields[str(field)] = bool(flag)
+            else:
+                merged_fields = {
+                    str(field): bool(flag) for field, flag in matched_fields.items()
+                }
+            normalized["matched_fields"] = merged_fields
+
+    if extra:
+        for key, value in extra.items():
+            if value is None:
+                continue
+            if key in {"strong_rank", "score_total"}:
+                normalized[key] = _tag_safe_int(value)
+            else:
+                normalized[key] = value
+
+    return normalized
+
+
+def _normalize_flag_value(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y"}:
+            return True
+        if lowered in {"0", "false", "no", "n"}:
+            return False
+    return None
+
+
+def build_summary_ai_entries(
+    partner_idx: Any,
+    decision: Any,
+    reason: Any,
+    flags: Mapping[str, Any] | None,
+    *,
+    normalized: bool = False,
+) -> List[Dict[str, Any]]:
+    partner = _coerce_partner_index(partner_idx)
+    if partner is None:
+        return []
+
+    entries: List[Dict[str, Any]] = []
+    decision_entry: Dict[str, Any] = {
+        "kind": "ai_decision",
+        "with": partner,
+        "normalized": bool(normalized),
+    }
+    decision_text = str(decision).strip() if decision is not None else ""
+    if decision_text:
+        decision_entry["decision"] = decision_text
+    reason_text = str(reason).strip() if isinstance(reason, str) else (
+        str(reason).strip() if reason is not None else ""
+    )
+    if reason_text:
+        decision_entry["reason"] = reason_text
+    if isinstance(flags, Mapping):
+        normalized_flags: Dict[str, Any] = {}
+        for key in ("account_match", "debt_match"):
+            flag_value = flags.get(key)
+            normalized_value = _normalize_flag_value(flag_value)
+            if normalized_value is not None:
+                normalized_flags[key] = normalized_value
+        if normalized_flags:
+            decision_entry["flags"] = normalized_flags
+    entries.append(decision_entry)
+
+    pair_entry: Dict[str, Any] = {"kind": "same_account_pair", "with": partner}
+    if reason_text:
+        pair_entry["reason"] = reason_text
+    entries.append(pair_entry)
+
+    return entries
+
+
+def _append_summary_entries(
+    summary_data: Dict[str, Any],
+    key: str,
+    entries: Iterable[Mapping[str, Any]],
+    unique_keys: Tuple[str, ...],
+) -> bool:
+    normalized_entries: List[Dict[str, Any]] = []
+    existing_raw = summary_data.get(key)
+    if isinstance(existing_raw, Iterable) and not isinstance(existing_raw, (str, bytes)):
+        for entry in existing_raw:
+            if isinstance(entry, Mapping):
+                normalized_entries.append({key_: _copy_summary_value(val) for key_, val in entry.items()})
+
+    changed = False
+    index: Dict[Tuple[Any, ...], int] = {}
+    for position, entry in enumerate(normalized_entries):
+        index[tuple(entry.get(field) for field in unique_keys)] = position
+
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        lookup_key = tuple(entry.get(field) for field in unique_keys)
+        candidate = {key_: _copy_summary_value(val) for key_, val in entry.items()}
+        if lookup_key in index:
+            existing_entry = normalized_entries[index[lookup_key]]
+            merged, entry_changed = _merge_summary_mapping(existing_entry, candidate)
+            if entry_changed:
+                normalized_entries[index[lookup_key]] = merged
+                changed = True
+        else:
+            normalized_entries.append(candidate)
+            index[lookup_key] = len(normalized_entries) - 1
+            changed = True
+
+    if normalized_entries:
+        original_len = len(normalized_entries)
+        normalized_entries = _dedupe_summary_list(
+            normalized_entries, unique_keys=unique_keys
+        )
+        if len(normalized_entries) != original_len:
+            changed = True
+    if changed or (key not in summary_data and normalized_entries):
+        summary_data[key] = normalized_entries
+    return changed
+
+
+def _summary_entry_score(entry: Mapping[str, Any]) -> int:
+    score = 0
+    parts = entry.get("parts")
+    if isinstance(parts, Mapping):
+        score += len(parts)
+    matched_fields = entry.get("matched_fields")
+    if isinstance(matched_fields, Mapping):
+        score += sum(1 for flag in matched_fields.values() if bool(flag))
+    aux_payload = entry.get("aux")
+    if isinstance(aux_payload, Mapping):
+        acct_level = aux_payload.get("acctnum_level")
+        if isinstance(acct_level, str) and acct_level and acct_level != "none":
+            score += 1
+        matched_aux = aux_payload.get("matched_fields")
+        if isinstance(matched_aux, Mapping):
+            score += sum(1 for flag in matched_aux.values() if bool(flag))
+    if entry.get("strong"):
+        score += 1
+    total_value = entry.get("total")
+    try:
+        total_int = int(total_value)
+    except (TypeError, ValueError):
+        total_int = 0
+    if total_int:
+        score += 1
+    return score
+
+
+def _dedupe_summary_list(
+    entries: Iterable[Mapping[str, Any]], *, unique_keys: Tuple[str, ...]
+) -> List[Dict[str, Any]]:
+    best_by_key: Dict[Tuple[Any, ...], Tuple[int, Dict[str, Any]]] = {}
+    order: List[Tuple[Any, ...]] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        candidate = {key: _copy_summary_value(value) for key, value in entry.items()}
+        key = tuple(candidate.get(field) for field in unique_keys)
+        score = _summary_entry_score(candidate)
+        if key not in best_by_key:
+            best_by_key[key] = (score, candidate)
+            order.append(key)
+        else:
+            existing_score, _ = best_by_key[key]
+            if score >= existing_score:
+                best_by_key[key] = (score, candidate)
+    result: List[Dict[str, Any]] = []
+    for key in order:
+        best = best_by_key.get(key)
+        if best is None:
+            continue
+        result.append(best[1])
+    return result
+
+
+def merge_summary_sections(
+    summary_data: Dict[str, Any],
+    *,
+    merge_entries: Iterable[Mapping[str, Any]] | None = None,
+    ai_entries: Iterable[Mapping[str, Any]] | None = None,
+) -> bool:
+    changed = False
+    if merge_entries:
+        changed |= _append_summary_entries(
+            summary_data,
+            "merge_explanations",
+            merge_entries,
+            ("kind", "with"),
+        )
+    elif isinstance(summary_data.get("merge_explanations"), list):
+        existing_merge = summary_data.get("merge_explanations") or []
+        deduped_merge = _dedupe_summary_list(
+            [entry for entry in existing_merge if isinstance(entry, Mapping)],
+            unique_keys=("kind", "with"),
+        )
+        if len(deduped_merge) != len(existing_merge):
+            summary_data["merge_explanations"] = deduped_merge
+            changed = True
+    if ai_entries:
+        changed |= _append_summary_entries(
+            summary_data,
+            "ai_explanations",
+            ai_entries,
+            ("kind", "with"),
+        )
+    elif isinstance(summary_data.get("ai_explanations"), list):
+        existing_ai = summary_data.get("ai_explanations") or []
+        deduped_ai = _dedupe_summary_list(
+            [entry for entry in existing_ai if isinstance(entry, Mapping)],
+            unique_keys=("kind", "with"),
+        )
+        if len(deduped_ai) != len(existing_ai):
+            summary_data["ai_explanations"] = deduped_ai
+            changed = True
+    return changed
+
+
+def apply_summary_updates(
+    summary_path: Path,
+    *,
+    merge_entries: Iterable[Mapping[str, Any]] | None = None,
+    ai_entries: Iterable[Mapping[str, Any]] | None = None,
+) -> Dict[str, Any]:
+    try:
+        raw = summary_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        summary_data: Dict[str, Any] = {}
+    except OSError:
+        summary_data = {}
+    else:
+        try:
+            loaded = json.loads(raw)
+        except Exception:
+            summary_data = {}
+        else:
+            summary_data = dict(loaded) if isinstance(loaded, Mapping) else {}
+
+    changed = merge_summary_sections(
+        summary_data, merge_entries=merge_entries, ai_entries=ai_entries
+    )
+
+    if changed:
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(summary_path, summary_data)
+
+    return summary_data
 
 
 def build_merge_pair_tag(partner_idx: int, result: Mapping[str, Any]) -> Dict[str, Any]:
@@ -2092,6 +2428,9 @@ def persist_merge_tags(
     tag_paths: Dict[int, Path] = {
         idx: tags_root / str(idx) / "tags.json" for idx in all_indices
     }
+    summary_paths: Dict[int, Path] = {
+        idx: tags_root / str(idx) / "summary.json" for idx in all_indices
+    }
 
     merge_kinds = {"merge_pair", "merge_best"}
     for idx, path in tag_paths.items():
@@ -2102,6 +2441,9 @@ def persist_merge_tags(
 
     valid_decisions = {"ai", "auto"}
     processed_pairs: Set[Tuple[int, int]] = set()
+    summary_updates: Dict[int, Dict[str, List[Dict[str, Any]]]] = defaultdict(
+        lambda: {"merge": [], "ai": []}
+    )
     for left in sorted(scores_by_idx.keys()):
         partner_map = scores_by_idx.get(left) or {}
         for right in sorted(partner_map.keys()):
@@ -2115,6 +2457,15 @@ def persist_merge_tags(
             result = partner_map.get(right)
             if not isinstance(result, Mapping):
                 continue
+
+            total_value = _tag_safe_int(result.get("total"))
+            if total_value >= AI_PACK_SCORE_THRESHOLD:
+                left_merge_entry = build_summary_merge_entry("merge_pair", right, result)
+                if left_merge_entry is not None:
+                    summary_updates[left]["merge"].append(left_merge_entry)
+                right_merge_entry = build_summary_merge_entry("merge_pair", left, result)
+                if right_merge_entry is not None:
+                    summary_updates[right]["merge"].append(right_merge_entry)
 
             left_tag = build_merge_pair_tag(right, result)
             if left_tag.get("decision") in valid_decisions:
@@ -2184,11 +2535,38 @@ def persist_merge_tags(
         if path is not None:
             upsert_tag(path, best_tag, unique_keys=("kind",))
 
+        best_partner = best_info.get("partner_index") if isinstance(best_info, Mapping) else None
+        best_result = best_info.get("result") if isinstance(best_info, Mapping) else None
+        if best_partner is not None and isinstance(best_result, Mapping):
+            extra_fields = {
+                "tiebreaker": str(best_info.get("tiebreaker", "none")),
+                "strong_rank": best_info.get("strong_rank"),
+                "score_total": best_info.get("score_total"),
+            }
+            best_entry = build_summary_merge_entry(
+                "merge_best", best_partner, best_result, extra=extra_fields
+            )
+            if best_entry is not None:
+                summary_updates[idx]["merge"].append(best_entry)
+
     for idx in all_indices:
         partner_scores = scores_by_idx.get(idx, {})
         best_info = best_by_idx.get(idx, {})
         merge_tag = _merge_tag_from_best(idx, partner_scores, best_info)
         merge_tags[idx] = merge_tag
+
+    for idx, updates in summary_updates.items():
+        summary_path = summary_paths.get(idx)
+        if summary_path is None:
+            continue
+        merge_entries = updates.get("merge") or []
+        ai_entries = updates.get("ai") or []
+        if merge_entries or ai_entries:
+            apply_summary_updates(
+                summary_path,
+                merge_entries=merge_entries,
+                ai_entries=ai_entries,
+            )
 
     return merge_tags
 

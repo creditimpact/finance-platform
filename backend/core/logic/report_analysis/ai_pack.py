@@ -156,6 +156,14 @@ def _extract_account_number(raw_lines: Iterable[str]) -> str | None:
     return None
 
 
+def _normalize_highlights(value: Mapping[str, object] | None) -> dict[str, object]:
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise ValueError("highlights payload must be a mapping if provided")
+
+
 def _build_pack_payload(
     sid: str,
     first_idx: int,
@@ -170,7 +178,7 @@ def _build_pack_payload(
     return {
         "sid": sid,
         "pair": {"a": first_idx, "b": second_idx},
-        "highlights": dict(highlights or {}),
+        "highlights": _normalize_highlights(highlights),
         "context": {"a": list(first_context), "b": list(second_context)},
         "ids": {
             "account_number_a": first_account_number or "--",
@@ -180,12 +188,49 @@ def _build_pack_payload(
     }
 
 
+def _validate_pack_payload(payload: Mapping[str, object]) -> None:
+    if not isinstance(payload, Mapping):
+        raise ValueError("pack payload must be a mapping")
+
+    sid_value = payload.get("sid")
+    if not isinstance(sid_value, str) or not sid_value:
+        raise ValueError("pack payload requires a non-empty sid string")
+
+    pair_payload = payload.get("pair")
+    if not isinstance(pair_payload, Mapping):
+        raise ValueError("pack payload requires pair metadata")
+
+    pair_a = pair_payload.get("a")
+    pair_b = pair_payload.get("b")
+    if not isinstance(pair_a, int) or not isinstance(pair_b, int):
+        raise ValueError("pair metadata must include integer indices")
+
+    context_payload = payload.get("context")
+    if not isinstance(context_payload, Mapping):
+        raise ValueError("pack payload requires context metadata")
+
+    for side in ("a", "b"):
+        lines = context_payload.get(side)
+        if not isinstance(lines, list):
+            raise ValueError("context lines must be a list")
+        if any(not isinstance(line, str) for line in lines):
+            raise ValueError("context lines must be strings")
+
+    ids_payload = payload.get("ids")
+    if not isinstance(ids_payload, Mapping):
+        raise ValueError("pack payload requires id metadata")
+
+    limits_payload = payload.get("limits")
+    if not isinstance(limits_payload, Mapping):
+        raise ValueError("pack payload requires limits metadata")
+
+
 def build_ai_pack_for_pair(
     sid: str,
     runs_root: str | os.PathLike[str],
     a_idx: int,
     b_idx: int,
-    highlights: Mapping[str, object] | None,
+    highlights: Mapping[str, object] | None = None,
 ) -> dict:
     sid_str = str(sid)
     runs_root_path = Path(runs_root)
@@ -225,6 +270,16 @@ def build_ai_pack_for_pair(
         highlights,
         max_lines,
     )
+
+    _validate_pack_payload(pack_for_a)
+
+    pack_dir = runs_root_path / sid_str / "ai_packs"
+    pack_dir.mkdir(parents=True, exist_ok=True)
+
+    first_idx, second_idx = sorted((account_a, account_b))
+    pack_path = pack_dir / f"pair_{first_idx:03d}_{second_idx:03d}.jsonl"
+    payload_text = json.dumps(pack_for_a, sort_keys=True)
+    pack_path.write_text(payload_text + "\n", encoding="utf-8")
 
     return pack_for_a
 

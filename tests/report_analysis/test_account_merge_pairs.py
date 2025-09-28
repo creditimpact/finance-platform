@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
+from typing import Mapping
 
 import pytest
 
 from backend.core.io.tags import upsert_tag
 from backend.core.logic.report_analysis.account_merge import (
+    AI_PACK_SCORE_THRESHOLD,
     build_merge_pair_tag,
     choose_best_partner,
     gen_unordered_pairs,
@@ -172,3 +174,20 @@ def test_account_number_clique_persists_all_pair_packs(
         pack_payload = lines[0]
         highlights = pack_payload.get("highlights", {})
         assert highlights.get("acctnum_level") == "exact_or_known_match"
+
+    for idx in indices:
+        summary_path = accounts_root / str(idx) / "summary.json"
+        summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        merge_entries = summary_payload.get("merge_explanations", [])
+        pair_partners = {
+            entry.get("with")
+            for entry in merge_entries
+            if isinstance(entry, Mapping) and entry.get("kind") == "merge_pair"
+        }
+        expected_partners = {
+            partner
+            for partner, result in (scores.get(idx, {}) or {}).items()
+            if isinstance(result, Mapping)
+            and int(result.get("total") or 0) >= AI_PACK_SCORE_THRESHOLD
+        }
+        assert expected_partners <= pair_partners

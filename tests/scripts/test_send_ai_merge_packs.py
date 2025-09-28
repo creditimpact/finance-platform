@@ -785,34 +785,55 @@ def test_ai_pairing_flow_compaction(
         return next(item for item in entry_list if item.get("with") == partner)
 
     ai_a = summary_a["ai_explanations"]
-    assert {item["kind"] for item in ai_a} == {"ai_decision"}
-    ai_entry_a = _ai_summary(ai_a, partner=16)
+    kinds_a = {item["kind"] for item in ai_a}
+    assert kinds_a == {"ai_decision", "same_account_pair"}
+    ai_entry_a = next(item for item in ai_a if item.get("kind") == "ai_decision")
+    assert ai_entry_a["with"] == 16
+    assert ai_entry_a.get("normalized") is False
     assert "reason" in ai_entry_a
     assert "same debt" in ai_entry_a["reason"].lower()
+    pair_entry_a = next(item for item in ai_a if item.get("kind") == "same_account_pair")
+    assert pair_entry_a["with"] == 16
+    assert "same debt" in pair_entry_a.get("reason", "").lower()
 
     ai_b = summary_b["ai_explanations"]
-    assert {item["kind"] for item in ai_b} == {"ai_decision"}
-    ai_entry_b = _ai_summary(ai_b, partner=11)
+    kinds_b = {item["kind"] for item in ai_b}
+    assert kinds_b == {"ai_decision", "same_account_pair"}
+    ai_entry_b = next(item for item in ai_b if item.get("kind") == "ai_decision")
+    assert ai_entry_b["with"] == 11
+    assert ai_entry_b.get("normalized") is False
     assert "reason" in ai_entry_b
     assert "same debt" in ai_entry_b["reason"].lower()
+    pair_entry_b = next(item for item in ai_b if item.get("kind") == "same_account_pair")
+    assert pair_entry_b["with"] == 11
+    assert "same debt" in pair_entry_b.get("reason", "").lower()
 
     merge_summary_a = summary_a.get("merge_explanations", [])
     assert merge_summary_a
-    merge_entry = _ai_summary(merge_summary_a, partner=16)
-    assert merge_entry["kind"] == "merge_best"
-    assert merge_entry["parts"] == {"balance_owed": 31, "account_number": 28}
-    assert merge_entry["conflicts"] == ["credit_limit:conflict"]
-    assert merge_entry["matched_fields"] == {
+    merge_best_entry = _ai_summary(merge_summary_a, partner=16)
+    assert merge_best_entry["kind"] == "merge_best"
+    assert merge_best_entry["parts"] == {"balance_owed": 31, "account_number": 28}
+    assert merge_best_entry["conflicts"] == ["credit_limit:conflict"]
+    assert merge_best_entry["matched_fields"] == {
         "balance_owed": True,
         "last_payment": True,
         "account_number": True,
     }
-    assert merge_entry.get("acctnum_level") in {"exact_or_known_match", "none"}
-    acct_pair = merge_entry["matched_pairs"]["account_number"]
+    assert merge_best_entry.get("acctnum_level") in {"exact_or_known_match", "none"}
+    acct_pair = merge_best_entry["matched_pairs"]["account_number"]
     assert isinstance(acct_pair, list)
     assert len(acct_pair) == 2
-    assert "acctnum_digits_len_a" in merge_entry
-    assert "acctnum_digits_len_b" in merge_entry
+    assert "acctnum_digits_len_a" in merge_best_entry
+    assert "acctnum_digits_len_b" in merge_best_entry
+
+    merge_pair_entries = [
+        entry for entry in merge_summary_a if entry.get("kind") == "merge_pair"
+    ]
+    assert merge_pair_entries
+    merge_pair_entry = merge_pair_entries[0]
+    assert merge_pair_entry["with"] == 16
+    assert merge_pair_entry["decision"] == "ai"
+    assert merge_pair_entry.get("total", 0) >= 0
 
     merge_score_a = summary_a.get("merge_scoring")
     assert merge_score_a

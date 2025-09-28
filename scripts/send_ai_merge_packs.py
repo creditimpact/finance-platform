@@ -28,6 +28,11 @@ from backend.core.ai.adjudicator import (
     decide_merge_or_different,
 )
 from backend.core.io.tags import read_tags, upsert_tag
+from backend.core.logic.report_analysis.account_merge import (
+    build_summary_ai_entries,
+    build_summary_merge_entry,
+    merge_summary_sections,
+)
 from backend.core.merge.acctnum import normalize_level
 from backend.pipeline.runs import RunManifest, persist_manifest
 
@@ -599,40 +604,115 @@ def _write_decision_tags_resolved(
         else:
             _prune_pair_tags(tag_path, other_idx, keep_kind=None)
 
-        merge_tag: Mapping[str, object] | None = None
-        for entry in read_tags(tag_path):
-            if str(entry.get("kind", "")) != "merge_best":
-                continue
+        merge_best_tag: Mapping[str, object] | None = None
+        merge_pair_tag: Mapping[str, object] | None = None
+        tags_payload = read_tags(tag_path)
+        for entry in tags_payload:
+            kind = str(entry.get("kind", ""))
             partner_idx = entry.get("with")
             try:
                 partner_val = int(partner_idx) if partner_idx is not None else None
             except (TypeError, ValueError):
                 partner_val = None
-            if partner_val == other_idx:
-                merge_tag = entry
-                break
+            if partner_val != other_idx:
+                continue
+            if kind == "merge_best" and merge_best_tag is None:
+                merge_best_tag = entry
+            elif kind == "merge_pair" and merge_pair_tag is None:
+                merge_pair_tag = entry
 
-        if merge_tag is not None:
-            summary_path = tag_path.parent / "summary.json"
-            summary_payload = _load_summary(summary_path)
-            if not isinstance(summary_payload, dict):
-                summary_payload = {}
-            score_total = merge_tag.get("score_total") or merge_tag.get("total") or 0
+        summary_path = tag_path.parent / "summary.json"
+        summary_payload = _load_summary(summary_path)
+        if not isinstance(summary_payload, dict):
+            summary_payload = {}
+
+        merge_entries: list[Mapping[str, object]] = []
+        if merge_best_tag is not None and any(
+            key in merge_best_tag for key in ("parts", "aux", "conflicts", "reasons")
+        ):
+            merge_entry = build_summary_merge_entry(
+                merge_best_tag.get("kind", "merge_best"),
+                other_idx,
+                merge_best_tag,
+                extra={
+                    "tiebreaker": merge_best_tag.get("tiebreaker"),
+                    "strong_rank": merge_best_tag.get("strong_rank"),
+                    "score_total": merge_best_tag.get("score_total"),
+                },
+            )
+            if merge_entry is not None:
+                merge_entries.append(merge_entry)
+        if merge_pair_tag is not None and any(
+            key in merge_pair_tag for key in ("parts", "aux", "conflicts", "reasons")
+        ):
+            merge_pair_entry = build_summary_merge_entry(
+                merge_pair_tag.get("kind", "merge_pair"),
+                other_idx,
+                merge_pair_tag,
+            )
+            if merge_pair_entry is not None:
+                merge_entries.append(merge_pair_entry)
+
+        ai_entries = build_summary_ai_entries(other_idx, decision, reason, flags_payload)
+        summary_changed = merge_summary_sections(
+            summary_payload,
+            merge_entries=merge_entries,
+            ai_entries=ai_entries,
+        )
+
+        existing_merge_entries = summary_payload.get("merge_explanations", [])
+        has_pair_entry = any(
+            isinstance(entry, Mapping)
+            and entry.get("kind") == "merge_pair"
+            and entry.get("with") == other_idx
+            for entry in existing_merge_entries
+        )
+        if not has_pair_entry:
+            pair_source: Mapping[str, object] | None = None
+            if merge_pair_tag is not None:
+                pair_source = merge_pair_tag
+            elif merge_best_tag is not None and any(
+                key in merge_best_tag for key in ("parts", "aux")
+            ):
+                pair_source = merge_best_tag
+            else:
+                for entry in existing_merge_entries:
+                    if (
+                        isinstance(entry, Mapping)
+                        and entry.get("kind") == "merge_best"
+                        and entry.get("with") == other_idx
+                    ):
+                        pair_source = entry
+                        break
+            if pair_source is not None:
+                pair_entry = build_summary_merge_entry("merge_pair", other_idx, pair_source)
+                if pair_entry is not None:
+                    if merge_summary_sections(
+                        summary_payload, merge_entries=[pair_entry]
+                    ):
+                        summary_changed = True
+
+        if merge_best_tag is not None:
+            score_total = (
+                merge_best_tag.get("score_total")
+                or merge_best_tag.get("total")
+                or 0
+            )
             try:
                 score_total_int = int(score_total)
             except (TypeError, ValueError):
                 score_total_int = 0
-            reasons_raw = merge_tag.get("reasons") or []
+            reasons_raw = merge_best_tag.get("reasons") or []
             if isinstance(reasons_raw, Iterable) and not isinstance(reasons_raw, (str, bytes)):
                 reasons = [str(item) for item in reasons_raw if item is not None]
             else:
                 reasons = []
-            conflicts_raw = merge_tag.get("conflicts") or []
+            conflicts_raw = merge_best_tag.get("conflicts") or []
             if isinstance(conflicts_raw, Iterable) and not isinstance(conflicts_raw, (str, bytes)):
                 conflicts = [str(item) for item in conflicts_raw if item is not None]
             else:
                 conflicts = []
-            parts_payload = merge_tag.get("parts")
+            parts_payload = merge_best_tag.get("parts")
             if isinstance(parts_payload, MappingABC):
                 identity_score = _sum_parts(parts_payload, _IDENTITY_PART_FIELDS)
                 debt_score = _sum_parts(parts_payload, _DEBT_PART_FIELDS)
@@ -640,9 +720,9 @@ def _write_decision_tags_resolved(
                 identity_score = 0
                 debt_score = 0
             extras: list[str] = []
-            if bool(merge_tag.get("strong")):
+            if bool(merge_best_tag.get("strong")):
                 extras.append("strong")
-            mid_value = merge_tag.get("mid")
+            mid_value = merge_best_tag.get("mid")
             try:
                 mid_int = int(mid_value)
             except (TypeError, ValueError):
@@ -658,7 +738,7 @@ def _write_decision_tags_resolved(
                     unique_reasons.append(item)
             reasons = unique_reasons
             matched_fields: dict[str, bool] = {}
-            aux_payload = merge_tag.get("aux")
+            aux_payload = merge_best_tag.get("aux")
             acctnum_level = normalize_level(None)
             if isinstance(aux_payload, MappingABC):
                 raw_matched = aux_payload.get("matched_fields")
@@ -679,6 +759,9 @@ def _write_decision_tags_resolved(
             }
             merge_summary["acctnum_level"] = acctnum_level
             summary_payload["merge_scoring"] = merge_summary
+            summary_changed = True
+
+        if summary_changed:
             _write_summary(summary_path, summary_payload)
 
     log.info(

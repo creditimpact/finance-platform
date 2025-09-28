@@ -88,6 +88,13 @@ def test_compact_tags_moves_verbose_data_to_summary(tmp_path: Path) -> None:
             "at": "2025-09-21T22:47:26Z",
         },
         {"kind": "same_debt_pair", "with": 16, "at": "2025-09-21T22:47:26Z"},
+        {
+            "kind": "ai_resolution",
+            "with": 16,
+            "decision": "different",
+            "flags": {},
+            "reason": "Different account numbers and conflicting last payment dates; same debt indicated.",
+        },
     ]
 
     summary_after = _read_summary(account_dir)
@@ -102,17 +109,30 @@ def test_compact_tags_moves_verbose_data_to_summary(tmp_path: Path) -> None:
     assert merge_entry["parts"] == {"balance_owed": 31}
     assert merge_entry["conflicts"] == ["amount_conflict:high_balance"]
     assert merge_entry["matched_fields"] == {"balance_owed": True}
-    assert merge_entry["acctnum_level"] == "none"
+    aux_payload = merge_entry.get("aux", {}) if isinstance(merge_entry.get("aux"), dict) else {}
+    acct_level = merge_entry.get("acctnum_level", aux_payload.get("acctnum_level"))
+    assert acct_level == "none"
 
     ai_entries = summary_after["ai_explanations"]
     assert isinstance(ai_entries, list)
-    assert {entry.get("kind") for entry in ai_entries} == {"ai_decision", "same_debt_pair"}
+    assert {entry.get("kind") for entry in ai_entries} == {
+        "ai_decision",
+        "ai_resolution",
+        "same_debt_pair",
+    }
     ai_decision_entry = next(entry for entry in ai_entries if entry.get("kind") == "ai_decision")
     assert ai_decision_entry["with"] == 16
     assert ai_decision_entry["normalized"] is False
     assert ai_decision_entry["decision"] == "different"
     assert ai_decision_entry["reason"].startswith("Different account numbers")
     assert "raw_response" in ai_decision_entry
+    ai_resolution_entry = next(
+        entry for entry in ai_entries if entry.get("kind") == "ai_resolution"
+    )
+    assert ai_resolution_entry["with"] == 16
+    assert ai_resolution_entry["normalized"] is False
+    assert ai_resolution_entry["decision"] == "different"
+    assert ai_resolution_entry["reason"].startswith("Different account numbers")
     same_debt_entry = next(entry for entry in ai_entries if entry.get("kind") == "same_debt_pair")
     assert same_debt_entry["reason"].startswith("Different account numbers")
 

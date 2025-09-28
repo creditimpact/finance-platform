@@ -208,6 +208,13 @@ def test_build_summary_ai_entries_normalizes_aliases() -> None:
     assert ai_entry["normalized"] is True
     assert ai_entry["ai_result"]["decision"] == "same_debt_account_unknown"
 
+    resolution_entry = next(
+        entry for entry in entries if entry.get("kind") == "ai_resolution"
+    )
+    assert resolution_entry["decision"] == "same_debt_account_unknown"
+    assert resolution_entry["normalized"] is True
+    assert resolution_entry["ai_result"]["decision"] == "same_debt_account_unknown"
+
     pair_entry = next(entry for entry in entries if entry.get("kind") == "same_debt_pair")
     assert pair_entry["ai_result"]["decision"] == "same_debt_account_unknown"
     assert "same_debt_account_unclear" in pair_entry.get("notes", [])

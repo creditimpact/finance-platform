@@ -789,24 +789,44 @@ def test_ai_pairing_flow_compaction(
 
     ai_a = summary_a["ai_explanations"]
     kinds_a = {item["kind"] for item in ai_a}
-    assert kinds_a == {"ai_decision", "same_account_pair"}
+    assert kinds_a == {"ai_decision", "ai_resolution", "same_account_pair"}
     ai_entry_a = next(item for item in ai_a if item.get("kind") == "ai_decision")
     assert ai_entry_a["with"] == 16
     assert ai_entry_a.get("normalized") is False
     assert "reason" in ai_entry_a
     assert "same debt" in ai_entry_a["reason"].lower()
+    resolution_entry_a = next(
+        item for item in ai_a if item.get("kind") == "ai_resolution"
+    )
+    assert resolution_entry_a["with"] == 16
+    assert resolution_entry_a.get("normalized") is False
+    assert resolution_entry_a.get("flags") == {
+        "account_match": False,
+        "debt_match": False,
+    }
+    assert "same debt" in resolution_entry_a.get("reason", "").lower()
     pair_entry_a = next(item for item in ai_a if item.get("kind") == "same_account_pair")
     assert pair_entry_a["with"] == 16
     assert "same debt" in pair_entry_a.get("reason", "").lower()
 
     ai_b = summary_b["ai_explanations"]
     kinds_b = {item["kind"] for item in ai_b}
-    assert kinds_b == {"ai_decision", "same_account_pair"}
+    assert kinds_b == {"ai_decision", "ai_resolution", "same_account_pair"}
     ai_entry_b = next(item for item in ai_b if item.get("kind") == "ai_decision")
     assert ai_entry_b["with"] == 11
     assert ai_entry_b.get("normalized") is False
     assert "reason" in ai_entry_b
     assert "same debt" in ai_entry_b["reason"].lower()
+    resolution_entry_b = next(
+        item for item in ai_b if item.get("kind") == "ai_resolution"
+    )
+    assert resolution_entry_b["with"] == 11
+    assert resolution_entry_b.get("normalized") is False
+    assert resolution_entry_b.get("flags") == {
+        "account_match": False,
+        "debt_match": False,
+    }
+    assert "same debt" in resolution_entry_b.get("reason", "").lower()
     pair_entry_b = next(item for item in ai_b if item.get("kind") == "same_account_pair")
     assert pair_entry_b["with"] == 11
     assert "same debt" in pair_entry_b.get("reason", "").lower()

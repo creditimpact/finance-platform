@@ -553,10 +553,19 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     assert summary_a_first["merge_explanations"][0]["with"] == 16
     assert any(entry.get("origin") == "ai" for entry in summary_a_first["merge_explanations"])
     ai_entries_b = summary_b_first["ai_explanations"]
-    assert {entry["kind"] for entry in ai_entries_b} == {"ai_decision", "same_account_pair"}
+    assert {entry["kind"] for entry in ai_entries_b} == {
+        "ai_decision",
+        "ai_resolution",
+        "same_account_pair",
+    }
     ai_decision_b = next(entry for entry in ai_entries_b if entry.get("kind") == "ai_decision")
     assert ai_decision_b["decision"] == "merge"
     assert ai_decision_b.get("normalized") is False
+    ai_resolution_b = next(
+        entry for entry in ai_entries_b if entry.get("kind") == "ai_resolution"
+    )
+    assert ai_resolution_b["decision"] == "merge"
+    assert ai_resolution_b.get("normalized") is False
 
     payload = auto_ai_tasks.ai_score_step.run(sid, str(runs_root))
     payload = auto_ai_tasks.ai_build_packs_step.run(payload)

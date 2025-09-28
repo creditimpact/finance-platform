@@ -16,7 +16,7 @@ from backend import config as app_config
 from backend.core.io.tags import read_tags, upsert_tag, write_tags_atomic
 from backend.core.logic.normalize.accounts import normalize_acctnum as _normalize_acctnum_basic
 from backend.core.merge import acctnum
-from backend.core.merge.acctnum import acctnum_level, normalize_level
+from backend.core.merge.acctnum import acctnum_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
 
@@ -40,16 +40,22 @@ _candidate_logger = logging.getLogger("ai_packs")
 
 
 POINTS_ACCTNUM_VISIBLE = 28
-def _sanitize_acct_level(value: Any) -> str:
-    """Return the supported account-number level for arbitrary input."""
 
-    if value is None:
-        candidate: str | None = None
-    elif isinstance(value, str):
-        candidate = value
-    else:
-        candidate = str(value)
-    return normalize_level(candidate)
+
+def _sanitize_acct_level(v: object) -> str:
+    s = str(v or "none").strip().lower()
+    return (
+        s
+        if s
+        in {
+            "none",
+            "unknown",
+            "partial",
+            "masked_match",
+            "exact_or_known_match",
+        }
+        else "none"
+    )
 
 
 def _normalized_account_level(
@@ -89,14 +95,30 @@ def _priority_category(level: str, dates_all: bool, score_gate: bool) -> Tuple[i
     return category, subscore, label
 
 
-def _should_build_pack(total: int, allow_flags: Mapping[str, Any], cfg: MergeCfg) -> bool:
-    """Return True when the pair should produce a pack."""
+def _should_build_pack(
+    *,
+    cfg,
+    total_score: int,
+    dates_all_equal: bool,
+    level_value: str,
+) -> tuple[bool, str]:
+    # read toggles safely with defaults
+    triggers = getattr(cfg, "triggers", {}) or {}
+    ai_threshold = int(getattr(cfg, "ai_threshold", 0) or 0)
 
-    hard = bool(allow_flags.get("hard_acct"))
-    dates_all = bool(allow_flags.get("dates_all"))
-    threshold = cfg.threshold
-    over = total >= threshold
-    return hard or dates_all or over
+    on_hard = bool(triggers.get("MERGE_AI_ON_HARD_ACCTNUM", True))
+    on_dates = bool(triggers.get("MERGE_AI_ON_ALL_DATES", True))
+
+    hard_acct = level_value == "exact_or_known_match"
+    allow_by_total = ai_threshold > 0 and total_score >= ai_threshold
+
+    if on_hard and hard_acct:
+        return True, "hard_acctnum"
+    if on_dates and dates_all_equal:
+        return True, "dates_all"
+    if allow_by_total:
+        return True, "over_threshold"
+    return False, "below_gate"
 
 
 def is_missing(value: Any) -> bool:
@@ -207,6 +229,12 @@ class MergeCfg:
             return int(raw or 0)
         except (TypeError, ValueError):
             return 0
+
+    @property
+    def ai_threshold(self) -> int:
+        """Alias for the AI threshold used by AI gating helpers."""
+
+        return self.threshold
 
 
 _POINT_DEFAULTS: Dict[str, int] = {
@@ -1557,89 +1585,112 @@ def score_all_pairs_0_100(
                 allowed=allowed,
                 reason=reason,
             )
-            if allowed:
-                pack_path: Optional[Path] = None
-                try:
-                    left_idx = int(i)
-                    right_idx = int(j)
-                except (TypeError, ValueError):
-                    pack_path = None
-                else:
-                    first_idx, second_idx = sorted((left_idx, right_idx))
-                    pack_path = pack_dir / f"pair_{first_idx:03d}_{second_idx:03d}.jsonl"
-                if pack_path is not None and pack_path.exists():
-                    logger.debug(
-                        "PACK_ALREADY_EXISTS sid=%s i=%s j=%s path=%s",
-                        sid,
-                        i,
-                        j,
-                        pack_path,
-                    )
             return record
 
-        logger.info(
-            (
-                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s total=%s hard=%s "
-                "gate_level=%s level_value=%s dates_all=%s"
-            ),
+        level_value = _sanitize_acct_level(level_value)
+
+        allowed, allow_reason = _should_build_pack(
+            cfg=cfg,
+            total_score=total_score,
+            dates_all_equal=dates_all_equal,
+            level_value=level_value,
+        )
+
+        considered_message = (
+            "CANDIDATE_CONSIDERED sid=%s i=%s j=%s total=%s gate_level=%s level_value=%s dates_all=%s"
+        )
+        considered_args = (
             sid,
             left,
             right,
             total_score,
-            hard_acct,
             gate_level,
             level_value,
             dates_all_equal,
         )
+        logger.info(considered_message, *considered_args)
+        _candidate_logger.info(considered_message, *considered_args)
 
-        if _should_build_pack(total_score, allow_flags, cfg):
-            message = (
-                "CANDIDATE_ADDED sid=%s i=%s j=%s reason=%s total=%s hard=%s "
-                "gate_level=%s level_value=%s dates_all=%s"
+        if allowed:
+            added_message = (
+                "CANDIDATE_ADDED sid=%s i=%s j=%s reason=%s total=%s gate_level=%s level_value=%s dates_all=%s"
             )
-            message_args = (
+            added_args = (
                 sid,
                 left,
                 right,
-                "score_or_hard_or_dates",
+                allow_reason,
                 total_score,
-                hard_acct,
                 gate_level,
                 level_value,
                 dates_all_equal,
             )
-            logger.info(message, *message_args)
-            _candidate_logger.info(message, *message_args)
-            add_candidate(left, right, reason="score_or_hard_or_dates")
+            logger.info(added_message, *added_args)
+            _candidate_logger.info(added_message, *added_args)
+            add_candidate(left, right, reason=allow_reason)
+
+            highlights = _build_ai_highlights(result)
+            highlights.update(
+                {
+                    "acctnum_level": level_value,
+                    "total": total_score,
+                    "dates_all": dates_all_equal,
+                }
+            )
+
+            pack_path: Optional[Path] = None
+            try:
+                left_idx = int(left)
+                right_idx = int(right)
+            except (TypeError, ValueError):
+                pack_path = None
+            else:
+                first_idx, second_idx = sorted((left_idx, right_idx))
+                pack_path = pack_dir / f"pair_{first_idx:03d}_{second_idx:03d}.jsonl"
+
+            if pack_path is not None and pack_path.exists():
+                logger.debug(
+                    "PACK_ALREADY_EXISTS sid=%s i=%s j=%s path=%s",
+                    sid,
+                    left,
+                    right,
+                    pack_path,
+                )
+            else:
+                build_ai_pack_for_pair(
+                    sid,
+                    runs_root,
+                    left,
+                    right,
+                    highlights,
+                )
         else:
-            message = (
-                "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s total=%s hard=%s "
-                "gate_level=%s level_value=%s dates_all=%s"
+            skipped_message = (
+                "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s total=%s gate_level=%s level_value=%s dates_all=%s"
             )
-            message_args = (
+            skipped_args = (
                 sid,
                 left,
                 right,
-                "below_threshold_and_no_hard",
+                allow_reason,
                 total_score,
-                hard_acct,
                 gate_level,
                 level_value,
                 dates_all_equal,
             )
-            logger.info(message, *message_args)
-            _candidate_logger.info(message, *message_args)
+            logger.info(skipped_message, *skipped_args)
+            _candidate_logger.info(skipped_message, *skipped_args)
             record = add_candidate(
                 left,
                 right,
-                reason="below_threshold_and_no_hard",
+                reason=allow_reason,
                 allowed=False,
             )
             _log_candidate_skipped(
                 sid,
                 left,
                 right,
-                "below_threshold_and_no_hard",
+                allow_reason,
                 allow_flags=dict(allow_flags),
                 total=total_score,
                 level=level_value,

@@ -1243,6 +1243,7 @@ def score_all_pairs_0_100(
 ) -> Dict[int, Dict[int, Dict[str, Any]]]:
     """Score all unordered account pairs for a case run."""
 
+    runs_root = Path(runs_root)
     cfg = get_merge_cfg()
     ai_threshold = int(cfg.thresholds.get("AI_THRESHOLD", 0) or 0)
     requested_raw = list(idx_list) if idx_list is not None else []
@@ -1258,6 +1259,8 @@ def score_all_pairs_0_100(
         requested_indices.append(idx_val)
 
     requested_set = set(requested_indices)
+
+    pack_dir = runs_root / sid / "ai_packs"
 
     accounts_root = runs_root / sid / "cases" / "accounts"
     discovered_indices: List[int] = []
@@ -1521,6 +1524,18 @@ def score_all_pairs_0_100(
                     allowed=allowed,
                     reason=reason,
                 )
+                if allowed:
+                    pack_path: Optional[Path] = None
+                    try:
+                        left_idx = int(i)
+                        right_idx = int(j)
+                    except (TypeError, ValueError):
+                        pack_path = None
+                    else:
+                        first_idx, second_idx = sorted((left_idx, right_idx))
+                        pack_path = pack_dir / f"pair_{first_idx:03d}_{second_idx:03d}.jsonl"
+                    if pack_path is not None and pack_path.exists():
+                        return record  # already built
                 return record
 
             logger.info(

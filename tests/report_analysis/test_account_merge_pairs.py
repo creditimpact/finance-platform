@@ -7,7 +7,9 @@ import pytest
 from backend.core.io.tags import upsert_tag
 from backend.core.logic.report_analysis.account_merge import (
     AI_PACK_SCORE_THRESHOLD,
+    MergeDecision,
     build_merge_pair_tag,
+    build_summary_ai_entries,
     choose_best_partner,
     gen_unordered_pairs,
     persist_merge_tags,
@@ -191,3 +193,26 @@ def test_account_number_clique_persists_all_pair_packs(
             and int(result.get("total") or 0) >= AI_PACK_SCORE_THRESHOLD
         }
         assert expected_partners <= pair_partners
+
+
+def test_build_summary_ai_entries_normalizes_aliases() -> None:
+    entries = build_summary_ai_entries(
+        7,
+        "same_debt",
+        "Reasoning",
+        {"account_match": "unknown", "debt_match": True},
+    )
+
+    ai_entry = next(entry for entry in entries if entry.get("kind") == "ai_decision")
+    assert ai_entry["decision"] == "same_debt_account_unknown"
+    assert ai_entry["normalized"] is True
+    assert ai_entry["ai_result"]["decision"] == "same_debt_account_unknown"
+
+    pair_entry = next(entry for entry in entries if entry.get("kind") == "same_debt_pair")
+    assert pair_entry["ai_result"]["decision"] == "same_debt_account_unknown"
+    assert "same_debt_account_unclear" in pair_entry.get("notes", [])
+
+
+def test_merge_decision_alias_members() -> None:
+    assert MergeDecision.SAME_ACCOUNT_SAME_DEBT is MergeDecision.MERGE
+    assert MergeDecision.SAME_DEBT_ACCOUNT_UNKNOWN is MergeDecision.SAME_DEBT

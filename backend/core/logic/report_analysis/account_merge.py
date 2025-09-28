@@ -10,6 +10,7 @@ from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
@@ -38,6 +39,7 @@ __all__ = [
     "build_summary_ai_entries",
     "apply_summary_updates",
     "merge_summary_sections",
+    "MergeDecision",
 ]
 
 
@@ -45,14 +47,46 @@ logger = logging.getLogger(__name__)
 _candidate_logger = logging.getLogger("ai_packs")
 
 
-AI_DECISIONS_NEW = {
-    "same_account_same_debt",
-    "same_account_diff_debt",
-    "same_account_debt_unknown",
-    "same_debt_diff_account",
-    "same_debt_account_unknown",
-    "different",
+CANON: Dict[str, Dict[str, List[str]]] = {
+    "same_account_same_debt": {"aliases": ["merge", "same_account"]},
+    "same_account_diff_debt": {"aliases": ["same_account_debt_different"]},
+    "same_account_debt_unknown": {"aliases": []},
+    "same_debt_diff_account": {"aliases": ["same_debt_account_different"]},
+    "same_debt_account_unknown": {"aliases": ["same_debt"]},
+    "different": {"aliases": []},
 }
+
+
+class MergeDecision(str, Enum):
+    """Canonical AI merge decisions with legacy aliases."""
+
+    SAME_ACCOUNT_SAME_DEBT = "same_account_same_debt"
+    SAME_ACCOUNT_DIFF_DEBT = "same_account_diff_debt"
+    SAME_ACCOUNT_DEBT_UNKNOWN = "same_account_debt_unknown"
+    SAME_DEBT_DIFF_ACCOUNT = "same_debt_diff_account"
+    SAME_DEBT_ACCOUNT_UNKNOWN = "same_debt_account_unknown"
+    DIFFERENT = "different"
+
+    # Legacy aliases preserved for backwards compatibility.
+    MERGE = "same_account_same_debt"
+    SAME_ACCOUNT = "same_account_same_debt"
+    SAME_ACCOUNT_DEBT_DIFFERENT = "same_account_diff_debt"
+    SAME_DEBT_ACCOUNT_DIFFERENT = "same_debt_diff_account"
+    SAME_DEBT = "same_debt_account_unknown"
+
+    @classmethod
+    def canonical_value(cls, value: Any) -> Optional[str]:
+        """Return the canonical decision string for *value* or ``None``."""
+
+        if value is None:
+            return None
+        decision_text = str(value).strip().lower()
+        if not decision_text:
+            return None
+        if decision_text in CANON:
+            return decision_text
+        return _MERGE_DECISION_ALIASES.get(decision_text)
+
 
 AI_PAIR_KIND_BY_DECISION = {
     "same_account_same_debt": "same_account_pair",
@@ -63,14 +97,59 @@ AI_PAIR_KIND_BY_DECISION = {
     "different": "same_account_pair",
 }
 
-LEGACY_TO_NEW = {
-    "merge": "same_account_same_debt",
-    "same_account": "same_account_same_debt",
-    "same_account_debt_different": "same_account_diff_debt",
-    "same_debt_account_different": "same_debt_diff_account",
-    "same_debt": "same_debt_account_unknown",
-    "different": "different",
+_MERGE_DECISION_ALIASES: Dict[str, str] = {
+    alias.lower(): canonical
+    for canonical, meta in CANON.items()
+    for alias in meta.get("aliases", [])
 }
+
+
+def _normalize_merge_decision(
+    decision: Any,
+    *,
+    partner: Any | None = None,
+    log_missing: bool = False,
+    log_unknown: bool = False,
+) -> Tuple[str, bool]:
+    """Return a canonical decision string and whether normalization occurred."""
+
+    canonical = MergeDecision.canonical_value(decision)
+    if canonical is not None:
+        original_text = str(decision).strip().lower()
+        return canonical, original_text != canonical
+
+    if decision is None or (isinstance(decision, str) and not decision.strip()):
+        if log_missing:
+            if partner is not None:
+                logger.warning(
+                    "AI_DECISION_MISSING partner=%s decision=%r; defaulting to 'different'",
+                    partner,
+                    decision,
+                )
+            else:
+                logger.warning(
+                    "AI_DECISION_MISSING decision=%r; defaulting to 'different'",
+                    decision,
+                )
+        return "different", True
+
+    decision_text = str(decision).strip().lower()
+    if decision_text in _MERGE_DECISION_ALIASES:
+        return _MERGE_DECISION_ALIASES[decision_text], True
+
+    if log_unknown:
+        if partner is not None:
+            logger.warning(
+                "AI_DECISION_UNKNOWN decision=%s partner=%s; falling back to 'different'",
+                decision_text,
+                partner,
+            )
+        else:
+            logger.warning(
+                "AI_DECISION_UNKNOWN decision=%s; falling back to 'different'",
+                decision_text,
+            )
+    return "different", True
 
 
 def _configure_candidate_logger(logs_path: Path) -> None:
@@ -2094,37 +2173,14 @@ def build_summary_ai_entries(
         "with": partner,
         "normalized": normalized_flag,
     }
-    decision_text = str(decision).strip() if decision is not None else ""
-    normalized_decision = ""
-    if decision_text:
-        decision_lower = decision_text.lower()
-        if decision_lower in AI_DECISIONS_NEW:
-            normalized_decision = decision_lower
-        else:
-            mapped_decision = LEGACY_TO_NEW.get(decision_lower)
-            if mapped_decision:
-                normalized_decision = mapped_decision
-                if mapped_decision != decision_lower:
-                    normalized_flag = True
-            else:
-                logger.warning(
-                    "AI_DECISION_UNKNOWN decision=%s partner=%s; falling back to 'different'",
-                    decision_text,
-                    partner,
-                )
-                normalized_decision = "different"
-                normalized_flag = True
-    else:
-        logger.warning(
-            "AI_DECISION_MISSING partner=%s decision=%r; defaulting to 'different'",
-            partner,
-            decision,
-        )
-        normalized_decision = "different"
-        normalized_flag = True
-
-    if normalized_decision:
-        decision_entry["decision"] = normalized_decision
+    normalized_decision, normalized_from_input = _normalize_merge_decision(
+        decision,
+        partner=partner,
+        log_missing=True,
+        log_unknown=True,
+    )
+    normalized_flag = normalized_flag or normalized_from_input
+    decision_entry["decision"] = normalized_decision
     decision_entry["normalized"] = normalized_flag
     reason_text = str(reason).strip() if isinstance(reason, str) else (
         str(reason).strip() if reason is not None else ""

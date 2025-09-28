@@ -1461,7 +1461,8 @@ def score_all_pairs_0_100(
             if gate_level_norm in {"", "none"}:
                 gate_level_norm = _sanitize_acct_level(gate_level)
 
-            hard_acct = gate_level_norm == "exact_or_known_match"
+            normalized_level = level_value if level_value not in {"", "none"} else gate_level_norm
+            hard_acct = normalized_level == "exact_or_known_match"
             dates_all_equal = bool(result.get("dates_all"))
             allow_by_dates = dates_all_equal
             allow_by_total = ai_threshold > 0 and total_score >= ai_threshold
@@ -1551,13 +1552,18 @@ def score_all_pairs_0_100(
                 return record
 
             logger.info(
-                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s total=%s hard=%s dates_all=%s",
+                (
+                    "CANDIDATE_CONSIDERED sid=%s i=%s j=%s total=%s hard=%s "
+                    "gate_level=%s level_value=%s dates_all=%s"
+                ),
                 sid,
                 left,
                 right,
                 total_score,
-                allow_flags.get("hard_acct"),
-                allow_flags.get("dates_all"),
+                hard_acct,
+                gate_level,
+                level_value,
+                dates_all_equal,
             )
 
             if _should_build_pack(total_score, allow_flags, cfg):

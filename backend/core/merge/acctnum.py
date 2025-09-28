@@ -106,7 +106,18 @@ def _digits(s: str) -> str:
     return "".join(DIGITS.findall(s or ""))
 
 
-def acctnum_visible_match(a_raw: str, b_raw: str) -> tuple[bool, dict[str, dict[str, str] | str]]:
+def _match_visible_digits(short: str, long_: str) -> tuple[bool, str]:
+    """Return whether ``short`` appears sequentially inside ``long_``."""
+
+    offset = long_.find(short)
+    if offset == -1:
+        return False, ""
+    return True, str(offset)
+
+
+def acctnum_visible_match(
+    a_raw: str, b_raw: str
+) -> tuple[bool, dict[str, dict[str, str] | str]]:
     a_digits = _digits(a_raw)
     b_digits = _digits(b_raw)
 
@@ -129,17 +140,17 @@ def acctnum_visible_match(a_raw: str, b_raw: str) -> tuple[bool, dict[str, dict[
         debug["why"] = "missing_visible_digits"
         return False, debug
 
-    short, long_ = (
-        (a_digits, b_digits)
-        if len(a_digits) <= len(b_digits)
-        else (b_digits, a_digits)
-    )
+    if len(a_digits) <= len(b_digits):
+        short, long_ = a_digits, b_digits
+    else:
+        short, long_ = b_digits, a_digits
+
     debug["short"] = short
     debug["long"] = long_
 
-    offset = long_.find(short)
-    if offset != -1:
-        debug["match_offset"] = str(offset)
+    ok, offset = _match_visible_digits(short, long_)
+    if ok:
+        debug["match_offset"] = offset
         return True, debug
 
     debug["why"] = "visible_digits_conflict"

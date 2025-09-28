@@ -283,7 +283,7 @@ def test_candidate_loop_logs_and_soft_gate(tmp_path, caplog) -> None:
     assert end_messages == ["CANDIDATE_LOOP_END sid=SID-SOFT built_pairs=0"]
 
 
-def test_candidate_limit_prefers_hard_matches(tmp_path, monkeypatch, caplog) -> None:
+def test_candidate_limit_env_is_ignored(tmp_path, monkeypatch, caplog) -> None:
     monkeypatch.setenv("MERGE_CANDIDATE_LIMIT", "1")
 
     sid = "SID-LIMIT"
@@ -301,7 +301,7 @@ def test_candidate_limit_prefers_hard_matches(tmp_path, monkeypatch, caplog) -> 
     }
     bureaus_two = {
         "equifax": {
-            "account_number_display": "00923456",
+            "account_number_display": "1234567890123456",
         }
     }
 
@@ -315,23 +315,15 @@ def test_candidate_limit_prefers_hard_matches(tmp_path, monkeypatch, caplog) -> 
         scores = score_all_pairs_0_100(sid, [0, 1, 2], runs_root=tmp_path)
 
     assert 1 in scores[0]
+    assert 2 in scores[0]
     assert 0 in scores[1]
-    assert 2 not in scores[0]
-    assert 0 not in scores[2]
+    assert 2 in scores[1]
+    assert 0 in scores[2]
+    assert 1 in scores[2]
 
-    limit_summaries = [
-        json.loads(record.getMessage().split(" ", 1)[1])
+    loop_end_messages = [
+        record.getMessage()
         for record in caplog.records
-        if record.getMessage().startswith("CANDIDATE_LIMIT_SUMMARY ")
+        if record.getMessage().startswith("CANDIDATE_LOOP_END ")
     ]
-    assert limit_summaries
-    summary_payload = limit_summaries[-1]
-    assert summary_payload["kept"] == 1
-    assert summary_payload["dropped"] == 0
-
-    drop_logs = [
-        json.loads(record.getMessage().split(" ", 1)[1])
-        for record in caplog.records
-        if record.getMessage().startswith("CANDIDATE_LIMIT_DROP ")
-    ]
-    assert drop_logs == []
+    assert loop_end_messages == ["CANDIDATE_LOOP_END sid=SID-LIMIT built_pairs=3"]

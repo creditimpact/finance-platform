@@ -742,77 +742,6 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
-def _log_candidate_considered(
-    sid: str,
-    i: int,
-    j: int,
-    total: Any,
-    gate_level: Any,
-    level: str,
-    dates_all: Any,
-    account_points: Any,
-    mid_sum: Any,
-    identity_sum: Any,
-    *,
-    allowed: bool,
-    reason: str,
-) -> None:
-    payload = {
-        "sid": sid,
-        "i": i,
-        "j": j,
-        "allowed": allowed,
-        "reason": reason,
-        "total": _safe_int(total),
-        "gate": gate_level,
-        "gate_level_norm": _sanitize_acct_level(gate_level),
-        "level": _sanitize_acct_level(level),
-        "account_points": _safe_int(account_points),
-        "mid_sum": _safe_int(mid_sum),
-        "identity_sum": _safe_int(identity_sum),
-        "dates_all": bool(dates_all),
-        "score_gate": bool(allowed),
-    }
-    _candidate_logger.info(
-        "CANDIDATE_CONSIDERED %s", json.dumps(payload, sort_keys=True)
-    )
-
-
-def _log_candidate_skipped(
-    sid: str,
-    i: int,
-    j: int,
-    reason: str,
-    *,
-    total: Any = None,
-    level: str | None = None,
-    gate_level: Any = None,
-    account_points: Any = None,
-    dates_all: Any = None,
-    allowed: bool | None = None,
-) -> None:
-    payload = {
-        "sid": sid,
-        "i": i,
-        "j": j,
-        "reason": reason,
-        "dates_all": bool(dates_all),
-        "score_gate": bool(allowed),
-    }
-    if total is not None:
-        payload["total"] = _safe_int(total)
-    if level is not None:
-        payload["level"] = _sanitize_acct_level(level)
-    if gate_level is not None:
-        payload["gate"] = gate_level
-        payload["gate_level_norm"] = _sanitize_acct_level(gate_level)
-    if account_points is not None:
-        payload["account_points"] = _safe_int(account_points)
-    _candidate_logger.info(
-        "CANDIDATE_SKIPPED %s", json.dumps(payload, sort_keys=True)
-    )
-
-
 def _is_zero_amount(value: Any) -> bool:
     try:
         return abs(float(value)) <= _AMOUNT_ZERO_EPSILON
@@ -1446,6 +1375,10 @@ def score_all_pairs_0_100(
         score_log["decision"] = str(result.get("decision", "different"))
         logger.info("MERGE_V2_SCORE %s", json.dumps(score_log, sort_keys=True))
 
+        score_message = f"SCORE {left}-{right} = {total_score}"
+        logger.info(score_message)
+        _candidate_logger.info(score_message)
+
         for event in result.get("trigger_events", []) or []:
             if not isinstance(event, Mapping):
                 continue
@@ -1477,68 +1410,17 @@ def score_all_pairs_0_100(
 
         dates_all_equal = bool(result.get("dates_all"))
 
-        try:
-            acct_points = int(sanitized_parts.get("account_number", 0) or 0)
-        except (TypeError, ValueError):
-            acct_points = 0
-        mid_sum = int(result.get("mid_sum", 0) or 0)
-        identity_sum = int(result.get("identity_sum", 0) or 0)
-
         level_value = _sanitize_acct_level(level_value)
 
         allowed = total_score >= ai_threshold
-        allow_reason = "over_threshold" if allowed else "below_threshold"
-
-        _log_candidate_considered(
-            sid,
-            left,
-            right,
-            total_score,
-            gate_level,
-            level_value,
-            dates_all_equal,
-            acct_points,
-            mid_sum,
-            identity_sum,
-            allowed=allowed,
-            reason=allow_reason,
-        )
-
-        considered_message = (
-            "CANDIDATE_CONSIDERED sid=%s i=%s j=%s reason=%s total=%s gate_level=%s level_value=%s dates_all=%s"
-        )
-        considered_args = (
-            sid,
-            left,
-            right,
-            allow_reason,
-            total_score,
-            gate_level,
-            level_value,
-            dates_all_equal,
-        )
-        logger.info(considered_message, *considered_args)
-        _candidate_logger.info(considered_message, *considered_args)
 
         scores[left][right] = deepcopy(result)
         scores[right][left] = deepcopy(result)
 
         if allowed:
-            added_message = (
-                "CANDIDATE_ADDED sid=%s i=%s j=%s reason=%s total=%s gate_level=%s level_value=%s dates_all=%s"
-            )
-            added_args = (
-                sid,
-                left,
-                right,
-                allow_reason,
-                total_score,
-                gate_level,
-                level_value,
-                dates_all_equal,
-            )
-            logger.info(added_message, *added_args)
-            _candidate_logger.info(added_message, *added_args)
+            pack_built_message = f"PACK_BUILT {left}-{right}"
+            logger.info(pack_built_message)
+            _candidate_logger.info(pack_built_message)
             built_pairs += 1
 
             highlights = _build_ai_highlights(result)
@@ -1577,33 +1459,9 @@ def score_all_pairs_0_100(
                 highlights,
             )
         else:
-            skipped_message = (
-                "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s total=%s gate_level=%s level_value=%s dates_all=%s"
-            )
-            skipped_args = (
-                sid,
-                left,
-                right,
-                allow_reason,
-                total_score,
-                gate_level,
-                level_value,
-                dates_all_equal,
-            )
-            logger.info(skipped_message, *skipped_args)
-            _candidate_logger.info(skipped_message, *skipped_args)
-            _log_candidate_skipped(
-                sid,
-                left,
-                right,
-                allow_reason,
-                total=total_score,
-                level=level_value,
-                gate_level=gate_level,
-                account_points=acct_points,
-                dates_all=dates_all_equal,
-                allowed=allowed,
-            )
+            pack_skipped_message = f"PACK_SKIPPED {left}-{right}"
+            logger.info(pack_skipped_message)
+            _candidate_logger.info(pack_skipped_message)
 
     for left_pos in range(total_accounts - 1):
         for right_pos in range(left_pos + 1, total_accounts):

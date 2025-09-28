@@ -729,6 +729,7 @@ def _log_candidate_considered(
     allow_flags: Mapping[str, Any],
     total: Any,
     gate_level: Any,
+    gate_level_norm: Any,
     level: str,
     account_points: Any,
     mid_sum: Any,
@@ -746,6 +747,7 @@ def _log_candidate_considered(
         "reason": reason,
         "total": _safe_int(total),
         "gate": gate_level,
+        "gate_level_norm": _sanitize_acct_level(gate_level_norm),
         "level": _sanitize_acct_level(level),
         "account_points": _safe_int(account_points),
         "mid_sum": _safe_int(mid_sum),
@@ -768,6 +770,7 @@ def _log_candidate_skipped(
     total: Any = None,
     level: str | None = None,
     gate_level: Any = None,
+    gate_level_norm: Any = None,
     account_points: Any = None,
 ) -> None:
     flags = allow_flags if isinstance(allow_flags, Mapping) else {}
@@ -786,6 +789,8 @@ def _log_candidate_skipped(
         payload["level"] = _sanitize_acct_level(level)
     if gate_level is not None:
         payload["gate"] = gate_level
+    if gate_level_norm is not None:
+        payload["gate_level_norm"] = _sanitize_acct_level(gate_level_norm)
     if account_points is not None:
         payload["account_points"] = _safe_int(account_points)
     _candidate_logger.info(
@@ -1452,7 +1457,11 @@ def score_all_pairs_0_100(
                 "MERGE_V2_DECISION %s", json.dumps(decision_log, sort_keys=True)
             )
 
-            hard_acct = gate_level == "exact_or_known_match"
+            gate_level_norm = level_value
+            if gate_level_norm in {"", "none"}:
+                gate_level_norm = _sanitize_acct_level(gate_level)
+
+            hard_acct = gate_level_norm == "exact_or_known_match"
             dates_all_equal = bool(result.get("dates_all"))
             allow_by_dates = dates_all_equal
             allow_by_total = ai_threshold > 0 and total_score >= ai_threshold
@@ -1474,6 +1483,7 @@ def score_all_pairs_0_100(
                 "dates": allow_by_dates,
                 "dates_all": dates_all_equal,
                 "total": allow_by_total,
+                "gate_level_norm": gate_level_norm,
             }
 
             def add_candidate(
@@ -1503,6 +1513,7 @@ def score_all_pairs_0_100(
                     "reason": reason,
                     "account_points": acct_points,
                     "gate_level": gate_level,
+                    "gate_level_norm": gate_level_norm,
                     "priority": {
                         "category": priority_category,
                         "subscore": priority_subscore,
@@ -1517,6 +1528,7 @@ def score_all_pairs_0_100(
                     dict(allow_flags),
                     total_score,
                     gate_level,
+                    gate_level_norm,
                     level_value,
                     acct_points,
                     mid_sum,
@@ -1550,11 +1562,13 @@ def score_all_pairs_0_100(
 
             if _should_build_pack(total_score, allow_flags, cfg):
                 logger.info(
-                    "CANDIDATE_ADDED sid=%s i=%s j=%s reason=%s",
+                    "CANDIDATE_ADDED sid=%s i=%s j=%s reason=%s hard=%s gate_level_norm=%s",
                     sid,
                     left,
                     right,
                     "score_or_hard_or_dates",
+                    hard_acct,
+                    gate_level_norm,
                 )
                 add_candidate(left, right, reason="score_or_hard_or_dates")
             else:
@@ -1580,6 +1594,7 @@ def score_all_pairs_0_100(
                     total=total_score,
                     level=level_value,
                     gate_level=gate_level,
+                    gate_level_norm=gate_level_norm,
                     account_points=record.get("account_points"),
                 )
 

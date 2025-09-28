@@ -4,6 +4,7 @@ import json
 import os
 import re
 from pathlib import Path
+from datetime import date, datetime
 from typing import Iterable, Mapping
 
 from . import config as merge_config
@@ -164,6 +165,260 @@ def _normalize_highlights(value: Mapping[str, object] | None) -> dict[str, objec
     raise ValueError("highlights payload must be a mapping if provided")
 
 
+def _extract_field_values(lines: Iterable[str], field: str) -> list[str]:
+    pattern = re.compile(rf"{re.escape(field)}\s*:?(.*)$", re.IGNORECASE)
+    values: list[str] = []
+    for line in lines:
+        match = pattern.search(line)
+        if not match:
+            continue
+        tail = match.group(1).strip()
+        if not tail:
+            continue
+        parts = [part.strip(" -") for part in re.split(r"--", tail)]
+        for part in parts:
+            if not part or part in {"--", "-"}:
+                continue
+            cleaned = part.strip()
+            if cleaned:
+                values.append(cleaned)
+    return values
+
+
+_AMOUNT_RE = re.compile(r"(-?\d[\d,]*\.?\d*)")
+
+
+def _parse_amount(value: str | None) -> float | None:
+    if not value:
+        return None
+    cleaned = value.strip().strip("$")
+    if not cleaned or cleaned.lower() in {"--", "n/a", "na"}:
+        return None
+    cleaned = cleaned.replace("$", "").replace(",", "")
+    match = _AMOUNT_RE.search(cleaned)
+    if not match:
+        return None
+    number = match.group(1)
+    if not number:
+        return None
+    try:
+        return float(number)
+    except ValueError:
+        return None
+
+
+def _amounts_close(left: float, right: float, tol_abs: float, tol_ratio: float) -> bool:
+    delta = abs(left - right)
+    if delta <= tol_abs:
+        return True
+    if max(abs(left), abs(right)) == 0:
+        return False
+    return delta / max(abs(left), abs(right)) <= tol_ratio
+
+
+def _first_amount(values: Iterable[str]) -> float | None:
+    for raw in values:
+        amount = _parse_amount(raw)
+        if amount is not None:
+            return amount
+    return None
+
+
+def _strip_ordinal_suffix(text: str) -> str:
+    return re.sub(r"(\d)(st|nd|rd|th)\b", r"\1", text, flags=re.IGNORECASE)
+
+
+_DATE_FORMATS = (
+    "%m/%d/%Y",
+    "%m/%d/%y",
+    "%d/%m/%Y",
+    "%d/%m/%y",
+    "%Y-%m-%d",
+    "%m-%d-%Y",
+    "%m-%d-%y",
+    "%d-%m-%Y",
+    "%d-%m-%y",
+    "%d.%m.%Y",
+    "%Y.%m.%d",
+    "%b %d, %Y",
+    "%d %b %Y",
+    "%b %Y",
+    "%Y",
+)
+
+
+def _parse_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    cleaned = value.strip().strip("-–—")
+    if not cleaned:
+        return None
+    lowered = cleaned.lower()
+    if lowered in {"--", "n/a", "na"}:
+        return None
+    normalized = _strip_ordinal_suffix(cleaned.replace("–", "-").replace("—", "-"))
+    normalized = re.sub(r"\s+", " ", normalized)
+    for fmt in _DATE_FORMATS:
+        candidate = normalized
+        if fmt in {"%m/%d/%Y", "%m/%d/%y", "%d/%m/%Y", "%d/%m/%y"}:
+            candidate = normalized.replace("-", "/")
+        elif fmt in {"%m-%d-%Y", "%m-%d-%y", "%d-%m-%Y", "%d-%m-%y"}:
+            candidate = normalized.replace("/", "-")
+        elif fmt in {"%d.%m.%Y", "%Y.%m.%d"}:
+            candidate = normalized.replace("-", ".").replace("/", ".")
+        try:
+            if fmt == "%Y-%m-%d":
+                return date.fromisoformat(candidate)
+            dt = datetime.strptime(candidate, fmt)
+        except ValueError:
+            continue
+        if fmt == "%b %Y":
+            return date(dt.year, dt.month, 1)
+        if fmt == "%Y":
+            return date(dt.year, 1, 1)
+        return dt.date()
+    numeric = re.sub(r"[^0-9]", "", normalized)
+    if len(numeric) == 8:
+        try:
+            dt = datetime.strptime(numeric, "%Y%m%d")
+            return dt.date()
+        except ValueError:
+            pass
+    return None
+
+
+def _first_date(values: Iterable[str]) -> date | None:
+    for raw in values:
+        parsed = _parse_date(raw)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _is_collection(values: Iterable[str]) -> bool:
+    for raw in values:
+        lowered = raw.lower()
+        if "collection" in lowered:
+            return True
+    return False
+
+
+_ORIGINAL_KEYWORDS = {
+    "bank",
+    "financial",
+    "finance",
+    "lender",
+    "mortgage",
+    "credit union",
+    "servicing",
+    "services",
+    "loan",
+    "credit card",
+}
+
+
+def _is_original(values: Iterable[str]) -> bool:
+    for raw in values:
+        lowered = raw.lower()
+        for token in _ORIGINAL_KEYWORDS:
+            if token in lowered:
+                return True
+    return False
+
+
+def _resolve_tolerances() -> tuple[float, float]:
+    from backend.core.logic.report_analysis.account_merge import get_merge_cfg
+
+    try:
+        cfg = get_merge_cfg()
+        tolerances = cfg.tolerances if isinstance(cfg.tolerances, Mapping) else {}
+    except Exception:
+        tolerances = {}
+    try:
+        tol_abs = float(tolerances.get("AMOUNT_TOL_ABS", 50.0))
+    except (TypeError, ValueError):
+        tol_abs = 50.0
+    try:
+        tol_ratio = float(tolerances.get("AMOUNT_TOL_RATIO", 0.01))
+    except (TypeError, ValueError):
+        tol_ratio = 0.01
+    return tol_abs, tol_ratio
+
+
+def build_context_flags(
+    highlights: Mapping[str, object] | None,
+    lines_a: Iterable[str],
+    lines_b: Iterable[str],
+) -> dict[str, bool]:
+    tol_abs, tol_ratio = _resolve_tolerances()
+
+    highlights_map = dict(highlights or {})
+    matched_fields = {}
+    raw_matched = highlights_map.get("matched_fields")
+    if isinstance(raw_matched, Mapping):
+        matched_fields = {str(key): bool(value) for key, value in raw_matched.items()}
+
+    creditor_type_a = list(_extract_field_values(lines_a, "Creditor Type"))
+    creditor_type_b = list(_extract_field_values(lines_b, "Creditor Type"))
+    account_type_a = list(_extract_field_values(lines_a, "Account Type"))
+    account_type_b = list(_extract_field_values(lines_b, "Account Type"))
+
+    is_collection_a = _is_collection(creditor_type_a) or _is_collection(account_type_a)
+    is_collection_b = _is_collection(creditor_type_b) or _is_collection(account_type_b)
+
+    is_original_a = (not is_collection_a) and _is_original(creditor_type_a + account_type_a)
+    is_original_b = (not is_collection_b) and _is_original(creditor_type_b + account_type_b)
+
+    balance_a = _first_amount(_extract_field_values(lines_a, "Balance Owed"))
+    balance_b = _first_amount(_extract_field_values(lines_b, "Balance Owed"))
+    past_due_a = _first_amount(_extract_field_values(lines_a, "Past Due Amount"))
+    past_due_b = _first_amount(_extract_field_values(lines_b, "Past Due Amount"))
+
+    amounts_equal = False
+    if matched_fields.get("balance_owed") or matched_fields.get("past_due_amount"):
+        amounts_equal = True
+    else:
+        amount_pairs = [
+            (balance_a, balance_b),
+            (past_due_a, past_due_b),
+        ]
+        for left, right in amount_pairs:
+            if left is None or right is None:
+                continue
+            if left <= 0 or right <= 0:
+                continue
+            if _amounts_close(left, right, tol_abs, tol_ratio):
+                amounts_equal = True
+                break
+
+    dla_a = _first_date(_extract_field_values(lines_a, "Date of Last Activity"))
+    dla_b = _first_date(_extract_field_values(lines_b, "Date of Last Activity"))
+    opened_a = _first_date(_extract_field_values(lines_a, "Date Opened"))
+    opened_b = _first_date(_extract_field_values(lines_b, "Date Opened"))
+
+    date_pairs: list[tuple[date, date]] = []
+    for left, right in (
+        (opened_a, opened_b),
+        (opened_a, dla_b),
+        (dla_a, dla_b),
+        (dla_a, opened_b),
+    ):
+        if left is None or right is None:
+            continue
+        date_pairs.append((left, right))
+
+    dates_plausible = any(right >= left for left, right in date_pairs)
+
+    return {
+        "is_collection_agency_a": bool(is_collection_a),
+        "is_collection_agency_b": bool(is_collection_b),
+        "is_original_creditor_a": bool(is_original_a),
+        "is_original_creditor_b": bool(is_original_b),
+        "amounts_equal_within_tol": bool(amounts_equal),
+        "dates_plausible_chain": bool(dates_plausible),
+    }
+
+
 def _build_pack_payload(
     sid: str,
     first_idx: int,
@@ -277,6 +532,18 @@ def build_ai_pack_for_pair(
 
         account_number_a = _extract_account_number(normalized_a)
         account_number_b = _extract_account_number(normalized_b)
+
+        context_flags = build_context_flags(
+            normalized_highlights,
+            normalized_a,
+            normalized_b,
+        )
+
+        if isinstance(normalized_highlights, dict):
+            normalized_highlights = dict(normalized_highlights)
+        else:
+            normalized_highlights = {}
+        normalized_highlights["context_flags"] = context_flags
 
         pack_for_a = _build_pack_payload(
             sid_str,

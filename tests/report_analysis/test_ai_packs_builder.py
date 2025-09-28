@@ -121,7 +121,11 @@ def test_build_merge_ai_packs_curates_context_and_prompt(tmp_path: Path) -> None
     assert pack["highlights"]["identity_score"] == 28
     assert pack["highlights"]["debt_score"] == 31
     assert pack["highlights"]["matched_fields"]["balance_owed"] is True
+    assert pack["highlights"]["context_flags"]["amounts_equal_within_tol"] is True
+    assert pack["highlights"]["context_flags"]["dates_plausible_chain"] is False
     assert pack["limits"]["max_lines_per_side"] == 6
+    assert pack["context_flags"]["amounts_equal_within_tol"] is True
+    assert pack["context_flags"]["is_collection_agency_a"] is False
     assert set(pack["tolerances_hint"].keys()) == {
         "amount_abs_usd",
         "amount_ratio",
@@ -142,6 +146,8 @@ def test_build_merge_ai_packs_curates_context_and_prompt(tmp_path: Path) -> None
     assert user_payload["ids"]["account_number_b_normalized"] == "409451"
     assert user_payload["ids"]["account_number_a_last4"] == "9451"
     assert user_payload["ids"]["account_number_b_last4"] == "9451"
+    assert user_payload["context_flags"]["amounts_equal_within_tol"] is True
+    assert user_payload["context_flags"]["dates_plausible_chain"] is False
     assert user_payload["output_contract"]["decision"] == [
         "same_account_same_debt",
         "same_account_diff_debt",

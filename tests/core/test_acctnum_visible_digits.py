@@ -18,4 +18,4 @@ def test_visible_digits_suffix_match() -> None:
 def test_visible_digits_conflict() -> None:
     ok, debug = acctnum_visible_match("555550*****", "555555*****")
     assert not ok
-    assert debug["why"] == "visible_digits_mismatch"
+    assert debug["why"] == "visible_digits_conflict"

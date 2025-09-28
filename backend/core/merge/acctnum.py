@@ -122,20 +122,27 @@ def acctnum_visible_match(a_raw: str, b_raw: str) -> tuple[bool, dict[str, dict[
         "short": "",
         "long": "",
         "why": "",
+        "match_offset": "",
     }
 
     if not a_digits or not b_digits:
         debug["why"] = "missing_visible_digits"
         return False, debug
 
-    short, long_ = (a_digits, b_digits) if len(a_digits) <= len(b_digits) else (b_digits, a_digits)
+    short, long_ = (
+        (a_digits, b_digits)
+        if len(a_digits) <= len(b_digits)
+        else (b_digits, a_digits)
+    )
     debug["short"] = short
     debug["long"] = long_
 
-    if short in long_:
+    offset = long_.find(short)
+    if offset != -1:
+        debug["match_offset"] = str(offset)
         return True, debug
 
-    debug["why"] = "visible_digits_mismatch"
+    debug["why"] = "visible_digits_conflict"
     return False, debug
 
 

@@ -37,6 +37,7 @@ __all__ = [
 
 
 logger = logging.getLogger(__name__)
+_candidate_logger = logging.getLogger("ai_packs")
 
 
 POINTS_ACCTNUM_VISIBLE = 28
@@ -730,138 +731,27 @@ def _detect_soft_acct_match(
 
 def _log_candidate_considered(
     sid: str,
-    left: int,
-    right: int,
-    *,
-    reason: str | None = None,
-    record: Mapping[str, Any] | None = None,
-    allow_flags: Mapping[str, Any] | None = None,
-    total: Any | None = None,
-    gate_level: str | None = None,
-    extra: Mapping[str, Any] | None = None,
+    i: int,
+    j: int,
+    allow_flags: Mapping[str, Any],
+    total: Any,
+    gate_level: Any,
 ) -> None:
-    payload: Dict[str, Any] = {
-        "sid": sid,
-        "i": int(left),
-        "j": int(right),
-    }
-
-    if record is not None:
-        payload["allowed"] = bool(record.get("allowed"))
-        payload["acctnum_level"] = _sanitize_acct_level(record.get("level"))
-        payload["dates_all"] = bool(record.get("dates_all"))
-        payload["score_gate"] = bool(record.get("score_gate"))
-        payload["soft"] = bool(record.get("soft"))
-        try:
-            payload["mid_sum"] = int(record.get("mid_sum", 0) or 0)
-        except (TypeError, ValueError):
-            payload["mid_sum"] = 0
-        try:
-            payload["identity_sum"] = int(record.get("identity_sum", 0) or 0)
-        except (TypeError, ValueError):
-            payload["identity_sum"] = 0
-
-        priority = record.get("priority")
-        if isinstance(priority, Mapping):
-            priority_payload: Dict[str, Any] = {}
-            try:
-                priority_payload["category"] = int(priority.get("category", 0) or 0)
-            except (TypeError, ValueError):
-                priority_payload["category"] = 0
-            try:
-                priority_payload["subscore"] = int(priority.get("subscore", 0) or 0)
-            except (TypeError, ValueError):
-                priority_payload["subscore"] = 0
-            priority_payload["label"] = str(priority.get("label", ""))
-            payload["priority"] = priority_payload
-
-        if reason is None:
-            reason = record.get("reason")
-
-    if reason is not None:
-        payload["reason"] = str(reason)
-
-    if allow_flags is None and isinstance(record, Mapping):
-        allow_flags = record.get("allow_flags")
-    if isinstance(allow_flags, Mapping):
-        payload["allow_flags"] = {
-            "hard_acct": bool(allow_flags.get("hard_acct")),
-            "dates": bool(allow_flags.get("dates")),
-            "total": bool(allow_flags.get("total")),
-        }
-
-    if total is None and isinstance(record, Mapping):
-        total = record.get("total", 0)
-    try:
-        payload["total"] = int(total or 0)
-    except (TypeError, ValueError):
-        payload["total"] = 0
-
-    if gate_level is None and isinstance(record, Mapping):
-        gate_level = record.get("level")
-    if gate_level is not None:
-        payload["acctnum_gate_level"] = _sanitize_acct_level(gate_level)
-
-    if isinstance(extra, Mapping):
-        for key, value in extra.items():
-            payload[key] = value
-
-    logger.info("CANDIDATE_CONSIDERED %s", json.dumps(payload, sort_keys=True))
+    _candidate_logger.info(
+        "CANDIDATE_CONSIDERED sid=%s i=%s j=%s hard_acct=%s total=%s gate=%s",
+        sid,
+        i,
+        j,
+        bool(allow_flags.get("hard_acct")),
+        total,
+        gate_level,
+    )
 
 
-def _log_candidate_skipped(
-    sid: str,
-    left: int,
-    right: int,
-    *,
-    reason: str,
-    record: Mapping[str, Any] | None = None,
-    extra: Mapping[str, Any] | None = None,
-) -> None:
-    payload: Dict[str, Any] = {
-        "sid": sid,
-        "i": int(left),
-        "j": int(right),
-        "reason": str(reason),
-    }
-
-    if isinstance(record, Mapping):
-        payload["allowed"] = bool(record.get("allowed"))
-        payload["acctnum_level"] = _sanitize_acct_level(record.get("level"))
-        try:
-            payload["total"] = int(record.get("total", 0) or 0)
-        except (TypeError, ValueError):
-            payload["total"] = 0
-        payload["dates_all"] = bool(record.get("dates_all"))
-        payload["score_gate"] = bool(record.get("score_gate"))
-
-        allow_flags = record.get("allow_flags")
-        if isinstance(allow_flags, Mapping):
-            payload["allow_flags"] = {
-                "hard_acct": bool(allow_flags.get("hard_acct")),
-                "dates": bool(allow_flags.get("dates")),
-                "total": bool(allow_flags.get("total")),
-            }
-
-        priority = record.get("priority")
-        if isinstance(priority, Mapping):
-            priority_payload: Dict[str, Any] = {}
-            try:
-                priority_payload["category"] = int(priority.get("category", 0) or 0)
-            except (TypeError, ValueError):
-                priority_payload["category"] = 0
-            try:
-                priority_payload["subscore"] = int(priority.get("subscore", 0) or 0)
-            except (TypeError, ValueError):
-                priority_payload["subscore"] = 0
-            priority_payload["label"] = str(priority.get("label", ""))
-            payload["priority"] = priority_payload
-
-    if isinstance(extra, Mapping):
-        for key, value in extra.items():
-            payload[key] = value
-
-    logger.info("CANDIDATE_SKIPPED %s", json.dumps(payload, sort_keys=True))
+def _log_candidate_skipped(sid: str, i: int, j: int, reason: str) -> None:
+    _candidate_logger.info(
+        "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s", sid, i, j, reason
+    )
 
 
 def _is_zero_amount(value: Any) -> bool:
@@ -1575,11 +1465,9 @@ def score_all_pairs_0_100(
                     sid,
                     i,
                     j,
-                    reason=reason,
-                    record=record,
-                    allow_flags=dict(allow_flags),
-                    total=total_score,
-                    gate_level=gate_level,
+                    dict(allow_flags),
+                    total_score,
+                    gate_level,
                 )
                 return record
 
@@ -1602,8 +1490,7 @@ def score_all_pairs_0_100(
                     sid,
                     left,
                     right,
-                    reason="below_threshold_no_acctnum",
-                    record=record,
+                    "below_threshold_no_acctnum",
                 )
 
     allowed_records = [record for record in candidate_records if record.get("allowed")]
@@ -1699,13 +1586,7 @@ def score_all_pairs_0_100(
                 sid,
                 left,
                 right,
-                reason="cap_nonhard_per_account",
-                record=record,
-                extra={
-                    "per_account_limit": int(per_account_limit or 0),
-                    "per_account_count_left": int(per_account_counts[left]),
-                    "per_account_count_right": int(per_account_counts[right]),
-                },
+                "cap_nonhard_per_account",
             )
             continue
 
@@ -1715,12 +1596,7 @@ def score_all_pairs_0_100(
                 sid,
                 left,
                 right,
-                reason="cap_nonhard_global",
-                record=record,
-                extra={
-                    "global_limit": int(global_limit or 0),
-                    "selected_nonhard": len(selected_nonhard),
-                },
+                "cap_nonhard_global",
             )
             continue
 

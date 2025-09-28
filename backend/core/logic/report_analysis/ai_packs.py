@@ -14,6 +14,7 @@ from backend.core.merge.acctnum import normalize_level
 from backend.core.logic.normalize import last4 as normalize_last4
 from backend.core.logic.normalize import normalize_acctnum
 from backend.core.logic.report_analysis.account_merge import get_merge_cfg
+from backend.core.logic.report_analysis.ai_pack import build_context_flags
 from backend.core.logic.report_analysis.keys import normalize_issuer
 
 from . import config as merge_config
@@ -37,6 +38,15 @@ SYSTEM_PROMPT = (
     "Legacy labels (merge, same_debt, same_debt_account_different, same_account, "
     "same_account_debt_different, different) may appear in reference material, but "
     "you MUST respond using only the six decisions above.\n"
+    "If account identifiers DO NOT match, but:\n"
+    "- amounts_equal_within_tol is true for positive debt (balance and/or past due), AND\n"
+    "- one side is a collection agent (is_collection_agency_*) while the other is an original creditor (is_original_creditor_*), AND\n"
+    "- dates_plausible_chain is true (collection reported/opened after the original),\n"
+    "then prefer \"same_debt_diff_account\" over \"different\".\n"
+    "Only output one of: same_account_same_debt, same_account_diff_debt, same_account_debt_unknown, same_debt_diff_account, same_debt_account_unknown, different.\n"
+    "Flags guidance:\n"
+    "- account_match = true only for same_account_* decisions; false for same_debt_* or different.\n"
+    "- debt_match = true for same_*_same_debt and same_debt_*; false for *_diff_debt and different; use \"unknown\" only when instructed (e.g., same_account_debt_unknown or same_debt_account_unknown).\n"
     "Return strict JSON only: {\"decision\":\"<one above>\",\"reason\":\"short natural "
     "language\",\"flags\":{\"account_match\":true|false|\"unknown\",\"debt_match\":true|false|"
     "\"unknown\"}}. Do not add commentary or extra keys."
@@ -594,13 +604,20 @@ def build_merge_ai_packs(
             "account_number_b_last4": last4_b,
         }
 
+        context_flags = build_context_flags(
+            highlights,
+            account_a.get("lines", []),
+            account_b.get("lines", []),
+        )
         summary = dict(highlights)
+        summary["context_flags"] = context_flags
 
         user_payload = {
             "sid": sid_str,
             "pair": {"a": a_idx, "b": b_idx},
             "ids": ids_payload,
             "numeric_match_summary": summary,
+            "context_flags": dict(context_flags),
             "tolerances_hint": dict(tolerance_hint),
             "limits": {"max_lines_per_side": context_limit},
             "context": {"a": context_a, "b": context_b},
@@ -626,6 +643,7 @@ def build_merge_ai_packs(
             "pair": {"a": a_idx, "b": b_idx},
             "ids": ids_payload,
             "highlights": summary,
+            "context_flags": dict(context_flags),
             "tolerances_hint": dict(tolerance_hint),
             "limits": {"max_lines_per_side": context_limit},
             "context": {"a": context_a, "b": context_b},

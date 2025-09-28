@@ -2122,15 +2122,30 @@ def build_summary_ai_entries(
     )
     if reason_text:
         decision_entry["reason"] = reason_text
+    normalized_flags: Dict[str, Any] = {}
     if isinstance(flags, Mapping):
-        normalized_flags: Dict[str, Any] = {}
         for key in ("account_match", "debt_match"):
             flag_value = flags.get(key)
             normalized_value = _normalize_flag_value(flag_value)
             if normalized_value is not None:
                 normalized_flags[key] = normalized_value
-        if normalized_flags:
-            decision_entry["flags"] = normalized_flags
+
+    default_flags: Dict[str, Any] = {}
+    if normalized_decision.startswith("same_account_"):
+        default_flags["account_match"] = True
+        if normalized_decision.endswith("_same_debt"):
+            default_flags["debt_match"] = True
+    if normalized_decision.startswith("same_debt_"):
+        default_flags["debt_match"] = True
+
+    final_flags: Dict[str, Any] = {}
+    for key in ("account_match", "debt_match"):
+        if key in normalized_flags:
+            final_flags[key] = normalized_flags[key]
+        else:
+            final_flags[key] = default_flags.get(key, "unknown")
+
+    decision_entry["flags"] = final_flags
     entries.append(decision_entry)
 
     pair_entry: Dict[str, Any] = {"kind": "same_account_pair", "with": partner}

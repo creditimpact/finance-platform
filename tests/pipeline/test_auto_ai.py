@@ -819,6 +819,21 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
         },
     ]
 
+    pack_files = sorted(packs_dir.glob("pair_*.jsonl"))
+    assert pack_files
+    pack_payload = json.loads(pack_files[0].read_text(encoding="utf-8"))
+    assert pack_payload["ai_result"] == {
+        "decision": "different",
+        "reason": "These tradelines describe the same debt from different collectors.",
+        "flags": {"account_match": False, "debt_match": False},
+    }
+
+    index_payload = json.loads((packs_dir / "index.json").read_text(encoding="utf-8"))
+    matching = [entry for entry in index_payload.get("pairs", []) if entry.get("pair") == [11, 16]]
+    assert matching
+    pair_entry = matching[0]
+    assert pair_entry.get("ai_result") == pack_payload["ai_result"]
+
     summary_a = json.loads((account_a / "summary.json").read_text(encoding="utf-8"))
     summary_b = json.loads((account_b / "summary.json").read_text(encoding="utf-8"))
 

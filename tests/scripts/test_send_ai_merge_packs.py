@@ -239,6 +239,22 @@ def test_send_ai_merge_packs_records_merge_decision(
     assert decision_tag_a == {"with": 16, **expected_decision}
     assert decision_tag_b == {"with": 11, **expected_decision}
 
+    pack_files = sorted(packs_dir.glob("pair_*.jsonl"))
+    assert pack_files, "expected at least one AI pack to be written"
+    pack_payload = json.loads(pack_files[0].read_text(encoding="utf-8"))
+    assert pack_payload["pair"] == {"a": 11, "b": 16}
+    assert pack_payload["ai_result"] == {
+        "decision": "merge",
+        "reason": "Records align cleanly.",
+        "flags": {"account_match": True, "debt_match": True},
+    }
+
+    index_payload = json.loads((packs_dir / "index.json").read_text(encoding="utf-8"))
+    pairs_entries = index_payload.get("pairs", [])
+    matching = [entry for entry in pairs_entries if entry.get("pair") == [11, 16]]
+    assert matching
+    assert matching[0].get("ai_result") == pack_payload["ai_result"]
+
     pair_tag_a = next(
         tag
         for tag in account_a_tags

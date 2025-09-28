@@ -134,20 +134,155 @@ DEFAULT_MAX_RETRIES = 3
 DEFAULT_BACKOFF_SCHEDULE = "1,3,7"
 
 
-def _load_index(path: Path) -> list[Mapping[str, object]]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(data, MappingABC):
-        entries = data.get("pairs")
-        if entries is None:
-            entries = data.get("packs")
-        if entries is None:
-            return []
-        if not isinstance(entries, list):
-            raise ValueError(f"Pack index entries must be a list: {path}")
-        return [dict(entry) for entry in entries if isinstance(entry, MappingABC)]
-    if isinstance(data, list):  # pragma: no cover - legacy support
-        return [dict(entry) for entry in data if isinstance(entry, MappingABC)]
-    raise ValueError(f"Pack index must be a mapping or list: {path}")
+def _load_index_payload(
+    path: Path,
+) -> tuple[dict[str, object], dict[tuple[int, int], dict[str, object]]]:
+    data_raw: dict[str, object] = {}
+    entries: dict[tuple[int, int], dict[str, object]] = {}
+
+    if path.exists():
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(loaded, MappingABC):
+            data_raw = dict(loaded)
+        elif isinstance(loaded, list):  # pragma: no cover - legacy support
+            data_raw = {"packs": list(loaded)}
+        else:
+            raise ValueError(f"Pack index must be a mapping or list: {path}")
+
+    for source_key in ("packs", "pairs"):
+        items = data_raw.get(source_key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, MappingABC):
+                continue
+            a_val = item.get("a")
+            b_val = item.get("b")
+            pair_val = item.get("pair")
+            a_idx: int | None = None
+            b_idx: int | None = None
+            if isinstance(pair_val, Sequence) and len(pair_val) == 2:
+                try:
+                    a_idx = int(pair_val[0])
+                    b_idx = int(pair_val[1])
+                except (TypeError, ValueError):
+                    a_idx = b_idx = None
+            if a_idx is None or b_idx is None:
+                try:
+                    a_idx = int(a_val)
+                    b_idx = int(b_val)
+                except (TypeError, ValueError):
+                    continue
+            key = (a_idx, b_idx)
+            dest = entries.setdefault(key, {"a": a_idx, "b": b_idx})
+            dest.update({k: v for k, v in dict(item).items() if k not in {"a", "b"}})
+            dest["pair"] = [a_idx, b_idx]
+    return data_raw, entries
+
+
+def _normalize_pair(value: Mapping[str, object] | Sequence[object] | None) -> tuple[int, int] | None:
+    if isinstance(value, MappingABC):
+        try:
+            return int(value.get("a")), int(value.get("b"))
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, Sequence) and len(value) == 2:
+        try:
+            return int(value[0]), int(value[1])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _pair_from_filename(name: str) -> tuple[int, int] | None:
+    if not name.startswith("pair_"):
+        return None
+    stem = name
+    if stem.endswith(".jsonl"):
+        stem = stem[:-6]
+    parts = stem.split("_")
+    if len(parts) != 3:
+        return None
+    try:
+        return int(parts[1]), int(parts[2])
+    except (TypeError, ValueError):
+        return None
+
+
+def _pair_from_pack(pack: Mapping[str, object], pack_path: Path) -> tuple[int, int]:
+    pair_value = pack.get("pair")
+    normalized = _normalize_pair(pair_value if isinstance(pair_value, (MappingABC, Sequence)) else None)
+    if normalized is not None:
+        return normalized
+    filename_pair = _pair_from_filename(pack_path.name)
+    if filename_pair is not None:
+        return filename_pair
+    raise ValueError(f"Pack {pack_path} is missing pair indices")
+
+
+def _score_from_pack(pack: Mapping[str, object]) -> int:
+    highlights = pack.get("highlights")
+    total: object | None = None
+    if isinstance(highlights, MappingABC):
+        total = highlights.get("total")
+    elif isinstance(pack.get("score"), (int, float)):
+        total = pack["score"]
+    try:
+        return int(total) if total is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _write_pack(path: Path, payload: Mapping[str, object]) -> None:
+    serialized = json.dumps(dict(payload), ensure_ascii=False, sort_keys=True)
+    path.write_text(f"{serialized}\n", encoding="utf-8")
+
+
+def _score_from_entry(entry: Mapping[str, object]) -> int:
+    for key in ("score", "score_total"):
+        value = entry.get(key)
+        try:
+            if value is not None:
+                return int(value)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _build_index_payload(
+    sid: str,
+    base: Mapping[str, object],
+    entries: Mapping[tuple[int, int], Mapping[str, object]],
+) -> dict[str, object]:
+    sorted_pairs = sorted(entries.items(), key=lambda item: item[0])
+    packs_payload: list[dict[str, object]] = []
+    pairs_payload: list[dict[str, object]] = []
+    for (a_idx, b_idx), entry in sorted_pairs:
+        score_value = _score_from_entry(entry)
+        pack_entry = dict(entry)
+        pack_entry["a"] = a_idx
+        pack_entry["b"] = b_idx
+        pack_entry["pair"] = [a_idx, b_idx]
+        pack_entry.setdefault("pack_file", f"pair_{a_idx:03d}_{b_idx:03d}.jsonl")
+        pack_entry["score_total"] = score_value
+        pack_entry["score"] = score_value
+        packs_payload.append(pack_entry)
+
+        pair_entry: dict[str, object] = {"pair": [a_idx, b_idx], "score": score_value}
+        ai_result = entry.get("ai_result")
+        if isinstance(ai_result, MappingABC):
+            pair_entry["ai_result"] = dict(ai_result)
+        error_payload = entry.get("error")
+        if isinstance(error_payload, MappingABC):
+            pair_entry["error"] = dict(error_payload)
+        pairs_payload.append(pair_entry)
+
+    payload = dict(base)
+    payload["sid"] = sid
+    payload["packs"] = packs_payload
+    payload["pairs"] = pairs_payload
+    payload["pairs_count"] = len(packs_payload)
+    return payload
 
 
 def _load_pack(path: Path) -> Mapping[str, object]:
@@ -630,19 +765,23 @@ def main(argv: Sequence[str] | None = None) -> None:
     if not index_path.exists():
         raise SystemExit(f"No AI packs for SID (index.json not found at {index_path})")
 
+    pair_paths = sorted(packs_dir.glob("pair_*.jsonl"))
+    if not pair_paths:
+        raise SystemExit(f"No AI packs for SID (no pair_*.jsonl files at {packs_dir})")
+
     run_dir = manifest.path.parent
 
-    index = _load_index(index_path)
+    index_data, index_entries = _load_index_payload(index_path)
     logs_path = packs_dir / "logs.txt"
 
     manifest.update_ai_packs(
         dir=packs_dir,
         index=index_path,
         logs=logs_path,
-        pairs=len(index),
+        pairs=len(pair_paths),
     )
 
-    total = 0
+    total = len(pair_paths)
     successes = 0
     failures = 0
     if args.max_retries is None:
@@ -656,28 +795,41 @@ def main(argv: Sequence[str] | None = None) -> None:
         backoff_schedule = _parse_backoff_schedule(str(args.backoff))
     max_attempts = max(0, max_retries) + 1
 
-    for entry in index:
-        if "a" not in entry or "b" not in entry or "pack_file" not in entry:
-            raise ValueError(f"Invalid pack index entry: {entry}")
-        a_idx = int(entry["a"])
-        b_idx = int(entry["b"])
-        pack_path = packs_dir / str(entry["pack_file"])
-        if not pack_path.exists():
-            raise FileNotFoundError(f"Pack file missing: {pack_path}")
-
+    for pack_path in pair_paths:
         pack = _append_zero_debt_rules(_load_pack(pack_path))
-        total += 1
+        a_idx, b_idx = _pair_from_pack(pack, pack_path)
+        score_value = _score_from_pack(pack)
+        entry = index_entries.setdefault((a_idx, b_idx), {"a": a_idx, "b": b_idx})
+        entry.update(
+            {
+                "pack_file": pack_path.name,
+                "score": score_value,
+                "score_total": score_value,
+                "pair": [a_idx, b_idx],
+            }
+        )
 
-        pack_log = _log_factory(logs_path, sid, {"a": a_idx, "b": b_idx}, pack_path.name)
+        pair_for_log = {"a": a_idx, "b": b_idx}
+        pack_log = _log_factory(logs_path, sid, pair_for_log, pack_path.name)
+
+        ai_result_existing = pack.get("ai_result")
+        if isinstance(ai_result_existing, MappingABC):
+            entry["ai_result"] = dict(ai_result_existing)
+            entry.pop("error", None)
+            pack_log("PACK_SKIP", {"reason": "ai_result_present"})
+            successes += 1
+            continue
+
+        attempts = 0
+        decision_payload: Mapping[str, object] | None = None
+        last_error: Exception | None = None
+
         pack_log(
             "PACK_START",
             {
                 "max_attempts": max_attempts,
             },
         )
-        attempts = 0
-        decision_payload: Mapping[str, object] | None = None
-        last_error: Exception | None = None
 
         while attempts < max_attempts:
             attempts += 1
@@ -738,6 +890,12 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
             timestamp = _isoformat_timestamp()
             _write_error_tags(run_dir, a_idx, b_idx, error_name, message, timestamp)
+            error_payload = {"kind": error_name, "message": message}
+            pack["ai_error"] = error_payload
+            pack.pop("ai_result", None)
+            _write_pack(pack_path, pack)
+            entry["error"] = dict(error_payload)
+            entry.pop("ai_result", None)
             failures += 1
             continue
 
@@ -822,6 +980,17 @@ def main(argv: Sequence[str] | None = None) -> None:
             },
         )
 
+        ai_result_payload = {
+            "decision": decision,
+            "reason": reason,
+            "flags": dict(flags_normalized),
+        }
+        pack["ai_result"] = ai_result_payload
+        pack.pop("ai_error", None)
+        _write_pack(pack_path, pack)
+        entry["ai_result"] = dict(ai_result_payload)
+        entry.pop("error", None)
+
         _write_decision_tags(
             run_dir,
             a_int,
@@ -840,6 +1009,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             },
         )
         successes += 1
+
+    index_payload = _build_index_payload(sid, index_data, index_entries)
+    index_serialized = json.dumps(index_payload, ensure_ascii=False, indent=2)
+    index_path.write_text(f"{index_serialized}\n", encoding="utf-8")
 
     if failures == 0:
         manifest.set_ai_sent()

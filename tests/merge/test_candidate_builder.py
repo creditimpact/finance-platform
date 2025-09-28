@@ -36,8 +36,8 @@ def test_hard_pairs_bypass_per_account_caps(tmp_path, monkeypatch) -> None:
     accounts_root = tmp_path / sid / "cases" / "accounts"
 
     bureaus_28 = {"transunion": {"account_number_display": "349992*****"}}
-    bureaus_29 = {"experian": {"account_number_display": "3499921234"}}
-    bureaus_39 = {"equifax": {"account_number_display": "3499921234"}}
+    bureaus_29 = {"experian": {"account_number_display": "3499921234567"}}
+    bureaus_39 = {"equifax": {"account_number_display": "3499921234567"}}
 
     _write_account_payload(accounts_root, 28, bureaus_28)
     _write_account_payload(accounts_root, 29, bureaus_29)

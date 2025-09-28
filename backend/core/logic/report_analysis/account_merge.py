@@ -729,6 +729,13 @@ def _detect_soft_acct_match(
     return False
 
 
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _log_candidate_considered(
     sid: str,
     i: int,
@@ -736,29 +743,67 @@ def _log_candidate_considered(
     allow_flags: Mapping[str, Any],
     total: Any,
     gate_level: Any,
+    level: str,
+    account_points: Any,
+    mid_sum: Any,
+    identity_sum: Any,
     *,
     allowed: bool,
     reason: str,
 ) -> None:
+    payload = {
+        "sid": sid,
+        "i": i,
+        "j": j,
+        "hard_acct": bool(allow_flags.get("hard_acct")),
+        "allowed": allowed,
+        "reason": reason,
+        "total": _safe_int(total),
+        "gate": gate_level,
+        "level": _sanitize_acct_level(level),
+        "account_points": _safe_int(account_points),
+        "mid_sum": _safe_int(mid_sum),
+        "identity_sum": _safe_int(identity_sum),
+        "dates_all": bool(allow_flags.get("dates")),
+        "score_gate": bool(allow_flags.get("total")),
+    }
     _candidate_logger.info(
-        (
-            "CANDIDATE_CONSIDERED sid=%s i=%s j=%s hard_acct=%s allowed=%s "
-            "reason=%s total=%s gate=%s"
-        ),
-        sid,
-        i,
-        j,
-        bool(allow_flags.get("hard_acct")),
-        allowed,
-        reason,
-        total,
-        gate_level,
+        "CANDIDATE_CONSIDERED %s", json.dumps(payload, sort_keys=True)
     )
 
 
-def _log_candidate_skipped(sid: str, i: int, j: int, reason: str) -> None:
+def _log_candidate_skipped(
+    sid: str,
+    i: int,
+    j: int,
+    reason: str,
+    *,
+    allow_flags: Mapping[str, Any] | None = None,
+    total: Any = None,
+    level: str | None = None,
+    gate_level: Any = None,
+    account_points: Any = None,
+) -> None:
+    flags = allow_flags if isinstance(allow_flags, Mapping) else {}
+    payload = {
+        "sid": sid,
+        "i": i,
+        "j": j,
+        "reason": reason,
+        "hard_acct": bool(flags.get("hard_acct")),
+        "dates_all": bool(flags.get("dates")),
+        "score_gate": bool(flags.get("total")),
+    }
+    if total is not None:
+        payload["total"] = _safe_int(total)
+    if level is not None:
+        payload["level"] = _sanitize_acct_level(level)
+    if gate_level is not None:
+        payload["gate"] = gate_level
+    if account_points is not None:
+        payload["account_points"] = _safe_int(account_points)
     _candidate_logger.info(
-        "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s", sid, i, j, reason
+        "CANDIDATE_SKIPPED %s", json.dumps(payload, sort_keys=True)
     )
 
 
@@ -1448,6 +1493,10 @@ def score_all_pairs_0_100(
                 reason: str,
                 allowed: bool = True,
             ) -> Dict[str, Any]:
+                try:
+                    acct_points = int(sanitized_parts.get("account_number", 0) or 0)
+                except (TypeError, ValueError):
+                    acct_points = 0
                 record = {
                     "left": i,
                     "right": j,
@@ -1462,6 +1511,8 @@ def score_all_pairs_0_100(
                     "identity_sum": identity_sum,
                     "soft": soft_match,
                     "reason": reason,
+                    "account_points": acct_points,
+                    "gate_level": gate_level,
                     "priority": {
                         "category": priority_category,
                         "subscore": priority_subscore,
@@ -1476,6 +1527,10 @@ def score_all_pairs_0_100(
                     dict(allow_flags),
                     total_score,
                     gate_level,
+                    level_value,
+                    acct_points,
+                    mid_sum,
+                    identity_sum,
                     allowed=allowed,
                     reason=reason,
                 )
@@ -1501,6 +1556,11 @@ def score_all_pairs_0_100(
                     left,
                     right,
                     "below_threshold_no_acctnum",
+                    allow_flags=dict(allow_flags),
+                    total=total_score,
+                    level=level_value,
+                    gate_level=gate_level,
+                    account_points=record.get("account_points"),
                 )
 
     allowed_records = [record for record in candidate_records if record.get("allowed")]
@@ -1597,6 +1657,11 @@ def score_all_pairs_0_100(
                 left,
                 right,
                 "cap_nonhard_per_account",
+                allow_flags=record.get("allow_flags"),
+                total=record.get("total"),
+                level=record.get("level"),
+                gate_level=record.get("gate_level"),
+                account_points=record.get("account_points"),
             )
             continue
 
@@ -1607,6 +1672,11 @@ def score_all_pairs_0_100(
                 left,
                 right,
                 "cap_nonhard_global",
+                allow_flags=record.get("allow_flags"),
+                total=record.get("total"),
+                level=record.get("level"),
+                gate_level=record.get("gate_level"),
+                account_points=record.get("account_points"),
             )
             continue
 

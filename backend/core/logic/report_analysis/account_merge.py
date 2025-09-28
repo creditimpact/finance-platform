@@ -1523,9 +1523,33 @@ def score_all_pairs_0_100(
                 )
                 return record
 
+            logger.info(
+                "CANDIDATE_CONSIDERED sid=%s i=%s j=%s total=%s hard=%s dates_all=%s",
+                sid,
+                left,
+                right,
+                total_score,
+                allow_flags.get("hard_acct"),
+                allow_flags.get("dates_all"),
+            )
+
             if _should_build_pack(total_score, allow_flags, cfg):
+                logger.info(
+                    "CANDIDATE_ADDED sid=%s i=%s j=%s reason=%s",
+                    sid,
+                    left,
+                    right,
+                    "score_or_hard_or_dates",
+                )
                 add_candidate(left, right, reason="score_or_hard_or_dates")
             else:
+                logger.info(
+                    "CANDIDATE_SKIPPED sid=%s i=%s j=%s reason=%s",
+                    sid,
+                    left,
+                    right,
+                    "below_threshold_and_no_hard",
+                )
                 record = add_candidate(
                     left,
                     right,

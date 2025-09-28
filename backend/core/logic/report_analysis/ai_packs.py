@@ -440,17 +440,32 @@ def _collect_pair_entries(accounts_root: Path) -> tuple[Dict[tuple[int, int], Li
     return pair_entries, best_partners
 
 
-def _should_include_pair(
+def _is_merge_best_pair(
     pair: tuple[int, int],
     best_partners: Mapping[int, set[int]],
-    only_merge_best: bool,
 ) -> bool:
-    if not only_merge_best:
-        return True
     a, b = pair
     best_a = best_partners.get(a, set())
     best_b = best_partners.get(b, set())
     return (b in best_a) or (a in best_b)
+
+
+def _extract_acct_level(tag_payload: Mapping[str, object] | None) -> str:
+    level = normalize_level(None)
+    if not isinstance(tag_payload, Mapping):
+        return level
+
+    level = normalize_level(tag_payload.get("acctnum_level"))
+    if level != "none":
+        return level
+
+    aux_payload = tag_payload.get("aux")
+    if isinstance(aux_payload, Mapping):
+        aux_level = normalize_level(aux_payload.get("acctnum_level"))
+        if aux_level != "none":
+            return aux_level
+
+    return level
 
 
 def build_merge_ai_packs(
@@ -496,9 +511,6 @@ def build_merge_ai_packs(
     packs: List[Mapping[str, object]] = []
 
     for pair in sorted(pair_entries.keys()):
-        if not _should_include_pair(pair, best_partners, only_merge_best):
-            continue
-
         entries = pair_entries.get(pair, [])
         primary_tag = _select_primary_tag(entries)
         if primary_tag is None:
@@ -506,6 +518,36 @@ def build_merge_ai_packs(
             continue
 
         a_idx, b_idx = pair
+
+        acct_level = _extract_acct_level(primary_tag)
+        is_merge_best = _is_merge_best_pair(pair, best_partners)
+        hard_acct = acct_level == "exact_or_known_match"
+        include_pair = (not only_merge_best) or is_merge_best or hard_acct
+
+        pair_log = {
+            "sid": sid_str,
+            "pair": {"a": a_idx, "b": b_idx},
+            "only_merge_best": bool(only_merge_best),
+            "is_merge_best": bool(is_merge_best),
+            "acctnum_level": acct_level,
+            "include": bool(include_pair),
+        }
+
+        if not include_pair:
+            pair_log["reason"] = "filtered_only_merge_best"
+            logger.info("MERGE_V2_PACK_SKIP %s", json.dumps(pair_log, sort_keys=True))
+            continue
+
+        if hard_acct and only_merge_best and not is_merge_best:
+            pair_log["reason"] = "hard_acct_override"
+        elif is_merge_best:
+            pair_log["reason"] = "merge_best"
+        elif not only_merge_best:
+            pair_log["reason"] = "all_pairs"
+        else:
+            pair_log["reason"] = "unknown"
+
+        logger.info("MERGE_V2_PACK_CONSIDER %s", json.dumps(pair_log, sort_keys=True))
 
         try:
             account_a = _load_account_payload(accounts_root, a_idx, cache, context_limit)

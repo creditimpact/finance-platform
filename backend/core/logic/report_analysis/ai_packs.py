@@ -423,8 +423,11 @@ def _collect_pair_entries(accounts_root: Path) -> tuple[Dict[tuple[int, int], Li
             if kind not in allowed_kinds:
                 continue
             decision = str(tag.get("decision", "")).lower()
+            acct_level = _extract_acct_level(tag)
             if decision != "ai":
-                continue
+                is_hard_auto = decision == "auto" and acct_level == "exact_or_known_match"
+                if not is_hard_auto:
+                    continue
             partner = tag.get("with")
             try:
                 partner_idx = int(partner)

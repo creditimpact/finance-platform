@@ -31,11 +31,11 @@ HIGHLIGHT_KEYS: tuple[str, ...] = (
 )
 
 ALLOWED_DECISIONS: tuple[str, ...] = (
-    "merge",
-    "same_debt",
-    "same_debt_account_different",
-    "same_account",
-    "same_account_debt_different",
+    "same_account_same_debt",
+    "same_account_diff_debt",
+    "same_account_debt_unknown",
+    "same_debt_diff_account",
+    "same_debt_account_unknown",
     "different",
 )
 
@@ -47,11 +47,21 @@ SYSTEM_MESSAGE = (
     "supporting evidence but cannot override conflicts backed by strong signals. "
     "Creditor names may appear with aliases, abbreviations, or formatting "
     "differences—treat reasonable variants as referring to the same source when "
-    "supported by other evidence. Respond ONLY with strict JSON following this "
-    "schema: {\"decision\": \"merge|same_debt|same_debt_account_different|same_account|"
-    "same_account_debt_different|different\", \"reason\": \"short natural language\", "
-    "\"flags\": {\"account_match\": true|false|\"unknown\", \"debt_match\": "
-    "true|false|\"unknown\"}}. Do not add commentary or extra keys."
+    "supported by other evidence.\n"
+    "Allowed decisions (exact strings, choose one):\n"
+    "- same_account_same_debt        # accounts align and refer to the same debt\n"
+    "- same_account_diff_debt        # same account, but debt details clearly differ\n"
+    "- same_account_debt_unknown     # same account, debt status cannot be confirmed\n"
+    "- same_debt_diff_account        # same debt, but reported under a different account\n"
+    "- same_debt_account_unknown     # same debt, account identity cannot be confirmed\n"
+    "- different                     # neither the account nor the debt matches\n"
+    "Legacy labels such as merge, same_debt, same_debt_account_different, "
+    "same_account, same_account_debt_different, and different may appear in "
+    "reference material, but you MUST respond with only the six decisions above.\n"
+    "Return strict JSON only: {\"decision\":\"<one above>\", "
+    "\"reason\":\"short natural language\", \"flags\":{\"account_match\":true|false|"
+    "\"unknown\",\"debt_match\":true|false|\"unknown\"}}. Do not add commentary or "
+    "extra keys."
 )
 
 
@@ -178,13 +188,13 @@ def _expected_decision_for_flags(account_flag: bool | str, debt_flag: bool | str
     )
 
     mapping = {
-        ("true", "true"): "merge",
-        ("true", "false"): "same_account_debt_different",
-        ("true", "unknown"): "same_account",
-        ("false", "true"): "same_debt_account_different",
+        ("true", "true"): "same_account_same_debt",
+        ("true", "false"): "same_account_diff_debt",
+        ("true", "unknown"): "same_account_debt_unknown",
+        ("false", "true"): "same_debt_diff_account",
         ("false", "false"): "different",
         ("false", "unknown"): "different",
-        ("unknown", "true"): "same_debt",
+        ("unknown", "true"): "same_debt_account_unknown",
         ("unknown", "false"): "different",
         ("unknown", "unknown"): "different",
     }

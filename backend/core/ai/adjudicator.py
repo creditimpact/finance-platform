@@ -12,9 +12,20 @@ import httpx
 _SYSTEM_PROMPT = """You are a meticulous adjudicator for credit-report account pairing.
 Decide if two account entries (A,B) refer to the SAME underlying account.
 
+Allowed decisions (exact strings, choose one):
+- same_account_same_debt        # accounts align and refer to the same debt
+- same_account_diff_debt        # same account, but debt details clearly differ
+- same_account_debt_unknown     # same account, debt status cannot be confirmed
+- same_debt_diff_account        # same debt, but reported under a different account
+- same_debt_account_unknown     # same debt, account identity cannot be confirmed
+- different                     # neither the account nor the debt matches
+Legacy labels (merge, same_debt, same_debt_account_diff, same_account,
+same_account_debt_diff, different) may appear in reference material, but
+you MUST respond using only the six decisions above.
+
 Always output strict JSON matching the contract below (no prose around it):
 {
-  "decision": "one of: different | same_debt | same_debt_account_diff | same_account | same_account_debt_diff | merge",
+  "decision": "one of the six allowed decisions above",
   "flags": {"account_match": true|false|"unknown", "debt_match": true|false|"unknown"},
   "reason": "short natural language"
 }
@@ -22,13 +33,13 @@ Always output strict JSON matching the contract below (no prose around it):
 Decision guidance:
 - Flags.account_match=true when normalized account numbers (exact or last4 corroborated by lender+dates) align.
 - Flags.debt_match=true when balances/high_balance/past_due + timing align within tolerance; false when they conflict.
-- If account_match=true and debt_match=true, recommend "merge" only when there is strong corroboration (acct numbers, dates, balances). Otherwise use "same_account".
-- If account_match=true and debt_match=false → "same_account_debt_diff".
-- If account_match=false and debt_match=true → "same_debt_account_diff" when you know the tradelines differ; otherwise stay with "same_debt".
-- If account_match=true and debt_match="unknown" → "same_account".
-- If debt_match=true and account_match="unknown" → "same_debt".
-- If either flag is "unknown" be conservative and avoid the *_diff suffix unless evidence is explicit.
-- If both flags are false → "different".
+- If account_match=true and debt_match=true → same_account_same_debt.
+- If account_match=true and debt_match=false → same_account_diff_debt.
+- If account_match=false and debt_match=true → same_debt_diff_account when tradelines clearly differ; otherwise lean conservative.
+- If account_match=true and debt_match="unknown" → same_account_debt_unknown.
+- If debt_match=true and account_match="unknown" → same_debt_account_unknown.
+- If either flag is "unknown" be conservative and avoid *_diff decisions unless evidence is explicit.
+- If both flags are false → different.
 
 Consider:
 • High-precision cues: account-number (last4/exact), balance owed equality within tolerances, date alignments.
@@ -48,12 +59,12 @@ _ALLOWED_USER_PAYLOAD_KEYS: Iterable[str] = (
 
 
 _ALLOWED_DECISIONS: tuple[str, ...] = (
+    "same_account_same_debt",
+    "same_account_diff_debt",
+    "same_account_debt_unknown",
+    "same_debt_diff_account",
+    "same_debt_account_unknown",
     "different",
-    "same_debt",
-    "same_debt_account_diff",
-    "same_account",
-    "same_account_debt_diff",
-    "merge",
 )
 
 
@@ -87,16 +98,26 @@ def _decision_for_flags(
 ) -> str:
     """Return the contract-compliant decision for the provided flags."""
 
+    normalized_requested = requested.strip().lower()
+    legacy_map = {
+        "merge": "same_account_same_debt",
+        "same_account": "same_account_debt_unknown",
+        "same_account_debt_different": "same_account_diff_debt",
+        "same_debt": "same_debt_account_unknown",
+        "same_debt_account_different": "same_debt_diff_account",
+    }
+    requested_normalized = legacy_map.get(normalized_requested, normalized_requested)
+
     if account_flag is True and debt_flag is True:
-        return "merge" if requested == "merge" else "same_account"
+        return "same_account_same_debt"
     if account_flag is True and debt_flag is False:
-        return "same_account_debt_diff"
+        return "same_account_diff_debt"
     if account_flag is False and debt_flag is True:
-        return "same_debt_account_diff"
+        return "same_debt_diff_account"
     if account_flag is True and debt_flag == "unknown":
-        return "same_account"
+        return "same_account_debt_unknown"
     if account_flag == "unknown" and debt_flag is True:
-        return "same_debt"
+        return "same_debt_account_unknown"
     if account_flag is False and debt_flag == "unknown":
         return "different"
     if account_flag == "unknown" and debt_flag is False:
@@ -105,6 +126,8 @@ def _decision_for_flags(
         return "different"
     if account_flag is False and debt_flag is False:
         return "different"
+    if requested_normalized in _ALLOWED_DECISIONS:
+        return requested_normalized
     return "different"
 
 

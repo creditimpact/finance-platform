@@ -242,44 +242,71 @@ def build_ai_pack_for_pair(
     except Exception as exc:  # pragma: no cover - defensive
         raise ValueError("Account indices must be integers") from exc
 
+    highlight_error: dict[str, str] | None = None
+    try:
+        normalized_highlights = _normalize_highlights(highlights)
+    except Exception as exc:  # pragma: no cover - defensive
+        normalized_highlights = {}
+        highlight_error = {
+            "kind": type(exc).__name__,
+            "message": str(exc),
+            "stage": "normalize_highlights",
+        }
+
     raw_a_path = accounts_root / str(account_a) / "raw_lines.json"
     raw_b_path = accounts_root / str(account_b) / "raw_lines.json"
-
-    raw_lines_a = _load_raw_lines(raw_a_path)
-    raw_lines_b = _load_raw_lines(raw_b_path)
-
-    max_lines = merge_config.get_ai_pack_max_lines_per_side()
-
-    context_a = extract_context_raw(raw_lines_a, WANTED_CONTEXT_KEYS, max_lines)
-    context_b = extract_context_raw(raw_lines_b, WANTED_CONTEXT_KEYS, max_lines)
-
-    normalized_a = [_normalize_line(_coerce_text(line)) for line in raw_lines_a or []]
-    normalized_b = [_normalize_line(_coerce_text(line)) for line in raw_lines_b or []]
-
-    account_number_a = _extract_account_number(normalized_a)
-    account_number_b = _extract_account_number(normalized_b)
-
-    pack_for_a = _build_pack_payload(
-        sid_str,
-        account_a,
-        account_b,
-        context_a,
-        context_b,
-        account_number_a,
-        account_number_b,
-        highlights,
-        max_lines,
-    )
-
-    _validate_pack_payload(pack_for_a)
 
     pack_dir = runs_root_path / sid_str / "ai_packs"
     pack_dir.mkdir(parents=True, exist_ok=True)
 
     first_idx, second_idx = sorted((account_a, account_b))
     pack_path = pack_dir / f"pair_{first_idx:03d}_{second_idx:03d}.jsonl"
-    payload_text = json.dumps(pack_for_a, sort_keys=True)
+    payload: dict
+
+    try:
+        raw_lines_a = _load_raw_lines(raw_a_path)
+        raw_lines_b = _load_raw_lines(raw_b_path)
+
+        max_lines = merge_config.get_ai_pack_max_lines_per_side()
+
+        context_a = extract_context_raw(raw_lines_a, WANTED_CONTEXT_KEYS, max_lines)
+        context_b = extract_context_raw(raw_lines_b, WANTED_CONTEXT_KEYS, max_lines)
+
+        normalized_a = [_normalize_line(_coerce_text(line)) for line in raw_lines_a or []]
+        normalized_b = [_normalize_line(_coerce_text(line)) for line in raw_lines_b or []]
+
+        account_number_a = _extract_account_number(normalized_a)
+        account_number_b = _extract_account_number(normalized_b)
+
+        pack_for_a = _build_pack_payload(
+            sid_str,
+            account_a,
+            account_b,
+            context_a,
+            context_b,
+            account_number_a,
+            account_number_b,
+            normalized_highlights,
+            max_lines,
+        )
+
+        _validate_pack_payload(pack_for_a)
+        payload = dict(pack_for_a)
+        if highlight_error is not None:
+            payload["error"] = highlight_error
+    except Exception as exc:  # pragma: no cover - defensive
+        error_payload = {
+            "sid": sid_str,
+            "pair": {"a": account_a, "b": account_b},
+            "highlights": dict(normalized_highlights),
+            "error": {"kind": type(exc).__name__, "message": str(exc)},
+        }
+        if highlight_error is not None:
+            error_payload["error"]["highlights_normalization_error"] = highlight_error
+        payload = error_payload
+
+    payload_text = json.dumps(payload, sort_keys=True)
     pack_path.write_text(payload_text + "\n", encoding="utf-8")
 
-    return pack_for_a
+    return payload
 

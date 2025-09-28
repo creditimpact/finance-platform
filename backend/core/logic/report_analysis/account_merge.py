@@ -736,13 +736,21 @@ def _log_candidate_considered(
     allow_flags: Mapping[str, Any],
     total: Any,
     gate_level: Any,
+    *,
+    allowed: bool,
+    reason: str,
 ) -> None:
     _candidate_logger.info(
-        "CANDIDATE_CONSIDERED sid=%s i=%s j=%s hard_acct=%s total=%s gate=%s",
+        (
+            "CANDIDATE_CONSIDERED sid=%s i=%s j=%s hard_acct=%s allowed=%s "
+            "reason=%s total=%s gate=%s"
+        ),
         sid,
         i,
         j,
         bool(allow_flags.get("hard_acct")),
+        allowed,
+        reason,
         total,
         gate_level,
     )
@@ -1468,6 +1476,8 @@ def score_all_pairs_0_100(
                     dict(allow_flags),
                     total_score,
                     gate_level,
+                    allowed=allowed,
+                    reason=reason,
                 )
                 return record
 

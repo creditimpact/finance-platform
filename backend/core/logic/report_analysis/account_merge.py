@@ -95,21 +95,6 @@ def _sanitize_acct_level(v: object) -> str:
     )
 
 
-def _normalized_account_level(
-    acct_level: Any,
-    level_value: Any,
-    gate_level: Any,
-) -> str:
-    """Determine the authoritative account-number level for gating."""
-
-    normalized = _sanitize_acct_level(level_value)
-    if normalized in {"", "none"}:
-        normalized = _sanitize_acct_level(acct_level)
-    if normalized in {"", "none"}:
-        normalized = _sanitize_acct_level(gate_level)
-    return normalized
-
-
 AI_PACK_SCORE_THRESHOLD = 27
 
 
@@ -761,11 +746,10 @@ def _log_candidate_considered(
     sid: str,
     i: int,
     j: int,
-    allow_flags: Mapping[str, Any],
     total: Any,
     gate_level: Any,
-    gate_level_norm: Any,
     level: str,
+    dates_all: Any,
     account_points: Any,
     mid_sum: Any,
     identity_sum: Any,
@@ -777,18 +761,17 @@ def _log_candidate_considered(
         "sid": sid,
         "i": i,
         "j": j,
-        "hard_acct": bool(allow_flags.get("hard_acct")),
         "allowed": allowed,
         "reason": reason,
         "total": _safe_int(total),
         "gate": gate_level,
-        "gate_level_norm": _sanitize_acct_level(gate_level_norm),
+        "gate_level_norm": _sanitize_acct_level(gate_level),
         "level": _sanitize_acct_level(level),
         "account_points": _safe_int(account_points),
         "mid_sum": _safe_int(mid_sum),
         "identity_sum": _safe_int(identity_sum),
-        "dates_all": bool(allow_flags.get("dates")),
-        "score_gate": bool(allow_flags.get("total")),
+        "dates_all": bool(dates_all),
+        "score_gate": bool(allowed),
     }
     _candidate_logger.info(
         "CANDIDATE_CONSIDERED %s", json.dumps(payload, sort_keys=True)
@@ -801,22 +784,20 @@ def _log_candidate_skipped(
     j: int,
     reason: str,
     *,
-    allow_flags: Mapping[str, Any] | None = None,
     total: Any = None,
     level: str | None = None,
     gate_level: Any = None,
-    gate_level_norm: Any = None,
     account_points: Any = None,
+    dates_all: Any = None,
+    allowed: bool | None = None,
 ) -> None:
-    flags = allow_flags if isinstance(allow_flags, Mapping) else {}
     payload = {
         "sid": sid,
         "i": i,
         "j": j,
         "reason": reason,
-        "hard_acct": bool(flags.get("hard_acct")),
-        "dates_all": bool(flags.get("dates")),
-        "score_gate": bool(flags.get("total")),
+        "dates_all": bool(dates_all),
+        "score_gate": bool(allowed),
     }
     if total is not None:
         payload["total"] = _safe_int(total)
@@ -824,8 +805,7 @@ def _log_candidate_skipped(
         payload["level"] = _sanitize_acct_level(level)
     if gate_level is not None:
         payload["gate"] = gate_level
-    if gate_level_norm is not None:
-        payload["gate_level_norm"] = _sanitize_acct_level(gate_level_norm)
+        payload["gate_level_norm"] = _sanitize_acct_level(gate_level)
     if account_points is not None:
         payload["account_points"] = _safe_int(account_points)
     _candidate_logger.info(
@@ -1495,22 +1475,7 @@ def score_all_pairs_0_100(
             "MERGE_V2_DECISION %s", json.dumps(decision_log, sort_keys=True)
         )
 
-        normalized_level = _normalized_account_level(
-            acct_level,
-            level_value,
-            gate_level,
-        )
-
-        gate_level_norm = normalized_level
-        hard_acct = normalized_level == "exact_or_known_match"
         dates_all_equal = bool(result.get("dates_all"))
-        allow_flags = {
-            "hard_acct": hard_acct,
-            "dates": dates_all_equal,
-            "dates_all": dates_all_equal,
-            "total": total_score >= ai_threshold,
-            "gate_level_norm": gate_level_norm,
-        }
 
         try:
             acct_points = int(sanitized_parts.get("account_number", 0) or 0)
@@ -1519,7 +1484,7 @@ def score_all_pairs_0_100(
         mid_sum = int(result.get("mid_sum", 0) or 0)
         identity_sum = int(result.get("identity_sum", 0) or 0)
 
-        level_value = _sanitize_acct_level(normalized_level or level_value)
+        level_value = _sanitize_acct_level(level_value)
 
         allowed = total_score >= ai_threshold
         allow_reason = "over_threshold" if allowed else "below_threshold"
@@ -1528,11 +1493,10 @@ def score_all_pairs_0_100(
             sid,
             left,
             right,
-            dict(allow_flags),
             total_score,
             gate_level,
-            gate_level_norm,
             level_value,
+            dates_all_equal,
             acct_points,
             mid_sum,
             identity_sum,
@@ -1633,12 +1597,12 @@ def score_all_pairs_0_100(
                 left,
                 right,
                 allow_reason,
-                allow_flags=dict(allow_flags),
                 total=total_score,
                 level=level_value,
                 gate_level=gate_level,
-                gate_level_norm=gate_level_norm,
                 account_points=acct_points,
+                dates_all=dates_all_equal,
+                allowed=allowed,
             )
 
     for left_pos in range(total_accounts):

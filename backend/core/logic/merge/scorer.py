@@ -12,7 +12,6 @@ from typing import Any, Dict, Iterable, Mapping as TypingMapping
 
 from backend import config as app_config
 from backend.core.merge import acctnum
-from backend.core.merge.acctnum import acctnum_match_level
 from scripts.score_bureau_pairs import (
     ScoreComputationResult,
     build_merge_tags,
@@ -30,11 +29,6 @@ SCORER_WEIGHTS = {
     "acctnum_exact": app_config.ACCTNUM_EXACT_WEIGHT,
     "masked": app_config.ACCTNUM_MASKED_WEIGHT,
 }
-
-POINTS_ACCTNUM = 28
-
-_EMPTY_NORMALIZED = acctnum.normalize_display("")
-
 
 def _ensure_tag_levels(
     merge_tags: Mapping[int, Mapping[str, Any]] | None,
@@ -109,7 +103,7 @@ def _update_result_with_match(
 ) -> None:
     parts = dict(result.get("parts") or {})
     old_points = int(parts.get("account_number", 0) or 0)
-    new_points = POINTS_ACCTNUM if match.level == "exact_or_known_match" else 0
+    new_points = match.points
     parts["account_number"] = new_points
     result["parts"] = parts
 
@@ -171,56 +165,7 @@ def _apply_account_number_scoring(
             if not isinstance(result, dict):
                 continue
             b_norm = normalized_by_idx.get(j, {})
-            best_match = acctnum.AccountNumberMatch(
-                "none",
-                "",
-                "",
-                _EMPTY_NORMALIZED,
-                _EMPTY_NORMALIZED,
-                {
-                    "a": {"raw": "", "digits": ""},
-                    "b": {"raw": "", "digits": ""},
-                    "short": "",
-                    "long": "",
-                    "why": "",
-                },
-            )
-            best_debug: dict[str, Any] = {
-                "a": {"raw": "", "digits": ""},
-                "b": {"raw": "", "digits": ""},
-                "short": "",
-                "long": "",
-                "why": "",
-            }
-            best_rank = -1
-            for a_bureau in ("transunion", "experian", "equifax"):
-                a_norm_value = a_norm.get(a_bureau, _EMPTY_NORMALIZED)
-                a_account_str = a_norm_value.raw or a_norm_value.digits
-                if not a_account_str:
-                    continue
-                for b_bureau in ("transunion", "experian", "equifax"):
-                    b_norm_value = b_norm.get(b_bureau, _EMPTY_NORMALIZED)
-                    b_account_str = b_norm_value.raw or b_norm_value.digits
-                    if not b_account_str:
-                        continue
-                    level, debug = acctnum_match_level(a_account_str, b_account_str)
-                    rank = 1 if level == "exact_or_known_match" else 0
-                    if rank > best_rank:
-                        best_rank = rank
-                        best_match = acctnum.AccountNumberMatch(
-                            level,
-                            a_bureau,
-                            b_bureau,
-                            a_norm_value,
-                            b_norm_value,
-                            dict(debug),
-                        )
-                        best_debug = dict(debug)
-                    if rank == 1:
-                        break
-                if best_rank == 1:
-                    break
-            match = best_match
+            match = acctnum.best_account_number_match(a_norm, b_norm)
             _update_result_with_match(result, match)
             right_scores = scores_by_idx.get(j)
             if isinstance(right_scores, Mapping):
@@ -233,16 +178,8 @@ def _apply_account_number_scoring(
                 i,
                 j,
                 match.level,
-                (
-                    best_debug.get("a", {}).get("digits")
-                    if isinstance(best_debug.get("a"), Mapping)
-                    else best_debug.get("a")
-                ),
-                (
-                    best_debug.get("b", {}).get("digits")
-                    if isinstance(best_debug.get("b"), Mapping)
-                    else best_debug.get("b")
-                ),
+                match.debug.get("a", {}).get("digits") if isinstance(match.debug.get("a"), Mapping) else "",
+                match.debug.get("b", {}).get("digits") if isinstance(match.debug.get("b"), Mapping) else "",
             )
             logger.info(
                 "MERGE_V2_ACCTNUM_MATCH sid=%s i=%s j=%s level=%s short=%s long=%s why=%s",

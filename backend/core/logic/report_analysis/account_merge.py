@@ -110,55 +110,7 @@ def _normalized_account_level(
     return normalized
 
 
-def _priority_label_for_level(level: str) -> Tuple[int, int, str]:
-    """Return (category, subscore, label) for the provided account-number level."""
-
-    normalized = _sanitize_acct_level(level)
-    if normalized == "exact_or_known_match":
-        return (0, 1, "hard:acctnum_visible_digits")
-    return (3, 0, "default")
-
-
-def _priority_category(level: str, dates_all: bool, score_gate: bool) -> Tuple[int, int, str]:
-    """Return the ordered priority bucket metadata for a pair."""
-
-    category, subscore, label = _priority_label_for_level(level)
-    if category == 0:
-        return category, subscore, label
-    if dates_all:
-        return 1, 0, "dates_all"
-    if score_gate:
-        return 2, 0, "score_gate"
-    return category, subscore, label
-
-
-def _should_build_pack(
-    *,
-    cfg,
-    total_score: int,
-    dates_all_equal: bool,
-    level_value: str,
-) -> tuple[bool, str]:
-    # read toggles safely with defaults
-    triggers = getattr(cfg, "triggers", {}) or {}
-    try:
-        ai_threshold = int(getattr(cfg, "ai_threshold", 27) or 27)
-    except (TypeError, ValueError):
-        ai_threshold = 27
-
-    on_hard = bool(triggers.get("MERGE_AI_ON_HARD_ACCTNUM", True))
-    on_dates = bool(triggers.get("MERGE_AI_ON_ALL_DATES", True))
-
-    hard_acct = level_value == "exact_or_known_match"
-    allow_by_total = total_score >= ai_threshold
-
-    if on_hard and hard_acct:
-        return True, "hard_acctnum"
-    if on_dates and dates_all_equal:
-        return True, "dates_all"
-    if allow_by_total:
-        return True, "over_threshold"
-    return False, "below_gate"
+AI_PACK_SCORE_THRESHOLD = 27
 
 
 def is_missing(value: Any) -> bool:
@@ -1333,10 +1285,7 @@ def score_all_pairs_0_100(
 
     runs_root = Path(runs_root)
     cfg = get_merge_cfg()
-    try:
-        ai_threshold = int(getattr(cfg, "ai_threshold", 27) or 27)
-    except (TypeError, ValueError):
-        ai_threshold = 27
+    ai_threshold = AI_PACK_SCORE_THRESHOLD
     requested_raw = list(idx_list) if idx_list is not None else []
     requested_indices: List[int] = []
     for raw_idx in requested_raw:
@@ -1422,10 +1371,9 @@ def score_all_pairs_0_100(
     logger.info("CANDIDATE_LOOP_START sid=%s total_accounts=%s", sid, total_accounts)
 
     pair_counter = 0
-    candidate_records: List[Dict[str, Any]] = []
-
+    built_pairs = 0
     def score_and_maybe_build_pack(left_pos: int, right_pos: int) -> None:
-        nonlocal pair_counter
+        nonlocal pair_counter, built_pairs
 
         left = indices[left_pos]
         right = indices[right_pos]
@@ -1556,89 +1504,40 @@ def score_all_pairs_0_100(
         gate_level_norm = normalized_level
         hard_acct = normalized_level == "exact_or_known_match"
         dates_all_equal = bool(result.get("dates_all"))
-        allow_by_dates = dates_all_equal
-        allow_by_total = total_score >= ai_threshold
-
-        mid_sum = int(result.get("mid_sum", 0) or 0)
-        identity_sum = int(result.get("identity_sum", 0) or 0)
-        soft_match = False
-        if not hard_acct:
-            soft_match = _detect_soft_acct_match(left_bureaus, right_bureaus)
-
-        priority_category, priority_subscore, priority_label = _priority_category(
-            level_value, allow_by_dates, allow_by_total
-        )
-        if soft_match and priority_label == "default":
-            priority_label = "soft_acctnum"
-
         allow_flags = {
             "hard_acct": hard_acct,
-            "dates": allow_by_dates,
+            "dates": dates_all_equal,
             "dates_all": dates_all_equal,
-            "total": allow_by_total,
+            "total": total_score >= ai_threshold,
             "gate_level_norm": gate_level_norm,
         }
 
-        def add_candidate(
-            i: int,
-            j: int,
-            *,
-            reason: str,
-            allowed: bool = True,
-        ) -> Dict[str, Any]:
-            try:
-                acct_points = int(sanitized_parts.get("account_number", 0) or 0)
-            except (TypeError, ValueError):
-                acct_points = 0
-            record = {
-                "left": i,
-                "right": j,
-                "result": deepcopy(result),
-                "allowed": allowed,
-                "allow_flags": dict(allow_flags),
-                "level": level_value,
-                "dates_all": dates_all_equal,
-                "score_gate": allow_by_total,
-                "total": total_score,
-                "mid_sum": mid_sum,
-                "identity_sum": identity_sum,
-                "soft": soft_match,
-                "reason": reason,
-                "account_points": acct_points,
-                "gate_level": gate_level,
-                "gate_level_norm": gate_level_norm,
-                "priority": {
-                    "category": priority_category,
-                    "subscore": priority_subscore,
-                    "label": priority_label,
-                },
-            }
-            candidate_records.append(record)
-            _log_candidate_considered(
-                sid,
-                i,
-                j,
-                dict(allow_flags),
-                total_score,
-                gate_level,
-                gate_level_norm,
-                level_value,
-                acct_points,
-                mid_sum,
-                identity_sum,
-                allowed=allowed,
-                reason=reason,
-            )
-            return record
+        try:
+            acct_points = int(sanitized_parts.get("account_number", 0) or 0)
+        except (TypeError, ValueError):
+            acct_points = 0
+        mid_sum = int(result.get("mid_sum", 0) or 0)
+        identity_sum = int(result.get("identity_sum", 0) or 0)
 
-        # ensure the authoritative normalized level flows through
         level_value = _sanitize_acct_level(normalized_level or level_value)
 
-        allowed, allow_reason = _should_build_pack(
-            cfg=cfg,
-            total_score=total_score,
-            dates_all_equal=dates_all_equal,
-            level_value=level_value,
+        allowed = total_score >= ai_threshold
+        allow_reason = "over_threshold" if allowed else "below_threshold"
+
+        _log_candidate_considered(
+            sid,
+            left,
+            right,
+            dict(allow_flags),
+            total_score,
+            gate_level,
+            gate_level_norm,
+            level_value,
+            acct_points,
+            mid_sum,
+            identity_sum,
+            allowed=allowed,
+            reason=allow_reason,
         )
 
         considered_message = (
@@ -1657,6 +1556,9 @@ def score_all_pairs_0_100(
         logger.info(considered_message, *considered_args)
         _candidate_logger.info(considered_message, *considered_args)
 
+        scores[left][right] = deepcopy(result)
+        scores[right][left] = deepcopy(result)
+
         if allowed:
             added_message = (
                 "CANDIDATE_ADDED sid=%s i=%s j=%s reason=%s total=%s gate_level=%s level_value=%s dates_all=%s"
@@ -1673,7 +1575,7 @@ def score_all_pairs_0_100(
             )
             logger.info(added_message, *added_args)
             _candidate_logger.info(added_message, *added_args)
-            add_candidate(left, right, reason=allow_reason)
+            built_pairs += 1
 
             highlights = _build_ai_highlights(result)
             highlights.update(
@@ -1726,12 +1628,6 @@ def score_all_pairs_0_100(
             )
             logger.info(skipped_message, *skipped_args)
             _candidate_logger.info(skipped_message, *skipped_args)
-            record = add_candidate(
-                left,
-                right,
-                reason=allow_reason,
-                allowed=False,
-            )
             _log_candidate_skipped(
                 sid,
                 left,
@@ -1742,95 +1638,19 @@ def score_all_pairs_0_100(
                 level=level_value,
                 gate_level=gate_level,
                 gate_level_norm=gate_level_norm,
-                account_points=record.get("account_points"),
+                account_points=acct_points,
             )
 
     for left_pos in range(total_accounts):
         for right_pos in range(left_pos + 1, total_accounts):
             score_and_maybe_build_pack(left_pos, right_pos)
 
-    allowed_records = [record for record in candidate_records if record.get("allowed")]
-
-    def _sort_key(record: Mapping[str, Any]) -> Tuple[int, ...]:
-        priority = record.get("priority", {}) if isinstance(record.get("priority"), Mapping) else {}
-        level_value = str(record.get("level", "none") or "none").lower()
-        level_rank = _ACCOUNT_LEVEL_PRIORITY.get(level_value, 0)
-
-        identity_raw = record.get("identity_score", record.get("identity_sum", 0))
-        try:
-            identity_val = int(identity_raw or 0)
-        except (TypeError, ValueError):
-            identity_val = 0
-
-        mid_raw = record.get("mid_sum", 0)
-        try:
-            mid_val = int(mid_raw or 0)
-        except (TypeError, ValueError):
-            mid_val = 0
-
-        total_raw = record.get("total", 0)
-        try:
-            total_val = int(total_raw or 0)
-        except (TypeError, ValueError):
-            total_val = 0
-
-        dates_flag = 1 if record.get("dates_all") else 0
-        score_gate_flag = 1 if record.get("score_gate") else 0
-
-        category = int(priority.get("category", 3))
-        subscore = int(priority.get("subscore", 0))
-
-        left_idx = int(record.get("left", 0) or 0)
-        right_idx = int(record.get("right", 0) or 0)
-
-        return (
-            -level_rank,
-            -mid_val,
-            -identity_val,
-            -dates_flag,
-            score_gate_flag,
-            -total_val,
-            category,
-            -subscore,
-            left_idx,
-            right_idx,
-        )
-
-    sorted_records = sorted(allowed_records, key=_sort_key)
-
-    for record in sorted_records:
-        left = int(record.get("left"))
-        right = int(record.get("right"))
-        result = record.get("result") if isinstance(record.get("result"), Mapping) else {}
-        allow_flags = record.get("allow_flags") if isinstance(record.get("allow_flags"), Mapping) else {}
-        hard_flag = bool(allow_flags.get("hard_acct"))
-        total_flag = bool(allow_flags.get("total"))
-        dates_flag = bool(allow_flags.get("dates"))
-        logger.info(
-            (
-                "CANDIDATE_SELECTED sid=%s i=%s j=%s hard=%s total=%s dates=%s "
-                "reason=%s score=%s"
-            ),
-            sid,
-            left,
-            right,
-            hard_flag,
-            total_flag,
-            dates_flag,
-            record.get("reason"),
-            record.get("total"),
-        )
-        scores[left][right] = deepcopy(result)
-        scores[right][left] = deepcopy(result)
-
-    built_pairs = len(sorted_records)
-
     summary_log = {
         "sid": sid,
         "total_accounts": total_accounts,
         "expected_pairs": expected_pairs,
         "pairs_scored": pair_counter,
-        "pairs_allowed": len(allowed_records),
+        "pairs_allowed": built_pairs,
         "pairs_built": built_pairs,
     }
     logger.debug("MERGE_PAIR_SUMMARY %s", json.dumps(summary_log, sort_keys=True))

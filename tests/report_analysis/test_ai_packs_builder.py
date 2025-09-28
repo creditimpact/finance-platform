@@ -370,6 +370,11 @@ def test_build_ai_merge_packs_cli_updates_manifest(
     assert isinstance(pair_entry["lines_a"], int)
     assert isinstance(pair_entry["lines_b"], int)
     assert isinstance(pair_entry["score_total"], int)
+    assert pair_entry["pair"] == [11, 16]
+    assert pair_entry["score"] == pair_entry["score_total"]
+
+    minimal_pairs = index_payload.get("pairs", [])
+    assert minimal_pairs == [{"pair": [11, 16], "score": pair_entry["score_total"]}]
 
     logs_path = out_dir / "logs.txt"
     assert not logs_path.exists()

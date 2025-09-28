@@ -210,10 +210,12 @@ def main(argv: Sequence[str] | None = None) -> None:
             {
                 "a": a_idx,
                 "b": b_idx,
+                "pair": [a_idx, b_idx],
                 "pack_file": pack_filename,
                 "lines_a": len(context_a),
                 "lines_b": len(context_b),
                 "score_total": score_total,
+                "score": score_total,
             }
         )
 
@@ -223,6 +225,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         index_payload = {
             "sid": sid,
             "packs": index_entries,
+            "pairs": [
+                {
+                    "pair": [entry["a"], entry["b"]],
+                    "score": entry.get("score", entry.get("score_total", 0)),
+                }
+                for entry in index_entries
+            ],
             "pairs_count": pairs_count,
         }
         _write_index(index_path, index_payload)

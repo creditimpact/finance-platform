@@ -10,7 +10,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
 from backend import config as app_config
@@ -41,39 +40,6 @@ _candidate_logger = logging.getLogger("ai_packs")
 
 
 POINTS_ACCTNUM_VISIBLE = 28
-
-
-def _coerce_positive_int(value: Optional[int]) -> Optional[int]:
-    """Return ``value`` when it is a positive integer, otherwise ``None``."""
-
-    if value is None:
-        return None
-    try:
-        coerced = int(value)
-    except (TypeError, ValueError):
-        return None
-    return coerced if coerced > 0 else None
-
-
-def _read_candidate_limits(env: Optional[Mapping[str, str]] = None) -> Tuple[Optional[int], Optional[int]]:
-    """Return global and per-account candidate limits from the environment."""
-
-    env_mapping: Mapping[str, str]
-    if env is None:
-        env_mapping = os.environ
-    else:
-        env_mapping = env
-
-    global_limit = _coerce_positive_int(env_mapping.get("MERGE_CANDIDATE_LIMIT"))
-    if global_limit is None:
-        legacy_limit = env_mapping.get("MERGE_PAIR_LIMIT")
-        global_limit = _coerce_positive_int(legacy_limit)
-
-    per_account_limit = _coerce_positive_int(env_mapping.get("MAX_CANDIDATES_PER_ACCOUNT"))
-
-    return global_limit, per_account_limit
-
-
 def _sanitize_acct_level(value: Any) -> str:
     """Return the supported account-number level for arbitrary input."""
 
@@ -1580,9 +1546,6 @@ def score_all_pairs_0_100(
 
     allowed_records = [record for record in candidate_records if record.get("allowed")]
 
-    global_limit, per_account_limit = _read_candidate_limits()
-    per_account_counts: Dict[int, int] = defaultdict(int)
-
     def _sort_key(record: Mapping[str, Any]) -> Tuple[int, ...]:
         priority = record.get("priority", {}) if isinstance(record.get("priority"), Mapping) else {}
         level_value = str(record.get("level", "none") or "none").lower()
@@ -1630,78 +1593,7 @@ def score_all_pairs_0_100(
 
     sorted_records = sorted(allowed_records, key=_sort_key)
 
-    hard_records: List[Dict[str, Any]] = []
-    nonhard_records: List[Dict[str, Any]] = []
     for record in sorted_records:
-        allow_flags = record.get("allow_flags", {})
-        is_hard = False
-        if isinstance(allow_flags, Mapping):
-            is_hard = bool(allow_flags.get("hard_acct"))
-        if is_hard:
-            hard_records.append(record)
-        else:
-            nonhard_records.append(record)
-
-    sorted_hard_records = sorted(hard_records, key=_sort_key)
-    sorted_nonhard_records = sorted(nonhard_records, key=_sort_key)
-
-    selected_records: List[Dict[str, Any]] = []
-    dropped_records: List[Tuple[Dict[str, Any], str]] = []
-
-    selected_records.extend(sorted_hard_records)
-
-    remaining_global: Optional[int]
-    if global_limit is None:
-        remaining_global = None
-    else:
-        remaining_global = max(global_limit - len(sorted_hard_records), 0)
-
-    selected_nonhard: List[Dict[str, Any]] = []
-
-    for record in sorted_nonhard_records:
-        left = int(record.get("left"))
-        right = int(record.get("right"))
-
-        if per_account_limit and (
-            per_account_counts[left] >= per_account_limit
-            or per_account_counts[right] >= per_account_limit
-        ):
-            dropped_records.append((record, "per_account_limit"))
-            _log_candidate_skipped(
-                sid,
-                left,
-                right,
-                "cap_nonhard_per_account",
-                allow_flags=record.get("allow_flags"),
-                total=record.get("total"),
-                level=record.get("level"),
-                gate_level=record.get("gate_level"),
-                account_points=record.get("account_points"),
-            )
-            continue
-
-        if remaining_global is not None and len(selected_nonhard) >= remaining_global:
-            dropped_records.append((record, "global_limit"))
-            _log_candidate_skipped(
-                sid,
-                left,
-                right,
-                "cap_nonhard_global",
-                allow_flags=record.get("allow_flags"),
-                total=record.get("total"),
-                level=record.get("level"),
-                gate_level=record.get("gate_level"),
-                account_points=record.get("account_points"),
-            )
-            continue
-
-        selected_nonhard.append(record)
-        per_account_counts[left] += 1
-        per_account_counts[right] += 1
-
-    selected_records.extend(selected_nonhard)
-
-    for record in selected_records:
         left = int(record.get("left"))
         right = int(record.get("right"))
         result = record.get("result") if isinstance(record.get("result"), Mapping) else {}
@@ -1726,51 +1618,7 @@ def score_all_pairs_0_100(
         scores[left][right] = deepcopy(result)
         scores[right][left] = deepcopy(result)
 
-    built_pairs = len(selected_records)
-
-    if global_limit or per_account_limit:
-        limit_log = {
-            "sid": sid,
-            "limit": global_limit or 0,
-            "per_account": per_account_limit or 0,
-            "considered": len(candidate_records),
-            "eligible": len(allowed_records),
-            "kept": built_pairs,
-            "dropped": len(dropped_records),
-        }
-        logger.info("CANDIDATE_LIMIT_SUMMARY %s", json.dumps(limit_log, sort_keys=True))
-
-        for record, reason in dropped_records[:10]:
-            priority = record.get("priority", {})
-            level_value = str(record.get("level", "none") or "none")
-
-            identity_raw = record.get("identity_score", record.get("identity_sum", 0))
-            try:
-                identity_val = int(identity_raw or 0)
-            except (TypeError, ValueError):
-                identity_val = 0
-
-            mid_raw = record.get("mid_sum", 0)
-            try:
-                mid_val = int(mid_raw or 0)
-            except (TypeError, ValueError):
-                mid_val = 0
-
-            drop_log = {
-                "sid": sid,
-                "i": record.get("left"),
-                "j": record.get("right"),
-                "reason": reason,
-                "priority": priority.get("label"),
-                "total": record.get("total", 0),
-                "level": level_value,
-                "identity": identity_val,
-                "mid": mid_val,
-                "dates_all": bool(record.get("dates_all")),
-                "score_gate": bool(record.get("score_gate")),
-                "soft": bool(record.get("soft")),
-            }
-            logger.info("CANDIDATE_LIMIT_DROP %s", json.dumps(drop_log, sort_keys=True))
+    built_pairs = len(sorted_records)
 
     summary_log = {
         "sid": sid,

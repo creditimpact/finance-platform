@@ -23,7 +23,7 @@ def test_normalize_acctnum_handles_mask_only() -> None:
 def test_account_number_level_visible_digits_match() -> None:
     assert (
         account_merge.account_number_level("349992*****", "3499921234567")
-        == "exact_or_known_match"
+        == "none"
     )
 
 
@@ -35,11 +35,12 @@ def test_account_number_level_requires_substring() -> None:
 
 def test_acctnum_match_level_debug_payload() -> None:
     level, debug = account_merge.acctnum_match_level("****6789", "123456789")
-    assert level == "exact_or_known_match"
+    assert level == "none"
     assert debug["short"] == "6789"
     assert debug["long"] == "123456789"
     assert debug["a"]["digits"] == "6789"
     assert debug["b"]["digits"] == "123456789"
+    assert debug.get("why") == "digit_conflict"
 
 
 def test_acctnum_match_level_requires_visible_digits() -> None:

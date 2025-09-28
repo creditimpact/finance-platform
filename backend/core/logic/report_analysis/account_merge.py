@@ -108,6 +108,16 @@ def _priority_category(level: str, dates_all: bool, score_gate: bool) -> Tuple[i
     return category, subscore, label
 
 
+def _should_build_pack(total: int, allow_flags: Mapping[str, Any], cfg: MergeCfg) -> bool:
+    """Return True when the pair should produce a pack."""
+
+    hard = bool(allow_flags.get("hard_acct"))
+    dates_all = bool(allow_flags.get("dates_all"))
+    threshold = cfg.threshold
+    over = total >= threshold
+    return hard or dates_all or over
+
+
 def is_missing(value: Any) -> bool:
     """Return True when a value represents an explicit missing sentinel."""
 
@@ -206,6 +216,16 @@ class MergeCfg:
     thresholds: Mapping[str, int]
     triggers: Mapping[str, Union[int, str, bool]]
     tolerances: Mapping[str, Union[int, float]]
+
+    @property
+    def threshold(self) -> int:
+        """Return the configured AI threshold as an integer."""
+
+        raw = self.thresholds.get("AI_THRESHOLD", 0)
+        try:
+            return int(raw or 0)
+        except (TypeError, ValueError):
+            return 0
 
 
 _POINT_DEFAULTS: Dict[str, int] = {
@@ -1483,6 +1503,7 @@ def score_all_pairs_0_100(
             allow_flags = {
                 "hard_acct": hard_acct,
                 "dates": allow_by_dates,
+                "dates_all": dates_all_equal,
                 "total": allow_by_total,
             }
 
@@ -1536,26 +1557,20 @@ def score_all_pairs_0_100(
                 )
                 return record
 
-            if hard_acct:
-                add_candidate(left, right, reason="hard_acctnum")
-                continue
-
-            if allow_by_total:
-                add_candidate(left, right, reason="score_gate")
-            elif dates_all_equal:
-                add_candidate(left, right, reason="dates_all_equal")
+            if _should_build_pack(total_score, allow_flags, cfg):
+                add_candidate(left, right, reason="score_or_hard_or_dates")
             else:
                 record = add_candidate(
                     left,
                     right,
-                    reason="below_threshold_no_acctnum",
+                    reason="below_threshold_and_no_hard",
                     allowed=False,
                 )
                 _log_candidate_skipped(
                     sid,
                     left,
                     right,
-                    "below_threshold_no_acctnum",
+                    "below_threshold_and_no_hard",
                     allow_flags=dict(allow_flags),
                     total=total_score,
                     level=level_value,

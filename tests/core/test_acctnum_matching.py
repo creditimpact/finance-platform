@@ -11,23 +11,29 @@ MATCH_CASES = [
     (
         "349992*****",
         "3499921234567",
-        "exact_or_known_match",
-        account_merge.POINTS_ACCTNUM_VISIBLE,
+        "none",
+        0,
     ),
     (
         "****6789",
         "123456789",
-        "exact_or_known_match",
-        account_merge.POINTS_ACCTNUM_VISIBLE,
+        "none",
+        0,
     ),
     ("555550*****", "555555*****", "none", 0),
     (
         "****-****-****-0423",
         "X X X X 0423",
+        "none",
+        0,
+    ),
+    ("****-****-****-1111", "....2222", "none", 0),
+    (
+        "M20191",
+        "M20191",
         "exact_or_known_match",
         account_merge.POINTS_ACCTNUM_VISIBLE,
     ),
-    ("****-****-****-1111", "....2222", "none", 0),
 ]
 
 
@@ -50,8 +56,8 @@ def test_account_number_display_is_used_for_matching(cfg: account_merge.MergeCfg
 
     result = account_merge.score_pair_0_100(bureaus_a, bureaus_b, cfg)
 
-    assert result["aux"]["account_number"]["acctnum_level"] == "exact_or_known_match"
-    assert result["parts"]["account_number"] == account_merge.POINTS_ACCTNUM_VISIBLE
+    assert result["aux"]["account_number"]["acctnum_level"] == "none"
+    assert result["parts"]["account_number"] == 0
 
 
 @pytest.mark.parametrize("left,right,expected_level,expected_points", MATCH_CASES)

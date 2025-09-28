@@ -106,6 +106,10 @@ def _digits(s: str) -> str:
     return "".join(DIGITS.findall(s or ""))
 
 
+def _alnum(s: str) -> str:
+    return "".join(ch for ch in (s or "") if ch.isalnum()).upper()
+
+
 def _match_visible_digits(short: str, long_: str) -> tuple[bool, str]:
     """Return whether ``short`` appears sequentially inside ``long_``."""
 
@@ -172,15 +176,71 @@ def acctnum_match_level(
     return ("exact_or_known_match" if ok else "none"), dbg
 
 
-def acctnum_level(a_raw: str, b_raw: str) -> tuple[str, dict[str, str]]:
+def acctnum_level(a_raw: str, b_raw: str) -> tuple[str, Dict[str, dict[str, str] | str]]:
     """Return the account-number level and debug metadata."""
 
-    level, debug = acctnum_match_level(a_raw, b_raw)
-    level = normalize_level(level)
-    debug_dict = dict(debug)
-    debug_dict.setdefault("short", "")
-    debug_dict.setdefault("long", "")
-    return level, debug_dict
+    a_raw_str = str(a_raw or "")
+    b_raw_str = str(b_raw or "")
+
+    a_digits = _digits(a_raw_str)
+    b_digits = _digits(b_raw_str)
+    a_alnum = _alnum(a_raw_str)
+    b_alnum = _alnum(b_raw_str)
+
+    debug: Dict[str, dict[str, str] | str] = {
+        "a": {"raw": a_raw_str, "digits": a_digits, "alnum": a_alnum},
+        "b": {"raw": b_raw_str, "digits": b_digits, "alnum": b_alnum},
+        "short": "",
+        "long": "",
+        "why": "",
+        "mode": "none",
+        "match_offset": "",
+    }
+
+    if a_digits and b_digits:
+        if len(a_digits) <= len(b_digits):
+            short, long_ = a_digits, b_digits
+        else:
+            short, long_ = b_digits, a_digits
+        debug["short"] = short
+        debug["long"] = long_
+        ok, offset = _match_visible_digits(short, long_)
+        if ok:
+            debug["match_offset"] = offset
+
+    if a_alnum and b_alnum and a_alnum == b_alnum:
+        debug["mode"] = "alnum"
+        debug["why"] = "alnum_match"
+        return _MATCH_LEVEL, debug
+
+    if (
+        a_digits
+        and b_digits
+        and a_digits == b_digits
+        and a_alnum.isdigit()
+        and b_alnum.isdigit()
+    ):
+        debug["mode"] = "digits"
+        debug["why"] = "digits_match"
+        return _MATCH_LEVEL, debug
+
+    if not a_digits and not b_digits:
+        debug["why"] = "empty"
+    elif (
+        a_alnum
+        and b_alnum
+        and a_alnum != b_alnum
+        and (not a_alnum.isdigit() or not b_alnum.isdigit())
+    ):
+        debug["why"] = "alnum_conflict"
+    elif a_digits and b_digits and a_digits != b_digits:
+        debug["why"] = "digit_conflict"
+    elif a_alnum and b_alnum and a_alnum != b_alnum:
+        debug["why"] = "alnum_conflict"
+    else:
+        debug["why"] = "insufficient_data"
+
+    return _NONE_LEVEL, debug
 
 
 def match_level(a: NormalizedAccountNumber, b: NormalizedAccountNumber) -> str:

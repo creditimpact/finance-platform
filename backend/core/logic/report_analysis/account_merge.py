@@ -2549,6 +2549,35 @@ def persist_merge_tags(
             if best_entry is not None:
                 summary_updates[idx]["merge"].append(best_entry)
 
+                partner_idx = best_entry.get("with")
+                if isinstance(partner_idx, int):
+                    partner_scores = scores_by_idx.get(partner_idx, {})
+                    reverse_result = partner_scores.get(idx)
+                    if not isinstance(reverse_result, Mapping):
+                        reverse_result = best_result
+
+                    partner_info = best_by_idx.get(partner_idx)
+                    if isinstance(partner_info, Mapping):
+                        partner_extra = {
+                            "tiebreaker": str(partner_info.get("tiebreaker", "none")),
+                            "strong_rank": partner_info.get("strong_rank"),
+                            "score_total": partner_info.get("score_total"),
+                        }
+                    else:
+                        partner_extra = {
+                            "tiebreaker": "peer_best",
+                            "strong_rank": None,
+                            "score_total": best_result.get("total")
+                            if isinstance(best_result, Mapping)
+                            else None,
+                        }
+
+                    reverse_entry = build_summary_merge_entry(
+                        "merge_best", idx, reverse_result, extra=partner_extra
+                    )
+                    if reverse_entry is not None:
+                        summary_updates[partner_idx]["merge"].append(reverse_entry)
+
     for idx in all_indices:
         partner_scores = scores_by_idx.get(idx, {})
         best_info = best_by_idx.get(idx, {})

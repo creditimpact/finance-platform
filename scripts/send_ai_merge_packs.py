@@ -262,25 +262,36 @@ def _build_index_payload(
     sorted_pairs = sorted(entries.items(), key=lambda item: item[0])
     packs_payload: list[dict[str, object]] = []
     pairs_payload: list[dict[str, object]] = []
+    seen_pairs: set[tuple[int, int]] = set()
     for (a_idx, b_idx), entry in sorted_pairs:
         score_value = _score_from_entry(entry)
         pack_entry = dict(entry)
         pack_entry["a"] = a_idx
         pack_entry["b"] = b_idx
         pack_entry["pair"] = [a_idx, b_idx]
-        pack_entry.setdefault("pack_file", f"pair_{a_idx:03d}_{b_idx:03d}.jsonl")
+        canonical_a, canonical_b = sorted((a_idx, b_idx))
+        pack_entry.setdefault(
+            "pack_file", f"pair_{canonical_a:03d}_{canonical_b:03d}.jsonl"
+        )
         pack_entry["score_total"] = score_value
         pack_entry["score"] = score_value
         packs_payload.append(pack_entry)
 
-        pair_entry: dict[str, object] = {"pair": [a_idx, b_idx], "score": score_value}
-        ai_result = entry.get("ai_result")
-        if isinstance(ai_result, MappingABC):
-            pair_entry["ai_result"] = dict(ai_result)
-        error_payload = entry.get("error")
-        if isinstance(error_payload, MappingABC):
-            pair_entry["error"] = dict(error_payload)
-        pairs_payload.append(pair_entry)
+        pack_file = pack_entry.get("pack_file")
+        for pair in ((a_idx, b_idx), (b_idx, a_idx)):
+            if pair in seen_pairs:
+                continue
+            pair_entry: dict[str, object] = {"pair": [pair[0], pair[1]], "score": score_value}
+            if pack_file:
+                pair_entry["pack_file"] = pack_file
+            ai_result = entry.get("ai_result")
+            if isinstance(ai_result, MappingABC):
+                pair_entry["ai_result"] = dict(ai_result)
+            error_payload = entry.get("error")
+            if isinstance(error_payload, MappingABC):
+                pair_entry["error"] = dict(error_payload)
+            pairs_payload.append(pair_entry)
+            seen_pairs.add(pair)
 
     payload = dict(base)
     payload["sid"] = sid

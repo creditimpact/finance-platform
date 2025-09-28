@@ -222,16 +222,29 @@ def main(argv: Sequence[str] | None = None) -> None:
     pairs_count = len(index_entries)
     if pairs_count > 0:
         index_path = packs_dir / "index.json"
+        seen_pairs: set[tuple[int, int]] = set()
+        pairs_payload: list[dict[str, object]] = []
+        for entry in index_entries:
+            a_idx = int(entry["a"])
+            b_idx = int(entry["b"])
+            score_value = entry.get("score", entry.get("score_total", 0))
+            pack_file = entry.get("pack_file")
+            for pair in ((a_idx, b_idx), (b_idx, a_idx)):
+                if pair in seen_pairs:
+                    continue
+                pair_entry: dict[str, object] = {
+                    "pair": [pair[0], pair[1]],
+                    "score": score_value,
+                }
+                if pack_file:
+                    pair_entry["pack_file"] = pack_file
+                pairs_payload.append(pair_entry)
+                seen_pairs.add(pair)
+
         index_payload = {
             "sid": sid,
             "packs": index_entries,
-            "pairs": [
-                {
-                    "pair": [entry["a"], entry["b"]],
-                    "score": entry.get("score", entry.get("score_total", 0)),
-                }
-                for entry in index_entries
-            ],
+            "pairs": pairs_payload,
             "pairs_count": pairs_count,
         }
         _write_index(index_path, index_payload)

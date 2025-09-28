@@ -374,7 +374,10 @@ def test_build_ai_merge_packs_cli_updates_manifest(
     assert pair_entry["score"] == pair_entry["score_total"]
 
     minimal_pairs = index_payload.get("pairs", [])
-    assert minimal_pairs == [{"pair": [11, 16], "score": pair_entry["score_total"]}]
+    assert {tuple(entry["pair"]) for entry in minimal_pairs} == {(11, 16), (16, 11)}
+    for entry in minimal_pairs:
+        assert entry["score"] == pair_entry["score_total"]
+        assert entry.get("pack_file") == pair_entry["pack_file"]
 
     logs_path = out_dir / "logs.txt"
     assert not logs_path.exists()

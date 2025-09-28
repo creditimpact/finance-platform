@@ -1457,11 +1457,13 @@ def score_all_pairs_0_100(
                 "MERGE_V2_DECISION %s", json.dumps(decision_log, sort_keys=True)
             )
 
-            gate_level_norm = level_value
-            if gate_level_norm in {"", "none"}:
-                gate_level_norm = _sanitize_acct_level(gate_level)
+            normalized_level = acct_level
+            if normalized_level in {"", "none"}:
+                normalized_level = level_value
+            if normalized_level in {"", "none"}:
+                normalized_level = _sanitize_acct_level(gate_level)
 
-            normalized_level = level_value if level_value not in {"", "none"} else gate_level_norm
+            gate_level_norm = normalized_level
             hard_acct = normalized_level == "exact_or_known_match"
             dates_all_equal = bool(result.get("dates_all"))
             allow_by_dates = dates_all_equal

@@ -1587,7 +1587,8 @@ def score_all_pairs_0_100(
             )
             return record
 
-        level_value = _sanitize_acct_level(level_value)
+        # ensure the authoritative normalized level flows through
+        level_value = _sanitize_acct_level(normalized_level or level_value)
 
         allowed, allow_reason = _should_build_pack(
             cfg=cfg,
@@ -1597,12 +1598,13 @@ def score_all_pairs_0_100(
         )
 
         considered_message = (
-            "CANDIDATE_CONSIDERED sid=%s i=%s j=%s total=%s gate_level=%s level_value=%s dates_all=%s"
+            "CANDIDATE_CONSIDERED sid=%s i=%s j=%s reason=%s total=%s gate_level=%s level_value=%s dates_all=%s"
         )
         considered_args = (
             sid,
             left,
             right,
+            allow_reason,
             total_score,
             gate_level,
             level_value,

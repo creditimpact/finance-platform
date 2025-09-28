@@ -254,6 +254,9 @@ def test_send_ai_merge_packs_records_merge_decision(
     matching = [entry for entry in pairs_entries if entry.get("pair") == [11, 16]]
     assert matching
     assert matching[0].get("ai_result") == pack_payload["ai_result"]
+    reverse = [entry for entry in pairs_entries if entry.get("pair") == [16, 11]]
+    assert reverse
+    assert reverse[0].get("pack_file") == matching[0].get("pack_file")
 
     pair_tag_a = next(
         tag
@@ -834,6 +837,12 @@ def test_ai_pairing_flow_compaction(
     assert merge_pair_entry["with"] == 16
     assert merge_pair_entry["decision"] == "ai"
     assert merge_pair_entry.get("total", 0) >= 0
+
+    merge_summary_b = summary_b.get("merge_explanations", [])
+    assert merge_summary_b
+    merge_best_entry_b = _ai_summary(merge_summary_b, partner=11)
+    assert merge_best_entry_b["kind"] == "merge_best"
+    assert merge_best_entry_b["with"] == 11
 
     merge_score_a = summary_a.get("merge_scoring")
     assert merge_score_a

@@ -54,6 +54,15 @@ AI_DECISIONS_NEW = {
     "different",
 }
 
+AI_PAIR_KIND_BY_DECISION = {
+    "same_account_same_debt": "same_account_pair",
+    "same_account_diff_debt": "same_account_pair",
+    "same_account_debt_unknown": "same_account_pair",
+    "same_debt_diff_account": "same_debt_pair",
+    "same_debt_account_unknown": "same_debt_pair",
+    "different": "same_account_pair",
+}
+
 LEGACY_TO_NEW = {
     "merge": "same_account_same_debt",
     "same_account": "same_account_same_debt",
@@ -2145,13 +2154,36 @@ def build_summary_ai_entries(
         else:
             final_flags[key] = default_flags.get(key, "unknown")
 
+    ai_result_payload: Dict[str, Any] = {
+        "decision": normalized_decision or "different",
+        "flags": {key: final_flags[key] for key in ("account_match", "debt_match")},
+    }
+    if reason_text:
+        ai_result_payload["reason"] = reason_text
+
     decision_entry["flags"] = final_flags
+    decision_entry["ai_result"] = dict(ai_result_payload)
     entries.append(decision_entry)
 
-    pair_entry: Dict[str, Any] = {"kind": "same_account_pair", "with": partner}
-    if reason_text:
-        pair_entry["reason"] = reason_text
-    entries.append(pair_entry)
+    pair_kind = AI_PAIR_KIND_BY_DECISION.get(normalized_decision or "")
+    if pair_kind:
+        pair_entry: Dict[str, Any] = {"kind": pair_kind, "with": partner, "ai_result": dict(ai_result_payload)}
+        if reason_text:
+            pair_entry["reason"] = reason_text
+        entries.append(pair_entry)
+
+        if pair_kind == "same_account_pair" and normalized_decision == "same_account_same_debt":
+            pair_entry.setdefault("notes", []).append("accounts_and_debt_match")
+        elif pair_kind == "same_account_pair" and normalized_decision == "same_account_diff_debt":
+            pair_entry.setdefault("notes", []).append("debt_differs")
+        elif normalized_decision == "same_account_debt_unknown":
+            pair_entry.setdefault("notes", []).append("debt_information_missing")
+        elif normalized_decision == "same_debt_diff_account":
+            pair_entry.setdefault("notes", []).append("same_debt_different_accounts")
+        elif normalized_decision == "same_debt_account_unknown":
+            pair_entry.setdefault("notes", []).append("same_debt_account_unclear")
+        elif normalized_decision == "different":
+            pair_entry.setdefault("notes", []).append("no_match")
 
     return entries
 

@@ -27,3 +27,7 @@ def test_extra_headers_sanitized():
     )
 
     assert captured["extra_headers"] == {"X-Test": "hllo"}
+    assert captured["temperature"] == 0
+    assert captured["top_p"] == 1
+    assert captured["frequency_penalty"] == 0
+    assert captured["presence_penalty"] == 0

@@ -111,7 +111,7 @@ def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
                             "message": {
                                 "content": jsonlib.dumps(
                                     {
-                                        "decision": "merge",
+                                        "decision": "same_account_same_debt",
                                         "confidence": 0.83,
                                         "reason": "accounts align",
                                         "reasons": ["matched creditor names"],
@@ -142,7 +142,7 @@ def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
     resp = ai_adjudicator.adjudicate_pair(pack)
 
     assert resp == {
-        "decision": "merge",
+        "decision": "same_account_same_debt",
         "confidence": 0.83,
         "reason": "accounts align",
         "reasons": ["matched creditor names"],
@@ -153,6 +153,10 @@ def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
     assert captured["headers"]["Authorization"] == "Bearer test-key"
     assert captured["payload"]["model"] == "gpt-test"
     assert captured["payload"]["response_format"] == {"type": "json_object"}
+    assert captured["payload"]["temperature"] == 0.0
+    assert captured["payload"]["top_p"] == 1.0
+    assert "frequency_penalty" not in captured["payload"]
+    assert "presence_penalty" not in captured["payload"]
     assert captured["timeout"] == 3.0
 
     ai_adjudicator.persist_ai_decision("case-123", tmp_path, 11, 16, resp)
@@ -166,7 +170,7 @@ def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
     expected_a = {
         "kind": "merge_result",
         "with": 16,
-        "decision": "merge",
+        "decision": "same_account_same_debt",
         "confidence": 0.83,
         "reason": "accounts align",
         "reasons": ["matched creditor names"],
@@ -176,7 +180,7 @@ def test_adjudicate_pair_enabled_and_persist(monkeypatch, tmp_path):
     expected_b = {
         "kind": "merge_result",
         "with": 11,
-        "decision": "merge",
+        "decision": "same_account_same_debt",
         "confidence": 0.83,
         "reason": "accounts align",
         "reasons": ["matched creditor names"],

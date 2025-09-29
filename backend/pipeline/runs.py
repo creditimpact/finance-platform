@@ -5,7 +5,11 @@ from datetime import datetime, timezone
 from typing import Mapping
 import json, os, glob, shutil, time
 
-from backend.core.ai.paths import ensure_merge_paths, merge_paths_from_any
+from backend.core.ai.paths import (
+    MergePaths,
+    ensure_merge_paths,
+    merge_paths_from_any,
+)
 
 RUNS_ROOT_ENV = "RUNS_ROOT"                 # optional override
 MANIFEST_ENV  = "REPORT_MANIFEST_PATH"      # explicit manifest path
@@ -88,8 +92,11 @@ class RunManifest:
             },
             "ai": {
                 "packs": {
+                    "base": None,
                     "dir": None,
+                    "packs": None,
                     "packs_dir": None,
+                    "results": None,
                     "results_dir": None,
                     "index": None,
                     "pairs": 0,
@@ -125,11 +132,73 @@ class RunManifest:
     def save(self) -> "RunManifest":
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
+        self._upgrade_ai_packs_structure()
         self._mirror_ai_to_legacy_artifacts()
         with tmp.open("w", encoding="utf-8") as fh:
             json.dump(self.data, fh, ensure_ascii=False, indent=2)
         safe_replace(tmp, self.path)
         return self
+
+    def _upgrade_ai_packs_structure(self) -> None:
+        ai_section = self.data.get("ai")
+        if not isinstance(ai_section, dict):
+            return
+
+        packs_section = ai_section.get("packs")
+        if not isinstance(packs_section, dict):
+            return
+
+        base_value = packs_section.get("base")
+        packs_value = packs_section.get("packs")
+        results_value = packs_section.get("results")
+        dir_value = packs_section.get("dir")
+
+        needs_upgrade = not (base_value and packs_value and results_value)
+
+        if not needs_upgrade and isinstance(dir_value, str):
+            normalized = dir_value.rstrip("/\\")
+            if normalized.endswith("ai_packs"):
+                needs_upgrade = True
+
+        if not needs_upgrade:
+            return
+
+        run_root = self.path.parent
+        runs_root = run_root.parent
+        canonical_paths = ensure_merge_paths(runs_root, self.sid, create=False)
+
+        merge_paths: MergePaths | None = None
+        candidates = [
+            packs_section.get("base"),
+            packs_section.get("packs"),
+            packs_section.get("results"),
+            packs_section.get("dir"),
+            packs_section.get("packs_dir"),
+            packs_section.get("results_dir"),
+        ]
+
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                merge_paths = merge_paths_from_any(Path(candidate), create=False)
+                break
+            except ValueError:
+                continue
+
+        if merge_paths is None:
+            merge_paths = canonical_paths
+
+        existing_logs = packs_section.get("logs")
+        prefer_existing_index = bool(packs_section.get("index"))
+        self._apply_merge_paths_to_packs(
+            packs_section,
+            merge_paths,
+            prefer_existing_index=prefer_existing_index,
+        )
+
+        if existing_logs:
+            packs_section["logs"] = existing_logs
 
     def _mirror_ai_to_legacy_artifacts(self) -> None:
         ai_section = self.data.get("ai")
@@ -144,7 +213,18 @@ class RunManifest:
         packs = ai_section.get("packs")
         if isinstance(packs, dict):
             legacy_packs = legacy_ai.setdefault("packs", {})
-            for key in ("dir", "index", "pairs", "last_built_at", "logs"):
+            for key in (
+                "base",
+                "dir",
+                "packs",
+                "packs_dir",
+                "results",
+                "results_dir",
+                "index",
+                "pairs",
+                "last_built_at",
+                "logs",
+            ):
                 if key in packs:
                     legacy_packs[key] = packs[key]
 
@@ -217,8 +297,11 @@ class RunManifest:
         packs = ai.setdefault(
             "packs",
             {
+                "base": None,
                 "dir": None,
+                "packs": None,
                 "packs_dir": None,
+                "results": None,
                 "results_dir": None,
                 "index": None,
                 "pairs": 0,
@@ -238,19 +321,32 @@ class RunManifest:
         )
         return packs, status
 
+    def _apply_merge_paths_to_packs(
+        self,
+        packs: dict[str, object],
+        merge_paths: MergePaths,
+        *,
+        prefer_existing_index: bool = False,
+    ) -> None:
+        base_str = str(merge_paths.base)
+        packs_str = str(merge_paths.packs_dir)
+        results_str = str(merge_paths.results_dir)
+
+        packs["base"] = base_str
+        packs["dir"] = base_str
+        packs["packs"] = packs_str
+        packs["packs_dir"] = packs_str
+        packs["results"] = results_str
+        packs["results_dir"] = results_str
+        packs["logs"] = str(merge_paths.log_file)
+
+        if not (prefer_existing_index and packs.get("index")):
+            packs["index"] = str(merge_paths.index_file)
+
     def upsert_ai_packs_dir(self, packs_dir: Path) -> "RunManifest":
         packs, _ = self._ensure_ai_section()
         merge_paths = merge_paths_from_any(packs_dir, create=False)
-        packs["dir"] = str(merge_paths.base)
-        packs["packs_dir"] = str(merge_paths.packs_dir)
-        packs["results_dir"] = str(merge_paths.results_dir)
-        if not packs.get("index"):
-            packs["index"] = str(merge_paths.index_file)
-        log_path = merge_paths.log_file
-        if log_path.exists():
-            packs["logs"] = str(log_path.resolve())
-        else:
-            packs.pop("logs", None)
+        self._apply_merge_paths_to_packs(packs, merge_paths, prefer_existing_index=True)
         return self
 
     def set_ai_enqueued(self) -> "RunManifest":
@@ -262,17 +358,9 @@ class RunManifest:
     def set_ai_built(self, packs_dir: Path, pairs: int) -> "RunManifest":
         packs, status = self._ensure_ai_section()
         merge_paths = merge_paths_from_any(packs_dir, create=False)
-        packs["dir"] = str(merge_paths.base)
-        packs["packs_dir"] = str(merge_paths.packs_dir)
-        packs["results_dir"] = str(merge_paths.results_dir)
-        packs["index"] = str(merge_paths.index_file)
+        self._apply_merge_paths_to_packs(packs, merge_paths)
         packs["pairs"] = int(pairs)
         packs["last_built_at"] = _utc_now()
-        log_path = merge_paths.log_file
-        if log_path.exists():
-            packs["logs"] = str(log_path.resolve())
-        else:
-            packs.pop("logs", None)
         status["built"] = True
         status["skipped_reason"] = None
         return self.save()
@@ -314,13 +402,15 @@ class RunManifest:
             except ValueError:
                 packs["dir"] = str(dir_path)
                 packs.pop("packs_dir", None)
+                packs.pop("packs", None)
                 packs.pop("results_dir", None)
+                packs.pop("results", None)
             else:
-                packs["dir"] = str(merge_paths.base)
-                packs["packs_dir"] = str(merge_paths.packs_dir)
-                packs["results_dir"] = str(merge_paths.results_dir)
-                if index is None and not packs.get("index"):
-                    packs["index"] = str(merge_paths.index_file)
+                self._apply_merge_paths_to_packs(
+                    packs,
+                    merge_paths,
+                    prefer_existing_index=index is None,
+                )
 
         if index is not None:
             packs["index"] = str(Path(index).resolve())
@@ -328,11 +418,7 @@ class RunManifest:
         if logs is not None:
             packs["logs"] = str(Path(logs).resolve())
         elif merge_paths is not None:
-            candidate_log = merge_paths.log_file
-            if candidate_log.exists():
-                packs["logs"] = str(candidate_log)
-            else:
-                packs.pop("logs", None)
+            packs["logs"] = str(merge_paths.log_file)
 
         if pairs is not None:
             packs["pairs"] = int(pairs)
@@ -364,6 +450,9 @@ class RunManifest:
             if isinstance(packs_value, dict):
                 packs_section = packs_value
 
+        base_value = packs_section.get("base")
+        packs_value = packs_section.get("packs")
+        results_value = packs_section.get("results")
         dir_value = packs_section.get("dir")
         packs_dir_value = packs_section.get("packs_dir")
         results_dir_value = packs_section.get("results_dir")
@@ -390,7 +479,14 @@ class RunManifest:
                     legacy_dir = resolved
                     legacy_packs_dir = resolved
 
-        for candidate in (dir_value, packs_dir_value, results_dir_value):
+        for candidate in (
+            base_value,
+            packs_value,
+            results_value,
+            dir_value,
+            packs_dir_value,
+            results_dir_value,
+        ):
             _apply_candidate(candidate)
             if merge_paths is not canonical_paths:
                 break
@@ -446,7 +542,9 @@ class RunManifest:
         paths: dict[str, Path | None] = {
             "base": base_path,
             "packs_dir": packs_dir.resolve(),
+            "packs": packs_dir.resolve(),
             "results_dir": results_dir.resolve(),
+            "results": results_dir.resolve(),
             "index_file": index_file,
             "log_file": log_file,
         }
@@ -519,46 +617,81 @@ def persist_manifest(
                 packs_updates = dict(entries)
                 packs, _ = manifest._ensure_ai_section()
 
+                base_value = packs_updates.pop("base", None)
                 dir_value = packs_updates.pop("dir", None)
-                if dir_value is not None and str(dir_value) != "":
-                    dir_path = Path(dir_value)
-                    try:
-                        manifest.upsert_ai_packs_dir(dir_path)
-                    except ValueError:
-                        resolved = dir_path.resolve()
-                        packs["dir"] = str(resolved)
-                        packs.pop("packs_dir", None)
-                        packs.pop("results_dir", None)
-
+                packs_value = packs_updates.pop("packs", None)
                 packs_dir_value = packs_updates.pop("packs_dir", None)
-                if packs_dir_value is not None and str(packs_dir_value) != "":
-                    packs["packs_dir"] = str(Path(packs_dir_value).resolve())
-
+                results_value = packs_updates.pop("results", None)
                 results_dir_value = packs_updates.pop("results_dir", None)
-                if results_dir_value is not None and str(results_dir_value) != "":
-                    packs["results_dir"] = str(Path(results_dir_value).resolve())
 
-                index_value = packs_updates.pop("index", None)
-                if index_value is not None and str(index_value) != "":
-                    packs["index"] = str(Path(index_value).resolve())
+                index_value_raw = packs_updates.pop("index", None)
+                logs_value_raw = packs_updates.pop("logs", None)
+                pairs_value = packs_updates.pop("pairs", None)
+                pairs_count_value = packs_updates.pop("pairs_count", None)
+                last_built_value = packs_updates.pop("last_built_at", None)
+
+                merge_paths: MergePaths | None = None
+                candidate_pairs = [
+                    ("base", base_value),
+                    ("packs", packs_value),
+                    ("results", results_value),
+                    ("dir", dir_value),
+                    ("packs_dir", packs_dir_value),
+                    ("results_dir", results_dir_value),
+                ]
+
+                prefer_existing_index = True
+
+                def _set_direct(key: str, value: object) -> None:
+                    if value is None or str(value) == "":
+                        return
+                    resolved = Path(value).resolve()
+                    packs[key] = str(resolved)
+                    if key == "dir":
+                        packs.pop("packs_dir", None)
+                        packs.pop("packs", None)
+                        packs.pop("results_dir", None)
+                        packs.pop("results", None)
+
+                for key, candidate in candidate_pairs:
+                    if candidate is None or str(candidate) == "":
+                        continue
+                    try:
+                        merge_paths = merge_paths_from_any(Path(candidate), create=False)
+                    except ValueError:
+                        _set_direct(key, candidate)
+                        continue
+
+                    prefer_existing_index = index_value_raw is None or str(index_value_raw) == ""
+                    manifest._apply_merge_paths_to_packs(
+                        packs,
+                        merge_paths,
+                        prefer_existing_index=prefer_existing_index,
+                    )
+                    break
+
+                index_value: Path | None = None
+                if index_value_raw is not None and str(index_value_raw) != "":
+                    index_value = Path(index_value_raw).resolve()
+
+                if index_value is not None:
+                    packs["index"] = str(index_value)
                 elif packs.get("dir") and not packs.get("index"):
                     packs["index"] = str((Path(packs["dir"]) / "index.json").resolve())
 
-                pairs_value = packs_updates.pop("pairs", None)
+                if logs_value_raw is not None and str(logs_value_raw) != "":
+                    packs["logs"] = str(Path(logs_value_raw).resolve())
+                elif merge_paths is not None:
+                    packs["logs"] = str(merge_paths.log_file)
+
                 if pairs_value is not None:
                     packs["pairs"] = int(pairs_value)
 
-                pairs_count_value = packs_updates.pop("pairs_count", None)
                 if pairs_count_value is not None:
                     packs["pairs"] = int(pairs_count_value)
 
-                last_built_value = packs_updates.pop("last_built_at", None)
                 if last_built_value is not None:
                     packs["last_built_at"] = str(last_built_value)
-
-                logs_value = packs_updates.pop("logs", None)
-                if logs_value is not None and str(logs_value) != "":
-                    packs["logs"] = str(Path(logs_value).resolve())
 
                 for extra_key, extra_value in packs_updates.items():
                     packs[str(extra_key)] = extra_value

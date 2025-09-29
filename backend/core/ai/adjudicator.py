@@ -1,6 +1,7 @@
 """AI adjudicator client for calling OpenAI's chat completion API."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from collections.abc import Mapping
@@ -54,6 +55,15 @@ Consider:
 • The numeric 0–100 match summary as a hint, but override if raw context contradicts it.
 Be conservative: if critical fields conflict without plausible explanation → "different".
 Do NOT mention these rules in the output."""
+
+SYSTEM_PROMPT_SHA256 = hashlib.sha256(_SYSTEM_PROMPT.encode("utf-8")).hexdigest()
+
+REQUEST_PARAMS: Dict[str, object] = {
+    "temperature": 0,
+    "top_p": 1,
+}
+
+RESPONSE_FORMAT: Dict[str, object] = {"type": "json_object"}
 
 _ALLOWED_USER_PAYLOAD_KEYS: Iterable[str] = (
     "sid",
@@ -285,12 +295,13 @@ def decide_merge_or_different(pack: dict, *, timeout: int) -> dict:
         {"role": "user", "content": json.dumps(user_payload)},
     ]
 
-    request_body = {
+    request_body: Dict[str, object] = {
         "model": model,
-        "response_format": {"type": "json_object"},
-        "temperature": 0,
         "messages": messages,
+        "response_format": dict(RESPONSE_FORMAT),
     }
+    for key, value in REQUEST_PARAMS.items():
+        request_body[key] = value
 
     url = f"{base_url}/chat/completions"
     response = httpx.post(url, headers=headers, json=request_body, timeout=request_timeout)

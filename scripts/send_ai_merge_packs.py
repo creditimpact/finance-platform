@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -25,6 +26,9 @@ from backend.config import AI_REQUEST_TIMEOUT
 from backend.core.ai.adjudicator import (
     ALLOWED_DECISIONS,
     AdjudicatorError,
+    REQUEST_PARAMS as AI_REQUEST_PARAMS,
+    RESPONSE_FORMAT as AI_RESPONSE_FORMAT,
+    SYSTEM_PROMPT_SHA256,
     _normalize_and_validate_decision,
     decide_merge_or_different,
 )
@@ -139,6 +143,14 @@ def _append_zero_debt_rules(pack: Mapping[str, object]) -> dict[str, object]:
 
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_BACKOFF_SCHEDULE = "1,3,7"
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _pack_sha256(path: Path) -> str:
+    return _sha256_bytes(path.read_bytes())
 
 
 def _load_index_payload(
@@ -991,6 +1003,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     max_attempts = max(0, max_retries) + 1
 
     for pack_path in pair_paths:
+        pack_sha256 = _pack_sha256(pack_path)
         pack = _append_zero_debt_rules(_load_pack(pack_path))
         a_idx, b_idx = _pair_from_pack(pack, pack_path)
         score_value = _score_from_pack(pack)
@@ -1006,6 +1019,25 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         pair_for_log = {"a": a_idx, "b": b_idx}
         pack_log = _log_factory(logs_path, sid, pair_for_log, pack_path.name)
+
+        debug_params = dict(AI_REQUEST_PARAMS)
+        debug_params["response_format"] = dict(AI_RESPONSE_FORMAT)
+        debug_payload = {
+            "pack_sha256": pack_sha256,
+            "prompt_sha256": SYSTEM_PROMPT_SHA256,
+            "model": os.getenv("AI_MODEL"),
+            "params": debug_params,
+        }
+
+        log.info(
+            "AI_DEBUG_METADATA sid=%s a=%s b=%s pack_sha=%s prompt_sha=%s model=%s",
+            sid,
+            a_idx,
+            b_idx,
+            pack_sha256,
+            SYSTEM_PROMPT_SHA256,
+            debug_payload["model"] or "<unset>",
+        )
 
         try:
             a_int = _ensure_int(a_idx, "a_idx")
@@ -1031,7 +1063,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             if legacy_result_found and a_int is not None and b_int is not None:
                 result_path = pair_result_path(merge_paths, a_int, b_int)
                 _write_result(result_path, result_payload_existing)
-            pack_log("PACK_SKIP", {"reason": "result_present"})
+            pack_log(
+                "PACK_SKIP",
+                {"reason": "result_present", "debug": debug_payload},
+            )
             successes += 1
             continue
 
@@ -1043,6 +1078,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "PACK_START",
             {
                 "max_attempts": max_attempts,
+                "debug": debug_payload,
             },
         )
 
@@ -1101,6 +1137,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 {
                     "attempts": attempts,
                     "error": error_name,
+                    "debug": debug_payload,
                 },
             )
             timestamp = _isoformat_timestamp()
@@ -1128,6 +1165,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 {
                     "attempts": attempts,
                     "error": "InvalidDecision",
+                    "debug": debug_payload,
                 },
             )
             timestamp = _isoformat_timestamp()
@@ -1273,6 +1311,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "decision": decision,
             "reason": reason,
             "flags": dict(flags_for_storage),
+            "debug": dict(debug_payload),
         }
         entry["ai_result"] = dict(ai_result_payload)
         entry.pop("error", None)
@@ -1293,6 +1332,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "decision": decision,
                 "reason": reason,
                 "fallback": fallback_used,
+                "debug": debug_payload,
             },
         )
         result_path = pair_result_path(merge_paths, a_int, b_int)

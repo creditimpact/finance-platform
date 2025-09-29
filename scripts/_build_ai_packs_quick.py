@@ -1,7 +1,7 @@
 ﻿import os, json, re, pathlib, time
 from datetime import datetime
 
-from backend.core.ai.paths import get_merge_paths, pair_pack_filename
+from backend.core.ai.paths import ensure_merge_paths, pair_pack_filename
 
 RUNS_ROOT = os.environ.get("RUNS_ROOT", "runs")
 SID = os.environ.get("SID") or "'+$SID+'"
@@ -10,7 +10,7 @@ base = pathlib.Path(RUNS_ROOT)/SID
 accounts_dir = base/"cases"/"accounts"
 manifest_path = base/".manifest"
 
-merge_paths = get_merge_paths(pathlib.Path(RUNS_ROOT), SID, create=True)
+merge_paths = ensure_merge_paths(pathlib.Path(RUNS_ROOT), SID, create=True)
 PACKS_ROOT = merge_paths.packs_dir
 INDEX_PATH = merge_paths.index_file
 LOG_PATH = merge_paths.log_file

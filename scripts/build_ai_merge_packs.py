@@ -17,7 +17,7 @@ except Exception:  # pragma: no cover - fallback for direct execution
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-from backend.core.ai.paths import get_merge_paths, pair_pack_filename
+from backend.core.ai.paths import MergePaths, ensure_merge_paths, pair_pack_filename
 from backend.core.logic.normalize import last4, normalize_acctnum
 from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
 from backend.pipeline.runs import RunManifest, persist_manifest
@@ -36,6 +36,31 @@ def _write_index(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(payload, ensure_ascii=False, indent=2)
     path.write_text(serialized + "\n", encoding="utf-8")
+
+
+def _merge_paths_with_override(base: MergePaths, override: Path | None) -> MergePaths:
+    if override is None:
+        return base
+
+    override_path = override.resolve()
+    if override_path.name == "packs":
+        base_dir = override_path.parent
+        packs_dir = override_path
+    else:
+        base_dir = override_path
+        packs_dir = override_path / "packs"
+
+    packs_dir.mkdir(parents=True, exist_ok=True)
+    results_dir = base_dir / base.results_dir.name
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    return MergePaths(
+        base=base_dir,
+        packs_dir=packs_dir,
+        results_dir=results_dir,
+        log_file=base_dir / base.log_file.name,
+        index_file=base_dir / base.index_file.name,
+    )
 
 
 def _safe_int(value: object, default: int = 0) -> int:
@@ -124,23 +149,16 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     sid = str(args.sid)
     runs_root = Path(args.runs_root)
-    merge_paths = get_merge_paths(runs_root, sid, create=True)
+    canonical_paths = ensure_merge_paths(runs_root, sid, create=True)
+    override = Path(args.packs_dir) if args.packs_dir else None
+    merge_paths = _merge_paths_with_override(canonical_paths, override)
 
-    if args.packs_dir:
-        packs_dir = Path(args.packs_dir)
-        packs_dir.mkdir(parents=True, exist_ok=True)
-        base_dir = packs_dir.parent
-        index_path = base_dir / merge_paths.index_file.name
-        results_dir = base_dir / "results"
-        results_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        packs_dir = merge_paths.packs_dir
-        base_dir = merge_paths.base
-        index_path = merge_paths.index_file
-        results_dir = merge_paths.results_dir
+    packs_dir = merge_paths.packs_dir
+    base_dir = merge_paths.base
+    index_path = merge_paths.index_file
 
     log.info("PACKS_DIR_USED sid=%s dir=%s", sid, packs_dir)
-    log.debug("MERGE_RESULTS_DIR sid=%s dir=%s", sid, results_dir)
+    log.debug("MERGE_RESULTS_DIR sid=%s dir=%s", sid, merge_paths.results_dir)
 
     manifest = RunManifest.for_sid(sid)
     manifest.upsert_ai_packs_dir(base_dir)

@@ -29,11 +29,12 @@ from backend.core.ai.adjudicator import (
     decide_merge_or_different,
 )
 from backend.core.ai.paths import (
-    get_merge_paths,
+    ensure_merge_paths,
     pair_pack_filename,
     pair_result_filename,
     probe_legacy_ai_packs,
 )
+from backend.core.ai.validators import validate_ai_result
 from backend.core.io.tags import read_tags, upsert_tag
 from backend.core.logic.report_analysis.account_merge import (
     build_summary_ai_entries,
@@ -235,24 +236,20 @@ def _score_from_pack(pack: Mapping[str, object]) -> int:
         return 0
 
 
-def _write_pack(path: Path, payload: Mapping[str, object]) -> None:
-    serialized = json.dumps(dict(payload), ensure_ascii=False, sort_keys=True)
-    path.write_text(f"{serialized}\n", encoding="utf-8")
-
-
-def _write_pack_with_shadow(
-    primary_path: Path, base_dir: Path, payload: Mapping[str, object]
-) -> None:
-    _write_pack(primary_path, payload)
-    if primary_path.parent != base_dir:
-        shadow_path = base_dir / primary_path.name
-        _write_pack(shadow_path, payload)
-
-
 def _write_result(path: Path, payload: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(dict(payload), ensure_ascii=False, sort_keys=True)
     path.write_text(f"{serialized}\n", encoding="utf-8")
+
+
+def _load_result(path: Path) -> Mapping[str, object] | None:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, MappingABC) else None
 
 
 def _score_from_entry(entry: Mapping[str, object]) -> int:
@@ -831,59 +828,27 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     manifest = RunManifest.for_sid(sid)
 
-    merge_paths = get_merge_paths(runs_root_path, sid, create=False)
+    merge_paths = ensure_merge_paths(runs_root_path, sid, create=True)
     base_dir = merge_paths.base
     packs_dir = merge_paths.packs_dir
     results_dir = merge_paths.results_dir
     index_path = merge_paths.index_file
     logs_path = merge_paths.log_file
 
-    def _apply_base_override(base_path: Path) -> None:
-        nonlocal base_dir, packs_dir, results_dir, index_path, logs_path
-        base_dir = base_path
-        packs_dir = base_dir / "packs"
-        results_dir = base_dir / "results"
-        index_path = base_dir / "index.json"
-        logs_path = base_dir / "logs.txt"
-
     pack_candidates: list[Path] = []
 
     if args.packs_dir:
         override_dir = Path(args.packs_dir)
-        if override_dir.name == "packs" and override_dir.parent.exists():
-            _apply_base_override(override_dir.parent)
-            pack_candidates.append(override_dir)
-        elif (override_dir / "packs").is_dir():
-            _apply_base_override(override_dir)
-            pack_candidates.append(override_dir / "packs")
-        else:
-            pack_candidates.append(override_dir)
+        pack_candidates.append(override_dir)
         log.info("SENDER_PACKS_DIR_OVERRIDE sid=%s dir=%s", sid, override_dir)
     else:
         preferred_dir = manifest.get_ai_packs_dir()
         if preferred_dir is not None:
             preferred_path = Path(preferred_dir)
-            if preferred_path.name == "packs" and preferred_path.parent.exists():
-                _apply_base_override(preferred_path.parent)
-                pack_candidates.append(preferred_path)
-                log.info(
-                    "SENDER_PACKS_DIR_FROM_MANIFEST sid=%s dir=%s", sid, preferred_path
-                )
-            elif (preferred_path / "packs").is_dir():
-                _apply_base_override(preferred_path)
-                pack_candidates.append(preferred_path / "packs")
-                log.info(
-                    "SENDER_PACKS_BASE_FROM_MANIFEST sid=%s dir=%s",
-                    sid,
-                    preferred_path,
-                )
-            else:
-                pack_candidates.append(preferred_path)
-                log.info(
-                    "SENDER_PACKS_DIR_FROM_MANIFEST sid=%s dir=%s",
-                    sid,
-                    preferred_path,
-                )
+            pack_candidates.append(preferred_path)
+            log.info(
+                "SENDER_PACKS_DIR_FROM_MANIFEST sid=%s dir=%s", sid, preferred_path
+            )
     pack_candidates.append(packs_dir)
 
     pack_dir = None
@@ -972,19 +937,31 @@ def main(argv: Sequence[str] | None = None) -> None:
         pair_for_log = {"a": a_idx, "b": b_idx}
         pack_log = _log_factory(logs_path, sid, pair_for_log, pack_path.name)
 
-        ai_result_existing = pack.get("ai_result")
-        if isinstance(ai_result_existing, MappingABC):
-            entry["ai_result"] = dict(ai_result_existing)
+        try:
+            a_int = _ensure_int(a_idx, "a_idx")
+            b_int = _ensure_int(b_idx, "b_idx")
+        except (TypeError, ValueError):
+            a_int = b_int = None
+
+        result_payload_existing: Mapping[str, object] | None = None
+        legacy_result_found = False
+        if a_int is not None and b_int is not None:
+            result_path = results_dir / pair_result_filename(a_int, b_int)
+            result_payload_existing = _load_result(result_path)
+
+        if result_payload_existing is None:
+            ai_result_existing = pack.get("ai_result")
+            if isinstance(ai_result_existing, MappingABC):
+                result_payload_existing = dict(ai_result_existing)
+                legacy_result_found = True
+
+        if result_payload_existing is not None:
+            entry["ai_result"] = dict(result_payload_existing)
             entry.pop("error", None)
-            try:
-                a_int = _ensure_int(a_idx, "a_idx")
-                b_int = _ensure_int(b_idx, "b_idx")
-            except (TypeError, ValueError):
-                pass
-            else:
+            if legacy_result_found and a_int is not None and b_int is not None:
                 result_path = results_dir / pair_result_filename(a_int, b_int)
-                _write_result(result_path, dict(ai_result_existing))
-            pack_log("PACK_SKIP", {"reason": "ai_result_present"})
+                _write_result(result_path, result_payload_existing)
+            pack_log("PACK_SKIP", {"reason": "result_present"})
             successes += 1
             continue
 
@@ -1058,11 +1035,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
             timestamp = _isoformat_timestamp()
             _write_error_tags(run_dir, a_idx, b_idx, error_name, message, timestamp)
-            error_payload = {"kind": error_name, "message": message}
-            pack["ai_error"] = error_payload
-            pack.pop("ai_result", None)
-            _write_pack_with_shadow(pack_path, base_dir, pack)
-            entry["error"] = dict(error_payload)
+            entry["error"] = {"kind": error_name, "message": message}
             entry.pop("ai_result", None)
             failures += 1
             continue
@@ -1096,8 +1069,33 @@ def main(argv: Sequence[str] | None = None) -> None:
                 str(exc),
                 timestamp,
             )
+            entry["error"] = {"kind": "InvalidDecision", "message": str(exc)}
+            entry.pop("ai_result", None)
             failures += 1
             continue
+
+        validation_ok, validation_error = validate_ai_result(normalized_payload)
+        fallback_used = False
+        if not validation_ok:
+            fallback_used = True
+            log.warning(
+                "AI_DECISION_INVALID sid=%s a=%s b=%s reason=%s",
+                sid,
+                a_idx,
+                b_idx,
+                validation_error or "unknown",
+            )
+            pack_log(
+                "AI_DECISION_INVALID",
+                {
+                    "error": validation_error or "unknown",
+                },
+            )
+            normalized_payload = {
+                "decision": "different",
+                "reason": "invalid_response_schema",
+                "flags": {"account_match": False, "debt_match": False},
+            }
 
         original_decision_raw = decision_payload.get("decision")
         original_decision = (
@@ -1124,7 +1122,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 f"Decision outside contract: {decision!r}"
             )
 
-        if was_normalized:
+        if was_normalized and not fallback_used:
             log.info(
                 "AI_DECISION_NORMALIZED sid=%s a=%s b=%s from=%s to=%s",
                 sid,
@@ -1136,8 +1134,10 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         timestamp = _isoformat_timestamp()
 
-        a_int = _ensure_int(a_idx, "a_idx")
-        b_int = _ensure_int(b_idx, "b_idx")
+        if a_int is None or b_int is None:
+            a_int = _ensure_int(a_idx, "a_idx")
+            b_int = _ensure_int(b_idx, "b_idx")
+
         payload_for_tags = dict(normalized_payload)
         payload_for_tags["flags"] = dict(flags_serialized)
 
@@ -1155,7 +1155,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             {
                 "decision": decision,
                 "flags": flags_serialized,
-                "normalized": was_normalized,
+                "normalized": was_normalized and not fallback_used,
+                "fallback": fallback_used,
             },
         )
 
@@ -1164,9 +1165,6 @@ def main(argv: Sequence[str] | None = None) -> None:
             "reason": reason,
             "flags": dict(flags_for_storage),
         }
-        pack["ai_result"] = ai_result_payload
-        pack.pop("ai_error", None)
-        _write_pack_with_shadow(pack_path, base_dir, pack)
         entry["ai_result"] = dict(ai_result_payload)
         entry.pop("error", None)
 
@@ -1185,6 +1183,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "attempts": attempts,
                 "decision": decision,
                 "reason": reason,
+                "fallback": fallback_used,
             },
         )
         result_path = results_dir / pair_result_filename(a_int, b_int)

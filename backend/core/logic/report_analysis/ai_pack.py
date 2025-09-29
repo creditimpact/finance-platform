@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import date, datetime
 from typing import Iterable, Mapping
 
-from backend.core.ai.paths import get_merge_paths, pair_pack_filename
+from backend.core.ai.paths import ensure_merge_paths, pair_pack_filename
 
 from . import config as merge_config
 
@@ -513,7 +513,7 @@ def build_ai_pack_for_pair(
     raw_a_path = accounts_root / str(account_a) / "raw_lines.json"
     raw_b_path = accounts_root / str(account_b) / "raw_lines.json"
 
-    merge_paths = get_merge_paths(runs_root_path, sid_str, create=True)
+    merge_paths = ensure_merge_paths(runs_root_path, sid_str, create=True)
     packs_dir = merge_paths.packs_dir
 
     first_idx, second_idx = sorted((account_a, account_b))

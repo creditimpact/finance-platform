@@ -17,7 +17,7 @@ except Exception:  # pragma: no cover - fallback to ensure repo modules are impo
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-from backend.core.ai.paths import get_merge_paths, pair_pack_filename
+from backend.core.ai.paths import MergePaths, ensure_merge_paths, pair_pack_filename
 from backend.core.io.tags import read_tags
 from backend.core.logic.report_analysis import ai_sender
 from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
@@ -77,31 +77,32 @@ def _resolve_merge_paths(
     runs_root: Path,
     sid: str,
     override: Optional[str],
-) -> Dict[str, Path]:
-    merge_paths = get_merge_paths(runs_root, sid, create=True)
+) -> MergePaths:
+    canonical = ensure_merge_paths(runs_root, sid, create=True)
 
-    if override:
-        packs_dir = Path(override)
-        packs_dir.mkdir(parents=True, exist_ok=True)
-        base_dir = packs_dir.parent
-        index_path = base_dir / merge_paths.index_file.name
-        log_path = base_dir / merge_paths.log_file.name
-        results_dir = base_dir / "results"
-        results_dir.mkdir(parents=True, exist_ok=True)
+    if not override:
+        return canonical
+
+    override_path = Path(override).resolve()
+    if override_path.name == "packs":
+        base_dir = override_path.parent
+        packs_dir = override_path
     else:
-        packs_dir = merge_paths.packs_dir
-        base_dir = merge_paths.base
-        index_path = merge_paths.index_file
-        log_path = merge_paths.log_file
-        results_dir = merge_paths.results_dir
+        base_dir = override_path
+        packs_dir = override_path / "packs"
 
-    return {
-        "packs_dir": packs_dir,
-        "base_dir": base_dir,
-        "index_path": index_path,
-        "log_path": log_path,
-        "results_dir": results_dir,
-    }
+    packs_dir.mkdir(parents=True, exist_ok=True)
+
+    results_dir = base_dir / canonical.results_dir.name
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    return MergePaths(
+        base=base_dir,
+        packs_dir=packs_dir,
+        results_dir=results_dir,
+        log_file=base_dir / canonical.log_file.name,
+        index_file=base_dir / canonical.index_file.name,
+    )
 
 
 def _append_log(path: Path, line: str) -> None:
@@ -138,11 +139,11 @@ def build_packs_for_sid(
 
     sid_str = str(sid)
     runs_root_path = Path(runs_root)
-    paths = _resolve_merge_paths(runs_root_path, sid_str, out_dir)
-    packs_dir = paths["packs_dir"]
-    base_dir = paths["base_dir"]
-    index_path = paths["index_path"]
-    logs_path = paths["log_path"]
+    merge_paths = _resolve_merge_paths(runs_root_path, sid_str, out_dir)
+    packs_dir = merge_paths.packs_dir
+    base_dir = merge_paths.base
+    index_path = merge_paths.index_file
+    logs_path = merge_paths.log_file
 
     packs = build_merge_ai_packs(
         sid_str,

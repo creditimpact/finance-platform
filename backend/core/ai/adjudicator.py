@@ -41,6 +41,13 @@ Decision guidance:
 - If either flag is "unknown" be conservative and avoid *_diff decisions unless evidence is explicit.
 - If both flags are false → different.
 
+When BOTH sides are collection agencies:
+• If amounts_equal_within_tol is true for positive debt and dates_plausible_chain is true, prefer "same_debt_diff_account" over "different".
+• If amounts match but timing is ambiguous, respond with "same_debt_account_unknown".
+• Do NOT choose "different" solely because account numbers or lender names differ.
+
+Allowed outputs: same_account_same_debt, same_account_diff_debt, same_account_debt_unknown, same_debt_diff_account, same_debt_account_unknown, different.
+
 Consider:
 • High-precision cues: account-number (last4/exact), balance owed equality within tolerances, date alignments.
 • Lender names/brands and free-text descriptors from the raw “context” lines.

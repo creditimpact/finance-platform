@@ -18,6 +18,24 @@ class MergePaths:
     index_file: Path
 
 
+def _merge_paths_from_base(base: Path, *, create: bool) -> MergePaths:
+    base_path = Path(base).resolve()
+    packs_dir = base_path / "packs"
+    results_dir = base_path / "results"
+
+    if create:
+        packs_dir.mkdir(parents=True, exist_ok=True)
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+    return MergePaths(
+        base=base_path,
+        packs_dir=packs_dir,
+        results_dir=results_dir,
+        log_file=base_path / "logs.txt",
+        index_file=base_path / "index.json",
+    )
+
+
 def ensure_merge_paths(runs_root: Path, sid: str, create: bool = True) -> MergePaths:
     """Return the canonical merge AI pack paths for ``sid``.
 
@@ -28,20 +46,25 @@ def ensure_merge_paths(runs_root: Path, sid: str, create: bool = True) -> MergeP
     """
 
     base = Path(runs_root) / sid / "ai_packs" / "merge"
-    packs_dir = base / "packs"
-    results_dir = base / "results"
+    return _merge_paths_from_base(base, create=create)
 
-    if create:
-        packs_dir.mkdir(parents=True, exist_ok=True)
-        results_dir.mkdir(parents=True, exist_ok=True)
 
-    return MergePaths(
-        base=base,
-        packs_dir=packs_dir,
-        results_dir=results_dir,
-        log_file=base / "logs.txt",
-        index_file=base / "index.json",
-    )
+def merge_paths_from_any(path: Path, *, create: bool = False) -> MergePaths:
+    """Return :class:`MergePaths` using ``path`` rooted at the merge base.
+
+    ``path`` may point at the merge base itself (``.../merge``) or one of its
+    canonical children (``.../merge/packs`` or ``.../merge/results``).  The
+    caller controls directory creation via ``create``; by default this function
+    is read-only.
+    """
+
+    resolved = Path(path).resolve()
+    if resolved.name == "merge":
+        return _merge_paths_from_base(resolved, create=create)
+    if resolved.parent.name == "merge" and resolved.name in {"packs", "results"}:
+        return _merge_paths_from_base(resolved.parent, create=create)
+
+    raise ValueError(f"Path does not identify merge layout: {resolved}")
 
 
 def pair_pack_filename(a_idx: int, b_idx: int) -> str:

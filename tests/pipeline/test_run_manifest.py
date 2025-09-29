@@ -144,6 +144,7 @@ def test_get_ai_merge_paths_with_legacy_layout(runs_root):
     expected_base = (legacy_dir / "merge").resolve()
     assert paths["base"] == expected_base
     assert paths["packs_dir"] == legacy_dir.resolve()
+    assert paths["results_dir"] == (expected_base / "results").resolve()
     assert paths["index_file"] == legacy_index.resolve()
     assert paths["log_file"] == (expected_base / "logs.txt").resolve()
     assert paths["legacy_dir"] == legacy_dir.resolve()
@@ -161,6 +162,8 @@ def test_set_ai_built_records_logs_when_present(runs_root):
 
     packs_section = manifest.data["ai"]["packs"]
     assert packs_section["dir"] == str(base_dir.resolve())
+    assert packs_section["packs_dir"] == str((base_dir / "packs").resolve())
+    assert packs_section["results_dir"] == str((base_dir / "results").resolve())
     assert packs_section["logs"] == str(log_path.resolve())
 
     paths = manifest.get_ai_merge_paths()

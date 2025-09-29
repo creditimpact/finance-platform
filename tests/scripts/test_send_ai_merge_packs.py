@@ -1,10 +1,13 @@
+import hashlib
 import json
 import logging
+import os
 from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
+from backend.core.ai import adjudicator
 from backend.core.ai.paths import get_merge_paths, pair_pack_filename, pair_result_filename
 from backend.core.logic.report_analysis.tags_compact import compact_tags_for_account
 from backend.pipeline.runs import RunManifest
@@ -20,6 +23,17 @@ def _write_json(path: Path, payload: object) -> None:
 
 def _write_raw_lines(path: Path, lines: list[str]) -> None:
     _write_json(path, [{"text": line} for line in lines])
+
+
+def _expected_debug_payload(pack_path: Path) -> dict[str, object]:
+    params = dict(adjudicator.REQUEST_PARAMS)
+    params["response_format"] = dict(adjudicator.RESPONSE_FORMAT)
+    return {
+        "pack_sha256": hashlib.sha256(pack_path.read_bytes()).hexdigest(),
+        "prompt_sha256": adjudicator.SYSTEM_PROMPT_SHA256,
+        "model": os.getenv("AI_MODEL"),
+        "params": params,
+    }
 
 
 def _assert_pack_messages_with_rules(
@@ -217,7 +231,7 @@ def test_send_ai_merge_packs_forces_ca_pairs_to_same_debt(
         ],
     }
 
-    merge_paths, _ = _create_merge_pack(
+    merge_paths, pack_path = _create_merge_pack(
         runs_root,
         sid,
         pack_payload,
@@ -261,6 +275,7 @@ def test_send_ai_merge_packs_forces_ca_pairs_to_same_debt(
     assert result_payload["flags"]["debt_match"] is True
     assert result_payload["flags"]["account_match"] == expected_account_flag
     assert "Collection agencies" in result_payload["reason"]
+    assert result_payload["debug"] == _expected_debug_payload(pack_path)
 
     base_accounts = runs_root / sid / "cases" / "accounts"
     tags_a = _normalize_tags(
@@ -431,11 +446,13 @@ def test_send_ai_merge_packs_records_merge_decision(
     result_path = results_dir / pair_result_filename(11, 16)
     assert result_path.exists()
     result_payload = json.loads(result_path.read_text(encoding="utf-8"))
-    assert result_payload == {
-        "decision": "same_account_same_debt",
-        "reason": "Records align cleanly.",
-        "flags": {"account_match": True, "debt_match": True},
+    assert result_payload["decision"] == "same_account_same_debt"
+    assert result_payload["reason"] == "Records align cleanly."
+    assert result_payload["flags"] == {
+        "account_match": True,
+        "debt_match": True,
     }
+    assert result_payload["debug"] == _expected_debug_payload(pack_files[0])
 
     assert "ai_result" not in pack_payload
 
@@ -842,10 +859,11 @@ def test_send_ai_merge_packs_reads_legacy_layout(
     assert result_dir.exists()
     result_path = result_dir / pair_result_filename(11, 16)
     assert result_path.exists()
+    pack_path = legacy_dir / pack_filename
     result_payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert result_payload["decision"] == "same_account_same_debt"
+    assert result_payload["debug"] == _expected_debug_payload(pack_path)
 
-    pack_path = legacy_dir / pack_filename
     updated_payload = json.loads(pack_path.read_text(encoding="utf-8"))
     assert "ai_result" not in updated_payload
 

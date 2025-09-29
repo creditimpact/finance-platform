@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
-from backend.core.ai.paths import get_merge_paths, pair_pack_filename
+from backend.core.ai.paths import get_merge_paths, pair_pack_path
 from backend.core.io.tags import read_tags
 from backend.core.merge.acctnum import normalize_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
@@ -143,7 +143,7 @@ def preview_pair_pack(
     )
 
     merge_paths = get_merge_paths(runs_root, sid, create=True)
-    pack_path = merge_paths.packs_dir / pair_pack_filename(a_idx, b_idx)
+    pack_path = pair_pack_path(merge_paths, a_idx, b_idx)
     print(f"Pack path: {pack_path}")
 
     print("Highlights:")

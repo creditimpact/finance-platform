@@ -180,6 +180,108 @@ def runs_root(tmp_path: Path) -> Path:
     return root
 
 
+@pytest.mark.parametrize(
+    ("dates_plausible", "expected_decision", "expected_account_flag"),
+    [
+        (True, "same_debt_diff_account", False),
+        (False, "same_debt_account_unknown", "unknown"),
+    ],
+)
+def test_send_ai_merge_packs_forces_ca_pairs_to_same_debt(
+    monkeypatch: pytest.MonkeyPatch,
+    runs_root: Path,
+    dates_plausible: bool,
+    expected_decision: str,
+    expected_account_flag: object,
+) -> None:
+    sid = f"ca-equal-{int(dates_plausible)}"
+    pack_payload = {
+        "sid": sid,
+        "pair": {"a": 41, "b": 42},
+        "context": {"a": [], "b": []},
+        "highlights": {"total": 0},
+        "context_flags": {
+            "is_collection_agency_a": True,
+            "is_collection_agency_b": True,
+            "amounts_equal_within_tol": True,
+            "dates_plausible_chain": dates_plausible,
+        },
+        "messages": [
+            {"role": "system", "content": "Test system"},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"sid": sid, "pair": {"a": 41, "b": 42}}, ensure_ascii=False
+                ),
+            },
+        ],
+    }
+
+    merge_paths, _ = _create_merge_pack(
+        runs_root,
+        sid,
+        pack_payload,
+        a_idx=41,
+        b_idx=42,
+    )
+
+    manifest = RunManifest.for_sid(sid)
+    manifest.update_ai_packs(
+        dir=merge_paths.base,
+        index=merge_paths.index_file,
+        logs=merge_paths.log_file,
+        pairs=1,
+    )
+
+    monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+
+    def _fake_decide(pack: dict, *, timeout: float):
+        assert pack["pair"] == {"a": 41, "b": 42}
+        return {
+            "decision": "different",
+            "reason": "Identifiers differ",
+            "flags": {"account_match": False, "debt_match": False},
+        }
+
+    monkeypatch.setattr(send_ai_merge_packs, "decide_merge_or_different", _fake_decide)
+    monkeypatch.setattr(
+        send_ai_merge_packs,
+        "_isoformat_timestamp",
+        lambda dt=None: "2024-07-04T00:00:00Z",
+    )
+
+    send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
+
+    result_path = merge_paths.results_dir / pair_result_filename(41, 42)
+    assert result_path.exists()
+    result_payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert result_payload["decision"] == expected_decision
+    assert result_payload["flags"]["debt_match"] is True
+    assert result_payload["flags"]["account_match"] == expected_account_flag
+    assert "Collection agencies" in result_payload["reason"]
+
+    base_accounts = runs_root / sid / "cases" / "accounts"
+    tags_a = _normalize_tags(
+        json.loads((base_accounts / "41" / "tags.json").read_text(encoding="utf-8"))
+    )
+    tags_b = _normalize_tags(
+        json.loads((base_accounts / "42" / "tags.json").read_text(encoding="utf-8"))
+    )
+
+    decision_tag_a = next(tag for tag in tags_a if tag.get("kind") == "ai_decision")
+    decision_tag_b = next(tag for tag in tags_b if tag.get("kind") == "ai_decision")
+    assert decision_tag_a["decision"] == expected_decision
+    assert decision_tag_b["decision"] == expected_decision
+    assert decision_tag_a["flags"]["account_match"] == expected_account_flag
+    assert decision_tag_b["flags"]["account_match"] == expected_account_flag
+
+    same_debt_tag = next(tag for tag in tags_a if tag.get("kind") == "same_debt_pair")
+    assert same_debt_tag["with"] == 42
+
+
+
 def test_send_ai_merge_packs_records_merge_decision(
     monkeypatch: pytest.MonkeyPatch,
     runs_root: Path,
@@ -324,6 +426,7 @@ def test_send_ai_merge_packs_records_merge_decision(
     assert pack_files, "expected at least one AI pack to be written"
     pack_payload = json.loads(pack_files[0].read_text(encoding="utf-8"))
     assert pack_payload["pair"] == {"a": 11, "b": 16}
+    assert "decision" not in pack_payload
 
     result_path = results_dir / pair_result_filename(11, 16)
     assert result_path.exists()

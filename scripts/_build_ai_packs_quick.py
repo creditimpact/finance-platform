@@ -1,7 +1,7 @@
 ﻿import os, json, re, pathlib, time
 from datetime import datetime
 
-from backend.core.ai.paths import ensure_merge_paths, pair_pack_filename
+from backend.core.ai.paths import ensure_merge_paths, pair_pack_path
 
 RUNS_ROOT = os.environ.get("RUNS_ROOT", "runs")
 SID = os.environ.get("SID") or "'+$SID+'"
@@ -140,10 +140,9 @@ for pr in pairs:
         )
     }
 
-    filename = pair_pack_filename(a_idx, b_idx)
-    out_file = PACKS_ROOT/filename
+    out_file = pair_pack_path(merge_paths, a_idx, b_idx)
     dump_json(out_file, pack)
-    out_index.append({"a":a_idx,"b":b_idx,"file":filename})
+    out_index.append({"a":a_idx,"b":b_idx,"file":out_file.name})
 
 # כתיבת אינדקס מרכזי
 dump_json(INDEX_PATH, out_index)

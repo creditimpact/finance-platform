@@ -29,9 +29,13 @@ from backend.core.ai.adjudicator import (
     decide_merge_or_different,
 )
 from backend.core.ai.paths import (
+    MergePaths,
     ensure_merge_paths,
+    merge_paths_from_any,
     pair_pack_filename,
+    pair_pack_path,
     pair_result_filename,
+    pair_result_path,
     probe_legacy_ai_packs,
 )
 from backend.core.ai.validators import validate_ai_result
@@ -313,6 +317,46 @@ def _load_pack(path: Path) -> Mapping[str, object]:
     if not isinstance(data, MappingABC):
         raise ValueError(f"AI pack must be a JSON object: {path}")
     return data
+
+
+def _maybe_force_collection_agency_same_debt(
+    pack: Mapping[str, object], payload: Mapping[str, object]
+) -> tuple[dict[str, object], str | None]:
+    """Normalize CA↔CA outcomes toward ``same_debt`` decisions when warranted."""
+
+    context_flags = pack.get("context_flags")
+    if not isinstance(context_flags, MappingABC):
+        return dict(payload), None
+
+    is_ca_a = bool(context_flags.get("is_collection_agency_a"))
+    is_ca_b = bool(context_flags.get("is_collection_agency_b"))
+    amounts_equal = bool(context_flags.get("amounts_equal_within_tol"))
+    if not (is_ca_a and is_ca_b and amounts_equal):
+        return dict(payload), None
+
+    dates_plausible = bool(context_flags.get("dates_plausible_chain"))
+    target_decision = "same_debt_diff_account" if dates_plausible else "same_debt_account_unknown"
+
+    current_decision = str(payload.get("decision", "")).strip().lower()
+    if current_decision == target_decision:
+        return dict(payload), None
+
+    normalized_payload = dict(payload)
+    reason = str(normalized_payload.get("reason", "")).strip()
+    suffix = (
+        "Collection agencies with aligned balances; forced same_debt_diff_account"
+        if dates_plausible
+        else "Collection agencies with aligned balances; forced same_debt_account_unknown"
+    )
+    normalized_payload["decision"] = target_decision
+    normalized_payload["flags"] = {
+        "account_match": False if dates_plausible else "unknown",
+        "debt_match": True,
+    }
+    normalized_payload["normalized"] = True
+    normalized_payload["reason"] = f"{reason}; {suffix}" if reason else suffix
+
+    return normalized_payload, target_decision
 
 
 def _env_max_retries() -> int:
@@ -851,13 +895,19 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
     pack_candidates.append(packs_dir)
 
-    pack_dir = None
+    read_paths: MergePaths | None = None
     for candidate in pack_candidates:
-        if not candidate.exists():
+        try:
+            candidate_paths = merge_paths_from_any(candidate, create=False)
+        except ValueError:
             continue
-        if any(candidate.glob("pair_*.jsonl")):
-            pack_dir = candidate
+
+        candidate_dir = candidate_paths.packs_dir
+        if candidate_dir.exists() and any(candidate_dir.glob("pair_*.jsonl")):
+            read_paths = candidate_paths
             break
+
+    pack_dir = read_paths.packs_dir if read_paths is not None else None
 
     legacy_pack_dir = None
     if pack_dir is None:
@@ -871,6 +921,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             "No AI packs for SID (no pair_*.jsonl files found in new or legacy layout)"
         )
 
+    if read_paths is None:
+        read_paths = merge_paths
+
     pair_paths = sorted(pack_dir.glob("pair_*.jsonl"))
     if not pair_paths:
         raise SystemExit(f"No AI packs for SID (no pair_*.jsonl files at {pack_dir})")
@@ -878,7 +931,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     if legacy_pack_dir is not None:
         index_read_path = legacy_pack_dir / "index.json"
     else:
-        index_read_path = index_path if index_path.exists() else None
+        index_read_path = (
+            read_paths.index_file if read_paths.index_file.exists() else None
+        )
         if index_read_path is None:
             candidate_index_paths = [pack_dir.parent / "index.json", pack_dir / "index.json"]
             for candidate in candidate_index_paths:
@@ -946,7 +1001,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         result_payload_existing: Mapping[str, object] | None = None
         legacy_result_found = False
         if a_int is not None and b_int is not None:
-            result_path = results_dir / pair_result_filename(a_int, b_int)
+            result_path = pair_result_path(merge_paths, a_int, b_int)
             result_payload_existing = _load_result(result_path)
 
         if result_payload_existing is None:
@@ -959,7 +1014,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             entry["ai_result"] = dict(result_payload_existing)
             entry.pop("error", None)
             if legacy_result_found and a_int is not None and b_int is not None:
-                result_path = results_dir / pair_result_filename(a_int, b_int)
+                result_path = pair_result_path(merge_paths, a_int, b_int)
                 _write_result(result_path, result_payload_existing)
             pack_log("PACK_SKIP", {"reason": "result_present"})
             successes += 1
@@ -1097,6 +1152,45 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "flags": {"account_match": False, "debt_match": False},
             }
 
+        forced_decision = None
+        if not fallback_used:
+            normalized_payload, forced_decision = _maybe_force_collection_agency_same_debt(
+                pack, normalized_payload
+            )
+            if forced_decision is not None:
+                was_normalized = True
+                forced_ok, forced_error = validate_ai_result(normalized_payload)
+                if not forced_ok:
+                    fallback_used = True
+                    log.warning(
+                        "AI_DECISION_FORCED_INVALID sid=%s a=%s b=%s reason=%s",
+                        sid,
+                        a_idx,
+                        b_idx,
+                        forced_error or "unknown",
+                    )
+                    pack_log(
+                        "CA_DECISION_OVERRIDE_INVALID",
+                        {"error": forced_error or "unknown"},
+                    )
+                    normalized_payload = {
+                        "decision": "different",
+                        "reason": "invalid_response_schema",
+                        "flags": {"account_match": False, "debt_match": False},
+                    }
+                else:
+                    log.info(
+                        "AI_DECISION_CA_OVERRIDE sid=%s a=%s b=%s forced=%s",
+                        sid,
+                        a_idx,
+                        b_idx,
+                        forced_decision,
+                    )
+                    pack_log(
+                        "CA_DECISION_OVERRIDE",
+                        {"forced_decision": forced_decision},
+                    )
+
         original_decision_raw = decision_payload.get("decision")
         original_decision = (
             str(original_decision_raw).strip().lower()
@@ -1186,7 +1280,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "fallback": fallback_used,
             },
         )
-        result_path = results_dir / pair_result_filename(a_int, b_int)
+        result_path = pair_result_path(merge_paths, a_int, b_int)
         _write_result(result_path, ai_result_payload)
         successes += 1
 

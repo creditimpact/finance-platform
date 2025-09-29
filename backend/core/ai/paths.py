@@ -49,7 +49,7 @@ def ensure_merge_paths(runs_root: Path, sid: str, create: bool = True) -> MergeP
     return _merge_paths_from_base(base, create=create)
 
 
-def merge_paths_from_any(path: Path, *, create: bool = False) -> MergePaths:
+def merge_paths_from_any(path: Path | str, *, create: bool = False) -> MergePaths:
     """Return :class:`MergePaths` using ``path`` rooted at the merge base.
 
     ``path`` may point at the merge base itself (``.../merge``) or one of its
@@ -79,6 +79,18 @@ def pair_result_filename(a_idx: int, b_idx: int) -> str:
 
     lo, hi = sorted((a_idx, b_idx))
     return f"pair_{lo:03d}_{hi:03d}.result.json"
+
+
+def pair_pack_path(paths: MergePaths, a_idx: int, b_idx: int) -> Path:
+    """Return the resolved filesystem path for a pair pack."""
+
+    return paths.packs_dir / pair_pack_filename(a_idx, b_idx)
+
+
+def pair_result_path(paths: MergePaths, a_idx: int, b_idx: int) -> Path:
+    """Return the resolved filesystem path for a pair result."""
+
+    return paths.results_dir / pair_result_filename(a_idx, b_idx)
 
 
 def get_merge_paths(runs_root: Path, sid: str, *, create: bool = True) -> MergePaths:

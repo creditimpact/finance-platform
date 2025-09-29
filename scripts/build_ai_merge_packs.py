@@ -17,7 +17,13 @@ except Exception:  # pragma: no cover - fallback for direct execution
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-from backend.core.ai.paths import MergePaths, ensure_merge_paths, pair_pack_filename
+from backend.core.ai.paths import (
+    MergePaths,
+    ensure_merge_paths,
+    merge_paths_from_any,
+    pair_pack_filename,
+    pair_pack_path,
+)
 from backend.core.logic.normalize import last4, normalize_acctnum
 from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
 from backend.pipeline.runs import RunManifest, persist_manifest
@@ -42,25 +48,8 @@ def _merge_paths_with_override(base: MergePaths, override: Path | None) -> Merge
     if override is None:
         return base
 
-    override_path = override.resolve()
-    if override_path.name == "packs":
-        base_dir = override_path.parent
-        packs_dir = override_path
-    else:
-        base_dir = override_path
-        packs_dir = override_path / "packs"
-
-    packs_dir.mkdir(parents=True, exist_ok=True)
-    results_dir = base_dir / base.results_dir.name
-    results_dir.mkdir(parents=True, exist_ok=True)
-
-    return MergePaths(
-        base=base_dir,
-        packs_dir=packs_dir,
-        results_dir=results_dir,
-        log_file=base_dir / base.log_file.name,
-        index_file=base_dir / base.index_file.name,
-    )
+    override_paths = merge_paths_from_any(override, create=True)
+    return override_paths
 
 
 def _safe_int(value: object, default: int = 0) -> int:
@@ -182,7 +171,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             raise ValueError("Pack is missing pair indices") from exc
 
         pack_filename = pair_pack_filename(a_idx, b_idx)
-        pack_path = packs_dir / pack_filename
+        pack_path = pair_pack_path(merge_paths, a_idx, b_idx)
         context = pack.get("context") if isinstance(pack.get("context"), dict) else {}
         context_a = context.get("a") if isinstance(context.get("a"), list) else []
         context_b = context.get("b") if isinstance(context.get("b"), list) else []

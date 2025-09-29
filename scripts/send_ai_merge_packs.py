@@ -32,6 +32,7 @@ from backend.core.ai.adjudicator import (
     _normalize_and_validate_decision,
     decide_merge_or_different,
 )
+from backend.core.ai.merge_validation import apply_same_account_guardrail
 from backend.core.ai.paths import (
     MergePaths,
     ensure_merge_paths,
@@ -1242,6 +1243,48 @@ def main(argv: Sequence[str] | None = None) -> None:
                     pack_log(
                         "CA_DECISION_OVERRIDE",
                         {"forced_decision": forced_decision},
+                    )
+
+        guardrail_reason: str | None = None
+        if not fallback_used:
+            normalized_payload, guardrail_reason = apply_same_account_guardrail(
+                pack, normalized_payload
+            )
+            if guardrail_reason is not None:
+                was_normalized = True
+                guardrail_ok, guardrail_error = validate_ai_result(normalized_payload)
+                if not guardrail_ok:
+                    fallback_used = True
+                    log.warning(
+                        "AI_DECISION_GUARDRAIL_INVALID sid=%s a=%s b=%s reason=%s",
+                        sid,
+                        a_idx,
+                        b_idx,
+                        guardrail_error or "unknown",
+                    )
+                    pack_log(
+                        "GUARDRAIL_OVERRIDE_INVALID",
+                        {"error": guardrail_error or "unknown"},
+                    )
+                    normalized_payload = {
+                        "decision": "different",
+                        "reason": "invalid_response_schema",
+                        "flags": {"account_match": False, "debt_match": False},
+                    }
+                else:
+                    log.info(
+                        "AI_DECISION_GUARDRAIL sid=%s a=%s b=%s forced=different reason=%s",
+                        sid,
+                        a_idx,
+                        b_idx,
+                        guardrail_reason,
+                    )
+                    pack_log(
+                        "GUARDRAIL_OVERRIDE",
+                        {
+                            "forced_decision": "different",
+                            "reason": guardrail_reason,
+                        },
                     )
 
         original_decision_raw = decision_payload.get("decision")

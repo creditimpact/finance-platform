@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from backend.core.ai import adjudicator
+from backend.core.ai.merge_validation import ACCOUNT_STEM_GUARDRAIL_REASON
 from backend.core.ai.paths import get_merge_paths, pair_pack_filename, pair_result_filename
 from backend.core.logic.report_analysis.tags_compact import compact_tags_for_account
 from backend.pipeline.runs import RunManifest
@@ -495,6 +496,96 @@ def test_send_ai_merge_packs_records_merge_decision(
 
     logs_text = logs_path.read_text(encoding="utf-8")
     assert "AI_ADJUDICATOR_RESPONSE" in logs_text
+
+
+def test_send_ai_merge_packs_guardrail_blocks_same_account_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+    runs_root: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sid = "guardrail-case"
+    pack_payload = {
+        "messages": [
+            {"role": "system", "content": "instructions"},
+            {"role": "user", "content": "Review accounts 11 and 16."},
+        ],
+        "context_flags": {
+            "acctnum_conflict": True,
+            "acct_stem_equal": False,
+        },
+    }
+    merge_paths, pack_path = _create_merge_pack(runs_root, sid, pack_payload)
+    results_dir = merge_paths.results_dir
+
+    monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+
+    def _fake_decide(pack: dict, *, timeout: float):
+        assert pack.get("context_flags", {}).get("acctnum_conflict") is True
+        return {
+            "decision": "same_account_same_debt",
+            "reason": "Numbers look aligned.",
+            "flags": {"account_match": True, "debt_match": True},
+        }
+
+    monkeypatch.setattr(send_ai_merge_packs, "decide_merge_or_different", _fake_decide)
+    monkeypatch.setattr(
+        send_ai_merge_packs,
+        "_isoformat_timestamp",
+        lambda dt=None: "2024-07-15T00:00:00Z",
+    )
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="scripts.send_ai_merge_packs"):
+        send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
+
+    result_path = results_dir / pair_result_filename(11, 16)
+    assert result_path.exists()
+    result_payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert result_payload["decision"] == "different"
+    assert result_payload["reason"] == ACCOUNT_STEM_GUARDRAIL_REASON
+    assert result_payload["flags"] == {"account_match": False, "debt_match": False}
+    assert result_payload["debug"] == _expected_debug_payload(pack_path)
+
+    accounts_root = runs_root / sid / "cases" / "accounts"
+    account_a_tags = json.loads((accounts_root / "11" / "tags.json").read_text(encoding="utf-8"))
+    account_b_tags = json.loads((accounts_root / "16" / "tags.json").read_text(encoding="utf-8"))
+
+    decision_tag_a = next(
+        tag
+        for tag in account_a_tags
+        if tag.get("kind") == "ai_decision" and tag.get("with") == 16
+    )
+    decision_tag_b = next(
+        tag
+        for tag in account_b_tags
+        if tag.get("kind") == "ai_decision" and tag.get("with") == 11
+    )
+
+    expected_decision = {
+        "kind": "ai_decision",
+        "tag": "ai_decision",
+        "source": "ai_adjudicator",
+        "decision": "different",
+        "reason": ACCOUNT_STEM_GUARDRAIL_REASON,
+        "flags": {"account_match": False, "debt_match": False},
+        "at": "2024-07-15T00:00:00Z",
+    }
+
+    normalized_a = dict(decision_tag_a)
+    normalized_a["flags"] = _normalize_flag_values(decision_tag_a.get("flags", {}))
+    normalized_b = dict(decision_tag_b)
+    normalized_b["flags"] = _normalize_flag_values(decision_tag_b.get("flags", {}))
+
+    assert normalized_a == {"with": 16, **expected_decision}
+    assert normalized_b == {"with": 11, **expected_decision}
+
+    assert not any(tag.get("kind") == "same_account_pair" for tag in account_a_tags)
+    assert not any(tag.get("kind") == "same_account_pair" for tag in account_b_tags)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("AI_DECISION_GUARDRAIL" in message for message in messages)
 
 
 def test_send_ai_merge_packs_writes_same_debt_tags(

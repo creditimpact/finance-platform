@@ -217,6 +217,7 @@ class RunManifest:
                 "index": None,
                 "pairs": 0,
                 "last_built_at": None,
+                "logs": None,
             },
         )
         status = ai.setdefault(
@@ -237,6 +238,9 @@ class RunManifest:
         packs["dir"] = str(dir_path)
         if not packs.get("index"):
             packs["index"] = str((dir_path / "index.json").resolve())
+        log_path = dir_path / "logs.txt"
+        if log_path.exists():
+            packs["logs"] = str(log_path.resolve())
         return self
 
     def set_ai_enqueued(self) -> "RunManifest":
@@ -252,6 +256,9 @@ class RunManifest:
         packs["index"] = str((packs_path / "index.json").resolve())
         packs["pairs"] = int(pairs)
         packs["last_built_at"] = _utc_now()
+        log_path = packs_path / "logs.txt"
+        if log_path.exists():
+            packs["logs"] = str(log_path.resolve())
         status["built"] = True
         status["skipped_reason"] = None
         return self.save()
@@ -296,6 +303,10 @@ class RunManifest:
 
         if logs is not None:
             packs["logs"] = str(Path(logs).resolve())
+        elif dir is not None:
+            candidate_log = Path(dir).resolve() / "logs.txt"
+            if candidate_log.exists():
+                packs["logs"] = str(candidate_log)
 
         if pairs is not None:
             packs["pairs"] = int(pairs)
@@ -305,41 +316,120 @@ class RunManifest:
 
         return self.save()
 
-    def get_ai_packs_dir(self) -> Path | None:
+    def get_ai_merge_paths(self) -> dict[str, Path | None]:
+        """Return the resolved merge AI pack locations for this manifest.
+
+        The returned mapping always includes canonical ``merge`` paths rooted at
+        ``runs/<sid>/ai_packs/merge``.  When the manifest still references the
+        legacy flat ``ai_packs`` directory, ``legacy_dir`` points to that base so
+        callers can perform read-only operations without migrating data.  The
+        ``index_file`` and ``log_file`` entries prefer existing files regardless
+        of layout.
+        """
+
+        run_root = self.path.parent
         ai_section = self.data.get("ai")
-        if not isinstance(ai_section, dict):
-            return None
-        packs = ai_section.get("packs")
-        if not isinstance(packs, dict):
-            return None
-        path_value = packs.get("dir")
-        if not path_value:
-            return None
-        try:
-            return Path(path_value)
-        except (TypeError, ValueError):
-            return None
+        packs_section: dict[str, object] = {}
+        if isinstance(ai_section, dict):
+            packs_value = ai_section.get("packs")
+            if isinstance(packs_value, dict):
+                packs_section = packs_value
+
+        dir_value = packs_section.get("dir")
+        index_value = packs_section.get("index")
+        logs_value = packs_section.get("logs")
+
+        base_path: Path | None = None
+        legacy_dir: Path | None = None
+
+        if dir_value:
+            try:
+                candidate = Path(dir_value)
+            except (TypeError, ValueError):
+                candidate = None
+            if candidate is not None:
+                if candidate.name == "merge":
+                    base_path = candidate
+                elif candidate.name == "packs" and candidate.parent.name == "merge":
+                    base_path = candidate.parent
+                else:
+                    legacy_dir = candidate.resolve()
+                    base_path = legacy_dir / "merge"
+
+        if base_path is None:
+            base_path = run_root / "ai_packs" / "merge"
+
+        base_path = base_path.resolve()
+
+        canonical_packs_dir = (base_path / "packs").resolve()
+        packs_dir = canonical_packs_dir
+        legacy_packs_dir: Path | None = None
+        if legacy_dir is not None:
+            legacy_packs_dir = legacy_dir
+            if not canonical_packs_dir.exists() and legacy_packs_dir.exists():
+                packs_dir = legacy_packs_dir.resolve()
+
+        results_dir = (base_path / "results").resolve()
+
+        index_candidates: list[Path] = []
+        if index_value:
+            try:
+                index_candidates.append(Path(index_value).resolve())
+            except (TypeError, ValueError):
+                pass
+        index_candidates.append((base_path / "index.json").resolve())
+        if legacy_dir is not None:
+            index_candidates.append((legacy_dir / "index.json").resolve())
+
+        index_file: Path | None = None
+        for candidate in index_candidates:
+            if candidate.exists():
+                index_file = candidate
+                break
+        if index_file is None and index_candidates:
+            index_file = index_candidates[0]
+
+        log_candidates: list[Path] = []
+        if logs_value:
+            try:
+                log_candidates.append(Path(logs_value).resolve())
+            except (TypeError, ValueError):
+                pass
+        log_candidates.append((base_path / "logs.txt").resolve())
+        if legacy_dir is not None:
+            log_candidates.append((legacy_dir / "logs.txt").resolve())
+
+        log_file: Path | None = None
+        for candidate in log_candidates:
+            if candidate.exists():
+                log_file = candidate
+                break
+        if log_file is None and log_candidates:
+            log_file = log_candidates[0]
+
+        paths: dict[str, Path | None] = {
+            "base": base_path,
+            "packs_dir": packs_dir,
+            "results_dir": results_dir,
+            "index_file": index_file,
+            "log_file": log_file,
+        }
+
+        if legacy_dir is not None:
+            paths["legacy_dir"] = legacy_dir
+            paths["legacy_packs_dir"] = legacy_packs_dir
+
+        return paths
+
+    def get_ai_packs_dir(self) -> Path | None:
+        paths = self.get_ai_merge_paths()
+        packs_dir = paths.get("packs_dir")
+        return packs_dir if isinstance(packs_dir, Path) else None
 
     def get_ai_index_path(self) -> Path | None:
-        ai_section = self.data.get("ai")
-        if not isinstance(ai_section, dict):
-            return None
-        packs = ai_section.get("packs")
-        if not isinstance(packs, dict):
-            return None
-        path_value = packs.get("index")
-        candidates: list[Path | str | None] = [path_value]
-        dir_value = packs.get("dir")
-        if not path_value and dir_value:
-            candidates.append(Path(dir_value) / "index.json")
-        for candidate in candidates:
-            if not candidate:
-                continue
-            try:
-                return Path(candidate)
-            except (TypeError, ValueError):
-                continue
-        return None
+        paths = self.get_ai_merge_paths()
+        index_path = paths.get("index_file")
+        return index_path if isinstance(index_path, Path) else None
 
     def ensure_run_subdir(self, label: str, rel: str) -> Path:
         """

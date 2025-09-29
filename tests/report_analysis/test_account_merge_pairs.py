@@ -4,6 +4,7 @@ from typing import Mapping
 
 import pytest
 
+from backend.core.ai.paths import get_merge_paths
 from backend.core.io.tags import upsert_tag
 from backend.core.logic.report_analysis.account_merge import (
     AI_PACK_SCORE_THRESHOLD,
@@ -161,7 +162,8 @@ def test_account_number_clique_persists_all_pair_packs(
         (29, 39),
     ]
 
-    packs_dir = runs_root / sid / "ai_packs"
+    merge_paths = get_merge_paths(runs_root, sid, create=False)
+    packs_dir = merge_paths["packs_dir"]
     for left, right in expected_pairs:
         first, second = sorted((left, right))
         pack_path = packs_dir / f"pair_{first:03d}_{second:03d}.jsonl"

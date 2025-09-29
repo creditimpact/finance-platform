@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
 
 from backend import config as app_config
+from backend.core.ai.adjudicator import AdjudicatorError, validate_ai_payload
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, upsert_tag, write_tags_atomic
 from backend.core.logic.normalize.accounts import normalize_acctnum as _normalize_acctnum_basic
@@ -2180,35 +2181,96 @@ def build_summary_ai_entries(
         log_unknown=True,
     )
     normalized_flag = normalized_flag or normalized_from_input
-    decision_entry["decision"] = normalized_decision
+
+    raw_flags: Mapping[str, Any]
+    if isinstance(flags, Mapping):
+        raw_flags = {str(key): value for key, value in flags.items()}
+    else:
+        raw_flags = {}
+
+    ai_payload: Dict[str, Any] = {
+        "decision": normalized_decision,
+        "flags": raw_flags,
+    }
+    if reason is not None:
+        ai_payload["reason"] = reason
+
+    try:
+        normalized_payload = validate_ai_payload(ai_payload)
+    except AdjudicatorError as exc:
+        logger.warning(
+            "AI_DECISION_PAYLOAD_INVALID partner=%s decision=%r error=%s; defaulting to 'different'",
+            partner,
+            decision,
+            exc,
+        )
+        normalized_flag = True
+        normalized_payload = {
+            "decision": normalized_decision or "different",
+            "flags": {"account_match": "unknown", "debt_match": "unknown"},
+        }
+        if reason is not None:
+            normalized_payload["reason"] = reason
+
+    normalized_decision = str(normalized_payload.get("decision") or "different")
+    normalized_flags_payload = normalized_payload.get("flags", {})
+    if not isinstance(normalized_flags_payload, Mapping):
+        normalized_flags_payload = {
+            "account_match": "unknown",
+            "debt_match": "unknown",
+        }
+
+    def _flag_as_string(value: Any) -> Optional[str]:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "false", "unknown"}:
+                return lowered
+        return None
+
+    default_flags: Dict[str, str] = {}
+    lowered_decision = normalized_decision.strip().lower()
+    if lowered_decision.startswith("same_account_"):
+        default_flags["account_match"] = "true"
+        if lowered_decision.endswith("_same_debt"):
+            default_flags["debt_match"] = "true"
+    if lowered_decision.startswith("same_debt_"):
+        default_flags["debt_match"] = "true"
+
+    final_flags: Dict[str, str] = {}
+    for key in ("account_match", "debt_match"):
+        normalized_value = normalized_flags_payload.get(key)
+        normalized_value_str = _flag_as_string(normalized_value)
+        if normalized_value_str is not None:
+            final_flags[key] = normalized_value_str
+        elif key in default_flags:
+            final_flags[key] = default_flags[key]
+        else:
+            final_flags[key] = "unknown"
+
+        original_value = _flag_as_string(raw_flags.get(key)) if raw_flags else None
+        if original_value is None and raw_flags and key in raw_flags:
+            normalized_flag = True
+        elif (
+            original_value is not None
+            and normalized_value_str is not None
+            and original_value != normalized_value_str
+        ):
+            normalized_flag = True
+
+    reason_value = normalized_payload.get("reason")
+    if isinstance(reason_value, str):
+        reason_text = reason_value.strip()
+    elif reason_value is not None:
+        reason_text = str(reason_value).strip()
+    else:
+        reason_text = ""
+
+    decision_entry["decision"] = normalized_decision or "different"
     decision_entry["normalized"] = normalized_flag
-    reason_text = str(reason).strip() if isinstance(reason, str) else (
-        str(reason).strip() if reason is not None else ""
-    )
     if reason_text:
         decision_entry["reason"] = reason_text
-    normalized_flags: Dict[str, Any] = {}
-    if isinstance(flags, Mapping):
-        for key in ("account_match", "debt_match"):
-            flag_value = flags.get(key)
-            normalized_value = _normalize_flag_value(flag_value)
-            if normalized_value is not None:
-                normalized_flags[key] = normalized_value
-
-    default_flags: Dict[str, Any] = {}
-    if normalized_decision.startswith("same_account_"):
-        default_flags["account_match"] = True
-        if normalized_decision.endswith("_same_debt"):
-            default_flags["debt_match"] = True
-    if normalized_decision.startswith("same_debt_"):
-        default_flags["debt_match"] = True
-
-    final_flags: Dict[str, Any] = {}
-    for key in ("account_match", "debt_match"):
-        if key in normalized_flags:
-            final_flags[key] = normalized_flags[key]
-        else:
-            final_flags[key] = default_flags.get(key, "unknown")
 
     ai_result_payload: Dict[str, Any] = {
         "decision": normalized_decision or "different",

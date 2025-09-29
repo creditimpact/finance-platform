@@ -298,6 +298,60 @@ def test_send_ai_merge_packs_forces_ca_pairs_to_same_debt(
 
 
 
+def test_send_ai_merge_packs_preserves_pack_files(
+    monkeypatch: pytest.MonkeyPatch, runs_root: Path
+) -> None:
+    sid = "pack-preserve"
+    pack_payload = {
+        "messages": [
+            {"role": "system", "content": "instructions"},
+            {"role": "user", "content": "Please adjudicate accounts 11 and 16."},
+        ]
+    }
+
+    merge_paths, pack_path = _create_merge_pack(runs_root, sid, pack_payload)
+    packs_dir = merge_paths.packs_dir
+    results_dir = merge_paths.results_dir
+    original_bytes = pack_path.read_bytes()
+
+    monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+
+    def _fake_decide(pack: Mapping[str, object], *, timeout: float) -> Mapping[str, object]:
+        _assert_pack_messages_with_rules(pack, pack_payload)
+        return {
+            "decision": "different",
+            "reason": "Not the same account",
+            "flags": {"account_match": False, "debt_match": False},
+        }
+
+    monkeypatch.setattr(send_ai_merge_packs, "decide_merge_or_different", _fake_decide)
+    monkeypatch.setattr(
+        send_ai_merge_packs,
+        "_isoformat_timestamp",
+        lambda dt=None: "2024-07-15T12:00:00Z",
+    )
+
+    send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
+
+    # Packs should remain byte-for-byte identical after adjudication.
+    assert pack_path.read_bytes() == original_bytes
+
+    pack_entries = sorted(path.name for path in packs_dir.iterdir())
+    assert pack_entries == [pack_path.name]
+
+    # Results must live under the results directory and never inside packs/.
+    assert not list(packs_dir.glob("*.result.json"))
+
+    result_path = results_dir / pair_result_filename(11, 16)
+    assert result_path.exists()
+    result_payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert result_payload["decision"] == "different"
+    assert result_payload["flags"] == {"account_match": False, "debt_match": False}
+
+
+
 def test_send_ai_merge_packs_records_merge_decision(
     monkeypatch: pytest.MonkeyPatch,
     runs_root: Path,

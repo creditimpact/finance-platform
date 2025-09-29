@@ -444,9 +444,11 @@ def test_send_ai_merge_packs_records_merge_decision(
     matching = [entry for entry in pairs_entries if entry.get("pair") == [11, 16]]
     assert matching
     assert matching[0].get("ai_result") == result_payload
+    assert matching[0].get("result_file") == pair_result_filename(11, 16)
     reverse = [entry for entry in pairs_entries if entry.get("pair") == [16, 11]]
     assert reverse
     assert reverse[0].get("pack_file") == matching[0].get("pack_file")
+    assert reverse[0].get("result_file") == matching[0].get("result_file")
 
     pair_tag_a = next(
         tag

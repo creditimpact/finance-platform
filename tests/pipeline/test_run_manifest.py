@@ -143,7 +143,7 @@ def test_get_ai_merge_paths_with_legacy_layout(runs_root):
 
     expected_base = (legacy_dir / "merge").resolve()
     assert paths["base"] == expected_base
-    assert paths["packs_dir"] == legacy_dir.resolve()
+    assert paths["packs_dir"] == (expected_base / "packs").resolve()
     assert paths["results_dir"] == (expected_base / "results").resolve()
     assert paths["index_file"] == legacy_index.resolve()
     assert paths["log_file"] == (expected_base / "logs.txt").resolve()

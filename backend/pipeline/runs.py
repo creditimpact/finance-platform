@@ -394,23 +394,22 @@ class RunManifest:
     ) -> "RunManifest":
         packs, _ = self._ensure_ai_section()
 
-        merge_paths = None
+        merge_paths: MergePaths | None = None
         if dir is not None:
             dir_path = Path(dir).resolve()
             try:
                 merge_paths = merge_paths_from_any(dir_path, create=False)
             except ValueError:
-                packs["dir"] = str(dir_path)
-                packs.pop("packs_dir", None)
-                packs.pop("packs", None)
-                packs.pop("results_dir", None)
-                packs.pop("results", None)
+                packs["legacy_dir"] = str(dir_path)
+                packs["legacy_packs_dir"] = str(dir_path)
             else:
                 self._apply_merge_paths_to_packs(
                     packs,
                     merge_paths,
                     prefer_existing_index=index is None,
                 )
+                packs.pop("legacy_dir", None)
+                packs.pop("legacy_packs_dir", None)
 
         if index is not None:
             packs["index"] = str(Path(index).resolve())
@@ -458,6 +457,8 @@ class RunManifest:
         results_dir_value = packs_section.get("results_dir")
         index_value = packs_section.get("index")
         logs_value = packs_section.get("logs")
+        legacy_dir_value = packs_section.get("legacy_dir")
+        legacy_packs_dir_value = packs_section.get("legacy_packs_dir")
 
         merge_paths = canonical_paths
         legacy_dir: Path | None = None
@@ -495,9 +496,16 @@ class RunManifest:
         packs_dir = merge_paths.packs_dir
         results_dir = merge_paths.results_dir
 
-        if legacy_packs_dir is not None and legacy_packs_dir.exists():
-            if not packs_dir.exists():
-                packs_dir = legacy_packs_dir.resolve()
+        if legacy_dir is None and legacy_dir_value:
+            try:
+                legacy_dir = Path(legacy_dir_value).resolve()
+            except (TypeError, ValueError):
+                legacy_dir = None
+        if legacy_packs_dir is None and legacy_packs_dir_value:
+            try:
+                legacy_packs_dir = Path(legacy_packs_dir_value).resolve()
+            except (TypeError, ValueError):
+                legacy_packs_dir = None
 
         index_candidates: list[Path] = []
         if index_value:
@@ -642,24 +650,18 @@ def persist_manifest(
 
                 prefer_existing_index = True
 
-                def _set_direct(key: str, value: object) -> None:
-                    if value is None or str(value) == "":
-                        return
-                    resolved = Path(value).resolve()
-                    packs[key] = str(resolved)
-                    if key == "dir":
-                        packs.pop("packs_dir", None)
-                        packs.pop("packs", None)
-                        packs.pop("results_dir", None)
-                        packs.pop("results", None)
-
+                legacy_dir_resolved: Path | None = None
                 for key, candidate in candidate_pairs:
                     if candidate is None or str(candidate) == "":
                         continue
                     try:
                         merge_paths = merge_paths_from_any(Path(candidate), create=False)
                     except ValueError:
-                        _set_direct(key, candidate)
+                        if key in {"base", "dir", "packs", "packs_dir"} and legacy_dir_resolved is None:
+                            try:
+                                legacy_dir_resolved = Path(candidate).resolve()
+                            except (TypeError, ValueError):
+                                legacy_dir_resolved = None
                         continue
 
                     prefer_existing_index = index_value_raw is None or str(index_value_raw) == ""
@@ -668,7 +670,13 @@ def persist_manifest(
                         merge_paths,
                         prefer_existing_index=prefer_existing_index,
                     )
+                    packs.pop("legacy_dir", None)
+                    packs.pop("legacy_packs_dir", None)
                     break
+
+                if legacy_dir_resolved is not None:
+                    packs["legacy_dir"] = str(legacy_dir_resolved)
+                    packs["legacy_packs_dir"] = str(legacy_dir_resolved)
 
                 index_value: Path | None = None
                 if index_value_raw is not None and str(index_value_raw) != "":

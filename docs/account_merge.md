@@ -99,14 +99,14 @@ without altering the underlying part score.
   specific session, run:
 
   ```bash
-  rg "CANDIDATE_(CONSIDERED|SKIPPED)" runs/<sid>/ai_packs/logs.txt
+  rg "CANDIDATE_(CONSIDERED|SKIPPED)" runs/<sid>/ai_packs/merge/logs.txt
   ```
 
 - Account-number normalization logs the winning bureau pair via
   `MERGE_V2_ACCT_BEST`. Inspect those entries with:
 
   ```bash
-  rg "MERGE_V2_ACCT_BEST" runs/<sid>/ai_packs/logs.txt
+  rg "MERGE_V2_ACCT_BEST" runs/<sid>/ai_packs/merge/logs.txt
   ```
 
 These commands make it easy to confirm which account pairs were considered,

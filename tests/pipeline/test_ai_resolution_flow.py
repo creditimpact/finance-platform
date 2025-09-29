@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from backend.core.ai.paths import get_merge_paths
 from scripts import send_ai_merge_packs
 
 
@@ -49,8 +50,8 @@ def test_send_packs_normalizes_decisions(
 ) -> None:
     runs_root = tmp_path / "runs"
     sid = f"flow-{expected_decision}"
-    packs_dir = runs_root / sid / "ai_packs"
-    packs_dir.mkdir(parents=True, exist_ok=True)
+    merge_paths = get_merge_paths(runs_root, sid, create=True)
+    packs_dir = merge_paths["packs_dir"]
 
     pack_filename = "pair_001_002.jsonl"
     pack_payload = {
@@ -76,7 +77,7 @@ def test_send_packs_normalizes_decisions(
             }
         ],
     }
-    _write_json(packs_dir / "index.json", index_payload)
+    _write_json(merge_paths["index_file"], index_payload)
 
     accounts_root = runs_root / sid / "cases" / "accounts"
     _write_json(accounts_root / "1" / "tags.json", [])
@@ -121,17 +122,17 @@ def test_send_packs_normalizes_decisions(
     tags_a = json.loads((accounts_root / "1" / "tags.json").read_text(encoding="utf-8"))
     tags_b = json.loads((accounts_root / "2" / "tags.json").read_text(encoding="utf-8"))
 
-    def _expected_flags(raw_flags: dict[str, bool | str]) -> dict[str, bool | str]:
-        normalized: dict[str, bool | str] = {}
+    def _expected_flags(raw_flags: dict[str, bool | str]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
         for key, value in raw_flags.items():
             if isinstance(value, str):
                 lowered = value.strip().lower()
-                if lowered == "unknown":
-                    normalized[key] = "unknown"
+                if lowered in {"true", "false", "unknown"}:
+                    normalized[key] = lowered
                 else:
-                    normalized[key] = lowered == "true"
+                    normalized[key] = lowered
             else:
-                normalized[key] = bool(value)
+                normalized[key] = "true" if value else "false"
         return normalized
 
     expected_flags = _expected_flags(flags)

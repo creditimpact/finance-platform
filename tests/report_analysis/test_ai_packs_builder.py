@@ -6,6 +6,7 @@ import pytest
 
 from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
 from backend.pipeline.runs import RUNS_ROOT_ENV
+from backend.core.ai.paths import get_merge_paths
 from scripts.build_ai_merge_packs import main as build_packs_main
 
 
@@ -351,8 +352,10 @@ def test_build_ai_merge_packs_cli_updates_manifest(
         )
     log_messages = [record.getMessage() for record in caplog.records]
 
-    out_dir = runs_root / sid / "ai_packs"
-    index_path = out_dir / "index.json"
+    merge_paths = get_merge_paths(runs_root, sid, create=False)
+    merge_base = merge_paths["base"]
+    packs_dir = merge_paths["packs_dir"]
+    index_path = merge_paths["index_file"]
     manifest_path = runs_root / sid / "manifest.json"
 
     assert any(f"PACKS_DIR_USED sid={sid}" in message for message in log_messages)
@@ -385,8 +388,13 @@ def test_build_ai_merge_packs_cli_updates_manifest(
         assert entry["score"] == pair_entry["score_total"]
         assert entry.get("pack_file") == pair_entry["pack_file"]
 
-    logs_path = out_dir / "logs.txt"
+    pack_path = packs_dir / pair_entry["pack_file"]
+    assert pack_path.exists()
+
+    logs_path = merge_paths["log_file"]
     assert not logs_path.exists()
+    results_dir = merge_paths["results_dir"]
+    assert results_dir.is_dir()
     assert manifest_path.exists()
 
     manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -394,7 +402,7 @@ def test_build_ai_merge_packs_cli_updates_manifest(
     packs_info = ai_section["packs"]
     status_info = ai_section["status"]
 
-    assert packs_info["dir"] == str(out_dir.resolve())
+    assert packs_info["dir"] == str(merge_base.resolve())
     assert packs_info["index"] == str(index_path.resolve())
     assert packs_info["pairs"] == 1
     assert status_info["built"] is True

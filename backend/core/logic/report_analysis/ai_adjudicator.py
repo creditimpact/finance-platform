@@ -58,6 +58,7 @@ SYSTEM_MESSAGE = (
     "Legacy labels such as merge, same_debt, same_debt_account_different, "
     "same_account, same_account_debt_different, and different may appear in "
     "reference material, but you MUST respond with only the six decisions above.\n"
+    "If only last four digits match but stems differ, never choose any same_account_*.\n"
     "If account identifiers DO NOT match, but:\n"
     "- amounts_equal_within_tol is true for positive debt (balance and/or past due), AND\n"
     "- one side is a collection agent (is_collection_agency_*) while the other is an original creditor (is_original_creditor_*), AND\n"

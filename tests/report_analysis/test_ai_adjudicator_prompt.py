@@ -47,6 +47,10 @@ def test_build_prompt_from_pack_limits_context(monkeypatch):
     assert set(prompt.keys()) == {"system", "user"}
     assert "expert credit tradeline merge adjudicator" in prompt["system"].lower()
     assert "decision" in prompt["system"]
+    assert (
+        "If only last four digits match but stems differ, never choose any same_account_*"
+        in prompt["system"]
+    )
 
     user_payload = json.loads(prompt["user"])
     assert user_payload["sid"] == "sample-sid"

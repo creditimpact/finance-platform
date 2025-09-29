@@ -15,6 +15,7 @@ from backend.core.logic.normalize import last4 as normalize_last4
 from backend.core.logic.normalize import normalize_acctnum
 from backend.core.logic.report_analysis.account_merge import get_merge_cfg
 from backend.core.logic.report_analysis.ai_pack import build_context_flags
+from backend.core.logic.report_analysis.constants import BUREAUS
 from backend.core.logic.report_analysis.keys import normalize_issuer
 
 from . import config as merge_config
@@ -38,6 +39,7 @@ SYSTEM_PROMPT = (
     "Legacy labels (merge, same_debt, same_debt_account_different, same_account, "
     "same_account_debt_different, different) may appear in reference material, but "
     "you MUST respond using only the six decisions above.\n"
+    "If only last four digits match but stems differ, never choose any same_account_*.\n"
     "If account identifiers DO NOT match, but:\n"
     "- amounts_equal_within_tol is true for positive debt (balance and/or past due), AND\n"
     "- one side is a collection agent (is_collection_agency_*) while the other is an original creditor (is_original_creditor_*), AND\n"
@@ -123,6 +125,42 @@ LENDER_DROP_TOKENS = {
     "SVCS",
     "CACS",
 }
+
+
+def _empty_ids_by_bureau() -> Dict[str, Dict[str, str | None]]:
+    return {
+        bureau: {"raw": None, "digits": None, "last4": None}
+        for bureau in BUREAUS
+    }
+
+
+def _normalize_bureau_value(value: str) -> Dict[str, str | None]:
+    cleaned = str(value or "").strip()
+    raw_value = cleaned if cleaned and cleaned != "--" else None
+    digits = re.sub(r"\D", "", cleaned)
+    digits_value = digits or None
+    last4_value = digits[-4:] if len(digits) >= 4 else None
+    return {"raw": raw_value, "digits": digits_value, "last4": last4_value}
+
+
+def _extract_account_numbers_by_bureau(lines: Iterable[str]) -> Dict[str, Dict[str, str | None]]:
+    result = _empty_ids_by_bureau()
+    for line in lines:
+        match = ACCOUNT_NUMBER_RE.search(str(line) if line is not None else "")
+        if not match:
+            continue
+        tail = match.group(1).strip()
+        if not tail:
+            continue
+        parts = [part for part in tail.split() if part]
+        if not parts:
+            continue
+        for idx, bureau in enumerate(BUREAUS):
+            if idx >= len(parts):
+                continue
+            result[bureau] = _normalize_bureau_value(parts[idx])
+        break
+    return result
 
 
 @dataclass(frozen=True)
@@ -607,12 +645,27 @@ def build_merge_ai_packs(
             "account_number_a_last4": last4_a,
             "account_number_b_last4": last4_b,
         }
+        ids_by_bureau = {
+            "a": _extract_account_numbers_by_bureau(account_a.get("lines", [])),
+            "b": _extract_account_numbers_by_bureau(account_b.get("lines", [])),
+        }
+
+        digits_a = re.sub(r"\D", "", str(account_number_a or ""))
+        digits_b = re.sub(r"\D", "", str(account_number_b or ""))
+        stem_a = digits_a[:-4] if len(digits_a) > 4 else ""
+        stem_b = digits_b[:-4] if len(digits_b) > 4 else ""
+        acct_last4_equal = bool(last4_a and last4_b and last4_a == last4_b)
+        acct_stem_equal = bool(stem_a and stem_b and stem_a == stem_b)
+        acctnum_conflict = bool(digits_a and digits_b and digits_a != digits_b)
 
         context_flags = build_context_flags(
             highlights,
             account_a.get("lines", []),
             account_b.get("lines", []),
         )
+        context_flags["acct_last4_equal"] = acct_last4_equal
+        context_flags["acct_stem_equal"] = acct_stem_equal
+        context_flags["acctnum_conflict"] = acctnum_conflict
         summary = dict(highlights)
         summary["context_flags"] = context_flags
 
@@ -620,6 +673,7 @@ def build_merge_ai_packs(
             "sid": sid_str,
             "pair": {"a": a_idx, "b": b_idx},
             "ids": ids_payload,
+            "ids_by_bureau": ids_by_bureau,
             "numeric_match_summary": summary,
             "context_flags": dict(context_flags),
             "tolerances_hint": dict(tolerance_hint),
@@ -646,6 +700,7 @@ def build_merge_ai_packs(
             "sid": sid_str,
             "pair": {"a": a_idx, "b": b_idx},
             "ids": ids_payload,
+            "ids_by_bureau": ids_by_bureau,
             "highlights": summary,
             "context_flags": dict(context_flags),
             "tolerances_hint": dict(tolerance_hint),

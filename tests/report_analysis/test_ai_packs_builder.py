@@ -119,15 +119,40 @@ def test_build_merge_ai_packs_curates_context_and_prompt(tmp_path: Path) -> None
     assert pack["ids"]["account_number_b_normalized"] == "409451"
     assert pack["ids"]["account_number_a_last4"] == "9451"
     assert pack["ids"]["account_number_b_last4"] == "9451"
+    ids_by_bureau = pack["ids_by_bureau"]
+    assert ids_by_bureau["a"]["transunion"] == {
+        "raw": "409451******",
+        "digits": "409451",
+        "last4": "9451",
+    }
+    assert ids_by_bureau["a"]["experian"] == {"raw": None, "digits": None, "last4": None}
+    assert ids_by_bureau["a"]["equifax"] == {
+        "raw": "409451******",
+        "digits": "409451",
+        "last4": "9451",
+    }
+    assert ids_by_bureau["b"]["transunion"] == {"raw": None, "digits": None, "last4": None}
+    assert ids_by_bureau["b"]["experian"] == {
+        "raw": "409451******",
+        "digits": "409451",
+        "last4": "9451",
+    }
+    assert ids_by_bureau["b"]["equifax"] == {"raw": None, "digits": None, "last4": None}
     assert pack["highlights"]["total"] == 59
     assert pack["highlights"]["identity_score"] == 28
     assert pack["highlights"]["debt_score"] == 31
     assert pack["highlights"]["matched_fields"]["balance_owed"] is True
     assert pack["highlights"]["context_flags"]["amounts_equal_within_tol"] is True
     assert pack["highlights"]["context_flags"]["dates_plausible_chain"] is False
+    assert pack["highlights"]["context_flags"]["acct_last4_equal"] is True
+    assert pack["highlights"]["context_flags"]["acct_stem_equal"] is True
+    assert pack["highlights"]["context_flags"]["acctnum_conflict"] is False
     assert pack["limits"]["max_lines_per_side"] == 6
     assert pack["context_flags"]["amounts_equal_within_tol"] is True
     assert pack["context_flags"]["is_collection_agency_a"] is False
+    assert pack["context_flags"]["acct_last4_equal"] is True
+    assert pack["context_flags"]["acct_stem_equal"] is True
+    assert pack["context_flags"]["acctnum_conflict"] is False
     assert set(pack["tolerances_hint"].keys()) == {
         "amount_abs_usd",
         "amount_ratio",
@@ -138,6 +163,10 @@ def test_build_merge_ai_packs_curates_context_and_prompt(tmp_path: Path) -> None
     assert len(messages) == 2
     assert messages[0]["role"] == "system"
     assert "adjudicator" in messages[0]["content"]
+    assert (
+        "If only last four digits match but stems differ, never choose any same_account_*"
+        in messages[0]["content"]
+    )
 
     user_payload = json.loads(messages[1]["content"])
     assert user_payload["pair"] == {"a": 11, "b": 16}
@@ -148,8 +177,12 @@ def test_build_merge_ai_packs_curates_context_and_prompt(tmp_path: Path) -> None
     assert user_payload["ids"]["account_number_b_normalized"] == "409451"
     assert user_payload["ids"]["account_number_a_last4"] == "9451"
     assert user_payload["ids"]["account_number_b_last4"] == "9451"
+    assert user_payload["ids_by_bureau"] == ids_by_bureau
     assert user_payload["context_flags"]["amounts_equal_within_tol"] is True
     assert user_payload["context_flags"]["dates_plausible_chain"] is False
+    assert user_payload["context_flags"]["acct_last4_equal"] is True
+    assert user_payload["context_flags"]["acct_stem_equal"] is True
+    assert user_payload["context_flags"]["acctnum_conflict"] is False
     assert user_payload["output_contract"]["decision"] == [
         "same_account_same_debt",
         "same_account_diff_debt",

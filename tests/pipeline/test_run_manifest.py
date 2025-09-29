@@ -113,3 +113,55 @@ def test_api_upload_updates_manifest(tmp_path, monkeypatch, runs_root):
 
     assert session_calls
     assert update_calls
+
+
+def test_get_ai_merge_paths_defaults(runs_root):
+    manifest = RunManifest.for_sid("sid123")
+
+    paths = manifest.get_ai_merge_paths()
+
+    base_dir = (runs_root / "sid123" / "ai_packs" / "merge").resolve()
+    assert paths["base"] == base_dir
+    assert paths["packs_dir"] == (base_dir / "packs").resolve()
+    assert paths["results_dir"] == (base_dir / "results").resolve()
+    assert paths["index_file"] == (base_dir / "index.json").resolve()
+    assert paths["log_file"] == (base_dir / "logs.txt").resolve()
+    assert paths.get("legacy_dir") is None
+
+
+def test_get_ai_merge_paths_with_legacy_layout(runs_root):
+    manifest = RunManifest.for_sid("sid123")
+    run_dir = runs_root / "sid123"
+    legacy_dir = run_dir / "ai_packs"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    legacy_index = legacy_dir / "index.json"
+    legacy_index.write_text("{}", encoding="utf-8")
+
+    manifest.update_ai_packs(dir=legacy_dir, index=legacy_index)
+
+    paths = manifest.get_ai_merge_paths()
+
+    expected_base = (legacy_dir / "merge").resolve()
+    assert paths["base"] == expected_base
+    assert paths["packs_dir"] == legacy_dir.resolve()
+    assert paths["index_file"] == legacy_index.resolve()
+    assert paths["log_file"] == (expected_base / "logs.txt").resolve()
+    assert paths["legacy_dir"] == legacy_dir.resolve()
+    assert paths["legacy_packs_dir"] == legacy_dir.resolve()
+
+
+def test_set_ai_built_records_logs_when_present(runs_root):
+    manifest = RunManifest.for_sid("sid123")
+    base_dir = runs_root / "sid123" / "ai_packs" / "merge"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    log_path = base_dir / "logs.txt"
+    log_path.write_text("log", encoding="utf-8")
+
+    manifest.set_ai_built(base_dir, pairs=3)
+
+    packs_section = manifest.data["ai"]["packs"]
+    assert packs_section["dir"] == str(base_dir.resolve())
+    assert packs_section["logs"] == str(log_path.resolve())
+
+    paths = manifest.get_ai_merge_paths()
+    assert paths["log_file"] == log_path.resolve()

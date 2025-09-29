@@ -1,6 +1,8 @@
 ﻿import os, json, re, pathlib, time
 from datetime import datetime
 
+from backend.core.ai.paths import get_merge_paths, pair_pack_filename
+
 RUNS_ROOT = os.environ.get("RUNS_ROOT", "runs")
 SID = os.environ.get("SID") or "'+$SID+'"
 
@@ -8,8 +10,11 @@ base = pathlib.Path(RUNS_ROOT)/SID
 accounts_dir = base/"cases"/"accounts"
 manifest_path = base/".manifest"
 
-PACKS_ROOT = base/"ai_packs"
-PACKS_ROOT.mkdir(parents=True, exist_ok=True)
+merge_paths = get_merge_paths(pathlib.Path(RUNS_ROOT), SID, create=True)
+PACKS_ROOT = merge_paths["packs_dir"]
+INDEX_PATH = merge_paths["index_file"]
+LOG_PATH = merge_paths["log_file"]
+BASE_DIR = merge_paths["base"]
 
 def load_json(p: pathlib.Path, default=None):
     try:
@@ -135,21 +140,20 @@ for pr in pairs:
         )
     }
 
-    filename = f"{a_idx:03d}-{b_idx:03d}.json"
+    filename = pair_pack_filename(a_idx, b_idx)
     out_file = PACKS_ROOT/filename
     dump_json(out_file, pack)
     out_index.append({"a":a_idx,"b":b_idx,"file":filename})
 
 # כתיבת אינדקס מרכזי
-index_path = PACKS_ROOT/"index.json"
-dump_json(index_path, out_index)
+dump_json(INDEX_PATH, out_index)
 
 # עדכון המניפסט
 manifest = load_json(manifest_path, default={})
 ai_section = manifest.setdefault("ai", {}).setdefault("packs", {})
-ai_section["dir"] = str(PACKS_ROOT.resolve())
-ai_section["index"] = str(index_path.resolve())
-ai_section["logs"] = str((PACKS_ROOT/"logs.txt").resolve())
+ai_section["dir"] = str(BASE_DIR.resolve())
+ai_section["index"] = str(INDEX_PATH.resolve())
+ai_section["logs"] = str(LOG_PATH.resolve())
 ai_section["pairs"] = len(out_index)
 dump_json(manifest_path, manifest)
 

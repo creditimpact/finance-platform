@@ -7,6 +7,8 @@ from pathlib import Path
 from datetime import date, datetime
 from typing import Iterable, Mapping
 
+from backend.core.ai.paths import get_merge_paths, pair_pack_filename
+
 from . import config as merge_config
 
 WANTED_CONTEXT_KEYS: list[str] = [
@@ -511,11 +513,11 @@ def build_ai_pack_for_pair(
     raw_a_path = accounts_root / str(account_a) / "raw_lines.json"
     raw_b_path = accounts_root / str(account_b) / "raw_lines.json"
 
-    pack_dir = runs_root_path / sid_str / "ai_packs"
-    pack_dir.mkdir(parents=True, exist_ok=True)
+    merge_paths = get_merge_paths(runs_root_path, sid_str, create=True)
+    packs_dir = merge_paths["packs_dir"]
 
     first_idx, second_idx = sorted((account_a, account_b))
-    pack_path = pack_dir / f"pair_{first_idx:03d}_{second_idx:03d}.jsonl"
+    pack_path = packs_dir / pair_pack_filename(first_idx, second_idx)
     payload: dict
 
     try:

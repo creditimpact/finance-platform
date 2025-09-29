@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
-from backend.core.io.json_io import _atomic_write_json
+from backend.core.io.json_io import update_json_in_place
 from backend.core.io.tags import upsert_tag
 from backend.core.logic.polarity import classify_field_value, load_polarity_config
 
@@ -41,28 +41,6 @@ def _load_bureaus(account_path: Path, sid: str) -> Dict[str, Any]:
 
     if not isinstance(data, Mapping):
         logger.warning("POLARITY_BUREAUS_INVALID root_type=%s", type(data).__name__)
-        return {}
-
-    return dict(data)
-
-
-def _load_summary(summary_path: Path) -> Dict[str, Any]:
-    try:
-        raw_text = summary_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return {}
-    except OSError:
-        logger.exception("POLARITY_SUMMARY_READ_FAILED path=%s", summary_path)
-        return {}
-
-    try:
-        data = json.loads(raw_text)
-    except json.JSONDecodeError:
-        logger.exception("POLARITY_SUMMARY_PARSE_FAILED path=%s", summary_path)
-        return {}
-
-    if not isinstance(data, Mapping):
-        logger.warning("POLARITY_SUMMARY_INVALID root_type=%s", type(data).__name__)
         return {}
 
     return dict(data)
@@ -133,11 +111,25 @@ def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[
     }
 
     summary_path = account_path / "summary.json"
-    summary_data = _load_summary(summary_path)
-    if summary_data.get("polarity_check") != polarity_block:
-        summary_data["polarity_check"] = polarity_block
-        summary_path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write_json(summary_path, summary_data)
+
+    def _update_summary(existing: object) -> Dict[str, Any]:
+        if isinstance(existing, Mapping):
+            summary: Dict[str, Any] = dict(existing)
+        else:
+            summary = {}
+
+        if summary.get("polarity_check") == polarity_block:
+            return summary
+
+        summary["polarity_check"] = polarity_block
+        return summary
+
+    try:
+        update_json_in_place(summary_path, _update_summary)
+    except ValueError:
+        logger.exception("POLARITY_SUMMARY_PARSE_FAILED path=%s", summary_path)
+    except OSError:
+        logger.exception("POLARITY_SUMMARY_WRITE_FAILED path=%s", summary_path)
 
     return polarity_block
 

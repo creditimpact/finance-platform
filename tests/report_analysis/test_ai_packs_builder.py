@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.core.logic.report_analysis.ai_pack import build_context_flags
 from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
 from backend.pipeline.runs import RUNS_ROOT_ENV
 from backend.core.ai.paths import get_merge_paths
@@ -161,6 +162,38 @@ def test_build_merge_ai_packs_curates_context_and_prompt(tmp_path: Path) -> None
         "account_match": ["true", "false", "unknown"],
         "debt_match": ["true", "false", "unknown"],
     }
+
+
+def test_context_flags_collection_agency_relaxed_dates(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CA_DATE_MONTH_TOL", "3")
+
+    lines_a = [
+        "Creditor Type: Collections",
+        "Creditor Remarks: Debt Collector",
+        "Closed Date: 2023-06-15",
+    ]
+    lines_b = [
+        "Creditor Type: Other Collection Agencies",
+        "Date Reported: 2023-04-01",
+    ]
+
+    flags = build_context_flags({}, lines_a, lines_b)
+
+    assert flags["is_collection_agency_a"] is True
+    assert flags["is_collection_agency_b"] is True
+    assert flags["dates_plausible_chain"] is True
+
+
+def test_context_flags_amounts_equal_ratio_tolerance(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AMOUNT_TOL_ABS", "0")
+    monkeypatch.setenv("AMOUNT_TOL_RATIO", "0.05")
+
+    lines_a = ["Balance Owed: $1,000"]
+    lines_b = ["Balance Owed: $1,040"]
+
+    flags = build_context_flags({}, lines_a, lines_b)
+
+    assert flags["amounts_equal_within_tol"] is True
 
 
 def test_build_merge_ai_packs_only_merge_best_filter(tmp_path: Path) -> None:

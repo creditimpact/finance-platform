@@ -363,6 +363,7 @@ _TOLERANCE_DEFAULTS: Dict[str, Union[int, float]] = {
     "AMOUNT_TOL_RATIO": 0.01,
     "LAST_PAYMENT_DAY_TOL": 7,
     "COUNT_ZERO_PAYMENT_MATCH": 0,
+    "CA_DATE_MONTH_TOL": 6,
 }
 
 def get_merge_cfg(env: Optional[Mapping[str, str]] = None) -> MergeCfg:

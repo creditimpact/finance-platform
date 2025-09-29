@@ -17,6 +17,7 @@ except Exception:  # pragma: no cover - fallback to ensure repo modules are impo
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
+from backend.core.ai.paths import get_merge_paths, pair_pack_filename
 from backend.core.io.tags import read_tags
 from backend.core.logic.report_analysis import ai_sender
 from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
@@ -72,10 +73,35 @@ def _write_json_file(path: Path, payload: object) -> None:
     path.write_text(serialized + "\n", encoding="utf-8")
 
 
-def _resolve_packs_dir(base: Path, sid: str, override: Optional[str]) -> Path:
+def _resolve_merge_paths(
+    runs_root: Path,
+    sid: str,
+    override: Optional[str],
+) -> Dict[str, Path]:
+    merge_paths = get_merge_paths(runs_root, sid, create=True)
+
     if override:
-        return Path(override)
-    return base / sid / "ai_packs"
+        packs_dir = Path(override)
+        packs_dir.mkdir(parents=True, exist_ok=True)
+        base_dir = packs_dir.parent
+        index_path = base_dir / merge_paths["index_file"].name
+        log_path = base_dir / merge_paths["log_file"].name
+        results_dir = base_dir / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        packs_dir = merge_paths["packs_dir"]
+        base_dir = merge_paths["base"]
+        index_path = merge_paths["index_file"]
+        log_path = merge_paths["log_file"]
+        results_dir = merge_paths["results_dir"]
+
+    return {
+        "packs_dir": packs_dir,
+        "base_dir": base_dir,
+        "index_path": index_path,
+        "log_path": log_path,
+        "results_dir": results_dir,
+    }
 
 
 def _append_log(path: Path, line: str) -> None:
@@ -112,7 +138,11 @@ def build_packs_for_sid(
 
     sid_str = str(sid)
     runs_root_path = Path(runs_root)
-    output_dir = _resolve_packs_dir(runs_root_path, sid_str, out_dir)
+    paths = _resolve_merge_paths(runs_root_path, sid_str, out_dir)
+    packs_dir = paths["packs_dir"]
+    base_dir = paths["base_dir"]
+    index_path = paths["index_path"]
+    logs_path = paths["log_path"]
 
     packs = build_merge_ai_packs(
         sid_str,
@@ -120,8 +150,6 @@ def build_packs_for_sid(
         only_merge_best=only_merge_best,
         max_lines_per_side=max_lines_per_side,
     )
-
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     items: List[PackArtifact] = []
     for pack in packs:
@@ -133,21 +161,18 @@ def build_packs_for_sid(
             b_idx = int(pair["b"])
         except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
             raise ValueError("Pack indices must be integers") from exc
-        filename = f"{a_idx:03d}-{b_idx:03d}.json"
-        _write_json_file(output_dir / filename, pack)
+        filename = pair_pack_filename(a_idx, b_idx)
+        _write_json_file(packs_dir / filename, pack)
         items.append(PackArtifact(a_idx=a_idx, b_idx=b_idx, filename=filename, payload=pack))
 
-    index_path = output_dir / "index.json"
     index_payload = [
         {"a": item.a_idx, "b": item.b_idx, "file": item.filename} for item in items
     ]
     _write_json_file(index_path, index_payload)
 
-    logs_path = output_dir / "logs.txt"
-
     manifest = RunManifest.for_sid(sid_str)
     manifest.update_ai_packs(
-        dir=output_dir,
+        dir=base_dir,
         index=index_path,
         logs=logs_path,
         pairs=len(items),
@@ -156,7 +181,7 @@ def build_packs_for_sid(
     return PackBuildResult(
         sid=sid_str,
         runs_root=runs_root_path,
-        directory=output_dir,
+        directory=packs_dir,
         index_path=index_path,
         log_path=logs_path,
         items=items,

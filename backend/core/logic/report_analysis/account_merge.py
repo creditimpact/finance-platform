@@ -16,6 +16,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Uni
 
 from backend import config as app_config
 from backend.core.ai.adjudicator import AdjudicatorError, validate_ai_payload
+from backend.core.ai.paths import get_merge_paths, pair_pack_filename
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, upsert_tag, write_tags_atomic
 from backend.core.logic.normalize.accounts import normalize_acctnum as _normalize_acctnum_basic
@@ -1307,6 +1308,9 @@ def score_all_pairs_0_100(
     """Score all unordered account pairs for a case run."""
 
     runs_root = Path(runs_root)
+    merge_paths = get_merge_paths(runs_root, sid, create=True)
+    packs_dir = merge_paths["packs_dir"]
+    log_file = merge_paths["log_file"]
     cfg = get_merge_cfg()
     ai_threshold = AI_PACK_SCORE_THRESHOLD
     requested_raw = list(idx_list) if idx_list is not None else []
@@ -1323,8 +1327,7 @@ def score_all_pairs_0_100(
 
     requested_set = set(requested_indices)
 
-    pack_dir = runs_root / sid / "ai_packs"
-    _configure_candidate_logger(pack_dir / "logs.txt")
+    _configure_candidate_logger(log_file)
 
     accounts_root = runs_root / sid / "cases" / "accounts"
     discovered_indices: List[int] = []
@@ -1554,7 +1557,7 @@ def score_all_pairs_0_100(
                 pack_path = None
             else:
                 first_idx, second_idx = sorted((left_idx, right_idx))
-                pack_path = pack_dir / f"pair_{first_idx:03d}_{second_idx:03d}.jsonl"
+                pack_path = packs_dir / pair_pack_filename(first_idx, second_idx)
 
             if pack_path is not None and pack_path.exists():
                 logger.debug(

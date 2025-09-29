@@ -17,20 +17,13 @@ except Exception:  # pragma: no cover - fallback for direct execution
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
+from backend.core.ai.paths import get_merge_paths, pair_pack_filename
 from backend.core.logic.normalize import last4, normalize_acctnum
 from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
 from backend.pipeline.runs import RunManifest, persist_manifest
 
 
 log = logging.getLogger(__name__)
-
-
-def _packs_dir_for(sid: str, runs_root: Path) -> Path:
-    """Return the canonical ``ai_packs`` directory for ``sid``."""
-
-    from backend.pipeline.auto_ai import packs_dir_for as _packs_dest  # local import to avoid cycles
-
-    return _packs_dest(sid, runs_root=runs_root)
 
 
 def _write_pack(path: Path, payload: object) -> None:
@@ -131,14 +124,28 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     sid = str(args.sid)
     runs_root = Path(args.runs_root)
-    packs_dir = Path(args.packs_dir) if args.packs_dir else _packs_dir_for(sid, runs_root)
-    packs_dir.mkdir(parents=True, exist_ok=True)
+    merge_paths = get_merge_paths(runs_root, sid, create=True)
+
+    if args.packs_dir:
+        packs_dir = Path(args.packs_dir)
+        packs_dir.mkdir(parents=True, exist_ok=True)
+        base_dir = packs_dir.parent
+        index_path = base_dir / merge_paths["index_file"].name
+        results_dir = base_dir / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        packs_dir = merge_paths["packs_dir"]
+        base_dir = merge_paths["base"]
+        index_path = merge_paths["index_file"]
+        results_dir = merge_paths["results_dir"]
+
     log.info("PACKS_DIR_USED sid=%s dir=%s", sid, packs_dir)
+    log.debug("MERGE_RESULTS_DIR sid=%s dir=%s", sid, results_dir)
 
     manifest = RunManifest.for_sid(sid)
-    manifest.upsert_ai_packs_dir(packs_dir)
+    manifest.upsert_ai_packs_dir(base_dir)
     persist_manifest(manifest)
-    log.info("MANIFEST_AI_PACKS_DIR_SET sid=%s dir=%s", sid, packs_dir)
+    log.info("MANIFEST_AI_PACKS_DIR_SET sid=%s dir=%s", sid, base_dir)
 
     packs = build_merge_ai_packs(
         sid,
@@ -156,7 +163,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         except (TypeError, ValueError) as exc:
             raise ValueError("Pack is missing pair indices") from exc
 
-        pack_filename = f"pair_{a_idx:03d}_{b_idx:03d}.jsonl"
+        pack_filename = pair_pack_filename(a_idx, b_idx)
         pack_path = packs_dir / pack_filename
         context = pack.get("context") if isinstance(pack.get("context"), dict) else {}
         context_a = context.get("a") if isinstance(context.get("a"), list) else []
@@ -221,7 +228,8 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     pairs_count = len(index_entries)
     if pairs_count > 0:
-        index_path = packs_dir / "index.json"
+        if args.packs_dir:
+            index_path = base_dir / merge_paths["index_file"].name
         seen_pairs: set[tuple[int, int]] = set()
         pairs_payload: list[dict[str, object]] = []
         for entry in index_entries:
@@ -251,12 +259,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         packs_in_index = len(index_payload.get("packs", []))
         log.info("INDEX_WRITTEN sid=%s index=%s pairs=%d", sid, index_path, packs_in_index)
 
-        manifest = RunManifest.for_sid(sid).set_ai_built(packs_dir, pairs_count)
+        manifest = RunManifest.for_sid(sid).set_ai_built(base_dir, pairs_count)
         persist_manifest(manifest)
         log.info(
             "MANIFEST_AI_PACKS_UPDATED sid=%s dir=%s index=%s pairs=%d",
             sid,
-            packs_dir,
+            base_dir,
             index_path,
             pairs_count,
         )

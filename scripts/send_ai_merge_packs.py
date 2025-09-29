@@ -283,18 +283,24 @@ def _build_index_payload(
         pack_entry["b"] = b_idx
         pack_entry["pair"] = [a_idx, b_idx]
         canonical_a, canonical_b = sorted((a_idx, b_idx))
-        pack_entry.setdefault("pack_file", pair_pack_filename(canonical_a, canonical_b))
+        pack_filename = pair_pack_filename(canonical_a, canonical_b)
+        result_filename = pair_result_filename(canonical_a, canonical_b)
+        pack_entry["pack_file"] = pack_filename
+        pack_entry["result_file"] = result_filename
         pack_entry["score_total"] = score_value
         pack_entry["score"] = score_value
         packs_payload.append(pack_entry)
 
         pack_file = pack_entry.get("pack_file")
+        result_file = pack_entry.get("result_file")
         for pair in ((a_idx, b_idx), (b_idx, a_idx)):
             if pair in seen_pairs:
                 continue
             pair_entry: dict[str, object] = {"pair": [pair[0], pair[1]], "score": score_value}
             if pack_file:
                 pair_entry["pack_file"] = pack_file
+            if result_file:
+                pair_entry["result_file"] = result_file
             ai_result = entry.get("ai_result")
             if isinstance(ai_result, MappingABC):
                 pair_entry["ai_result"] = dict(ai_result)
@@ -892,6 +898,15 @@ def main(argv: Sequence[str] | None = None) -> None:
             pack_candidates.append(preferred_path)
             log.info(
                 "SENDER_PACKS_DIR_FROM_MANIFEST sid=%s dir=%s", sid, preferred_path
+            )
+        manifest_paths = manifest.get_ai_merge_paths()
+        legacy_candidate = manifest_paths.get("legacy_packs_dir") if isinstance(manifest_paths, dict) else None
+        if isinstance(legacy_candidate, Path):
+            pack_candidates.append(legacy_candidate)
+            log.info(
+                "SENDER_PACKS_DIR_FROM_MANIFEST_LEGACY sid=%s dir=%s",
+                sid,
+                legacy_candidate,
             )
     pack_candidates.append(packs_dir)
 

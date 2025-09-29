@@ -929,8 +929,12 @@ def test_run_auto_ai_pipeline_processes_index_and_updates_manifest(
     assert status_info.get("skipped_reason") is None
 
     packs_dir = Path(packs_info.get("dir"))
+    packs_subdir = Path(packs_info.get("packs_dir"))
+    results_subdir = Path(packs_info.get("results_dir"))
     index_path = Path(packs_info.get("index"))
     assert packs_dir.exists()
+    assert packs_subdir.exists()
+    assert results_subdir.exists()
     assert index_path.exists()
     assert packs_info.get("pairs") >= 1
 

@@ -324,17 +324,23 @@ def test_send_ai_merge_packs_records_merge_decision(
     assert pack_files, "expected at least one AI pack to be written"
     pack_payload = json.loads(pack_files[0].read_text(encoding="utf-8"))
     assert pack_payload["pair"] == {"a": 11, "b": 16}
-    assert pack_payload["ai_result"] == {
+
+    result_path = results_dir / pair_result_filename(11, 16)
+    assert result_path.exists()
+    result_payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert result_payload == {
         "decision": "same_account_same_debt",
         "reason": "Records align cleanly.",
         "flags": {"account_match": True, "debt_match": True},
     }
 
+    assert "ai_result" not in pack_payload
+
     index_payload = json.loads((base_dir / "index.json").read_text(encoding="utf-8"))
     pairs_entries = index_payload.get("pairs", [])
     matching = [entry for entry in pairs_entries if entry.get("pair") == [11, 16]]
     assert matching
-    assert matching[0].get("ai_result") == pack_payload["ai_result"]
+    assert matching[0].get("ai_result") == result_payload
     reverse = [entry for entry in pairs_entries if entry.get("pair") == [16, 11]]
     assert reverse
     assert reverse[0].get("pack_file") == matching[0].get("pack_file")
@@ -475,6 +481,8 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
     ai_packs = manifest_data["ai"]["packs"]
     assert Path(ai_packs["dir"]) == base_dir.resolve()
     assert Path(ai_packs["dir"]).exists()
+    assert Path(ai_packs["packs_dir"]) == (base_dir / "packs").resolve()
+    assert Path(ai_packs["results_dir"]) == (base_dir / "results").resolve()
     assert Path(ai_packs["index"]) == (base_dir / "index.json").resolve()
     assert Path(ai_packs["index"]).exists()
     assert Path(ai_packs["logs"]) == logs_path.resolve()
@@ -729,10 +737,12 @@ def test_send_ai_merge_packs_reads_legacy_layout(
     assert result_dir.exists()
     result_path = result_dir / pair_result_filename(11, 16)
     assert result_path.exists()
+    result_payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert result_payload["decision"] == "same_account_same_debt"
 
     pack_path = legacy_dir / pack_filename
     updated_payload = json.loads(pack_path.read_text(encoding="utf-8"))
-    assert updated_payload.get("ai_result", {}).get("decision") == "same_account_same_debt"
+    assert "ai_result" not in updated_payload
 
     manifest = RunManifest.for_sid(sid)
     packs_info = manifest.data.get("ai", {}).get("packs", {})

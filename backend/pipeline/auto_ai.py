@@ -14,7 +14,7 @@ from typing import Iterable, Mapping, MutableMapping, Sequence
 
 from celery import shared_task
 
-from backend.core.ai.paths import get_merge_paths, probe_legacy_ai_packs
+from backend.core.ai.paths import ensure_merge_paths, probe_legacy_ai_packs
 from backend.core.logic.tags.compact import (
     compact_account_tags,
     compact_tags_for_sid,
@@ -35,7 +35,7 @@ def packs_dir_for(sid: str, *, runs_root: Path | str | None = None) -> Path:
     """Return the canonical merge AI pipeline directory for ``sid``."""
 
     base = Path(runs_root) if runs_root is not None else RUNS_ROOT
-    merge_paths = get_merge_paths(base, sid, create=False)
+    merge_paths = ensure_merge_paths(base, sid, create=False)
     return merge_paths.base
 
 
@@ -102,7 +102,7 @@ def maybe_queue_auto_ai_pipeline(
         return {"queued": False, "reason": "disabled"}
 
     runs_root_path = Path(runs_root)
-    merge_paths = get_merge_paths(runs_root_path, sid, create=True)
+    merge_paths = ensure_merge_paths(runs_root_path, sid, create=True)
     base_dir = merge_paths.base
     packs_dir = merge_paths.packs_dir
     lock_path = base_dir / INFLIGHT_LOCK_FILENAME
@@ -495,7 +495,7 @@ def ai_inflight_lock(runs_root: Path, sid: str):
     Creates runs/<sid>/ai_packs/merge/inflight.lock; removes it on exit.
     """
 
-    merge_paths = get_merge_paths(runs_root, sid, create=True)
+    merge_paths = ensure_merge_paths(runs_root, sid, create=True)
     ai_dir = merge_paths.base
     lock = ai_dir / INFLIGHT_LOCK_FILENAME
     if lock.exists():
@@ -560,7 +560,7 @@ def _run_auto_ai_pipeline(sid: str):
     _build_ai_packs(sid, RUNS_ROOT)
 
     manifest = RunManifest.for_sid(sid)
-    merge_paths = get_merge_paths(RUNS_ROOT, sid, create=True)
+    merge_paths = ensure_merge_paths(RUNS_ROOT, sid, create=True)
     base_dir = merge_paths.base
     packs_dir = merge_paths.packs_dir
     index_path = merge_paths.index_file

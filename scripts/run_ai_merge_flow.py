@@ -17,7 +17,13 @@ except Exception:  # pragma: no cover - fallback to ensure repo modules are impo
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-from backend.core.ai.paths import MergePaths, ensure_merge_paths, pair_pack_filename
+from backend.core.ai.paths import (
+    MergePaths,
+    ensure_merge_paths,
+    merge_paths_from_any,
+    pair_pack_filename,
+    pair_pack_path,
+)
 from backend.core.io.tags import read_tags
 from backend.core.logic.report_analysis import ai_sender
 from backend.core.logic.report_analysis.ai_packs import build_merge_ai_packs
@@ -83,26 +89,7 @@ def _resolve_merge_paths(
     if not override:
         return canonical
 
-    override_path = Path(override).resolve()
-    if override_path.name == "packs":
-        base_dir = override_path.parent
-        packs_dir = override_path
-    else:
-        base_dir = override_path
-        packs_dir = override_path / "packs"
-
-    packs_dir.mkdir(parents=True, exist_ok=True)
-
-    results_dir = base_dir / canonical.results_dir.name
-    results_dir.mkdir(parents=True, exist_ok=True)
-
-    return MergePaths(
-        base=base_dir,
-        packs_dir=packs_dir,
-        results_dir=results_dir,
-        log_file=base_dir / canonical.log_file.name,
-        index_file=base_dir / canonical.index_file.name,
-    )
+    return merge_paths_from_any(Path(override), create=True)
 
 
 def _append_log(path: Path, line: str) -> None:
@@ -163,7 +150,7 @@ def build_packs_for_sid(
         except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
             raise ValueError("Pack indices must be integers") from exc
         filename = pair_pack_filename(a_idx, b_idx)
-        _write_json_file(packs_dir / filename, pack)
+        _write_json_file(pair_pack_path(merge_paths, a_idx, b_idx), pack)
         items.append(PackArtifact(a_idx=a_idx, b_idx=b_idx, filename=filename, payload=pack))
 
     index_payload = [

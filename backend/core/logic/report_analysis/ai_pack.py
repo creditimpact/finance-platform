@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import date, datetime
 from typing import Iterable, Mapping
 
-from backend.core.ai.paths import ensure_merge_paths, pair_pack_filename
+from backend.core.ai.paths import ensure_merge_paths, pair_pack_path
 
 from . import config as merge_config
 
@@ -636,7 +636,7 @@ def build_ai_pack_for_pair(
     packs_dir = merge_paths.packs_dir
 
     first_idx, second_idx = sorted((account_a, account_b))
-    pack_path = packs_dir / pair_pack_filename(first_idx, second_idx)
+    pack_path = pair_pack_path(merge_paths, first_idx, second_idx)
     payload: dict
 
     try:

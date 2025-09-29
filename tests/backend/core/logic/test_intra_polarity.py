@@ -83,3 +83,54 @@ def test_analyze_account_polarity_writes_probe_tags(account_dir: Path, monkeypat
             "severity": "low",
         }
     ]
+
+
+def test_analyze_account_polarity_logs(account_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
+    _write_json(
+        account_dir / "bureaus.json",
+        {
+            "transunion": {
+                "balance_owed": "$120.00",
+                "payment_status": "Account in Collection",
+            },
+            "experian": {
+                "balance_owed": "$0",
+                "payment_status": "Paid in Full",
+            },
+        },
+    )
+
+    with caplog.at_level("INFO"):
+        analyze_account_polarity("sid789", account_dir)
+
+    messages = [record.getMessage() for record in caplog.records if record.name == "backend.core.logic.intra_polarity"]
+
+    start_logs = [msg for msg in messages if msg.startswith("POLARITY_START ")]
+    assert any("bureaus=[transunion,experian]" in msg and "idx=0" in msg for msg in start_logs)
+
+    balance_logs = [msg for msg in messages if "field=balance_owed" in msg]
+    assert any("TU=bad:high" in msg and "EX=good:medium" in msg for msg in balance_logs)
+
+
+def test_analyze_account_polarity_probe_logging(
+    account_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("WRITE_POLARITY_PROBES", "1")
+
+    _write_json(
+        account_dir / "bureaus.json",
+        {
+            "equifax": {
+                "closed_date": "--",
+            }
+        },
+    )
+
+    with caplog.at_level("INFO"):
+        analyze_account_polarity("sid000", account_dir)
+
+    messages = [record.getMessage() for record in caplog.records if record.name == "backend.core.logic.intra_polarity"]
+    tag_logs = [msg for msg in messages if msg.startswith("POLARITY_TAG_WRITTEN ")]
+    assert any("bureau=equifax" in msg and "field=closed_date" in msg for msg in tag_logs)

@@ -15,7 +15,7 @@ def test_normalizes_decision_to_match_flags() -> None:
 
     normalized, was_normalized = _normalize_and_validate_decision(payload)
 
-    assert normalized["decision"] == "same_account_debt_diff"
+    assert normalized["decision"] == "same_account_diff_debt"
     assert normalized["reason"] == "inconsistent debt"
     assert normalized["flags"] == {"account_match": True, "debt_match": False}
     assert normalized["normalized"] is True
@@ -33,8 +33,8 @@ def test_keeps_merge_when_flags_strong_match() -> None:
 
     normalized, was_normalized = _normalize_and_validate_decision(payload)
 
-    assert normalized["decision"] == "merge"
+    assert normalized["decision"] == "same_account_same_debt"
     assert normalized["reason"] == "Shared account number and balance"
     assert normalized["flags"] == {"account_match": True, "debt_match": True}
-    assert "normalized" not in normalized
-    assert was_normalized is False
+    assert normalized["normalized"] is True
+    assert was_normalized is True

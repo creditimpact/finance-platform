@@ -230,7 +230,7 @@ def test_send_ai_merge_packs_records_merge_decision(
         "kind": "ai_decision",
         "tag": "ai_decision",
         "source": "ai_adjudicator",
-        "decision": "merge",
+        "decision": "same_account_same_debt",
         "reason": "Records align cleanly.",
         "flags": {"account_match": True, "debt_match": True},
         "at": "2024-07-01T09:30:00Z",
@@ -244,7 +244,7 @@ def test_send_ai_merge_packs_records_merge_decision(
     pack_payload = json.loads(pack_files[0].read_text(encoding="utf-8"))
     assert pack_payload["pair"] == {"a": 11, "b": 16}
     assert pack_payload["ai_result"] == {
-        "decision": "merge",
+        "decision": "same_account_same_debt",
         "reason": "Records align cleanly.",
         "flags": {"account_match": True, "debt_match": True},
     }
@@ -336,7 +336,7 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
         _assert_pack_messages_with_rules(pack, pack_payload)
         captured_decisions.append({"pack": dict(pack), "timeout": timeout})
         return {
-            "decision": "same_debt",
+            "decision": "same_debt_account_unknown",
             "reason": "Same open date and balance",
             "flags": {"account_match": "unknown", "debt_match": True},
         }
@@ -378,7 +378,7 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
         "tag": "ai_decision",
         "source": "ai_adjudicator",
         "with": 16,
-        "decision": "same_debt",
+        "decision": "same_debt_account_unknown",
         "reason": "Same open date and balance",
         "flags": {"account_match": "unknown", "debt_match": True},
         "at": "2024-06-15T10:00:00Z",
@@ -425,22 +425,22 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
     "decision,flags,expected_pair",
     [
         (
-            "same_account_debt_diff",
+            "same_account_diff_debt",
             {"account_match": True, "debt_match": False},
             "same_account_pair",
         ),
         (
-            "same_debt_account_diff",
+            "same_debt_diff_account",
             {"account_match": False, "debt_match": True},
             "same_debt_pair",
         ),
         (
-            "same_account",
+            "same_account_debt_unknown",
             {"account_match": True, "debt_match": "unknown"},
             "same_account_pair",
         ),
         (
-            "same_debt",
+            "same_debt_account_unknown",
             {"account_match": "unknown", "debt_match": True},
             "same_debt_pair",
         ),
@@ -635,10 +635,10 @@ def test_write_decision_tags_idempotent(tmp_path: Path) -> None:
         sid,
         31,
         32,
-        "same_debt",
+        "same_debt_account_unknown",
         reason,
         "2024-07-01T00:00:00Z",
-        {"decision": "same_debt", "reason": reason},
+        {"decision": "same_debt_account_unknown", "reason": reason},
     )
 
     # Second invocation should update without duplication.
@@ -647,10 +647,10 @@ def test_write_decision_tags_idempotent(tmp_path: Path) -> None:
         sid,
         31,
         32,
-        "same_debt",
+        "same_debt_account_unknown",
         reason,
         "2024-07-01T00:00:00Z",
-        {"decision": "same_debt", "reason": reason},
+        {"decision": "same_debt_account_unknown", "reason": reason},
     )
 
     base = runs_root / sid / "cases" / "accounts"
@@ -662,7 +662,7 @@ def test_write_decision_tags_idempotent(tmp_path: Path) -> None:
         "tag": "ai_decision",
         "source": "ai_adjudicator",
         "with": 32,
-        "decision": "same_debt",
+        "decision": "same_debt_account_unknown",
         "reason": reason,
         "at": "2024-07-01T00:00:00Z",
     }

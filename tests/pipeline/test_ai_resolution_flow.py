@@ -18,15 +18,19 @@ def _write_json(path: Path, payload: Any) -> None:
 @pytest.mark.parametrize(
     "flags,expected_decision,expected_pair",
     [
-        ({"account_match": True, "debt_match": True}, "merge", "same_account_pair"),
+        (
+            {"account_match": True, "debt_match": True},
+            "same_account_same_debt",
+            "same_account_pair",
+        ),
         (
             {"account_match": "true", "debt_match": "FALSE"},
-            "same_account_debt_diff",
+            "same_account_diff_debt",
             "same_account_pair",
         ),
         (
             {"account_match": "false", "debt_match": "true"},
-            "same_debt_account_diff",
+            "same_debt_diff_account",
             "same_debt_pair",
         ),
         (
@@ -86,7 +90,23 @@ def test_send_packs_normalizes_decisions(
     timestamp = "2024-07-01T00:00:00Z"
 
     def _fake_decide(pack: dict[str, Any], *, timeout: float) -> dict[str, Any]:
-        assert pack == pack_payload
+        messages = pack.get("messages")
+        expected_messages = pack_payload.get("messages")
+        assert isinstance(messages, list)
+        assert isinstance(expected_messages, list)
+        assert len(messages) == len(expected_messages)
+        assert messages[1:] == expected_messages[1:]
+        system_actual = messages[0]
+        system_expected = expected_messages[0]
+        assert isinstance(system_actual, dict)
+        assert isinstance(system_expected, dict)
+        assert system_actual.get("role") == system_expected.get("role")
+        actual_content = system_actual.get("content")
+        expected_content = system_expected.get("content")
+        assert isinstance(actual_content, str)
+        assert isinstance(expected_content, str)
+        assert actual_content.startswith(expected_content.strip())
+        assert "Debt rules:" in actual_content
         return {"decision": "merge", "reason": reason, "flags": dict(flags)}
 
     monkeypatch.setattr(send_ai_merge_packs, "decide_merge_or_different", _fake_decide)

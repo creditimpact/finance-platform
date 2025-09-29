@@ -424,26 +424,27 @@ def _serialize_match_flag(value: bool | str | object) -> bool | str:
 
 
 _DECISION_CONTRACT = [
-    "merge",
-    "same_debt",
-    "same_debt_account_diff",
-    "same_account",
-    "same_account_debt_diff",
+    "same_account_same_debt",
+    "same_account_diff_debt",
+    "same_account_debt_unknown",
+    "same_debt_diff_account",
+    "same_debt_account_unknown",
     "different",
 ]
 
 _DECISION_CONTRACT_TEXT = (
-    '"decision": ["merge", "same_debt", "same_debt_account_diff", '
-    '"same_account", "same_account_debt_diff", "different"]'
+    '"decision": ["same_account_same_debt", "same_account_diff_debt", '
+    '"same_account_debt_unknown", "same_debt_diff_account", '
+    '"same_debt_account_unknown", "different"]'
 )
 
 
 _PAIR_TAG_BY_DECISION: dict[str, str] = {
-    "same_account": "same_account_pair",
-    "same_account_debt_diff": "same_account_pair",
-    "merge": "same_account_pair",
-    "same_debt": "same_debt_pair",
-    "same_debt_account_diff": "same_debt_pair",
+    "same_account_same_debt": "same_account_pair",
+    "same_account_diff_debt": "same_account_pair",
+    "same_account_debt_unknown": "same_account_pair",
+    "same_debt_diff_account": "same_debt_pair",
+    "same_debt_account_unknown": "same_debt_pair",
 }
 
 _IDENTITY_PART_FIELDS = {

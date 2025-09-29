@@ -58,14 +58,17 @@ _ALLOWED_USER_PAYLOAD_KEYS: Iterable[str] = (
 )
 
 
-_ALLOWED_DECISIONS: tuple[str, ...] = (
+ALLOWED_DECISIONS: set[str] = {
     "same_account_same_debt",
     "same_account_diff_debt",
     "same_account_debt_unknown",
     "same_debt_diff_account",
     "same_debt_account_unknown",
     "different",
-)
+}
+
+ALLOWED_FLAGS_ACCOUNT: set[str] = {"true", "false", "unknown"}
+ALLOWED_FLAGS_DEBT: set[str] = {"true", "false", "unknown"}
 
 
 class AdjudicatorError(ValueError):
@@ -79,6 +82,13 @@ def _normalize_match_flag(value: object, *, field: str) -> bool | str:
         return value
     if isinstance(value, str):
         lowered = value.strip().lower()
+        allowed_values = (
+            ALLOWED_FLAGS_ACCOUNT if field == "account_match" else ALLOWED_FLAGS_DEBT
+        )
+        if lowered not in allowed_values:
+            raise AdjudicatorError(
+                f"AI adjudicator flags must set {field} to true, false, or \"unknown\""
+            )
         if lowered == "true":
             return True
         if lowered == "false":
@@ -103,8 +113,10 @@ def _decision_for_flags(
         "merge": "same_account_same_debt",
         "same_account": "same_account_debt_unknown",
         "same_account_debt_different": "same_account_diff_debt",
+        "same_account_debt_diff": "same_account_diff_debt",
         "same_debt": "same_debt_account_unknown",
         "same_debt_account_different": "same_debt_diff_account",
+        "same_debt_account_diff": "same_debt_diff_account",
     }
     requested_normalized = legacy_map.get(normalized_requested, normalized_requested)
 
@@ -126,7 +138,7 @@ def _decision_for_flags(
         return "different"
     if account_flag is False and debt_flag is False:
         return "different"
-    if requested_normalized in _ALLOWED_DECISIONS:
+    if requested_normalized in ALLOWED_DECISIONS:
         return requested_normalized
     return "different"
 
@@ -159,12 +171,12 @@ def _normalize_and_validate_decision(
     debt_flag = _normalize_match_flag(flags_raw.get("debt_match"), field="debt_match")
 
     normalized_decision = _decision_for_flags(account_flag, debt_flag, requested=decision_value)
-    if normalized_decision not in _ALLOWED_DECISIONS:
+    if normalized_decision not in ALLOWED_DECISIONS:
         raise AdjudicatorError("AI adjudicator decision was outside the allowed set")
 
     normalized_flags = {"account_match": account_flag, "debt_match": debt_flag}
 
-    normalized = decision_value not in _ALLOWED_DECISIONS or decision_value != normalized_decision
+    normalized = decision_value not in ALLOWED_DECISIONS or decision_value != normalized_decision
 
     normalized_payload: Dict[str, Any] = dict(resp)
     normalized_payload["decision"] = normalized_decision

@@ -470,8 +470,9 @@ def _ai_explanations_from_tag(
                 response_payload = existing_response
         if _has_value(response_payload):
             payload["raw_response"] = response_payload
+        ai_result_decision = normalized_decision if not decision else decision
         ai_result_payload: dict[str, object] = {
-            "decision": normalized_decision,
+            "decision": ai_result_decision,
             "flags": {key: final_flags[key] for key in ("account_match", "debt_match")},
         }
         if reason_text:
@@ -487,7 +488,7 @@ def _ai_explanations_from_tag(
         }
         if partner is not None:
             resolution_entry["with"] = partner
-        resolution_entry["decision"] = normalized_decision
+        resolution_entry["decision"] = ai_result_decision
         if reason_text is not None:
             resolution_entry["reason"] = reason_text
         entries.append(resolution_entry)

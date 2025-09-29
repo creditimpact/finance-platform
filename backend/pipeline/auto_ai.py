@@ -14,6 +14,7 @@ from typing import Iterable, Mapping, MutableMapping, Sequence
 
 from celery import shared_task
 
+from backend.core.ai.paths import get_merge_paths, probe_legacy_ai_packs
 from backend.core.logic.tags.compact import (
     compact_account_tags,
     compact_tags_for_sid,
@@ -24,17 +25,18 @@ from scripts.send_ai_merge_packs import main as send_ai_merge_packs_main
 
 logger = logging.getLogger(__name__)
 
-AUTO_AI_PIPELINE_DIRNAME = "ai_packs"
+AUTO_AI_PIPELINE_DIRNAME = Path("ai_packs") / "merge"
 INFLIGHT_LOCK_FILENAME = "inflight.lock"
 LAST_OK_FILENAME = "last_ok.json"
 DEFAULT_INFLIGHT_TTL_SECONDS = 30 * 60
 
 
 def packs_dir_for(sid: str, *, runs_root: Path | str | None = None) -> Path:
-    """Return the canonical ``ai_packs`` directory for ``sid``."""
+    """Return the canonical merge AI pipeline directory for ``sid``."""
 
     base = Path(runs_root) if runs_root is not None else RUNS_ROOT
-    return Path(base) / sid / AUTO_AI_PIPELINE_DIRNAME
+    merge_paths = get_merge_paths(base, sid, create=False)
+    return merge_paths["base"]
 
 
 def _lock_age_seconds(path: Path, *, now: float | None = None) -> float | None:
@@ -100,9 +102,11 @@ def maybe_queue_auto_ai_pipeline(
         return {"queued": False, "reason": "disabled"}
 
     runs_root_path = Path(runs_root)
-    packs_dir = packs_dir_for(sid, runs_root=runs_root_path)
-    lock_path = packs_dir / INFLIGHT_LOCK_FILENAME
-    last_ok_path = packs_dir / LAST_OK_FILENAME
+    merge_paths = get_merge_paths(runs_root_path, sid, create=True)
+    base_dir = merge_paths["base"]
+    packs_dir = merge_paths["packs_dir"]
+    lock_path = base_dir / INFLIGHT_LOCK_FILENAME
+    last_ok_path = base_dir / LAST_OK_FILENAME
 
     lock_exists = lock_path.exists()
     lock_age = _lock_age_seconds(lock_path, now=now) if lock_exists else None
@@ -153,7 +157,9 @@ def maybe_queue_auto_ai_pipeline(
         lock_payload["force"] = True
 
     try:
+        base_dir.mkdir(parents=True, exist_ok=True)
         packs_dir.mkdir(parents=True, exist_ok=True)
+        merge_paths["results_dir"].mkdir(parents=True, exist_ok=True)
         lock_path.write_text(json.dumps(lock_payload, ensure_ascii=False), encoding="utf-8")
     except OSError:  # pragma: no cover - defensive logging
         logger.warning("AUTO_AI_LOCK_WRITE_FAILED sid=%s path=%s", sid, lock_path)
@@ -190,7 +196,7 @@ def maybe_queue_auto_ai_pipeline(
     if task_id:
         payload["task_id"] = task_id
     payload["lock_path"] = str(lock_path)
-    payload["pipeline_dir"] = str(packs_dir)
+    payload["pipeline_dir"] = str(base_dir)
     payload["last_ok_path"] = str(last_ok_path)
     return payload
 
@@ -486,11 +492,11 @@ def _is_ai_merge_best_tag(tag: Mapping[str, object]) -> bool:
 def ai_inflight_lock(runs_root: Path, sid: str):
     """
     Prevents concurrent AI runs on the same SID.
-    Creates runs/<sid>/ai_packs/inflight.lock; removes it on exit.
+    Creates runs/<sid>/ai_packs/merge/inflight.lock; removes it on exit.
     """
 
-    ai_dir = packs_dir_for(sid, runs_root=runs_root)
-    ai_dir.mkdir(parents=True, exist_ok=True)
+    merge_paths = get_merge_paths(runs_root, sid, create=True)
+    ai_dir = merge_paths["base"]
     lock = ai_dir / INFLIGHT_LOCK_FILENAME
     if lock.exists():
         # Someone else is running; caller should skip.
@@ -554,8 +560,21 @@ def _run_auto_ai_pipeline(sid: str):
     _build_ai_packs(sid, RUNS_ROOT)
 
     manifest = RunManifest.for_sid(sid)
-    packs_dir = packs_dir_for(sid, runs_root=RUNS_ROOT)
-    index_path = packs_dir / "index.json"
+    merge_paths = get_merge_paths(RUNS_ROOT, sid, create=True)
+    base_dir = merge_paths["base"]
+    packs_dir = merge_paths["packs_dir"]
+    index_path = merge_paths["index_file"]
+
+    index_read_path = index_path
+    packs_source_dir = packs_dir
+    legacy_dir = None
+    if not index_read_path.exists():
+        legacy_dir = probe_legacy_ai_packs(RUNS_ROOT, sid)
+        if legacy_dir is not None:
+            legacy_index = legacy_dir / "index.json"
+            if legacy_index.exists():
+                index_read_path = legacy_index
+                packs_source_dir = legacy_dir
 
     manifest_pairs = 0
     ai_section = manifest.data.get("ai") if isinstance(manifest.data, dict) else {}
@@ -567,7 +586,7 @@ def _run_auto_ai_pipeline(sid: str):
             except (TypeError, ValueError):
                 manifest_pairs = 0
 
-    if not index_path.exists():
+    if not index_read_path.exists():
         if manifest_pairs > 0:
             logger.error(
                 "AUTO_AI_NO_PACKS_INDEX_MISSING sid=%s manifest_pairs=%d",
@@ -578,12 +597,14 @@ def _run_auto_ai_pipeline(sid: str):
         manifest.set_ai_skipped("no_packs")
         persist_manifest(manifest)
         logger.info(
-            "AUTO_AI_SKIP_NO_PACKS sid=%s packs_dir=%s (index missing)", sid, packs_dir
+            "AUTO_AI_SKIP_NO_PACKS sid=%s packs_dir=%s (index missing)",
+            sid,
+            packs_source_dir,
         )
         return {"sid": sid, "skipped": "no_packs"}
 
     try:
-        index_data = json.loads(index_path.read_text(encoding="utf-8"))
+        index_data = json.loads(index_read_path.read_text(encoding="utf-8"))
         if not isinstance(index_data, dict):
             index_data = {}
     except Exception as exc:
@@ -646,22 +667,26 @@ def _run_auto_ai_pipeline(sid: str):
         manifest.set_ai_skipped("no_packs")
         persist_manifest(manifest)
         logger.info(
-            "AUTO_AI_SKIP_NO_PACKS sid=%s packs_dir=%s (pairs_count=0)", sid, packs_dir
+            "AUTO_AI_SKIP_NO_PACKS sid=%s packs_dir=%s (pairs_count=0)",
+            sid,
+            packs_source_dir,
         )
         return {"sid": sid, "skipped": "no_packs"}
 
-    logger.info("AUTO_AI_PACKS_FOUND sid=%s dir=%s pairs=%d", sid, packs_dir, pairs_count)
+    logger.info(
+        "AUTO_AI_PACKS_FOUND sid=%s dir=%s pairs=%d", sid, packs_source_dir, pairs_count
+    )
     logger.info("AUTO_AI_BUILT sid=%s pairs=%d", sid, pairs_count)
-    manifest = manifest.set_ai_built(packs_dir, pairs_count)
+    manifest = manifest.set_ai_built(base_dir, pairs_count)
     persist_manifest(manifest)
 
     # === 3) send to AI (writes ai_decision / same_debt_pair)
-    argv = ["--sid", sid, "--packs-dir", str(packs_dir)]
+    argv = ["--sid", sid, "--packs-dir", str(packs_source_dir), "--runs-root", str(RUNS_ROOT)]
     send_ai_merge_packs_main(argv)
 
     manifest.set_ai_sent()
     persist_manifest(manifest)
-    logger.info("AUTO_AI_SENT sid=%s dir=%s", sid, packs_dir)
+    logger.info("AUTO_AI_SENT sid=%s dir=%s", sid, packs_source_dir)
 
     # === 4) compact tags (keep only tags; push explanations to summary.json)
     compact_tags_for_sid(sid)

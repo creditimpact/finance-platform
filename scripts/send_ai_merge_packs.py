@@ -28,6 +28,12 @@ from backend.core.ai.adjudicator import (
     _normalize_and_validate_decision,
     decide_merge_or_different,
 )
+from backend.core.ai.paths import (
+    get_merge_paths,
+    pair_pack_filename,
+    pair_result_filename,
+    probe_legacy_ai_packs,
+)
 from backend.core.io.tags import read_tags, upsert_tag
 from backend.core.logic.report_analysis.account_merge import (
     build_summary_ai_entries,
@@ -125,16 +131,6 @@ def _append_zero_debt_rules(pack: Mapping[str, object]) -> dict[str, object]:
         updated_pack["system"] = _DEBT_RULES_TEXT
 
     return updated_pack
-
-
-
-def _packs_dir_for(sid: str, runs_root: Path) -> Path:
-    """Return the canonical ``ai_packs`` directory for ``sid``."""
-
-    from backend.pipeline.auto_ai import packs_dir_for as _packs_dest  # local import to avoid cycles
-
-    return _packs_dest(sid, runs_root=runs_root)
-
 
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_BACKOFF_SCHEDULE = "1,3,7"
@@ -244,6 +240,21 @@ def _write_pack(path: Path, payload: Mapping[str, object]) -> None:
     path.write_text(f"{serialized}\n", encoding="utf-8")
 
 
+def _write_pack_with_shadow(
+    primary_path: Path, base_dir: Path, payload: Mapping[str, object]
+) -> None:
+    _write_pack(primary_path, payload)
+    if primary_path.parent != base_dir:
+        shadow_path = base_dir / primary_path.name
+        _write_pack(shadow_path, payload)
+
+
+def _write_result(path: Path, payload: Mapping[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(dict(payload), ensure_ascii=False, sort_keys=True)
+    path.write_text(f"{serialized}\n", encoding="utf-8")
+
+
 def _score_from_entry(entry: Mapping[str, object]) -> int:
     for key in ("score", "score_total"):
         value = entry.get(key)
@@ -271,9 +282,7 @@ def _build_index_payload(
         pack_entry["b"] = b_idx
         pack_entry["pair"] = [a_idx, b_idx]
         canonical_a, canonical_b = sorted((a_idx, b_idx))
-        pack_entry.setdefault(
-            "pack_file", f"pair_{canonical_a:03d}_{canonical_b:03d}.jsonl"
-        )
+        pack_entry.setdefault("pack_file", pair_pack_filename(canonical_a, canonical_b))
         pack_entry["score_total"] = score_value
         pack_entry["score"] = score_value
         packs_payload.append(pack_entry)
@@ -822,36 +831,111 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     manifest = RunManifest.for_sid(sid)
 
+    merge_paths = get_merge_paths(runs_root_path, sid, create=False)
+    base_dir = merge_paths["base"]
+    packs_dir = merge_paths["packs_dir"]
+    results_dir = merge_paths["results_dir"]
+    index_path = merge_paths["index_file"]
+    logs_path = merge_paths["log_file"]
+
+    def _apply_base_override(base_path: Path) -> None:
+        nonlocal base_dir, packs_dir, results_dir, index_path, logs_path
+        base_dir = base_path
+        packs_dir = base_dir / "packs"
+        results_dir = base_dir / "results"
+        index_path = base_dir / "index.json"
+        logs_path = base_dir / "logs.txt"
+
+    pack_candidates: list[Path] = []
+
     if args.packs_dir:
-        packs_dir = Path(args.packs_dir)
-        log.info("SENDER_PACKS_DIR_OVERRIDE sid=%s dir=%s", sid, packs_dir)
+        override_dir = Path(args.packs_dir)
+        if override_dir.name == "packs" and override_dir.parent.exists():
+            _apply_base_override(override_dir.parent)
+            pack_candidates.append(override_dir)
+        elif (override_dir / "packs").is_dir():
+            _apply_base_override(override_dir)
+            pack_candidates.append(override_dir / "packs")
+        else:
+            pack_candidates.append(override_dir)
+        log.info("SENDER_PACKS_DIR_OVERRIDE sid=%s dir=%s", sid, override_dir)
     else:
         preferred_dir = manifest.get_ai_packs_dir()
         if preferred_dir is not None:
-            packs_dir = Path(preferred_dir)
-            log.info("SENDER_PACKS_DIR_FROM_MANIFEST sid=%s dir=%s", sid, packs_dir)
-        else:
-            packs_dir = _packs_dir_for(sid, runs_root_path)
-            log.info("SENDER_PACKS_DIR_FALLBACK sid=%s dir=%s", sid, packs_dir)
+            preferred_path = Path(preferred_dir)
+            if preferred_path.name == "packs" and preferred_path.parent.exists():
+                _apply_base_override(preferred_path.parent)
+                pack_candidates.append(preferred_path)
+                log.info(
+                    "SENDER_PACKS_DIR_FROM_MANIFEST sid=%s dir=%s", sid, preferred_path
+                )
+            elif (preferred_path / "packs").is_dir():
+                _apply_base_override(preferred_path)
+                pack_candidates.append(preferred_path / "packs")
+                log.info(
+                    "SENDER_PACKS_BASE_FROM_MANIFEST sid=%s dir=%s",
+                    sid,
+                    preferred_path,
+                )
+            else:
+                pack_candidates.append(preferred_path)
+                log.info(
+                    "SENDER_PACKS_DIR_FROM_MANIFEST sid=%s dir=%s",
+                    sid,
+                    preferred_path,
+                )
+    pack_candidates.append(packs_dir)
 
-    if not packs_dir.exists():
-        raise SystemExit(f"No AI packs for SID (directory not found at {packs_dir})")
+    pack_dir = None
+    for candidate in pack_candidates:
+        if not candidate.exists():
+            continue
+        if any(candidate.glob("pair_*.jsonl")):
+            pack_dir = candidate
+            break
 
-    index_path = packs_dir / "index.json"
-    if not index_path.exists():
-        raise SystemExit(f"No AI packs for SID (index.json not found at {index_path})")
+    legacy_pack_dir = None
+    if pack_dir is None:
+        legacy_pack_dir = probe_legacy_ai_packs(runs_root_path, sid)
+        if legacy_pack_dir is not None:
+            pack_dir = legacy_pack_dir
+            log.info("SENDER_PACKS_DIR_LEGACY sid=%s dir=%s", sid, legacy_pack_dir)
 
-    pair_paths = sorted(packs_dir.glob("pair_*.jsonl"))
+    if pack_dir is None:
+        raise SystemExit(
+            "No AI packs for SID (no pair_*.jsonl files found in new or legacy layout)"
+        )
+
+    pair_paths = sorted(pack_dir.glob("pair_*.jsonl"))
     if not pair_paths:
-        raise SystemExit(f"No AI packs for SID (no pair_*.jsonl files at {packs_dir})")
+        raise SystemExit(f"No AI packs for SID (no pair_*.jsonl files at {pack_dir})")
+
+    if legacy_pack_dir is not None:
+        index_read_path = legacy_pack_dir / "index.json"
+    else:
+        index_read_path = index_path if index_path.exists() else None
+        if index_read_path is None:
+            candidate_index_paths = [pack_dir.parent / "index.json", pack_dir / "index.json"]
+            for candidate in candidate_index_paths:
+                if candidate.exists():
+                    index_read_path = candidate
+                    break
+
+    if index_read_path is None or not index_read_path.exists():
+        raise SystemExit(
+            f"No AI packs for SID (index.json not found for base {base_dir})"
+        )
+
+    base_dir.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    logs_path.parent.mkdir(parents=True, exist_ok=True)
 
     run_dir = manifest.path.parent
 
-    index_data, index_entries = _load_index_payload(index_path)
-    logs_path = packs_dir / "logs.txt"
+    index_data, index_entries = _load_index_payload(index_read_path)
 
     manifest.update_ai_packs(
-        dir=packs_dir,
+        dir=base_dir,
         index=index_path,
         logs=logs_path,
         pairs=len(pair_paths),
@@ -892,6 +976,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         if isinstance(ai_result_existing, MappingABC):
             entry["ai_result"] = dict(ai_result_existing)
             entry.pop("error", None)
+            try:
+                a_int = _ensure_int(a_idx, "a_idx")
+                b_int = _ensure_int(b_idx, "b_idx")
+            except (TypeError, ValueError):
+                pass
+            else:
+                result_path = results_dir / pair_result_filename(a_int, b_int)
+                _write_result(result_path, dict(ai_result_existing))
             pack_log("PACK_SKIP", {"reason": "ai_result_present"})
             successes += 1
             continue
@@ -969,7 +1061,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             error_payload = {"kind": error_name, "message": message}
             pack["ai_error"] = error_payload
             pack.pop("ai_result", None)
-            _write_pack(pack_path, pack)
+            _write_pack_with_shadow(pack_path, base_dir, pack)
             entry["error"] = dict(error_payload)
             entry.pop("ai_result", None)
             failures += 1
@@ -1022,6 +1114,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             ),
             "debt_match": _serialize_match_flag(flags_normalized.get("debt_match")),
         }
+        flags_for_storage = {
+            "account_match": flags_normalized.get("account_match"),
+            "debt_match": flags_normalized.get("debt_match"),
+        }
 
         if decision not in ALLOWED_DECISIONS:
             raise AdjudicatorError(
@@ -1066,11 +1162,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         ai_result_payload = {
             "decision": decision,
             "reason": reason,
-            "flags": dict(flags_serialized),
+            "flags": dict(flags_for_storage),
         }
         pack["ai_result"] = ai_result_payload
         pack.pop("ai_error", None)
-        _write_pack(pack_path, pack)
+        _write_pack_with_shadow(pack_path, base_dir, pack)
         entry["ai_result"] = dict(ai_result_payload)
         entry.pop("error", None)
 
@@ -1091,6 +1187,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "reason": reason,
             },
         )
+        result_path = results_dir / pair_result_filename(a_int, b_int)
+        _write_result(result_path, ai_result_payload)
         successes += 1
 
     index_payload = _build_index_payload(sid, index_data, index_entries)

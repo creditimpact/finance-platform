@@ -11,11 +11,10 @@ from typing import Mapping, MutableMapping
 
 from celery import chain, shared_task
 
+from backend.core.ai.paths import get_merge_paths, probe_legacy_ai_packs
 from backend.pipeline.auto_ai import (
-    AUTO_AI_PIPELINE_DIRNAME,
     INFLIGHT_LOCK_FILENAME,
     LAST_OK_FILENAME,
-    packs_dir_for,
     _build_ai_packs,
     _compact_accounts,
     _indices_from_index,
@@ -42,7 +41,8 @@ def _append_run_log_entry(
 ) -> None:
     """Append a compact JSON line describing the AI run outcome."""
 
-    logs_path = packs_dir_for(sid, runs_root=runs_root) / "logs.txt"
+    merge_paths = get_merge_paths(runs_root, sid, create=True)
+    logs_path = merge_paths["log_file"]
     entry = {
         "sid": sid,
         "at": datetime.now(timezone.utc).isoformat(),
@@ -63,14 +63,30 @@ def _append_run_log_entry(
     if reason:
         entry["reason"] = reason
 
+    serialized_entry = json.dumps(entry, ensure_ascii=False) + "\n"
+
     try:
         logs_path.parent.mkdir(parents=True, exist_ok=True)
         with logs_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            handle.write(serialized_entry)
     except Exception:  # pragma: no cover - defensive logging
         logger.warning(
             "AUTO_AI_LOG_APPEND_FAILED sid=%s path=%s", sid, logs_path, exc_info=True
         )
+
+    legacy_logs_path = runs_root / sid / "ai_packs" / "logs.txt"
+    if legacy_logs_path != logs_path:
+        try:
+            legacy_logs_path.parent.mkdir(parents=True, exist_ok=True)
+            with legacy_logs_path.open("a", encoding="utf-8") as handle:
+                handle.write(serialized_entry)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.debug(
+                "AUTO_AI_LOG_LEGACY_WRITE_FAILED sid=%s path=%s",
+                sid,
+                legacy_logs_path,
+                exc_info=True,
+            )
 
 
 
@@ -91,7 +107,7 @@ def _resolve_runs_root(payload: Mapping[str, object], sid: str) -> Path:
 
     default_root = Path("runs")
 
-    pipeline_dir = packs_dir_for(sid, runs_root=default_root)
+    pipeline_dir = get_merge_paths(default_root, sid, create=False)["base"]
     lock_path = pipeline_dir / INFLIGHT_LOCK_FILENAME
     if lock_path.exists():
         try:
@@ -134,7 +150,8 @@ def _populate_common_paths(payload: MutableMapping[str, object]) -> None:
 
     runs_root = _resolve_runs_root(payload, sid)
     accounts_dir = runs_root / sid / "cases" / "accounts"
-    pipeline_dir = packs_dir_for(sid, runs_root=runs_root)
+    merge_paths = get_merge_paths(runs_root, sid, create=True)
+    pipeline_dir = merge_paths["base"]
     lock_path = pipeline_dir / INFLIGHT_LOCK_FILENAME
     last_ok_path = pipeline_dir / LAST_OK_FILENAME
 
@@ -238,7 +255,14 @@ def ai_build_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, ob
         _cleanup_lock(payload, reason="build_failed")
         raise
 
-    index_path = packs_dir_for(sid, runs_root=runs_root) / "index.json"
+    merge_paths = get_merge_paths(runs_root, sid, create=True)
+    index_path = merge_paths["index_file"]
+    if not index_path.exists():
+        legacy_dir = probe_legacy_ai_packs(runs_root, sid)
+        if legacy_dir is not None:
+            legacy_index = legacy_dir / "index.json"
+            if legacy_index.exists():
+                index_path = legacy_index
     try:
         index_entries = _load_ai_index(index_path)
     except Exception:  # pragma: no cover - defensive logging

@@ -310,9 +310,11 @@ def _build_request_payload(pack: dict) -> tuple[str, dict[str, Any], dict[str, s
         raise RuntimeError("OPENAI_API_KEY is required when AI adjudication is enabled")
 
     model = merge_config.get_ai_model()
-    temperature = _coerce_float(
-        os.getenv("AI_TEMPERATURE_DEFAULT"), getattr(config, "AI_TEMPERATURE_DEFAULT", 0.0)
-    )
+    # Adjudicator requests must be deterministic to ensure parity with the
+    # manual workflow. Force zero temperature and unity top_p rather than
+    # permitting environment overrides that might introduce randomness.
+    temperature = 0.0
+    top_p = 1.0
     max_tokens = _coerce_positive_int(
         os.getenv("AI_MAX_TOKENS"), getattr(config, "AI_MAX_TOKENS", 600)
     )
@@ -321,6 +323,7 @@ def _build_request_payload(pack: dict) -> tuple[str, dict[str, Any], dict[str, s
         "model": model,
         "messages": messages,
         "temperature": temperature,
+        "top_p": top_p,
         "max_tokens": max_tokens,
         "response_format": {"type": "json_object"},
     }
@@ -333,6 +336,7 @@ def _build_request_payload(pack: dict) -> tuple[str, dict[str, Any], dict[str, s
     metadata = {
         "model": model,
         "temperature": temperature,
+        "top_p": top_p,
         "max_tokens": max_tokens,
     }
 

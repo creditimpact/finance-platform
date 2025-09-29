@@ -38,6 +38,7 @@ class AIClient:
         messages: List[Dict[str, Any]],
         model: str | None = None,
         temperature: float = 0,
+        top_p: float = 1,
         **kwargs: Any,
     ):
         """Proxy to ``chat.completions.create``."""
@@ -54,8 +55,26 @@ class AIClient:
             if sanitized:
                 kwargs["extra_headers"] = sanitized
 
+        # Enforce deterministic parameters regardless of caller provided values.
+        if "frequency_penalty" in kwargs:
+            kwargs.pop("frequency_penalty")
+        if "presence_penalty" in kwargs:
+            kwargs.pop("presence_penalty")
+        if "top_p" in kwargs:
+            kwargs.pop("top_p")
+
+        frequency_penalty = 0
+        presence_penalty = 0
+        top_p_value = top_p
+
         return self._client.chat.completions.create(
-            model=model, messages=messages, temperature=temperature, **kwargs
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            top_p=top_p_value,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty,
+            **kwargs,
         )
 
     def response_json(

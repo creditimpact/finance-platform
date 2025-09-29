@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, MutableMapping
 
 from celery import chain, shared_task
 
-from backend.core.ai.paths import get_merge_paths, probe_legacy_ai_packs
+from backend.core.ai.paths import ensure_merge_paths, probe_legacy_ai_packs
 from backend.pipeline.auto_ai import (
     INFLIGHT_LOCK_FILENAME,
     LAST_OK_FILENAME,
@@ -23,12 +24,207 @@ from backend.pipeline.auto_ai import (
     _send_ai_packs,
     has_ai_merge_best_pairs,
 )
+from backend.core.ai.validators import validate_ai_result
+from backend.core.io.tags import read_tags, upsert_tag
 from scripts.score_bureau_pairs import score_accounts
 
 LEGACY_PIPELINE_DIRNAME = "ai_packs"
 LEGACY_MARKER_FILENAME = "auto_ai_pipeline_in_progress.json"
 
 logger = logging.getLogger(__name__)
+
+
+_PAIR_TAG_BY_DECISION: dict[str, str] = {
+    "same_account_same_debt": "same_account_pair",
+    "same_account_diff_debt": "same_account_pair",
+    "same_account_debt_unknown": "same_account_pair",
+    "same_debt_diff_account": "same_debt_pair",
+    "same_debt_account_unknown": "same_debt_pair",
+}
+
+_RESULT_FILENAME_PATTERN = re.compile(r"^pair_(\d{3})_(\d{3})\.result\.json$")
+
+
+def _isoformat_timestamp(now: datetime | None = None) -> str:
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    else:
+        current = current.astimezone(timezone.utc)
+    return current.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _serialize_match_flag(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "false", "unknown"}:
+            return lowered
+    return "unknown"
+
+
+def _load_ai_results(results_dir: Path) -> list[tuple[int, int, dict[str, object]]]:
+    if not results_dir.exists():
+        return []
+
+    pairs: list[tuple[int, int, dict[str, object]]] = []
+    for path in sorted(results_dir.glob("pair_*.result.json")):
+        match = _RESULT_FILENAME_PATTERN.match(path.name)
+        if not match:
+            logger.debug("AUTO_AI_RESULT_SKIP_UNMATCHED path=%s", path)
+            continue
+
+        try:
+            a_idx = int(match.group(1))
+            b_idx = int(match.group(2))
+        except (TypeError, ValueError):
+            logger.debug("AUTO_AI_RESULT_SKIP_PARSE path=%s", path)
+            continue
+
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            logger.warning("AUTO_AI_RESULT_INVALID_JSON path=%s", path, exc_info=True)
+            continue
+
+        if not isinstance(loaded, Mapping):
+            logger.warning("AUTO_AI_RESULT_INVALID_TYPE path=%s", path)
+            continue
+
+        payload = dict(loaded)
+        flags_obj = payload.get("flags")
+        if not isinstance(flags_obj, Mapping):
+            logger.warning("AUTO_AI_RESULT_MISSING_FLAGS path=%s", path)
+            continue
+
+        try:
+            valid, error = validate_ai_result(
+                {"decision": payload.get("decision"), "reason": payload.get("reason"), "flags": dict(flags_obj)}
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            logger.warning("AUTO_AI_RESULT_VALIDATION_ERROR path=%s", path, exc_info=True)
+            continue
+
+        if not valid:
+            logger.warning(
+                "AUTO_AI_RESULT_INVALID sid_pair=%s_%s path=%s error=%s",
+                a_idx,
+                b_idx,
+                path,
+                error or "unknown",
+            )
+            continue
+
+        payload["flags"] = dict(flags_obj)
+        pairs.append((a_idx, b_idx, payload))
+
+    return pairs
+
+
+def _prune_pair_tags(tag_path: Path, other_idx: int, *, keep_kind: str | None) -> None:
+    existing_tags = read_tags(tag_path)
+    if not existing_tags:
+        return
+
+    filtered: list[dict[str, object]] = []
+    modified = False
+    for entry in existing_tags:
+        kind = str(entry.get("kind", "")).strip().lower()
+        if kind not in {"same_account_pair", "same_debt_pair"}:
+            filtered.append(dict(entry))
+            continue
+
+        source = str(entry.get("source", ""))
+        if source != "ai_adjudicator":
+            filtered.append(dict(entry))
+            continue
+
+        partner_raw = entry.get("with")
+        try:
+            partner_val = int(partner_raw) if partner_raw is not None else None
+        except (TypeError, ValueError):
+            partner_val = None
+
+        if partner_val != other_idx:
+            filtered.append(dict(entry))
+            continue
+
+        if keep_kind is not None and kind == keep_kind:
+            filtered.append(dict(entry))
+            continue
+
+        modified = True
+
+    if not modified:
+        return
+
+    tag_path.write_text(json.dumps(filtered, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _apply_ai_result_to_accounts(
+    accounts_dir: Path, a_idx: int, b_idx: int, payload: Mapping[str, object]
+) -> None:
+    decision_raw = payload.get("decision")
+    decision = str(decision_raw).strip().lower() if isinstance(decision_raw, str) else ""
+    reason_raw = payload.get("reason")
+    if isinstance(reason_raw, str):
+        reason = reason_raw.strip()
+    elif reason_raw is None:
+        reason = ""
+    else:
+        reason = str(reason_raw)
+
+    flags_raw = payload.get("flags")
+    flags_serialized: dict[str, str] | None = None
+    if isinstance(flags_raw, Mapping):
+        flags_serialized = {
+            "account_match": _serialize_match_flag(flags_raw.get("account_match")),
+            "debt_match": _serialize_match_flag(flags_raw.get("debt_match")),
+        }
+
+    timestamp = _isoformat_timestamp()
+    pair_tag_kind = _PAIR_TAG_BY_DECISION.get(decision)
+
+    normalized_raw = payload.get("normalized")
+    normalized_flag = normalized_raw if isinstance(normalized_raw, bool) else None
+    raw_response = payload.get("raw_response") if isinstance(payload.get("raw_response"), Mapping) else None
+
+    for source_idx, other_idx in ((a_idx, b_idx), (b_idx, a_idx)):
+        account_dir = accounts_dir / f"{source_idx}"
+        account_dir.mkdir(parents=True, exist_ok=True)
+        tag_path = account_dir / "tags.json"
+
+        decision_tag: dict[str, object] = {
+            "kind": "ai_decision",
+            "tag": "ai_decision",
+            "source": "ai_adjudicator",
+            "with": other_idx,
+            "decision": decision,
+            "reason": reason,
+            "at": timestamp,
+        }
+        if flags_serialized is not None:
+            decision_tag["flags"] = dict(flags_serialized)
+        if normalized_flag is not None:
+            decision_tag["normalized"] = normalized_flag
+        if raw_response is not None:
+            decision_tag["raw_response"] = dict(raw_response)
+
+        upsert_tag(tag_path, decision_tag, unique_keys=("kind", "with", "source"))
+
+        if pair_tag_kind is not None:
+            pair_tag = {
+                "kind": pair_tag_kind,
+                "with": other_idx,
+                "source": "ai_adjudicator",
+                "reason": reason,
+                "at": timestamp,
+            }
+            upsert_tag(tag_path, pair_tag, unique_keys=("kind", "with", "source"))
+            _prune_pair_tags(tag_path, other_idx, keep_kind=pair_tag_kind)
+        else:
+            _prune_pair_tags(tag_path, other_idx, keep_kind=None)
 
 
 def _append_run_log_entry(
@@ -41,7 +237,7 @@ def _append_run_log_entry(
 ) -> None:
     """Append a compact JSON line describing the AI run outcome."""
 
-    merge_paths = get_merge_paths(runs_root, sid, create=True)
+    merge_paths = ensure_merge_paths(runs_root, sid, create=True)
     logs_path = merge_paths.log_file
     entry = {
         "sid": sid,
@@ -107,7 +303,7 @@ def _resolve_runs_root(payload: Mapping[str, object], sid: str) -> Path:
 
     default_root = Path("runs")
 
-    pipeline_dir = get_merge_paths(default_root, sid, create=False)["base"]
+    pipeline_dir = ensure_merge_paths(default_root, sid, create=False).base
     lock_path = pipeline_dir / INFLIGHT_LOCK_FILENAME
     if lock_path.exists():
         try:
@@ -150,7 +346,7 @@ def _populate_common_paths(payload: MutableMapping[str, object]) -> None:
 
     runs_root = _resolve_runs_root(payload, sid)
     accounts_dir = runs_root / sid / "cases" / "accounts"
-    merge_paths = get_merge_paths(runs_root, sid, create=True)
+    merge_paths = ensure_merge_paths(runs_root, sid, create=True)
     pipeline_dir = merge_paths.base
     lock_path = pipeline_dir / INFLIGHT_LOCK_FILENAME
     last_ok_path = pipeline_dir / LAST_OK_FILENAME
@@ -255,7 +451,7 @@ def ai_build_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, ob
         _cleanup_lock(payload, reason="build_failed")
         raise
 
-    merge_paths = get_merge_paths(runs_root, sid, create=True)
+    merge_paths = ensure_merge_paths(runs_root, sid, create=True)
     index_path = merge_paths.index_file
     if not index_path.exists():
         legacy_dir = probe_legacy_ai_packs(runs_root, sid)
@@ -327,7 +523,34 @@ def ai_compact_tags_step(self, prev: Mapping[str, object] | None) -> dict[str, o
 
     accounts_dir_value = payload.get("accounts_dir")
     accounts_dir = Path(str(accounts_dir_value)) if accounts_dir_value else None
-    indices = sorted(_normalize_indices(payload.get("touched_accounts", [])))
+    runs_root_value = payload.get("runs_root")
+    runs_root = Path(str(runs_root_value)) if runs_root_value else None
+
+    indices_set: set[int] = set(_normalize_indices(payload.get("touched_accounts", [])))
+
+    result_pairs: list[tuple[int, int, dict[str, object]]] = []
+    if runs_root is not None:
+        try:
+            merge_paths = ensure_merge_paths(runs_root, sid, create=True)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.error(
+                "AUTO_AI_RESULTS_PATH_FAILED sid=%s runs_root=%s", sid, runs_root, exc_info=True
+            )
+        else:
+            result_pairs = _load_ai_results(merge_paths.results_dir)
+
+    if result_pairs and accounts_dir is None:
+        logger.warning("AUTO_AI_RESULTS_NO_ACCOUNTS_DIR sid=%s", sid)
+
+    if result_pairs and accounts_dir is not None:
+        for a_idx, b_idx, result_payload in result_pairs:
+            _apply_ai_result_to_accounts(accounts_dir, a_idx, b_idx, result_payload)
+            indices_set.add(int(a_idx))
+            indices_set.add(int(b_idx))
+        logger.info("AI_RESULTS_APPLIED sid=%s count=%d", sid, len(result_pairs))
+
+    indices = sorted(indices_set)
+    payload["touched_accounts"] = indices
 
     logger.info("AI_COMPACT_START sid=%s accounts=%d", sid, len(indices))
 

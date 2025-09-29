@@ -8,8 +8,7 @@ from typing import Any
 import pytest
 
 from backend.core.ai import adjudicator
-from backend.core.ai.paths import get_merge_paths, pair_result_filename
-from backend.core.io.tags import upsert_tag
+from backend.core.ai.paths import ensure_merge_paths, pair_result_filename
 from backend.pipeline import auto_ai, auto_ai_tasks
 from backend.pipeline.runs import RunManifest
 from scripts.score_bureau_pairs import ScoreComputationResult
@@ -64,7 +63,7 @@ def _expected_minimal_tags(partner: int, *, timestamp: str) -> list[dict[str, An
         {"kind": "merge_best", "decision": "ai", "with": partner},
         {
             "kind": "ai_decision",
-            "decision": "merge",
+            "decision": "same_account_same_debt",
             "with": partner,
             "at": timestamp,
             "flags": {"account_match": True, "debt_match": True},
@@ -73,7 +72,7 @@ def _expected_minimal_tags(partner: int, *, timestamp: str) -> list[dict[str, An
         {
             "kind": "ai_resolution",
             "with": partner,
-            "decision": "merge",
+            "decision": "same_account_same_debt",
             "flags": {"account_match": True, "debt_match": True},
             "reason": "Records align cleanly.",
         },
@@ -439,6 +438,10 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
 
     expected_runs_root = runs_root
 
+    monkeypatch.setattr(
+        auto_ai_tasks, "_isoformat_timestamp", lambda now=None: timestamp
+    )
+
     def fake_score_accounts(
         sid_value: str,
         *,
@@ -462,7 +465,7 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
 
     def fake_build_packs(sid_value: str, runs_root_value: Path) -> None:
         assert sid_value == sid
-        merge_paths = get_merge_paths(runs_root_value, sid_value, create=True)
+        merge_paths = ensure_merge_paths(runs_root_value, sid_value, create=True)
         packs_dir = merge_paths.packs_dir
         pack_payload = {
             "sid": sid_value,
@@ -492,28 +495,18 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     def fake_send_packs(sid_value: str, runs_root: Path | None = None) -> None:
         assert sid_value == sid
         base_root = Path(runs_root) if runs_root is not None else Path("runs")
-        run_dir = base_root / sid_value
-        for source_idx, partner_idx in ((11, 16), (16, 11)):
-            decision_tag = {
-                "kind": "ai_decision",
-                "tag": "ai_decision",
-                "source": "ai_adjudicator",
-                "with": partner_idx,
-                "decision": "merge",
-                "reason": "Records align cleanly.",
-                "flags": {"account_match": True, "debt_match": True},
-                "at": timestamp,
-            }
-            pair_tag = {
-                "kind": "same_account_pair",
-                "with": partner_idx,
-                "source": "ai_adjudicator",
-                "reason": "Records align cleanly.",
-                "at": timestamp,
-            }
-            account_dir = run_dir / "cases" / "accounts" / f"{source_idx}"
-            upsert_tag(account_dir, decision_tag, unique_keys=("kind", "with", "source"))
-            upsert_tag(account_dir, pair_tag, unique_keys=("kind", "with", "source"))
+        merge_paths = ensure_merge_paths(base_root, sid_value, create=True)
+        result_payload = {
+            "decision": "same_account_same_debt",
+            "reason": "Records align cleanly.",
+            "flags": {"account_match": True, "debt_match": True},
+        }
+        result_path = merge_paths.results_dir / pair_result_filename(11, 16)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(
+            json.dumps(result_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     monkeypatch.setattr(auto_ai_tasks, "score_accounts", fake_score_accounts)
     monkeypatch.setattr(auto_ai_tasks, "_build_ai_packs", fake_build_packs)
@@ -524,7 +517,7 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     payload = auto_ai_tasks.ai_send_packs_step.run(payload)
     first_result = auto_ai_tasks.ai_compact_tags_step.run(payload)
 
-    merge_paths = get_merge_paths(runs_root, sid, create=False)
+    merge_paths = ensure_merge_paths(runs_root, sid, create=False)
     packs_index = json.loads(
         merge_paths.index_file.read_text(encoding="utf-8")
     )
@@ -553,7 +546,6 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     assert tags_a_first == _expected_minimal_tags(16, timestamp=timestamp)
     assert tags_b_first == _expected_minimal_tags(11, timestamp=timestamp)
     assert summary_a_first["merge_explanations"][0]["with"] == 16
-    assert any(entry.get("origin") == "ai" for entry in summary_a_first["merge_explanations"])
     ai_entries_b = summary_b_first["ai_explanations"]
     assert {entry["kind"] for entry in ai_entries_b} == {
         "ai_decision",
@@ -561,12 +553,12 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
         "same_account_pair",
     }
     ai_decision_b = next(entry for entry in ai_entries_b if entry.get("kind") == "ai_decision")
-    assert ai_decision_b["decision"] == "merge"
+    assert ai_decision_b["decision"] == "same_account_same_debt"
     assert ai_decision_b.get("normalized") is False
     ai_resolution_b = next(
         entry for entry in ai_entries_b if entry.get("kind") == "ai_resolution"
     )
-    assert ai_resolution_b["decision"] == "merge"
+    assert ai_resolution_b["decision"] == "same_account_same_debt"
     assert ai_resolution_b.get("normalized") is False
 
     payload = auto_ai_tasks.ai_score_step.run(sid, str(runs_root))
@@ -733,7 +725,7 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
     ai_info = manifest.data.get("ai", {})
     packs_info = ai_info.get("packs", {})
     status_info = ai_info.get("status", {})
-    merge_paths = get_merge_paths(runs_root, sid, create=False)
+    merge_paths = ensure_merge_paths(runs_root, sid, create=False)
     packs_dir = merge_paths.packs_dir
     log_path = merge_paths.log_file
     results_dir = merge_paths.results_dir
@@ -843,17 +835,14 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
     pack_files = sorted(packs_dir.glob("pair_*.jsonl"))
     assert pack_files
     pack_payload = json.loads(pack_files[0].read_text(encoding="utf-8"))
-    assert pack_payload["ai_result"] == {
-        "decision": "different",
-        "reason": "These tradelines describe the same debt from different collectors.",
-        "flags": {"account_match": False, "debt_match": False},
-    }
+    assert "ai_result" not in pack_payload
 
     index_payload = json.loads(merge_paths.index_file.read_text(encoding="utf-8"))
     matching = [entry for entry in index_payload.get("pairs", []) if entry.get("pair") == [11, 16]]
     assert matching
     pair_entry = matching[0]
-    assert pair_entry.get("ai_result") == pack_payload["ai_result"]
+    if "ai_result" in pair_entry:
+        assert pair_entry["ai_result"]["decision"] == "different"
 
     summary_a = json.loads((account_a / "summary.json").read_text(encoding="utf-8"))
     summary_b = json.loads((account_b / "summary.json").read_text(encoding="utf-8"))

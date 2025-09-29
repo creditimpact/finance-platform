@@ -15,6 +15,7 @@ from typing import Iterable, Mapping, MutableMapping, Sequence
 from celery import shared_task
 
 from backend.core.ai.paths import ensure_merge_paths, probe_legacy_ai_packs
+from backend.core.logic.intra_polarity import analyze_account_polarity
 from backend.core.logic.tags.compact import (
     compact_account_tags,
     compact_tags_for_sid,
@@ -37,6 +38,25 @@ def packs_dir_for(sid: str, *, runs_root: Path | str | None = None) -> Path:
     base = Path(runs_root) if runs_root is not None else RUNS_ROOT
     merge_paths = ensure_merge_paths(base, sid, create=False)
     return merge_paths.base
+
+
+def polarity_phase_for_all_accounts(sid: str, *, runs_root: Path | str | None = None) -> None:
+    """Run polarity analysis for each account belonging to ``sid``."""
+
+    base_root = Path(runs_root) if runs_root is not None else RUNS_ROOT
+    accounts_root = base_root / sid / "cases" / "accounts"
+    if not accounts_root.exists():
+        return
+
+    for account_dir in sorted(accounts_root.iterdir()):
+        if not account_dir.is_dir():
+            continue
+        try:
+            analyze_account_polarity(sid, account_dir)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception(
+                "POLARITY_PHASE_FAILED sid=%s account_dir=%s", sid, account_dir
+            )
 
 
 def _lock_age_seconds(path: Path, *, now: float | None = None) -> float | None:
@@ -688,7 +708,10 @@ def _run_auto_ai_pipeline(sid: str):
     persist_manifest(manifest)
     logger.info("AUTO_AI_SENT sid=%s dir=%s", sid, packs_source_dir)
 
-    # === 4) compact tags (keep only tags; push explanations to summary.json)
+    # === 4) polarity phase (updates per-bureau polarity assessments)
+    polarity_phase_for_all_accounts(sid, runs_root=RUNS_ROOT)
+
+    # === 5) compact tags (keep only tags; push explanations to summary.json)
     compact_tags_for_sid(sid)
     manifest.set_ai_compacted()
     persist_manifest(manifest)

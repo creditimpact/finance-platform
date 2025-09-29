@@ -39,13 +39,16 @@ def test_analyze_account_polarity_updates_summary(account_dir: Path) -> None:
     result = analyze_account_polarity("sid123", account_dir)
 
     assert result == {
-        "balance_owed": {
-            "transunion": {"polarity": "bad", "severity": "high"},
-            "experian": {"polarity": "good", "severity": "medium"},
-        },
-        "payment_status": {
-            "transunion": {"polarity": "bad", "severity": "high"},
-            "experian": {"polarity": "good", "severity": "medium"},
+        "schema_version": 1,
+        "bureaus": {
+            "transunion": {
+                "balance_owed": {"polarity": "bad", "severity": "high"},
+                "payment_status": {"polarity": "bad", "severity": "high"},
+            },
+            "experian": {
+                "balance_owed": {"polarity": "good", "severity": "medium"},
+                "payment_status": {"polarity": "good", "severity": "medium"},
+            },
         },
     }
 

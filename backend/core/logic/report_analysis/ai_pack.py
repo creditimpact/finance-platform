@@ -514,7 +514,7 @@ def build_ai_pack_for_pair(
     raw_b_path = accounts_root / str(account_b) / "raw_lines.json"
 
     merge_paths = get_merge_paths(runs_root_path, sid_str, create=True)
-    packs_dir = merge_paths["packs_dir"]
+    packs_dir = merge_paths.packs_dir
 
     first_idx, second_idx = sorted((account_a, account_b))
     pack_path = packs_dir / pair_pack_filename(first_idx, second_idx)

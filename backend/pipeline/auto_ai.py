@@ -36,7 +36,7 @@ def packs_dir_for(sid: str, *, runs_root: Path | str | None = None) -> Path:
 
     base = Path(runs_root) if runs_root is not None else RUNS_ROOT
     merge_paths = get_merge_paths(base, sid, create=False)
-    return merge_paths["base"]
+    return merge_paths.base
 
 
 def _lock_age_seconds(path: Path, *, now: float | None = None) -> float | None:
@@ -103,8 +103,8 @@ def maybe_queue_auto_ai_pipeline(
 
     runs_root_path = Path(runs_root)
     merge_paths = get_merge_paths(runs_root_path, sid, create=True)
-    base_dir = merge_paths["base"]
-    packs_dir = merge_paths["packs_dir"]
+    base_dir = merge_paths.base
+    packs_dir = merge_paths.packs_dir
     lock_path = base_dir / INFLIGHT_LOCK_FILENAME
     last_ok_path = base_dir / LAST_OK_FILENAME
 
@@ -159,7 +159,7 @@ def maybe_queue_auto_ai_pipeline(
     try:
         base_dir.mkdir(parents=True, exist_ok=True)
         packs_dir.mkdir(parents=True, exist_ok=True)
-        merge_paths["results_dir"].mkdir(parents=True, exist_ok=True)
+        merge_paths.results_dir.mkdir(parents=True, exist_ok=True)
         lock_path.write_text(json.dumps(lock_payload, ensure_ascii=False), encoding="utf-8")
     except OSError:  # pragma: no cover - defensive logging
         logger.warning("AUTO_AI_LOCK_WRITE_FAILED sid=%s path=%s", sid, lock_path)
@@ -496,7 +496,7 @@ def ai_inflight_lock(runs_root: Path, sid: str):
     """
 
     merge_paths = get_merge_paths(runs_root, sid, create=True)
-    ai_dir = merge_paths["base"]
+    ai_dir = merge_paths.base
     lock = ai_dir / INFLIGHT_LOCK_FILENAME
     if lock.exists():
         # Someone else is running; caller should skip.
@@ -561,9 +561,9 @@ def _run_auto_ai_pipeline(sid: str):
 
     manifest = RunManifest.for_sid(sid)
     merge_paths = get_merge_paths(RUNS_ROOT, sid, create=True)
-    base_dir = merge_paths["base"]
-    packs_dir = merge_paths["packs_dir"]
-    index_path = merge_paths["index_file"]
+    base_dir = merge_paths.base
+    packs_dir = merge_paths.packs_dir
+    index_path = merge_paths.index_file
 
     index_read_path = index_path
     packs_source_dir = packs_dir

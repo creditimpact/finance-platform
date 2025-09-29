@@ -353,9 +353,9 @@ def test_build_ai_merge_packs_cli_updates_manifest(
     log_messages = [record.getMessage() for record in caplog.records]
 
     merge_paths = get_merge_paths(runs_root, sid, create=False)
-    merge_base = merge_paths["base"]
-    packs_dir = merge_paths["packs_dir"]
-    index_path = merge_paths["index_file"]
+    merge_base = merge_paths.base
+    packs_dir = merge_paths.packs_dir
+    index_path = merge_paths.index_file
     manifest_path = runs_root / sid / "manifest.json"
 
     assert any(f"PACKS_DIR_USED sid={sid}" in message for message in log_messages)
@@ -391,9 +391,9 @@ def test_build_ai_merge_packs_cli_updates_manifest(
     pack_path = packs_dir / pair_entry["pack_file"]
     assert pack_path.exists()
 
-    logs_path = merge_paths["log_file"]
+    logs_path = merge_paths.log_file
     assert not logs_path.exists()
-    results_dir = merge_paths["results_dir"]
+    results_dir = merge_paths.results_dir
     assert results_dir.is_dir()
     assert manifest_path.exists()
 

@@ -51,7 +51,7 @@ def test_send_packs_normalizes_decisions(
     runs_root = tmp_path / "runs"
     sid = f"flow-{expected_decision}"
     merge_paths = get_merge_paths(runs_root, sid, create=True)
-    packs_dir = merge_paths["packs_dir"]
+    packs_dir = merge_paths.packs_dir
 
     pack_filename = "pair_001_002.jsonl"
     pack_payload = {
@@ -77,7 +77,7 @@ def test_send_packs_normalizes_decisions(
             }
         ],
     }
-    _write_json(merge_paths["index_file"], index_payload)
+    _write_json(merge_paths.index_file, index_payload)
 
     accounts_root = runs_root / sid / "cases" / "accounts"
     _write_json(accounts_root / "1" / "tags.json", [])

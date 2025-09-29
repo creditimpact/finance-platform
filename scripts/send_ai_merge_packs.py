@@ -832,11 +832,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     manifest = RunManifest.for_sid(sid)
 
     merge_paths = get_merge_paths(runs_root_path, sid, create=False)
-    base_dir = merge_paths["base"]
-    packs_dir = merge_paths["packs_dir"]
-    results_dir = merge_paths["results_dir"]
-    index_path = merge_paths["index_file"]
-    logs_path = merge_paths["log_file"]
+    base_dir = merge_paths.base
+    packs_dir = merge_paths.packs_dir
+    results_dir = merge_paths.results_dir
+    index_path = merge_paths.index_file
+    logs_path = merge_paths.log_file
 
     def _apply_base_override(base_path: Path) -> None:
         nonlocal base_dir, packs_dir, results_dir, index_path, logs_path

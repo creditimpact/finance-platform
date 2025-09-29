@@ -463,7 +463,7 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     def fake_build_packs(sid_value: str, runs_root_value: Path) -> None:
         assert sid_value == sid
         merge_paths = get_merge_paths(runs_root_value, sid_value, create=True)
-        packs_dir = merge_paths["packs_dir"]
+        packs_dir = merge_paths.packs_dir
         pack_payload = {
             "sid": sid_value,
             "pair": {"a": 11, "b": 16},
@@ -473,7 +473,7 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
         pack_filename = "pair_011_016.jsonl"
         (packs_dir / pack_filename).write_text(json.dumps(pack_payload, ensure_ascii=False) + "\n", encoding="utf-8")
         _write_json(
-            merge_paths["index_file"],
+            merge_paths.index_file,
             {
                 "sid": sid_value,
                 "pairs": [
@@ -526,13 +526,13 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
 
     merge_paths = get_merge_paths(runs_root, sid, create=False)
     packs_index = json.loads(
-        merge_paths["index_file"].read_text(encoding="utf-8")
+        merge_paths.index_file.read_text(encoding="utf-8")
     )
     assert packs_index == {"sid": sid, "pairs": [{"a": 11, "b": 16, "pack_file": "pair_011_016.jsonl", "lines_a": 0, "lines_b": 0, "score_total": 0}]}
     assert first_result["packs"] == 1
     assert first_result["pairs"] == 2
 
-    logs_path = merge_paths["log_file"]
+    logs_path = merge_paths.log_file
     first_logs = [
         json.loads(line)
         for line in logs_path.read_text(encoding="utf-8").splitlines()
@@ -734,9 +734,9 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
     packs_info = ai_info.get("packs", {})
     status_info = ai_info.get("status", {})
     merge_paths = get_merge_paths(runs_root, sid, create=False)
-    packs_dir = merge_paths["packs_dir"]
-    log_path = merge_paths["log_file"]
-    results_dir = merge_paths["results_dir"]
+    packs_dir = merge_paths.packs_dir
+    log_path = merge_paths.log_file
+    results_dir = merge_paths.results_dir
     assert Path(packs_info.get("dir")) == merge_base.resolve()
     assert Path(packs_info.get("dir")).exists()
     assert Path(packs_info.get("index")) == index_path.resolve()
@@ -849,7 +849,7 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
         "flags": {"account_match": False, "debt_match": False},
     }
 
-    index_payload = json.loads(merge_paths["index_file"].read_text(encoding="utf-8"))
+    index_payload = json.loads(merge_paths.index_file.read_text(encoding="utf-8"))
     matching = [entry for entry in index_payload.get("pairs", []) if entry.get("pair") == [11, 16]]
     assert matching
     pair_entry = matching[0]

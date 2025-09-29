@@ -130,14 +130,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         packs_dir = Path(args.packs_dir)
         packs_dir.mkdir(parents=True, exist_ok=True)
         base_dir = packs_dir.parent
-        index_path = base_dir / merge_paths["index_file"].name
+        index_path = base_dir / merge_paths.index_file.name
         results_dir = base_dir / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
     else:
-        packs_dir = merge_paths["packs_dir"]
-        base_dir = merge_paths["base"]
-        index_path = merge_paths["index_file"]
-        results_dir = merge_paths["results_dir"]
+        packs_dir = merge_paths.packs_dir
+        base_dir = merge_paths.base
+        index_path = merge_paths.index_file
+        results_dir = merge_paths.results_dir
 
     log.info("PACKS_DIR_USED sid=%s dir=%s", sid, packs_dir)
     log.debug("MERGE_RESULTS_DIR sid=%s dir=%s", sid, results_dir)
@@ -229,7 +229,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     pairs_count = len(index_entries)
     if pairs_count > 0:
         if args.packs_dir:
-            index_path = base_dir / merge_paths["index_file"].name
+            index_path = base_dir / merge_paths.index_file.name
         seen_pairs: set[tuple[int, int]] = set()
         pairs_payload: list[dict[str, object]] = []
         for entry in index_entries:

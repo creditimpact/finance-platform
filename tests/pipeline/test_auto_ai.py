@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from backend.core.ai import adjudicator
+from backend.core.ai.paths import get_merge_paths, pair_result_filename
 from backend.core.io.tags import upsert_tag
 from backend.pipeline import auto_ai, auto_ai_tasks
 from backend.pipeline.runs import RunManifest
@@ -461,8 +462,8 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
 
     def fake_build_packs(sid_value: str, runs_root_value: Path) -> None:
         assert sid_value == sid
-        packs_dir = runs_root_value / sid_value / "ai_packs"
-        packs_dir.mkdir(parents=True, exist_ok=True)
+        merge_paths = get_merge_paths(runs_root_value, sid_value, create=True)
+        packs_dir = merge_paths["packs_dir"]
         pack_payload = {
             "sid": sid_value,
             "pair": {"a": 11, "b": 16},
@@ -472,7 +473,7 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
         pack_filename = "pair_011_016.jsonl"
         (packs_dir / pack_filename).write_text(json.dumps(pack_payload, ensure_ascii=False) + "\n", encoding="utf-8")
         _write_json(
-            packs_dir / "index.json",
+            merge_paths["index_file"],
             {
                 "sid": sid_value,
                 "pairs": [
@@ -523,14 +524,15 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     payload = auto_ai_tasks.ai_send_packs_step.run(payload)
     first_result = auto_ai_tasks.ai_compact_tags_step.run(payload)
 
+    merge_paths = get_merge_paths(runs_root, sid, create=False)
     packs_index = json.loads(
-        (runs_root / sid / "ai_packs" / "index.json").read_text(encoding="utf-8")
+        merge_paths["index_file"].read_text(encoding="utf-8")
     )
     assert packs_index == {"sid": sid, "pairs": [{"a": 11, "b": 16, "pack_file": "pair_011_016.jsonl", "lines_a": 0, "lines_b": 0, "score_total": 0}]}
     assert first_result["packs"] == 1
     assert first_result["pairs"] == 2
 
-    logs_path = runs_root / sid / "ai_packs" / "logs.txt"
+    logs_path = merge_paths["log_file"]
     first_logs = [
         json.loads(line)
         for line in logs_path.read_text(encoding="utf-8").splitlines()
@@ -708,7 +710,7 @@ def test_maybe_run_ai_pipeline_skips_zero_debt_candidates(
 def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
     runs_root = tmp_path / "runs"
     sid, account_a, account_b = _setup_merge_case(runs_root)
-    packs_dir = auto_ai.packs_dir_for(sid, runs_root=runs_root)
+    merge_base = auto_ai.packs_dir_for(sid, runs_root=runs_root)
 
     monkeypatch.setenv("RUNS_ROOT", str(runs_root))
 
@@ -723,15 +725,19 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
             "6",
         ])
 
-    assert packs_dir.exists()
-    index_path = packs_dir / "index.json"
+    assert merge_base.exists()
+    index_path = merge_base / "index.json"
     assert index_path.exists()
 
     manifest = RunManifest.for_sid(sid)
     ai_info = manifest.data.get("ai", {})
     packs_info = ai_info.get("packs", {})
     status_info = ai_info.get("status", {})
-    assert Path(packs_info.get("dir")) == packs_dir.resolve()
+    merge_paths = get_merge_paths(runs_root, sid, create=False)
+    packs_dir = merge_paths["packs_dir"]
+    log_path = merge_paths["log_file"]
+    results_dir = merge_paths["results_dir"]
+    assert Path(packs_info.get("dir")) == merge_base.resolve()
     assert Path(packs_info.get("dir")).exists()
     assert Path(packs_info.get("index")) == index_path.resolve()
     assert Path(packs_info.get("index")).exists()
@@ -770,15 +776,15 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
     assert any(f"MANIFEST_AI_SENT sid={sid}" in message for message in messages)
     assert any(f"MANIFEST_AI_COMPACTED sid={sid}" in message for message in messages)
 
-    logs_path = packs_dir / "logs.txt"
+    logs_path = log_path
     assert logs_path.exists()
     assert logs_path.read_text(encoding="utf-8")
 
     manifest = RunManifest.for_sid(sid)
     manifest_data = json.loads((runs_root / sid / "manifest.json").read_text(encoding="utf-8"))
     ai_packs = manifest_data["ai"]["packs"]
-    assert Path(ai_packs["dir"]) == packs_dir.resolve()
-    assert Path(ai_packs["index"]) == (packs_dir / "index.json").resolve()
+    assert Path(ai_packs["dir"]) == merge_base.resolve()
+    assert Path(ai_packs["index"]) == index_path.resolve()
     assert Path(ai_packs["logs"]) == logs_path.resolve()
 
     status_info = manifest.data.get("ai", {}).get("status", {})
@@ -790,6 +796,9 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
     assert Path(packs_info.get("dir")).exists()
     assert Path(packs_info.get("index")).exists()
     assert packs_info.get("pairs") >= 1
+
+    result_path = results_dir / pair_result_filename(11, 16)
+    assert result_path.exists()
 
     compact_tags_for_account(account_a)
     compact_tags_for_account(account_b)
@@ -840,7 +849,7 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
         "flags": {"account_match": False, "debt_match": False},
     }
 
-    index_payload = json.loads((packs_dir / "index.json").read_text(encoding="utf-8"))
+    index_payload = json.loads(merge_paths["index_file"].read_text(encoding="utf-8"))
     matching = [entry for entry in index_payload.get("pairs", []) if entry.get("pair") == [11, 16]]
     assert matching
     pair_entry = matching[0]

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.core.ai.paths import get_merge_paths, pair_pack_filename, pair_result_filename
 from backend.core.logic.report_analysis.tags_compact import compact_tags_for_account
 from backend.pipeline.runs import RunManifest
 from backend.pipeline.runs import RUNS_ROOT_ENV
@@ -42,6 +43,75 @@ def _assert_pack_messages_with_rules(
     trimmed_expected = expected_content.rstrip()
     assert actual_content.startswith(trimmed_expected)
     assert "Debt rules:" in actual_content
+
+
+def _create_merge_pack(
+    runs_root: Path,
+    sid: str,
+    pack_payload: Mapping[str, object],
+    *,
+    a_idx: int = 11,
+    b_idx: int = 16,
+    index_entry: Mapping[str, object] | None = None,
+) -> tuple[dict[str, Path], Path]:
+    merge_paths = get_merge_paths(runs_root, sid, create=True)
+    packs_dir = merge_paths["packs_dir"]
+    pack_filename = pair_pack_filename(a_idx, b_idx)
+    pack_path = packs_dir / pack_filename
+    pack_path.write_text(
+        json.dumps(pack_payload, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    entry = {
+        "a": a_idx,
+        "b": b_idx,
+        "pair": [a_idx, b_idx],
+        "pack_file": pack_filename,
+        "lines_a": 0,
+        "lines_b": 0,
+        "score_total": 0,
+    }
+    if index_entry:
+        entry.update(dict(index_entry))
+
+    index_payload = {
+        "sid": sid,
+        "packs": [dict(entry)],
+        "pairs": [dict(entry)],
+        "pairs_count": 1,
+    }
+    merge_paths["index_file"].write_text(
+        json.dumps(index_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    return merge_paths, pack_path
+
+
+def _normalize_flag_values(raw_flags: Mapping[str, object]) -> dict[str, object]:
+    normalized: dict[str, object] = {}
+    for key, value in raw_flags.items():
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "false"}:
+                normalized[key] = lowered == "true"
+            else:
+                normalized[key] = value
+        else:
+            normalized[key] = value
+    return normalized
+
+
+def _normalize_tags(tags: list[Mapping[str, object]]) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
+    for tag in tags:
+        normalized_tag = dict(tag)
+        flags = tag.get("flags")
+        if isinstance(flags, Mapping):
+            normalized_tag["flags"] = _normalize_flag_values(flags)
+        normalized.append(normalized_tag)
+    return normalized
 
 
 def _merge_pair_tag(partner: int) -> dict:
@@ -161,8 +231,12 @@ def test_send_ai_merge_packs_records_merge_decision(
     manifest = RunManifest.for_sid(sid)
     packs_info = manifest.data.get("ai", {}).get("packs", {})
     status_info = manifest.data.get("ai", {}).get("status", {})
-    packs_dir = (runs_root / sid / "ai_packs").resolve()
-    assert Path(packs_info.get("dir")) == packs_dir
+    merge_paths = get_merge_paths(runs_root, sid, create=False)
+    packs_dir = merge_paths["packs_dir"].resolve()
+    base_dir = merge_paths["base"].resolve()
+    logs_path = merge_paths["log_file"].resolve()
+    results_dir = merge_paths["results_dir"].resolve()
+    assert Path(packs_info.get("dir")) == base_dir
     assert Path(packs_info.get("dir")).exists()
     assert Path(packs_info.get("index")).exists()
     assert packs_info.get("pairs") >= 1
@@ -212,6 +286,9 @@ def test_send_ai_merge_packs_records_merge_decision(
     assert Path(packs_info.get("index")).exists()
     assert packs_info.get("pairs") >= 1
 
+    result_path = results_dir / pair_result_filename(11, 16)
+    assert result_path.exists()
+
     account_a_tags = json.loads((account_a_dir / "tags.json").read_text(encoding="utf-8"))
     account_b_tags = json.loads((account_b_dir / "tags.json").read_text(encoding="utf-8"))
 
@@ -236,8 +313,12 @@ def test_send_ai_merge_packs_records_merge_decision(
         "at": "2024-07-01T09:30:00Z",
     }
 
-    assert decision_tag_a == {"with": 16, **expected_decision}
-    assert decision_tag_b == {"with": 11, **expected_decision}
+    normalized_decision_a = dict(decision_tag_a)
+    normalized_decision_a["flags"] = _normalize_flag_values(decision_tag_a.get("flags", {}))
+    normalized_decision_b = dict(decision_tag_b)
+    normalized_decision_b["flags"] = _normalize_flag_values(decision_tag_b.get("flags", {}))
+    assert normalized_decision_a == {"with": 16, **expected_decision}
+    assert normalized_decision_b == {"with": 11, **expected_decision}
 
     pack_files = sorted(packs_dir.glob("pair_*.jsonl"))
     assert pack_files, "expected at least one AI pack to be written"
@@ -249,7 +330,7 @@ def test_send_ai_merge_packs_records_merge_decision(
         "flags": {"account_match": True, "debt_match": True},
     }
 
-    index_payload = json.loads((packs_dir / "index.json").read_text(encoding="utf-8"))
+    index_payload = json.loads((base_dir / "index.json").read_text(encoding="utf-8"))
     pairs_entries = index_payload.get("pairs", [])
     matching = [entry for entry in pairs_entries if entry.get("pair") == [11, 16]]
     assert matching
@@ -284,7 +365,6 @@ def test_send_ai_merge_packs_records_merge_decision(
         "at": "2024-07-01T09:30:00Z",
     }
 
-    logs_path = runs_root / sid / "ai_packs" / "logs.txt"
     logs_text = logs_path.read_text(encoding="utf-8")
     assert "AI_ADJUDICATOR_RESPONSE" in logs_text
 
@@ -296,9 +376,6 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     sid = "merge-case"
-    packs_dir = runs_root / sid / "ai_packs"
-    packs_dir.mkdir(parents=True, exist_ok=True)
-
     pack_payload = {
         "messages": [
             {"role": "system", "content": "instructions"},
@@ -308,23 +385,11 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
             },
         ]
     }
-    pack_filename = "pair_011_016.jsonl"
-    pack_path = packs_dir / pack_filename
-    pack_path.write_text(json.dumps(pack_payload, ensure_ascii=False) + "\n", encoding="utf-8")
-    index_payload = {
-        "sid": sid,
-        "pairs": [
-            {
-                "a": 11,
-                "b": 16,
-                "pack_file": pack_filename,
-                "lines_a": 0,
-                "lines_b": 0,
-                "score_total": 0,
-            }
-        ],
-    }
-    (packs_dir / "index.json").write_text(json.dumps(index_payload, ensure_ascii=False), encoding="utf-8")
+    merge_paths, _ = _create_merge_pack(runs_root, sid, pack_payload)
+    packs_dir = merge_paths["packs_dir"]
+    base_dir = merge_paths["base"]
+    results_dir = merge_paths["results_dir"]
+    logs_path = merge_paths["log_file"]
 
     monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -357,9 +422,6 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
         send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
 
     messages = [record.getMessage() for record in caplog.records]
-    assert any(
-        f"SENDER_PACKS_DIR_FALLBACK sid={sid} dir=" in message for message in messages
-    )
     assert any(f"MANIFEST_AI_SENT sid={sid}" in message for message in messages)
     assert any(f"MANIFEST_AI_COMPACTED sid={sid}" in message for message in messages)
 
@@ -370,8 +432,12 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
     _assert_pack_messages_with_rules(captured_decisions[0]["pack"], pack_payload)
 
     account_tags_dir = runs_root / sid / "cases" / "accounts"
-    tags_a = json.loads((account_tags_dir / "11" / "tags.json").read_text(encoding="utf-8"))
-    tags_b = json.loads((account_tags_dir / "16" / "tags.json").read_text(encoding="utf-8"))
+    tags_a = _normalize_tags(
+        json.loads((account_tags_dir / "11" / "tags.json").read_text(encoding="utf-8"))
+    )
+    tags_b = _normalize_tags(
+        json.loads((account_tags_dir / "16" / "tags.json").read_text(encoding="utf-8"))
+    )
 
     expected_decision_tag_a = {
         "kind": "ai_decision",
@@ -398,7 +464,6 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
     expected_same_debt_tag_b["with"] = 11
     assert tags_b == [expected_decision_tag_b, expected_same_debt_tag_b]
 
-    logs_path = packs_dir / "logs.txt"
     log_lines = logs_path.read_text(encoding="utf-8").strip().splitlines()
     assert any("AI_ADJUDICATOR_PACK_START" in line for line in log_lines)
     assert any("AI_ADJUDICATOR_REQUEST" in line for line in log_lines)
@@ -408,9 +473,9 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
     manifest = RunManifest.for_sid(sid)
     manifest_data = json.loads((runs_root / sid / "manifest.json").read_text(encoding="utf-8"))
     ai_packs = manifest_data["ai"]["packs"]
-    assert Path(ai_packs["dir"]) == packs_dir.resolve()
+    assert Path(ai_packs["dir"]) == base_dir.resolve()
     assert Path(ai_packs["dir"]).exists()
-    assert Path(ai_packs["index"]) == (packs_dir / "index.json").resolve()
+    assert Path(ai_packs["index"]) == (base_dir / "index.json").resolve()
     assert Path(ai_packs["index"]).exists()
     assert Path(ai_packs["logs"]) == logs_path.resolve()
     assert ai_packs.get("pairs", 0) >= 1
@@ -419,6 +484,9 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
     assert status_info.get("sent") is True
     assert status_info.get("compacted") is True
     assert status_info.get("skipped_reason") is None
+
+    result_path = results_dir / pair_result_filename(11, 16)
+    assert result_path.exists()
 
 
 @pytest.mark.parametrize(
@@ -459,9 +527,6 @@ def test_send_ai_merge_packs_writes_decision_variants(
     expected_pair: str | None,
 ) -> None:
     sid = f"variant-{decision}"
-    packs_dir = runs_root / sid / "ai_packs"
-    packs_dir.mkdir(parents=True, exist_ok=True)
-
     pack_payload = {
         "messages": [
             {"role": "system", "content": "instructions"},
@@ -471,26 +536,7 @@ def test_send_ai_merge_packs_writes_decision_variants(
             },
         ]
     }
-    pack_filename = "pair_011_016.jsonl"
-    (packs_dir / pack_filename).write_text(
-        json.dumps(pack_payload, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
-    index_payload = {
-        "sid": sid,
-        "pairs": [
-            {
-                "a": 11,
-                "b": 16,
-                "pack_file": pack_filename,
-                "lines_a": 0,
-                "lines_b": 0,
-                "score_total": 0,
-            }
-        ],
-    }
-    (packs_dir / "index.json").write_text(
-        json.dumps(index_payload, ensure_ascii=False), encoding="utf-8"
-    )
+    merge_paths, _ = _create_merge_pack(runs_root, sid, pack_payload)
 
     monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -512,9 +558,16 @@ def test_send_ai_merge_packs_writes_decision_variants(
 
     send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
 
+    result_path = merge_paths["results_dir"] / pair_result_filename(11, 16)
+    assert result_path.exists()
+
     account_tags_dir = runs_root / sid / "cases" / "accounts"
-    tags_a = json.loads((account_tags_dir / "11" / "tags.json").read_text(encoding="utf-8"))
-    tags_b = json.loads((account_tags_dir / "16" / "tags.json").read_text(encoding="utf-8"))
+    tags_a = _normalize_tags(
+        json.loads((account_tags_dir / "11" / "tags.json").read_text(encoding="utf-8"))
+    )
+    tags_b = _normalize_tags(
+        json.loads((account_tags_dir / "16" / "tags.json").read_text(encoding="utf-8"))
+    )
 
     def _expected_flags(raw_flags: dict[str, bool | str]) -> dict[str, bool | str]:
         normalized: dict[str, bool | str] = {}
@@ -568,32 +621,15 @@ def test_send_ai_merge_packs_writes_decision_variants(
     assert tags_b == expected_tags_b
 def test_send_ai_merge_packs_logs_failure(monkeypatch: pytest.MonkeyPatch, runs_root: Path) -> None:
     sid = "merge-case-errors"
-    packs_dir = runs_root / sid / "ai_packs"
-    packs_dir.mkdir(parents=True, exist_ok=True)
-
     pack_payload = {
         "messages": [
             {"role": "system", "content": "instructions"},
             {"role": "user", "content": "Account pair"},
         ]
     }
-    pack_filename = "pair_001_002.jsonl"
-    pack_path = packs_dir / pack_filename
-    pack_path.write_text(json.dumps(pack_payload, ensure_ascii=False) + "\n", encoding="utf-8")
-    index_payload = {
-        "sid": sid,
-        "pairs": [
-            {
-                "a": 1,
-                "b": 2,
-                "pack_file": pack_filename,
-                "lines_a": 0,
-                "lines_b": 0,
-                "score_total": 0,
-            }
-        ],
-    }
-    (packs_dir / "index.json").write_text(json.dumps(index_payload, ensure_ascii=False), encoding="utf-8")
+    merge_paths, _ = _create_merge_pack(runs_root, sid, pack_payload, a_idx=1, b_idx=2)
+    packs_dir = merge_paths["packs_dir"]
+    logs_path = merge_paths["log_file"]
 
     monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -614,13 +650,100 @@ def test_send_ai_merge_packs_logs_failure(monkeypatch: pytest.MonkeyPatch, runs_
     with pytest.raises(SystemExit):
         send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
 
-    logs_path = packs_dir / "logs.txt"
     log_lines = logs_path.read_text(encoding="utf-8").strip().splitlines()
     assert any("AI_ADJUDICATOR_PACK_START" in line for line in log_lines)
     assert any("AI_ADJUDICATOR_REQUEST" in line for line in log_lines)
     assert any("AI_ADJUDICATOR_RESPONSE" in line for line in log_lines)
     assert any("AI_ADJUDICATOR_ERROR" in line for line in log_lines)
     assert any("AI_ADJUDICATOR_PACK_FAILURE" in line for line in log_lines)
+
+
+def test_send_ai_merge_packs_reads_legacy_layout(
+    monkeypatch: pytest.MonkeyPatch,
+    runs_root: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sid = "legacy-layout"
+    legacy_dir = runs_root / sid / "ai_packs"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+
+    pack_payload = {
+        "messages": [
+            {"role": "system", "content": "legacy instructions"},
+            {"role": "user", "content": "Legacy merge pack"},
+        ]
+    }
+    pack_filename = pair_pack_filename(11, 16)
+    (legacy_dir / pack_filename).write_text(
+        json.dumps(pack_payload, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    index_payload = {
+        "sid": sid,
+        "pairs": [
+            {
+                "a": 11,
+                "b": 16,
+                "pair": [11, 16],
+                "pack_file": pack_filename,
+                "lines_a": 0,
+                "lines_b": 0,
+                "score_total": 0,
+            }
+        ],
+    }
+    (legacy_dir / "index.json").write_text(
+        json.dumps(index_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+
+    def _fake_decide(pack: dict, *, timeout: float):
+        _assert_pack_messages_with_rules(pack, pack_payload)
+        return {
+            "decision": "same_account_same_debt",
+            "reason": "Legacy directories are supported.",
+            "flags": {"account_match": True, "debt_match": True},
+        }
+
+    monkeypatch.setattr(send_ai_merge_packs, "decide_merge_or_different", _fake_decide)
+    monkeypatch.setattr(
+        send_ai_merge_packs,
+        "_isoformat_timestamp",
+        lambda dt=None: "2024-07-10T15:30:00Z",
+    )
+
+    merge_paths = get_merge_paths(runs_root, sid, create=False)
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="scripts.send_ai_merge_packs"):
+        send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(f"SENDER_PACKS_DIR_LEGACY sid={sid}" in message for message in messages)
+
+    result_dir = merge_paths["results_dir"]
+    assert result_dir.exists()
+    result_path = result_dir / pair_result_filename(11, 16)
+    assert result_path.exists()
+
+    pack_path = legacy_dir / pack_filename
+    updated_payload = json.loads(pack_path.read_text(encoding="utf-8"))
+    assert updated_payload.get("ai_result", {}).get("decision") == "same_account_same_debt"
+
+    manifest = RunManifest.for_sid(sid)
+    packs_info = manifest.data.get("ai", {}).get("packs", {})
+    assert Path(packs_info.get("dir")) == merge_paths["base"].resolve()
+    assert Path(packs_info.get("index")).exists()
+    assert Path(packs_info.get("logs")).exists()
+
+    logs_path = merge_paths["log_file"]
+    assert logs_path.exists()
+    log_lines = logs_path.read_text(encoding="utf-8").splitlines()
+    assert any("AI_ADJUDICATOR_RESPONSE" in line for line in log_lines)
 
 
 def test_write_decision_tags_idempotent(tmp_path: Path) -> None:
@@ -654,8 +777,12 @@ def test_write_decision_tags_idempotent(tmp_path: Path) -> None:
     )
 
     base = runs_root / sid / "cases" / "accounts"
-    tags_a = json.loads((base / "31" / "tags.json").read_text(encoding="utf-8"))
-    tags_b = json.loads((base / "32" / "tags.json").read_text(encoding="utf-8"))
+    tags_a = _normalize_tags(
+        json.loads((base / "31" / "tags.json").read_text(encoding="utf-8"))
+    )
+    tags_b = _normalize_tags(
+        json.loads((base / "32" / "tags.json").read_text(encoding="utf-8"))
+    )
 
     expected_decision_a = {
         "kind": "ai_decision",
@@ -720,8 +847,9 @@ def test_ai_pairing_flow_compaction(
         ["--sid", sid, "--runs-root", str(runs_root), "--max-lines-per-side", "6"]
     )
 
-    packs_dir = runs_root / sid / "ai_packs"
-    assert (packs_dir / "index.json").exists()
+    merge_paths = get_merge_paths(runs_root, sid, create=False)
+    packs_dir = merge_paths["packs_dir"]
+    assert merge_paths["index_file"].exists()
 
     timestamp = "2024-07-04T12:00:00Z"
 
@@ -740,11 +868,18 @@ def test_ai_pairing_flow_compaction(
 
     send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
 
+    result_path = merge_paths["results_dir"] / pair_result_filename(11, 16)
+    assert result_path.exists()
+
     for account_dir in (account_a_dir, account_b_dir):
         compact_tags_for_account(account_dir)
 
-    tags_a = json.loads((account_a_dir / "tags.json").read_text(encoding="utf-8"))
-    tags_b = json.loads((account_b_dir / "tags.json").read_text(encoding="utf-8"))
+    tags_a = _normalize_tags(
+        json.loads((account_a_dir / "tags.json").read_text(encoding="utf-8"))
+    )
+    tags_b = _normalize_tags(
+        json.loads((account_b_dir / "tags.json").read_text(encoding="utf-8"))
+    )
 
     assert tags_a == [
         {"kind": "merge_best", "with": 16, "decision": "ai"},

@@ -11,10 +11,10 @@ accounts_dir = base/"cases"/"accounts"
 manifest_path = base/".manifest"
 
 merge_paths = get_merge_paths(pathlib.Path(RUNS_ROOT), SID, create=True)
-PACKS_ROOT = merge_paths["packs_dir"]
-INDEX_PATH = merge_paths["index_file"]
-LOG_PATH = merge_paths["log_file"]
-BASE_DIR = merge_paths["base"]
+PACKS_ROOT = merge_paths.packs_dir
+INDEX_PATH = merge_paths.index_file
+LOG_PATH = merge_paths.log_file
+BASE_DIR = merge_paths.base
 
 def load_json(p: pathlib.Path, default=None):
     try:

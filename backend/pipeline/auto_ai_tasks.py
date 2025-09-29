@@ -42,7 +42,7 @@ def _append_run_log_entry(
     """Append a compact JSON line describing the AI run outcome."""
 
     merge_paths = get_merge_paths(runs_root, sid, create=True)
-    logs_path = merge_paths["log_file"]
+    logs_path = merge_paths.log_file
     entry = {
         "sid": sid,
         "at": datetime.now(timezone.utc).isoformat(),
@@ -151,7 +151,7 @@ def _populate_common_paths(payload: MutableMapping[str, object]) -> None:
     runs_root = _resolve_runs_root(payload, sid)
     accounts_dir = runs_root / sid / "cases" / "accounts"
     merge_paths = get_merge_paths(runs_root, sid, create=True)
-    pipeline_dir = merge_paths["base"]
+    pipeline_dir = merge_paths.base
     lock_path = pipeline_dir / INFLIGHT_LOCK_FILENAME
     last_ok_path = pipeline_dir / LAST_OK_FILENAME
 
@@ -256,7 +256,7 @@ def ai_build_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, ob
         raise
 
     merge_paths = get_merge_paths(runs_root, sid, create=True)
-    index_path = merge_paths["index_file"]
+    index_path = merge_paths.index_file
     if not index_path.exists():
         legacy_dir = probe_legacy_ai_packs(runs_root, sid)
         if legacy_dir is not None:

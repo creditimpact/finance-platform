@@ -84,16 +84,16 @@ def _resolve_merge_paths(
         packs_dir = Path(override)
         packs_dir.mkdir(parents=True, exist_ok=True)
         base_dir = packs_dir.parent
-        index_path = base_dir / merge_paths["index_file"].name
-        log_path = base_dir / merge_paths["log_file"].name
+        index_path = base_dir / merge_paths.index_file.name
+        log_path = base_dir / merge_paths.log_file.name
         results_dir = base_dir / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
     else:
-        packs_dir = merge_paths["packs_dir"]
-        base_dir = merge_paths["base"]
-        index_path = merge_paths["index_file"]
-        log_path = merge_paths["log_file"]
-        results_dir = merge_paths["results_dir"]
+        packs_dir = merge_paths.packs_dir
+        base_dir = merge_paths.base
+        index_path = merge_paths.index_file
+        log_path = merge_paths.log_file
+        results_dir = merge_paths.results_dir
 
     return {
         "packs_dir": packs_dir,

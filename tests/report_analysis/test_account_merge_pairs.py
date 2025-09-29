@@ -163,7 +163,7 @@ def test_account_number_clique_persists_all_pair_packs(
     ]
 
     merge_paths = get_merge_paths(runs_root, sid, create=False)
-    packs_dir = merge_paths["packs_dir"]
+    packs_dir = merge_paths.packs_dir
     for left, right in expected_pairs:
         first, second = sorted((left, right))
         pack_path = packs_dir / f"pair_{first:03d}_{second:03d}.jsonl"

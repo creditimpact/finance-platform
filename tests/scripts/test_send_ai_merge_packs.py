@@ -55,7 +55,7 @@ def _create_merge_pack(
     index_entry: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, Path], Path]:
     merge_paths = get_merge_paths(runs_root, sid, create=True)
-    packs_dir = merge_paths["packs_dir"]
+    packs_dir = merge_paths.packs_dir
     pack_filename = pair_pack_filename(a_idx, b_idx)
     pack_path = packs_dir / pack_filename
     pack_path.write_text(
@@ -81,7 +81,7 @@ def _create_merge_pack(
         "pairs": [dict(entry)],
         "pairs_count": 1,
     }
-    merge_paths["index_file"].write_text(
+    merge_paths.index_file.write_text(
         json.dumps(index_payload, ensure_ascii=False),
         encoding="utf-8",
     )
@@ -232,10 +232,10 @@ def test_send_ai_merge_packs_records_merge_decision(
     packs_info = manifest.data.get("ai", {}).get("packs", {})
     status_info = manifest.data.get("ai", {}).get("status", {})
     merge_paths = get_merge_paths(runs_root, sid, create=False)
-    packs_dir = merge_paths["packs_dir"].resolve()
-    base_dir = merge_paths["base"].resolve()
-    logs_path = merge_paths["log_file"].resolve()
-    results_dir = merge_paths["results_dir"].resolve()
+    packs_dir = merge_paths.packs_dir.resolve()
+    base_dir = merge_paths.base.resolve()
+    logs_path = merge_paths.log_file.resolve()
+    results_dir = merge_paths.results_dir.resolve()
     assert Path(packs_info.get("dir")) == base_dir
     assert Path(packs_info.get("dir")).exists()
     assert Path(packs_info.get("index")).exists()
@@ -386,10 +386,10 @@ def test_send_ai_merge_packs_writes_same_debt_tags(
         ]
     }
     merge_paths, _ = _create_merge_pack(runs_root, sid, pack_payload)
-    packs_dir = merge_paths["packs_dir"]
-    base_dir = merge_paths["base"]
-    results_dir = merge_paths["results_dir"]
-    logs_path = merge_paths["log_file"]
+    packs_dir = merge_paths.packs_dir
+    base_dir = merge_paths.base
+    results_dir = merge_paths.results_dir
+    logs_path = merge_paths.log_file
 
     monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -558,7 +558,7 @@ def test_send_ai_merge_packs_writes_decision_variants(
 
     send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
 
-    result_path = merge_paths["results_dir"] / pair_result_filename(11, 16)
+    result_path = merge_paths.results_dir / pair_result_filename(11, 16)
     assert result_path.exists()
 
     account_tags_dir = runs_root / sid / "cases" / "accounts"
@@ -628,8 +628,8 @@ def test_send_ai_merge_packs_logs_failure(monkeypatch: pytest.MonkeyPatch, runs_
         ]
     }
     merge_paths, _ = _create_merge_pack(runs_root, sid, pack_payload, a_idx=1, b_idx=2)
-    packs_dir = merge_paths["packs_dir"]
-    logs_path = merge_paths["log_file"]
+    packs_dir = merge_paths.packs_dir
+    logs_path = merge_paths.log_file
 
     monkeypatch.setenv("ENABLE_AI_ADJUDICATOR", "1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -725,7 +725,7 @@ def test_send_ai_merge_packs_reads_legacy_layout(
     messages = [record.getMessage() for record in caplog.records]
     assert any(f"SENDER_PACKS_DIR_LEGACY sid={sid}" in message for message in messages)
 
-    result_dir = merge_paths["results_dir"]
+    result_dir = merge_paths.results_dir
     assert result_dir.exists()
     result_path = result_dir / pair_result_filename(11, 16)
     assert result_path.exists()
@@ -736,11 +736,11 @@ def test_send_ai_merge_packs_reads_legacy_layout(
 
     manifest = RunManifest.for_sid(sid)
     packs_info = manifest.data.get("ai", {}).get("packs", {})
-    assert Path(packs_info.get("dir")) == merge_paths["base"].resolve()
+    assert Path(packs_info.get("dir")) == merge_paths.base.resolve()
     assert Path(packs_info.get("index")).exists()
     assert Path(packs_info.get("logs")).exists()
 
-    logs_path = merge_paths["log_file"]
+    logs_path = merge_paths.log_file
     assert logs_path.exists()
     log_lines = logs_path.read_text(encoding="utf-8").splitlines()
     assert any("AI_ADJUDICATOR_RESPONSE" in line for line in log_lines)
@@ -848,8 +848,8 @@ def test_ai_pairing_flow_compaction(
     )
 
     merge_paths = get_merge_paths(runs_root, sid, create=False)
-    packs_dir = merge_paths["packs_dir"]
-    assert merge_paths["index_file"].exists()
+    packs_dir = merge_paths.packs_dir
+    assert merge_paths.index_file.exists()
 
     timestamp = "2024-07-04T12:00:00Z"
 
@@ -868,7 +868,7 @@ def test_ai_pairing_flow_compaction(
 
     send_ai_merge_packs.main(["--sid", sid, "--runs-root", str(runs_root)])
 
-    result_path = merge_paths["results_dir"] / pair_result_filename(11, 16)
+    result_path = merge_paths.results_dir / pair_result_filename(11, 16)
     assert result_path.exists()
 
     for account_dir in (account_a_dir, account_b_dir):

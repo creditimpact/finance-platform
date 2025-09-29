@@ -1309,8 +1309,8 @@ def score_all_pairs_0_100(
 
     runs_root = Path(runs_root)
     merge_paths = get_merge_paths(runs_root, sid, create=True)
-    packs_dir = merge_paths["packs_dir"]
-    log_file = merge_paths["log_file"]
+    packs_dir = merge_paths.packs_dir
+    log_file = merge_paths.log_file
     cfg = get_merge_cfg()
     ai_threshold = AI_PACK_SCORE_THRESHOLD
     requested_raw = list(idx_list) if idx_list is not None else []

@@ -143,7 +143,7 @@ def preview_pair_pack(
     )
 
     merge_paths = get_merge_paths(runs_root, sid, create=True)
-    pack_path = merge_paths["packs_dir"] / pair_pack_filename(a_idx, b_idx)
+    pack_path = merge_paths.packs_dir / pair_pack_filename(a_idx, b_idx)
     print(f"Pack path: {pack_path}")
 
     print("Highlights:")

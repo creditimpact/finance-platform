@@ -53,13 +53,34 @@ def _should_write_probes() -> bool:
     return flag.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _maybe_write_probe_tags(account_dir: Path, payload: Mapping[str, Any]) -> None:
+def _format_bureau_list(bureaus: tuple[str, ...] | list[str]) -> str:
+    if not bureaus:
+        return "[]"
+    return "[" + ",".join(bureaus) + "]"
+
+
+def _maybe_write_probe_tags(
+    account_dir: Path,
+    *,
+    sid: str,
+    idx: str,
+    payload: Mapping[str, Any],
+) -> None:
     if not _should_write_probes():
         return
 
     tag_payload = {"source": "intra_polarity"}
     tag_payload.update(payload)
     upsert_tag(account_dir, tag_payload, unique_keys=("kind", "field", "bureau"))
+    logger.info(
+        "POLARITY_TAG_WRITTEN sid=%s idx=%s field=%s bureau=%s p=%s s=%s",
+        sid,
+        idx,
+        payload.get("field"),
+        payload.get("bureau"),
+        payload.get("polarity"),
+        payload.get("severity"),
+    )
 
 
 def _extract_configured_fields() -> tuple[str, ...]:
@@ -74,12 +95,27 @@ def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[
     """Analyze polarity for bureau fields and persist results."""
 
     account_path = Path(account_dir)
+    account_idx = account_path.name
     bureaus_data = _load_bureaus(account_path, sid)
     fields = _extract_configured_fields()
 
     bureaus_block: Dict[str, Dict[str, Dict[str, str]]] = {}
 
+    present_bureaus: list[str] = [
+        bureau
+        for bureau in _BUREAU_KEYS
+        if isinstance(bureaus_data.get(bureau), Mapping)
+    ]
+
+    logger.info(
+        "POLARITY_START sid=%s idx=%s bureaus=%s",
+        sid,
+        account_idx,
+        _format_bureau_list(present_bureaus),
+    )
+
     for field in fields:
+        log_values: Dict[str, str] = {bureau: "-" for bureau in _BUREAU_KEYS}
         for bureau_key in _BUREAU_KEYS:
             bureau_values = bureaus_data.get(bureau_key)
             if not isinstance(bureau_values, Mapping):
@@ -88,7 +124,8 @@ def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[
                 continue
             classification = classify_field_value(field, bureau_values.get(field))
             polarity = str(classification.get("polarity", "unknown"))
-            severity = str(classification.get("severity", "low"))
+            severity_value = classification.get("severity")
+            severity = str(severity_value) if severity_value else "low"
             bureau_results = bureaus_block.setdefault(bureau_key, {})
             bureau_results[field] = {
                 "polarity": polarity,
@@ -96,7 +133,9 @@ def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[
             }
             _maybe_write_probe_tags(
                 account_path,
-                {
+                sid=sid,
+                idx=account_idx,
+                payload={
                     "kind": "polarity_probe",
                     "field": field,
                     "bureau": bureau_key,
@@ -104,6 +143,17 @@ def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[
                     "severity": severity,
                 },
             )
+            log_values[bureau_key] = f"{polarity}:{severity}"
+
+        logger.info(
+            "POLARITY_FIELD sid=%s idx=%s field=%s TU=%s EX=%s EQ=%s",
+            sid,
+            account_idx,
+            field,
+            log_values.get("transunion", "-"),
+            log_values.get("experian", "-"),
+            log_values.get("equifax", "-"),
+        )
 
     polarity_block: Dict[str, Any] = {
         "schema_version": _POLARITY_SCHEMA_VERSION,

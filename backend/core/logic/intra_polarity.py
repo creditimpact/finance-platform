@@ -15,6 +15,7 @@ from backend.core.logic.polarity import classify_field_value, load_polarity_conf
 logger = logging.getLogger(__name__)
 
 _BUREAU_KEYS: tuple[str, ...] = ("transunion", "experian", "equifax")
+_POLARITY_SCHEMA_VERSION = 1
 
 
 def _load_bureaus(account_path: Path, sid: str) -> Dict[str, Any]:
@@ -98,10 +99,9 @@ def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[
     bureaus_data = _load_bureaus(account_path, sid)
     fields = _extract_configured_fields()
 
-    polarity_block: Dict[str, Dict[str, Dict[str, str]]] = {}
+    bureaus_block: Dict[str, Dict[str, Dict[str, str]]] = {}
 
     for field in fields:
-        field_results: Dict[str, Dict[str, str]] = {}
         for bureau_key in _BUREAU_KEYS:
             bureau_values = bureaus_data.get(bureau_key)
             if not isinstance(bureau_values, Mapping):
@@ -111,7 +111,8 @@ def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[
             classification = classify_field_value(field, bureau_values.get(field))
             polarity = str(classification.get("polarity", "unknown"))
             severity = str(classification.get("severity", "low"))
-            field_results[bureau_key] = {
+            bureau_results = bureaus_block.setdefault(bureau_key, {})
+            bureau_results[field] = {
                 "polarity": polarity,
                 "severity": severity,
             }
@@ -125,8 +126,11 @@ def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[
                     "severity": severity,
                 },
             )
-        if field_results:
-            polarity_block[field] = field_results
+
+    polarity_block: Dict[str, Any] = {
+        "schema_version": _POLARITY_SCHEMA_VERSION,
+        "bureaus": bureaus_block,
+    }
 
     summary_path = account_path / "summary.json"
     summary_data = _load_summary(summary_path)

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import ast
+import hashlib
+import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional, Literal
+from typing import Any, Dict, Iterable, Mapping, Optional, Literal, Sequence
 
 import yaml
 
@@ -342,9 +345,120 @@ def classify_field_value(field: str, raw_value: Optional[str | int | float]) -> 
     }
 
 
+@dataclass(frozen=True)
+class ApplyPolarityResult:
+    processed_accounts: int
+    updated_accounts: list[int]
+    config_digest: Optional[str] = None
+
+
+def _compute_config_digest() -> Optional[str]:
+    try:
+        raw = _POLARITY_CONFIG_PATH.read_bytes()
+    except FileNotFoundError:
+        logger.warning("POLARITY_CONFIG_NOT_FOUND_DIGEST path=%s", _POLARITY_CONFIG_PATH)
+        return None
+    except OSError:  # pragma: no cover - defensive logging
+        logger.debug(
+            "POLARITY_CONFIG_DIGEST_FAILED path=%s",
+            _POLARITY_CONFIG_PATH,
+            exc_info=True,
+        )
+        return None
+
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _load_existing_polarity_block(account_path: Path) -> Optional[Mapping[str, Any]]:
+    summary_path = account_path / "summary.json"
+    try:
+        raw = summary_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:  # pragma: no cover - defensive logging
+        logger.debug(
+            "POLARITY_EXISTING_SUMMARY_FAILED path=%s",
+            summary_path,
+            exc_info=True,
+        )
+        return None
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:  # pragma: no cover - defensive logging
+        logger.debug(
+            "POLARITY_EXISTING_SUMMARY_INVALID path=%s",
+            summary_path,
+            exc_info=True,
+        )
+        return None
+
+    if not isinstance(data, Mapping):
+        return None
+
+    block = data.get("polarity_check")
+    if isinstance(block, Mapping):
+        return dict(block)
+    return None
+
+
+def apply_polarity_checks(
+    accounts_dir: Path | str,
+    indices: Sequence[object],
+    *,
+    sid: Optional[str] = None,
+) -> ApplyPolarityResult:
+    base_path = Path(accounts_dir)
+    unique_indices: list[int] = []
+    seen: set[int] = set()
+    for value in indices:
+        try:
+            idx = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        if idx in seen:
+            continue
+        seen.add(idx)
+        unique_indices.append(idx)
+
+    unique_indices.sort()
+
+    processed = 0
+    updated: list[int] = []
+    sid_value = sid or ""
+
+    for idx in unique_indices:
+        account_path = base_path / f"{idx}"
+        if not account_path.exists():
+            continue
+
+        processed += 1
+        before_block = _load_existing_polarity_block(account_path)
+
+        try:
+            from backend.core.logic.intra_polarity import analyze_account_polarity
+
+            result_block = analyze_account_polarity(sid_value, account_path)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception(
+                "POLARITY_APPLY_FAILED sid=%s account_dir=%s",
+                sid_value,
+                account_path,
+            )
+            continue
+
+        if before_block != result_block:
+            updated.append(idx)
+
+    digest = _compute_config_digest()
+    return ApplyPolarityResult(processed_accounts=processed, updated_accounts=updated, config_digest=digest)
+
+
 __all__ = [
+    "ApplyPolarityResult",
     "Polarity",
     "Severity",
+    "apply_polarity_checks",
     "classify_field_value",
     "is_blank",
     "load_polarity_config",

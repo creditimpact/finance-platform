@@ -661,7 +661,7 @@ def ai_polarity_check_step(self, prev: Mapping[str, object] | None) -> dict[str,
     logger.info("AI_POLARITY_START sid=%s accounts=%d", sid, len(indices))
 
     try:
-        result = polarity.apply_polarity_checks(accounts_dir, indices)
+        result = polarity.apply_polarity_checks(accounts_dir, indices, sid=sid)
     except Exception:  # pragma: no cover - defensive logging
         logger.error("AUTO_AI_POLARITY_FAILED sid=%s dir=%s", sid, accounts_dir, exc_info=True)
         _cleanup_lock(payload, reason="polarity_failed")

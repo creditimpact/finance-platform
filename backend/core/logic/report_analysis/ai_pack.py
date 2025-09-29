@@ -210,12 +210,11 @@ def _parse_amount(value: str | None) -> float | None:
 
 
 def _amounts_close(left: float, right: float, tol_abs: float, tol_ratio: float) -> bool:
-    delta = abs(left - right)
-    if delta <= tol_abs:
-        return True
-    if max(abs(left), abs(right)) == 0:
-        return False
-    return delta / max(abs(left), abs(right)) <= tol_ratio
+    tol_abs = max(float(tol_abs), 0.0)
+    tol_ratio = max(float(tol_ratio), 0.0)
+    base = min(abs(left), abs(right))
+    allowed = max(tol_abs, base * tol_ratio)
+    return abs(left - right) <= allowed
 
 
 def _first_amount(values: Iterable[str]) -> float | None:
@@ -297,11 +296,60 @@ def _first_date(values: Iterable[str]) -> date | None:
     return None
 
 
-def _is_collection(values: Iterable[str]) -> bool:
+_COLLECTION_NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _normalize_collection_text(value: str) -> str:
+    lowered = value.lower().replace("&", " and ")
+    cleaned = _COLLECTION_NORMALIZE_RE.sub(" ", lowered)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+_COLLECTION_EXACT_TERMS = {
+    "collection",
+    "collections",
+    "collection agency",
+    "collection agencies",
+    "collection services",
+}
+
+_COLLECTION_KEYWORDS = (
+    "collection agency",
+    "collection agencies",
+    "collection dept",
+    "collection department",
+    "collection division",
+    "collection office",
+    "collection bureau",
+    "collection company",
+    "collections dept",
+    "collections department",
+    "collections division",
+    "collections office",
+    "collections bureau",
+    "collections company",
+    "other collection agencies",
+    "debt collector",
+    "debt collectors",
+    "debt collection",
+    "debt collections",
+    "debt collection agency",
+    "debt collection company",
+    "debt buyer",
+)
+
+
+def _is_collection_agency(values: Iterable[str]) -> bool:
     for raw in values:
-        lowered = raw.lower()
-        if "collection" in lowered:
+        normalized = _normalize_collection_text(raw)
+        if not normalized:
+            continue
+        if normalized in _COLLECTION_EXACT_TERMS:
             return True
+        for keyword in _COLLECTION_KEYWORDS:
+            if keyword in normalized:
+                return True
     return False
 
 
@@ -328,7 +376,7 @@ def _is_original(values: Iterable[str]) -> bool:
     return False
 
 
-def _resolve_tolerances() -> tuple[float, float]:
+def _resolve_tolerances() -> tuple[float, float, int]:
     from backend.core.logic.report_analysis.account_merge import get_merge_cfg
 
     try:
@@ -344,7 +392,15 @@ def _resolve_tolerances() -> tuple[float, float]:
         tol_ratio = float(tolerances.get("AMOUNT_TOL_RATIO", 0.01))
     except (TypeError, ValueError):
         tol_ratio = 0.01
-    return tol_abs, tol_ratio
+    try:
+        months_tol = int(tolerances.get("CA_DATE_MONTH_TOL", 6))
+    except (TypeError, ValueError):
+        months_tol = 6
+    return tol_abs, tol_ratio, max(months_tol, 0)
+
+
+def _months_apart(left: date, right: date) -> int:
+    return abs((left.year - right.year) * 12 + (left.month - right.month))
 
 
 def build_context_flags(
@@ -352,7 +408,7 @@ def build_context_flags(
     lines_a: Iterable[str],
     lines_b: Iterable[str],
 ) -> dict[str, bool]:
-    tol_abs, tol_ratio = _resolve_tolerances()
+    tol_abs, tol_ratio, ca_month_tol = _resolve_tolerances()
 
     highlights_map = dict(highlights or {})
     matched_fields = {}
@@ -364,12 +420,37 @@ def build_context_flags(
     creditor_type_b = list(_extract_field_values(lines_b, "Creditor Type"))
     account_type_a = list(_extract_field_values(lines_a, "Account Type"))
     account_type_b = list(_extract_field_values(lines_b, "Account Type"))
+    account_description_a = list(_extract_field_values(lines_a, "Account Description"))
+    account_description_b = list(_extract_field_values(lines_b, "Account Description"))
+    creditor_description_a = list(_extract_field_values(lines_a, "Creditor Description"))
+    creditor_description_b = list(_extract_field_values(lines_b, "Creditor Description"))
+    creditor_remarks_a = list(_extract_field_values(lines_a, "Creditor Remarks"))
+    creditor_remarks_b = list(_extract_field_values(lines_b, "Creditor Remarks"))
 
-    is_collection_a = _is_collection(creditor_type_a) or _is_collection(account_type_a)
-    is_collection_b = _is_collection(creditor_type_b) or _is_collection(account_type_b)
+    descriptors_a = (
+        creditor_type_a
+        + account_type_a
+        + account_description_a
+        + creditor_description_a
+        + creditor_remarks_a
+    )
+    descriptors_b = (
+        creditor_type_b
+        + account_type_b
+        + account_description_b
+        + creditor_description_b
+        + creditor_remarks_b
+    )
 
-    is_original_a = (not is_collection_a) and _is_original(creditor_type_a + account_type_a)
-    is_original_b = (not is_collection_b) and _is_original(creditor_type_b + account_type_b)
+    is_collection_a = _is_collection_agency(descriptors_a)
+    is_collection_b = _is_collection_agency(descriptors_b)
+
+    is_original_a = (not is_collection_a) and _is_original(
+        creditor_type_a + account_type_a + account_description_a
+    )
+    is_original_b = (not is_collection_b) and _is_original(
+        creditor_type_b + account_type_b + account_description_b
+    )
 
     balance_a = _first_amount(_extract_field_values(lines_a, "Balance Owed"))
     balance_b = _first_amount(_extract_field_values(lines_b, "Balance Owed"))
@@ -397,6 +478,10 @@ def build_context_flags(
     dla_b = _first_date(_extract_field_values(lines_b, "Date of Last Activity"))
     opened_a = _first_date(_extract_field_values(lines_a, "Date Opened"))
     opened_b = _first_date(_extract_field_values(lines_b, "Date Opened"))
+    closed_a = _first_date(_extract_field_values(lines_a, "Closed Date"))
+    closed_b = _first_date(_extract_field_values(lines_b, "Closed Date"))
+    reported_a = _first_date(_extract_field_values(lines_a, "Date Reported"))
+    reported_b = _first_date(_extract_field_values(lines_b, "Date Reported"))
 
     date_pairs: list[tuple[date, date]] = []
     for left, right in (
@@ -410,6 +495,40 @@ def build_context_flags(
         date_pairs.append((left, right))
 
     dates_plausible = any(right >= left for left, right in date_pairs)
+
+    if not dates_plausible and is_collection_a and is_collection_b:
+        ca_after_closed_pairs = [
+            (closed_a, opened_b),
+            (closed_a, reported_b),
+            (closed_b, opened_a),
+            (closed_b, reported_a),
+        ]
+        for left, right in ca_after_closed_pairs:
+            if left is None or right is None:
+                continue
+            if right >= left:
+                dates_plausible = True
+                break
+
+        if not dates_plausible and ca_month_tol > 0:
+            ca_tolerance_pairs = [
+                (opened_a, opened_b),
+                (opened_a, reported_b),
+                (reported_a, opened_b),
+                (reported_a, reported_b),
+                (closed_a, opened_b),
+                (closed_a, reported_b),
+                (closed_b, opened_a),
+                (closed_b, reported_a),
+            ]
+            for left, right in ca_tolerance_pairs:
+                if left is None or right is None:
+                    continue
+                if left.year != right.year:
+                    continue
+                if _months_apart(left, right) <= ca_month_tol:
+                    dates_plausible = True
+                    break
 
     return {
         "is_collection_agency_a": bool(is_collection_a),

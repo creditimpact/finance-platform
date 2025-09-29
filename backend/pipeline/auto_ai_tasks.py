@@ -13,6 +13,7 @@ from typing import Mapping, MutableMapping
 from celery import chain, shared_task
 
 from backend.core.ai.paths import ensure_merge_paths, probe_legacy_ai_packs
+from backend.core.logic import polarity
 from backend.pipeline.auto_ai import (
     INFLIGHT_LOCK_FILENAME,
     LAST_OK_FILENAME,
@@ -615,13 +616,77 @@ def ai_compact_tags_step(self, prev: Mapping[str, object] | None) -> dict[str, o
                 reason=reason_text,
             )
 
+    return payload
+
+
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def ai_polarity_check_step(self, prev: Mapping[str, object] | None) -> dict[str, object]:
+    """Run polarity classification after AI adjudication outputs are compacted."""
+
+    payload = _ensure_payload(prev)
+    sid = str(payload.get("sid") or "")
+    if not sid:
+        logger.info("AUTO_AI_POLARITY_SKIP payload=%s", payload)
+        return payload
+
+    _populate_common_paths(payload)
+
+    accounts_dir_value = payload.get("accounts_dir")
+    accounts_dir = Path(str(accounts_dir_value)) if accounts_dir_value else None
+    if accounts_dir is None:
+        logger.info("AUTO_AI_POLARITY_SKIP sid=%s reason=no_accounts_dir", sid)
+        removed = _cleanup_lock(payload, reason="polarity_missing_accounts_dir")
+        logger.info(
+            "AUTO_AI_CHAIN_END sid=%s lock_removed=%s packs=%s pairs=%s",
+            sid,
+            1 if removed else 0,
+            payload.get("packs"),
+            payload.get("pairs"),
+        )
+        return payload
+
+    indices = sorted(_normalize_indices(payload.get("touched_accounts", [])))
+    if not indices:
+        logger.info("AUTO_AI_POLARITY_SKIP sid=%s reason=no_indices", sid)
+        removed = _cleanup_lock(payload, reason="polarity_no_indices")
+        logger.info(
+            "AUTO_AI_CHAIN_END sid=%s lock_removed=%s packs=%s pairs=%s",
+            sid,
+            1 if removed else 0,
+            payload.get("packs"),
+            payload.get("pairs"),
+        )
+        return payload
+
+    logger.info("AI_POLARITY_START sid=%s accounts=%d", sid, len(indices))
+
+    try:
+        result = polarity.apply_polarity_checks(accounts_dir, indices)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.error("AUTO_AI_POLARITY_FAILED sid=%s dir=%s", sid, accounts_dir, exc_info=True)
+        _cleanup_lock(payload, reason="polarity_failed")
+        raise
+
+    payload["polarity_processed"] = result.processed_accounts
+    payload["polarity_updated"] = result.updated_accounts
+    if result.config_digest:
+        payload["polarity_config_digest"] = result.config_digest
+
+    logger.info(
+        "AI_POLARITY_END sid=%s processed=%d updated=%d",
+        sid,
+        result.processed_accounts,
+        len(result.updated_accounts),
+    )
+
     removed = _cleanup_lock(payload, reason="chain_complete")
     logger.info(
-        "AUTO_AI_CHAIN_END sid=%s lock_removed=%s packs=%s pairs=%s",
+        "AUTO_AI_CHAIN_END sid=%s lock_removed=%s packs=%s pairs=%s polarity=%d",
         sid,
         1 if removed else 0,
-        packs_count,
-        pairs_count,
+        payload.get("packs"),
+        payload.get("pairs"),
+        result.processed_accounts,
     )
 
     return payload
@@ -639,6 +704,7 @@ def enqueue_auto_ai_chain(sid: str, runs_root: Path | str | None = None) -> str:
         ai_build_packs_step.s(),
         ai_send_packs_step.s(),
         ai_compact_tags_step.s(),
+        ai_polarity_check_step.s(),
     )
 
     result = workflow.apply_async()

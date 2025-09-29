@@ -1,0 +1,101 @@
+fields:
+  balance_owed:
+    type: money
+    rules:
+      - if: "value > 0"
+        polarity: bad
+        severity: high
+      - if: "value == 0"
+        polarity: good
+        severity: medium
+
+  past_due_amount:
+    type: money
+    rules:
+      - if: "value > 0"
+        polarity: bad
+        severity: high
+      - if: "value == 0"
+        polarity: good
+        severity: medium
+
+  payment_status:
+    type: text
+    bad_keywords:
+      - "collection"
+      - "chargeoff"
+      - "charge-off"
+      - "repossession"
+      - "late 120"
+      - "late 90"
+    good_keywords:
+      - "paid in full"
+      - "paid as agreed"
+      - "current"
+      - "never late"
+    neutral_keywords:
+      - "unknown"
+      - "--"
+    default: unknown
+    weights:
+      bad: high
+      good: medium
+      neutral: low
+
+  account_status:
+    type: text
+    bad_keywords: [ "collection", "chargeoff", "repossession" ]
+    good_keywords: [ "closed - paid", "paid", "current" ]
+    neutral_keywords: [ "open", "closed", "--" ]
+    default: unknown
+    weights: { bad: high, good: medium, neutral: low }
+
+  closed_date:
+    type: date
+    rules:
+      - if: "is_present == true"
+        polarity: good
+        severity: low
+      - if: "is_present == false"
+        polarity: neutral
+        severity: low
+
+  last_payment:
+    type: date
+    rules:
+      - if: "is_present == true"
+        polarity: good
+        severity: medium
+      - if: "is_present == false"
+        polarity: neutral
+        severity: low
+
+  creditor_remarks:
+    type: text
+    bad_keywords:
+      - "placed for collection"
+      - "assigned to attorney"
+      - "internal collections"
+      - "charged off"
+    good_keywords:
+      - "dispute resolved - consumer agrees"
+      - "paid/settled"
+    neutral_keywords: [ "account information disputed", "--" ]
+    default: neutral
+    weights: { bad: medium, good: low, neutral: low }
+
+  account_type:
+    type: text
+    bad_keywords: [ "collection" ]
+    good_keywords: [ "installment", "revolving", "mortgage" ]
+    neutral_keywords: [ "--" ]
+    default: unknown
+    weights: { bad: medium, good: low, neutral: low }
+
+  creditor_type:
+    type: text
+    bad_keywords: [ "collection agencies", "debt buyers" ]
+    good_keywords: [ "bank credit cards", "auto financing" ]
+    neutral_keywords: [ "all banks", "--" ]
+    default: neutral
+    weights: { bad: medium, good: low, neutral: low }

@@ -85,6 +85,78 @@ def _setup_merge_case(runs_root: Path, sid: str = "codex-flow") -> tuple[str, Pa
     accounts_root = runs_root / sid / "cases" / "accounts"
     account_a = accounts_root / "11"
     account_b = accounts_root / "16"
+    bureaus_positive = {
+        "order": ["transunion", "experian", "equifax"],
+        "transunion": {
+            "balance_owed": "$0",
+            "past_due_amount": "$0",
+            "payment_status": "Paid as agreed",
+            "account_status": "Closed - Paid",
+            "closed_date": "2024-02-01",
+            "last_payment": "2024-02-11",
+            "creditor_remarks": "Dispute resolved - consumer agrees",
+            "account_type": "Installment",
+            "creditor_type": "Bank Credit Cards",
+        },
+        "experian": {
+            "balance_owed": "$0",
+            "past_due_amount": "$0",
+            "payment_status": "Paid as agreed",
+            "account_status": "Closed - Paid",
+            "closed_date": "2024-02-01",
+            "last_payment": "2024-02-11",
+            "creditor_remarks": "Dispute resolved - consumer agrees",
+            "account_type": "Installment",
+            "creditor_type": "Bank Credit Cards",
+        },
+        "equifax": {
+            "balance_owed": "$0",
+            "past_due_amount": "$0",
+            "payment_status": "Paid as agreed",
+            "account_status": "Closed - Paid",
+            "closed_date": "2024-02-01",
+            "last_payment": "2024-02-11",
+            "creditor_remarks": "Dispute resolved - consumer agrees",
+            "account_type": "Installment",
+            "creditor_type": "Bank Credit Cards",
+        },
+    }
+    bureaus_negative = {
+        "order": ["transunion", "experian", "equifax"],
+        "transunion": {
+            "balance_owed": "$12,091",
+            "past_due_amount": "$6,217",
+            "payment_status": "Collection/Chargeoff",
+            "account_status": "Collection",
+            "closed_date": "--",
+            "last_payment": "--",
+            "creditor_remarks": "Charged off account",
+            "account_type": "Collection",
+            "creditor_type": "Collection Agencies",
+        },
+        "experian": {
+            "balance_owed": "$12,091",
+            "past_due_amount": "$6,217",
+            "payment_status": "Collection/Chargeoff",
+            "account_status": "Collection",
+            "closed_date": "--",
+            "last_payment": "--",
+            "creditor_remarks": "Charged off account",
+            "account_type": "Collection",
+            "creditor_type": "Collection Agencies",
+        },
+        "equifax": {
+            "balance_owed": "$12,091",
+            "past_due_amount": "$6,217",
+            "payment_status": "Collection/Chargeoff",
+            "account_status": "Collection",
+            "closed_date": "--",
+            "last_payment": "--",
+            "creditor_remarks": "Charged off account",
+            "account_type": "Collection",
+            "creditor_type": "Collection Agencies",
+        },
+    }
     _write_raw_lines(
         account_a / "raw_lines.json",
         [
@@ -105,6 +177,8 @@ def _setup_merge_case(runs_root: Path, sid: str = "codex-flow") -> tuple[str, Pa
             "Remarks: Referred to collections",
         ],
     )
+    _write_json(account_a / "bureaus.json", bureaus_positive)
+    _write_json(account_b / "bureaus.json", bureaus_negative)
     _write_json(account_a / "tags.json", [_merge_best_tag(16)])
     _write_json(account_b / "tags.json", [_merge_best_tag(11)])
     return sid, account_a, account_b
@@ -387,11 +461,13 @@ def test_enqueue_auto_ai_chain_orders_signatures(monkeypatch) -> None:
     build_recorder = _Recorder("build")
     send_recorder = _Recorder("send")
     compact_recorder = _Recorder("compact")
+    polarity_recorder = _Recorder("polarity")
 
     monkeypatch.setattr(auto_ai_tasks, "ai_score_step", score_recorder)
     monkeypatch.setattr(auto_ai_tasks, "ai_build_packs_step", build_recorder)
     monkeypatch.setattr(auto_ai_tasks, "ai_send_packs_step", send_recorder)
     monkeypatch.setattr(auto_ai_tasks, "ai_compact_tags_step", compact_recorder)
+    monkeypatch.setattr(auto_ai_tasks, "ai_polarity_check_step", polarity_recorder)
 
     chain_calls: dict[str, Any] = {}
 
@@ -420,6 +496,7 @@ def test_enqueue_auto_ai_chain_orders_signatures(monkeypatch) -> None:
         ("build", ()),
         ("send", ()),
         ("compact", ()),
+        ("polarity", ()),
     )
     assert chain_calls["apply_async"] == chain_calls["steps"]
 
@@ -432,6 +509,41 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     account_root = runs_root / sid / "cases" / "accounts"
     account_a = account_root / "11"
     account_b = account_root / "16"
+
+    _write_json(
+        account_a / "bureaus.json",
+        {
+            "order": ["transunion"],
+            "transunion": {
+                "balance_owed": "$0",
+                "past_due_amount": "$0",
+                "payment_status": "Paid as agreed",
+                "account_status": "Closed - Paid",
+                "closed_date": "2024-02-01",
+                "last_payment": "2024-02-11",
+                "creditor_remarks": "Dispute resolved - consumer agrees",
+                "account_type": "Installment",
+                "creditor_type": "Bank Credit Cards",
+            },
+        },
+    )
+    _write_json(
+        account_b / "bureaus.json",
+        {
+            "order": ["transunion"],
+            "transunion": {
+                "balance_owed": "$12,091",
+                "past_due_amount": "$6,217",
+                "payment_status": "Collection/Chargeoff",
+                "account_status": "Collection",
+                "closed_date": "--",
+                "last_payment": "--",
+                "creditor_remarks": "Charged off account",
+                "account_type": "Collection",
+                "creditor_type": "Collection Agencies",
+            },
+        },
+    )
 
     _write_json(account_a / "tags.json", [_issue_tag(), _merge_best_verbose(16)])
     _write_json(account_b / "tags.json", [_issue_tag(), _merge_best_verbose(11)])
@@ -515,7 +627,8 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     payload = auto_ai_tasks.ai_score_step.run(sid, str(runs_root))
     payload = auto_ai_tasks.ai_build_packs_step.run(payload)
     payload = auto_ai_tasks.ai_send_packs_step.run(payload)
-    first_result = auto_ai_tasks.ai_compact_tags_step.run(payload)
+    payload = auto_ai_tasks.ai_compact_tags_step.run(payload)
+    first_result = auto_ai_tasks.ai_polarity_check_step.run(payload)
 
     merge_paths = ensure_merge_paths(runs_root, sid, create=False)
     packs_index = json.loads(
@@ -546,6 +659,19 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     assert tags_a_first == _expected_minimal_tags(16, timestamp=timestamp)
     assert tags_b_first == _expected_minimal_tags(11, timestamp=timestamp)
     assert summary_a_first["merge_explanations"][0]["with"] == 16
+    for summary in (summary_a_first, summary_b_first):
+        block = summary.get("polarity_check")
+        assert block is not None
+        assert block.get("schema_version") == 1
+        assert "bureaus" in block
+    assert (
+        summary_a_first["polarity_check"]["bureaus"]["transunion"]["balance_owed"]["polarity"]
+        == "good"
+    )
+    assert (
+        summary_b_first["polarity_check"]["bureaus"]["transunion"]["balance_owed"]["polarity"]
+        == "bad"
+    )
     ai_entries_b = summary_b_first["ai_explanations"]
     assert {entry["kind"] for entry in ai_entries_b} == {
         "ai_decision",
@@ -564,7 +690,8 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     payload = auto_ai_tasks.ai_score_step.run(sid, str(runs_root))
     payload = auto_ai_tasks.ai_build_packs_step.run(payload)
     payload = auto_ai_tasks.ai_send_packs_step.run(payload)
-    second_result = auto_ai_tasks.ai_compact_tags_step.run(payload)
+    payload = auto_ai_tasks.ai_compact_tags_step.run(payload)
+    second_result = auto_ai_tasks.ai_polarity_check_step.run(payload)
 
     assert second_result["packs"] == 1
     assert second_result["pairs"] == 2

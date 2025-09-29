@@ -1,7 +1,13 @@
 """Contract tests for AI adjudicator normalization."""
 from __future__ import annotations
 
-from backend.core.ai.adjudicator import _normalize_and_validate_decision
+import pytest
+
+from backend.core.ai.adjudicator import (
+    AdjudicatorError,
+    _normalize_and_validate_decision,
+    validate_ai_payload,
+)
 
 
 def test_normalizes_decision_to_match_flags() -> None:
@@ -38,3 +44,40 @@ def test_keeps_merge_when_flags_strong_match() -> None:
     assert normalized["flags"] == {"account_match": True, "debt_match": True}
     assert normalized["normalized"] is True
     assert was_normalized is True
+
+
+def test_validate_ai_payload_coerces_boolean_flags() -> None:
+    payload = {
+        "decision": "same_account_same_debt",
+        "reason": "accounts align",
+        "flags": {"account_match": True, "debt_match": False},
+    }
+
+    normalized = validate_ai_payload(payload)
+
+    assert normalized == {
+        "decision": "same_account_same_debt",
+        "flags": {"account_match": "true", "debt_match": "false"},
+        "reason": "accounts align",
+    }
+
+
+def test_validate_ai_payload_defaults_unknown_for_missing_flags() -> None:
+    payload = {"decision": "same_account_same_debt", "reason": "accounts align"}
+
+    normalized = validate_ai_payload(payload)
+
+    assert normalized["flags"] == {
+        "account_match": "unknown",
+        "debt_match": "unknown",
+    }
+
+
+def test_validate_ai_payload_rejects_invalid_flag() -> None:
+    payload = {
+        "decision": "same_account_same_debt",
+        "flags": {"account_match": "maybe", "debt_match": "false"},
+    }
+
+    with pytest.raises(AdjudicatorError, match="Flags outside contract"):
+        validate_ai_payload(payload)

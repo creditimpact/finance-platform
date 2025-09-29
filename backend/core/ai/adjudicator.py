@@ -71,6 +71,38 @@ ALLOWED_FLAGS_ACCOUNT: set[str] = {"true", "false", "unknown"}
 ALLOWED_FLAGS_DEBT: set[str] = {"true", "false", "unknown"}
 
 
+def _coerce_flag(value: Any) -> str:
+    """Return a lowercase flag string from a boolean or string value."""
+
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value).strip().lower()
+
+
+def validate_ai_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Validate and normalize a raw AI payload against the decision contract."""
+
+    decision = str(payload.get("decision", "")).strip()
+    if decision not in ALLOWED_DECISIONS:
+        raise AdjudicatorError(f"Decision outside contract: {decision!r}")
+
+    flags_raw = payload.get("flags", {})
+    if not isinstance(flags_raw, Mapping):
+        raise AdjudicatorError("Flags outside contract")
+
+    account_flag = _coerce_flag(flags_raw.get("account_match", "unknown"))
+    debt_flag = _coerce_flag(flags_raw.get("debt_match", "unknown"))
+
+    if account_flag not in ALLOWED_FLAGS_ACCOUNT or debt_flag not in ALLOWED_FLAGS_DEBT:
+        raise AdjudicatorError("Flags outside contract")
+
+    return {
+        "decision": decision,
+        "flags": {"account_match": account_flag, "debt_match": debt_flag},
+        "reason": payload.get("reason"),
+    }
+
+
 class AdjudicatorError(ValueError):
     """Raised when the AI adjudicator response is malformed."""
 

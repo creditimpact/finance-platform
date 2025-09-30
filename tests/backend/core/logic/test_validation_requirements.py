@@ -48,6 +48,7 @@ def test_build_validation_requirements_uses_config_and_defaults():
     assert "monthly_statement" in balance_rule["documents"]
     assert balance_rule["strength"] == "strong"
     assert balance_rule["ai_needed"] is False
+    assert balance_rule["bureaus"] == ["equifax", "experian", "transunion"]
 
     mystery_rule = next(entry for entry in requirements if entry["field"] == "mystery_field")
     assert mystery_rule["category"] == "unknown"
@@ -55,6 +56,7 @@ def test_build_validation_requirements_uses_config_and_defaults():
     assert mystery_rule["documents"] == []
     assert mystery_rule["strength"] == "soft"
     assert mystery_rule["ai_needed"] is False
+    assert mystery_rule["bureaus"] == ["equifax", "experian", "transunion"]
     assert set(inconsistencies.keys()) == {"balance_owed", "mystery_field"}
 
 
@@ -67,6 +69,7 @@ def test_build_summary_payload_includes_field_consistency():
             "documents": ["monthly_statement"],
             "strength": "strong",
             "ai_needed": False,
+            "bureaus": ["experian", "transunion"],
         }
     ]
     field_consistency = {
@@ -293,6 +296,8 @@ def test_build_validation_requirements_for_account_writes_summary_and_tags(
         "balance_owed",
         "payment_status",
     }
+    for entry in validation_payload["requirements"]:
+        assert entry["bureaus"] == ["equifax", "experian", "transunion"]
 
     summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["existing"] is True
@@ -300,6 +305,8 @@ def test_build_validation_requirements_for_account_writes_summary_and_tags(
     assert validation_block["count"] == 2
     fields = {entry["field"] for entry in validation_block["requirements"]}
     assert fields == {"balance_owed", "payment_status"}
+    for entry in validation_block["requirements"]:
+        assert entry["bureaus"] == ["equifax", "experian", "transunion"]
     field_consistency = validation_block["field_consistency"]
     assert set(field_consistency.keys()) == {"balance_owed", "payment_status"}
     assert field_consistency["balance_owed"]["consensus"] in {"majority", "split"}

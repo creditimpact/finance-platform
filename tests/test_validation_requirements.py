@@ -78,11 +78,11 @@ def test_histories_require_strong_policy(account_with_histories):
     ]
 
     history_norm = inconsistencies["two_year_payment_history"]["normalized"]
-    assert history_norm["transunion"]["codes"] == ("CO", "30", "OK", "120")
-    assert history_norm["transunion"]["summary"]["co_count"] == 1
-    assert history_norm["transunion"]["summary"]["late30"] == 1
-    assert history_norm["experian"]["codes"] == ("OK", "OK", "OK")
-    assert history_norm["equifax"] is None
+    assert history_norm["transunion"]["tokens"] == ["CO", "30", "OK", "120"]
+    assert history_norm["transunion"]["counts"]["CO"] == 1
+    assert history_norm["transunion"]["counts"]["late30"] == 1
+    assert history_norm["experian"]["tokens"] == ["OK", "OK", "OK"]
+    assert history_norm["equifax"]["tokens"] == []
 
     assert "seven_year_history" in requirements
     seven_rule = requirements["seven_year_history"]
@@ -97,7 +97,7 @@ def test_histories_require_strong_policy(account_with_histories):
 
     seven_norm = inconsistencies["seven_year_history"]["normalized"]
     assert seven_norm["transunion"]["late30"] == 2
-    assert seven_norm["transunion"]["co_count"] == 1
+    assert seven_norm["transunion"]["late90"] == 1
     assert seven_norm["experian"]["late30"] == 0
     assert seven_norm["equifax"]["late30"] == 0
 
@@ -124,15 +124,21 @@ def test_dates_are_normalized(account_date_mismatch):
     assert normalized["experian"] == "2023-08-01"
 
 
-def test_account_number_masking_is_unanimous(account_number_masking_only):
-    requirements, _ = _requirements_by_field(account_number_masking_only)
+def test_account_number_masking_needs_soft_review(account_number_masking_only):
+    requirements, inconsistencies = _requirements_by_field(account_number_masking_only)
 
-    assert requirements == {}
+    assert "account_number_display" in requirements
+    rule = requirements["account_number_display"]
+    assert rule["strength"] == "soft"
+    assert rule["ai_needed"] is True
+    assert rule["bureaus"] == ["equifax", "experian", "transunion"]
 
     field_consistency = compute_field_consistency(account_number_masking_only)
-    assert (
-        field_consistency["account_number_display"]["consensus"] == "unanimous"
-    )
+    assert field_consistency["account_number_display"]["consensus"] == "majority"
+    normalized = inconsistencies["account_number_display"]["normalized"]
+    assert normalized["transunion"]["last4"] == "4567"
+    assert normalized["experian"]["last4"] == "4567"
+    assert normalized["equifax"]["last4"] is None
 
 
 def test_soft_semantics_require_ai(account_soft_semantics):
@@ -186,8 +192,8 @@ def test_sanity_example_strong_and_soft_requirements():
     two_year_consensus = inconsistencies["two_year_payment_history"]["consensus"]
     assert two_year_consensus in {"majority", "split"}
     two_year_norm = inconsistencies["two_year_payment_history"]["normalized"]
-    assert two_year_norm["experian"]["summary"]["co_count"] == 24
-    assert two_year_norm["transunion"] is None
+    assert two_year_norm["experian"]["counts"]["CO"] == 24
+    assert two_year_norm["transunion"]["tokens"] == []
 
     assert "seven_year_history" in requirements
     seven_rule = requirements["seven_year_history"]

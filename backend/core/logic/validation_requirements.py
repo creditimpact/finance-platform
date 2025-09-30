@@ -43,6 +43,9 @@ class ValidationRule:
     category: str
     min_days: int
     documents: tuple[str, ...]
+    points: int
+    strength: str
+    ai_needed: bool
 
 
 @dataclass(frozen=True)
@@ -81,6 +84,36 @@ def _coerce_category(raw: Any, fallback: str) -> str:
     return text or str(fallback)
 
 
+def _coerce_points(raw: Any, fallback: int) -> int:
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return int(fallback)
+
+
+def _coerce_strength(raw: Any, fallback: str) -> str:
+    if raw is None:
+        return fallback
+    text = str(raw).strip().lower()
+    if text in {"strong", "soft"}:
+        return text
+    return fallback
+
+
+def _coerce_ai_needed(raw: Any, fallback: bool) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        lowered = raw.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return bool(raw)
+    return fallback
+
+
 @lru_cache(maxsize=1)
 def load_validation_config(path: str | Path = _CONFIG_PATH) -> ValidationConfig:
     """Load validation metadata from YAML configuration."""
@@ -90,7 +123,7 @@ def load_validation_config(path: str | Path = _CONFIG_PATH) -> ValidationConfig:
         raw_text = config_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         logger.warning("VALIDATION_CONFIG_MISSING path=%s", config_path)
-        defaults = ValidationRule("unspecified", 3, tuple())
+        defaults = ValidationRule("unknown", 3, tuple(), 3, "soft", False)
         return ValidationConfig(defaults=defaults, fields={})
 
     try:
@@ -101,15 +134,28 @@ def load_validation_config(path: str | Path = _CONFIG_PATH) -> ValidationConfig:
 
     defaults_raw = loaded.get("defaults") if isinstance(loaded, Mapping) else None
     if isinstance(defaults_raw, Mapping):
-        default_category = _coerce_category(defaults_raw.get("category"), "unspecified")
+        default_category = _coerce_category(defaults_raw.get("category"), "unknown")
         default_min_days = _coerce_min_days(defaults_raw.get("min_days"), 3)
         default_documents = _coerce_documents(defaults_raw.get("documents"), ())
+        default_points = _coerce_points(defaults_raw.get("points"), 3)
+        default_strength = _coerce_strength(defaults_raw.get("strength"), "soft")
+        default_ai_needed = _coerce_ai_needed(defaults_raw.get("ai_needed"), False)
     else:
-        default_category = "unspecified"
+        default_category = "unknown"
         default_min_days = 3
         default_documents = tuple()
+        default_points = 3
+        default_strength = "soft"
+        default_ai_needed = False
 
-    defaults = ValidationRule(default_category, default_min_days, default_documents)
+    defaults = ValidationRule(
+        default_category,
+        default_min_days,
+        default_documents,
+        default_points,
+        default_strength,
+        default_ai_needed,
+    )
 
     fields_cfg: Dict[str, ValidationRule] = {}
     fields_raw = loaded.get("fields") if isinstance(loaded, Mapping) else None
@@ -120,7 +166,12 @@ def load_validation_config(path: str | Path = _CONFIG_PATH) -> ValidationConfig:
             category = _coerce_category(value.get("category"), defaults.category)
             min_days = _coerce_min_days(value.get("min_days"), defaults.min_days)
             documents = _coerce_documents(value.get("documents"), defaults.documents)
-            fields_cfg[str(key)] = ValidationRule(category, min_days, documents)
+            points = _coerce_points(value.get("points"), defaults.points)
+            strength = _coerce_strength(value.get("strength"), defaults.strength)
+            ai_needed = _coerce_ai_needed(value.get("ai_needed"), defaults.ai_needed)
+            fields_cfg[str(key)] = ValidationRule(
+                category, min_days, documents, points, strength, ai_needed
+            )
 
     return ValidationConfig(defaults=defaults, fields=fields_cfg)
 
@@ -142,6 +193,8 @@ def build_validation_requirements(
                 "category": rule.category,
                 "min_days": rule.min_days,
                 "documents": list(rule.documents),
+                "strength": rule.strength,
+                "ai_needed": rule.ai_needed,
             }
         )
 

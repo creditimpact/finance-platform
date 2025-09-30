@@ -41,11 +41,46 @@ def test_build_validation_requirements_uses_config_and_defaults():
     assert balance_rule["category"] == "activity"
     assert balance_rule["min_days"] == 8
     assert "monthly_statement" in balance_rule["documents"]
+    assert balance_rule["strength"] == "strong"
+    assert balance_rule["ai_needed"] is False
 
     mystery_rule = next(entry for entry in requirements if entry["field"] == "mystery_field")
-    assert mystery_rule["category"] == "unspecified"
+    assert mystery_rule["category"] == "unknown"
     assert mystery_rule["min_days"] == 3
     assert mystery_rule["documents"] == []
+    assert mystery_rule["strength"] == "soft"
+    assert mystery_rule["ai_needed"] is False
+
+
+def test_compute_inconsistent_fields_handles_histories():
+    bureaus = {
+        "transunion": {"account_status": "Open"},
+        "experian": {"account_status": "Open"},
+        "equifax": {"account_status": "Open"},
+        "two_year_payment_history": {
+            "transunion": ["OK", "30", "60"],
+            "experian": ["ok", "30", "60"],
+            "equifax": ["OK", "60", "90"],
+        },
+        "seven_year_history": {
+            "transunion": {"late30": 0, "late60": 0, "late90": 0},
+            "experian": {"late30": 0, "late60": 0, "late90": 0},
+            "equifax": {"late30": 1, "late60": 0, "late90": 0},
+        },
+    }
+
+    inconsistencies = compute_inconsistent_fields(bureaus)
+
+    assert "two_year_payment_history" in inconsistencies
+    history_norm = inconsistencies["two_year_payment_history"]["normalized"]
+    assert history_norm["transunion"] == ("OK", "30", "60")
+    assert history_norm["experian"] == ("OK", "30", "60")
+    assert history_norm["equifax"] == ("OK", "60", "90")
+
+    assert "seven_year_history" in inconsistencies
+    seven_norm = inconsistencies["seven_year_history"]["normalized"]
+    assert seven_norm["transunion"] == (("LATE30", 0), ("LATE60", 0), ("LATE90", 0))
+    assert seven_norm["equifax"] == (("LATE30", 1), ("LATE60", 0), ("LATE90", 0))
 
 
 def test_apply_validation_summary_and_sync_validation_tag(tmp_path):

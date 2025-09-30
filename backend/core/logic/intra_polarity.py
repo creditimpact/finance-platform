@@ -131,32 +131,17 @@ def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[
             severity_value = classification.get("severity")
             severity = str(severity_value) if severity_value else "low"
             bureau_results = bureaus_block.setdefault(bureau_key, {})
-            evidence = classification.get("evidence")
-            evidence_map = evidence if isinstance(evidence, Mapping) else {}
-
             cell: Dict[str, Any] = {
                 "polarity": polarity,
                 "severity": severity,
             }
             if include_vals:
                 cell["value_raw"] = raw_value
-                cell["value_norm"] = evidence_map.get("parsed")
+                cell["value_norm"] = classification.get("value_norm")
 
             if include_rules:
-                matched_keyword = evidence_map.get("matched_keyword")
-                matched_rule = evidence_map.get("matched_rule")
-                rule_hit: Any = None
-                reason: str | None = None
-
-                if matched_keyword:
-                    rule_hit = str(matched_keyword)
-                    reason = f"contains '{rule_hit}'"
-                elif matched_rule:
-                    rule_hit = str(matched_rule)
-                    reason = f"matched rule \"{rule_hit}\""
-                else:
-                    reason = "no rule matched"
-
+                rule_hit = classification.get("rule_hit")
+                reason = classification.get("reason")
                 if rule_hit is not None:
                     cell["rule_hit"] = rule_hit
                 if reason is not None:

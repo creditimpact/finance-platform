@@ -75,16 +75,25 @@ def test_classify_money_field(monkeypatch, tmp_path: Path) -> None:
     positive = polarity.classify_field_value("balance", "$120.00")
     assert positive["polarity"] == "bad"
     assert positive["severity"] == "high"
+    assert positive["value_norm"] == 120.0
+    assert positive["rule_hit"] == "value > 0"
+    assert positive["reason"] == 'condition "value > 0" matched'
     assert positive["evidence"]["matched_rule"] == "value > 0"
     assert positive["evidence"]["parsed"] == 120.0
 
     zero = polarity.classify_field_value("balance", "$0")
     assert zero["polarity"] == "good"
     assert zero["severity"] == "medium"
+    assert zero["value_norm"] == 0.0
+    assert zero["rule_hit"] == "value == 0"
+    assert zero["reason"] == 'condition "value == 0" matched'
 
     missing = polarity.classify_field_value("balance", "--")
     assert missing["polarity"] == "unknown"
     assert missing["severity"] == "low"
+    assert missing["value_norm"] is None
+    assert missing["rule_hit"] is None
+    assert missing["reason"] == "value missing or invalid"
     assert missing["evidence"]["parsed"] is None
 
 
@@ -109,15 +118,24 @@ def test_classify_text_field(monkeypatch, tmp_path: Path) -> None:
     bad = polarity.classify_field_value("payment_status", "Account in Collection")
     assert bad["polarity"] == "bad"
     assert bad["severity"] == "high"
+    assert bad["value_norm"] == "account in collection"
+    assert bad["rule_hit"] == "collection"
+    assert bad["reason"] == "matched bad keyword 'collection'"
     assert bad["evidence"]["matched_keyword"] == "collection"
 
     good = polarity.classify_field_value("payment_status", "Paid in Full")
     assert good["polarity"] == "good"
     assert good["severity"] == "medium"
+    assert good["value_norm"] == "paid in full"
+    assert good["rule_hit"] == "paid in full"
+    assert good["reason"] == "matched good keyword 'paid in full'"
 
     default = polarity.classify_field_value("payment_status", "unknown status")
     assert default["polarity"] == "unknown"
     assert default["severity"] == "low"
+    assert default["value_norm"] == "unknown status"
+    assert default["rule_hit"] is None
+    assert default["reason"] == "default polarity 'unknown'"
 
 
 def test_classify_date_field(monkeypatch, tmp_path: Path) -> None:
@@ -140,10 +158,16 @@ def test_classify_date_field(monkeypatch, tmp_path: Path) -> None:
     present = polarity.classify_field_value("closed_date", "2024-01-01")
     assert present["polarity"] == "good"
     assert present["evidence"]["matched_rule"] == "is_present == true"
+    assert present["value_norm"] is True
+    assert present["rule_hit"] == "is_present == true"
+    assert present["reason"] == 'condition "is_present == true" matched'
 
     missing = polarity.classify_field_value("closed_date", "--")
     assert missing["polarity"] == "neutral"
     assert missing["severity"] == "low"
+    assert missing["value_norm"] is False
+    assert missing["rule_hit"] == "is_present == false"
+    assert missing["reason"] == 'condition "is_present == false" matched'
 
 
 def test_classify_unknown_field(monkeypatch, tmp_path: Path) -> None:
@@ -152,6 +176,9 @@ def test_classify_unknown_field(monkeypatch, tmp_path: Path) -> None:
     assert result == {
         "polarity": "unknown",
         "severity": "low",
+        "value_norm": None,
+        "rule_hit": None,
+        "reason": "field not configured",
         "evidence": {"parsed": None},
     }
 

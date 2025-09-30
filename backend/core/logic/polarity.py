@@ -207,16 +207,39 @@ def _safe_eval_boolean(expression: str, variables: Mapping[str, Any]) -> bool:
     return bool(result)
 
 
+def _build_result(
+    polarity: Polarity,
+    severity: Severity,
+    *,
+    value_norm: Any = None,
+    rule_hit: str | None = None,
+    reason: str | None = None,
+    evidence: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "polarity": polarity,
+        "severity": severity,
+        "value_norm": value_norm,
+        "rule_hit": rule_hit,
+        "reason": reason,
+        "evidence": evidence or {},
+    }
+    return result
+
+
 def _evaluate_money(field_cfg: Mapping[str, Any], raw_value: Any) -> Dict[str, Any]:
     parsed_value = parse_money(raw_value)
     evidence: Dict[str, Any] = {"parsed": parsed_value}
 
     if parsed_value is None:
-        return {
-            "polarity": "unknown",
-            "severity": "low",
-            "evidence": evidence,
-        }
+        return _build_result(
+            "unknown",
+            "low",
+            value_norm=None,
+            rule_hit=None,
+            reason="value missing or invalid",
+            evidence=evidence,
+        )
 
     rules = field_cfg.get("rules")
     if isinstance(rules, Iterable):
@@ -230,17 +253,30 @@ def _evaluate_money(field_cfg: Mapping[str, Any], raw_value: Any) -> Dict[str, A
                 evidence["matched_rule"] = condition
                 polarity = _normalize_polarity(rule.get("polarity"))
                 severity = _normalize_severity(rule.get("severity"))
-                return {
-                    "polarity": polarity,
-                    "severity": severity,
-                    "evidence": evidence,
-                }
+                rule_name = rule.get("name")
+                rule_hit = str(rule_name) if isinstance(rule_name, str) else condition
+                reason_value = rule.get("reason")
+                if isinstance(reason_value, str) and reason_value.strip():
+                    reason = reason_value.strip()
+                else:
+                    reason = f"condition \"{condition}\" matched"
+                return _build_result(
+                    polarity,
+                    severity,
+                    value_norm=parsed_value,
+                    rule_hit=rule_hit,
+                    reason=reason,
+                    evidence=evidence,
+                )
 
-    return {
-        "polarity": "unknown",
-        "severity": "low",
-        "evidence": evidence,
-    }
+    return _build_result(
+        "unknown",
+        "low",
+        value_norm=parsed_value,
+        rule_hit=None,
+        reason="no rule matched",
+        evidence=evidence,
+    )
 
 
 def _evaluate_date(field_cfg: Mapping[str, Any], raw_value: Any) -> Dict[str, Any]:
@@ -259,18 +295,32 @@ def _evaluate_date(field_cfg: Mapping[str, Any], raw_value: Any) -> Dict[str, An
                 evidence["matched_rule"] = condition
                 polarity = _normalize_polarity(rule.get("polarity"))
                 severity = _normalize_severity(rule.get("severity"))
-                return {
-                    "polarity": polarity,
-                    "severity": severity,
-                    "evidence": evidence,
-                }
+                rule_name = rule.get("name")
+                rule_hit = str(rule_name) if isinstance(rule_name, str) else condition
+                reason_value = rule.get("reason")
+                if isinstance(reason_value, str) and reason_value.strip():
+                    reason = reason_value.strip()
+                else:
+                    reason = f"condition \"{condition}\" matched"
+                return _build_result(
+                    polarity,
+                    severity,
+                    value_norm=present,
+                    rule_hit=rule_hit,
+                    reason=reason,
+                    evidence=evidence,
+                )
 
     polarity = "neutral" if present else "unknown"
-    return {
-        "polarity": polarity,
-        "severity": "low",
-        "evidence": evidence,
-    }
+    reason = "date present" if present else "date missing"
+    return _build_result(
+        polarity,
+        "low",
+        value_norm=present,
+        rule_hit=None,
+        reason=reason,
+        evidence=evidence,
+    )
 
 
 def _match_keyword(normalized_value: str, keywords: Iterable[Any]) -> Optional[str]:
@@ -298,19 +348,27 @@ def _evaluate_text(field_cfg: Mapping[str, Any], raw_value: Any) -> Dict[str, An
                 evidence["matched_keyword"] = matched
                 polarity = _normalize_polarity(category)
                 severity = _normalize_severity(weight_map.get(category))
-                return {
-                    "polarity": polarity,
-                    "severity": severity,
-                    "evidence": evidence,
-                }
+                reason = f"matched {category} keyword '{matched}'"
+                return _build_result(
+                    polarity,
+                    severity,
+                    value_norm=normalized_value or None,
+                    rule_hit=matched,
+                    reason=reason,
+                    evidence=evidence,
+                )
 
     default_polarity = _normalize_polarity(field_cfg.get("default"))
     severity = _normalize_severity(weight_map.get(default_polarity))
-    return {
-        "polarity": default_polarity,
-        "severity": severity,
-        "evidence": evidence,
-    }
+    reason = f"default polarity '{default_polarity}'"
+    return _build_result(
+        default_polarity,
+        severity,
+        value_norm=normalized_value or None,
+        rule_hit=None,
+        reason=reason,
+        evidence=evidence,
+    )
 
 
 def classify_field_value(field: str, raw_value: Optional[str | int | float]) -> Dict[str, Any]:
@@ -323,11 +381,14 @@ def classify_field_value(field: str, raw_value: Optional[str | int | float]) -> 
 
     field_cfg = fields_cfg.get(field)
     if not isinstance(field_cfg, Mapping):
-        return {
-            "polarity": "unknown",
-            "severity": "low",
-            "evidence": {"parsed": None},
-        }
+        return _build_result(
+            "unknown",
+            "low",
+            value_norm=None,
+            rule_hit=None,
+            reason="field not configured",
+            evidence={"parsed": None},
+        )
 
     field_type = str(field_cfg.get("type") or "").strip().lower()
     if field_type == "money":
@@ -338,11 +399,14 @@ def classify_field_value(field: str, raw_value: Optional[str | int | float]) -> 
         return _evaluate_text(field_cfg, raw_value)
 
     logger.debug("POLARITY_UNKNOWN_FIELD_TYPE field=%s type=%r", field, field_type)
-    return {
-        "polarity": "unknown",
-        "severity": "low",
-        "evidence": {"parsed": None},
-    }
+    return _build_result(
+        "unknown",
+        "low",
+        value_norm=None,
+        rule_hit=None,
+        reason="unsupported field type",
+        evidence={"parsed": None},
+    )
 
 
 @dataclass(frozen=True)

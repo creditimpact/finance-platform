@@ -99,7 +99,7 @@ def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[
     bureaus_data = _load_bureaus(account_path, sid)
     fields = _extract_configured_fields()
 
-    bureaus_block: Dict[str, Dict[str, Dict[str, str]]] = {}
+    bureaus_block: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
     present_bureaus: list[str] = [
         bureau
@@ -114,6 +114,9 @@ def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[
         _format_bureau_list(present_bureaus),
     )
 
+    include_vals = os.getenv("POLARITY_INCLUDE_VALUES") == "1"
+    include_rules = os.getenv("POLARITY_INCLUDE_RULES") == "1"
+
     for field in fields:
         log_values: Dict[str, str] = {bureau: "-" for bureau in _BUREAU_KEYS}
         for bureau_key in _BUREAU_KEYS:
@@ -122,15 +125,45 @@ def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[
                 continue
             if field not in bureau_values:
                 continue
-            classification = classify_field_value(field, bureau_values.get(field))
+            raw_value = bureau_values.get(field)
+            classification = classify_field_value(field, raw_value)
             polarity = str(classification.get("polarity", "unknown"))
             severity_value = classification.get("severity")
             severity = str(severity_value) if severity_value else "low"
             bureau_results = bureaus_block.setdefault(bureau_key, {})
-            bureau_results[field] = {
+            evidence = classification.get("evidence")
+            evidence_map = evidence if isinstance(evidence, Mapping) else {}
+
+            cell: Dict[str, Any] = {
                 "polarity": polarity,
                 "severity": severity,
             }
+            if include_vals:
+                cell["value_raw"] = raw_value
+                cell["value_norm"] = evidence_map.get("parsed")
+
+            if include_rules:
+                matched_keyword = evidence_map.get("matched_keyword")
+                matched_rule = evidence_map.get("matched_rule")
+                rule_hit: Any = None
+                reason: str | None = None
+
+                if matched_keyword:
+                    rule_hit = str(matched_keyword)
+                    reason = f"contains '{rule_hit}'"
+                elif matched_rule:
+                    rule_hit = str(matched_rule)
+                    reason = f"matched rule \"{rule_hit}\""
+                else:
+                    reason = "no rule matched"
+
+                if rule_hit is not None:
+                    cell["rule_hit"] = rule_hit
+                if reason is not None:
+                    cell["reason"] = reason
+                cell["source"] = f"bureaus.json:{bureau_key}.{field}"
+
+            bureau_results[field] = cell
             _maybe_write_probe_tags(
                 account_path,
                 sid=sid,

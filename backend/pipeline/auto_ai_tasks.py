@@ -24,6 +24,7 @@ from backend.pipeline.auto_ai import (
     _normalize_indices,
     _send_ai_packs,
     has_ai_merge_best_pairs,
+    run_validation_requirements_for_all_accounts,
 )
 from backend.core.ai.validators import validate_ai_result
 from backend.core.io.tags import read_tags, upsert_tag
@@ -511,6 +512,48 @@ def ai_send_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, obj
 
 
 @shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def ai_validation_requirements_step(
+    self, prev: Mapping[str, object] | None
+) -> dict[str, object]:
+    """Populate validation requirements after AI adjudication results."""
+
+    payload = _ensure_payload(prev)
+    sid = str(payload.get("sid") or "")
+    if not sid:
+        logger.info("AUTO_AI_VALIDATION_SKIP payload=%s", payload)
+        return payload
+
+    _populate_common_paths(payload)
+
+    runs_root_value = payload.get("runs_root")
+    runs_root_path = Path(str(runs_root_value)) if runs_root_value else None
+
+    logger.info("AI_VALIDATION_REQUIREMENTS_START sid=%s", sid)
+
+    try:
+        stats = run_validation_requirements_for_all_accounts(
+            sid, runs_root=runs_root_path
+        )
+    except Exception:  # pragma: no cover - defensive logging
+        logger.error(
+            "AI_VALIDATION_REQUIREMENTS_FAILED sid=%s", sid, exc_info=True
+        )
+        _cleanup_lock(payload, reason="validation_requirements_failed")
+        raise
+
+    payload["validation_requirements"] = stats
+
+    logger.info(
+        "AI_VALIDATION_REQUIREMENTS_END sid=%s processed=%d requirements=%d",
+        sid,
+        stats.get("processed_accounts", 0),
+        stats.get("requirements", 0),
+    )
+
+    return payload
+
+
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
 def ai_compact_tags_step(self, prev: Mapping[str, object] | None) -> dict[str, object]:
     """Compact tags and summaries for accounts touched by the AI pipeline."""
 
@@ -703,6 +746,7 @@ def enqueue_auto_ai_chain(sid: str, runs_root: Path | str | None = None) -> str:
         ai_score_step.s(sid, runs_root_value),
         ai_build_packs_step.s(),
         ai_send_packs_step.s(),
+        ai_validation_requirements_step.s(),
         ai_compact_tags_step.s(),
         ai_polarity_check_step.s(),
     )

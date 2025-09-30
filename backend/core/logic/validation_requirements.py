@@ -398,10 +398,24 @@ def _apply_strength_policy(
     )
 
 
+def _resolve_validation_mode(config: ValidationConfig) -> str:
+    override = os.getenv("VALIDATION_MODE")
+    if override:
+        lowered = override.strip().lower()
+        if lowered in {"broad", "strict"}:
+            return lowered
+    return config.mode
+
+
 def _should_broadcast(config: ValidationConfig) -> bool:
     override = os.getenv("BROADCAST_DISPUTES")
     if override is not None:
         return override.strip() == "1"
+
+    mode = _resolve_validation_mode(config)
+    if mode == "broad":
+        return True
+
     return config.broadcast_disputes
 
 

@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
-from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 __all__ = ["compute_field_consistency", "compute_inconsistent_fields"]
 
 
 _BUREAU_KEYS: Tuple[str, ...] = ("transunion", "experian", "equifax")
-_MISSING_SENTINELS = {None, "", "--"}
-
 _AMOUNT_FIELD_HINTS = {
     "amount",
     "balance",
@@ -135,15 +133,32 @@ _DATE_FORMATS = (
 _NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]")
 
 
-def _is_missing(raw: Any) -> bool:
-    try:
-        if raw in _MISSING_SENTINELS:
-            return True
-    except TypeError:
-        pass
-    if isinstance(raw, str) and not raw.strip():
-        return True
-    return False
+def _is_missing(v: Any) -> bool:
+    return v is None or (isinstance(v, str) and v.strip() in ("", "--"))
+
+
+def _get_bureau_value(bureaus_json: Mapping[str, Any], field: str, bureau: str) -> Any:
+    """Return the raw bureau value for a field, handling history blocks."""
+
+    if field not in ("two_year_payment_history", "seven_year_history"):
+        branch = bureaus_json.get(bureau, {})
+        if isinstance(branch, Mapping):
+            return branch.get(field)
+        return None
+
+    if field == "two_year_payment_history":
+        block = bureaus_json.get("two_year_payment_history", {})
+        if isinstance(block, Mapping):
+            return block.get(bureau)
+        return None
+
+    if field == "seven_year_history":
+        block = bureaus_json.get("seven_year_history", {})
+        if isinstance(block, Mapping):
+            return block.get(bureau)
+        return None
+
+    return None
 
 
 def normalize_amount(raw: Optional[str]) -> Optional[float]:
@@ -269,165 +284,35 @@ def normalize_account_number_display(raw: Optional[str]) -> Dict[str, Optional[s
     return {"display": text, "last4": last4 if len(last4 or "") == 4 else None}
 
 
-def _history_items(raw: Any) -> Iterable[Any]:
-    if raw is None:
-        return []
-    if isinstance(raw, Mapping):
-        for key in ("tokens", "values", "statuses", "history", "entries", "items"):
-            if key in raw:
-                return _history_items(raw[key])
-        items: list[Any] = []
-        for value in raw.values():
-            items.extend(_history_items(value))
-        return items
-    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
-        items: list[Any] = []
-        for value in raw:
-            items.extend(_history_items(value))
-        return items
-    if isinstance(raw, str):
-        text = raw.strip()
-        if not text:
-            return []
-        tokens = re.findall(r"[A-Za-z0-9]+", text)
-        if tokens:
-            return tokens
-        return [text]
-    return [raw]
-
-
-def _canonical_history_token(token: Any) -> Optional[str]:
-    if _is_missing(token):
-        return None
-    text = str(token).strip().upper()
-    if not text:
-        return None
-    cleaned = re.sub(r"[^A-Z0-9]", "", text)
-    if not cleaned:
-        return None
-
-    mapping = {
-        "OK": "OK",
-        "CUR": "OK",
-        "CURRENT": "OK",
-        "C": "OK",
-        "CO": "CO",
-        "COCOUNT": "CO",
-        "CHARGEOFF": "CO",
-        "CHARGE": "CO",
-        "CHARGEDOFF": "CO",
-        "CHARGEOFFS": "CO",
-        "CHARGEOFFCOUNT": "CO",
-        "DELINQ": "DELINQ",
-        "LATE": "LATE",
-        "LATE30": "30",
-        "PAST30": "30",
-        "PAST30DAYS": "30",
-        "PASTDUE30": "30",
-        "30": "30",
-        "030": "30",
-        "30DAY": "30",
-        "30DAYS": "30",
-        "30DAYSLATE": "30",
-        "LATE60": "60",
-        "PAST60": "60",
-        "PAST60DAYS": "60",
-        "PASTDUE60": "60",
-        "60": "60",
-        "060": "60",
-        "60DAY": "60",
-        "60DAYSLATE": "60",
-        "LATE90": "90",
-        "PAST90": "90",
-        "PAST90DAYS": "90",
-        "PASTDUE90": "90",
-        "90": "90",
-        "90DAY": "90",
-        "90DAYSLATE": "90",
-        "PAST120": "120",
-        "PASTDUE120": "120",
-        "120": "120",
-        "PAST150": "150",
-        "150": "150",
-        "PAST180": "180",
-        "180": "180",
-    }
-
-    return mapping.get(cleaned, cleaned)
-
-
 def normalize_two_year_history(raw: Any) -> Dict[str, Any]:
     """Normalize two-year payment history tokens and summary counts."""
 
-    tokens: list[str] = []
+    tokens = raw if isinstance(raw, list) else []
     counts = {"CO": 0, "late30": 0, "late60": 0, "late90": 0}
 
-    for item in _history_items(raw):
-        canon = _canonical_history_token(item)
-        if not canon:
-            continue
-        tokens.append(canon)
-        if canon == "CO":
+    for token in tokens:
+        s = (token or "").strip().upper()
+        if s == "CO":
             counts["CO"] += 1
-        elif canon in {"30"}:
+        elif s in ("30", "LATE30"):
             counts["late30"] += 1
-        elif canon in {"60"}:
+        elif s in ("60", "LATE60"):
             counts["late60"] += 1
-        elif canon in {"90", "120", "150", "180"}:
+        elif s in ("90", "120", "150", "180", "LATE90"):
             counts["late90"] += 1
 
     return {"tokens": tokens, "counts": counts}
 
 
-def _parse_int(value: Any) -> int:
-    if _is_missing(value):
-        return 0
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return int(value)
-    text = str(value).strip()
-    if not text:
-        return 0
-    match = re.search(r"-?\d+", text)
-    if not match:
-        return 0
-    return int(match.group())
-
-
 def normalize_seven_year_history(raw: Any) -> Dict[str, int]:
     """Normalize seven-year history counters to late30/late60/late90."""
 
-    result = {"late30": 0, "late60": 0, "late90": 0}
-    if _is_missing(raw):
-        return result
-
-    def consume_entry(key: Any, value: Any) -> None:
-        token = _canonical_history_token(key)
-        if not token:
-            return
-        if token in {"30", "LATE30"}:
-            result["late30"] += _parse_int(value)
-        elif token in {"60", "LATE60"}:
-            result["late60"] += _parse_int(value)
-        elif token in {"90", "120", "150", "180", "LATE90", "CO"}:
-            result["late90"] += _parse_int(value)
-
-    if isinstance(raw, Mapping):
-        for key, value in raw.items():
-            consume_entry(key, value)
-    elif isinstance(raw, str):
-        for token in _history_items(raw):
-            consume_entry(token, 1)
-    elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
-        for entry in raw:
-            if isinstance(entry, Mapping) and "type" in entry and "value" in entry:
-                consume_entry(entry.get("type"), entry.get("value"))
-            else:
-                for token in _history_items(entry):
-                    consume_entry(token, 1)
-    else:
-        consume_entry("late30", raw)
-
-    return result
+    data = raw if isinstance(raw, Mapping) else {}
+    return {
+        "late30": int(data.get("late30") or 0),
+        "late60": int(data.get("late60") or 0),
+        "late90": int(data.get("late90") or 0),
+    }
 
 
 def _looks_like_amount(field: str) -> bool:
@@ -484,17 +369,6 @@ def _freeze_value(field: str, value: Any) -> Any:
     return value
 
 
-def _extract_value(bureaus: Mapping[str, Any], bureau: str, field: str) -> Any:
-    if field in _HISTORY_FIELDS:
-        blob = bureaus.get(field)
-        if isinstance(blob, Mapping) and bureau in blob:
-            return blob[bureau]
-    branch = bureaus.get(bureau)
-    if isinstance(branch, Mapping):
-        return branch.get(field)
-    return None
-
-
 def _determine_consensus(field: str, groups: Mapping[Any, Sequence[str]]) -> Tuple[str, list[str]]:
     items = [(key, list(bureaus)) for key, bureaus in groups.items() if bureaus]
     if not items:
@@ -537,13 +411,14 @@ def compute_field_consistency(bureaus_json: Dict[str, Any]) -> Dict[str, Any]:
         missing_bureaus: list[str] = []
 
         for bureau in _BUREAU_KEYS:
-            value = _extract_value(bureaus_json, bureau, field)
+            value = _get_bureau_value(bureaus_json, field, bureau)
             raw[bureau] = value
+            is_missing = _is_missing(value)
             norm_value = _normalize_field(field, value)
             normalized[bureau] = norm_value
-            if norm_value is None:
+            if is_missing:
                 missing_bureaus.append(bureau)
-            key = _freeze_value(field, norm_value)
+            key = ("__missing__",) if is_missing else _freeze_value(field, norm_value)
             groups.setdefault(key, []).append(bureau)
 
         if all(norm is None for norm in normalized.values()):

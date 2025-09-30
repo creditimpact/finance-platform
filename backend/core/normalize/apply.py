@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Tuple
@@ -8,11 +9,17 @@ from typing import Any, Dict, Tuple
 import yaml
 
 from backend.core.metrics.field_coverage import metrics
+from backend.core.logic.report_analysis.extractors.tokens import parse_date_any
 
 logger = logging.getLogger(__name__)
 
 _REGISTRY_CACHE: Dict[str, Any] | None = None
 _PRIORITY = ["EQ", "TU", "EX"]
+
+_PLACEHOLDER_VALUES = {"--", "-", "N/A", "NA"}
+_MONTH_YEAR_RE = re.compile(r"^(\d{1,2})[.\-/\s](\d{4})$")
+_YEAR_ONLY_RE = re.compile(r"^(\d{4})$")
+_DATEISH_RE = re.compile(r"^[\d\s./-]+$")
 
 
 def load_registry(path: str | None = None) -> Dict[str, Any]:
@@ -43,26 +50,42 @@ def _coerce_string(val: Any) -> Tuple[str, bool]:
     return stripped, stripped != text
 
 
-def _coerce_date_iso(val: Any) -> Tuple[str, bool]:
+def _coerce_date_iso(val: Any) -> Tuple[str | None, bool]:
+    if val is None:
+        return None, False
+
     text = str(val).strip()
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
+    if not text:
+        return None, False
+
+    if text.upper() in _PLACEHOLDER_VALUES:
+        return None, False
+
+    parsed = parse_date_any(text)
+    if parsed:
+        return parsed, False
+
+    month_year = _MONTH_YEAR_RE.match(text)
+    if month_year:
+        month, year = month_year.groups()
         try:
-            d = datetime.strptime(text, fmt)
-            return d.strftime("%Y-%m-%d"), False
+            d = datetime(int(year), int(month), 1)
         except ValueError:
-            pass
-    for fmt in ("%m/%Y", "%m-%Y"):
+            return None, False
+        return d.strftime("%Y-%m-01"), True
+
+    year_only = _YEAR_ONLY_RE.match(text)
+    if year_only:
+        year = year_only.group(1)
         try:
-            d = datetime.strptime(text, fmt)
-            return d.strftime("%Y-%m-01"), True
+            d = datetime(int(year), 1, 1)
         except ValueError:
-            pass
-    for fmt in ("%Y",):
-        try:
-            d = datetime.strptime(text, fmt)
-            return d.strftime("%Y-01-01"), True
-        except ValueError:
-            pass
+            return None, False
+        return d.strftime("%Y-01-01"), True
+
+    if _DATEISH_RE.match(text):
+        return None, False
+
     return text, False
 
 

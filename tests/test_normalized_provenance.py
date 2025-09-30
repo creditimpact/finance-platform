@@ -75,6 +75,24 @@ def test_derived_date_coercion():
     assert field["sources"] == {"EX": "03/2020"}
 
 
+def test_full_date_with_spaces_normalizes():
+    by_bureau = {"EX": {"Date Opened": "10 8 2025"}}
+    overlay = apply.build_normalized(by_bureau, REGISTRY)
+    field = overlay["opened_date"]
+    assert field["status"] == "agreed"
+    assert field["value"] == "2025-10-08"
+    assert field["sources"] == {"EX": "10 8 2025"}
+
+
+def test_unparseable_date_returns_none():
+    by_bureau = {"EX": {"Date Opened": "1.1"}}
+    overlay = apply.build_normalized(by_bureau, REGISTRY)
+    field = overlay["opened_date"]
+    assert field["status"] == "agreed"
+    assert field["value"] is None
+    assert field["sources"] == {"EX": "1.1"}
+
+
 def test_missing_field():
     by_bureau = {"EQ": {}, "TU": {}, "EX": {}}
     overlay = apply.build_normalized(by_bureau, REGISTRY)

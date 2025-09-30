@@ -170,7 +170,11 @@ def _normalize_merge_scoring(source: Mapping[str, Any] | None) -> dict[str, Any]
         if digits is not None:
             normalized[key] = digits
 
-    return normalized
+    return {
+        key: normalized[key]
+        for key in _MERGE_SCORING_ALLOWED
+        if key in normalized
+    }
 
 
 def _normalize_merge_explanations(

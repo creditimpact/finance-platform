@@ -95,7 +95,7 @@ def _coerce_strength(raw: Any, fallback: str) -> str:
     if raw is None:
         return fallback
     text = str(raw).strip().lower()
-    if text in {"strong", "soft"}:
+    if text in {"strong", "soft", "medium"}:
         return text
     return fallback
 
@@ -211,82 +211,165 @@ def _filter_inconsistent_fields(
         else:
             disagreeing_list = []
 
+        missing = raw_details.get("missing_bureaus") or []
+        if isinstance(missing, Sequence) and not isinstance(
+            missing, (str, bytes, bytearray)
+        ):
+            missing_list = sorted(str(item) for item in missing)
+        else:
+            missing_list = []
+
         result[field] = {
             "normalized": normalized_payload,
             "raw": raw_payload,
             "consensus": raw_details.get("consensus"),
             "disagreeing_bureaus": disagreeing_list,
+            "missing_bureaus": missing_list,
         }
 
     return result
 
 
-_STRONG_FIELDS = {
-    "balance_owed",
-    "past_due_amount",
-    "high_balance",
-    "credit_limit",
-    "payment_amount",
-    "date_opened",
-    "closed_date",
-    "date_of_last_activity",
-    "date_reported",
-    "last_verified",
-    "last_payment",
-    "dispute_status",
-    "two_year_payment_history",
-    "seven_year_history",
-    "account_status",
-    "payment_status",
-}
-
-_SOFT_AI_FIELDS = {
-    "account_number_display",
-    "account_type",
-    "creditor_type",
-    "account_description",
-    "account_rating",
-    "creditor_remarks",
-}
+_HISTORY_FIELDS = {"two_year_payment_history", "seven_year_history"}
+_SEMANTIC_FIELDS = {"account_type", "creditor_type", "creditor_remarks"}
 
 
-def _apply_strength_policy(field: str, rule: ValidationRule) -> ValidationRule:
-    """Enforce runtime defaults for strength and AI needs."""
+def _looks_like_date_field(field: str) -> bool:
+    return "date" in field.lower()
 
-    if field in _STRONG_FIELDS:
-        if rule.strength != "strong" or rule.ai_needed:
-            return ValidationRule(
-                rule.category,
-                rule.min_days,
-                rule.documents,
-                rule.points,
-                "strong",
-                False,
-            )
+
+def _is_numeric_value(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_numeric_field(field: str, normalized: Mapping[str, Any]) -> bool:
+    if any(_is_numeric_value(value) for value in normalized.values() if value is not None):
+        return True
+    lowered = field.lower()
+    if any(
+        keyword in lowered
+        for keyword in (
+            "amount",
+            "balance",
+            "limit",
+            "payment",
+            "value",
+            "due",
+            "credit",
+            "loan",
+            "debt",
+        )
+    ):
+        return True
+    return False
+
+
+def _has_missing_mismatch(normalized: Mapping[str, Any]) -> bool:
+    values = list(normalized.values())
+    return any(value is None for value in values) and any(
+        value is not None for value in values
+    )
+
+
+def _determine_account_number_strength(normalized: Mapping[str, Any]) -> tuple[str, bool]:
+    last4_values = set()
+    for value in normalized.values():
+        if isinstance(value, Mapping):
+            last4 = value.get("last4")
+        else:
+            last4 = None
+        if last4:
+            last4_values.add(str(last4))
+    if len(last4_values) > 1:
+        return "strong", False
+    return "soft", True
+
+
+def _determine_dispute_strength(normalized: Mapping[str, Any]) -> tuple[str, bool]:
+    seen = {str(value) for value in normalized.values() if value is not None}
+    if len(seen) > 1 or _has_missing_mismatch(normalized):
+        return "strong", False
+    return "strong", False
+
+
+def _apply_strength_policy(
+    field: str, details: Mapping[str, Any], rule: ValidationRule
+) -> ValidationRule:
+    normalized = details.get("normalized")
+    if not isinstance(normalized, Mapping):
+        normalized = {}
+
+    strength = rule.strength
+    ai_needed = rule.ai_needed
+
+    if field in _HISTORY_FIELDS:
+        strength, ai_needed = "strong", False
+    elif field == "account_number_display":
+        strength, ai_needed = _determine_account_number_strength(normalized)
+    elif field in _SEMANTIC_FIELDS:
+        strength, ai_needed = "soft", True
+    elif _looks_like_date_field(field):
+        strength, ai_needed = "strong", False
+    elif _is_numeric_field(field, normalized):
+        strength, ai_needed = "strong", False
+    elif field == "dispute_status":
+        strength, ai_needed = _determine_dispute_strength(normalized)
+    elif _has_missing_mismatch(normalized) and strength != "strong":
+        strength = "medium"
+
+    if strength == rule.strength and ai_needed == rule.ai_needed:
         return rule
 
-    if field in _SOFT_AI_FIELDS:
-        if rule.strength != "soft" or not rule.ai_needed:
-            return ValidationRule(
-                rule.category,
-                rule.min_days,
-                rule.documents,
-                rule.points,
-                "soft",
-                True,
-            )
-        return rule
+    return ValidationRule(
+        rule.category,
+        rule.min_days,
+        rule.documents,
+        rule.points,
+        strength,
+        ai_needed,
+    )
 
-    return rule
+
+def _select_requirement_bureaus(
+    details: Mapping[str, Any], *, broadcast_all: bool
+) -> List[str]:
+    disagreeing = details.get("disagreeing_bureaus")
+    if not isinstance(disagreeing, Sequence) or isinstance(disagreeing, (str, bytes, bytearray)):
+        disagreeing_list: List[str] = []
+    else:
+        disagreeing_list = [str(item) for item in disagreeing]
+
+    normalized = details.get("normalized")
+    if not isinstance(normalized, Mapping):
+        normalized = {}
+
+    if broadcast_all:
+        bureaus = sorted(str(key) for key in normalized.keys())
+        if bureaus:
+            return bureaus
+    if disagreeing_list:
+        return sorted(set(disagreeing_list))
+
+    missing = details.get("missing_bureaus")
+    if isinstance(missing, Sequence) and not isinstance(missing, (str, bytes, bytearray)):
+        missing_list = [str(item) for item in missing]
+        if missing_list:
+            return sorted(set(missing_list))
+    return sorted(str(key) for key in normalized.keys())
 
 
 def _build_requirement_entries(
-    fields: Mapping[str, Any], config: ValidationConfig
+    fields: Mapping[str, Any],
+    config: ValidationConfig,
+    *,
+    broadcast_all: bool,
 ) -> List[Dict[str, Any]]:
     requirements: List[Dict[str, Any]] = []
     for field in sorted(fields.keys()):
+        details = fields[field]
         rule = config.fields.get(field, config.defaults)
-        rule = _apply_strength_policy(field, rule)
+        rule = _apply_strength_policy(field, details, rule)
+        bureaus = _select_requirement_bureaus(details, broadcast_all=broadcast_all)
         requirements.append(
             {
                 "field": field,
@@ -295,6 +378,7 @@ def _build_requirement_entries(
                 "documents": list(rule.documents),
                 "strength": rule.strength,
                 "ai_needed": rule.ai_needed,
+                "bureaus": bureaus,
             }
         )
     return requirements
@@ -308,7 +392,10 @@ def build_validation_requirements(
     config = load_validation_config()
     field_consistency = compute_field_consistency(bureaus)
     inconsistencies = _filter_inconsistent_fields(field_consistency)
-    requirements = _build_requirement_entries(inconsistencies, config)
+    broadcast_all = os.getenv("BROADCAST_DISPUTES", "1") == "1"
+    requirements = _build_requirement_entries(
+        inconsistencies, config, broadcast_all=broadcast_all
+    )
 
     return requirements, inconsistencies
 
@@ -448,28 +535,47 @@ def build_validation_requirements_for_account(account_dir: str | Path) -> Dict[s
         )
         return {"status": "invalid_bureaus_json"}
 
-    summary_data = _load_summary(summary_path)
-    summary_consistency = summary_data.get("field_consistency")
-
-    if isinstance(summary_consistency, Mapping):
-        field_consistency_full = {
-            str(field): value
-            for field, value in summary_consistency.items()
-            if isinstance(value, Mapping)
-        }
-    else:
-        logger.debug(
-            "VALIDATION_REQUIREMENTS_NO_SUMMARY_CONSISTENCY path=%s", summary_path
-        )
-        field_consistency_full = compute_field_consistency(bureaus_raw)
+    field_consistency_full = compute_field_consistency(bureaus_raw)
 
     config = load_validation_config()
     inconsistencies = _filter_inconsistent_fields(field_consistency_full)
-    requirements = _build_requirement_entries(inconsistencies, config)
+    broadcast_all = os.getenv("BROADCAST_DISPUTES", "1") == "1"
+    requirements = _build_requirement_entries(
+        inconsistencies, config, broadcast_all=broadcast_all
+    )
     payload = build_summary_payload(
         requirements, field_consistency=inconsistencies
     )
-    apply_validation_summary(summary_path, payload)
+    summary_after = apply_validation_summary(summary_path, payload)
+
+    debug_enabled = os.getenv("VALIDATION_DEBUG_DUMP") == "1"
+    debug_key = "validation_debug"
+
+    if debug_enabled:
+        field_to_bureau: Dict[str, Any] = {}
+        for field, details in field_consistency_full.items():
+            if not isinstance(details, Mapping):
+                continue
+            raw_map = details.get("raw")
+            if isinstance(raw_map, Mapping):
+                entries = sorted(raw_map.items(), key=lambda item: str(item[0]))
+                field_to_bureau[str(field)] = {
+                    str(bureau): value for bureau, value in entries
+                }
+        debug_payload = {"raw_snapshot": {"field_to_bureau": field_to_bureau}}
+        if summary_after.get(debug_key) != debug_payload:
+            summary_after[debug_key] = debug_payload
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
+                compact_merge_sections(summary_after)
+            _atomic_write_json(summary_path, summary_after)
+    else:
+        if debug_key in summary_after:
+            summary_after.pop(debug_key, None)
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
+                compact_merge_sections(summary_after)
+            _atomic_write_json(summary_path, summary_after)
 
     fields = [
         str(entry.get("field")) for entry in requirements if entry.get("field")

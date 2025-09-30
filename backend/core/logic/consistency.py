@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import datetime as _dt
 import re
+from datetime import datetime
 from typing import Any, Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 __all__ = ["compute_field_consistency", "compute_inconsistent_fields"]
@@ -115,20 +115,10 @@ _ENUM_DOMAINS: Dict[str, Dict[str, str]] = {
 _HISTORY_FIELDS = {"two_year_payment_history", "seven_year_history"}
 _ACCOUNT_NUMBER_FIELDS = {"account_number_display"}
 
-_DATE_FORMATS = (
-    "%Y-%m-%d",
-    "%Y/%m/%d",
-    "%Y.%m.%d",
-    "%m/%d/%Y",
-    "%m-%d-%Y",
-    "%d.%m.%Y",
-    "%d/%m/%Y",
-    "%m.%d.%Y",
-    "%d-%m-%Y",
-    "%m/%d/%y",
-    "%d/%m/%y",
-    "%Y%m%d",
-)
+DATE_PATS = [
+    (re.compile(r"^\s*(\d{1,2})\.(\d{1,2})\.(\d{4})\s*$"), "%d.%m.%Y"),  # 16.8.2022
+    (re.compile(r"^\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*$"), "%m/%d/%Y"),    # 1/8/2024
+]
 
 _NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]")
 
@@ -199,45 +189,28 @@ def normalize_amount(raw: Optional[str]) -> Optional[float]:
 def normalize_date(raw: Optional[str]) -> Optional[str]:
     """Normalize several common date formats to YYYY-MM-DD."""
 
-    if _is_missing(raw):
-        return None
-    text = str(raw).strip()
-    if not text:
+    if raw is None:
         return None
 
-    cleaned = text.replace("\\", "/").replace("\u2013", "-").replace("\u2014", "-")
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    s = str(raw).strip()
+    if s in ("", "--"):
+        return None
 
-    for fmt in _DATE_FORMATS:
-        try:
-            parsed = _dt.datetime.strptime(cleaned, fmt)
-        except ValueError:
-            continue
-        return parsed.date().isoformat()
+    for rx, fmt in DATE_PATS:
+        if rx.match(s):
+            try:
+                dt = datetime.strptime(s, fmt)
+                return dt.strftime("%Y-%m-%d")
+            except Exception:
+                pass
 
-    digits = re.findall(r"\d+", cleaned)
-    if len(digits) == 3:
-        first, second, third = digits
-        year: Optional[int]
-        month: Optional[int]
-        day: Optional[int]
-
-        if len(first) == 4:
-            year, month, day = int(first), int(second), int(third)
-        elif len(third) == 4:
-            year = int(third)
-            month = int(first)
-            day = int(second)
-            if month > 12 and day <= 12:
-                month, day = day, month
-        else:
-            return None
-
-        try:
-            parsed = _dt.date(year, month, day)
-        except ValueError:
-            return None
-        return parsed.isoformat()
+    try:
+        parts = re.split(r"[.\-/]", s)
+        if len(parts) == 3:
+            d, m, y = map(int, parts)
+            return datetime(y, m, d).strftime("%Y-%m-%d")
+    except Exception:
+        return None
 
     return None
 

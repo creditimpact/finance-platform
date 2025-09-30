@@ -24,6 +24,7 @@ from backend.core.merge import acctnum
 from backend.core.merge.acctnum import acctnum_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
+from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.logic.validation_requirements import (
     apply_validation_summary,
     build_summary_payload as build_validation_summary_payload,
@@ -2495,6 +2496,8 @@ def apply_summary_updates(
     )
 
     if changed:
+        if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
+            compact_merge_sections(summary_data)
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write_json(summary_path, summary_data)
 

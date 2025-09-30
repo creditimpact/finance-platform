@@ -50,6 +50,7 @@ from backend.core.logic.report_analysis.account_merge import (
     build_summary_merge_entry,
     merge_summary_sections,
 )
+from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.merge.acctnum import normalize_level
 from backend.pipeline.runs import RunManifest, persist_manifest
 
@@ -438,7 +439,10 @@ def _load_summary(path: Path) -> dict[str, object]:
 
 
 def _write_summary(path: Path, payload: Mapping[str, object]) -> None:
-    serialized = json.dumps(dict(payload), ensure_ascii=False, indent=2)
+    data = dict(payload)
+    if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
+        compact_merge_sections(data)
+    serialized = json.dumps(data, ensure_ascii=False, indent=2)
     path.write_text(f"{serialized}\n", encoding="utf-8")
 
 

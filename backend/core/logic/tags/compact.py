@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from os import PathLike
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence, Union
@@ -13,6 +14,7 @@ from backend.core.logic.report_analysis.account_merge import (
     MergeDecision,
     merge_summary_sections,
 )
+from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.merge.acctnum import normalize_level
 
 _IDENTITY_PART_FIELDS = {
@@ -345,9 +347,7 @@ def _merge_explanation_from_tag(tag: Mapping[str, object]) -> dict[str, object] 
     acct_level_value: str | None = None
     aux = tag.get("aux")
     if isinstance(aux, Mapping):
-        acct_level = normalize_level(aux.get("acctnum_level"))
-        if acct_level != "none":
-            acct_level_value = acct_level
+        acct_level_value = normalize_level(aux.get("acctnum_level"))
         matched_fields = aux.get("matched_fields")
         if isinstance(matched_fields, Mapping) and matched_fields:
             payload.setdefault("matched_fields", dict(matched_fields))
@@ -369,9 +369,9 @@ def _merge_explanation_from_tag(tag: Mapping[str, object]) -> dict[str, object] 
                     payload[key] = value
                     meaningful = True
 
-    if acct_level_value is None:
-        direct_level = normalize_level(tag.get("acctnum_level"))
-        if direct_level != "none":
+    direct_level = normalize_level(tag.get("acctnum_level"))
+    if direct_level is not None:
+        if direct_level != "none" or acct_level_value in (None, "none"):
             acct_level_value = direct_level
     if acct_level_value is not None:
         payload["acctnum_level"] = acct_level_value
@@ -585,6 +585,8 @@ def _write_tags(tags_path: Path, payload: Iterable[Mapping[str, object]]) -> Non
 
 def _write_summary(summary_path: Path, payload: Mapping[str, object]) -> None:
     data = dict(payload)
+    if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
+        compact_merge_sections(data)
     _atomic_write_json(summary_path, data)
     log.info(
         "SUMMARY_WRITTEN_ATOMIC path=%s keys=%d",

@@ -16,6 +16,7 @@ import yaml
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, write_tags_atomic
 from backend.core.logic.consistency import compute_inconsistent_fields
+from backend.core.logic.summary_compact import compact_merge_sections
 
 logger = logging.getLogger(__name__)
 
@@ -184,12 +185,16 @@ def apply_validation_summary(
         if "validation_requirements" in summary_data:
             summary_data.pop("validation_requirements", None)
             summary_path.parent.mkdir(parents=True, exist_ok=True)
+            if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
+                compact_merge_sections(summary_data)
             _atomic_write_json(summary_path, summary_data)
         return summary_data
 
     if not isinstance(existing, Mapping) or dict(existing) != dict(payload):
         summary_data["validation_requirements"] = dict(payload)
         summary_path.parent.mkdir(parents=True, exist_ok=True)
+        if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
+            compact_merge_sections(summary_data)
         _atomic_write_json(summary_path, summary_data)
 
     return summary_data

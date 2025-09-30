@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
 
 from backend.core.io.tags import read_tags, write_tags_atomic
+from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.merge.acctnum import normalize_level
 
 
@@ -336,6 +338,8 @@ def compact_account_tags(account_dir: Path) -> None:
         )
 
     if merge_explanations or ai_explanations or summary_path.exists():
+        if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
+            compact_merge_sections(summary_data)
         summary_path.write_text(
             json.dumps(summary_data, ensure_ascii=False, indent=2), encoding="utf-8"
         )

@@ -491,3 +491,42 @@ def test_build_validation_requirements_for_account_clears_when_empty(tmp_path, m
 
     tags = json.loads((account_dir / "tags.json").read_text(encoding="utf-8"))
     assert all(tag.get("kind") != "validation_required" for tag in tags)
+
+
+def _write_basic_bureaus(account_dir: Path) -> None:
+    bureaus = {
+        "transunion": {"balance_owed": "100"},
+        "experian": {"balance_owed": "150"},
+        "equifax": {"balance_owed": "200"},
+    }
+    (account_dir / "bureaus.json").write_text(
+        json.dumps(bureaus, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def test_validation_debug_excluded_when_flag_off(tmp_path, monkeypatch):
+    account_dir = tmp_path / "A1"
+    account_dir.mkdir()
+    _write_basic_bureaus(account_dir)
+    (account_dir / "tags.json").write_text("[]", encoding="utf-8")
+    monkeypatch.delenv("VALIDATION_DEBUG", raising=False)
+
+    result = build_validation_requirements_for_account(account_dir)
+    assert result["status"] == "ok"
+
+    summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
+    assert "validation_debug" not in summary
+
+
+def test_validation_debug_included_when_flag_on(tmp_path, monkeypatch):
+    account_dir = tmp_path / "A2"
+    account_dir.mkdir()
+    _write_basic_bureaus(account_dir)
+    (account_dir / "tags.json").write_text("[]", encoding="utf-8")
+    monkeypatch.setenv("VALIDATION_DEBUG", "1")
+
+    result = build_validation_requirements_for_account(account_dir)
+    assert result["status"] == "ok"
+
+    summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
+    assert "validation_debug" in summary

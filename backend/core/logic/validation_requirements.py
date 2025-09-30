@@ -682,7 +682,7 @@ def build_validation_requirements_for_account(account_dir: str | Path) -> Dict[s
     )
     summary_after = apply_validation_summary(summary_path, payload)
 
-    debug_enabled = os.getenv("VALIDATION_DEBUG_DUMP") == "1"
+    debug_enabled = os.getenv("VALIDATION_DEBUG") == "1"
     debug_key = "validation_debug"
 
     if debug_enabled:

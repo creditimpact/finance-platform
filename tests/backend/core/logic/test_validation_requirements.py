@@ -212,6 +212,56 @@ def test_compute_field_consistency_handles_dates_and_account_numbers():
     assert details["remarks"]["normalized"]["equifax"] == "different note"
 
 
+def test_history_missing_vs_present_requires_strong_documents():
+    bureaus = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+        "two_year_payment_history": {
+            "transunion": ["OK", "30", "OK"],
+            "experian": None,
+            "equifax": None,
+        },
+        "seven_year_history": {
+            "transunion": {"late30": 2, "late60": 0, "late90": 0},
+            "experian": None,
+            "equifax": {"late30": 0, "late60": 0, "late90": 0},
+        },
+    }
+
+    requirements, inconsistencies, _ = build_validation_requirements(bureaus)
+    fields = {entry["field"]: entry for entry in requirements}
+
+    assert "two_year_payment_history" in fields
+    two_year_req = fields["two_year_payment_history"]
+    assert two_year_req["category"] == "history"
+    assert two_year_req["min_days"] == 18
+    assert two_year_req["documents"] == [
+        "monthly_statements_2y",
+        "internal_payment_history",
+    ]
+    assert two_year_req["strength"] == "strong"
+    assert two_year_req["ai_needed"] is False
+    assert two_year_req["bureaus"] == ["equifax", "experian", "transunion"]
+    assert (
+        inconsistencies["two_year_payment_history"]["consensus"] != "unanimous"
+    )
+
+    assert "seven_year_history" in fields
+    seven_req = fields["seven_year_history"]
+    assert seven_req["category"] == "history"
+    assert seven_req["min_days"] == 25
+    assert seven_req["documents"] == [
+        "cra_report_7y",
+        "cra_audit_logs",
+        "collection_history",
+    ]
+    assert seven_req["strength"] == "strong"
+    assert seven_req["ai_needed"] is False
+    assert seven_req["bureaus"] == ["equifax", "experian", "transunion"]
+    assert inconsistencies["seven_year_history"]["consensus"] != "unanimous"
+
+
 def test_apply_validation_summary_and_sync_validation_tag(tmp_path):
     summary_path = tmp_path / "summary.json"
     tag_path = tmp_path / "tags.json"

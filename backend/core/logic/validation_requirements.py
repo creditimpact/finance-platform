@@ -299,6 +299,29 @@ def _filter_inconsistent_fields(
 
 
 _HISTORY_FIELDS = {"two_year_payment_history", "seven_year_history"}
+
+_HISTORY_REQUIREMENT_OVERRIDES: Mapping[str, ValidationRule] = {
+    "two_year_payment_history": ValidationRule(
+        category="history",
+        min_days=18,
+        documents=("monthly_statements_2y", "internal_payment_history"),
+        points=10,
+        strength="strong",
+        ai_needed=False,
+    ),
+    "seven_year_history": ValidationRule(
+        category="history",
+        min_days=25,
+        documents=(
+            "cra_report_7y",
+            "cra_audit_logs",
+            "collection_history",
+        ),
+        points=12,
+        strength="strong",
+        ai_needed=False,
+    ),
+}
 _SEMANTIC_FIELDS = {"account_type", "creditor_type", "creditor_remarks"}
 
 
@@ -436,15 +459,28 @@ def _select_requirement_bureaus(
         bureaus = sorted(str(key) for key in normalized.keys())
         if bureaus:
             return bureaus
-    if disagreeing_list:
-        return sorted(set(disagreeing_list))
 
     missing = details.get("missing_bureaus")
     if isinstance(missing, Sequence) and not isinstance(missing, (str, bytes, bytearray)):
         missing_list = [str(item) for item in missing]
-        if missing_list:
-            return sorted(set(missing_list))
-    return sorted(str(key) for key in normalized.keys())
+    else:
+        missing_list = []
+
+    participants = set(disagreeing_list)
+    participants.update(missing_list)
+
+    if missing_list:
+        present_bureaus = [
+            str(bureau)
+            for bureau, value in normalized.items()
+            if value is not None and str(bureau) not in missing_list
+        ]
+        participants.update(present_bureaus)
+
+    if not participants:
+        participants.update(str(key) for key in normalized.keys())
+
+    return sorted(participants)
 
 
 def _build_requirement_entries(
@@ -457,6 +493,18 @@ def _build_requirement_entries(
     for field in sorted(fields.keys()):
         details = fields[field]
         rule = config.fields.get(field, config.defaults)
+
+        if field in _HISTORY_REQUIREMENT_OVERRIDES:
+            override = _HISTORY_REQUIREMENT_OVERRIDES[field]
+            rule = ValidationRule(
+                category=override.category,
+                min_days=override.min_days,
+                documents=override.documents,
+                points=override.points,
+                strength=override.strength,
+                ai_needed=override.ai_needed,
+            )
+
         rule = _apply_strength_policy(field, details, rule)
         bureaus = _select_requirement_bureaus(details, broadcast_all=broadcast_all)
         requirements.append(

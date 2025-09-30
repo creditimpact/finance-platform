@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from backend.core.logic.consistency import compute_inconsistent_fields
 from backend.core.logic.consistency import compute_field_consistency
@@ -260,6 +261,63 @@ def test_history_missing_vs_present_requires_strong_documents():
     assert seven_req["ai_needed"] is False
     assert seven_req["bureaus"] == ["equifax", "experian", "transunion"]
     assert inconsistencies["seven_year_history"]["consensus"] != "unanimous"
+
+
+def test_build_validation_requirements_for_account_respects_summary_consensus(
+    tmp_path: Path,
+) -> None:
+    account_dir = tmp_path / "acct"
+    account_dir.mkdir()
+
+    bureaus = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+        "two_year_payment_history": {
+            "transunion": ["OK", "30", "OK"],
+            "experian": None,
+            "equifax": ["CO", "CO"],
+        },
+        "seven_year_history": {
+            "transunion": {"late30": 2, "late60": 0, "late90": 0},
+            "experian": None,
+            "equifax": {"late30": 0, "late60": 0, "late90": 1},
+        },
+    }
+
+    bureaus_path = account_dir / "bureaus.json"
+    bureaus_path.write_text(json.dumps(bureaus), encoding="utf-8")
+
+    _, _, field_consistency = build_validation_requirements(bureaus)
+    for field in ("two_year_payment_history", "seven_year_history"):
+        snapshot = field_consistency.get(field)
+        if isinstance(snapshot, dict):
+            snapshot["consensus"] = "unanimous"
+
+    summary_path = account_dir / "summary.json"
+    summary_path.write_text(
+        json.dumps({"field_consistency": field_consistency}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = build_validation_requirements_for_account(account_dir)
+
+    assert result["status"] == "ok"
+    assert result["count"] == 0
+    assert result["fields"] == []
+
+    summary_after = json.loads(summary_path.read_text(encoding="utf-8"))
+    validation_block = summary_after["validation_requirements"]
+    assert validation_block["count"] == 0
+    assert validation_block["requirements"] == []
+    assert (
+        validation_block["field_consistency"]["two_year_payment_history"]["consensus"]
+        == "unanimous"
+    )
+    assert (
+        validation_block["field_consistency"]["seven_year_history"]["consensus"]
+        == "unanimous"
+    )
 
 
 def test_apply_validation_summary_and_sync_validation_tag(tmp_path):

@@ -244,6 +244,21 @@ def load_validation_config(path: str | Path = _CONFIG_PATH) -> ValidationConfig:
     )
 
 
+def _clone_field_consistency(
+    field_consistency: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Deep-copy ``field_consistency`` ensuring plain ``dict``/``list`` containers."""
+
+    def _clone(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {str(key): _clone(item) for key, item in value.items()}
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return [_clone(item) for item in value]
+        return value
+
+    return {str(field): _clone(details) for field, details in field_consistency.items()}
+
+
 def _filter_inconsistent_fields(
     field_consistency: Mapping[str, Any]
 ) -> Dict[str, Dict[str, Any]]:
@@ -523,18 +538,24 @@ def _build_requirement_entries(
 
 def build_validation_requirements(
     bureaus: Mapping[str, Mapping[str, Any]],
+    *,
+    field_consistency: Mapping[str, Any] | None = None,
 ) -> tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
     """Return validation requirements for fields with cross-bureau inconsistencies."""
 
     config = load_validation_config()
-    field_consistency = compute_field_consistency(bureaus)
-    inconsistencies = _filter_inconsistent_fields(field_consistency)
+    if not isinstance(field_consistency, Mapping):
+        field_consistency_full = compute_field_consistency(dict(bureaus))
+    else:
+        field_consistency_full = _clone_field_consistency(field_consistency)
+
+    inconsistencies = _filter_inconsistent_fields(field_consistency_full)
     broadcast_all = _should_broadcast(config)
     requirements = _build_requirement_entries(
         inconsistencies, config, broadcast_all=broadcast_all
     )
 
-    return requirements, inconsistencies, field_consistency
+    return requirements, inconsistencies, field_consistency_full
 
 
 def build_summary_payload(
@@ -674,8 +695,16 @@ def build_validation_requirements_for_account(account_dir: str | Path) -> Dict[s
         )
         return {"status": "invalid_bureaus_json"}
 
+    summary_snapshot = _load_summary(summary_path)
+    summary_consistency = summary_snapshot.get("field_consistency")
+    consistency_override = (
+        _clone_field_consistency(summary_consistency)
+        if isinstance(summary_consistency, Mapping)
+        else None
+    )
+
     requirements, _, field_consistency_full = build_validation_requirements(
-        bureaus_raw
+        bureaus_raw, field_consistency=consistency_override
     )
     payload = build_summary_payload(
         requirements, field_consistency=field_consistency_full

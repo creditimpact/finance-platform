@@ -1,97 +1,121 @@
-"""Utilities for cross-bureau field consistency detection."""
+"""Normalization and field consistency helpers for bureau data."""
 
 from __future__ import annotations
 
 import datetime as _dt
 import re
-import string
-from typing import Any, Dict, Mapping, MutableMapping, Sequence, Tuple
+from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional, Sequence, Tuple
 
-__all__ = ["compute_inconsistent_fields"]
+__all__ = ["compute_field_consistency", "compute_inconsistent_fields"]
 
 
-_BUREAU_KEYS = ("transunion", "experian", "equifax")
-_MONEY_FIELDS = {
-    "balance_owed",
-    "past_due_amount",
-    "high_balance",
-    "credit_limit",
-    "payment_amount",
-}
-_DATE_FIELDS = {
-    "date_opened",
-    "closed_date",
-    "last_payment",
-    "date_of_last_activity",
-    "date_reported",
-    "last_verified",
-}
+_BUREAU_KEYS: Tuple[str, ...] = ("transunion", "experian", "equifax")
 _MISSING_SENTINELS = {None, "", "--"}
+
+_AMOUNT_FIELD_HINTS = {
+    "amount",
+    "balance",
+    "limit",
+    "payment",
+    "value",
+    "due",
+    "credit",
+    "loan",
+    "debt",
+}
+
+_ENUM_DOMAINS: Dict[str, Dict[str, str]] = {
+    "account_status": {
+        "open": "open",
+        "opened": "open",
+        "active": "open",
+        "current": "open",
+        "close": "closed",
+        "closed": "closed",
+        "paidandclosed": "closed",
+        "paidclosed": "closed",
+        "closedpaid": "closed",
+        "paid": "paid",
+        "pif": "paid",
+        "chargeoff": "chargeoff",
+        "chargedoff": "chargeoff",
+        "chargeoffsold": "chargeoff",
+        "collection": "collection",
+        "collections": "collection",
+        "repossession": "repossession",
+        "transferred": "transferred",
+        "sold": "sold",
+        "foreclosure": "foreclosure",
+    },
+    "payment_status": {
+        "current": "ok",
+        "paysasagreed": "ok",
+        "payingasagreed": "ok",
+        "paidasagreed": "ok",
+        "ok": "ok",
+        "neverlate": "ok",
+        "chargeoff": "chargeoff",
+        "chargedoff": "chargeoff",
+        "collection": "collection",
+        "collections": "collection",
+        "repossession": "repossession",
+        "late30": "late30",
+        "late60": "late60",
+        "late90": "late90",
+        "late120": "late120",
+        "late150": "late150",
+        "late180": "late180",
+        "120": "late120",
+        "150": "late150",
+        "180": "late180",
+        "30": "late30",
+        "60": "late60",
+        "90": "late90",
+    },
+    "account_type": {
+        "creditcard": "credit_card",
+        "creditcards": "credit_card",
+        "bankcreditcard": "bank_credit_card",
+        "bankcreditcards": "bank_credit_card",
+        "autoloan": "auto_loan",
+        "autoloans": "auto_loan",
+        "studentloan": "student_loan",
+        "studentloans": "student_loan",
+        "personalloan": "personal_loan",
+        "personalloans": "personal_loan",
+        "mortgage": "mortgage",
+        "revolving": "revolving",
+        "installment": "installment",
+        "collection": "collection",
+        "chargeaccount": "charge_account",
+    },
+    "creditor_type": {
+        "bank": "bank",
+        "allbanks": "bank",
+        "bankcreditcards": "bank_credit_cards",
+        "bankcard": "bank_credit_cards",
+        "bankcards": "bank_credit_cards",
+        "collectionagency": "collection_agency",
+        "collectionagencies": "collection_agency",
+        "creditunion": "credit_union",
+        "mortgagelender": "mortgage_lender",
+    },
+    "dispute_status": {
+        "disputed": "disputed",
+        "indispute": "disputed",
+        "dispute": "disputed",
+        "open_dispute": "disputed",
+        "notdisputed": "not_disputed",
+        "nodispute": "not_disputed",
+        "undisputed": "not_disputed",
+        "resolved": "resolved",
+        "closed": "resolved",
+        "previouslydisputed": "previously_disputed",
+    },
+}
+
 _HISTORY_FIELDS = {"two_year_payment_history", "seven_year_history"}
-_REMARK_FIELDS = {"remarks", "creditor_remarks"}
-_ACCOUNT_NUMBER_FIELDS = {
-    "account_number_display",
-    "account_number",
-    "account_number_masked",
-}
-
-_ACCOUNT_STATUS_ALIASES = {
-    "open": "open",
-    "opened": "open",
-    "opn": "open",
-    "close": "closed",
-    "closed": "closed",
-    "paidclosed": "closed",
-    "paidandclosed": "closed",
-    "chargeoff": "chargeoff",
-    "chargedoff": "chargeoff",
-    "chargeofftransferred": "chargeoff",
-    "chargeoffsold": "chargeoff",
-    "collection": "collection",
-    "collections": "collection",
-    "incollection": "collection",
-    "incollections": "collection",
-    "repossession": "repossession",
-}
-
-_PAYMENT_STATUS_ALIASES = {
-    "current": "ok",
-    "paid": "ok",
-    "paysasagreed": "ok",
-    "ok": "ok",
-    "neverlate": "ok",
-    "paysasagreed": "ok",
-    "payingasagreed": "ok",
-    "paidasagreed": "ok",
-    "chargeoff": "chargeoff",
-    "chargedoff": "chargeoff",
-    "collection": "collection",
-    "collections": "collection",
-    "collectionaccount": "collection",
-    "repossession": "repossession",
-}
-
-_ACCOUNT_TYPE_ALIASES = {
-    "creditcard": "credit_card",
-    "creditcards": "credit_card",
-    "bankcreditcard": "bank_credit_cards",
-    "bankcreditcards": "bank_credit_cards",
-    "autoloan": "auto_loan",
-    "autoloans": "auto_loan",
-    "studentloan": "student_loan",
-    "studentloans": "student_loan",
-    "personalloan": "personal_loan",
-    "personalloans": "personal_loan",
-}
-
-_CREDITOR_TYPE_ALIASES = {
-    "bankcreditcards": "bank_credit_cards",
-    "bank": "bank",
-    "allbanks": "all_banks",
-    "bankcards": "bank_credit_cards",
-    "collectionagency": "collection_agency",
-    "collectionagencies": "collection_agency",
-}
+_ACCOUNT_NUMBER_FIELDS = {"account_number_display"}
 
 _DATE_FORMATS = (
     "%Y-%m-%d",
@@ -100,40 +124,37 @@ _DATE_FORMATS = (
     "%m/%d/%Y",
     "%m-%d-%Y",
     "%d.%m.%Y",
-    "%m.%d.%Y",
     "%d/%m/%Y",
+    "%m.%d.%Y",
     "%d-%m-%Y",
     "%m/%d/%y",
     "%d/%m/%y",
     "%Y%m%d",
 )
 
-_RE_PUNCT = re.compile(rf"[{re.escape(string.punctuation)}]")
-
-_AMOUNT_SANITIZE_RE = re.compile(r"[,$\s]")
-_AMOUNT_RE = re.compile(r"-?\d+(?:\.\d+)?")
-_HISTORY_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+_NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]")
 
 
-def _is_missing(value: Any) -> bool:
+def _is_missing(raw: Any) -> bool:
     try:
-        if value in _MISSING_SENTINELS:
+        if raw in _MISSING_SENTINELS:
             return True
     except TypeError:
-        # Unhashable container values are not considered missing by membership.
         pass
-    if isinstance(value, str) and not value.strip():
+    if isinstance(raw, str) and not raw.strip():
         return True
     return False
 
 
-def _normalize_money(value: Any) -> float | None:
-    if _is_missing(value):
-        return None
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
+def normalize_amount(raw: Optional[str]) -> Optional[float]:
+    """Parse $, commas, parentheses and sentinel markers into a float."""
 
-    text = str(value).strip()
+    if _is_missing(raw):
+        return None
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return float(raw)
+
+    text = str(raw).strip()
     if not text:
         return None
 
@@ -142,40 +163,34 @@ def _normalize_money(value: Any) -> float | None:
         negative = True
         text = text[1:-1]
 
-    cleaned = _AMOUNT_SANITIZE_RE.sub("", text)
-    match = _AMOUNT_RE.search(cleaned)
+    cleaned = re.sub(r"[,$\s]", "", text)
+    if not cleaned:
+        return None
+
+    match = re.search(r"-?\d+(?:\.\d+)?", cleaned)
     if not match:
         return None
 
     try:
-        number = float(match.group())
+        value = float(match.group())
     except ValueError:
         return None
 
-    if negative and number >= 0:
-        number = -number
-    return number
+    if negative and value >= 0:
+        value = -value
+    return value
 
 
-def _normalize_text(value: Any) -> str | None:
-    if _is_missing(value):
+def normalize_date(raw: Optional[str]) -> Optional[str]:
+    """Normalize several common date formats to YYYY-MM-DD."""
+
+    if _is_missing(raw):
         return None
-    text = str(value).strip()
-    if not text:
-        return None
-    normalized = " ".join(text.split()).lower()
-    return normalized or None
-
-
-def _normalize_date(value: Any) -> str | None:
-    if _is_missing(value):
-        return None
-    text = str(value).strip()
+    text = str(raw).strip()
     if not text:
         return None
 
-    cleaned = text.replace(",", " ").replace("\u2013", "-").replace("\u2014", "-")
-    cleaned = cleaned.replace("\\", "/")
+    cleaned = text.replace("\\", "/").replace("\u2013", "-").replace("\u2014", "-")
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
     for fmt in _DATE_FORMATS:
@@ -185,25 +200,26 @@ def _normalize_date(value: Any) -> str | None:
             continue
         return parsed.date().isoformat()
 
-    digits = [part for part in re.findall(r"\d+", cleaned)]
+    digits = re.findall(r"\d+", cleaned)
     if len(digits) == 3:
         first, second, third = digits
+        year: Optional[int]
+        month: Optional[int]
+        day: Optional[int]
+
         if len(first) == 4:
-            year, month, day = first, second, third
+            year, month, day = int(first), int(second), int(third)
         elif len(third) == 4:
-            day_candidate = int(first)
-            month_candidate = int(second)
-            if day_candidate > 12 and month_candidate <= 12:
-                day, month, year = first, second, third
-            elif month_candidate > 12 and day_candidate <= 12:
-                month, day, year = first, second, third
-            else:
-                month, day, year = first, second, third
+            year = int(third)
+            month = int(first)
+            day = int(second)
+            if month > 12 and day <= 12:
+                month, day = day, month
         else:
             return None
 
         try:
-            parsed = _dt.date(int(year), int(month), int(day))
+            parsed = _dt.date(year, month, day)
         except ValueError:
             return None
         return parsed.isoformat()
@@ -211,472 +227,347 @@ def _normalize_date(value: Any) -> str | None:
     return None
 
 
-def _normalize_compact_token(value: Any) -> str | None:
-    if _is_missing(value):
+def _normalize_text(raw: Any) -> Optional[str]:
+    if _is_missing(raw):
         return None
-    text = str(value).strip().lower()
+    text = str(raw).strip().lower()
     if not text:
         return None
-    token = re.sub(r"[^a-z0-9]+", "", text)
-    return token or None
+    cleaned = re.sub(r"[^a-z0-9]+", " ", text)
+    collapsed = " ".join(cleaned.split())
+    return collapsed or None
 
 
-def _normalize_words_token(value: Any) -> str | None:
-    if _is_missing(value):
+def normalize_enum(field: str, raw: Optional[str]) -> Optional[str]:
+    """Normalize enums using domain-specific alias tables."""
+
+    if _is_missing(raw):
         return None
-    text = str(value).strip().lower()
+
+    text = str(raw).strip().lower()
     if not text:
         return None
-    collapsed = re.sub(r"[^a-z0-9]+", " ", text)
-    tokens = [part for part in collapsed.split() if part]
-    if not tokens:
+
+    compact = _NON_ALNUM_RE.sub("", text)
+    domain = _ENUM_DOMAINS.get(field, {})
+    if compact in domain:
+        return domain[compact]
+    if text in domain:
+        return domain[text]
+    return " ".join(text.split())
+
+
+def normalize_account_number_display(raw: Optional[str]) -> Dict[str, Optional[str]]:
+    """Return a display/last4 structure for account numbers."""
+
+    if _is_missing(raw):
+        return {"display": "", "last4": None}
+
+    text = str(raw).strip()
+    digits = re.findall(r"\d", text)
+    last4 = "".join(digits[-4:]) if digits else None
+    return {"display": text, "last4": last4 if len(last4 or "") == 4 else None}
+
+
+def _history_items(raw: Any) -> Iterable[Any]:
+    if raw is None:
+        return []
+    if isinstance(raw, Mapping):
+        for key in ("tokens", "values", "statuses", "history", "entries", "items"):
+            if key in raw:
+                return _history_items(raw[key])
+        items: list[Any] = []
+        for value in raw.values():
+            items.extend(_history_items(value))
+        return items
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+        items: list[Any] = []
+        for value in raw:
+            items.extend(_history_items(value))
+        return items
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        tokens = re.findall(r"[A-Za-z0-9]+", text)
+        if tokens:
+            return tokens
+        return [text]
+    return [raw]
+
+
+def _canonical_history_token(token: Any) -> Optional[str]:
+    if _is_missing(token):
         return None
-    return "_".join(tokens)
-
-
-def _normalize_account_status(value: Any) -> str | None:
-    token = _normalize_compact_token(value)
-    if not token:
-        return None
-    return _ACCOUNT_STATUS_ALIASES.get(token, token)
-
-
-def _normalize_payment_status(value: Any) -> str | None:
-    compact = _normalize_compact_token(value)
-    text = str(value).lower() if not _is_missing(value) else ""
-    if not compact and not text:
-        return None
-    if compact in _PAYMENT_STATUS_ALIASES:
-        return _PAYMENT_STATUS_ALIASES[compact]
-    if "charge" in text and "off" in text:
-        return "chargeoff"
-    if "collection" in text:
-        return "collection"
-    match = re.search(r"(\d{1,3})", text)
-    if match:
-        number = match.group(1)
-        if "late" in text or number in {"30", "60", "90", "120", "150", "180"}:
-            mapping = {
-                "30": "late30",
-                "60": "late60",
-                "90": "late90",
-                "120": "late120",
-                "150": "late150",
-                "180": "late180",
-            }
-            return mapping.get(number, f"late{number}")
-    if any(word in text for word in ("current", "ok", "pays", "paying", "paid")):
-        return "ok"
-    return compact or None
-
-
-def _normalize_account_type(value: Any) -> str | None:
-    token = _normalize_words_token(value)
-    if not token:
-        return None
-    alias_key = token.replace("_", "")
-    return _ACCOUNT_TYPE_ALIASES.get(alias_key, token)
-
-
-def _normalize_creditor_type(value: Any) -> str | None:
-    token = _normalize_words_token(value)
-    if not token:
-        return None
-    alias_key = token.replace("_", "")
-    return _CREDITOR_TYPE_ALIASES.get(alias_key, token)
-
-
-def _normalize_remark_text(value: Any) -> str | None:
-    if _is_missing(value):
-        return None
-    text = str(value).strip().lower()
+    text = str(token).strip().upper()
     if not text:
         return None
-    text = _RE_PUNCT.sub(" ", text)
-    tokens = [token for token in text.split() if token]
-    if not tokens:
+    cleaned = re.sub(r"[^A-Z0-9]", "", text)
+    if not cleaned:
         return None
-    return " ".join(tokens)
+
+    mapping = {
+        "OK": "OK",
+        "CUR": "OK",
+        "CURRENT": "OK",
+        "C": "OK",
+        "CO": "CO",
+        "COCOUNT": "CO",
+        "CHARGEOFF": "CO",
+        "CHARGE": "CO",
+        "CHARGEDOFF": "CO",
+        "CHARGEOFFS": "CO",
+        "CHARGEOFFCOUNT": "CO",
+        "DELINQ": "DELINQ",
+        "LATE": "LATE",
+        "LATE30": "30",
+        "PAST30": "30",
+        "PAST30DAYS": "30",
+        "PASTDUE30": "30",
+        "30": "30",
+        "030": "30",
+        "30DAY": "30",
+        "30DAYS": "30",
+        "30DAYSLATE": "30",
+        "LATE60": "60",
+        "PAST60": "60",
+        "PAST60DAYS": "60",
+        "PASTDUE60": "60",
+        "60": "60",
+        "060": "60",
+        "60DAY": "60",
+        "60DAYSLATE": "60",
+        "LATE90": "90",
+        "PAST90": "90",
+        "PAST90DAYS": "90",
+        "PASTDUE90": "90",
+        "90": "90",
+        "90DAY": "90",
+        "90DAYSLATE": "90",
+        "PAST120": "120",
+        "PASTDUE120": "120",
+        "120": "120",
+        "PAST150": "150",
+        "150": "150",
+        "PAST180": "180",
+        "180": "180",
+    }
+
+    return mapping.get(cleaned, cleaned)
 
 
-def _normalize_account_number(value: Any) -> Mapping[str, str] | None:
+def normalize_two_year_history(raw: Any) -> Dict[str, Any]:
+    """Normalize two-year payment history tokens and summary counts."""
+
+    tokens: list[str] = []
+    counts = {"CO": 0, "late30": 0, "late60": 0, "late90": 0}
+
+    for item in _history_items(raw):
+        canon = _canonical_history_token(item)
+        if not canon:
+            continue
+        tokens.append(canon)
+        if canon == "CO":
+            counts["CO"] += 1
+        elif canon in {"30"}:
+            counts["late30"] += 1
+        elif canon in {"60"}:
+            counts["late60"] += 1
+        elif canon in {"90", "120", "150", "180"}:
+            counts["late90"] += 1
+
+    return {"tokens": tokens, "counts": counts}
+
+
+def _parse_int(value: Any) -> int:
     if _is_missing(value):
-        return None
+        return 0
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(value)
     text = str(value).strip()
     if not text:
-        return None
-    digits = re.findall(r"\d", text)
-    if not digits:
-        return None
-    last4 = "".join(digits[-4:])
-    if not last4:
-        return None
-    masked = re.sub(r"\s+", "", text)
-    return {"last4": last4, "display": masked}
+        return 0
+    match = re.search(r"-?\d+", text)
+    if not match:
+        return 0
+    return int(match.group())
 
 
-def _normalize_value(field: str, value: Any) -> Any:
-    if field == "two_year_payment_history":
-        return _normalize_two_year_history(value)
-    if field == "seven_year_history":
-        return _normalize_seven_year_history(value)
+def normalize_seven_year_history(raw: Any) -> Dict[str, int]:
+    """Normalize seven-year history counters to late30/late60/late90."""
+
+    result = {"late30": 0, "late60": 0, "late90": 0}
+    if _is_missing(raw):
+        return result
+
+    def consume_entry(key: Any, value: Any) -> None:
+        token = _canonical_history_token(key)
+        if not token:
+            return
+        if token in {"30", "LATE30"}:
+            result["late30"] += _parse_int(value)
+        elif token in {"60", "LATE60"}:
+            result["late60"] += _parse_int(value)
+        elif token in {"90", "120", "150", "180", "LATE90", "CO"}:
+            result["late90"] += _parse_int(value)
+
+    if isinstance(raw, Mapping):
+        for key, value in raw.items():
+            consume_entry(key, value)
+    elif isinstance(raw, str):
+        for token in _history_items(raw):
+            consume_entry(token, 1)
+    elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+        for entry in raw:
+            if isinstance(entry, Mapping) and "type" in entry and "value" in entry:
+                consume_entry(entry.get("type"), entry.get("value"))
+            else:
+                for token in _history_items(entry):
+                    consume_entry(token, 1)
+    else:
+        consume_entry("late30", raw)
+
+    return result
+
+
+def _looks_like_amount(field: str) -> bool:
+    lowered = field.lower()
+    if any(lowered.endswith(suffix) for suffix in _AMOUNT_FIELD_HINTS):
+        return True
+    return any(token in lowered for token in ("amount", "balance", "limit", "payment"))
+
+
+def _normalize_field(field: str, value: Any) -> Any:
+    if field in _HISTORY_FIELDS:
+        if field == "two_year_payment_history":
+            return normalize_two_year_history(value)
+        return normalize_seven_year_history(value)
     if field in _ACCOUNT_NUMBER_FIELDS:
-        return _normalize_account_number(value)
-    if field == "account_status":
-        return _normalize_account_status(value)
-    if field == "payment_status":
-        return _normalize_payment_status(value)
-    if field == "account_type":
-        return _normalize_account_type(value)
-    if field == "creditor_type":
-        return _normalize_creditor_type(value)
-    if field in _MONEY_FIELDS:
-        return _normalize_money(value)
-    if field in _DATE_FIELDS or field.endswith("_date"):
-        return _normalize_date(value)
-    if field in _REMARK_FIELDS:
-        return _normalize_remark_text(value)
+        return normalize_account_number_display(value)
+    if field in _ENUM_DOMAINS:
+        return normalize_enum(field, value)
+    if "date" in field.lower():
+        return normalize_date(value)
+    if _looks_like_amount(field):
+        return normalize_amount(value)
     return _normalize_text(value)
 
 
-def _normalize_history_status(value: Any) -> str | None:
-    if value is None or value in _MISSING_SENTINELS:
-        return None
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        if isinstance(value, float) and value.is_integer():
-            return str(int(value))
-        return str(value)
-
-    text = str(value).strip()
-    if not text:
-        return None
-    normalized = text.upper().replace(" ", "")
-    return normalized or None
-
-
-def _flatten_history_values(value: Any) -> list[Any]:
+def _freeze_value(field: str, value: Any) -> Any:
     if value is None:
-        return []
+        return None
+    if field == "account_number_display":
+        if isinstance(value, Mapping):
+            return value.get("last4") or value.get("display")
+    if field == "two_year_payment_history":
+        if isinstance(value, Mapping):
+            counts = value.get("counts", {})
+            tokens = tuple(value.get("tokens", []))
+            return (
+                counts.get("CO", 0),
+                counts.get("late30", 0),
+                counts.get("late60", 0),
+                counts.get("late90", 0),
+                tokens,
+            )
+    if field == "seven_year_history":
+        if isinstance(value, Mapping):
+            return (
+                value.get("late30", 0),
+                value.get("late60", 0),
+                value.get("late90", 0),
+            )
     if isinstance(value, Mapping):
-        # Prefer well-known container keys when present.
-        for key in ("values", "statuses", "history", "entries", "items"):
-            if key in value:
-                return _flatten_history_values(value.get(key))
-        flattened: list[Any] = []
-        for key in sorted(value.keys()):
-            flattened.extend(_flatten_history_values(value[key]))
-        return flattened
+        return tuple(sorted((key, _freeze_value(field, item)) for key, item in value.items()))
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        flattened: list[Any] = []
-        for entry in value:
-            if isinstance(entry, Mapping):
-                if "status" in entry:
-                    flattened.append(entry.get("status"))
-                    continue
-                if "value" in entry:
-                    flattened.append(entry.get("value"))
-                    continue
-            flattened.extend(_flatten_history_values(entry))
-        return flattened
-    if isinstance(value, str):
-        tokens = [token.strip() for token in _HISTORY_TOKEN_RE.findall(value.upper()) if token.strip()]
-        if tokens:
-            return tokens
-        text = value.strip()
-        return [text] if text else []
-    return [value]
-
-
-def _normalize_two_year_history(value: Any) -> Mapping[str, Any] | None:
-    if _is_missing(value):
-        return None
-    tokens = []
-    for item in _flatten_history_values(value):
-        token = _normalize_history_status(item)
-        if token:
-            tokens.append(token)
-    if not tokens:
-        return None
-    canonical_tokens: list[str] = []
-    summary_counts = {"co_count": 0, "late30": 0, "late60": 0, "late90": 0}
-    for token in tokens:
-        canon = _canonicalize_history_code(token)
-        canonical_tokens.append(canon)
-        if canon == "CO":
-            summary_counts["co_count"] += 1
-        elif canon in {"30", "60", "90", "120", "150", "180"}:
-            if canon == "30":
-                summary_counts["late30"] += 1
-            elif canon == "60":
-                summary_counts["late60"] += 1
-            else:
-                summary_counts["late90"] += 1
-    return {"codes": tuple(canonical_tokens), "summary": summary_counts}
-
-
-def _normalize_history_count(value: Any) -> int | float | None:
-    if value is None or value in _MISSING_SENTINELS:
-        return None
-    if isinstance(value, bool):
-        return 1 if value else 0
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        if isinstance(value, float) and value.is_integer():
-            return int(value)
-        return float(value)
-    text = str(value).strip()
-    if not text:
-        return None
-    match = _AMOUNT_RE.search(text)
-    if not match:
-        return None
-    number_text = match.group()
-    try:
-        number = float(number_text)
-    except ValueError:
-        return None
-    if number.is_integer():
-        return int(number)
-    return number
-
-
-def _canonicalize_history_bucket(token: str) -> str:
-    """Return a canonical bucket name for seven-year history summaries."""
-
-    cleaned = re.sub(r"[^A-Z0-9]", "", token.upper())
-    if not cleaned:
-        return token.lower()
-
-    mapping = {
-        "LATE30": "late30",
-        "PAST30": "late30",
-        "PAST30DAYS": "late30",
-        "PASTDUE30": "late30",
-        "L30": "late30",
-        "_30": "late30",
-        "30": "late30",
-        "30DAYSLATE": "late30",
-        "30DAYPASTDUE": "late30",
-        "LATE60": "late60",
-        "PAST60": "late60",
-        "PAST60DAYS": "late60",
-        "PASTDUE60": "late60",
-        "L60": "late60",
-        "_60": "late60",
-        "60": "late60",
-        "60DAYSLATE": "late60",
-        "60DAYPASTDUE": "late60",
-        "LATE90": "late90",
-        "PAST90": "late90",
-        "PAST90DAYS": "late90",
-        "PASTDUE90": "late90",
-        "L90": "late90",
-        "_90": "late90",
-        "90": "late90",
-        "90DAYSLATE": "late90",
-        "90DAYPASTDUE": "late90",
-        "LATE120": "late90",
-        "PASTDUE120": "late90",
-        "120": "late90",
-        "LATE150": "late90",
-        "150": "late90",
-        "LATE180": "late90",
-        "180": "late90",
-        "CO": "co_count",
-        "COCOUNT": "co_count",
-        "CHARGEOFF": "co_count",
-        "CHARGEOFFCOUNT": "co_count",
-        "CHARGEOFFS": "co_count",
-    }
-
-    return mapping.get(cleaned, token.lower())
-
-
-def _merge_history_bucket(
-    existing: Dict[str, Any], key: str, value: Any
-) -> None:
-    if value is None:
-        return
-    if key not in existing:
-        existing[key] = value
-        return
-    current = existing[key]
-    if isinstance(current, (int, float)) and isinstance(value, (int, float)):
-        existing[key] = current + value
-    else:
-        existing[key] = value
-
-
-def _normalize_seven_year_history(value: Any) -> Any:
-    if _is_missing(value):
-        return None
-    if isinstance(value, Mapping):
-        normalized: Dict[str, Any] = {}
-        for key in value.keys():
-            norm_key_raw = _normalize_history_status(key) or ""
-            if not norm_key_raw:
-                continue
-            norm_value = _normalize_history_count(value[key])
-            canonical_key = _canonicalize_history_bucket(norm_key_raw)
-            _merge_history_bucket(normalized, canonical_key, norm_value)
-        if not normalized:
-            return None
-        return normalized
-
-    # Fall back to treating it like a sequence of status tokens.
-    tokens = _normalize_two_year_history(value)
-    if not tokens:
-        return None
-    return tokens
-
-
-def _canonicalize_history_code(token: str) -> str:
-    token_upper = token.upper()
-    if token_upper in {"OK", "C", "CUR", "CURR", "CURRENT", "0"}:
-        return "OK"
-    if token_upper in {"CO", "C/O", "CHARGEOFF", "CHGOFF", "CHARGE-OFF"}:
-        return "CO"
-    match = re.search(r"(\d{1,3})", token_upper)
-    if match:
-        return match.group(1)
-    return token_upper
-
-
-def _freeze_value(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        keys = {str(k) for k in value.keys()}
-        if "last4" in keys and keys.issubset({"last4", "display"}):
-            return ("acct_last4", value.get("last4"))
-        return tuple(sorted((str(k), _freeze_value(v)) for k, v in value.items()))
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return tuple(_freeze_value(item) for item in value)
+        return tuple(_freeze_value(field, item) for item in value)
     return value
 
 
-def _build_field_consistency(
-    bureaus: Mapping[str, Mapping[str, Any]]
-) -> Dict[str, Dict[str, Any]]:
-    union_fields = set()
-    for bureau in _BUREAU_KEYS:
-        branch = bureaus.get(bureau)
-        if isinstance(branch, Mapping):
-            union_fields.update(branch.keys())
-    union_fields.update(_HISTORY_FIELDS)
+def _extract_value(bureaus: Mapping[str, Any], bureau: str, field: str) -> Any:
+    if field in _HISTORY_FIELDS:
+        blob = bureaus.get(field)
+        if isinstance(blob, Mapping) and bureau in blob:
+            return blob[bureau]
+    branch = bureaus.get(bureau)
+    if isinstance(branch, Mapping):
+        return branch.get(field)
+    return None
 
-    details: Dict[str, Dict[str, Any]] = {}
-    for field in sorted(union_fields):
+
+def _determine_consensus(field: str, groups: Mapping[Any, Sequence[str]]) -> Tuple[str, list[str]]:
+    items = [(key, list(bureaus)) for key, bureaus in groups.items() if bureaus]
+    if not items:
+        return "unanimous", []
+
+    if len(items) == 1:
+        return "unanimous", []
+
+    total = sum(len(bureaus) for _, bureaus in items)
+    sorted_items = sorted(items, key=lambda item: (-len(item[1]), str(item[0])))
+    top_key, top_bureaus = sorted_items[0]
+    top_count = len(top_bureaus)
+
+    if top_count > total / 2:
+        disagreeing = [bureau for key, bureaus in items if key != top_key for bureau in bureaus]
+        disagreeing.sort()
+        return "majority", disagreeing
+
+    disagreeing = [bureau for _, bureaus in items for bureau in bureaus]
+    disagreeing.sort()
+    return "split", disagreeing
+
+
+def compute_field_consistency(bureaus_json: Dict[str, Any]) -> Dict[str, Any]:
+    """Compute normalized values and consensus for every field across bureaus."""
+
+    fields = set(_HISTORY_FIELDS)
+
+    for bureau in _BUREAU_KEYS:
+        branch = bureaus_json.get(bureau)
+        if isinstance(branch, Mapping):
+            fields.update(branch.keys())
+
+    results: Dict[str, Any] = {}
+
+    for field in sorted(fields):
         normalized: MutableMapping[str, Any] = {}
         raw: MutableMapping[str, Any] = {}
-        value_groups: Dict[Any, list[str]] = {}
-        all_missing = True
+        groups: Dict[Any, list[str]] = {}
+        missing_bureaus: list[str] = []
 
         for bureau in _BUREAU_KEYS:
-            if field in _HISTORY_FIELDS:
-                history_blob = bureaus.get(field)
-                if isinstance(history_blob, Mapping):
-                    value = history_blob.get(bureau)
-                else:
-                    value = history_blob
-                if value is None:
-                    branch = bureaus.get(bureau)
-                    if isinstance(branch, Mapping):
-                        value = branch.get(field)
-            else:
-                branch = bureaus.get(bureau)
-                value = branch.get(field) if isinstance(branch, Mapping) else None
+            value = _extract_value(bureaus_json, bureau, field)
             raw[bureau] = value
-            norm_value = _normalize_value(field, value)
+            norm_value = _normalize_field(field, value)
             normalized[bureau] = norm_value
-            if norm_value is not None:
-                all_missing = False
-            frozen = _freeze_value(norm_value)
-            value_groups.setdefault(frozen, []).append(bureau)
+            if norm_value is None:
+                missing_bureaus.append(bureau)
+            key = _freeze_value(field, norm_value)
+            groups.setdefault(key, []).append(bureau)
 
-        if all_missing:
+        if all(norm is None for norm in normalized.values()):
             continue
 
-        consensus, disagreeing = _determine_consensus(value_groups)
-        if field in _HISTORY_FIELDS and consensus == "unanimous":
-            missing_bureaus = [
-                bureau for bureau, value in normalized.items() if value is None
-            ]
-            present_bureaus = [
-                bureau for bureau, value in normalized.items() if value is not None
-            ]
-            if missing_bureaus and present_bureaus:
-                if len(present_bureaus) == len(missing_bureaus):
-                    consensus = "split"
-                    disagreeing = sorted(missing_bureaus + present_bureaus)
-                elif len(present_bureaus) > len(missing_bureaus):
-                    consensus = "majority"
-                    disagreeing = sorted(missing_bureaus)
-                else:
-                    consensus = "majority"
-                    disagreeing = sorted(present_bureaus)
-        details[field] = {
+        consensus, disagreeing = _determine_consensus(field, groups)
+        results[field] = {
             "consensus": consensus,
             "normalized": dict(normalized),
             "raw": dict(raw),
             "disagreeing_bureaus": disagreeing,
+            "missing_bureaus": sorted({bureau for bureau in missing_bureaus}),
         }
 
-    return details
+    return results
 
 
-def _determine_consensus(value_groups: Mapping[Any, Sequence[str]]) -> Tuple[str, list[str]]:
-    items = [
-        (key, list(bureaus)) for key, bureaus in value_groups.items() if bureaus
-    ]
-    if not items:
-        return "unanimous", []
+def compute_inconsistent_fields(bureaus_json: Mapping[str, Any]) -> Dict[str, Any]:
+    """Return fields whose consensus is not unanimous."""
 
-    total = sum(len(b) for _, b in items)
-    sorted_items = sorted(items, key=lambda item: (-len(item[1]), str(item[0])))
-    top_key, top_bureaus = sorted_items[0]
-    top_count = len(top_bureaus)
-    unique_keys = {key for key, _ in items}
-    frozen_none = _freeze_value(None)
-    non_missing_keys = {key for key in unique_keys if key != frozen_none}
+    consistency = compute_field_consistency(dict(bureaus_json))
+    return {
+        field: info
+        for field, info in consistency.items()
+        if info.get("consensus") != "unanimous"
+    }
 
-    if len(unique_keys) == 1:
-        return "unanimous", []
-    if non_missing_keys and len(non_missing_keys) == 1 and len(unique_keys) == 2 and frozen_none in unique_keys:
-        return "unanimous", []
-    if top_count > total / 2:
-        consensus = "majority"
-    else:
-        consensus = "split"
-
-    disagreeing = []
-    for key, bureaus in items:
-        if key == top_key:
-            continue
-        disagreeing.extend(bureaus)
-    disagreeing.sort()
-    return consensus, disagreeing
-
-
-def compute_inconsistent_fields(bureaus: Mapping[str, Mapping[str, Any]]) -> Dict[str, Dict[str, MutableMapping[str, Any]]]:
-    """Return fields whose normalized values differ between bureaus."""
-    details = _build_field_consistency(bureaus)
-    result: Dict[str, Dict[str, MutableMapping[str, Any]]] = {}
-    for field, info in details.items():
-        if info.get("consensus") == "unanimous":
-            continue
-        result[field] = {
-            "normalized": info.get("normalized", {}),
-            "raw": info.get("raw", {}),
-            "consensus": info.get("consensus"),
-            "disagreeing_bureaus": info.get("disagreeing_bureaus", []),
-        }
-    return result
-
-
-def compute_field_consistency(bureaus: Mapping[str, Mapping[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """Return normalized field comparisons for all available fields."""
-
-    return _build_field_consistency(bureaus)
-
-
-__all__.append("compute_field_consistency")

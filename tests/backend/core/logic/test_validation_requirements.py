@@ -107,10 +107,10 @@ def test_compute_inconsistent_fields_handles_histories():
 
     assert "two_year_payment_history" in inconsistencies
     history_norm = inconsistencies["two_year_payment_history"]["normalized"]
-    assert history_norm["transunion"]["codes"] == ("OK", "30", "60")
-    assert history_norm["experian"]["codes"] == ("OK", "30", "60")
-    assert history_norm["equifax"]["codes"] == ("OK", "60", "90")
-    assert history_norm["equifax"]["summary"]["late90"] == 1
+    assert history_norm["transunion"]["tokens"] == ["OK", "30", "60"]
+    assert history_norm["experian"]["tokens"] == ["OK", "30", "60"]
+    assert history_norm["equifax"]["tokens"] == ["OK", "60", "90"]
+    assert history_norm["equifax"]["counts"]["late90"] == 1
 
     assert "seven_year_history" in inconsistencies
     seven_norm = inconsistencies["seven_year_history"]["normalized"]
@@ -141,13 +141,14 @@ def test_compute_field_consistency_reads_history_from_branch():
 
     history = details["two_year_payment_history"]
     assert history["consensus"] in {"split", "majority"}
-    assert history["normalized"]["experian"]["codes"] == ("OK", "30", "OK")
-    assert history["normalized"]["equifax"]["summary"]["late60"] == 1
+    assert history["normalized"]["experian"]["tokens"] == ["OK", "30", "OK"]
+    assert history["normalized"]["equifax"]["counts"]["late60"] == 1
 
     seven_year = details["seven_year_history"]
     assert seven_year["consensus"] in {"split", "majority"}
     assert seven_year["normalized"]["transunion"]["late30"] == 1
-    assert seven_year["normalized"]["equifax"]["codes"] == ("CO", "CO", "30")
+    assert seven_year["normalized"]["equifax"]["late90"] == 2
+    assert seven_year["normalized"]["equifax"]["late30"] == 1
 
 
 def test_seven_year_history_canonicalizes_bucket_names():
@@ -168,11 +169,11 @@ def test_seven_year_history_canonicalizes_bucket_names():
 
     history = details["seven_year_history"]
     assert history["normalized"]["transunion"]["late30"] == 2
-    assert history["normalized"]["transunion"]["co_count"] == 1
+    assert history["normalized"]["transunion"]["late90"] == 1
     assert history["normalized"]["experian"]["late30"] == 2
-    assert history["normalized"]["experian"]["co_count"] == 1
+    assert history["normalized"]["experian"]["late90"] == 1
     assert history["normalized"]["equifax"]["late30"] == 3
-    assert history["normalized"]["equifax"]["co_count"] == 1
+    assert history["normalized"]["equifax"]["late90"] == 1
     assert history["consensus"] in {"majority", "split"}
 
 

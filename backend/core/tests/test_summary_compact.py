@@ -117,6 +117,13 @@ def test_compact_merge_sections_scrubs_merge_sections_and_banned_keys(matched_fi
 
     matched_fields = merge_scoring["matched_fields"]
     assert all(isinstance(value, bool) for value in matched_fields.values())
+    assert matched_fields["account_number"] is True
+    assert matched_fields["balance_owed"] is False
+    if "last_payment" in matched_fields:
+        if matched_fields_input.get("last_payment") == "false":
+            assert matched_fields["last_payment"] is False
+        elif matched_fields_input.get("last_payment") is True:
+            assert matched_fields["last_payment"] is True
 
     merge_explanations = compacted["merge_explanations"]
     assert isinstance(merge_explanations, list)
@@ -140,6 +147,13 @@ def test_compact_merge_sections_scrubs_merge_sections_and_banned_keys(matched_fi
     assert explanation["acctnum_digits_len_a"] == 5
     assert explanation["acctnum_digits_len_b"] == 5
     assert all(isinstance(value, bool) for value in explanation["matched_fields"].values())
+    assert explanation["matched_fields"]["account_number"] is True
+    assert explanation["matched_fields"]["balance_owed"] is False
+    if "last_payment" in explanation["matched_fields"]:
+        if matched_fields_input.get("last_payment") == "false":
+            assert explanation["matched_fields"]["last_payment"] is False
+        elif matched_fields_input.get("last_payment") is True:
+            assert explanation["matched_fields"]["last_payment"] is True
 
     def assert_no_banned_keys(value):
         if isinstance(value, dict):

@@ -44,11 +44,36 @@ _BANNED_KEYS = {
 }
 
 
+def _coerce_bool(value: Any) -> bool:
+    """Return ``value`` represented as a boolean."""
+
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, (int, float)):
+        return bool(value)
+
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"", "0", "false", "f", "no", "n", "off"}:
+            return False
+        if lowered in {"1", "true", "t", "yes", "y", "on"}:
+            return True
+
+    if isinstance(value, (list, tuple, set)):
+        return bool(value)
+
+    if isinstance(value, Mapping):
+        return bool(value)
+
+    return bool(value)
+
+
 def _ensure_bool_mapping(value: Any) -> dict[str, bool]:
     """Return a mapping containing only boolean values."""
 
     if isinstance(value, Mapping):
-        return {str(key): bool(val) for key, val in value.items()}
+        return {str(key): _coerce_bool(val) for key, val in value.items()}
     return {}
 
 

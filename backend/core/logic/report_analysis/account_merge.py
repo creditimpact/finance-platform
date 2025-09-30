@@ -25,6 +25,7 @@ from backend.core.merge.acctnum import acctnum_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
 from backend.core.logic.summary_compact import compact_merge_sections
+from backend.core.logic.consistency import compute_field_consistency
 from backend.core.logic.validation_requirements import (
     apply_validation_summary,
     build_summary_payload as build_validation_summary_payload,
@@ -2862,13 +2863,22 @@ def persist_merge_tags(
             )
             continue
 
-        requirements = build_validation_requirements(bureaus_payload)
-        summary_payload = build_validation_summary_payload(requirements)
+        requirements, inconsistencies = build_validation_requirements(bureaus_payload)
+        field_consistency = {
+            field: details
+            for field, details in compute_field_consistency(bureaus_payload).items()
+            if field in inconsistencies
+        }
+        summary_payload = build_validation_summary_payload(
+            requirements, field_consistency=field_consistency
+        )
         apply_validation_summary(summary_path, summary_payload)
 
         tag_path = tag_paths.get(idx)
         if tag_path is not None:
-            fields_for_tag = [str(entry["field"]) for entry in requirements if entry.get("field")]
+            fields_for_tag = [
+                str(entry["field"]) for entry in requirements if entry.get("field")
+            ]
             sync_validation_tag(tag_path, fields_for_tag, emit=emit_validation_tag)
 
     return merge_tags

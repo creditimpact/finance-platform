@@ -15,7 +15,10 @@ import yaml
 
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, write_tags_atomic
-from backend.core.logic.consistency import compute_inconsistent_fields
+from backend.core.logic.consistency import (
+    compute_field_consistency,
+    compute_inconsistent_fields,
+)
 from backend.core.logic.summary_compact import compact_merge_sections
 
 logger = logging.getLogger(__name__)
@@ -178,7 +181,7 @@ def load_validation_config(path: str | Path = _CONFIG_PATH) -> ValidationConfig:
 
 def build_validation_requirements(
     bureaus: Mapping[str, Mapping[str, Any]],
-) -> List[Dict[str, Any]]:
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Return validation requirements for fields with cross-bureau inconsistencies."""
 
     config = load_validation_config()
@@ -198,14 +201,21 @@ def build_validation_requirements(
             }
         )
 
-    return requirements
+    return requirements, inconsistencies
 
 
-def build_summary_payload(requirements: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+def build_summary_payload(
+    requirements: Sequence[Mapping[str, Any]],
+    *,
+    field_consistency: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
     """Build the summary.json payload for validation requirements."""
 
     entries = [dict(item) for item in requirements]
-    return {"requirements": entries, "count": len(entries)}
+    payload = {"requirements": entries, "count": len(entries)}
+    if field_consistency:
+        payload["field_consistency"] = dict(field_consistency)
+    return payload
 
 
 def _load_summary(summary_path: Path) -> MutableMapping[str, Any]:
@@ -329,11 +339,20 @@ def build_validation_requirements_for_account(account_dir: str | Path) -> Dict[s
         )
         return {"status": "invalid_bureaus_json"}
 
-    requirements = build_validation_requirements(bureaus_raw)
-    payload = build_summary_payload(requirements)
+    requirements, inconsistencies = build_validation_requirements(bureaus_raw)
+    field_consistency = {
+        field: details
+        for field, details in compute_field_consistency(bureaus_raw).items()
+        if field in inconsistencies
+    }
+    payload = build_summary_payload(
+        requirements, field_consistency=field_consistency
+    )
     apply_validation_summary(summary_path, payload)
 
-    fields = [str(entry.get("field")) for entry in requirements if entry.get("field")]
+    fields = [
+        str(entry.get("field")) for entry in requirements if entry.get("field")
+    ]
     sync_validation_tag(tags_path, fields, emit=_should_emit_tags())
 
     return {"status": "ok", "count": len(requirements), "fields": fields}

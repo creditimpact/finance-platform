@@ -10,7 +10,7 @@ from typing import Any, Dict, Mapping
 
 from backend.core.io.json_io import update_json_in_place
 from backend.core.io.tags import upsert_tag
-from backend.core.logic.polarity import classify_field_value, load_polarity_config
+from backend.core.logic.polarity import classify_field_value
 from backend.core.logic.summary_compact import compact_merge_sections
 
 logger = logging.getLogger(__name__)
@@ -84,12 +84,20 @@ def _maybe_write_probe_tags(
     )
 
 
-def _extract_configured_fields() -> tuple[str, ...]:
-    config = load_polarity_config()
-    fields_cfg = config.get("fields") if isinstance(config, Mapping) else None
-    if not isinstance(fields_cfg, Mapping):
-        return ()
-    return tuple(str(field) for field in fields_cfg.keys())
+def _collect_account_fields(bureaus_data: Mapping[str, Any]) -> list[str]:
+    seen: set[str] = set()
+    fields: list[str] = []
+    for bureau_key in _BUREAU_KEYS:
+        bureau_values = bureaus_data.get(bureau_key)
+        if not isinstance(bureau_values, Mapping):
+            continue
+        for raw_field in bureau_values.keys():
+            field = str(raw_field)
+            if field in seen:
+                continue
+            seen.add(field)
+            fields.append(field)
+    return fields
 
 
 def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[str, Any]:
@@ -98,7 +106,7 @@ def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[
     account_path = Path(account_dir)
     account_idx = account_path.name
     bureaus_data = _load_bureaus(account_path, sid)
-    fields = _extract_configured_fields()
+    fields = _collect_account_fields(bureaus_data)
 
     bureaus_block: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
@@ -128,7 +136,12 @@ def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[
                 continue
             raw_value = bureau_values.get(field)
             classification = classify_field_value(field, raw_value)
-            polarity = str(classification.get("polarity", "unknown"))
+            if classification.get("reason") == "field not configured":
+                classification = dict(classification)
+                classification["polarity"] = "neutral"
+                classification["severity"] = "low"
+            polarity_value = classification.get("polarity")
+            polarity = str(polarity_value) if polarity_value else "unknown"
             severity_value = classification.get("severity")
             severity = str(severity_value) if severity_value else "low"
             bureau_results = bureaus_block.setdefault(bureau_key, {})

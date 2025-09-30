@@ -286,6 +286,12 @@ def test_build_validation_requirements_for_account_writes_summary_and_tags(
     assert result["status"] == "ok"
     assert result["count"] == 2
     assert set(result["fields"]) == {"balance_owed", "payment_status"}
+    validation_payload = result["validation_requirements"]
+    assert validation_payload["count"] == 2
+    assert {entry["field"] for entry in validation_payload["requirements"]} == {
+        "balance_owed",
+        "payment_status",
+    }
 
     summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["existing"] is True
@@ -352,6 +358,9 @@ def test_build_validation_requirements_for_account_clears_when_empty(tmp_path, m
     assert result["status"] == "ok"
     assert result["count"] == 0
     assert result["fields"] == []
+    validation_payload = result["validation_requirements"]
+    assert validation_payload["count"] == 0
+    assert validation_payload["requirements"] == []
 
     summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
     assert "validation_requirements" not in summary

@@ -1,6 +1,7 @@
 import json
 
 from backend.core.logic.consistency import compute_inconsistent_fields
+from backend.core.logic.consistency import compute_field_consistency
 from backend.core.logic.validation_requirements import (
     apply_validation_summary,
     build_summary_payload,
@@ -21,8 +22,12 @@ def test_compute_inconsistent_fields_detects_money_and_text():
 
     assert "balance_owed" in inconsistencies
     assert inconsistencies["balance_owed"]["normalized"]["equifax"] == 200.0
+    assert inconsistencies["balance_owed"]["consensus"] == "majority"
     assert "account_status" in inconsistencies
-    assert inconsistencies["account_status"]["normalized"]["transunion"] == "open"
+    assert (
+        inconsistencies["account_status"]["normalized"]["transunion"] == "open"
+    )
+    assert inconsistencies["account_status"]["disagreeing_bureaus"] == ["equifax"]
 
 
 def test_build_validation_requirements_uses_config_and_defaults():
@@ -32,7 +37,7 @@ def test_build_validation_requirements_uses_config_and_defaults():
         "equifax": {"balance_owed": "200", "mystery_field": "xyz"},
     }
 
-    requirements = build_validation_requirements(bureaus)
+    requirements, inconsistencies = build_validation_requirements(bureaus)
     fields = [entry["field"] for entry in requirements]
 
     assert fields == ["balance_owed", "mystery_field"]
@@ -50,6 +55,35 @@ def test_build_validation_requirements_uses_config_and_defaults():
     assert mystery_rule["documents"] == []
     assert mystery_rule["strength"] == "soft"
     assert mystery_rule["ai_needed"] is False
+    assert set(inconsistencies.keys()) == {"balance_owed", "mystery_field"}
+
+
+def test_build_summary_payload_includes_field_consistency():
+    requirements = [
+        {
+            "field": "balance_owed",
+            "category": "activity",
+            "min_days": 8,
+            "documents": ["monthly_statement"],
+            "strength": "strong",
+            "ai_needed": False,
+        }
+    ]
+    field_consistency = {
+        "balance_owed": {
+            "consensus": "split",
+            "normalized": {"transunion": 100.0, "experian": 150.0},
+            "raw": {"transunion": "100", "experian": "150"},
+            "disagreeing_bureaus": ["experian"],
+        }
+    }
+
+    payload = build_summary_payload(
+        requirements, field_consistency=field_consistency
+    )
+
+    assert payload["count"] == 1
+    assert payload["field_consistency"] == field_consistency
 
 
 def test_compute_inconsistent_fields_handles_histories():
@@ -73,14 +107,46 @@ def test_compute_inconsistent_fields_handles_histories():
 
     assert "two_year_payment_history" in inconsistencies
     history_norm = inconsistencies["two_year_payment_history"]["normalized"]
-    assert history_norm["transunion"] == ("OK", "30", "60")
-    assert history_norm["experian"] == ("OK", "30", "60")
-    assert history_norm["equifax"] == ("OK", "60", "90")
+    assert history_norm["transunion"]["codes"] == ("OK", "30", "60")
+    assert history_norm["experian"]["codes"] == ("OK", "30", "60")
+    assert history_norm["equifax"]["codes"] == ("OK", "60", "90")
+    assert history_norm["equifax"]["summary"]["late90"] == 1
 
     assert "seven_year_history" in inconsistencies
     seven_norm = inconsistencies["seven_year_history"]["normalized"]
-    assert seven_norm["transunion"] == (("LATE30", 0), ("LATE60", 0), ("LATE90", 0))
-    assert seven_norm["equifax"] == (("LATE30", 1), ("LATE60", 0), ("LATE90", 0))
+    assert seven_norm["transunion"]["late30"] == 0
+    assert seven_norm["equifax"]["late30"] == 1
+
+
+def test_compute_field_consistency_handles_dates_and_account_numbers():
+    bureaus = {
+        "transunion": {
+            "date_opened": "2023-05-01",
+            "account_number_display": "****1234",
+            "remarks": "Charge-Off filed",
+        },
+        "experian": {
+            "date_opened": "5/1/2023",
+            "account_number_display": "XXXX-1234",
+            "remarks": "charge off filed!",
+        },
+        "equifax": {
+            "date_opened": "28.7.2025",
+            "account_number_display": "****5678",
+            "remarks": "Different note",
+        },
+    }
+
+    details = compute_field_consistency(bureaus)
+
+    assert details["date_opened"]["normalized"]["experian"] == "2023-05-01"
+    assert details["date_opened"]["normalized"]["equifax"] == "2025-07-28"
+    assert details["account_number_display"]["consensus"] == "majority"
+    assert details["account_number_display"]["disagreeing_bureaus"] == ["equifax"]
+    assert details["account_number_display"]["normalized"]["transunion"]["last4"] == "1234"
+    assert details["account_number_display"]["normalized"]["equifax"]["last4"] == "5678"
+    assert details["remarks"]["normalized"]["transunion"] == "charge off filed"
+    assert details["remarks"]["normalized"]["equifax"] == "different note"
 
 
 def test_apply_validation_summary_and_sync_validation_tag(tmp_path):
@@ -161,6 +227,10 @@ def test_build_validation_requirements_for_account_writes_summary_and_tags(
     assert validation_block["count"] == 2
     fields = {entry["field"] for entry in validation_block["requirements"]}
     assert fields == {"balance_owed", "payment_status"}
+    field_consistency = validation_block["field_consistency"]
+    assert set(field_consistency.keys()) == {"balance_owed", "payment_status"}
+    assert field_consistency["balance_owed"]["consensus"] in {"majority", "split"}
+    assert field_consistency["payment_status"]["disagreeing_bureaus"]
 
     tags = json.loads((account_dir / "tags.json").read_text(encoding="utf-8"))
     assert {tag["kind"] for tag in tags} == {"other", "validation_required"}

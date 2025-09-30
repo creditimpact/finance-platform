@@ -49,9 +49,22 @@ class ValidationRule:
 
 
 @dataclass(frozen=True)
+class CategoryRule:
+    """Fallback configuration scoped to a category."""
+
+    min_days: int
+    documents: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ValidationConfig:
     defaults: ValidationRule
     fields: Mapping[str, ValidationRule]
+    category_defaults: Mapping[str, CategoryRule]
+    schema_version: int
+    mode: str
+    broadcast_disputes: bool
+    threshold_points: int
 
 
 def _coerce_documents(raw: Any, fallback: Sequence[str]) -> tuple[str, ...]:
@@ -114,6 +127,20 @@ def _coerce_ai_needed(raw: Any, fallback: bool) -> bool:
     return fallback
 
 
+def _coerce_bool(raw: Any, fallback: bool) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        lowered = raw.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return bool(raw)
+    return fallback
+
+
 @lru_cache(maxsize=1)
 def load_validation_config(path: str | Path = _CONFIG_PATH) -> ValidationConfig:
     """Load validation metadata from YAML configuration."""
@@ -157,23 +184,64 @@ def load_validation_config(path: str | Path = _CONFIG_PATH) -> ValidationConfig:
         default_ai_needed,
     )
 
+    category_defaults_raw = (
+        loaded.get("category_defaults") if isinstance(loaded, Mapping) else None
+    )
+    category_defaults: Dict[str, CategoryRule] = {}
+    if isinstance(category_defaults_raw, Mapping):
+        for key, value in category_defaults_raw.items():
+            if not isinstance(value, Mapping):
+                continue
+            min_days = _coerce_min_days(value.get("min_days"), defaults.min_days)
+            documents = _coerce_documents(value.get("documents"), defaults.documents)
+            category_defaults[str(key)] = CategoryRule(min_days=min_days, documents=documents)
+
+    def _resolve_field_rule(field: str, value: Mapping[str, Any]) -> ValidationRule:
+        category = _coerce_category(value.get("category"), defaults.category)
+        category_fallback = category_defaults.get(category)
+        fallback_min_days = (
+            category_fallback.min_days if category_fallback else defaults.min_days
+        )
+        fallback_documents = (
+            category_fallback.documents
+            if category_fallback and category_fallback.documents
+            else defaults.documents
+        )
+        min_days = _coerce_min_days(value.get("min_days"), fallback_min_days)
+        documents = _coerce_documents(value.get("documents"), fallback_documents)
+        points = _coerce_points(value.get("points"), defaults.points)
+        strength = _coerce_strength(value.get("strength"), defaults.strength)
+        ai_needed = _coerce_ai_needed(value.get("ai_needed"), defaults.ai_needed)
+        return ValidationRule(category, min_days, documents, points, strength, ai_needed)
+
     fields_cfg: Dict[str, ValidationRule] = {}
     fields_raw = loaded.get("fields") if isinstance(loaded, Mapping) else None
     if isinstance(fields_raw, Mapping):
         for key, value in fields_raw.items():
             if not isinstance(value, Mapping):
                 continue
-            category = _coerce_category(value.get("category"), defaults.category)
-            min_days = _coerce_min_days(value.get("min_days"), defaults.min_days)
-            documents = _coerce_documents(value.get("documents"), defaults.documents)
-            points = _coerce_points(value.get("points"), defaults.points)
-            strength = _coerce_strength(value.get("strength"), defaults.strength)
-            ai_needed = _coerce_ai_needed(value.get("ai_needed"), defaults.ai_needed)
-            fields_cfg[str(key)] = ValidationRule(
-                category, min_days, documents, points, strength, ai_needed
-            )
+            fields_cfg[str(key)] = _resolve_field_rule(str(key), value)
 
-    return ValidationConfig(defaults=defaults, fields=fields_cfg)
+    schema_version = _coerce_points(loaded.get("schema_version"), 1)
+    mode_raw = str(loaded.get("mode", "broad")) if isinstance(loaded, Mapping) else "broad"
+    mode = mode_raw.strip().lower()
+    if mode not in {"broad", "strict"}:
+        mode = "broad"
+    broadcast_default = True if mode == "broad" else False
+    broadcast_disputes = _coerce_bool(
+        loaded.get("broadcast_disputes"), broadcast_default
+    )
+    threshold_points = _coerce_points(loaded.get("threshold_points"), 45)
+
+    return ValidationConfig(
+        defaults=defaults,
+        fields=fields_cfg,
+        category_defaults=category_defaults,
+        schema_version=schema_version,
+        mode=mode,
+        broadcast_disputes=broadcast_disputes,
+        threshold_points=threshold_points,
+    )
 
 
 def _filter_inconsistent_fields(
@@ -330,6 +398,13 @@ def _apply_strength_policy(
     )
 
 
+def _should_broadcast(config: ValidationConfig) -> bool:
+    override = os.getenv("BROADCAST_DISPUTES")
+    if override is not None:
+        return override.strip() == "1"
+    return config.broadcast_disputes
+
+
 def _select_requirement_bureaus(
     details: Mapping[str, Any], *, broadcast_all: bool
 ) -> List[str]:
@@ -392,7 +467,7 @@ def build_validation_requirements(
     config = load_validation_config()
     field_consistency = compute_field_consistency(bureaus)
     inconsistencies = _filter_inconsistent_fields(field_consistency)
-    broadcast_all = os.getenv("BROADCAST_DISPUTES", "1") == "1"
+    broadcast_all = _should_broadcast(config)
     requirements = _build_requirement_entries(
         inconsistencies, config, broadcast_all=broadcast_all
     )
@@ -539,7 +614,7 @@ def build_validation_requirements_for_account(account_dir: str | Path) -> Dict[s
 
     config = load_validation_config()
     inconsistencies = _filter_inconsistent_fields(field_consistency_full)
-    broadcast_all = os.getenv("BROADCAST_DISPUTES", "1") == "1"
+    broadcast_all = _should_broadcast(config)
     requirements = _build_requirement_entries(
         inconsistencies, config, broadcast_all=broadcast_all
     )

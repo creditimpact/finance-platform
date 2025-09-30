@@ -64,6 +64,22 @@ def _requirements_by_field(bureaus):
     return by_field, inconsistencies
 
 
+def test_account_number_last4_mismatch_is_strong():
+    bureaus = {
+        "transunion": {"account_number_display": "****9992"},
+        "experian": {"account_number_display": "4999"},
+        "equifax": {"account_number_display": "acct 4999"},
+    }
+
+    requirements, inconsistencies = _requirements_by_field(bureaus)
+
+    rule = requirements["account_number_display"]
+    assert rule["strength"] == "strong"
+    assert rule["ai_needed"] is False
+
+    normalized = inconsistencies["account_number_display"]["normalized"]
+    assert normalized["transunion"]["last4"] == "9992"
+    assert normalized["experian"]["last4"] == "4999"
 def test_histories_require_strong_policy(account_with_histories):
     requirements, inconsistencies = _requirements_by_field(account_with_histories)
 

@@ -1,4 +1,15 @@
-schema_version: 2
+schema_version: 3
+mode: broad            # "broad" or "strict"
+broadcast_disputes: 1  # 1/0 override of mode when needed
+threshold_points: 45   # kept for future scoring phases
+
+# default fallbacks by category if field-specific docs/min_days not found:
+category_defaults:
+  open_ident: { min_days: 5,  documents: [account_opening_contract, application_form, system_audit_log] }
+  terms:      { min_days: 8,  documents: [loan_agreement, monthly_statement, internal_balance_report] }
+  activity:   { min_days: 10, documents: [monthly_statement, system_activity_log, internal_report] }
+  status:     { min_days: 6,  documents: [cra_audit_log, cra_reporting_log, cra_report] }
+  history:    { min_days: 20, documents: [monthly_statements_2y, internal_payment_history, cra_report_7y] }
 
 defaults:
   category: "unknown"

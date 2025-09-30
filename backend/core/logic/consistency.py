@@ -510,6 +510,10 @@ def _build_field_consistency(
                     value = history_blob.get(bureau)
                 else:
                     value = history_blob
+                if value is None:
+                    branch = bureaus.get(bureau)
+                    if isinstance(branch, Mapping):
+                        value = branch.get(field)
             else:
                 branch = bureaus.get(bureau)
                 value = branch.get(field) if isinstance(branch, Mapping) else None

@@ -118,6 +118,38 @@ def test_compute_inconsistent_fields_handles_histories():
     assert seven_norm["equifax"]["late30"] == 1
 
 
+def test_compute_field_consistency_reads_history_from_branch():
+    bureaus = {
+        "transunion": {
+            "two_year_payment_history": ["OK", "30", "OK"],
+            "seven_year_history": {"late30": "1", "late60": 0},
+        },
+        "experian": {
+            "two_year_payment_history": "ok,30,OK",
+            "seven_year_history": {"late30": "0", "late60": 0},
+        },
+        "equifax": {
+            "two_year_payment_history": [
+                {"date": "2024-01", "status": "OK"},
+                {"date": "2024-02", "status": "60"},
+            ],
+            "seven_year_history": "CO,CO,30",
+        },
+    }
+
+    details = compute_field_consistency(bureaus)
+
+    history = details["two_year_payment_history"]
+    assert history["consensus"] in {"split", "majority"}
+    assert history["normalized"]["experian"]["codes"] == ("OK", "30", "OK")
+    assert history["normalized"]["equifax"]["summary"]["late60"] == 1
+
+    seven_year = details["seven_year_history"]
+    assert seven_year["consensus"] in {"split", "majority"}
+    assert seven_year["normalized"]["transunion"]["late30"] == 1
+    assert seven_year["normalized"]["equifax"]["codes"] == ("CO", "CO", "30")
+
+
 def test_compute_field_consistency_handles_dates_and_account_numbers():
     bureaus = {
         "transunion": {
@@ -161,7 +193,14 @@ def test_apply_validation_summary_and_sync_validation_tag(tmp_path):
     tag_path.write_text(json.dumps(tag_payload), encoding="utf-8")
 
     requirements = [
-        {"field": "balance_owed", "category": "activity", "min_days": 8, "documents": []}
+        {
+            "field": "balance_owed",
+            "category": "activity",
+            "min_days": 8,
+            "documents": [],
+            "strength": "strong",
+            "ai_needed": False,
+        }
     ]
     payload = build_summary_payload(requirements)
 
@@ -260,6 +299,8 @@ def test_build_validation_requirements_for_account_clears_when_empty(tmp_path, m
                     "category": "activity",
                     "min_days": 8,
                     "documents": [],
+                    "strength": "strong",
+                    "ai_needed": False,
                 }
             ],
         },

@@ -8,6 +8,7 @@ import ast
 import hashlib
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Literal, Sequence
 
@@ -323,13 +324,56 @@ def _evaluate_date(field_cfg: Mapping[str, Any], raw_value: Any) -> Dict[str, An
     )
 
 
-def _match_keyword(normalized_value: str, keywords: Iterable[Any]) -> Optional[str]:
+def _match_keyword(
+    normalized_value: str, raw_value: Any, keywords: Iterable[Any]
+) -> Optional[Dict[str, Any]]:
     for keyword in keywords:
-        if not isinstance(keyword, str):
+        if isinstance(keyword, Mapping):
+            rule_id = keyword.get("id")
+            if not isinstance(rule_id, str) or not rule_id.strip():
+                continue
+
+            match_on = str(keyword.get("match_on") or "normalized").strip().lower()
+            if match_on == "raw":
+                if raw_value is None:
+                    target_value = ""
+                elif isinstance(raw_value, str):
+                    target_value = raw_value
+                else:
+                    target_value = str(raw_value)
+            else:
+                target_value = normalized_value
+
+            pattern = keyword.get("pattern")
+            if isinstance(pattern, str):
+                try:
+                    match = re.search(pattern, target_value, flags=re.IGNORECASE)
+                except re.error:
+                    logger.debug(
+                        "POLARITY_INVALID_REGEX pattern=%r rule_id=%s", pattern, rule_id
+                    )
+                else:
+                    if match:
+                        return {
+                            "rule_hit": rule_id.strip(),
+                            "matched": match.group(0),
+                            "pattern": pattern,
+                        }
+
+            value = keyword.get("value")
+            if isinstance(value, str):
+                normalized_keyword = norm_text(value)
+                if normalized_keyword and normalized_keyword in normalized_value:
+                    return {
+                        "rule_hit": rule_id.strip(),
+                        "matched": value,
+                    }
             continue
-        normalized_keyword = norm_text(keyword)
-        if normalized_keyword and normalized_keyword in normalized_value:
-            return keyword
+
+        if isinstance(keyword, str):
+            normalized_keyword = norm_text(keyword)
+            if normalized_keyword and normalized_keyword in normalized_value:
+                return {"rule_hit": keyword, "matched": keyword}
     return None
 
 
@@ -343,17 +387,26 @@ def _evaluate_text(field_cfg: Mapping[str, Any], raw_value: Any) -> Dict[str, An
     for category in ("bad", "good", "neutral"):
         keywords = field_cfg.get(f"{category}_keywords")
         if isinstance(keywords, Iterable):
-            matched = _match_keyword(normalized_value, keywords)
-            if matched:
-                evidence["matched_keyword"] = matched
+            match_info = _match_keyword(normalized_value, raw_value, keywords)
+            if match_info:
+                matched_keyword = str(match_info.get("matched") or "").strip()
+                evidence["matched_keyword"] = matched_keyword or None
+                pattern = match_info.get("pattern")
+                if isinstance(pattern, str):
+                    evidence["matched_pattern"] = pattern
                 polarity = _normalize_polarity(category)
                 severity = _normalize_severity(weight_map.get(category))
-                reason = f"matched {category} keyword '{matched}'"
+                keyword_label = matched_keyword or str(match_info.get("rule_hit"))
+                reason = f"matched {category} keyword '{keyword_label}'"
                 return _build_result(
                     polarity,
                     severity,
                     value_norm=normalized_value or None,
-                    rule_hit=matched,
+                    rule_hit=(
+                        str(match_info.get("rule_hit"))
+                        if match_info.get("rule_hit") is not None
+                        else None
+                    ),
                     reason=reason,
                     evidence=evidence,
                 )

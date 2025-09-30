@@ -105,9 +105,15 @@ def test_classify_text_field(monkeypatch, tmp_path: Path) -> None:
             "fields": {
                 "payment_status": {
                     "type": "text",
-                    "bad_keywords": ["collection"],
-                    "good_keywords": ["paid in full"],
-                    "neutral_keywords": ["--"],
+                    "bad_keywords": [
+                        {"id": "PAYMENT_STATUS_COLLECTION", "pattern": "collection"}
+                    ],
+                    "good_keywords": [
+                        {"id": "PAYMENT_STATUS_PAID_IN_FULL", "pattern": "paid in full"}
+                    ],
+                    "neutral_keywords": [
+                        {"id": "PAYMENT_STATUS_PLACEHOLDER", "pattern": "--"}
+                    ],
                     "default": "unknown",
                     "weights": {"bad": "high", "good": "medium", "neutral": "low"},
                 }
@@ -119,7 +125,7 @@ def test_classify_text_field(monkeypatch, tmp_path: Path) -> None:
     assert bad["polarity"] == "bad"
     assert bad["severity"] == "high"
     assert bad["value_norm"] == "account in collection"
-    assert bad["rule_hit"] == "collection"
+    assert bad["rule_hit"] == "PAYMENT_STATUS_COLLECTION"
     assert bad["reason"] == "matched bad keyword 'collection'"
     assert bad["evidence"]["matched_keyword"] == "collection"
 
@@ -127,7 +133,7 @@ def test_classify_text_field(monkeypatch, tmp_path: Path) -> None:
     assert good["polarity"] == "good"
     assert good["severity"] == "medium"
     assert good["value_norm"] == "paid in full"
-    assert good["rule_hit"] == "paid in full"
+    assert good["rule_hit"] == "PAYMENT_STATUS_PAID_IN_FULL"
     assert good["reason"] == "matched good keyword 'paid in full'"
 
     default = polarity.classify_field_value("payment_status", "unknown status")

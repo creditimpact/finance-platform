@@ -36,7 +36,8 @@ def test_compact_merge_sections_filters_and_normalizes() -> None:
             },
             "not a mapping",
         ],
-        "untouched": {"stay": True},
+        "untouched": {"stay": True, "aux": {"noise": 1}},
+        "extra": {"nested": {"matched_pairs": ["x", "y"], "keep": 5}},
     }
 
     compact_merge_sections(summary)
@@ -71,3 +72,4 @@ def test_compact_merge_sections_filters_and_normalizes() -> None:
     ]
 
     assert summary["untouched"] == {"stay": True}
+    assert summary["extra"] == {"nested": {"keep": 5}}

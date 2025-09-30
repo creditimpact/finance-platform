@@ -20,6 +20,14 @@ def test_parse_date_any_slashes_zero_padded():
     assert parse_date_any("03/09/2020") == "2020-03-09"
 
 
+def test_parse_date_any_spaces():
+    assert parse_date_any("10 8 2025") == "2025-10-08"
+
+
+def test_parse_date_any_hyphen_single_digit():
+    assert parse_date_any("3-9-2020") == "2020-03-09"
+
+
 def test_extractor_maps_date_opened_any_format(monkeypatch):
     monkeypatch.setattr(accounts, "upsert_account_fields", lambda **kwargs: None)
     off_flags = replace(

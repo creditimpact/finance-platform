@@ -80,6 +80,10 @@ DATE_PATTERNS = [
     (re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b"), ("D", "M", "Y")),
     # Slashes: M/D/YYYY or MM/DD/YYYY
     (re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b"), ("M", "D", "Y")),
+    # Hyphens: M-D-YYYY or MM-DD-YYYY
+    (re.compile(r"\b(\d{1,2})-(\d{1,2})-(\d{4})\b"), ("M", "D", "Y")),
+    # Spaces: M D YYYY or MM DD YYYY
+    (re.compile(r"\b(\d{1,2})\s+(\d{1,2})\s+(\d{4})\b"), ("M", "D", "Y")),
 ]
 
 

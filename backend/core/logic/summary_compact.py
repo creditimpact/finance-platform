@@ -56,7 +56,14 @@ def compact_merge_sections(summary: Dict[str, Any]) -> Dict[str, Any]:
             if key not in d:
                 continue
             value = d.get(key)
-            if key in {"best_with", "score_total", "identity_score", "debt_score", "acctnum_digits_len_a", "acctnum_digits_len_b"}:
+            if key in {
+                "best_with",
+                "score_total",
+                "identity_score",
+                "debt_score",
+                "acctnum_digits_len_a",
+                "acctnum_digits_len_b",
+            }:
                 iv = _safe_int(value)
                 if iv is not None:
                     out[key] = iv

@@ -382,6 +382,7 @@ def compute_field_consistency(bureaus_json: Dict[str, Any]) -> Dict[str, Any]:
         raw: MutableMapping[str, Any] = {}
         groups: Dict[Any, list[str]] = {}
         missing_bureaus: list[str] = []
+        present_bureaus: list[str] = []
 
         for bureau in _BUREAU_KEYS:
             value = _get_bureau_value(bureaus_json, field, bureau)
@@ -391,6 +392,8 @@ def compute_field_consistency(bureaus_json: Dict[str, Any]) -> Dict[str, Any]:
             normalized[bureau] = norm_value
             if is_missing:
                 missing_bureaus.append(bureau)
+            else:
+                present_bureaus.append(bureau)
             key = ("__missing__",) if is_missing else _freeze_value(field, norm_value)
             groups.setdefault(key, []).append(bureau)
 
@@ -403,7 +406,7 @@ def compute_field_consistency(bureaus_json: Dict[str, Any]) -> Dict[str, Any]:
             "normalized": dict(normalized),
             "raw": dict(raw),
             "disagreeing_bureaus": disagreeing,
-            "missing_bureaus": sorted({bureau for bureau in missing_bureaus}),
+            "missing_bureaus": sorted({bureau for bureau in missing_bureaus}) if present_bureaus else [],
         }
 
     return results

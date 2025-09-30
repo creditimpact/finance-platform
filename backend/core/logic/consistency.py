@@ -441,17 +441,85 @@ def _normalize_history_count(value: Any) -> int | float | None:
     return number
 
 
+def _canonicalize_history_bucket(token: str) -> str:
+    """Return a canonical bucket name for seven-year history summaries."""
+
+    cleaned = re.sub(r"[^A-Z0-9]", "", token.upper())
+    if not cleaned:
+        return token.lower()
+
+    mapping = {
+        "LATE30": "late30",
+        "PAST30": "late30",
+        "PAST30DAYS": "late30",
+        "PASTDUE30": "late30",
+        "L30": "late30",
+        "_30": "late30",
+        "30": "late30",
+        "30DAYSLATE": "late30",
+        "30DAYPASTDUE": "late30",
+        "LATE60": "late60",
+        "PAST60": "late60",
+        "PAST60DAYS": "late60",
+        "PASTDUE60": "late60",
+        "L60": "late60",
+        "_60": "late60",
+        "60": "late60",
+        "60DAYSLATE": "late60",
+        "60DAYPASTDUE": "late60",
+        "LATE90": "late90",
+        "PAST90": "late90",
+        "PAST90DAYS": "late90",
+        "PASTDUE90": "late90",
+        "L90": "late90",
+        "_90": "late90",
+        "90": "late90",
+        "90DAYSLATE": "late90",
+        "90DAYPASTDUE": "late90",
+        "LATE120": "late90",
+        "PASTDUE120": "late90",
+        "120": "late90",
+        "LATE150": "late90",
+        "150": "late90",
+        "LATE180": "late90",
+        "180": "late90",
+        "CO": "co_count",
+        "COCOUNT": "co_count",
+        "CHARGEOFF": "co_count",
+        "CHARGEOFFCOUNT": "co_count",
+        "CHARGEOFFS": "co_count",
+    }
+
+    return mapping.get(cleaned, token.lower())
+
+
+def _merge_history_bucket(
+    existing: Dict[str, Any], key: str, value: Any
+) -> None:
+    if value is None:
+        return
+    if key not in existing:
+        existing[key] = value
+        return
+    current = existing[key]
+    if isinstance(current, (int, float)) and isinstance(value, (int, float)):
+        existing[key] = current + value
+    else:
+        existing[key] = value
+
+
 def _normalize_seven_year_history(value: Any) -> Any:
     if _is_missing(value):
         return None
     if isinstance(value, Mapping):
         normalized: Dict[str, Any] = {}
         for key in value.keys():
-            norm_key = (_normalize_history_status(key) or "").lower()
-            if not norm_key:
+            norm_key_raw = _normalize_history_status(key) or ""
+            if not norm_key_raw:
                 continue
             norm_value = _normalize_history_count(value[key])
-            normalized[norm_key] = norm_value
+            canonical_key = _canonicalize_history_bucket(norm_key_raw)
+            _merge_history_bucket(normalized, canonical_key, norm_value)
         if not normalized:
             return None
         return normalized

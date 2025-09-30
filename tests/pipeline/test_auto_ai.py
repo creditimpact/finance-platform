@@ -986,16 +986,14 @@ def test_auto_ai_build_and_send_use_ai_packs_dir(tmp_path, monkeypatch, caplog):
     assert "total" in merge_score_a["reasons"]
     assert merge_score_a["matched_fields"].get("balance_owed") is True
     assert merge_score_a.get("acctnum_level") in {"exact_or_known_match", "none"}
-    assert "account_number" in merge_score_a.get("matched_pairs", {})
-    assert isinstance(merge_score_a["matched_pairs"]["account_number"], list)
+    assert "matched_pairs" not in merge_score_a
 
     merge_score_b = summary_b.get("merge_scoring")
     assert merge_score_b
     assert merge_score_b["best_with"] == 11
     assert merge_score_b["matched_fields"].get("balance_owed") is True
     assert merge_score_b.get("acctnum_level") in {"exact_or_known_match", "none"}
-    assert "account_number" in merge_score_b.get("matched_pairs", {})
-    assert isinstance(merge_score_b["matched_pairs"]["account_number"], list)
+    assert "matched_pairs" not in merge_score_b
 
 
 

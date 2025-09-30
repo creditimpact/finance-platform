@@ -109,9 +109,14 @@ def test_compact_tags_moves_verbose_data_to_summary(tmp_path: Path) -> None:
     assert merge_entry["parts"] == {"balance_owed": 31}
     assert merge_entry["conflicts"] == ["amount_conflict:high_balance"]
     assert merge_entry["matched_fields"] == {"balance_owed": True}
-    aux_payload = merge_entry.get("aux", {}) if isinstance(merge_entry.get("aux"), dict) else {}
-    acct_level = merge_entry.get("acctnum_level", aux_payload.get("acctnum_level"))
-    assert acct_level == "none"
+    assert merge_entry.get("acctnum_level") == "none"
+    assert "aux" not in merge_entry
+    assert "matched_pairs" not in merge_entry
+
+    merge_scoring = summary_after.get("merge_scoring", {})
+    if isinstance(merge_scoring, dict):
+        assert "matched_pairs" not in merge_scoring
+        assert "aux" not in merge_scoring
 
     ai_entries = summary_after["ai_explanations"]
     assert isinstance(ai_entries, list)

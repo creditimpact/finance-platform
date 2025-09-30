@@ -19,6 +19,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Tuple
 from backend.pipeline.runs import RunManifest, write_breadcrumb
 from backend.core.io.tags import read_tags, upsert_tag, write_tags_atomic
 from backend.core.merge.acctnum import normalize_level
+from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.logic.report_analysis.problem_extractor import (
     build_rule_fields_from_triad,
     load_stagea_accounts_from_manifest,
@@ -86,7 +87,15 @@ def _load_manifest_for_sid(sid: str, root: Path | None = None) -> RunManifest | 
 
 
 def _write_json(path: Path, obj: Any) -> None:
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    payload = obj
+    if (
+        path.name == "summary.json"
+        and isinstance(obj, Mapping)
+        and os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1"
+    ):
+        payload = dict(obj)
+        compact_merge_sections(payload)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _load_summary_json(path: Path) -> Tuple[Dict[str, Any], bool]:

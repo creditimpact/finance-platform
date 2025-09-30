@@ -11,6 +11,7 @@ from typing import Any, Dict, Mapping
 from backend.core.io.json_io import update_json_in_place
 from backend.core.io.tags import upsert_tag
 from backend.core.logic.polarity import classify_field_value, load_polarity_config
+from backend.core.logic.summary_compact import compact_merge_sections
 
 logger = logging.getLogger(__name__)
 
@@ -187,9 +188,13 @@ def analyze_account_polarity(sid: str, account_dir: "os.PathLike[str]") -> Dict[
             summary = {}
 
         if summary.get("polarity_check") == polarity_block:
+            if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
+                compact_merge_sections(summary)
             return summary
 
         summary["polarity_check"] = polarity_block
+        if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
+            compact_merge_sections(summary)
         return summary
 
     try:

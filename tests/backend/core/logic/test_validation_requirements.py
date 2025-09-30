@@ -150,6 +150,32 @@ def test_compute_field_consistency_reads_history_from_branch():
     assert seven_year["normalized"]["equifax"]["codes"] == ("CO", "CO", "30")
 
 
+def test_seven_year_history_canonicalizes_bucket_names():
+    bureaus = {
+        "transunion": {
+            "seven_year_history": {"30 Days Late": "2", "Charge-Off Count": 1}
+        },
+        "experian": {"seven_year_history": {"late30": 2, "co_count": "1"}},
+        "equifax": {
+            "seven_year_history": {
+                "past due 30": 3,
+                "charge offs": 1,
+            }
+        },
+    }
+
+    details = compute_field_consistency(bureaus)
+
+    history = details["seven_year_history"]
+    assert history["normalized"]["transunion"]["late30"] == 2
+    assert history["normalized"]["transunion"]["co_count"] == 1
+    assert history["normalized"]["experian"]["late30"] == 2
+    assert history["normalized"]["experian"]["co_count"] == 1
+    assert history["normalized"]["equifax"]["late30"] == 3
+    assert history["normalized"]["equifax"]["co_count"] == 1
+    assert history["consensus"] in {"majority", "split"}
+
+
 def test_compute_field_consistency_handles_dates_and_account_numbers():
     bureaus = {
         "transunion": {

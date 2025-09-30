@@ -15,6 +15,7 @@ from typing import Iterable, Mapping, MutableMapping, Sequence
 from celery import shared_task
 
 from backend.core.ai.paths import ensure_merge_paths, probe_legacy_ai_packs
+from backend.core.config import ENABLE_VALIDATION_REQUIREMENTS
 from backend.core.logic.validation_requirements import (
     build_validation_requirements_for_account,
 )
@@ -23,6 +24,9 @@ from backend.core.logic.tags.compact import (
     compact_tags_for_sid,
 )
 from backend.pipeline.runs import RUNS_ROOT, RunManifest, persist_manifest
+from backend.pipeline.steps.validation_requirements_step import (
+    run as validation_requirements_step,
+)
 from scripts.build_ai_merge_packs import main as build_ai_merge_packs_main
 from scripts.send_ai_merge_packs import main as send_ai_merge_packs_main
 
@@ -516,6 +520,12 @@ def _compact_accounts(accounts_dir: Path, indices: Iterable[int]) -> None:
             continue
         try:
             compact_account_tags(account_dir)
+            if ENABLE_VALIDATION_REQUIREMENTS:
+                vr_res = validation_requirements_step(str(account_dir))
+                logger.info(
+                    "validation_requirements",
+                    extra={"account_dir": str(account_dir), "res": vr_res},
+                )
         except Exception:  # pragma: no cover - defensive logging
             logger.warning(
                 "AUTO_AI_PIPELINE compact failed account=%s dir=%s",
@@ -761,6 +771,27 @@ def _run_auto_ai_pipeline(sid: str):
     manifest.set_ai_compacted()
     persist_manifest(manifest)
     logger.info("AUTO_AI_COMPACTED sid=%s", sid)
+
+    if ENABLE_VALIDATION_REQUIREMENTS:
+        accounts_root = RUNS_ROOT / sid / "cases" / "accounts"
+        if accounts_root.exists():
+            for account_path in sorted(accounts_root.iterdir(), key=_account_sort_key):
+                if not account_path.is_dir():
+                    continue
+                try:
+                    vr_res = validation_requirements_step(str(account_path))
+                except Exception:  # pragma: no cover - defensive logging
+                    logger.warning(
+                        "AUTO_AI_VALIDATION_REQUIREMENTS_FAILED sid=%s account_dir=%s",
+                        sid,
+                        account_path,
+                        exc_info=True,
+                    )
+                    continue
+                logger.info(
+                    "validation_requirements",
+                    extra={"account_dir": str(account_path), "res": vr_res},
+                )
 
     logger.info("AUTO_AI_DONE sid=%s", sid)
     return {"sid": sid, "ok": True}

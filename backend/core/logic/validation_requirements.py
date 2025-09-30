@@ -221,12 +221,72 @@ def _filter_inconsistent_fields(
     return result
 
 
+_STRONG_FIELDS = {
+    "balance_owed",
+    "past_due_amount",
+    "high_balance",
+    "credit_limit",
+    "payment_amount",
+    "date_opened",
+    "closed_date",
+    "date_of_last_activity",
+    "date_reported",
+    "last_verified",
+    "last_payment",
+    "dispute_status",
+    "two_year_payment_history",
+    "seven_year_history",
+    "account_status",
+    "payment_status",
+}
+
+_SOFT_AI_FIELDS = {
+    "account_number_display",
+    "account_type",
+    "creditor_type",
+    "account_description",
+    "account_rating",
+    "creditor_remarks",
+}
+
+
+def _apply_strength_policy(field: str, rule: ValidationRule) -> ValidationRule:
+    """Enforce runtime defaults for strength and AI needs."""
+
+    if field in _STRONG_FIELDS:
+        if rule.strength != "strong" or rule.ai_needed:
+            return ValidationRule(
+                rule.category,
+                rule.min_days,
+                rule.documents,
+                rule.points,
+                "strong",
+                False,
+            )
+        return rule
+
+    if field in _SOFT_AI_FIELDS:
+        if rule.strength != "soft" or not rule.ai_needed:
+            return ValidationRule(
+                rule.category,
+                rule.min_days,
+                rule.documents,
+                rule.points,
+                "soft",
+                True,
+            )
+        return rule
+
+    return rule
+
+
 def _build_requirement_entries(
     fields: Mapping[str, Any], config: ValidationConfig
 ) -> List[Dict[str, Any]]:
     requirements: List[Dict[str, Any]] = []
     for field in sorted(fields.keys()):
         rule = config.fields.get(field, config.defaults)
+        rule = _apply_strength_policy(field, rule)
         requirements.append(
             {
                 "field": field,

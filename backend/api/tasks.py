@@ -16,6 +16,7 @@ from backend.core.logic.report_analysis.block_exporter import export_stage_a, ru
 from backend.pipeline.auto_ai import (
     has_ai_merge_best_tags,
     maybe_run_ai_pipeline_task,
+    run_validation_requirements_for_all_accounts,
 )
 from backend.pipeline.runs import RunManifest, persist_manifest
 from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
@@ -25,6 +26,7 @@ from backend.core.logic.report_analysis.text_provider import (
     load_cached_text,
 )
 from backend.core.logic.report_analysis.trace_cleanup import purge_after_export
+from backend.core.config import ENABLE_VALIDATION_REQUIREMENTS
 from backend.settings import PROJECT_ROOT
 
 # Ensure the project root is always on sys.path so local modules can be
@@ -228,6 +230,25 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
         cases_info.get("count"),
         cases_info.get("dir"),
     )
+
+    if ENABLE_VALIDATION_REQUIREMENTS:
+        try:
+            stats = run_validation_requirements_for_all_accounts(sid)
+        except Exception:  # pragma: no cover - defensive logging
+            log.error(
+                "VALIDATION_REQUIREMENTS_PIPELINE_FAILED sid=%s",
+                sid,
+                exc_info=True,
+            )
+        else:
+            if isinstance(summary, dict):
+                summary["validation_requirements"] = stats
+            log.info(
+                "VALIDATION_REQUIREMENTS_PIPELINE_DONE sid=%s processed=%s requirements=%s",
+                sid,
+                stats.get("processed_accounts", 0),
+                stats.get("requirements", 0),
+            )
 
     if os.environ.get("ENABLE_AUTO_AI_PIPELINE", "1") in ("1", "true", "True"):
         if has_ai_merge_best_tags(sid):

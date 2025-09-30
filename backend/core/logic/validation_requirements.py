@@ -15,10 +15,7 @@ import yaml
 
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, write_tags_atomic
-from backend.core.logic.consistency import (
-    compute_field_consistency,
-    compute_inconsistent_fields,
-)
+from backend.core.logic.consistency import compute_field_consistency
 from backend.core.logic.summary_compact import compact_merge_sections
 
 logger = logging.getLogger(__name__)
@@ -179,16 +176,56 @@ def load_validation_config(path: str | Path = _CONFIG_PATH) -> ValidationConfig:
     return ValidationConfig(defaults=defaults, fields=fields_cfg)
 
 
-def build_validation_requirements(
-    bureaus: Mapping[str, Mapping[str, Any]],
-) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Return validation requirements for fields with cross-bureau inconsistencies."""
+def _filter_inconsistent_fields(
+    field_consistency: Mapping[str, Any]
+) -> Dict[str, Dict[str, Any]]:
+    """Return only the inconsistent fields from a field consistency payload."""
 
-    config = load_validation_config()
-    inconsistencies = compute_inconsistent_fields(bureaus)
+    result: Dict[str, Dict[str, Any]] = {}
+    for raw_field, raw_details in field_consistency.items():
+        if not isinstance(raw_details, Mapping):
+            continue
 
+        consensus = str(raw_details.get("consensus", "")).lower()
+        if consensus == "unanimous":
+            continue
+
+        field = str(raw_field)
+        normalized = raw_details.get("normalized")
+        if isinstance(normalized, Mapping):
+            normalized_payload = dict(normalized)
+        else:
+            normalized_payload = normalized
+
+        raw_values = raw_details.get("raw")
+        if isinstance(raw_values, Mapping):
+            raw_payload = dict(raw_values)
+        else:
+            raw_payload = raw_values
+
+        disagreeing = raw_details.get("disagreeing_bureaus") or []
+        if isinstance(disagreeing, Sequence) and not isinstance(
+            disagreeing, (str, bytes, bytearray)
+        ):
+            disagreeing_list = sorted(str(item) for item in disagreeing)
+        else:
+            disagreeing_list = []
+
+        result[field] = {
+            "normalized": normalized_payload,
+            "raw": raw_payload,
+            "consensus": raw_details.get("consensus"),
+            "disagreeing_bureaus": disagreeing_list,
+        }
+
+    return result
+
+
+def _build_requirement_entries(
+    fields: Mapping[str, Any], config: ValidationConfig
+) -> List[Dict[str, Any]]:
     requirements: List[Dict[str, Any]] = []
-    for field in sorted(inconsistencies.keys()):
+    for field in sorted(fields.keys()):
         rule = config.fields.get(field, config.defaults)
         requirements.append(
             {
@@ -200,6 +237,18 @@ def build_validation_requirements(
                 "ai_needed": rule.ai_needed,
             }
         )
+    return requirements
+
+
+def build_validation_requirements(
+    bureaus: Mapping[str, Mapping[str, Any]],
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Return validation requirements for fields with cross-bureau inconsistencies."""
+
+    config = load_validation_config()
+    field_consistency = compute_field_consistency(bureaus)
+    inconsistencies = _filter_inconsistent_fields(field_consistency)
+    requirements = _build_requirement_entries(inconsistencies, config)
 
     return requirements, inconsistencies
 
@@ -339,14 +388,26 @@ def build_validation_requirements_for_account(account_dir: str | Path) -> Dict[s
         )
         return {"status": "invalid_bureaus_json"}
 
-    requirements, inconsistencies = build_validation_requirements(bureaus_raw)
-    field_consistency = {
-        field: details
-        for field, details in compute_field_consistency(bureaus_raw).items()
-        if field in inconsistencies
-    }
+    summary_data = _load_summary(summary_path)
+    summary_consistency = summary_data.get("field_consistency")
+
+    if isinstance(summary_consistency, Mapping):
+        field_consistency_full = {
+            str(field): value
+            for field, value in summary_consistency.items()
+            if isinstance(value, Mapping)
+        }
+    else:
+        logger.debug(
+            "VALIDATION_REQUIREMENTS_NO_SUMMARY_CONSISTENCY path=%s", summary_path
+        )
+        field_consistency_full = compute_field_consistency(bureaus_raw)
+
+    config = load_validation_config()
+    inconsistencies = _filter_inconsistent_fields(field_consistency_full)
+    requirements = _build_requirement_entries(inconsistencies, config)
     payload = build_summary_payload(
-        requirements, field_consistency=field_consistency
+        requirements, field_consistency=inconsistencies
     )
     apply_validation_summary(summary_path, payload)
 

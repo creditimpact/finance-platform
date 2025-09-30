@@ -202,7 +202,8 @@ def test_build_validation_requirements_for_account_writes_summary_and_tags(
     }
     (account_dir / "bureaus.json").write_text(json.dumps(bureaus), encoding="utf-8")
 
-    existing_summary = {"existing": True}
+    field_consistency = compute_field_consistency(bureaus)
+    existing_summary = {"existing": True, "field_consistency": field_consistency}
     (account_dir / "summary.json").write_text(
         json.dumps(existing_summary), encoding="utf-8"
     )
@@ -250,6 +251,7 @@ def test_build_validation_requirements_for_account_clears_when_empty(tmp_path, m
     (account_dir / "bureaus.json").write_text(json.dumps(consistent), encoding="utf-8")
 
     seed_summary = {
+        "field_consistency": compute_field_consistency(consistent),
         "validation_requirements": {
             "count": 1,
             "requirements": [
@@ -260,7 +262,7 @@ def test_build_validation_requirements_for_account_clears_when_empty(tmp_path, m
                     "documents": [],
                 }
             ],
-        }
+        },
     }
     (account_dir / "summary.json").write_text(
         json.dumps(seed_summary), encoding="utf-8"

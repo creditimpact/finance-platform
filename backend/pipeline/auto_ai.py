@@ -16,6 +16,9 @@ from celery import shared_task
 
 from backend.core.ai.paths import ensure_merge_paths, probe_legacy_ai_packs
 from backend.core.config import ENABLE_VALIDATION_REQUIREMENTS
+from backend.core.io.json_io import update_json_in_place
+from backend.core.logic.consistency import compute_field_consistency
+from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.logic.validation_requirements import (
     build_validation_requirements_for_account,
 )
@@ -105,6 +108,133 @@ def run_validation_requirements_for_all_accounts(
         stats["processed_accounts"],
         stats["requirements"],
         stats["missing_bureaus"],
+        stats["errors"],
+    )
+
+    return stats
+
+
+def run_consistency_writeback_for_all_accounts(
+    sid: str, *, runs_root: Path | str | None = None
+) -> dict[str, object]:
+    """Compute and persist field consistency snapshots for each account of ``sid``."""
+
+    base_root = Path(runs_root) if runs_root is not None else RUNS_ROOT
+    accounts_root = base_root / sid / "cases" / "accounts"
+
+    stats = {
+        "sid": sid,
+        "total_accounts": 0,
+        "processed_accounts": 0,
+        "fields": 0,
+        "missing_inputs": 0,
+        "errors": 0,
+    }
+
+    if not accounts_root.exists():
+        return stats
+
+    account_paths = [path for path in accounts_root.iterdir() if path.is_dir()]
+    for account_path in sorted(account_paths, key=_account_sort_key):
+        stats["total_accounts"] += 1
+
+        bureaus_path = account_path / "bureaus.json"
+        summary_path = account_path / "summary.json"
+
+        if not (bureaus_path.exists() and summary_path.exists()):
+            stats["missing_inputs"] += 1
+            continue
+
+        try:
+            raw_text = bureaus_path.read_text(encoding="utf-8")
+        except OSError:
+            stats["errors"] += 1
+            logger.warning(
+                "CONSISTENCY_READ_FAILED sid=%s account_dir=%s", sid, account_path, exc_info=True
+            )
+            continue
+
+        try:
+            bureaus_payload = json.loads(raw_text)
+        except json.JSONDecodeError:
+            stats["errors"] += 1
+            logger.warning(
+                "CONSISTENCY_INVALID_JSON sid=%s account_dir=%s", sid, account_path, exc_info=True
+            )
+            continue
+
+        if not isinstance(bureaus_payload, Mapping):
+            stats["errors"] += 1
+            logger.warning(
+                "CONSISTENCY_INVALID_TYPE sid=%s account_dir=%s type=%s",
+                sid,
+                account_path,
+                type(bureaus_payload).__name__,
+            )
+            continue
+
+        try:
+            field_consistency = compute_field_consistency(dict(bureaus_payload))
+        except Exception:  # pragma: no cover - defensive logging
+            stats["errors"] += 1
+            logger.exception(
+                "CONSISTENCY_COMPUTE_FAILED sid=%s account_dir=%s", sid, account_path
+            )
+            continue
+
+        normalized_consistency = {
+            str(field): dict(details) if isinstance(details, Mapping) else details
+            for field, details in field_consistency.items()
+        }
+
+        def _update_summary(summary_data: MutableMapping[str, object]) -> MutableMapping[str, object]:
+            if not isinstance(summary_data, MutableMapping):
+                summary_data = {}  # type: ignore[assignment]
+            changed = False
+
+            if normalized_consistency:
+                existing = summary_data.get("field_consistency")
+                if not isinstance(existing, Mapping) or dict(existing) != normalized_consistency:
+                    summary_data["field_consistency"] = dict(normalized_consistency)
+                    changed = True
+            else:
+                if summary_data.pop("field_consistency", None) is not None:
+                    changed = True
+
+            if changed and os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
+                compact_merge_sections(summary_data)
+
+            return summary_data
+
+        try:
+            update_json_in_place(summary_path, _update_summary)
+        except ValueError:
+            stats["errors"] += 1
+            logger.warning(
+                "CONSISTENCY_SUMMARY_UPDATE_FAILED sid=%s account_dir=%s",
+                sid,
+                account_path,
+                exc_info=True,
+            )
+            continue
+
+        stats["processed_accounts"] += 1
+        stats["fields"] += len(normalized_consistency)
+
+        logger.info(
+            "AI_CONSISTENCY_WRITEBACK sid=%s account=%s fields=%d",
+            sid,
+            account_path.name,
+            len(normalized_consistency),
+        )
+
+    logger.info(
+        "AI_CONSISTENCY_SUMMARY sid=%s accounts=%d processed=%d fields=%d missing=%d errors=%d",
+        sid,
+        stats["total_accounts"],
+        stats["processed_accounts"],
+        stats["fields"],
+        stats["missing_inputs"],
         stats["errors"],
     )
 
@@ -520,12 +650,6 @@ def _compact_accounts(accounts_dir: Path, indices: Iterable[int]) -> None:
             continue
         try:
             compact_account_tags(account_dir)
-            if ENABLE_VALIDATION_REQUIREMENTS:
-                vr_res = validation_requirements_step(str(account_dir))
-                logger.info(
-                    "validation_requirements",
-                    extra={"account_dir": str(account_dir), "res": vr_res},
-                )
         except Exception:  # pragma: no cover - defensive logging
             logger.warning(
                 "AUTO_AI_PIPELINE compact failed account=%s dir=%s",

@@ -460,12 +460,18 @@ def test_enqueue_auto_ai_chain_orders_signatures(monkeypatch) -> None:
     score_recorder = _Recorder("score")
     build_recorder = _Recorder("build")
     send_recorder = _Recorder("send")
+    consistency_recorder = _Recorder("consistency")
+    validation_recorder = _Recorder("validation")
     compact_recorder = _Recorder("compact")
     polarity_recorder = _Recorder("polarity")
 
     monkeypatch.setattr(auto_ai_tasks, "ai_score_step", score_recorder)
     monkeypatch.setattr(auto_ai_tasks, "ai_build_packs_step", build_recorder)
     monkeypatch.setattr(auto_ai_tasks, "ai_send_packs_step", send_recorder)
+    monkeypatch.setattr(auto_ai_tasks, "ai_consistency_step", consistency_recorder)
+    monkeypatch.setattr(
+        auto_ai_tasks, "ai_validation_requirements_step", validation_recorder
+    )
     monkeypatch.setattr(auto_ai_tasks, "ai_compact_tags_step", compact_recorder)
     monkeypatch.setattr(auto_ai_tasks, "ai_polarity_check_step", polarity_recorder)
 
@@ -495,8 +501,10 @@ def test_enqueue_auto_ai_chain_orders_signatures(monkeypatch) -> None:
         ("score", (sid, str(runs_root))),
         ("build", ()),
         ("send", ()),
-        ("compact", ()),
         ("polarity", ()),
+        ("consistency", ()),
+        ("validation", ()),
+        ("compact", ()),
     )
     assert chain_calls["apply_async"] == chain_calls["steps"]
 
@@ -627,8 +635,10 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     payload = auto_ai_tasks.ai_score_step.run(sid, str(runs_root))
     payload = auto_ai_tasks.ai_build_packs_step.run(payload)
     payload = auto_ai_tasks.ai_send_packs_step.run(payload)
-    payload = auto_ai_tasks.ai_compact_tags_step.run(payload)
-    first_result = auto_ai_tasks.ai_polarity_check_step.run(payload)
+    payload = auto_ai_tasks.ai_polarity_check_step.run(payload)
+    payload = auto_ai_tasks.ai_consistency_step.run(payload)
+    payload = auto_ai_tasks.ai_validation_requirements_step.run(payload)
+    first_result = auto_ai_tasks.ai_compact_tags_step.run(payload)
 
     merge_paths = ensure_merge_paths(runs_root, sid, create=False)
     packs_index = json.loads(
@@ -690,8 +700,10 @@ def test_auto_ai_chain_idempotent_and_compacts_tags(monkeypatch, tmp_path: Path)
     payload = auto_ai_tasks.ai_score_step.run(sid, str(runs_root))
     payload = auto_ai_tasks.ai_build_packs_step.run(payload)
     payload = auto_ai_tasks.ai_send_packs_step.run(payload)
-    payload = auto_ai_tasks.ai_compact_tags_step.run(payload)
-    second_result = auto_ai_tasks.ai_polarity_check_step.run(payload)
+    payload = auto_ai_tasks.ai_polarity_check_step.run(payload)
+    payload = auto_ai_tasks.ai_consistency_step.run(payload)
+    payload = auto_ai_tasks.ai_validation_requirements_step.run(payload)
+    second_result = auto_ai_tasks.ai_compact_tags_step.run(payload)
 
     assert second_result["packs"] == 1
     assert second_result["pairs"] == 2

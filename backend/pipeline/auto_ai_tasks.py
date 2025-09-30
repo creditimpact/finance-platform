@@ -24,6 +24,7 @@ from backend.pipeline.auto_ai import (
     _normalize_indices,
     _send_ai_packs,
     has_ai_merge_best_pairs,
+    run_consistency_writeback_for_all_accounts,
     run_validation_requirements_for_all_accounts,
 )
 from backend.core.ai.validators import validate_ai_result
@@ -659,6 +660,16 @@ def ai_compact_tags_step(self, prev: Mapping[str, object] | None) -> dict[str, o
                 reason=reason_text,
             )
 
+    removed = _cleanup_lock(payload, reason="chain_complete")
+    logger.info(
+        "AUTO_AI_CHAIN_END sid=%s lock_removed=%s packs=%s pairs=%s polarity=%s",
+        sid,
+        1 if removed else 0,
+        payload.get("packs"),
+        payload.get("pairs"),
+        payload.get("polarity_processed"),
+    )
+
     return payload
 
 
@@ -678,27 +689,11 @@ def ai_polarity_check_step(self, prev: Mapping[str, object] | None) -> dict[str,
     accounts_dir = Path(str(accounts_dir_value)) if accounts_dir_value else None
     if accounts_dir is None:
         logger.info("AUTO_AI_POLARITY_SKIP sid=%s reason=no_accounts_dir", sid)
-        removed = _cleanup_lock(payload, reason="polarity_missing_accounts_dir")
-        logger.info(
-            "AUTO_AI_CHAIN_END sid=%s lock_removed=%s packs=%s pairs=%s",
-            sid,
-            1 if removed else 0,
-            payload.get("packs"),
-            payload.get("pairs"),
-        )
         return payload
 
     indices = sorted(_normalize_indices(payload.get("touched_accounts", [])))
     if not indices:
         logger.info("AUTO_AI_POLARITY_SKIP sid=%s reason=no_indices", sid)
-        removed = _cleanup_lock(payload, reason="polarity_no_indices")
-        logger.info(
-            "AUTO_AI_CHAIN_END sid=%s lock_removed=%s packs=%s pairs=%s",
-            sid,
-            1 if removed else 0,
-            payload.get("packs"),
-            payload.get("pairs"),
-        )
         return payload
 
     logger.info("AI_POLARITY_START sid=%s accounts=%d", sid, len(indices))
@@ -722,14 +717,42 @@ def ai_polarity_check_step(self, prev: Mapping[str, object] | None) -> dict[str,
         len(result.updated_accounts),
     )
 
-    removed = _cleanup_lock(payload, reason="chain_complete")
+    return payload
+
+
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def ai_consistency_step(self, prev: Mapping[str, object] | None) -> dict[str, object]:
+    """Persist field consistency snapshots for accounts touched by the AI flow."""
+
+    payload = _ensure_payload(prev)
+    sid = str(payload.get("sid") or "")
+    if not sid:
+        logger.info("AUTO_AI_CONSISTENCY_SKIP payload=%s", payload)
+        return payload
+
+    _populate_common_paths(payload)
+
+    runs_root_value = payload.get("runs_root")
+    runs_root_path = Path(str(runs_root_value)) if runs_root_value else None
+
+    logger.info("AI_CONSISTENCY_START sid=%s", sid)
+
+    try:
+        stats = run_consistency_writeback_for_all_accounts(
+            sid, runs_root=runs_root_path
+        )
+    except Exception:  # pragma: no cover - defensive logging
+        logger.error("AI_CONSISTENCY_FAILED sid=%s", sid, exc_info=True)
+        _cleanup_lock(payload, reason="consistency_failed")
+        raise
+
+    payload["consistency"] = stats
+
     logger.info(
-        "AUTO_AI_CHAIN_END sid=%s lock_removed=%s packs=%s pairs=%s polarity=%d",
+        "AI_CONSISTENCY_END sid=%s processed=%d fields=%d",
         sid,
-        1 if removed else 0,
-        payload.get("packs"),
-        payload.get("pairs"),
-        result.processed_accounts,
+        stats.get("processed_accounts", 0),
+        stats.get("fields", 0),
     )
 
     return payload
@@ -746,9 +769,10 @@ def enqueue_auto_ai_chain(sid: str, runs_root: Path | str | None = None) -> str:
         ai_score_step.s(sid, runs_root_value),
         ai_build_packs_step.s(),
         ai_send_packs_step.s(),
+        ai_polarity_check_step.s(),
+        ai_consistency_step.s(),
         ai_validation_requirements_step.s(),
         ai_compact_tags_step.s(),
-        ai_polarity_check_step.s(),
     )
 
     result = workflow.apply_async()

@@ -59,7 +59,7 @@ def account_soft_semantics():
 
 
 def _requirements_by_field(bureaus):
-    requirements, inconsistencies = build_validation_requirements(bureaus)
+    requirements, inconsistencies, _ = build_validation_requirements(bureaus)
     by_field = {entry["field"]: entry for entry in requirements}
     return by_field, inconsistencies
 

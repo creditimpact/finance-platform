@@ -25,7 +25,6 @@ from backend.core.merge.acctnum import acctnum_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
 from backend.core.logic.summary_compact import compact_merge_sections
-from backend.core.logic.consistency import compute_field_consistency
 from backend.core.logic.validation_requirements import (
     apply_validation_summary,
     build_summary_payload as build_validation_summary_payload,
@@ -2863,12 +2862,9 @@ def persist_merge_tags(
             )
             continue
 
-        requirements, inconsistencies = build_validation_requirements(bureaus_payload)
-        field_consistency = {
-            field: details
-            for field, details in compute_field_consistency(bureaus_payload).items()
-            if field in inconsistencies
-        }
+        requirements, inconsistencies, field_consistency = build_validation_requirements(
+            bureaus_payload
+        )
         summary_payload = build_validation_summary_payload(
             requirements, field_consistency=field_consistency
         )

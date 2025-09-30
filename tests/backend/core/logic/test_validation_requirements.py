@@ -37,7 +37,7 @@ def test_build_validation_requirements_uses_config_and_defaults():
         "equifax": {"balance_owed": "200", "mystery_field": "xyz"},
     }
 
-    requirements, inconsistencies = build_validation_requirements(bureaus)
+    requirements, inconsistencies, field_consistency = build_validation_requirements(bureaus)
     fields = [entry["field"] for entry in requirements]
 
     assert fields == ["balance_owed", "mystery_field"]
@@ -58,6 +58,7 @@ def test_build_validation_requirements_uses_config_and_defaults():
     assert mystery_rule["ai_needed"] is False
     assert mystery_rule["bureaus"] == ["equifax", "experian", "transunion"]
     assert set(inconsistencies.keys()) == {"balance_owed", "mystery_field"}
+    assert {"balance_owed", "mystery_field"}.issubset(field_consistency.keys())
 
 
 def test_build_summary_payload_includes_field_consistency():
@@ -308,7 +309,7 @@ def test_build_validation_requirements_for_account_writes_summary_and_tags(
     for entry in validation_block["requirements"]:
         assert entry["bureaus"] == ["equifax", "experian", "transunion"]
     field_consistency = validation_block["field_consistency"]
-    assert set(field_consistency.keys()) == {"balance_owed", "payment_status"}
+    assert {"balance_owed", "payment_status"}.issubset(field_consistency.keys())
     assert field_consistency["balance_owed"]["consensus"] in {"majority", "split"}
     assert field_consistency["payment_status"]["disagreeing_bureaus"]
 
@@ -369,9 +370,16 @@ def test_build_validation_requirements_for_account_clears_when_empty(tmp_path, m
     validation_payload = result["validation_requirements"]
     assert validation_payload["count"] == 0
     assert validation_payload["requirements"] == []
+    assert "field_consistency" in validation_payload
+    field_consistency = validation_payload["field_consistency"]
+    assert "balance_owed" in field_consistency
+    assert field_consistency["balance_owed"]["consensus"] == "unanimous"
 
     summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
-    assert "validation_requirements" not in summary
+    validation_block = summary["validation_requirements"]
+    assert validation_block["count"] == 0
+    assert validation_block["requirements"] == []
+    assert "balance_owed" in validation_block["field_consistency"]
 
     tags = json.loads((account_dir / "tags.json").read_text(encoding="utf-8"))
     assert all(tag.get("kind") != "validation_required" for tag in tags)

@@ -461,7 +461,7 @@ def _build_requirement_entries(
 
 def build_validation_requirements(
     bureaus: Mapping[str, Mapping[str, Any]],
-) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+) -> tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
     """Return validation requirements for fields with cross-bureau inconsistencies."""
 
     config = load_validation_config()
@@ -472,7 +472,7 @@ def build_validation_requirements(
         inconsistencies, config, broadcast_all=broadcast_all
     )
 
-    return requirements, inconsistencies
+    return requirements, inconsistencies, field_consistency
 
 
 def build_summary_payload(
@@ -515,7 +515,9 @@ def apply_validation_summary(
     existing = summary_data.get("validation_requirements")
 
     count = int(payload.get("count") or 0)
-    if count <= 0:
+    field_consistency = payload.get("field_consistency")
+    has_consistency = isinstance(field_consistency, Mapping) and bool(field_consistency)
+    if count <= 0 and not has_consistency:
         if "validation_requirements" in summary_data:
             summary_data.pop("validation_requirements", None)
             summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -610,16 +612,11 @@ def build_validation_requirements_for_account(account_dir: str | Path) -> Dict[s
         )
         return {"status": "invalid_bureaus_json"}
 
-    field_consistency_full = compute_field_consistency(bureaus_raw)
-
-    config = load_validation_config()
-    inconsistencies = _filter_inconsistent_fields(field_consistency_full)
-    broadcast_all = _should_broadcast(config)
-    requirements = _build_requirement_entries(
-        inconsistencies, config, broadcast_all=broadcast_all
+    requirements, _, field_consistency_full = build_validation_requirements(
+        bureaus_raw
     )
     payload = build_summary_payload(
-        requirements, field_consistency=inconsistencies
+        requirements, field_consistency=field_consistency_full
     )
     summary_after = apply_validation_summary(summary_path, payload)
 

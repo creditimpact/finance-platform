@@ -597,6 +597,23 @@ def _build_field_consistency(
             continue
 
         consensus, disagreeing = _determine_consensus(value_groups)
+        if field in _HISTORY_FIELDS and consensus == "unanimous":
+            missing_bureaus = [
+                bureau for bureau, value in normalized.items() if value is None
+            ]
+            present_bureaus = [
+                bureau for bureau, value in normalized.items() if value is not None
+            ]
+            if missing_bureaus and present_bureaus:
+                if len(present_bureaus) == len(missing_bureaus):
+                    consensus = "split"
+                    disagreeing = sorted(missing_bureaus + present_bureaus)
+                elif len(present_bureaus) > len(missing_bureaus):
+                    consensus = "majority"
+                    disagreeing = sorted(missing_bureaus)
+                else:
+                    consensus = "majority"
+                    disagreeing = sorted(present_bureaus)
         details[field] = {
             "consensus": consensus,
             "normalized": dict(normalized),

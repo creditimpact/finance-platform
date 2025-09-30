@@ -142,3 +142,69 @@ def test_soft_semantics_require_ai(account_soft_semantics):
     rule = requirements["creditor_type"]
     assert rule["strength"] == "soft"
     assert rule["ai_needed"] is True
+
+
+def test_sanity_example_strong_and_soft_requirements():
+    bureaus = {
+        "transunion": {
+            "two_year_payment_history": [],
+            "seven_year_history": {"late30": 0, "late60": 0, "late90": 0},
+            "date_of_last_activity": "16.8.2022",
+            "dispute_status": "Not disputed",
+            "account_number_display": "****1234",
+            "creditor_remarks": "Account transferred to recovery",
+        },
+        "experian": {
+            "two_year_payment_history": ["CO"] * 24,
+            "seven_year_history": {"late30": 0, "late60": 0, "late90": 0},
+            "date_of_last_activity": "1.8.2023",
+            "dispute_status": "not disputed",
+            "account_number_display": "1234",
+            "creditor_remarks": "Account closed at customer request",
+        },
+        "equifax": {
+            "two_year_payment_history": "",
+            "seven_year_history": {"late30": 0, "late60": 0, "late90": 28},
+            "date_of_last_activity": "1.11.2022",
+            "dispute_status": "Account disputed",
+            "account_number_display": "xxxx-1234",
+            "creditor_remarks": "Consumer states balance incorrect",
+        },
+    }
+
+    requirements, inconsistencies = _requirements_by_field(bureaus)
+
+    assert "two_year_payment_history" in requirements
+    two_year_rule = requirements["two_year_payment_history"]
+    assert two_year_rule["strength"] == "strong"
+    assert two_year_rule["ai_needed"] is False
+    assert two_year_rule["min_days"] == 18
+    assert two_year_rule["documents"] == [
+        "monthly_statements_2y",
+        "internal_payment_history",
+    ]
+    two_year_consensus = inconsistencies["two_year_payment_history"]["consensus"]
+    assert two_year_consensus in {"majority", "split"}
+    two_year_norm = inconsistencies["two_year_payment_history"]["normalized"]
+    assert two_year_norm["experian"]["summary"]["co_count"] == 24
+    assert two_year_norm["transunion"] is None
+
+    assert "seven_year_history" in requirements
+    seven_rule = requirements["seven_year_history"]
+    assert seven_rule["strength"] == "strong"
+    assert seven_rule["ai_needed"] is False
+    seven_norm = inconsistencies["seven_year_history"]["normalized"]
+    assert seven_norm["equifax"]["late90"] == 28
+
+    assert "date_of_last_activity" in requirements
+    assert requirements["date_of_last_activity"]["strength"] == "strong"
+
+    assert "dispute_status" in requirements
+    assert requirements["dispute_status"]["strength"] == "strong"
+
+    assert "creditor_remarks" in requirements
+    creditor_rule = requirements["creditor_remarks"]
+    assert creditor_rule["strength"] == "soft"
+    assert creditor_rule["ai_needed"] is True
+
+    assert "account_number_display" not in requirements

@@ -24,6 +24,12 @@ from backend.core.merge import acctnum
 from backend.core.merge.acctnum import acctnum_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
+from backend.core.logic.validation_requirements import (
+    apply_validation_summary,
+    build_summary_payload as build_validation_summary_payload,
+    build_validation_requirements,
+    sync_validation_tag,
+)
 
 __all__ = [
     "load_bureaus",
@@ -2825,6 +2831,42 @@ def persist_merge_tags(
                 merge_entries=merge_entries,
                 ai_entries=ai_entries,
             )
+
+    emit_validation_tag = _read_env_flag(
+        os.environ, "VALIDATION_REQUIREMENTS_TAGS", False
+    )
+
+    for idx in all_indices:
+        summary_path = summary_paths.get(idx)
+        if summary_path is None:
+            continue
+        try:
+            bureaus_payload = load_bureaus(sid, idx, runs_root=runs_root)
+        except FileNotFoundError:
+            logger.warning(
+                "VALIDATION_BUREAUS_MISSING sid=%s idx=%s runs_root=%s",
+                sid,
+                idx,
+                runs_root,
+            )
+            continue
+        except Exception:
+            logger.exception(
+                "VALIDATION_BUREAUS_LOAD_FAILED sid=%s idx=%s runs_root=%s",
+                sid,
+                idx,
+                runs_root,
+            )
+            continue
+
+        requirements = build_validation_requirements(bureaus_payload)
+        summary_payload = build_validation_summary_payload(requirements)
+        apply_validation_summary(summary_path, summary_payload)
+
+        tag_path = tag_paths.get(idx)
+        if tag_path is not None:
+            fields_for_tag = [str(entry["field"]) for entry in requirements if entry.get("field")]
+            sync_validation_tag(tag_path, fields_for_tag, emit=emit_validation_tag)
 
     return merge_tags
 

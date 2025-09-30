@@ -1,0 +1,131 @@
+schema_version: 1
+
+defaults:
+  category: "unspecified"
+  min_days: 3
+  documents: []
+
+fields:
+  # 🟦 Opening & Identification
+  account_number_display:
+    category: "open_ident"
+    min_days: 2
+    documents: ["account_opening_contract", "monthly_statement", "collection_report"]
+
+  date_opened:
+    category: "open_ident"
+    min_days: 3
+    documents: ["account_opening_contract", "application_form", "system_audit_log"]
+
+  closed_date:
+    category: "open_ident"
+    min_days: 6
+    documents: ["closure_letter", "internal_closure_report"]
+
+  account_type:
+    category: "open_ident"
+    min_days: 2
+    documents: ["account_opening_contract", "application_form", "monthly_statement"]
+
+  creditor_type:
+    category: "open_ident"
+    min_days: 6
+    documents: ["account_opening_contract", "lender_agreement", "cra_report"]
+
+  account_description:
+    category: "open_ident"
+    min_days: 6
+    documents: ["application_form", "account_opening_contract"]
+
+  # 🟩 Terms
+  high_balance:
+    category: "terms"
+    min_days: 8
+    documents: ["loan_agreement", "monthly_statement", "internal_balance_report"]
+
+  credit_limit:
+    category: "terms"
+    min_days: 8
+    documents: ["credit_line_agreement", "limit_change_record", "monthly_statement"]
+
+  term_length:
+    category: "terms"
+    min_days: 3
+    documents: ["loan_agreement", "terms_sheet"]
+
+  payment_amount:
+    category: "terms"
+    min_days: 5
+    documents: ["loan_agreement", "amortization_schedule", "monthly_statement"]
+
+  payment_frequency:
+    category: "terms"
+    min_days: 3
+    documents: ["loan_agreement", "terms_sheet", "monthly_statement"]
+
+  # 🟨 Activity & Balances
+  balance_owed:
+    category: "activity"
+    min_days: 8
+    documents: ["monthly_statement", "balance_report", "collection_report"]
+
+  last_payment:
+    category: "activity"
+    min_days: 3
+    documents: ["monthly_statement", "payment_receipt", "internal_payment_log"]
+
+  past_due_amount:
+    category: "activity"
+    min_days: 8
+    documents: ["monthly_statement", "collection_report", "delinquency_notice"]
+
+  date_of_last_activity:
+    category: "activity"
+    min_days: 12
+    documents: ["monthly_statement", "system_activity_log", "internal_report"]
+
+  # 🟥 Status/Collections/CRA
+  account_status:
+    category: "status"
+    min_days: 12
+    documents: ["monthly_statement", "cra_report", "cra_audit_log"]
+
+  payment_status:
+    category: "status"
+    min_days: 25
+    documents: ["collection_notes", "chargeoff_statement", "monthly_statement"]
+
+  account_rating:
+    category: "status"
+    min_days: 18
+    documents: ["cra_report", "cra_audit_log"]
+
+  creditor_remarks:
+    category: "status"
+    min_days: 25
+    documents: ["collection_notes", "customer_letters", "cra_log"]
+
+  dispute_status:
+    category: "status"
+    min_days: 6
+    documents: ["cra_audit_log", "eoscar_system"]
+
+  date_reported:
+    category: "status"
+    min_days: 3
+    documents: ["cra_reporting_log", "cra_report"]
+
+  last_verified:
+    category: "status"
+    min_days: 6
+    documents: ["internal_audit_log", "verification_report"]
+
+  two_year_payment_history:
+    category: "history"
+    min_days: 18
+    documents: ["monthly_statements_2y", "internal_payment_history"]
+
+  seven_year_history:
+    category: "history"
+    min_days: 25
+    documents: ["cra_report_7y", "cra_audit_logs", "collection_history"]

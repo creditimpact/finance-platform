@@ -16,6 +16,9 @@ from celery import shared_task
 
 from backend.core.ai.paths import ensure_merge_paths, probe_legacy_ai_packs
 from backend.core.logic.intra_polarity import analyze_account_polarity
+from backend.core.logic.validation_requirements import (
+    build_validation_requirements_for_account,
+)
 from backend.core.logic.tags.compact import (
     compact_account_tags,
     compact_tags_for_sid,
@@ -57,6 +60,71 @@ def polarity_phase_for_all_accounts(sid: str, *, runs_root: Path | str | None = 
             logger.exception(
                 "POLARITY_PHASE_FAILED sid=%s account_dir=%s", sid, account_dir
             )
+
+
+def _account_sort_key(path: Path) -> tuple[int, object]:
+    name = path.name
+    if name.isdigit():
+        return (0, int(name))
+    return (1, name)
+
+
+def run_validation_requirements_for_all_accounts(
+    sid: str, *, runs_root: Path | str | None = None
+) -> dict[str, object]:
+    """Run validation requirement extraction for each account of ``sid``."""
+
+    base_root = Path(runs_root) if runs_root is not None else RUNS_ROOT
+    accounts_root = base_root / sid / "cases" / "accounts"
+
+    stats = {
+        "sid": sid,
+        "total_accounts": 0,
+        "processed_accounts": 0,
+        "requirements": 0,
+        "missing_bureaus": 0,
+        "errors": 0,
+    }
+
+    if not accounts_root.exists():
+        return stats
+
+    account_paths = [path for path in accounts_root.iterdir() if path.is_dir()]
+    for account_path in sorted(account_paths, key=_account_sort_key):
+        stats["total_accounts"] += 1
+        try:
+            result = build_validation_requirements_for_account(account_path)
+        except Exception:  # pragma: no cover - defensive logging
+            stats["errors"] += 1
+            logger.exception(
+                "VALIDATION_REQUIREMENTS_ACCOUNT_FAILED sid=%s account_dir=%s",
+                sid,
+                account_path,
+            )
+            continue
+
+        status = str(result.get("status") or "")
+        if status == "no_bureaus_json":
+            stats["missing_bureaus"] += 1
+            continue
+        if status != "ok":
+            stats["errors"] += 1
+            continue
+
+        stats["processed_accounts"] += 1
+        stats["requirements"] += int(result.get("count") or 0)
+
+    logger.info(
+        "VALIDATION_REQUIREMENTS_SUMMARY sid=%s accounts=%d processed=%d requirements=%d missing=%d errors=%d",
+        sid,
+        stats["total_accounts"],
+        stats["processed_accounts"],
+        stats["requirements"],
+        stats["missing_bureaus"],
+        stats["errors"],
+    )
+
+    return stats
 
 
 def _lock_age_seconds(path: Path, *, now: float | None = None) -> float | None:

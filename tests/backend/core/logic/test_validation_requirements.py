@@ -5,6 +5,7 @@ from backend.core.logic.validation_requirements import (
     apply_validation_summary,
     build_summary_payload,
     build_validation_requirements,
+    build_validation_requirements_for_account,
     sync_validation_tag,
 )
 
@@ -84,4 +85,102 @@ def test_apply_validation_summary_and_sync_validation_tag(tmp_path):
 
     sync_validation_tag(tag_path, [], emit=True)
     tags = json.loads(tag_path.read_text(encoding="utf-8"))
+    assert all(tag.get("kind") != "validation_required" for tag in tags)
+
+
+def test_build_validation_requirements_for_account_writes_summary_and_tags(
+    tmp_path, monkeypatch
+):
+    account_dir = tmp_path / "0"
+    account_dir.mkdir()
+
+    bureaus = {
+        "transunion": {"balance_owed": "100", "payment_status": "late"},
+        "experian": {"balance_owed": "150", "payment_status": "ok"},
+        "equifax": {"balance_owed": "200", "payment_status": "late"},
+    }
+    (account_dir / "bureaus.json").write_text(json.dumps(bureaus), encoding="utf-8")
+
+    existing_summary = {"existing": True}
+    (account_dir / "summary.json").write_text(
+        json.dumps(existing_summary), encoding="utf-8"
+    )
+
+    existing_tags = [
+        {"kind": "other", "value": 1},
+        {"kind": "validation_required", "fields": ["old"], "at": "2024"},
+    ]
+    (account_dir / "tags.json").write_text(json.dumps(existing_tags), encoding="utf-8")
+
+    monkeypatch.setenv("WRITE_VALIDATION_TAGS", "1")
+
+    result = build_validation_requirements_for_account(account_dir)
+
+    assert result["status"] == "ok"
+    assert result["count"] == 2
+    assert set(result["fields"]) == {"balance_owed", "payment_status"}
+
+    summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["existing"] is True
+    validation_block = summary["validation_requirements"]
+    assert validation_block["count"] == 2
+    fields = {entry["field"] for entry in validation_block["requirements"]}
+    assert fields == {"balance_owed", "payment_status"}
+
+    tags = json.loads((account_dir / "tags.json").read_text(encoding="utf-8"))
+    assert {tag["kind"] for tag in tags} == {"other", "validation_required"}
+    validation_tag = next(tag for tag in tags if tag["kind"] == "validation_required")
+    assert validation_tag["fields"] == ["balance_owed", "payment_status"]
+
+
+def test_build_validation_requirements_for_account_clears_when_empty(tmp_path, monkeypatch):
+    account_dir = tmp_path / "1"
+    account_dir.mkdir()
+
+    consistent = {
+        "transunion": {"balance_owed": "100"},
+        "experian": {"balance_owed": "100"},
+        "equifax": {"balance_owed": "100"},
+    }
+    (account_dir / "bureaus.json").write_text(json.dumps(consistent), encoding="utf-8")
+
+    seed_summary = {
+        "validation_requirements": {
+            "count": 1,
+            "requirements": [
+                {
+                    "field": "balance_owed",
+                    "category": "activity",
+                    "min_days": 8,
+                    "documents": [],
+                }
+            ],
+        }
+    }
+    (account_dir / "summary.json").write_text(
+        json.dumps(seed_summary), encoding="utf-8"
+    )
+
+    (account_dir / "tags.json").write_text(
+        json.dumps(
+            [
+                {"kind": "validation_required", "fields": ["balance_owed"], "at": "old"},
+                {"kind": "other", "value": 1},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("WRITE_VALIDATION_TAGS", raising=False)
+
+    result = build_validation_requirements_for_account(account_dir)
+
+    assert result["status"] == "ok"
+    assert result["count"] == 0
+    assert result["fields"] == []
+
+    summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
+    assert "validation_requirements" not in summary
+
+    tags = json.loads((account_dir / "tags.json").read_text(encoding="utf-8"))
     assert all(tag.get("kind") != "validation_required" for tag in tags)

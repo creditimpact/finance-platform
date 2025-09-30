@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -26,6 +27,7 @@ __all__ = [
     "build_summary_payload",
     "apply_validation_summary",
     "sync_validation_tag",
+    "build_validation_requirements_for_account",
 ]
 
 
@@ -225,4 +227,56 @@ def sync_validation_tag(
             write_tags_atomic(tag_path, filtered)
         except Exception:  # pragma: no cover - defensive file IO
             logger.exception("VALIDATION_TAG_WRITE_FAILED path=%s", tag_path)
+
+
+def _should_emit_tags() -> bool:
+    return os.environ.get("WRITE_VALIDATION_TAGS") == "1"
+
+
+def build_validation_requirements_for_account(account_dir: str | Path) -> Dict[str, Any]:
+    """Compute and persist validation requirements for ``account_dir``."""
+
+    account_path = Path(account_dir)
+    bureaus_path = account_path / "bureaus.json"
+    summary_path = account_path / "summary.json"
+    tags_path = account_path / "tags.json"
+
+    if not bureaus_path.exists():
+        logger.debug(
+            "VALIDATION_REQUIREMENTS_SKIP_NO_BUREAUS path=%s", bureaus_path
+        )
+        return {"status": "no_bureaus_json"}
+
+    try:
+        raw_text = bureaus_path.read_text(encoding="utf-8")
+    except OSError:
+        logger.warning(
+            "VALIDATION_REQUIREMENTS_READ_FAILED path=%s", bureaus_path, exc_info=True
+        )
+        return {"status": "invalid_bureaus_json"}
+
+    try:
+        bureaus_raw = json.loads(raw_text)
+    except json.JSONDecodeError:
+        logger.warning(
+            "VALIDATION_REQUIREMENTS_INVALID_JSON path=%s", bureaus_path, exc_info=True
+        )
+        return {"status": "invalid_bureaus_json"}
+
+    if not isinstance(bureaus_raw, Mapping):
+        logger.warning(
+            "VALIDATION_REQUIREMENTS_INVALID_TYPE path=%s type=%s",
+            bureaus_path,
+            type(bureaus_raw).__name__,
+        )
+        return {"status": "invalid_bureaus_json"}
+
+    requirements = build_validation_requirements(bureaus_raw)
+    payload = build_summary_payload(requirements)
+    apply_validation_summary(summary_path, payload)
+
+    fields = [str(entry.get("field")) for entry in requirements if entry.get("field")]
+    sync_validation_tag(tags_path, fields, emit=_should_emit_tags())
+
+    return {"status": "ok", "count": len(requirements), "fields": fields}
 

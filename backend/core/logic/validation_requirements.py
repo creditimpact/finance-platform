@@ -476,5 +476,10 @@ def build_validation_requirements_for_account(account_dir: str | Path) -> Dict[s
     ]
     sync_validation_tag(tags_path, fields, emit=_should_emit_tags())
 
-    return {"status": "ok", "count": len(requirements), "fields": fields}
+    return {
+        "status": "ok",
+        "count": len(requirements),
+        "fields": fields,
+        "validation_requirements": payload,
+    }
 

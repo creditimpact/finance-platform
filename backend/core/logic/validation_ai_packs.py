@@ -278,6 +278,7 @@ def build_validation_ai_packs_for_accounts(
         ai_client = None
 
     created: list[ValidationAccountPaths] = []
+    index_entries: list[dict[str, Any]] = []
     accounts_root = runs_root_path / sid / "cases" / "accounts"
 
     for idx in normalized_indices:
@@ -312,12 +313,23 @@ def build_validation_ai_packs_for_accounts(
         _write_model_results(account_paths.model_results_file, result_payload)
 
         created.append(account_paths)
+        index_entries.append(
+            {
+                "account_index": int(idx),
+                "pack_path": str(account_paths.pack_file.resolve()),
+                "created_at": str(
+                    result_payload.get("timestamp") or _utc_now()
+                ),
+                "status": str(result_payload.get("status") or "unknown"),
+            }
+        )
 
     manifest_path = runs_root_path / sid / "manifest.json"
     manifest = RunManifest.load_or_create(manifest_path, sid)
     if created:
         last_account = created[-1]
         index_path = validation_paths.base / "index.json"
+        _append_validation_index_entries(index_path, index_entries)
         manifest.upsert_validation_packs_dir(
             validation_paths.base,
             account_dir=last_account.base,
@@ -567,6 +579,64 @@ def _write_model_results(path: Path, payload: Mapping[str, Any]) -> None:
     except TypeError:
         log.exception("VALIDATION_AI_RESULTS_SERIALIZE_FAILED path=%s", path)
         return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(serialized + "\n", encoding="utf-8")
+
+
+def _append_validation_index_entries(
+    path: Path, entries: Sequence[Mapping[str, Any]]
+) -> None:
+    if not entries:
+        return
+
+    existing = _load_validation_index_entries(path)
+    normalized: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        normalized.append(dict(entry))
+
+    if not normalized:
+        return
+
+    existing.extend(normalized)
+    _write_validation_index_entries(path, existing)
+
+
+def _load_validation_index_entries(path: Path) -> list[dict[str, Any]]:
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except OSError:
+        log.warning("VALIDATION_INDEX_READ_FAILED path=%s", path, exc_info=True)
+        return []
+
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError:
+        log.warning("VALIDATION_INDEX_INVALID_JSON path=%s", path, exc_info=True)
+        return []
+
+    if not isinstance(payload, list):
+        log.warning("VALIDATION_INDEX_INVALID_TYPE path=%s type=%s", path, type(payload))
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for entry in payload:
+        if isinstance(entry, Mapping):
+            normalized.append(dict(entry))
+
+    return normalized
+
+
+def _write_validation_index_entries(path: Path, entries: Sequence[Mapping[str, Any]]) -> None:
+    try:
+        serialized = json.dumps(list(entries), ensure_ascii=False, indent=2)
+    except TypeError:
+        log.exception("VALIDATION_INDEX_SERIALIZE_FAILED path=%s", path)
+        return
+
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(serialized + "\n", encoding="utf-8")
 

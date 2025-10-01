@@ -80,6 +80,15 @@ def test_builder_creates_validation_structure(
     assert packs_validation["index"] == str(expected_index)
     assert isinstance(packs_validation["last_built_at"], str)
 
+    index_entries = json.loads(expected_index.read_text(encoding="utf-8"))
+    assert {entry["account_index"] for entry in index_entries} == {14, 15}
+    for entry in index_entries:
+        assert entry["status"] == "skipped"
+        assert isinstance(entry["created_at"], str)
+        assert Path(entry["pack_path"]) == (
+            base_dir / str(entry["account_index"]) / "pack.json"
+        ).resolve()
+
 
 def test_load_validation_packs_config_defaults(tmp_path: Path) -> None:
     config = load_validation_packs_config(tmp_path / "missing")
@@ -198,6 +207,17 @@ def test_builder_populates_pack_and_preserves_prompt_and_results(
     model_results = json.loads(_read(account_paths.model_results_file))
     assert model_results["status"] == "ok"
     assert model_results["model"] == "gpt-4o-mini"
+
+    index_entries = json.loads(
+        (validation_paths.base / "index.json").read_text(encoding="utf-8")
+    )
+    assert index_entries[-1]["account_index"] == 42
+    assert index_entries[-1]["status"] == model_results["status"]
+    assert isinstance(index_entries[-1]["created_at"], str)
+    assert (
+        Path(index_entries[-1]["pack_path"]).resolve()
+        == account_paths.pack_file.resolve()
+    )
     assert isinstance(model_results["timestamp"], str)
     assert isinstance(model_results["duration_ms"], int)
     assert model_results["response"] == {

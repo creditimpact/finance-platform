@@ -10,7 +10,11 @@ from backend.core.ai.paths import (
     ensure_validation_paths,
 )
 from backend.core.logic import validation_ai_packs
-from backend.core.logic.validation_ai_packs import build_validation_ai_packs_for_accounts
+from backend.core.logic.validation_ai_packs import (
+    ValidationPacksConfig,
+    build_validation_ai_packs_for_accounts,
+    load_validation_packs_config,
+)
 from backend.pipeline.runs import RUNS_ROOT_ENV
 from tests.helpers.fake_ai_client import FakeAIClient
 
@@ -75,6 +79,17 @@ def test_builder_creates_validation_structure(
     expected_index = (base_dir / "index.json").resolve()
     assert packs_validation["index"] == str(expected_index)
     assert isinstance(packs_validation["last_built_at"], str)
+
+
+def test_load_validation_packs_config_defaults(tmp_path: Path) -> None:
+    config = load_validation_packs_config(tmp_path / "missing")
+    assert isinstance(config, ValidationPacksConfig)
+    assert config.enable_write is True
+    assert config.enable_infer is True
+    assert config.model == "gpt-4o-mini"
+    assert config.weak_limit == 0
+    assert config.max_attempts >= 1
+    assert config.backoff_seconds
 
 
 def test_builder_populates_pack_and_preserves_prompt_and_results(
@@ -264,3 +279,176 @@ def test_builder_uses_configured_model(
 
     results_payload = json.loads(_read(account_paths.model_results_file))
     assert results_payload["model"] == "gpt-validation-test"
+
+
+def test_builder_skips_when_write_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "sid-disabled"
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+
+    base_dir = runs_root / sid / "ai_packs" / "validation"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    (base_dir / "ai_packs_config.yml").write_text(
+        "validation_packs:\n  enable_write: false\n  enable_infer: true\n",
+        encoding="utf-8",
+    )
+
+    accounts_root = runs_root / sid / "cases" / "accounts"
+    account_dir = accounts_root / "5"
+    account_dir.mkdir(parents=True, exist_ok=True)
+    summary_payload = {
+        "validation_requirements": {
+            "requirements": [
+                {
+                    "field": "account_status",
+                    "category": "status",
+                    "min_days": 3,
+                    "documents": ["statement"],
+                    "ai_needed": True,
+                }
+            ],
+            "field_consistency": {},
+        }
+    }
+    (account_dir / "summary.json").write_text(
+        json.dumps(summary_payload), encoding="utf-8"
+    )
+
+    fake_ai = FakeAIClient()
+
+    build_validation_ai_packs_for_accounts(
+        sid,
+        account_indices=[5],
+        runs_root=runs_root,
+        ai_client=fake_ai,
+    )
+
+    assert not fake_ai.chat_payloads
+    account_pack_dir = base_dir / "5"
+    assert not account_pack_dir.exists()
+
+
+def test_builder_skips_inference_when_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "sid-no-infer"
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+
+    validation_paths = ensure_validation_paths(runs_root, sid, create=True)
+    (validation_paths.base / "ai_packs_config.yml").write_text(
+        "validation_packs:\n  enable_infer: false\n",
+        encoding="utf-8",
+    )
+
+    account_paths = ensure_validation_account_paths(
+        validation_paths, 3, create=True
+    )
+
+    accounts_root = runs_root / sid / "cases" / "accounts"
+    account_dir = accounts_root / "3"
+    account_dir.mkdir(parents=True, exist_ok=True)
+    summary_payload = {
+        "validation_requirements": {
+            "requirements": [
+                {
+                    "field": "account_status",
+                    "category": "status",
+                    "min_days": 3,
+                    "documents": ["statement"],
+                    "ai_needed": True,
+                }
+            ],
+            "field_consistency": {},
+        }
+    }
+    (account_dir / "summary.json").write_text(
+        json.dumps(summary_payload), encoding="utf-8"
+    )
+
+    fake_ai = FakeAIClient()
+
+    build_validation_ai_packs_for_accounts(
+        sid,
+        account_indices=[3],
+        runs_root=runs_root,
+        ai_client=fake_ai,
+    )
+
+    assert not fake_ai.chat_payloads
+    results_payload = json.loads(_read(account_paths.model_results_file))
+    assert results_payload["status"] == "skipped"
+    assert results_payload["reason"] == "inference_disabled"
+    assert results_payload["attempts"] == 0
+
+
+def test_builder_honors_weak_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "sid-weak-limit"
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+
+    validation_paths = ensure_validation_paths(runs_root, sid, create=True)
+    (validation_paths.base / "ai_packs_config.yml").write_text(
+        "validation_packs:\n  weak_limit: 1\n",
+        encoding="utf-8",
+    )
+
+    account_paths = ensure_validation_account_paths(
+        validation_paths, 9, create=True
+    )
+
+    accounts_root = runs_root / sid / "cases" / "accounts"
+    account_dir = accounts_root / "9"
+    account_dir.mkdir(parents=True, exist_ok=True)
+    summary_payload = {
+        "validation_requirements": {
+            "requirements": [
+                {
+                    "field": "balance_owed",
+                    "category": "activity",
+                    "min_days": 30,
+                    "documents": ["statement"],
+                    "ai_needed": True,
+                },
+                {
+                    "field": "account_status",
+                    "category": "status",
+                    "min_days": 10,
+                    "documents": ["statement"],
+                    "ai_needed": True,
+                },
+            ],
+            "field_consistency": {},
+        }
+    }
+    (account_dir / "summary.json").write_text(
+        json.dumps(summary_payload), encoding="utf-8"
+    )
+
+    fake_ai = FakeAIClient()
+    fake_ai.add_response(
+        json.dumps(
+            {
+                "sid": sid,
+                "account_index": 9,
+                "decisions": [],
+            }
+        )
+    )
+
+    build_validation_ai_packs_for_accounts(
+        sid,
+        account_indices=[9],
+        runs_root=runs_root,
+        ai_client=fake_ai,
+    )
+
+    pack_payload = json.loads(_read(account_paths.pack_file))
+    assert len(pack_payload["weak_items"]) == 1
+    prompt_payload = _read(account_paths.prompt_file)
+    assert "balance_owed" in prompt_payload or "account_status" in prompt_payload
+    assert fake_ai.chat_payloads

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+import textwrap
 from typing import Any, Iterable, Mapping, Sequence
 
 from backend.core.ai.paths import (
@@ -59,6 +60,12 @@ def build_validation_ai_packs_for_accounts(
         weak_items = _collect_weak_items(summary)
         pack_payload = {"weak_items": weak_items}
         _write_pack(account_paths.pack_file, pack_payload)
+
+        if weak_items:
+            prompt_text = _render_prompt(sid, idx, weak_items)
+            _write_prompt(account_paths.prompt_file, prompt_text)
+        else:
+            _write_prompt(account_paths.prompt_file, "")
 
         created.append(account_paths)
 
@@ -252,4 +259,60 @@ def _write_pack(path: Path, payload: Mapping[str, Any]) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(serialized + "\n", encoding="utf-8")
+
+
+def _render_prompt(sid: str, account_idx: int, weak_items: Sequence[Mapping[str, Any]]) -> str:
+    schema_block = textwrap.dedent(
+        """{
+  \"sid\": \"<copy the SID from the user section>\",
+  \"account_index\": <copy the account index as an integer>,
+  \"decisions\": [
+    {
+      \"field\": \"<field name>\",
+      \"decision\": \"STRONG\" | \"NO_CLAIM\"
+    }
+  ]
+}"""
+    )
+
+    system_lines = textwrap.dedent(
+        """SYSTEM:
+You are an adjudication assistant reviewing credit report inconsistencies.
+Evaluate each weak field independently and decide whether the consumer has a strong claim.
+Follow these rules:
+1. Base decisions only on the provided data for each field.
+2. Return the decisions in the same order the fields are provided.
+3. Use decision value \"STRONG\" when the evidence indicates a strong inconsistency; otherwise use \"NO_CLAIM\".
+Return a STRICT JSON object matching this schema (no extra keys, commentary, or trailing characters):
+"""
+    )
+
+    system_lines += textwrap.indent(schema_block, "  ")
+    system_lines += textwrap.dedent(
+        """
+
+Set \"sid\" to the provided SID and \"account_index\" to the provided account index.
+Do not include any explanation outside the JSON response.
+"""
+    )
+
+    weak_fields_json = json.dumps(
+        list(weak_items), indent=2, sort_keys=True, ensure_ascii=False
+    )
+
+    prompt = (
+        f"{system_lines}\n\n"
+        "USER:\n"
+        f"SID: {sid}\n"
+        f"ACCOUNT_INDEX: {account_idx}\n"
+        "WEAK_FIELDS:\n"
+        f"{weak_fields_json}\n"
+    )
+
+    return prompt
+
+
+def _write_prompt(path: Path, prompt: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(prompt, encoding="utf-8")
 

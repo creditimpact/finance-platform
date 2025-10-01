@@ -442,12 +442,28 @@ class ValidationPackBuilder:
             return None
 
 
-def build_validation_packs(manifest_path: Path | str) -> list[dict[str, Any]]:
-    """Build Validation AI packs for every account defined by ``manifest_path``."""
+def load_manifest_from_source(
+    manifest: Mapping[str, Any] | Path | str,
+) -> Mapping[str, Any]:
+    """Return a manifest mapping from ``manifest`` regardless of input type."""
+    if isinstance(manifest, Mapping):
+        return manifest
 
-    manifest_text = Path(manifest_path).read_text(encoding="utf-8")
-    manifest = json.loads(manifest_text)
-    builder = ValidationPackBuilder(manifest)
+    manifest_path = Path(manifest)
+    manifest_text = manifest_path.read_text(encoding="utf-8")
+    data = json.loads(manifest_text)
+    if not isinstance(data, Mapping):
+        raise TypeError("Manifest root must be a mapping")
+    return data
+
+
+def build_validation_packs(
+    manifest: Mapping[str, Any] | Path | str,
+) -> list[dict[str, Any]]:
+    """Build Validation AI packs for every account defined by ``manifest``."""
+
+    manifest_data = load_manifest_from_source(manifest)
+    builder = ValidationPackBuilder(manifest_data)
     return builder.build()
 
 
@@ -459,6 +475,7 @@ def resolve_manifest_paths(manifest: Mapping[str, Any]) -> ManifestPaths:
 
 __all__ = [
     "build_validation_packs",
+    "load_manifest_from_source",
     "resolve_manifest_paths",
     "ValidationPackBuilder",
     "ManifestPaths",

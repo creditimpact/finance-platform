@@ -121,7 +121,7 @@ def test_manifest_check_reports_missing_pack(tmp_path: Path) -> None:
     assert check_index(index, stream=buffer) is False
     output = buffer.getvalue()
     assert "MISSING" in output
-    assert "Missing packs detected." in output
+    assert "Missing packs detected: 1 of 1." in output
 
 
 def test_sender_uses_manifest_paths(

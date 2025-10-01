@@ -355,16 +355,23 @@ def build_validation_ai_packs_for_accounts(
     manifest = RunManifest.load_or_create(manifest_path, sid)
     if created:
         last_account = created[-1]
-        index_path = validation_paths.base / "index.json"
+        index_path = validation_paths.index_file
         _append_validation_index_entries(index_path, index_entries)
         manifest.upsert_validation_packs_dir(
             validation_paths.base,
-            account_dir=last_account.base,
-            results_dir=last_account.results_dir,
+            packs_dir=validation_paths.packs_dir,
+            results_dir=validation_paths.results_dir,
             index_file=index_path,
+            log_file=log_path,
         )
     else:
-        manifest.upsert_validation_packs_dir(validation_paths.base)
+        manifest.upsert_validation_packs_dir(
+            validation_paths.base,
+            packs_dir=validation_paths.packs_dir,
+            results_dir=validation_paths.results_dir,
+            index_file=validation_paths.index_file,
+            log_file=log_path,
+        )
 
     log.info(
         "VALIDATION_AI_PACKS_INITIALIZED sid=%s base=%s accounts=%s",

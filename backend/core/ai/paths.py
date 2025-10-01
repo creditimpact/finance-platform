@@ -26,6 +26,9 @@ class ValidationPaths:
     """Resolved filesystem locations for validation AI packs."""
 
     base: Path
+    packs_dir: Path
+    results_dir: Path
+    index_file: Path
     log_file: Path
 
 
@@ -35,9 +38,23 @@ def ensure_validation_paths(
     """Return the canonical validation AI pack paths for ``sid``."""
 
     base_path = (Path(runs_root) / sid / "ai_packs" / "validation").resolve()
+    packs_dir = base_path / "packs"
+    results_dir = base_path / "results"
+    index_file = base_path / "index.json"
+    log_file = base_path / "logs.txt"
+
     if create:
         base_path.mkdir(parents=True, exist_ok=True)
-    return ValidationPaths(base=base_path, log_file=base_path / "logs.txt")
+        packs_dir.mkdir(parents=True, exist_ok=True)
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+    return ValidationPaths(
+        base=base_path,
+        packs_dir=packs_dir.resolve(),
+        results_dir=results_dir.resolve(),
+        index_file=index_file.resolve(strict=False),
+        log_file=log_file.resolve(strict=False),
+    )
 
 
 def ensure_validation_account_paths(

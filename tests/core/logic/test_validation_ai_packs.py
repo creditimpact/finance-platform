@@ -55,6 +55,17 @@ def test_builder_creates_validation_structure(
     assert validation_section["accounts_dir"] == str(base_dir.resolve())
     assert isinstance(validation_section["last_prepared_at"], str)
 
+    packs_validation = manifest_data["ai"]["packs"]["validation"]
+    assert packs_validation["base"] == str(base_dir.resolve())
+    packs_path = Path(packs_validation["packs"])
+    assert packs_path.parent == base_dir.resolve()
+    assert packs_path.name in created_indices
+    expected_results = (packs_path / "results").resolve()
+    assert packs_validation["results"] == str(expected_results)
+    expected_index = (base_dir / "index.json").resolve()
+    assert packs_validation["index"] == str(expected_index)
+    assert isinstance(packs_validation["last_built_at"], str)
+
 
 def test_builder_preserves_existing_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

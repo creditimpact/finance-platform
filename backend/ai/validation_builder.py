@@ -57,7 +57,34 @@ _EXPECTED_OUTPUT_SCHEMA = {
 
 @dataclass(frozen=True)
 class PackLine:
-    """Single validation pack line ready to be serialized."""
+    """Single validation pack line ready to be serialized.
+
+    A pack line is a fully hydrated JSON-serialisable mapping that encodes
+    everything the adjudication model needs in order to make a validation
+    decision for one weak field.  The ``payload`` contains:
+
+    * ``id`` – stable identifier of the ``account`` / ``field`` pair
+      (``acc_<ACCID>__<FIELDKEY>``).
+    * ``sid`` / ``account_id`` / ``account_key`` – run and account metadata so
+      downstream tooling can trace lineage.
+    * ``field`` / ``field_key`` / ``category`` / ``documents`` /
+      ``min_days`` / ``strength`` – the raw requirement description copied from
+      ``summary.json``.
+    * ``bureaus`` – the raw and normalised bureau values for each supported
+      agency.
+    * ``context`` – auxiliary consistency data (consensus, disagreeing or
+      missing bureaus, history snippets, requirement notes, etc.).
+    * ``prompt`` – the actual request that will be sent to the model.  It
+      contains the system prompt plus the user payload above, keeping the pack
+      self-descriptive.
+    * ``expected_output`` – schema describing the desired JSON response.  The
+      model must emit ``decision`` (``strong`` or ``no_case``), ``rationale``,
+      and ``citations``.  Models *may* also include a ``confidence`` field
+      between ``0`` and ``1``; callers should treat it as optional.
+
+    The builder keeps this schema mirrored with ``docs/ai_packs/validation`` so
+    future contributors can safely extend the pack format.
+    """
 
     payload: Mapping[str, Any]
 

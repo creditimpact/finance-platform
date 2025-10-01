@@ -176,3 +176,60 @@ def test_sender_reports_missing_pack_with_relative_error(
     assert payload["status"] == "error"
     assert "Pack file missing: " in payload["error"]
     assert record.pack in payload["error"]
+
+
+def test_sender_supports_v1_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    base = tmp_path / "legacy" / "ai_packs" / "validation"
+    packs_dir = base / "packs"
+    results_dir = base / "results"
+    packs_dir.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    pack_path = packs_dir / "account_001.jsonl"
+    pack_payload = {
+        "id": "line-001",
+        "field": "Account Name",
+        "prompt": {"system": "test", "user": {"account": 1}},
+    }
+    pack_path.write_text(json.dumps(pack_payload) + "\n", encoding="utf-8")
+
+    result_jsonl_path = results_dir / "account_001.jsonl"
+    result_summary_path = results_dir / "account_001.json"
+
+    index_path = base / "index.json"
+    document = {
+        "schema_version": 1,
+        "sid": "S005",
+        "packs_dir": str(packs_dir),
+        "results_dir": str(results_dir),
+        "items": [
+            {
+                "account_id": 1,
+                "pack_path": str(pack_path),
+                "result_jsonl_path": str(result_jsonl_path),
+                "result_path": str(result_summary_path),
+                "lines": 1,
+                "status": "built",
+                "built_at": "2024-01-01T00:00:00Z",
+            }
+        ],
+    }
+    index_path.write_text(json.dumps(document), encoding="utf-8")
+
+    monkeypatch.setenv("AI_MODEL", "stub")
+
+    sender = ValidationPackSender(index_path, http_client=_StubClient())
+    results = sender.send()
+
+    assert len(results) == 1
+    record = sender._index.packs[0]
+
+    assert record.pack.startswith("packs/")
+    assert record.result_jsonl.startswith("results/")
+    assert record.result_json.startswith("results/")
+    assert sender._index.root == "."
+
+    summary_file = results_dir / "account_001.json"
+    jsonl_file = results_dir / "account_001.jsonl"
+    assert summary_file.is_file()
+    assert jsonl_file.is_file()

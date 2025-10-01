@@ -126,7 +126,8 @@ def _index_path_from_mapping(document: Mapping[str, Any]) -> Path:
 def _index_from_document(document: Mapping[str, Any], *, index_path: Path) -> ValidationIndex:
     schema_version = _coerce_int(document.get("schema_version"), default=0)
     if schema_version < 2:
-        raise ValidationPackError("Validation manifest schema version 2 is required")
+        document = _convert_v1_document(document, index_path=index_path)
+        schema_version = 2
 
     sid = _coerce_str(document.get("sid"))
     if not sid:
@@ -152,6 +153,80 @@ def _index_from_document(document: Mapping[str, Any], *, index_path: Path) -> Va
         packs=records,
         schema_version=schema_version,
     )
+
+
+def _convert_v1_document(
+    document: Mapping[str, Any], *, index_path: Path
+) -> Mapping[str, Any]:
+    """Convert a legacy v1 manifest document to the v2 schema."""
+
+    base_dir = index_path.parent.resolve()
+    sid = _coerce_str(document.get("sid"))
+
+    raw_items = document.get("packs") or document.get("items")
+    records: list[dict[str, Any]] = []
+    if isinstance(raw_items, Sequence):
+        for entry in raw_items:
+            if not isinstance(entry, Mapping):
+                continue
+            record: dict[str, Any] = dict(entry)
+            record["pack"] = _to_relative(
+                entry.get("pack_path")
+                or entry.get("pack")
+                or entry.get("pack_file")
+                or entry.get("pack_filename"),
+                base_dir,
+            )
+            record["result_jsonl"] = _to_relative(
+                entry.get("result_jsonl_path")
+                or entry.get("result_jsonl")
+                or entry.get("result_jsonl_file"),
+                base_dir,
+            )
+            record["result_json"] = _to_relative(
+                entry.get("result_path")
+                or entry.get("result_summary_path")
+                or entry.get("result_json"),
+                base_dir,
+            )
+            records.append(record)
+
+    return {
+        "schema_version": 2,
+        "sid": sid,
+        "root": ".",
+        "packs_dir": "packs",
+        "results_dir": "results",
+        "packs": records,
+    }
+
+
+def _to_relative(path_value: Any, base_dir: Path) -> str:
+    """Return a POSIX relative path for ``path_value`` with ``base_dir`` as the anchor."""
+
+    text = _coerce_str(path_value)
+    if not text:
+        return ""
+
+    candidate = Path(text)
+    if not candidate.is_absolute():
+        return PurePosixPath(text).as_posix()
+
+    try:
+        candidate_resolved = candidate.resolve()
+    except OSError:
+        candidate_resolved = candidate
+
+    base_resolved = base_dir.resolve()
+    try:
+        relative = candidate_resolved.relative_to(base_resolved)
+    except ValueError:
+        try:
+            relative = Path(os.path.relpath(candidate_resolved, base_resolved))
+        except (OSError, ValueError):
+            return candidate_resolved.as_posix()
+
+    return PurePosixPath(relative).as_posix()
 
 
 def _resolve_log_path(index_path: Path, document: Mapping[str, Any] | None) -> Path:

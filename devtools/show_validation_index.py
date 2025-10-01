@@ -101,7 +101,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     runs_root = _resolve_runs_root(args.runs_root)
     validation_paths = ensure_validation_paths(runs_root, args.sid, create=False)
     index_path = validation_paths.index_file
-    writer = ValidationPackIndexWriter(sid=args.sid, index_path=index_path)
+    writer = ValidationPackIndexWriter(
+        sid=args.sid,
+        index_path=index_path,
+        packs_dir=validation_paths.packs_dir,
+        results_dir=validation_paths.results_dir,
+    )
     accounts = writer.load_accounts()
 
     print(f"SID: {args.sid}")

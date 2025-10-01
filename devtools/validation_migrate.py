@@ -31,7 +31,11 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Iterable, Mapping
 
-from backend.ai.validation_index import ValidationIndexEntry, ValidationPackIndexWriter
+from backend.ai.validation_index import (
+    ValidationIndexEntry,
+    ValidationPackIndexWriter,
+    write_validation_manifest_v2,
+)
 from backend.core.ai.paths import (
     ensure_validation_paths,
     validation_pack_filename_for_account,
@@ -229,7 +233,7 @@ def migrate_sid(sid: str, runs_root: Path, *, dry_run: bool = False) -> None:
             account_id=account_id,
             pack_path=pack_path,
             result_jsonl_path=jsonl_path,
-            result_summary_path=result_path,
+            result_json_path=result_path,
             weak_fields=tuple(field for field in weak_fields if field),
             line_count=line_count,
             status=status,
@@ -257,13 +261,22 @@ def migrate_sid(sid: str, runs_root: Path, *, dry_run: bool = False) -> None:
 
     index_path = validation_paths.index_file
     index_path.unlink(missing_ok=True)
-    writer = ValidationPackIndexWriter(sid=sid, index_path=index_path)
+    writer = ValidationPackIndexWriter(
+        sid=sid,
+        index_path=index_path,
+        packs_dir=validation_paths.packs_dir,
+        results_dir=validation_paths.results_dir,
+    )
     if index_entries:
         writer.bulk_upsert(index_entries)
     else:
-        document = {"schema_version": 1, "sid": sid, "packs": []}
-        index_path.parent.mkdir(parents=True, exist_ok=True)
-        index_path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        write_validation_manifest_v2(
+            sid=sid,
+            packs_dir=validation_paths.packs_dir,
+            results_dir=validation_paths.results_dir,
+            entries=[],
+            index_path=index_path,
+        )
 
     print(f"Migrated {len(index_entries)} validation accounts for SID {sid}.")
     print("Validation packs directory:", validation_paths.packs_dir)

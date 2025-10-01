@@ -241,27 +241,18 @@ def test_writer_updates_index(tmp_path: Path) -> None:
     index_path = validation_index_path(sid, runs_root=runs_root)
     index_payload = _read_index(index_path)
 
-    assert index_payload["schema_version"] == 1
+    assert index_payload["schema_version"] == 2
     assert index_payload["sid"] == sid
+    assert index_payload["root"] == "."
+    assert index_payload["packs_dir"] == "packs"
+    assert index_payload["results_dir"] == "results"
     assert len(index_payload["packs"]) == 1
 
     entry = index_payload["packs"][0]
-    expected_pack = (runs_root / sid / "ai_packs" / "validation" / "packs" / "val_acc_001.jsonl").resolve()
-    expected_result_dir = validation_results_dir(sid, runs_root=runs_root)
-    expected_summary = (
-        expected_result_dir
-        / validation_result_filename_for_account(1)
-    ).resolve()
-    expected_jsonl = (
-        expected_result_dir
-        / validation_result_jsonl_filename_for_account(1)
-    ).resolve()
-
     assert entry["account_id"] == 1
-    assert entry["pack_path"] == str(expected_pack)
-    assert entry["result_summary_path"] == str(expected_summary)
-    assert entry["result_jsonl_path"] == str(expected_jsonl)
-    assert entry["result_path"] == str(expected_summary)
+    assert entry["pack"] == "packs/val_acc_001.jsonl"
+    assert entry["result_json"] == "results/acc_001.result.json"
+    assert entry["result_jsonl"] == "results/acc_001.result.jsonl"
     assert entry["lines"] == 2
     assert entry["weak_fields"] == ["balance_owed", "account_status"]
     assert entry["status"] == "built"

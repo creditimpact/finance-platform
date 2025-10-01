@@ -33,7 +33,14 @@ def _resolve_runs_root(runs_root: Path | str | None) -> Path:
 
 def _index_writer(sid: str, runs_root: Path) -> ValidationPackIndexWriter:
     index_path = validation_index_path(sid, runs_root=runs_root, create=True)
-    return ValidationPackIndexWriter(sid=sid, index_path=index_path)
+    packs_dir = validation_packs_dir(sid, runs_root=runs_root, create=True)
+    results_dir = validation_results_dir(sid, runs_root=runs_root, create=True)
+    return ValidationPackIndexWriter(
+        sid=sid,
+        index_path=index_path,
+        packs_dir=packs_dir,
+        results_dir=results_dir,
+    )
 
 
 def mark_validation_pack_sent(

@@ -122,7 +122,7 @@ def test_builder_creates_validation_structure(
 
     index_payload = json.loads(expected_index.read_text(encoding="utf-8"))
     assert index_payload["sid"] == sid
-    assert index_payload["schema_version"] == 1
+    assert index_payload["schema_version"] == 2
     pack_accounts = {entry["account_id"] for entry in index_payload["packs"]}
     assert pack_accounts == {14, 15}
     for entry in index_payload["packs"]:
@@ -132,7 +132,11 @@ def test_builder_creates_validation_structure(
         assert "request_lines" not in entry
         assert isinstance(entry.get("source_hash"), str) and len(entry["source_hash"]) == 64
         assert isinstance(entry["built_at"], str)
-        assert Path(entry["pack_path"]) == (
+        pack_path = (
+            validation_paths.index_file.parent
+            / entry["pack"]
+        ).resolve()
+        assert pack_path == (
             validation_paths.packs_dir
             / validation_pack_filename_for_account(entry["account_id"])
         ).resolve()
@@ -278,7 +282,10 @@ def test_builder_populates_pack_and_preserves_prompt_and_results(
     account_entry = packs_map[42]
     assert account_entry["status"] == model_results["status"]
     assert isinstance(account_entry["built_at"], str)
-    assert Path(account_entry["pack_path"]).resolve() == account_paths.pack_file.resolve()
+    pack_path = (
+        validation_paths.index_file.parent / account_entry["pack"]
+    ).resolve()
+    assert pack_path == account_paths.pack_file.resolve()
     assert account_entry["weak_fields"] == ["balance_owed"]
     assert account_entry["lines"] == 1
     assert isinstance(account_entry.get("source_hash"), str)

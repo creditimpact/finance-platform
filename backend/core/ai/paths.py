@@ -1,10 +1,67 @@
-"""Path helpers for AI merge packs."""
+# NOTE: keep docstring to describe module responsibilities
+"""Path helpers for AI adjudication artifacts."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+
+@dataclass(frozen=True)
+class ValidationAccountPaths:
+    """Resolved filesystem locations for a single validation AI pack."""
+
+    base: Path
+    pack_file: Path
+    prompt_file: Path
+    results_dir: Path
+    model_results_file: Path
+
+
+@dataclass(frozen=True)
+class ValidationPaths:
+    """Resolved filesystem locations for validation AI packs."""
+
+    base: Path
+
+
+def ensure_validation_paths(
+    runs_root: Path, sid: str, create: bool = True
+) -> ValidationPaths:
+    """Return the canonical validation AI pack paths for ``sid``."""
+
+    base_path = (Path(runs_root) / sid / "ai_packs" / "validation").resolve()
+    if create:
+        base_path.mkdir(parents=True, exist_ok=True)
+    return ValidationPaths(base=base_path)
+
+
+def ensure_validation_account_paths(
+    paths: ValidationPaths, account_idx: int | str, *, create: bool = True
+) -> ValidationAccountPaths:
+    """Return filesystem locations for ``account_idx`` under ``paths``."""
+
+    try:
+        normalized_idx = str(int(str(account_idx)))
+    except (TypeError, ValueError):
+        normalized_idx = str(account_idx).strip()
+        if not normalized_idx:
+            raise ValueError("account_idx must be coercible to an integer")
+
+    account_dir = paths.base / normalized_idx
+    results_dir = account_dir / "results"
+
+    if create:
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+    return ValidationAccountPaths(
+        base=account_dir,
+        pack_file=account_dir / "pack.json",
+        prompt_file=account_dir / "prompt.txt",
+        results_dir=results_dir,
+        model_results_file=results_dir / "model.json",
+    )
 
 
 @dataclass(frozen=True)

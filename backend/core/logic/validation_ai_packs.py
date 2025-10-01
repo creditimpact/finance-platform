@@ -6,6 +6,13 @@ import logging
 from pathlib import Path
 from typing import Iterable, Sequence
 
+from backend.core.ai.paths import (
+    ValidationAccountPaths,
+    ensure_validation_account_paths,
+    ensure_validation_paths,
+)
+from backend.pipeline.runs import RunManifest
+
 log = logging.getLogger(__name__)
 
 
@@ -27,18 +34,48 @@ def build_validation_ai_packs_for_accounts(
 ) -> None:
     """Trigger validation AI pack building for the provided account indices.
 
-    This is a lightweight shim that simply logs the request for now. The actual
-    pack construction logic will be implemented in subsequent iterations.
+    The builder currently ensures the filesystem scaffold for validation AI
+    packs exists so subsequent stages can populate payloads and prompts.
     """
 
     normalized_indices = _normalize_indices(account_indices)
     if not normalized_indices:
         return
 
+    runs_root_path = Path(runs_root) if runs_root is not None else Path("runs")
+    validation_paths = ensure_validation_paths(runs_root_path, sid, create=True)
+
+    created: list[ValidationAccountPaths] = []
+    for idx in normalized_indices:
+        account_paths = ensure_validation_account_paths(
+            validation_paths, idx, create=True
+        )
+        _ensure_placeholder_files(account_paths)
+        created.append(account_paths)
+
+    manifest_path = runs_root_path / sid / "manifest.json"
+    manifest = RunManifest.load_or_create(manifest_path, sid)
+    manifest.upsert_validation_packs_dir(validation_paths.base)
+
     log.info(
-        "VALIDATION_AI_PACKS_TRIGGER sid=%s runs_root=%s accounts=%s",
+        "VALIDATION_AI_PACKS_INITIALIZED sid=%s base=%s accounts=%s",
         sid,
-        str(runs_root) if runs_root is not None else None,
-        ",".join(str(idx) for idx in normalized_indices),
+        validation_paths.base,
+        ",".join(str(path.base.name) for path in created),
     )
+
+
+def _ensure_placeholder_files(paths: ValidationAccountPaths) -> None:
+    """Create empty scaffold files for a validation pack if they are missing."""
+
+    _ensure_file(paths.pack_file, "{}\n")
+    _ensure_file(paths.prompt_file, "")
+    _ensure_file(paths.model_results_file, "{}\n")
+
+
+def _ensure_file(path: Path, default_contents: str) -> None:
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(default_contents, encoding="utf-8")
 

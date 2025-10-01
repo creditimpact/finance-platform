@@ -5,9 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
+from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -28,6 +31,9 @@ from backend.core.ai.paths import (
 from backend.pipeline.runs import RunManifest, persist_manifest
 
 log = logging.getLogger(__name__)
+
+_PACKS_ENABLED_ENV = "VALIDATION_PACKS_ENABLED"
+_PACKS_PER_FIELD_ENV = "VALIDATION_PACKS_PER_FIELD"
 
 _BUREAUS = ("transunion", "experian", "equifax")
 _SYSTEM_PROMPT = (
@@ -78,6 +84,9 @@ class ValidationPackWriter:
         self._results_dir = validation_results_dir(
             self.sid, runs_root=self._runs_root, create=True
         )
+        self._log_path = validation_logs_path(
+            self.sid, runs_root=self._runs_root, create=True
+        )
         index_path = validation_index_path(
             self.sid, runs_root=self._runs_root, create=True
         )
@@ -102,16 +111,23 @@ class ValidationPackWriter:
         """Build and persist the pack for ``account_id``."""
 
         normalized_id = self._normalize_account_id(account_id)
-        pack_lines = self.build_pack_lines(normalized_id)
+        summary = self._load_summary(normalized_id)
+        pack_lines = self._build_pack_lines_from_summary(normalized_id, summary)
         pack_path = self._packs_dir / validation_pack_filename_for_account(normalized_id)
         self._write_pack_file(pack_path, pack_lines)
-        self._update_index(normalized_id, pack_path, pack_lines)
+        self._update_index(normalized_id, pack_path, pack_lines, summary=summary)
+        self._append_log_entry(normalized_id, pack_lines, summary)
         return pack_lines
 
     def build_pack_lines(self, account_id: int) -> list[PackLine]:
         """Return the pack lines for ``account_id`` without writing them."""
 
         summary = self._load_summary(account_id)
+        return self._build_pack_lines_from_summary(account_id, summary)
+
+    def _build_pack_lines_from_summary(
+        self, account_id: int, summary: Mapping[str, Any] | None
+    ) -> list[PackLine]:
         if not summary:
             return []
 
@@ -152,7 +168,12 @@ class ValidationPackWriter:
         path.write_text(serialized, encoding="utf-8")
 
     def _update_index(
-        self, account_id: int, pack_path: Path, lines: Sequence[PackLine]
+        self,
+        account_id: int,
+        pack_path: Path,
+        lines: Sequence[PackLine],
+        *,
+        summary: Mapping[str, Any] | None = None,
     ) -> None:
         result_path = self._results_dir / validation_result_filename_for_account(
             account_id
@@ -172,7 +193,8 @@ class ValidationPackWriter:
                 continue
             weak_fields.append(field_key)
 
-        summary = self._load_summary(account_id)
+        if summary is None:
+            summary = self._load_summary(account_id)
         source_hash = self._build_source_hash(summary, lines)
 
         entry = ValidationIndexEntry(
@@ -185,6 +207,58 @@ class ValidationPackWriter:
             source_hash=source_hash,
         )
         self._index_writer.upsert(entry)
+
+    def _append_log_entry(
+        self,
+        account_id: int,
+        lines: Sequence[PackLine],
+        summary: Mapping[str, Any] | None,
+    ) -> None:
+        statuses = self._derive_statuses(summary, lines)
+        entry = {
+            "timestamp": _utc_now(),
+            "account_index": int(account_id),
+            "weak_count": len(lines),
+            "statuses": statuses,
+            "mode": "per_field" if self._per_field else "per_account",
+        }
+        _append_validation_log_entry(self._log_path, entry)
+
+    def _derive_statuses(
+        self, summary: Mapping[str, Any] | None, lines: Sequence[PackLine]
+    ) -> list[str]:
+        if lines:
+            return ["pack_written"]
+
+        statuses: list[str] = []
+        if summary is None:
+            statuses.append("summary_missing")
+            statuses.append("no_weak_items")
+            return statuses
+
+        validation_block = self._extract_validation_block(summary)
+        if not validation_block:
+            statuses.append("no_validation_requirements")
+            statuses.append("no_weak_items")
+            return statuses
+
+        requirements = validation_block.get("requirements") or []
+        has_ai_needed = False
+        for requirement in requirements:
+            if not isinstance(requirement, Mapping):
+                continue
+            if not requirement.get("ai_needed"):
+                continue
+            strength = self._normalize_strength(requirement.get("strength"))
+            if strength == "strong":
+                continue
+            has_ai_needed = True
+            break
+
+        statuses.append("no_weak_items")
+        if not has_ai_needed:
+            statuses.insert(0, "no_ai_needed")
+        return statuses
 
     # ------------------------------------------------------------------
     # Builders
@@ -536,7 +610,45 @@ def _json_clone(value: Any) -> Any:
     return value
 
 
-_WRITER_CACHE: dict[tuple[str, Path], "ValidationPackWriter"] = {}
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _append_validation_log_entry(path: Path, entry: Mapping[str, Any]) -> None:
+    try:
+        serialized = json.dumps(entry, sort_keys=True, ensure_ascii=False)
+    except TypeError:
+        log.exception("VALIDATION_LOG_SERIALIZE_FAILED path=%s", path)
+        return
+
+    try:
+        existing = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        existing = ""
+    except OSError:
+        log.warning("VALIDATION_LOG_READ_FAILED path=%s", path, exc_info=True)
+        existing = ""
+
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+
+    new_contents = (existing + serialized + "\n") if existing else (serialized + "\n")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(path.name + ".tmp")
+
+    try:
+        temp_path.write_text(new_contents, encoding="utf-8")
+        temp_path.replace(path)
+    except OSError:
+        log.warning("VALIDATION_LOG_WRITE_FAILED path=%s", path, exc_info=True)
+        with suppress(FileNotFoundError, OSError):
+            temp_path.unlink(missing_ok=True)
+
+
+_WRITER_CACHE: dict[tuple[str, Path, bool], "ValidationPackWriter"] = {}
 _WRITER_CACHE_LOCK = threading.Lock()
 
 
@@ -556,13 +668,37 @@ def _resolve_runs_root_from_artifacts(
     return Path("runs").resolve()
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    if isinstance(raw, str):
+        lowered = raw.strip().lower()
+        if lowered in {"1", "true", "yes", "on", "y"}:
+            return True
+        if lowered in {"0", "false", "no", "off", "n"}:
+            return False
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return bool(raw)
+    return default
+
+
+def _packs_enabled() -> bool:
+    return _env_flag(_PACKS_ENABLED_ENV, True)
+
+
+def _packs_per_field_enabled() -> bool:
+    return _env_flag(_PACKS_PER_FIELD_ENV, False)
+
+
 def _get_writer(sid: str, runs_root: Path | str) -> ValidationPackWriter:
     resolved_root = Path(runs_root).resolve()
-    key = (str(sid), resolved_root)
+    per_field = _packs_per_field_enabled()
+    key = (str(sid), resolved_root, per_field)
     with _WRITER_CACHE_LOCK:
         writer = _WRITER_CACHE.get(key)
         if writer is None:
-            writer = ValidationPackWriter(sid, runs_root=resolved_root)
+            writer = ValidationPackWriter(sid, runs_root=resolved_root, per_field=per_field)
             _WRITER_CACHE[key] = writer
     return writer
 
@@ -595,6 +731,14 @@ def build_validation_pack_for_account(
 ) -> list[PackLine]:
     """Build and persist the validation pack for ``account_id`` within ``sid``."""
 
+    if not _packs_enabled():
+        log.info(
+            "VALIDATION_PACKS_DISABLED sid=%s account=%s reason=env_toggle",
+            sid,
+            account_id,
+        )
+        return []
+
     runs_root = _resolve_runs_root_from_artifacts(sid, summary_path, bureaus_path)
     writer = _get_writer(sid, runs_root)
     lines = writer.write_pack_for_account(account_id)
@@ -606,6 +750,12 @@ def build_validation_packs_for_run(
     sid: str, *, runs_root: Path | str | None = None
 ) -> dict[int, list[PackLine]]:
     """Build validation packs for every account of ``sid``."""
+
+    if not _packs_enabled():
+        log.info(
+            "VALIDATION_PACKS_DISABLED sid=%s reason=env_toggle", sid,
+        )
+        return {}
 
     runs_root_path = (
         Path(runs_root).resolve() if runs_root is not None else Path("runs").resolve()

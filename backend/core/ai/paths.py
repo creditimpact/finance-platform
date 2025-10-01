@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -168,4 +170,94 @@ def probe_legacy_ai_packs(runs_root: Path, sid: str) -> Optional[Path]:
         return legacy_dir
 
     return None
+
+
+def _resolve_runs_root(runs_root: Path | str | None) -> Path:
+    """Return the effective runs root using ``RUNS_ROOT`` env fallback."""
+
+    if runs_root is None:
+        env_root = os.getenv("RUNS_ROOT")
+        return Path(env_root) if env_root else Path("runs")
+    return Path(runs_root)
+
+
+def validation_base_dir(
+    sid: str, runs_root: Path | str | None = None, *, create: bool = True
+) -> Path:
+    """Return the canonical validation base directory for ``sid``.
+
+    When ``create`` is ``True`` the directory is created if it does not exist.
+    """
+
+    base = _resolve_runs_root(runs_root) / sid / "ai_packs" / "validation"
+    if create:
+        base.mkdir(parents=True, exist_ok=True)
+    return base.resolve()
+
+
+def validation_packs_dir(
+    sid: str, runs_root: Path | str | None = None, *, create: bool = True
+) -> Path:
+    """Return the directory holding validation pack payloads for ``sid``."""
+
+    packs_dir = validation_base_dir(sid, runs_root=runs_root, create=create) / "packs"
+    if create:
+        packs_dir.mkdir(parents=True, exist_ok=True)
+    return packs_dir.resolve()
+
+
+def validation_results_dir(
+    sid: str, runs_root: Path | str | None = None, *, create: bool = True
+) -> Path:
+    """Return the directory holding validation model results for ``sid``."""
+
+    results_dir = (
+        validation_base_dir(sid, runs_root=runs_root, create=create) / "results"
+    )
+    if create:
+        results_dir.mkdir(parents=True, exist_ok=True)
+    return results_dir.resolve()
+
+
+def validation_index_path(
+    sid: str, runs_root: Path | str | None = None, *, create: bool = True
+) -> Path:
+    """Return the manifest index path for validation packs."""
+
+    base = validation_base_dir(sid, runs_root=runs_root, create=create)
+    if create:
+        base.mkdir(parents=True, exist_ok=True)
+    return (base / "index.json").resolve()
+
+
+def validation_logs_path(
+    sid: str, runs_root: Path | str | None = None, *, create: bool = True
+) -> Path:
+    """Return the log file path for validation pack activity."""
+
+    base = validation_base_dir(sid, runs_root=runs_root, create=create)
+    if create:
+        base.mkdir(parents=True, exist_ok=True)
+    return (base / "logs.txt").resolve()
+
+
+def _normalize_account_id(account_id: int | str) -> int:
+    try:
+        return int(str(account_id).strip())
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        raise ValueError("account_id must be coercible to an integer") from None
+
+
+def validation_pack_filename_for_account(account_id: int | str) -> str:
+    """Return the canonical validation pack filename for ``account_id``."""
+
+    normalized = _normalize_account_id(account_id)
+    return f"val_acc_{normalized:03d}.jsonl"
+
+
+def validation_result_filename_for_account(account_id: int | str) -> str:
+    """Return the canonical validation result filename for ``account_id``."""
+
+    normalized = _normalize_account_id(account_id)
+    return f"val_acc_{normalized:03d}.result.json"
 

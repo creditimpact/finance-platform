@@ -8,6 +8,13 @@ import pytest
 from backend.core.ai.paths import (
     ensure_validation_account_paths,
     ensure_validation_paths,
+    validation_base_dir,
+    validation_index_path,
+    validation_logs_path,
+    validation_pack_filename_for_account,
+    validation_packs_dir,
+    validation_result_filename_for_account,
+    validation_results_dir,
 )
 from backend.core.logic import validation_ai_packs
 from backend.core.logic.validation_ai_packs import (
@@ -21,6 +28,38 @@ from tests.helpers.fake_ai_client import FakeAIClient
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def test_validation_path_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sid = "sid-paths"
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+
+    base_dir = validation_base_dir(sid)
+    assert base_dir == (runs_root / sid / "ai_packs" / "validation").resolve()
+
+    packs_dir = validation_packs_dir(sid)
+    results_dir = validation_results_dir(sid)
+    assert packs_dir == (base_dir / "packs").resolve()
+    assert results_dir == (base_dir / "results").resolve()
+    assert packs_dir.exists() and results_dir.exists()
+
+    index_path = validation_index_path(sid)
+    logs_path = validation_logs_path(sid)
+    assert index_path == (base_dir / "index.json").resolve()
+    assert logs_path == (base_dir / "logs.txt").resolve()
+
+    assert validation_pack_filename_for_account(7) == "val_acc_007.jsonl"
+    assert (
+        validation_pack_filename_for_account("15") == "val_acc_015.jsonl"
+    )
+    assert (
+        validation_result_filename_for_account(7) == "val_acc_007.result.json"
+    )
+    assert (
+        validation_result_filename_for_account("15")
+        == "val_acc_015.result.json"
+    )
 
 
 def test_builder_creates_validation_structure(

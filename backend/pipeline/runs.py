@@ -102,6 +102,13 @@ class RunManifest:
                     "pairs": 0,
                     "last_built_at": None,
                     "logs": None,
+                    "validation": {
+                        "base": None,
+                        "packs": None,
+                        "results": None,
+                        "index": None,
+                        "last_built_at": None,
+                    },
                 },
                 "validation": {
                     "base": None,
@@ -316,6 +323,19 @@ class RunManifest:
                 "logs": None,
             },
         )
+        validation_section = packs.get("validation")
+        if not isinstance(validation_section, dict):
+            validation_section = {
+                "base": None,
+                "packs": None,
+                "results": None,
+                "index": None,
+                "last_built_at": None,
+            }
+            packs["validation"] = validation_section
+        else:
+            for key in ("base", "packs", "results", "index", "last_built_at"):
+                validation_section.setdefault(key, None)
         ai.setdefault(
             "validation",
             {
@@ -337,6 +357,22 @@ class RunManifest:
             },
         )
         return packs, status
+
+    def _ensure_ai_validation_pack_section(self) -> dict[str, object]:
+        packs, _ = self._ensure_ai_section()
+        validation = packs.setdefault(
+            "validation",
+            {
+                "base": None,
+                "packs": None,
+                "results": None,
+                "index": None,
+                "last_built_at": None,
+            },
+        )
+        if not isinstance(validation, dict):
+            raise TypeError("ai.packs.validation must be a mapping")
+        return validation
 
     def _apply_merge_paths_to_packs(
         self,
@@ -374,15 +410,61 @@ class RunManifest:
         )
         return validation
 
-    def upsert_validation_packs_dir(self, base_dir: Path) -> "RunManifest":
+    def upsert_validation_packs_dir(
+        self,
+        base_dir: Path,
+        *,
+        account_dir: Path | None = None,
+        results_dir: Path | None = None,
+        index_file: Path | None = None,
+    ) -> "RunManifest":
         validation = self._ensure_validation_section()
         resolved = Path(base_dir).resolve()
         resolved_str = str(resolved)
+        timestamp = _utc_now()
+
         validation["base"] = resolved_str
         validation["dir"] = resolved_str
         validation["accounts"] = resolved_str
         validation["accounts_dir"] = resolved_str
-        validation["last_prepared_at"] = _utc_now()
+        validation["last_prepared_at"] = timestamp
+
+        packs_validation = self._ensure_ai_validation_pack_section()
+        packs_validation["base"] = resolved_str
+
+        account_path: Path | None = None
+        if account_dir is not None:
+            account_path = Path(account_dir).resolve()
+        elif packs_validation.get("packs"):
+            try:
+                account_path = Path(str(packs_validation["packs"]))
+            except (TypeError, ValueError):
+                account_path = None
+
+        if account_path is not None:
+            packs_validation["packs"] = str(account_path)
+        elif packs_validation.get("packs") is None:
+            packs_validation["packs"] = resolved_str
+
+        results_path: Path | None = None
+        if results_dir is not None:
+            results_path = Path(results_dir).resolve()
+        elif account_path is not None:
+            results_path = (account_path / "results").resolve()
+
+        if results_path is not None:
+            packs_validation["results"] = str(results_path)
+        elif packs_validation.get("results") is None and packs_validation.get("packs"):
+            packs_validation["results"] = str(Path(str(packs_validation["packs"])) / "results")
+
+        index_path = (
+            Path(index_file).resolve(strict=False)
+            if index_file is not None
+            else (resolved / "index.json").resolve(strict=False)
+        )
+        packs_validation["index"] = str(index_path)
+        packs_validation["last_built_at"] = timestamp
+
         return self.save()
 
     def upsert_ai_packs_dir(self, packs_dir: Path) -> "RunManifest":

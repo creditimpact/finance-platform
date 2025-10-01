@@ -88,6 +88,28 @@ class _ManifestView:
     log_path: Path
 
 
+@dataclass(frozen=True)
+class _PreflightAccount:
+    """Resolved paths for a single manifest entry during validation."""
+
+    record: ValidationPackRecord
+    pack_path: Path
+    result_jsonl_path: Path
+    result_json_path: Path
+    pack_missing: bool
+
+
+@dataclass(frozen=True)
+class _PreflightSummary:
+    """Aggregate data produced by :meth:`ValidationPackSender._preflight`."""
+
+    manifest_path: Path
+    accounts: tuple[_PreflightAccount, ...]
+    missing: int
+    results_dir_created: bool
+    parent_dirs_created: int
+
+
 def _coerce_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -313,16 +335,124 @@ class ValidationPackSender:
         self._log_path = view.log_path
 
     # ------------------------------------------------------------------
+    # Pre-flight validation
+    # ------------------------------------------------------------------
+    def _preflight(self, index: ValidationIndex) -> _PreflightSummary:
+        manifest_path = index.index_path
+        accounts: list[_PreflightAccount] = []
+
+        results_dir = index.results_dir_path
+        results_dir_exists = results_dir.exists()
+        if not results_dir_exists:
+            results_dir.mkdir(parents=True, exist_ok=True)
+
+        created_parent_dirs: set[Path] = set()
+
+        for record in index.packs:
+            pack_path = index.resolve_pack_path(record)
+            result_jsonl_path = index.resolve_result_jsonl_path(record)
+            result_json_path = index.resolve_result_json_path(record)
+
+            for candidate in (result_jsonl_path.parent, result_json_path.parent):
+                if candidate.exists():
+                    continue
+                candidate.mkdir(parents=True, exist_ok=True)
+                created_parent_dirs.add(candidate.resolve())
+
+            accounts.append(
+                _PreflightAccount(
+                    record=record,
+                    pack_path=pack_path,
+                    result_jsonl_path=result_jsonl_path,
+                    result_json_path=result_json_path,
+                    pack_missing=not pack_path.is_file(),
+                )
+            )
+
+        missing = sum(1 for account in accounts if account.pack_missing)
+        summary = _PreflightSummary(
+            manifest_path=manifest_path,
+            accounts=tuple(accounts),
+            missing=missing,
+            results_dir_created=not results_dir_exists,
+            parent_dirs_created=len(created_parent_dirs),
+        )
+        self._print_preflight_summary(index, summary)
+        return summary
+
+    def _print_preflight_summary(
+        self, index: ValidationIndex, summary: _PreflightSummary
+    ) -> None:
+        manifest_display = self._display_path(summary.manifest_path)
+        print(f"MANIFEST: {manifest_display}")
+        print(f"PACKS: {len(summary.accounts)}, missing: {summary.missing}")
+
+        results_status = "ok"
+        if summary.results_dir_created:
+            results_status = "created"
+        elif summary.parent_dirs_created:
+            results_status = f"ok (created {summary.parent_dirs_created} dirs)"
+        print(f"RESULTS DIR: {results_status}")
+
+        missing_accounts = {
+            account.record.account_id for account in summary.accounts if account.pack_missing
+        }
+        for account in summary.accounts:
+            record = account.record
+            account_id = record.account_id
+            pack_display = record.pack or self._display_path(
+                account.pack_path, base=index.index_dir
+            )
+            jsonl_display = record.result_jsonl or self._display_path(
+                account.result_jsonl_path, base=index.index_dir
+            )
+            summary_display = record.result_json or self._display_path(
+                account.result_json_path, base=index.index_dir
+            )
+
+            line = (
+                f"[acc={account_id:03d}] pack={pack_display} -> "
+                f"{jsonl_display}, {summary_display}  (lines={record.lines})"
+            )
+            if account_id in missing_accounts:
+                missing_path = self._display_path(
+                    account.pack_path, base=index.index_dir
+                )
+                line += f"  [MISSING: {missing_path}]"
+            print(line)
+
+    @staticmethod
+    def _display_path(path: Path, *, base: Path | None = None) -> str:
+        candidate = path.resolve()
+        anchors: list[Path] = []
+        if base is not None:
+            anchors.append(base.resolve())
+        anchors.append(Path.cwd().resolve())
+        for anchor in anchors:
+            try:
+                relative = candidate.relative_to(anchor)
+                return PurePosixPath(relative).as_posix() or "."
+            except ValueError:
+                try:
+                    relpath = Path(os.path.relpath(candidate, anchor))
+                except (OSError, ValueError):
+                    continue
+                return PurePosixPath(relpath).as_posix()
+        return candidate.as_posix()
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
     def send(self) -> list[dict[str, Any]]:
         """Send every pack referenced by the manifest index."""
 
         index = self._load_index()
+        preflight = self._preflight(index)
         self._results_root = index.results_dir_path
 
         results: list[dict[str, Any]] = []
-        for record in index.packs:
+        for account in preflight.accounts:
+            record = account.record
             account_id = record.account_id
             try:
                 normalized_account = self._normalize_account_id(account_id)
@@ -333,9 +463,9 @@ class ValidationPackSender:
             result_jsonl_relative = record.result_jsonl
             result_json_relative = record.result_json
 
-            resolved_pack = index.resolve_pack_path(record)
-            result_jsonl_path = index.resolve_result_jsonl_path(record)
-            result_json_path = index.resolve_result_json_path(record)
+            resolved_pack = account.pack_path
+            result_jsonl_path = account.result_jsonl_path
+            result_json_path = account.result_json_path
 
             try:
                 account_summary = self._process_account(
@@ -421,8 +551,13 @@ class ValidationPackSender:
             try:
                 response = self._call_model(pack_line)
             except Exception as exc:
-                errors.append(str(exc))
-                response = self._fallback_response(str(exc))
+                error_message = (
+                    "AI request failed for acc "
+                    f"{account_int:03d} pack={pack_display} -> "
+                    f"{result_jsonl_display}, {result_summary_display}: {exc}"
+                )
+                errors.append(error_message)
+                response = self._fallback_response(error_message)
             result_lines.append(self._build_result_line(account_int, idx, pack_line, response))
             time.sleep(self._throttle)
 

@@ -103,6 +103,13 @@ class RunManifest:
                     "last_built_at": None,
                     "logs": None,
                 },
+                "validation": {
+                    "base": None,
+                    "dir": None,
+                    "accounts": None,
+                    "accounts_dir": None,
+                    "last_prepared_at": None,
+                },
                 "status": {
                     "enqueued": False,
                     "built": False,
@@ -309,6 +316,16 @@ class RunManifest:
                 "logs": None,
             },
         )
+        ai.setdefault(
+            "validation",
+            {
+                "base": None,
+                "dir": None,
+                "accounts": None,
+                "accounts_dir": None,
+                "last_prepared_at": None,
+            },
+        )
         status = ai.setdefault(
             "status",
             {
@@ -342,6 +359,31 @@ class RunManifest:
 
         if not (prefer_existing_index and packs.get("index")):
             packs["index"] = str(merge_paths.index_file)
+
+    def _ensure_validation_section(self) -> dict[str, object]:
+        ai = self.data.setdefault("ai", {})
+        validation = ai.setdefault(
+            "validation",
+            {
+                "base": None,
+                "dir": None,
+                "accounts": None,
+                "accounts_dir": None,
+                "last_prepared_at": None,
+            },
+        )
+        return validation
+
+    def upsert_validation_packs_dir(self, base_dir: Path) -> "RunManifest":
+        validation = self._ensure_validation_section()
+        resolved = Path(base_dir).resolve()
+        resolved_str = str(resolved)
+        validation["base"] = resolved_str
+        validation["dir"] = resolved_str
+        validation["accounts"] = resolved_str
+        validation["accounts_dir"] = resolved_str
+        validation["last_prepared_at"] = _utc_now()
+        return self.save()
 
     def upsert_ai_packs_dir(self, packs_dir: Path) -> "RunManifest":
         packs, _ = self._ensure_ai_section()

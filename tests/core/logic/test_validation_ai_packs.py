@@ -12,6 +12,7 @@ from backend.core.ai.paths import (
 from backend.core.logic import validation_ai_packs
 from backend.core.logic.validation_ai_packs import build_validation_ai_packs_for_accounts
 from backend.pipeline.runs import RUNS_ROOT_ENV
+from tests.helpers.fake_ai_client import FakeAIClient
 
 
 def _read(path: Path) -> str:
@@ -45,7 +46,12 @@ def test_builder_creates_validation_structure(
 
         pack_payload = json.loads(_read(account_paths.pack_file))
         assert pack_payload == {"weak_items": []}
-        assert json.loads(_read(account_paths.model_results_file)) == {}
+        model_results = json.loads(_read(account_paths.model_results_file))
+        assert model_results["status"] == "skipped"
+        assert model_results["reason"] == "no_weak_items"
+        assert model_results["model"] == "gpt-4o-mini"
+        assert isinstance(model_results["timestamp"], str)
+        assert model_results["duration_ms"] == 0
         assert _read(account_paths.prompt_file) == ""
 
     manifest_path = runs_root / sid / "manifest.json"
@@ -133,10 +139,22 @@ def test_builder_populates_pack_and_preserves_prompt_and_results(
         json.dumps(summary_payload), encoding="utf-8"
     )
 
+    fake_ai = FakeAIClient()
+    fake_ai.add_response(
+        json.dumps(
+            {
+                "sid": sid,
+                "account_index": 42,
+                "decisions": [],
+            }
+        )
+    )
+
     build_validation_ai_packs_for_accounts(
         sid,
         account_indices=[42],
         runs_root=runs_root,
+        ai_client=fake_ai,
     )
 
     pack_payload = json.loads(_read(account_paths.pack_file))
@@ -162,4 +180,87 @@ def test_builder_populates_pack_and_preserves_prompt_and_results(
         sid, 42, pack_payload["weak_items"]
     )
     assert _read(account_paths.prompt_file) == expected_prompt
-    assert _read(account_paths.model_results_file) == "{\"status\": \"done\"}\n"
+    model_results = json.loads(_read(account_paths.model_results_file))
+    assert model_results["status"] == "ok"
+    assert model_results["model"] == "gpt-4o-mini"
+    assert isinstance(model_results["timestamp"], str)
+    assert isinstance(model_results["duration_ms"], int)
+    assert model_results["response"] == {
+        "sid": sid,
+        "account_index": 42,
+        "decisions": [],
+    }
+    assert model_results["raw"] == json.dumps(
+        {
+            "sid": sid,
+            "account_index": 42,
+            "decisions": [],
+        }
+    )
+    assert len(fake_ai.chat_payloads) == 1
+    sent_payload = fake_ai.chat_payloads[0]
+    assert sent_payload["model"] == "gpt-4o-mini"
+    assert sent_payload["prompt"] == _read(account_paths.prompt_file)
+    assert sent_payload["response_format"] == {"type": "json_object"}
+
+
+def test_builder_uses_configured_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "sid-config"
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+
+    validation_paths = ensure_validation_paths(runs_root, sid, create=True)
+    (validation_paths.base / "ai_packs_config.yml").write_text(
+        "model: gpt-validation-test\n", encoding="utf-8"
+    )
+
+    account_paths = ensure_validation_account_paths(
+        validation_paths, 7, create=True
+    )
+
+    accounts_root = runs_root / sid / "cases" / "accounts"
+    account_dir = accounts_root / "7"
+    account_dir.mkdir(parents=True, exist_ok=True)
+    summary_payload = {
+        "validation_requirements": {
+            "requirements": [
+                {
+                    "field": "account_status",
+                    "category": "status",
+                    "min_days": 10,
+                    "documents": ["statement"],
+                    "ai_needed": True,
+                }
+            ],
+            "field_consistency": {},
+        }
+    }
+    (account_dir / "summary.json").write_text(
+        json.dumps(summary_payload), encoding="utf-8"
+    )
+
+    fake_ai = FakeAIClient()
+    fake_ai.add_response(
+        json.dumps(
+            {
+                "sid": sid,
+                "account_index": 7,
+                "decisions": [],
+            }
+        )
+    )
+
+    build_validation_ai_packs_for_accounts(
+        sid,
+        account_indices=[7],
+        runs_root=runs_root,
+        ai_client=fake_ai,
+    )
+
+    sent_payload = fake_ai.chat_payloads[0]
+    assert sent_payload["model"] == "gpt-validation-test"
+
+    results_payload = json.loads(_read(account_paths.model_results_file))
+    assert results_payload["model"] == "gpt-validation-test"

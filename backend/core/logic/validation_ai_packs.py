@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 import textwrap
 from typing import Any, Iterable, Mapping, Sequence
+
+import yaml
 
 from backend.core.ai.paths import (
     ValidationAccountPaths,
@@ -14,8 +18,11 @@ from backend.core.ai.paths import (
     ensure_validation_paths,
 )
 from backend.pipeline.runs import RunManifest
+from backend.core.logic.utils.json_utils import parse_json
 
 log = logging.getLogger(__name__)
+
+_DEFAULT_MODEL = "gpt-4o-mini"
 
 
 def _normalize_indices(indices: Iterable[int | str]) -> list[int]:
@@ -33,6 +40,7 @@ def build_validation_ai_packs_for_accounts(
     *,
     account_indices: Sequence[int | str],
     runs_root: Path | str | None = None,
+    ai_client: Any | None = None,
 ) -> None:
     """Trigger validation AI pack building for the provided account indices.
 
@@ -46,6 +54,11 @@ def build_validation_ai_packs_for_accounts(
 
     runs_root_path = Path(runs_root) if runs_root is not None else Path("runs")
     validation_paths = ensure_validation_paths(runs_root_path, sid, create=True)
+
+    packs_config = _load_packs_config(validation_paths.base)
+    model_name = _select_model_name(packs_config)
+
+    ai_client = ai_client if ai_client is not None else _build_ai_client()
 
     created: list[ValidationAccountPaths] = []
     accounts_root = runs_root_path / sid / "cases" / "accounts"
@@ -65,7 +78,18 @@ def build_validation_ai_packs_for_accounts(
             prompt_text = _render_prompt(sid, idx, weak_items)
             _write_prompt(account_paths.prompt_file, prompt_text)
         else:
-            _write_prompt(account_paths.prompt_file, "")
+            prompt_text = ""
+            _write_prompt(account_paths.prompt_file, prompt_text)
+
+        result_payload = _run_model_inference(
+            ai_client,
+            prompt_text,
+            model_name,
+            sid=sid,
+            account_idx=idx,
+            has_weak_items=bool(weak_items),
+        )
+        _write_model_results(account_paths.model_results_file, result_payload)
 
         created.append(account_paths)
 
@@ -315,4 +339,167 @@ Do not include any explanation outside the JSON response.
 def _write_prompt(path: Path, prompt: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(prompt, encoding="utf-8")
+
+
+def _write_model_results(path: Path, payload: Mapping[str, Any]) -> None:
+    try:
+        serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    except TypeError:
+        log.exception("VALIDATION_AI_RESULTS_SERIALIZE_FAILED path=%s", path)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(serialized + "\n", encoding="utf-8")
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _load_packs_config(base_dir: Path) -> Mapping[str, Any]:
+    config_path = base_dir / "ai_packs_config.yml"
+    if not config_path.exists():
+        return {}
+    try:
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        log.warning(
+            "VALIDATION_AI_CONFIG_LOAD_FAILED path=%s", config_path, exc_info=True
+        )
+        return {}
+    if isinstance(data, Mapping):
+        return data
+    log.warning(
+        "VALIDATION_AI_CONFIG_INVALID path=%s type=%s",
+        config_path,
+        type(data).__name__,
+    )
+    return {}
+
+
+def _select_model_name(config: Mapping[str, Any]) -> str:
+    raw_model = config.get("model") if isinstance(config, Mapping) else None
+    if isinstance(raw_model, str) and raw_model.strip():
+        return raw_model.strip()
+    return _DEFAULT_MODEL
+
+
+def _build_ai_client() -> Any | None:
+    try:
+        from backend.core.services.ai_client import get_ai_client
+
+        return get_ai_client()
+    except Exception:
+        log.warning("VALIDATION_AI_CLIENT_UNAVAILABLE", exc_info=True)
+        return None
+
+
+def _extract_response_text(response: Any) -> str | None:
+    if response is None:
+        return None
+
+    for attr in ("output_text", "text"):
+        value = getattr(response, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value
+
+    output = getattr(response, "output", None)
+    if isinstance(output, list) and output:
+        first = output[0]
+        content = getattr(first, "content", None)
+        if isinstance(content, list) and content:
+            first_content = content[0]
+            text_val = getattr(first_content, "text", None)
+            if isinstance(text_val, str) and text_val.strip():
+                return text_val
+            if isinstance(first_content, Mapping):
+                text_val = first_content.get("text")
+                if isinstance(text_val, str) and text_val.strip():
+                    return text_val
+
+    if isinstance(response, Mapping):
+        text_val = response.get("output_text") or response.get("text")
+        if isinstance(text_val, str) and text_val.strip():
+            return text_val
+
+    return None
+
+
+def _run_model_inference(
+    ai_client: Any | None,
+    prompt: str,
+    model: str,
+    *,
+    sid: str,
+    account_idx: int | str,
+    has_weak_items: bool,
+) -> dict[str, Any]:
+    timestamp = _utc_now()
+
+    if not has_weak_items:
+        return {
+            "status": "skipped",
+            "reason": "no_weak_items",
+            "model": model,
+            "timestamp": timestamp,
+            "duration_ms": 0,
+        }
+
+    if ai_client is None:
+        log.warning(
+            "VALIDATION_AI_CLIENT_MISSING sid=%s account=%s", sid, account_idx
+        )
+        return {
+            "status": "skipped",
+            "reason": "no_client",
+            "model": model,
+            "timestamp": timestamp,
+            "duration_ms": 0,
+        }
+
+    started = time.perf_counter()
+    try:
+        response = ai_client.response_json(
+            prompt=prompt,
+            model=model,
+            response_format={"type": "json_object"},
+        )
+        duration_ms = int((time.perf_counter() - started) * 1000)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        log.warning(
+            "VALIDATION_AI_CALL_FAILED sid=%s account=%s error=%s",
+            sid,
+            account_idx,
+            exc,
+        )
+        return {
+            "status": "error",
+            "reason": exc.__class__.__name__,
+            "model": model,
+            "timestamp": timestamp,
+            "duration_ms": duration_ms,
+        }
+
+    raw_text = _extract_response_text(response)
+    result: dict[str, Any] = {
+        "status": "ok",
+        "model": model,
+        "timestamp": timestamp,
+        "duration_ms": duration_ms,
+    }
+
+    if raw_text is None:
+        result.update({"status": "error", "reason": "empty_response"})
+        return result
+
+    result["raw"] = raw_text
+    parsed, error_reason = parse_json(raw_text)
+    result["response"] = parsed
+    if error_reason:
+        result["status"] = "error"
+        result["reason"] = error_reason
+
+    return result
 

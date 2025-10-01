@@ -41,7 +41,7 @@ def _create_index_entry(
         account_id=account_id,
         pack_path=pack_path,
         result_jsonl_path=jsonl_path,
-        result_summary_path=summary_path,
+        result_json_path=summary_path,
         weak_fields=weak_fields or [],
         line_count=lines or len(weak_fields or ()),
         status=status,
@@ -70,7 +70,12 @@ def test_show_validation_index_outputs_table(tmp_path, capsys):
         weak_fields=["history_2y"],
     )
 
-    writer = ValidationPackIndexWriter(sid=sid, index_path=validation_paths.index_file)
+    writer = ValidationPackIndexWriter(
+        sid=sid,
+        index_path=validation_paths.index_file,
+        packs_dir=validation_paths.packs_dir,
+        results_dir=validation_paths.results_dir,
+    )
     writer.bulk_upsert([entry_ok, entry_error])
 
     exit_code = show_validation_index.main([sid, "--runs-root", str(runs_root)])

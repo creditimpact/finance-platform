@@ -158,7 +158,12 @@ def test_validation_index_round_trip(tmp_path: Path) -> None:
     packs_dir = validation_packs_dir(sid, runs_root=runs_root)
     results_dir = validation_results_dir(sid, runs_root=runs_root)
     index_path = validation_index_path(sid, runs_root=runs_root)
-    writer = ValidationPackIndexWriter(sid=sid, index_path=index_path)
+    writer = ValidationPackIndexWriter(
+        sid=sid,
+        index_path=index_path,
+        packs_dir=packs_dir,
+        results_dir=results_dir,
+    )
 
     pack_path1 = packs_dir / validation_pack_filename_for_account(1)
     summary_path1 = results_dir / validation_result_filename_for_account(1)
@@ -167,7 +172,7 @@ def test_validation_index_round_trip(tmp_path: Path) -> None:
         account_id=1,
         pack_path=pack_path1,
         result_jsonl_path=jsonl_path1,
-        result_summary_path=summary_path1,
+        result_json_path=summary_path1,
         weak_fields=("balance_owed",),
         line_count=1,
         status="built",
@@ -179,7 +184,7 @@ def test_validation_index_round_trip(tmp_path: Path) -> None:
         account_id=2,
         pack_path=pack_path2,
         result_jsonl_path=jsonl_path2,
-        result_summary_path=summary_path2,
+        result_json_path=summary_path2,
         weak_fields=("payment_history", "balance_owed"),
         line_count=2,
         status="built",

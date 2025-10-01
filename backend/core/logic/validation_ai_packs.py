@@ -287,7 +287,12 @@ def build_validation_ai_packs_for_accounts(
     processed_accounts: list[int] = []
     index_entries: list[ValidationIndexEntry] = []
     accounts_root = runs_root_path / sid / "cases" / "accounts"
-    index_writer = ValidationPackIndexWriter(sid=sid, index_path=validation_paths.index_file)
+    index_writer = ValidationPackIndexWriter(
+        sid=sid,
+        index_path=validation_paths.index_file,
+        packs_dir=validation_paths.packs_dir,
+        results_dir=validation_paths.results_dir,
+    )
     existing_index = index_writer.load_accounts()
 
     for idx in normalized_indices:
@@ -403,7 +408,7 @@ def build_validation_ai_packs_for_accounts(
                 account_id=int(idx),
                 pack_path=account_paths.pack_file,
                 result_jsonl_path=account_paths.result_jsonl_file,
-                result_summary_path=account_paths.result_summary_file,
+                result_json_path=account_paths.result_summary_file,
                 weak_fields=weak_fields,
                 line_count=line_count,
                 status=inference_status,

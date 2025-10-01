@@ -121,6 +121,8 @@ class ValidationPackWriter:
         self._index_writer = ValidationPackIndexWriter(
             sid=self.sid,
             index_path=index_path,
+            packs_dir=self._packs_dir,
+            results_dir=self._results_dir,
         )
         self._per_field = per_field
 
@@ -203,7 +205,7 @@ class ValidationPackWriter:
         *,
         summary: Mapping[str, Any] | None = None,
     ) -> None:
-        result_summary_path = (
+        result_json_path = (
             self._results_dir
             / validation_result_filename_for_account(account_id)
         )
@@ -234,7 +236,7 @@ class ValidationPackWriter:
             account_id=account_id,
             pack_path=pack_path.resolve(),
             result_jsonl_path=result_jsonl_path.resolve(),
-            result_summary_path=result_summary_path.resolve(),
+            result_json_path=result_json_path.resolve(),
             weak_fields=tuple(weak_fields),
             line_count=len(lines),
             status="built",

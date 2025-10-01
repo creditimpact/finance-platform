@@ -14,10 +14,9 @@ from typing import Optional
 class ValidationAccountPaths:
     """Resolved filesystem locations for a single validation AI pack."""
 
-    base: Path
+    account_id: int
     pack_file: Path
     prompt_file: Path
-    results_dir: Path
     model_results_file: Path
 
 
@@ -63,24 +62,27 @@ def ensure_validation_account_paths(
     """Return filesystem locations for ``account_idx`` under ``paths``."""
 
     try:
-        normalized_idx = str(int(str(account_idx)))
+        normalized_idx = int(str(account_idx))
     except (TypeError, ValueError):
-        normalized_idx = str(account_idx).strip()
-        if not normalized_idx:
-            raise ValueError("account_idx must be coercible to an integer")
+        raise ValueError("account_idx must be coercible to an integer") from None
 
-    account_dir = paths.base / normalized_idx
-    results_dir = account_dir / "results"
+    pack_filename = validation_pack_filename_for_account(normalized_idx)
+    pack_file = paths.packs_dir / pack_filename
+    prompt_file = paths.packs_dir / f"{pack_filename}.prompt.txt"
+    model_results_file = (
+        paths.results_dir / validation_result_filename_for_account(normalized_idx)
+    )
 
     if create:
-        results_dir.mkdir(parents=True, exist_ok=True)
+        pack_file.parent.mkdir(parents=True, exist_ok=True)
+        prompt_file.parent.mkdir(parents=True, exist_ok=True)
+        model_results_file.parent.mkdir(parents=True, exist_ok=True)
 
     return ValidationAccountPaths(
-        base=account_dir,
-        pack_file=account_dir / "pack.json",
-        prompt_file=account_dir / "prompt.txt",
-        results_dir=results_dir,
-        model_results_file=results_dir / "model.json",
+        account_id=normalized_idx,
+        pack_file=pack_file,
+        prompt_file=prompt_file,
+        model_results_file=model_results_file,
     )
 
 

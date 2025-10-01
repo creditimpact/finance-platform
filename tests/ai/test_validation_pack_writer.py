@@ -4,6 +4,11 @@ import json
 from pathlib import Path
 
 from backend.ai.validation_builder import ValidationPackWriter
+from backend.core.ai.paths import (
+    validation_index_path,
+    validation_result_filename_for_account,
+    validation_results_dir,
+)
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -15,6 +20,10 @@ def _read_jsonl(path: Path) -> list[dict]:
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def _read_index(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def test_writer_builds_pack_lines(tmp_path: Path) -> None:
@@ -173,4 +182,79 @@ def test_writer_skips_strong_fields(tmp_path: Path) -> None:
     pack_path = runs_root / sid / "ai_packs" / "validation" / "packs" / "val_acc_009.jsonl"
     assert pack_path.exists()
     assert pack_path.read_text(encoding="utf-8") == ""
+
+
+def test_writer_updates_index(tmp_path: Path) -> None:
+    sid = "S456"
+    runs_root = tmp_path / "runs"
+
+    summary_payload = {
+        "validation_requirements": {
+            "requirements": [
+                {
+                    "field": "balance_owed",
+                    "category": "activity",
+                    "strength": "weak",
+                    "ai_needed": True,
+                },
+                {
+                    "field": "account_status",
+                    "category": "status",
+                    "strength": "weak",
+                    "ai_needed": True,
+                },
+            ],
+            "field_consistency": {
+                "balance_owed": {
+                    "raw": {"transunion": "$100"},
+                },
+                "account_status": {
+                    "raw": {"transunion": "Open"},
+                },
+            },
+        }
+    }
+
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+    _write_json(account_dir / "summary.json", summary_payload)
+
+    writer = ValidationPackWriter(sid, runs_root=runs_root)
+    writer.write_all_packs()
+
+    index_path = validation_index_path(sid, runs_root=runs_root)
+    index_payload = _read_index(index_path)
+
+    assert index_payload["schema_version"] == 1
+    assert index_payload["sid"] == sid
+    assert len(index_payload["packs"]) == 1
+
+    entry = index_payload["packs"][0]
+    expected_pack = (runs_root / sid / "ai_packs" / "validation" / "packs" / "val_acc_001.jsonl").resolve()
+    expected_result_dir = validation_results_dir(sid, runs_root=runs_root)
+    expected_result = (
+        expected_result_dir
+        / validation_result_filename_for_account(1)
+    ).resolve()
+
+    assert entry["account_id"] == 1
+    assert entry["pack_path"] == str(expected_pack)
+    assert entry["result_path"] == str(expected_result)
+    assert entry["lines"] == 2
+    assert entry["weak_fields"] == ["balance_owed", "account_status"]
+    assert entry["status"] == "built"
+    assert isinstance(entry["built_at"], str) and entry["built_at"].endswith("Z")
+
+    # Update summary to remove one requirement and rebuild.
+    summary_payload["validation_requirements"]["requirements"] = [
+        summary_payload["validation_requirements"]["requirements"][0]
+    ]
+    _write_json(account_dir / "summary.json", summary_payload)
+
+    writer.write_pack_for_account(1)
+
+    refreshed_index = _read_index(index_path)
+    assert len(refreshed_index["packs"]) == 1
+    refreshed_entry = refreshed_index["packs"][0]
+    assert refreshed_entry["lines"] == 1
+    assert refreshed_entry["weak_fields"] == ["balance_owed"]
 

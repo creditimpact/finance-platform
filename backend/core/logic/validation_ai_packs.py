@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -283,54 +284,104 @@ def build_validation_ai_packs_for_accounts(
     if not packs_config.enable_infer:
         ai_client = None
 
-    created: list[ValidationAccountPaths] = []
+    processed_accounts: list[int] = []
     index_entries: list[ValidationIndexEntry] = []
     accounts_root = runs_root_path / sid / "cases" / "accounts"
     index_writer = ValidationPackIndexWriter(sid=sid, index_path=validation_paths.index_file)
+    existing_index = index_writer.load_accounts()
 
     for idx in normalized_indices:
         account_paths = ensure_validation_account_paths(
             validation_paths, idx, create=True
         )
-        _ensure_placeholder_files(account_paths)
+        processed_accounts.append(account_paths.account_id)
 
         summary = _load_summary(accounts_root, idx)
         weak_items = _collect_weak_items(summary)
         if packs_config.weak_limit > 0:
             weak_items = weak_items[: packs_config.weak_limit]
         weak_count = len(weak_items)
-        statuses: list[str] = ["pack_written"]
-        line_count, weak_fields = _write_pack(
-            account_paths.pack_file,
-            account_id=account_paths.account_id,
-            sid=sid,
-            weak_items=weak_items,
+        pack_lines, weak_fields = _build_pack_lines(
+            account_paths.account_id, sid, weak_items
+        )
+        line_count = len(pack_lines)
+        source_hash = _compute_source_hash(summary, weak_items, pack_lines)
+        existing_entry = existing_index.get(account_paths.account_id)
+        existing_hash = (
+            str(existing_entry.get("source_hash") or "") if existing_entry else ""
         )
 
-        if weak_items:
-            prompt_text = _render_prompt(sid, idx, weak_items)
-            _write_prompt(account_paths.prompt_file, prompt_text)
+        pack_exists = account_paths.pack_file.exists()
+        result_exists = account_paths.model_results_file.exists()
+        prompt_exists = account_paths.prompt_file.exists()
+
+        skip_build = (
+            bool(existing_entry)
+            and existing_hash
+            and existing_hash == source_hash
+            and pack_exists
+            and result_exists
+            and prompt_exists
+        )
+
+        statuses: list[str]
+        if skip_build:
+            statuses = ["up_to_date"]
+            if line_count == 0:
+                statuses.append("no_weak_items")
+            result_payload = _load_model_results(account_paths.model_results_file)
+            if result_payload is None:
+                result_payload = {
+                    "status": str(existing_entry.get("status") or "unknown"),
+                    "timestamp": existing_entry.get("built_at") or _utc_now(),
+                    "model": existing_entry.get("model") or model_name,
+                }
+            inference_status = str(result_payload.get("status") or "unknown")
+            model_used = (
+                result_payload.get("model")
+                or existing_entry.get("model")
+                or model_name
+            )
+            built_at = str(existing_entry.get("built_at") or result_payload.get("timestamp") or _utc_now())
+            request_lines = existing_entry.get("request_lines")
+            sent_at = existing_entry.get("sent_at")
+            completed_at = existing_entry.get("completed_at")
+            error_msg = existing_entry.get("error")
         else:
-            prompt_text = ""
-            _write_prompt(account_paths.prompt_file, prompt_text)
-            statuses.append("no_weak_items")
+            statuses = ["pack_written"]
+            _persist_pack_lines(account_paths.pack_file, pack_lines)
 
-        result_payload = _run_model_inference(
-            ai_client,
-            prompt_text,
-            model_name,
-            sid=sid,
-            account_idx=idx,
-            has_weak_items=bool(weak_items),
-            config=packs_config,
-        )
-        _write_model_results(account_paths.model_results_file, result_payload)
+            if weak_items:
+                prompt_text = _render_prompt(sid, idx, weak_items)
+                _write_prompt(account_paths.prompt_file, prompt_text)
+            else:
+                prompt_text = ""
+                _write_prompt(account_paths.prompt_file, prompt_text)
+                statuses.append("no_weak_items")
 
-        inference_status = str(result_payload.get("status") or "unknown")
-        if inference_status == "ok":
-            statuses.append("infer_done")
-        elif inference_status == "error":
-            statuses.append("errors")
+            result_payload = _run_model_inference(
+                ai_client,
+                prompt_text,
+                model_name,
+                sid=sid,
+                account_idx=idx,
+                has_weak_items=bool(weak_items),
+                config=packs_config,
+            )
+            _write_model_results(account_paths.model_results_file, result_payload)
+
+            inference_status = str(result_payload.get("status") or "unknown")
+            if inference_status == "ok":
+                statuses.append("infer_done")
+            elif inference_status == "error":
+                statuses.append("errors")
+
+            model_used = result_payload.get("model") or model_name
+            built_at = str(result_payload.get("timestamp") or _utc_now())
+            request_lines = line_count or None
+            sent_at = None
+            completed_at = None
+            error_msg = None
 
         log_entry: dict[str, Any] = {
             "timestamp": result_payload.get("timestamp") or _utc_now(),
@@ -342,13 +393,11 @@ def build_validation_ai_packs_for_accounts(
         reason = result_payload.get("reason")
         if reason:
             log_entry["inference_reason"] = str(reason)
-        model_used = result_payload.get("model")
         if model_used:
             log_entry["model"] = str(model_used)
 
         _append_validation_log_entry(log_path, log_entry)
 
-        created.append(account_paths)
         index_entries.append(
             ValidationIndexEntry(
                 account_id=int(idx),
@@ -356,39 +405,35 @@ def build_validation_ai_packs_for_accounts(
                 result_path=account_paths.model_results_file,
                 weak_fields=weak_fields,
                 line_count=line_count,
-                status=str(result_payload.get("status") or "unknown"),
-                built_at=str(result_payload.get("timestamp") or _utc_now()),
-                request_lines=line_count or None,
+                status=inference_status,
+                built_at=built_at,
+                request_lines=request_lines if request_lines is not None else None,
                 model=str(model_used) if model_used else None,
+                sent_at=str(sent_at) if sent_at else None,
+                completed_at=str(completed_at) if completed_at else None,
+                error=str(error_msg) if error_msg else None,
+                source_hash=source_hash,
             )
         )
 
     manifest_path = runs_root_path / sid / "manifest.json"
     manifest = RunManifest.load_or_create(manifest_path, sid)
     index_path = validation_paths.index_file
-    if created:
+    if index_entries:
         index_writer.bulk_upsert(index_entries)
-        manifest.upsert_validation_packs_dir(
-            validation_paths.base,
-            packs_dir=validation_paths.packs_dir,
-            results_dir=validation_paths.results_dir,
-            index_file=index_path,
-            log_file=log_path,
-        )
-    else:
-        manifest.upsert_validation_packs_dir(
-            validation_paths.base,
-            packs_dir=validation_paths.packs_dir,
-            results_dir=validation_paths.results_dir,
-            index_file=validation_paths.index_file,
-            log_file=log_path,
-        )
+    manifest.upsert_validation_packs_dir(
+        validation_paths.base,
+        packs_dir=validation_paths.packs_dir,
+        results_dir=validation_paths.results_dir,
+        index_file=validation_paths.index_file,
+        log_file=log_path,
+    )
 
     log.info(
         "VALIDATION_AI_PACKS_INITIALIZED sid=%s base=%s accounts=%s",
         sid,
         validation_paths.base,
-        ",".join(f"{path.account_id:03d}" for path in created),
+        ",".join(f"{account_id:03d}" for account_id in processed_accounts),
     )
 
 
@@ -562,6 +607,14 @@ def _write_pack(
     ordered list of field identifiers written to the pack.
     """
 
+    pack_lines, weak_fields = _build_pack_lines(account_id, sid, weak_items)
+    _persist_pack_lines(path, pack_lines)
+    return len(pack_lines), weak_fields
+
+
+def _build_pack_lines(
+    account_id: int, sid: str, weak_items: Sequence[Mapping[str, Any]]
+) -> tuple[list[str], list[str]]:
     normalized_lines: list[str] = []
     weak_fields: list[str] = []
 
@@ -575,7 +628,7 @@ def _write_pack(
         try:
             serialized = json.dumps(line_payload, sort_keys=True, ensure_ascii=False)
         except TypeError:
-            log.exception("VALIDATION_PACK_SERIALIZE_FAILED path=%s", path)
+            log.exception("VALIDATION_PACK_SERIALIZE_FAILED account=%s", account_id)
             continue
 
         normalized_lines.append(serialized)
@@ -583,12 +636,104 @@ def _write_pack(
         if isinstance(field_name, str) and field_name.strip():
             weak_fields.append(field_name.strip())
 
+    return normalized_lines, weak_fields
+
+
+def _persist_pack_lines(path: Path, lines: Sequence[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    contents = "\n".join(normalized_lines)
+    contents = "\n".join(str(line) for line in lines)
     if contents:
         contents += "\n"
     path.write_text(contents, encoding="utf-8")
-    return len(normalized_lines), weak_fields
+
+
+def _load_model_results(path: Path) -> Mapping[str, Any] | None:
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        log.warning("VALIDATION_RESULTS_READ_FAILED path=%s", path, exc_info=True)
+        return None
+
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError:
+        log.warning("VALIDATION_RESULTS_INVALID_JSON path=%s", path, exc_info=True)
+        return None
+
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _compute_source_hash(
+    summary: Mapping[str, Any] | None,
+    weak_items: Sequence[Mapping[str, Any]],
+    pack_lines: Sequence[str],
+) -> str:
+    segment = _extract_weak_source_segment(summary, weak_items)
+    normalized_payload = {
+        "segment": segment,
+        "pack_lines": list(pack_lines),
+    }
+    serialized = json.dumps(normalized_payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _extract_weak_source_segment(
+    summary: Mapping[str, Any] | None,
+    weak_items: Sequence[Mapping[str, Any]],
+) -> Mapping[str, Any]:
+    requirements: list[Any] = []
+    fields: list[str] = []
+
+    if isinstance(summary, Mapping):
+        validation = summary.get("validation_requirements")
+        if isinstance(validation, Mapping):
+            raw_requirements = validation.get("requirements")
+            if isinstance(raw_requirements, Sequence):
+                for entry in raw_requirements:
+                    if not isinstance(entry, Mapping):
+                        continue
+                    if not entry.get("ai_needed"):
+                        continue
+                    requirements.append(_json_clone(entry))
+                    field_name = entry.get("field")
+                    if isinstance(field_name, str) and field_name.strip():
+                        fields.append(field_name.strip())
+
+            field_consistency_raw = validation.get("field_consistency")
+            if isinstance(field_consistency_raw, Mapping):
+                if not fields:
+                    for item in weak_items:
+                        if not isinstance(item, Mapping):
+                            continue
+                        field_val = item.get("field")
+                        if isinstance(field_val, str) and field_val.strip():
+                            fields.append(field_val.strip())
+
+                consistency: dict[str, Any] = {}
+                for field in sorted({field for field in fields if field}):
+                    value = field_consistency_raw.get(field)
+                    consistency[field] = _json_clone(value) if value is not None else None
+            else:
+                consistency = {}
+        else:
+            consistency = {}
+    else:
+        consistency = {}
+
+    return {
+        "requirements": requirements,
+        "field_consistency": consistency,
+    }
+
+
+def _json_clone(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_clone(val) for key, val in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_json_clone(entry) for entry in value]
+    return value
 
 
 def _append_validation_log_entry(path: Path, entry: Mapping[str, Any]) -> None:

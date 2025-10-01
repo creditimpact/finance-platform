@@ -135,6 +135,7 @@ def test_builder_creates_validation_structure(
         assert entry["weak_fields"] == []
         assert entry["lines"] == 0
         assert "request_lines" not in entry
+        assert isinstance(entry.get("source_hash"), str) and len(entry["source_hash"]) == 64
         assert isinstance(entry["built_at"], str)
         assert Path(entry["pack_path"]) == (
             validation_paths.packs_dir
@@ -285,6 +286,8 @@ def test_builder_populates_pack_and_preserves_prompt_and_results(
     assert Path(account_entry["pack_path"]).resolve() == account_paths.pack_file.resolve()
     assert account_entry["weak_fields"] == ["balance_owed"]
     assert account_entry["lines"] == 1
+    assert isinstance(account_entry.get("source_hash"), str)
+    assert len(account_entry["source_hash"]) == 64
     assert isinstance(model_results["timestamp"], str)
     assert isinstance(model_results["duration_ms"], int)
     assert model_results["response"] == {
@@ -318,6 +321,90 @@ def test_builder_populates_pack_and_preserves_prompt_and_results(
     assert sent_payload["model"] == "gpt-4o-mini"
     assert sent_payload["prompt"] == _read(account_paths.prompt_file)
     assert sent_payload["response_format"] == {"type": "json_object"}
+
+
+def test_builder_skips_when_source_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "sid-up-to-date"
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+
+    accounts_root = runs_root / sid / "cases" / "accounts"
+    account_dir = accounts_root / "11"
+    account_dir.mkdir(parents=True, exist_ok=True)
+    summary_payload = {
+        "validation_requirements": {
+            "requirements": [
+                {
+                    "field": "balance_owed",
+                    "category": "activity",
+                    "min_days": 30,
+                    "documents": ["statement"],
+                    "ai_needed": True,
+                }
+            ],
+            "field_consistency": {
+                "balance_owed": {
+                    "consensus": "split",
+                    "disagreeing_bureaus": ["experian"],
+                    "missing_bureaus": [],
+                    "raw": {"transunion": "100", "experian": "150"},
+                    "normalized": {"transunion": 100, "experian": 150},
+                }
+            },
+        }
+    }
+    (account_dir / "summary.json").write_text(
+        json.dumps(summary_payload), encoding="utf-8"
+    )
+
+    validation_paths = ensure_validation_paths(runs_root, sid, create=True)
+    account_paths = ensure_validation_account_paths(validation_paths, 11, create=True)
+
+    fake_ai_first = FakeAIClient()
+    fake_ai_first.add_response(
+        json.dumps({"sid": sid, "account_index": 11, "decisions": []})
+    )
+
+    build_validation_ai_packs_for_accounts(
+        sid,
+        account_indices=[11],
+        runs_root=runs_root,
+        ai_client=fake_ai_first,
+    )
+
+    initial_pack_contents = account_paths.pack_file.read_text(encoding="utf-8")
+    index_path = validation_paths.index_file
+    initial_index = json.loads(index_path.read_text(encoding="utf-8"))
+    initial_entry = {entry["account_id"]: entry for entry in initial_index["packs"]}[11]
+
+    fake_ai_second = FakeAIClient()
+    build_validation_ai_packs_for_accounts(
+        sid,
+        account_indices=[11],
+        runs_root=runs_root,
+        ai_client=fake_ai_second,
+    )
+
+    assert fake_ai_second.chat_payloads == []
+    assert account_paths.pack_file.read_text(encoding="utf-8") == initial_pack_contents
+
+    updated_index = json.loads(index_path.read_text(encoding="utf-8"))
+    updated_entry = {entry["account_id"]: entry for entry in updated_index["packs"]}[11]
+    assert updated_entry["status"] == initial_entry["status"] == "ok"
+    assert updated_entry["built_at"] == initial_entry["built_at"]
+    assert updated_entry["source_hash"] == initial_entry["source_hash"]
+
+    log_lines = [
+        json.loads(line)
+        for line in validation_paths.log_file.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert len(log_lines) == 2
+    statuses = [entry["statuses"] for entry in log_lines]
+    assert ["pack_written", "infer_done"] in statuses
+    assert ["up_to_date"] in statuses
 
 
 def test_builder_uses_configured_model(

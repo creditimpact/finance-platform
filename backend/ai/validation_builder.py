@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -171,6 +172,9 @@ class ValidationPackWriter:
                 continue
             weak_fields.append(field_key)
 
+        summary = self._load_summary(account_id)
+        source_hash = self._build_source_hash(summary, lines)
+
         entry = ValidationIndexEntry(
             account_id=account_id,
             pack_path=pack_path.resolve(),
@@ -178,6 +182,7 @@ class ValidationPackWriter:
             weak_fields=tuple(weak_fields),
             line_count=len(lines),
             status="built",
+            source_hash=source_hash,
         )
         self._index_writer.upsert(entry)
 
@@ -416,6 +421,45 @@ class ValidationPackWriter:
             return account_id
         return int(str(account_id).strip())
 
+    def _build_source_hash(
+        self,
+        summary: Mapping[str, Any] | None,
+        lines: Sequence[PackLine],
+    ) -> str:
+        requirements: list[Any] = []
+        field_consistency: dict[str, Any] = {}
+
+        if isinstance(summary, Mapping):
+            validation_block = self._extract_validation_block(summary) or {}
+            raw_requirements = validation_block.get("requirements")
+            if isinstance(raw_requirements, Sequence):
+                for entry in raw_requirements:
+                    if not isinstance(entry, Mapping):
+                        continue
+                    if not entry.get("ai_needed"):
+                        continue
+                    requirements.append(_json_clone(entry))
+            raw_consistency = validation_block.get("field_consistency")
+            if isinstance(raw_consistency, Mapping):
+                fields = []
+                for requirement in requirements:
+                    field_name = requirement.get("field")
+                    if isinstance(field_name, str) and field_name.strip():
+                        fields.append(field_name.strip())
+                for field in sorted({field for field in fields if field}):
+                    value = raw_consistency.get(field)
+                    field_consistency[field] = (
+                        _json_clone(value) if value is not None else None
+                    )
+
+        payload = {
+            "requirements": requirements,
+            "field_consistency": field_consistency,
+            "pack_lines": [line.to_json() for line in lines],
+        }
+        serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
     @staticmethod
     def _normalize_strength(strength: Any) -> str:
         if isinstance(strength, str):
@@ -482,6 +526,14 @@ class ValidationPackWriter:
             except Exception:  # pragma: no cover - defensive
                 continue
         return normalized
+
+
+def _json_clone(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_clone(val) for key, val in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_json_clone(entry) for entry in value]
+    return value
 
 
 _WRITER_CACHE: dict[tuple[str, Path], "ValidationPackWriter"] = {}

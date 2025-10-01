@@ -65,7 +65,14 @@ class ValidationPackBuilder:
 
         items: list[dict[str, Any]] = []
         for account_id, account_dir in self._iter_accounts():
-            payloads = self._build_account_pack(account_id, account_dir)
+            payloads, skip_reason = self._build_account_pack(account_id, account_dir)
+            if not payloads:
+                self._log(
+                    "pack_skipped",
+                    account_id=f"{account_id:03d}",
+                    reason=skip_reason or "no_payloads",
+                )
+                continue
             pack_path = self._write_pack(account_id, payloads)
             items.append(
                 {
@@ -93,18 +100,20 @@ class ValidationPackBuilder:
                 continue
             yield account_id, child
 
-    def _build_account_pack(self, account_id: int, account_dir: Path) -> list[dict[str, Any]]:
+    def _build_account_pack(
+        self, account_id: int, account_dir: Path
+    ) -> tuple[list[dict[str, Any]], str | None]:
         summary = self._read_json(account_dir / "summary.json")
         if not isinstance(summary, Mapping):
-            return []
+            return [], "missing_summary"
 
         validation_block = summary.get("validation_requirements")
         if not isinstance(validation_block, Mapping):
-            return []
+            return [], "missing_validation_requirements"
 
         requirements = validation_block.get("requirements")
         if not isinstance(requirements, Sequence):
-            return []
+            return [], "missing_requirements"
 
         field_consistency = validation_block.get("field_consistency")
         if not isinstance(field_consistency, Mapping):
@@ -126,6 +135,7 @@ class ValidationPackBuilder:
             bureaus_map = {}
 
         payloads: list[dict[str, Any]] = []
+        weak_fields_found = False
         for requirement in requirements:
             if not isinstance(requirement, Mapping):
                 continue
@@ -134,6 +144,8 @@ class ValidationPackBuilder:
             include = bool(requirement.get("ai_needed")) or normalized_strength == "weak"
             if not include:
                 continue
+
+            weak_fields_found = True
 
             field = requirement.get("field")
             if not field:
@@ -149,7 +161,13 @@ class ValidationPackBuilder:
             if line is not None:
                 payloads.append(line)
 
-        return payloads
+        if not payloads and weak_fields_found:
+            return payloads, "no_valid_requirements"
+
+        if not payloads:
+            return payloads, "no_weak_fields"
+
+        return payloads, None
 
     def _build_line(
         self,
@@ -423,10 +441,19 @@ class ValidationPackBuilder:
                 bureau_data = {}
 
             raw_value = ValidationPackBuilder._extract_value(raw_map.get(bureau))
+            normalized_hint = None
             if raw_value is None:
-                raw_value = ValidationPackBuilder._extract_value(bureau_data.get(field))
+                raw_value, normalized_hint = ValidationPackBuilder._extract_bureau_field_values(
+                    bureau_data, field
+                )
 
             normalized_value = ValidationPackBuilder._extract_value(normalized_map.get(bureau))
+            if normalized_value is None:
+                if normalized_hint is None:
+                    _, normalized_hint = ValidationPackBuilder._extract_bureau_field_values(
+                        bureau_data, field
+                    )
+                normalized_value = normalized_hint
 
             values[bureau] = {
                 "raw": raw_value,
@@ -443,6 +470,34 @@ class ValidationPackBuilder:
                     return value[candidate]
             return dict(value)
         return value
+
+    @staticmethod
+    def _extract_bureau_field_values(
+        bureau_data: Mapping[str, Any], field: str
+    ) -> tuple[Any, Any]:
+        if not isinstance(bureau_data, Mapping):
+            return None, None
+
+        value = bureau_data.get(field)
+        if isinstance(value, Mapping):
+            raw_value = value.get("raw")
+            normalized_value = value.get("normalized")
+
+            if raw_value is None:
+                raw_value = ValidationPackBuilder._extract_value(value)
+
+            if normalized_value is None:
+                for candidate in ("normalized_value", "value", "text"):
+                    if candidate in value and value[candidate] is not None:
+                        normalized_value = value[candidate]
+                        break
+
+            return raw_value, normalized_value
+
+        if value is None:
+            return None, None
+
+        return value, None
 
     @staticmethod
     def _read_json(path: Path) -> Any:

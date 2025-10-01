@@ -12,7 +12,18 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, Union
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+)
 
 from backend import config as app_config
 from backend.core.ai.adjudicator import AdjudicatorError, validate_ai_payload
@@ -30,6 +41,9 @@ from backend.core.logic.validation_requirements import (
     build_summary_payload as build_validation_summary_payload,
     build_validation_requirements,
     sync_validation_tag,
+)
+from backend.core.logic.validation_ai_packs import (
+    build_validation_ai_packs_for_accounts,
 )
 
 __all__ = [
@@ -2839,6 +2853,8 @@ def persist_merge_tags(
         os.environ, "VALIDATION_REQUIREMENTS_TAGS", False
     )
 
+    validation_ai_indices: list[int] = []
+
     for idx in all_indices:
         summary_path = summary_paths.get(idx)
         if summary_path is None:
@@ -2868,7 +2884,7 @@ def persist_merge_tags(
         summary_payload = build_validation_summary_payload(
             requirements, field_consistency=field_consistency
         )
-        apply_validation_summary(summary_path, summary_payload)
+        summary_after = apply_validation_summary(summary_path, summary_payload)
 
         tag_path = tag_paths.get(idx)
         if tag_path is not None:
@@ -2876,6 +2892,39 @@ def persist_merge_tags(
                 str(entry["field"]) for entry in requirements if entry.get("field")
             ]
             sync_validation_tag(tag_path, fields_for_tag, emit=emit_validation_tag)
+
+        validation_block = (
+            summary_after.get("validation_requirements")
+            if isinstance(summary_after, Mapping)
+            else None
+        )
+        if not isinstance(validation_block, Mapping):
+            continue
+
+        req_entries = validation_block.get("requirements")
+        if not isinstance(req_entries, Sequence):
+            continue
+
+        if any(
+            isinstance(entry, Mapping) and bool(entry.get("ai_needed"))
+            for entry in req_entries
+        ):
+            validation_ai_indices.append(int(idx))
+
+    if validation_ai_indices:
+        try:
+            build_validation_ai_packs_for_accounts(
+                sid,
+                account_indices=validation_ai_indices,
+                runs_root=runs_root,
+            )
+        except Exception:
+            logger.exception(
+                "VALIDATION_AI_PACKS_BUILD_FAILED sid=%s runs_root=%s indices=%s",
+                sid,
+                runs_root,
+                validation_ai_indices,
+            )
 
     return merge_tags
 

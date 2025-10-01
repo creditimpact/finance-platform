@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, Mapping
 
 from backend.ai.validation_builder import ValidationPackWriter
+from backend.ai.validation_results import (
+    mark_validation_pack_sent,
+    store_validation_result,
+)
 from backend.core.ai.paths import (
     validation_index_path,
     validation_result_filename_for_account,
@@ -24,6 +29,14 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 def _read_index(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _index_entry_for_account(index_payload: Mapping[str, Any], account_id: int) -> Mapping[str, Any]:
+    packs = index_payload.get("packs", [])
+    for entry in packs:
+        if isinstance(entry, Mapping) and entry.get("account_id") == account_id:
+            return entry
+    raise AssertionError(f"account {account_id} not found in index")
 
 
 def test_writer_builds_pack_lines(tmp_path: Path) -> None:
@@ -257,4 +270,159 @@ def test_writer_updates_index(tmp_path: Path) -> None:
     refreshed_entry = refreshed_index["packs"][0]
     assert refreshed_entry["lines"] == 1
     assert refreshed_entry["weak_fields"] == ["balance_owed"]
+
+
+def _seed_validation_account(
+    runs_root: Path,
+    sid: str,
+    account_id: int,
+    *,
+    field: str = "balance_owed",
+) -> None:
+    account_dir = runs_root / sid / "cases" / "accounts" / str(account_id)
+    summary_payload = {
+        "validation_requirements": {
+            "requirements": [
+                {
+                    "field": field,
+                    "category": "activity",
+                    "strength": "weak",
+                    "ai_needed": True,
+                }
+            ],
+            "field_consistency": {
+                field: {"raw": {"transunion": "$100"}},
+            },
+        }
+    }
+    bureaus_payload = {
+        "transunion": {field: "$100"},
+        "experian": {field: "$105"},
+    }
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+
+
+def test_mark_validation_pack_sent_updates_index(tmp_path: Path) -> None:
+    sid = "S567"
+    runs_root = tmp_path / "runs"
+    account_id = 3
+
+    _seed_validation_account(runs_root, sid, account_id)
+
+    writer = ValidationPackWriter(sid, runs_root=runs_root)
+    lines = writer.write_pack_for_account(account_id)
+    assert len(lines) == 1
+
+    index_path = validation_index_path(sid, runs_root=runs_root)
+    index_payload = _read_index(index_path)
+    entry = _index_entry_for_account(index_payload, account_id)
+    assert entry["status"] == "built"
+
+    mark_validation_pack_sent(
+        sid,
+        account_id,
+        runs_root=runs_root,
+        request_lines=len(lines),
+        model="gpt-test",
+    )
+
+    updated_payload = _read_index(index_path)
+    updated_entry = _index_entry_for_account(updated_payload, account_id)
+    assert updated_entry["status"] == "sent"
+    assert updated_entry["request_lines"] == len(lines)
+    assert updated_entry["model"] == "gpt-test"
+    assert "completed_at" not in updated_entry
+    assert isinstance(updated_entry["sent_at"], str)
+
+
+def test_store_validation_result_updates_index_and_writes_file(
+    tmp_path: Path,
+) -> None:
+    sid = "S678"
+    runs_root = tmp_path / "runs"
+    account_id = 4
+
+    _seed_validation_account(runs_root, sid, account_id)
+
+    writer = ValidationPackWriter(sid, runs_root=runs_root)
+    lines = writer.write_pack_for_account(account_id)
+    mark_validation_pack_sent(
+        sid,
+        account_id,
+        runs_root=runs_root,
+        request_lines=len(lines),
+        model="gpt-infer",
+    )
+
+    response_payload = {
+        "decision_per_field": [
+            {
+                "field": "balance_owed",
+                "decision": "strong",
+                "rationale": "values diverge",
+                "confidence": 0.81,
+            }
+        ],
+        "raw_response": {"id": "resp_123"},
+    }
+
+    result_path = store_validation_result(
+        sid,
+        account_id,
+        response_payload,
+        runs_root=runs_root,
+        status="done",
+        request_lines=len(lines),
+        model="gpt-infer",
+    )
+
+    stored_payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert stored_payload["sid"] == sid
+    assert stored_payload["account_id"] == account_id
+    assert stored_payload["status"] == "done"
+    assert stored_payload["model"] == "gpt-infer"
+    assert stored_payload["request_lines"] == len(lines)
+    assert stored_payload["raw_response"] == {"id": "resp_123"}
+    assert isinstance(stored_payload["completed_at"], str)
+
+    index_path = validation_index_path(sid, runs_root=runs_root)
+    index_payload = _read_index(index_path)
+    entry = _index_entry_for_account(index_payload, account_id)
+    assert entry["status"] == "done"
+    assert entry["request_lines"] == len(lines)
+    assert entry["model"] == "gpt-infer"
+    assert entry.get("error") is None
+    assert isinstance(entry["completed_at"], str)
+    assert isinstance(entry["sent_at"], str)
+
+
+def test_store_validation_result_error(tmp_path: Path) -> None:
+    sid = "S789"
+    runs_root = tmp_path / "runs"
+    account_id = 5
+
+    _seed_validation_account(runs_root, sid, account_id, field="account_status")
+
+    writer = ValidationPackWriter(sid, runs_root=runs_root)
+    writer.write_pack_for_account(account_id)
+
+    result_path = store_validation_result(
+        sid,
+        account_id,
+        {"raw_response": {"error": "timeout"}},
+        runs_root=runs_root,
+        status="error",
+        error="api_timeout",
+    )
+
+    stored_payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert stored_payload["status"] == "error"
+    assert stored_payload["error"] == "api_timeout"
+
+    index_path = validation_index_path(sid, runs_root=runs_root)
+    entry = _index_entry_for_account(_read_index(index_path), account_id)
+    assert entry["status"] == "error"
+    assert entry["error"] == "api_timeout"
+    assert isinstance(entry["completed_at"], str)
 

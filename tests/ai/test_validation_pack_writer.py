@@ -4,7 +4,10 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from backend.ai.validation_builder import ValidationPackWriter
+from backend.ai.validation_builder import (
+    ValidationPackWriter,
+    build_validation_pack_for_account,
+)
 from backend.ai.validation_results import (
     mark_validation_pack_sent,
     store_validation_result,
@@ -432,4 +435,76 @@ def test_store_validation_result_error(tmp_path: Path) -> None:
     assert entry["error"] == "api_timeout"
     assert isinstance(entry["completed_at"], str)
     assert isinstance(entry.get("source_hash"), str)
+
+
+def test_writer_appends_log_entries(tmp_path: Path) -> None:
+    sid = "S910"
+    runs_root = tmp_path / "runs"
+
+    _seed_validation_account(runs_root, sid, 8)
+
+    writer = ValidationPackWriter(sid, runs_root=runs_root)
+    lines = writer.write_pack_for_account(8)
+
+    assert len(lines) == 1
+
+    log_path = runs_root / sid / "ai_packs" / "validation" / "logs.txt"
+    assert log_path.exists()
+
+    log_entries = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert len(log_entries) == 1
+    entry = log_entries[0]
+    assert entry["account_index"] == 8
+    assert entry["weak_count"] == 1
+    assert entry["statuses"] == ["pack_written"]
+    assert entry["mode"] == "per_account"
+
+
+def test_build_validation_pack_respects_env_toggle(
+    tmp_path: Path, monkeypatch
+) -> None:
+    sid = "S911"
+    runs_root = tmp_path / "runs"
+
+    account_dir = runs_root / sid / "cases" / "accounts" / "5"
+    summary_path = account_dir / "summary.json"
+    bureaus_path = account_dir / "bureaus.json"
+
+    account_dir.mkdir(parents=True, exist_ok=True)
+    summary_payload = {
+        "validation_requirements": {
+            "requirements": [
+                {
+                    "field": "balance_owed",
+                    "category": "activity",
+                    "strength": "weak",
+                    "ai_needed": True,
+                }
+            ],
+            "field_consistency": {
+                "balance_owed": {"raw": {"transunion": "$100"}}
+            },
+        }
+    }
+    bureaus_payload = {"transunion": {"balance_owed": "$100"}}
+    _write_json(summary_path, summary_payload)
+    _write_json(bureaus_path, bureaus_payload)
+
+    monkeypatch.setenv("VALIDATION_PACKS_ENABLED", "0")
+
+    lines = build_validation_pack_for_account(
+        sid,
+        5,
+        summary_path,
+        bureaus_path,
+    )
+
+    assert lines == []
+
+    pack_path = runs_root / sid / "ai_packs" / "validation" / "packs" / "val_acc_005.jsonl"
+    assert not pack_path.exists()
 

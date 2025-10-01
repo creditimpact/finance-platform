@@ -41,8 +41,10 @@ def test_builder_creates_validation_structure(
         assert account_paths.pack_file.exists()
         assert account_paths.prompt_file.exists()
         assert account_paths.model_results_file.exists()
-        assert _read(account_paths.pack_file).strip() == "{}"
-        assert _read(account_paths.model_results_file).strip() == "{}"
+
+        pack_payload = json.loads(_read(account_paths.pack_file))
+        assert pack_payload == {"weak_items": []}
+        assert json.loads(_read(account_paths.model_results_file)) == {}
 
     manifest_path = runs_root / sid / "manifest.json"
     assert manifest_path.exists()
@@ -67,7 +69,7 @@ def test_builder_creates_validation_structure(
     assert isinstance(packs_validation["last_built_at"], str)
 
 
-def test_builder_preserves_existing_files(
+def test_builder_populates_pack_and_preserves_prompt_and_results(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sid = "sid-existing"
@@ -85,12 +87,74 @@ def test_builder_preserves_existing_files(
         "{\"status\": \"done\"}\n", encoding="utf-8"
     )
 
+    accounts_root = runs_root / sid / "cases" / "accounts"
+    account_dir = accounts_root / "42"
+    account_dir.mkdir(parents=True, exist_ok=True)
+    summary_payload = {
+        "validation_requirements": {
+            "requirements": [
+                {
+                    "field": "balance_owed",
+                    "category": "activity",
+                    "min_days": 30,
+                    "documents": ["statement"],
+                    "ai_needed": True,
+                },
+                {
+                    "field": "payment_status",
+                    "category": "status",
+                    "min_days": 10,
+                    "documents": [],
+                    "ai_needed": False,
+                },
+            ],
+            "field_consistency": {
+                "balance_owed": {
+                    "consensus": "split",
+                    "disagreeing_bureaus": ["experian"],
+                    "missing_bureaus": ["equifax"],
+                    "raw": {
+                        "transunion": "100",
+                        "experian": "150",
+                        "equifax": None,
+                    },
+                    "normalized": {
+                        "transunion": 100,
+                        "experian": 150,
+                        "equifax": None,
+                    },
+                }
+            },
+        }
+    }
+    (account_dir / "summary.json").write_text(
+        json.dumps(summary_payload), encoding="utf-8"
+    )
+
     build_validation_ai_packs_for_accounts(
         sid,
         account_indices=[42],
         runs_root=runs_root,
     )
 
-    assert _read(account_paths.pack_file) == "{\"preseed\": true}\n"
+    pack_payload = json.loads(_read(account_paths.pack_file))
+    assert pack_payload == {
+        "weak_items": [
+            {
+                "field": "balance_owed",
+                "category": "activity",
+                "min_days": 30,
+                "documents": ["statement"],
+                "consensus": "split",
+                "disagreeing_bureaus": ["experian"],
+                "missing_bureaus": ["equifax"],
+                "values": {
+                    "transunion": {"raw": "100", "normalized": 100},
+                    "experian": {"raw": "150", "normalized": 150},
+                    "equifax": {"raw": None, "normalized": None},
+                },
+            }
+        ]
+    }
     assert _read(account_paths.prompt_file) == "Existing prompt"
     assert _read(account_paths.model_results_file) == "{\"status\": \"done\"}\n"

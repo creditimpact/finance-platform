@@ -89,6 +89,19 @@ def test_builder_creates_validation_structure(
             base_dir / str(entry["account_index"]) / "pack.json"
         ).resolve()
 
+    log_path = validation_paths.log_file
+    assert log_path.exists()
+    log_lines = [line for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    assert len(log_lines) == 2
+    parsed_logs = [json.loads(line) for line in log_lines]
+    assert {entry["account_index"] for entry in parsed_logs} == {14, 15}
+    for log_entry in parsed_logs:
+        assert log_entry["weak_count"] == 0
+        assert log_entry["statuses"] == ["pack_written", "no_weak_items"]
+        assert log_entry["inference_status"] == "skipped"
+        assert log_entry["inference_reason"] == "no_weak_items"
+        assert log_entry["model"] == "gpt-4o-mini"
+
 
 def test_load_validation_packs_config_defaults(tmp_path: Path) -> None:
     config = load_validation_packs_config(tmp_path / "missing")
@@ -225,6 +238,20 @@ def test_builder_populates_pack_and_preserves_prompt_and_results(
         "account_index": 42,
         "decisions": [],
     }
+
+    log_lines = [
+        line
+        for line in validation_paths.log_file.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert len(log_lines) == 1
+    log_entry = json.loads(log_lines[0])
+    assert log_entry["account_index"] == 42
+    assert log_entry["weak_count"] == 1
+    assert log_entry["statuses"] == ["pack_written", "infer_done"]
+    assert log_entry["inference_status"] == "ok"
+    assert "inference_reason" not in log_entry
+    assert log_entry["model"] == "gpt-4o-mini"
     assert model_results["raw"] == json.dumps(
         {
             "sid": sid,

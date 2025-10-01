@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -268,6 +269,7 @@ def build_validation_ai_packs_for_accounts(
         return
 
     validation_paths = ensure_validation_paths(runs_root_path, sid, create=True)
+    log_path = validation_paths.log_file
 
     model_name = packs_config.model
 
@@ -291,6 +293,8 @@ def build_validation_ai_packs_for_accounts(
         weak_items = _collect_weak_items(summary)
         if packs_config.weak_limit > 0:
             weak_items = weak_items[: packs_config.weak_limit]
+        weak_count = len(weak_items)
+        statuses: list[str] = ["pack_written"]
         pack_payload = {"weak_items": weak_items}
         _write_pack(account_paths.pack_file, pack_payload)
 
@@ -300,6 +304,7 @@ def build_validation_ai_packs_for_accounts(
         else:
             prompt_text = ""
             _write_prompt(account_paths.prompt_file, prompt_text)
+            statuses.append("no_weak_items")
 
         result_payload = _run_model_inference(
             ai_client,
@@ -311,6 +316,28 @@ def build_validation_ai_packs_for_accounts(
             config=packs_config,
         )
         _write_model_results(account_paths.model_results_file, result_payload)
+
+        inference_status = str(result_payload.get("status") or "unknown")
+        if inference_status == "ok":
+            statuses.append("infer_done")
+        elif inference_status == "error":
+            statuses.append("errors")
+
+        log_entry: dict[str, Any] = {
+            "timestamp": result_payload.get("timestamp") or _utc_now(),
+            "account_index": int(idx),
+            "weak_count": weak_count,
+            "statuses": statuses,
+            "inference_status": inference_status,
+        }
+        reason = result_payload.get("reason")
+        if reason:
+            log_entry["inference_reason"] = str(reason)
+        model_used = result_payload.get("model")
+        if model_used:
+            log_entry["model"] = str(model_used)
+
+        _append_validation_log_entry(log_path, log_entry)
 
         created.append(account_paths)
         index_entries.append(
@@ -515,6 +542,38 @@ def _write_pack(path: Path, payload: Mapping[str, Any]) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(serialized + "\n", encoding="utf-8")
+
+
+def _append_validation_log_entry(path: Path, entry: Mapping[str, Any]) -> None:
+    try:
+        serialized = json.dumps(entry, sort_keys=True, ensure_ascii=False)
+    except TypeError:
+        log.exception("VALIDATION_LOG_SERIALIZE_FAILED path=%s", path)
+        return
+
+    try:
+        existing = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        existing = ""
+    except OSError:
+        log.warning("VALIDATION_LOG_READ_FAILED path=%s", path, exc_info=True)
+        existing = ""
+
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+
+    new_contents = (existing + serialized + "\n") if existing else (serialized + "\n")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(path.name + ".tmp")
+
+    try:
+        temp_path.write_text(new_contents, encoding="utf-8")
+        temp_path.replace(path)
+    except OSError:
+        log.warning("VALIDATION_LOG_WRITE_FAILED path=%s", path, exc_info=True)
+        with suppress(FileNotFoundError, OSError):
+            temp_path.unlink(missing_ok=True)
 
 
 def _render_prompt(sid: str, account_idx: int, weak_items: Sequence[Mapping[str, Any]]) -> str:

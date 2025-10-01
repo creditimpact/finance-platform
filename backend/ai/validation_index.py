@@ -38,6 +38,7 @@ class ValidationIndexEntry:
     sent_at: str | None = None
     completed_at: str | None = None
     error: str | None = None
+    source_hash: str | None = None
 
     def to_json_payload(self) -> dict[str, object]:
         weak_fields = [str(field) for field in self.weak_fields if str(field).strip()]
@@ -63,6 +64,8 @@ class ValidationIndexEntry:
             payload["completed_at"] = str(self.completed_at)
         if self.error:
             payload["error"] = str(self.error)
+        if self.source_hash:
+            payload["source_hash"] = str(self.source_hash)
         return payload
 
 
@@ -73,6 +76,26 @@ class ValidationPackIndexWriter:
         self.sid = str(sid)
         self._index_path = Path(index_path)
         self._index_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def load_accounts(self) -> dict[int, dict[str, object]]:
+        """Return a mapping of account id to existing index entries."""
+
+        document = self._load_index()
+        packs = document.get("packs")
+        if not isinstance(packs, Sequence):
+            return {}
+
+        entries: dict[int, dict[str, object]] = {}
+        for pack in packs:
+            if not isinstance(pack, Mapping):
+                continue
+            account_id = pack.get("account_id")
+            try:
+                normalized_id = int(account_id)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            entries[normalized_id] = dict(pack)
+        return entries
 
     # ------------------------------------------------------------------
     # Public API

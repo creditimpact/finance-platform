@@ -256,6 +256,7 @@ def test_writer_updates_index(tmp_path: Path) -> None:
     assert entry["weak_fields"] == ["balance_owed", "account_status"]
     assert entry["status"] == "built"
     assert isinstance(entry["built_at"], str) and entry["built_at"].endswith("Z")
+    assert isinstance(entry.get("source_hash"), str) and len(entry["source_hash"]) == 64
 
     # Update summary to remove one requirement and rebuild.
     summary_payload["validation_requirements"]["requirements"] = [
@@ -270,6 +271,8 @@ def test_writer_updates_index(tmp_path: Path) -> None:
     refreshed_entry = refreshed_index["packs"][0]
     assert refreshed_entry["lines"] == 1
     assert refreshed_entry["weak_fields"] == ["balance_owed"]
+    assert isinstance(refreshed_entry.get("source_hash"), str)
+    assert refreshed_entry["source_hash"] != entry["source_hash"]
 
 
 def _seed_validation_account(
@@ -318,6 +321,7 @@ def test_mark_validation_pack_sent_updates_index(tmp_path: Path) -> None:
     index_payload = _read_index(index_path)
     entry = _index_entry_for_account(index_payload, account_id)
     assert entry["status"] == "built"
+    assert isinstance(entry.get("source_hash"), str)
 
     mark_validation_pack_sent(
         sid,
@@ -334,6 +338,7 @@ def test_mark_validation_pack_sent_updates_index(tmp_path: Path) -> None:
     assert updated_entry["model"] == "gpt-test"
     assert "completed_at" not in updated_entry
     assert isinstance(updated_entry["sent_at"], str)
+    assert updated_entry["source_hash"] == entry["source_hash"]
 
 
 def test_store_validation_result_updates_index_and_writes_file(
@@ -395,6 +400,7 @@ def test_store_validation_result_updates_index_and_writes_file(
     assert entry.get("error") is None
     assert isinstance(entry["completed_at"], str)
     assert isinstance(entry["sent_at"], str)
+    assert isinstance(entry.get("source_hash"), str)
 
 
 def test_store_validation_result_error(tmp_path: Path) -> None:
@@ -425,4 +431,5 @@ def test_store_validation_result_error(tmp_path: Path) -> None:
     assert entry["status"] == "error"
     assert entry["error"] == "api_timeout"
     assert isinstance(entry["completed_at"], str)
+    assert isinstance(entry.get("source_hash"), str)
 

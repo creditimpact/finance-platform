@@ -7,7 +7,7 @@ import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
 
 import requests
@@ -18,10 +18,8 @@ from backend.core.ai.paths import (
 )
 from backend.validation.index_schema import (
     ValidationIndex,
-    load_validation_index,
+    ValidationPackRecord,
 )
-
-from .build_packs import load_manifest_from_source, resolve_manifest_paths
 
 _DEFAULT_MODEL = "gpt-4o-mini"
 _DEFAULT_TIMEOUT = 30.0
@@ -82,21 +80,162 @@ class _ChatCompletionClient:
         return response.json()
 
 
+@dataclass(frozen=True)
+class _ManifestView:
+    """Resolved information about a validation manifest."""
+
+    index: ValidationIndex
+    log_path: Path
+
+
+def _coerce_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_str(value: Any, default: str = "") -> str:
+    if isinstance(value, str):
+        text = value.strip()
+        return text or default
+    if value is None:
+        return default
+    return str(value)
+
+
+def _index_path_from_mapping(document: Mapping[str, Any]) -> Path:
+    index_path_override = document.get("__index_path__")
+    if index_path_override:
+        return Path(str(index_path_override)).resolve()
+
+    base_dir_override = (
+        document.get("__base_dir__")
+        or document.get("__manifest_dir__")
+        or document.get("__index_dir__")
+    )
+    if base_dir_override:
+        base_dir = Path(str(base_dir_override)).resolve()
+    else:
+        base_dir = Path.cwd()
+
+    filename = _coerce_str(document.get("__index_filename__"), default="index.json")
+    return (base_dir / filename).resolve()
+
+
+def _index_from_document(document: Mapping[str, Any], *, index_path: Path) -> ValidationIndex:
+    schema_version = _coerce_int(document.get("schema_version"), default=0)
+    if schema_version < 2:
+        raise ValidationPackError("Validation manifest schema version 2 is required")
+
+    sid = _coerce_str(document.get("sid"))
+    if not sid:
+        raise ValidationPackError("Validation manifest is missing 'sid'")
+
+    root = _coerce_str(document.get("root"), default=".") or "."
+    packs_dir = _coerce_str(document.get("packs_dir"), default="packs") or "packs"
+    results_dir = _coerce_str(document.get("results_dir"), default="results") or "results"
+
+    raw_packs = document.get("packs")
+    records: list[ValidationPackRecord] = []
+    if isinstance(raw_packs, Sequence):
+        for entry in raw_packs:
+            if isinstance(entry, Mapping):
+                records.append(ValidationPackRecord.from_mapping(entry))
+
+    return ValidationIndex(
+        index_path=index_path,
+        sid=sid,
+        root=root,
+        packs_dir=packs_dir,
+        results_dir=results_dir,
+        packs=records,
+        schema_version=schema_version,
+    )
+
+
+def _resolve_log_path(index_path: Path, document: Mapping[str, Any] | None) -> Path:
+    index_dir = index_path.parent.resolve()
+    candidate: str | None = None
+
+    if document:
+        logs_section = document.get("logs")
+        if isinstance(logs_section, Mapping):
+            for key in ("send", "sender", "log", "log_path", "path"):
+                value = logs_section.get(key)
+                if isinstance(value, str) and value.strip():
+                    candidate = value.strip()
+                    break
+
+        if candidate is None:
+            for key in ("log", "log_path"):
+                value = document.get(key)
+                if isinstance(value, str) and value.strip():
+                    candidate = value.strip()
+                    break
+
+    if candidate:
+        return (index_dir / PurePosixPath(candidate)).resolve()
+
+    return index_dir / "send.log"
+
+
+def _load_manifest_view(
+    manifest: Mapping[str, Any] | ValidationIndex | Path | str,
+) -> _ManifestView:
+    if isinstance(manifest, ValidationIndex):
+        index = manifest
+        log_path = _resolve_log_path(index.index_path, None)
+        return _ManifestView(index=index, log_path=log_path)
+
+    if isinstance(manifest, Mapping):
+        index_path = _index_path_from_mapping(manifest)
+        index = _index_from_document(manifest, index_path=index_path)
+        log_path = _resolve_log_path(index_path, manifest)
+        return _ManifestView(index=index, log_path=log_path)
+
+    manifest_path = Path(manifest)
+    try:
+        text = manifest_path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise ValidationPackError(f"Validation index missing: {manifest_path}") from exc
+    except OSError as exc:
+        raise ValidationPackError(
+            f"Unable to read validation index: {manifest_path}"
+        ) from exc
+
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValidationPackError(
+            f"Validation index is not valid JSON: {manifest_path}"
+        ) from exc
+
+    if not isinstance(document, Mapping):
+        raise ValidationPackError("Validation index root must be an object")
+
+    index = _index_from_document(document, index_path=manifest_path)
+    log_path = _resolve_log_path(manifest_path, document)
+    return _ManifestView(index=index, log_path=log_path)
+
+
 class ValidationPackSender:
     """Send validation packs and store the adjudication results."""
 
     def __init__(
         self,
-        manifest: Mapping[str, Any],
+        manifest: Mapping[str, Any] | ValidationIndex | Path | str,
         *,
         http_client: _ChatCompletionClient | None = None,
     ) -> None:
-        self.paths = resolve_manifest_paths(manifest)
-        self.sid = self.paths.sid
+        view = _load_manifest_view(manifest)
+        self._index = view.index
+        self.sid = self._index.sid
         self.model = os.getenv("AI_MODEL", _DEFAULT_MODEL)
         self._client = http_client or self._build_client()
         self._throttle = _THROTTLE_SECONDS
         self._results_root: Path | None = None
+        self._log_path = view.log_path
 
     # ------------------------------------------------------------------
     # Public API
@@ -115,6 +254,10 @@ class ValidationPackSender:
             except ValueError:
                 normalized_account = None
 
+            pack_relative = record.pack
+            result_jsonl_relative = record.result_jsonl
+            result_json_relative = record.result_json
+
             resolved_pack = index.resolve_pack_path(record)
             result_jsonl_path = index.resolve_result_jsonl_path(record)
             result_json_path = index.resolve_result_json_path(record)
@@ -124,8 +267,11 @@ class ValidationPackSender:
                     account_id,
                     normalized_account,
                     resolved_pack,
+                    pack_relative,
                     result_jsonl_path,
+                    result_jsonl_relative,
                     result_json_path,
+                    result_json_relative,
                 )
             except ValidationPackError as exc:
                 if normalized_account is None:
@@ -143,8 +289,11 @@ class ValidationPackSender:
                 account_summary = self._record_account_failure(
                     normalized_account,
                     resolved_pack,
+                    pack_relative,
                     result_jsonl_path,
+                    result_jsonl_relative,
                     result_json_path,
+                    result_json_relative,
                     str(exc),
                 )
             results.append(account_summary)
@@ -158,20 +307,26 @@ class ValidationPackSender:
         account_id: Any,
         normalized_account: int | None,
         pack_path: Path,
+        pack_display: str,
         result_jsonl_path: Path,
+        result_jsonl_display: str,
         result_summary_path: Path,
+        result_summary_display: str,
     ) -> dict[str, Any]:
         account_int = normalized_account
         if account_int is None:
             raise ValidationPackError(f"Account id is not numeric: {account_id!r}")
 
         try:
-            pack_lines = list(self._iter_pack_lines(pack_path))
+            pack_lines = list(
+                self._iter_pack_lines(pack_path, display_path=pack_display)
+            )
         except ValidationPackError:
             self._log(
                 "send_account_start",
                 account_id=f"{account_int:03d}",
-                pack=str(pack_path),
+                pack=pack_display,
+                pack_absolute=str(pack_path),
                 lines=0,
             )
             raise
@@ -182,7 +337,8 @@ class ValidationPackSender:
         self._log(
             "send_account_start",
             account_id=f"{account_int:03d}",
-            pack=str(pack_path),
+            pack=pack_display,
+            pack_absolute=str(pack_path),
             lines=len(pack_lines),
         )
 
@@ -203,15 +359,20 @@ class ValidationPackSender:
             status=status,
             error=error_message,
             jsonl_path=result_jsonl_path,
+            jsonl_display=result_jsonl_display,
             summary_path=result_summary_path,
+            summary_display=result_summary_display,
         )
 
         summary_payload: dict[str, Any] = {
             "sid": self.sid,
             "account_id": account_int,
             "pack_path": str(pack_path),
+            "pack_manifest_path": pack_display,
             "results_path": str(summary_path),
+            "results_manifest_path": result_summary_display,
             "jsonl_path": str(jsonl_path),
+            "jsonl_manifest_path": result_jsonl_display,
             "status": status,
             "model": self.model,
             "request_lines": len(pack_lines),
@@ -234,8 +395,11 @@ class ValidationPackSender:
         self,
         account_id: int,
         pack_path: Path,
+        pack_display: str,
         result_jsonl_path: Path,
+        result_jsonl_display: str,
         result_summary_path: Path,
+        result_summary_display: str,
         error: str,
     ) -> dict[str, Any]:
         jsonl_path, summary_path = self._write_results(
@@ -244,14 +408,19 @@ class ValidationPackSender:
             status="error",
             error=error,
             jsonl_path=result_jsonl_path,
+            jsonl_display=result_jsonl_display,
             summary_path=result_summary_path,
+            summary_display=result_summary_display,
         )
         summary_payload = {
             "sid": self.sid,
             "account_id": account_id,
             "pack_path": str(pack_path),
+            "pack_manifest_path": pack_display,
             "results_path": str(summary_path),
+            "results_manifest_path": result_summary_display,
             "jsonl_path": str(jsonl_path),
+            "jsonl_manifest_path": result_jsonl_display,
             "status": "error",
             "model": self.model,
             "request_lines": 0,
@@ -343,24 +512,24 @@ class ValidationPackSender:
         status: str = "done",
         error: str | None = None,
         jsonl_path: Path | None = None,
+        jsonl_display: str | None = None,
         summary_path: Path | None = None,
+        summary_display: str | None = None,
     ) -> tuple[Path, Path]:
-        results_root = self._results_root or self.paths.results_dir
+        results_root = self._results_root or self._index.results_dir_path
         results_root.mkdir(parents=True, exist_ok=True)
 
         if jsonl_path is None:
             jsonl_path = (
-                results_root / validation_result_jsonl_filename_for_account(account_id)
+                results_root
+                / validation_result_jsonl_filename_for_account(account_id)
             )
-        else:
-            jsonl_path = jsonl_path
 
         if summary_path is None:
             summary_path = (
-                results_root / validation_result_summary_filename_for_account(account_id)
+                results_root
+                / validation_result_summary_filename_for_account(account_id)
             )
-        else:
-            summary_path = summary_path
 
         jsonl_path.parent.mkdir(parents=True, exist_ok=True)
         summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -391,8 +560,10 @@ class ValidationPackSender:
         self._log(
             "send_account_results",
             account_id=f"{account_id:03d}",
-            jsonl=str(jsonl_path.resolve()),
-            summary=str(summary_path.resolve()),
+            jsonl=jsonl_display or jsonl_path.name,
+            jsonl_absolute=str(jsonl_path.resolve()),
+            summary=summary_display or summary_path.name,
+            summary_absolute=str(summary_path.resolve()),
             results=len(result_lines),
             status=status,
         )
@@ -401,13 +572,16 @@ class ValidationPackSender:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    def _iter_pack_lines(self, pack_path: Path) -> Iterable[Mapping[str, Any]]:
+    def _iter_pack_lines(
+        self, pack_path: Path, *, display_path: str | None = None
+    ) -> Iterable[Mapping[str, Any]]:
+        display = display_path or str(pack_path)
         try:
             text = pack_path.read_text(encoding="utf-8")
         except FileNotFoundError as exc:
-            raise ValidationPackError(f"Pack file missing: {pack_path}") from exc
+            raise ValidationPackError(f"Pack file missing: {display}") from exc
         except OSError as exc:
-            raise ValidationPackError(f"Unable to read pack file: {pack_path}") from exc
+            raise ValidationPackError(f"Unable to read pack file: {display}") from exc
 
         lines: list[Mapping[str, Any]] = []
         for idx, raw in enumerate(text.splitlines(), start=1):
@@ -417,11 +591,11 @@ class ValidationPackSender:
                 payload = json.loads(raw)
             except json.JSONDecodeError as exc:
                 raise ValidationPackError(
-                    f"Invalid JSON in pack line {idx} of {pack_path}: {exc}"
+                    f"Invalid JSON in pack line {idx} of {display}: {exc}"
                 ) from exc
             if not isinstance(payload, Mapping):
                 raise ValidationPackError(
-                    f"Pack line {idx} of {pack_path} is not an object"
+                    f"Pack line {idx} of {display} is not an object"
                 )
             lines.append(payload)
         return lines
@@ -504,20 +678,10 @@ class ValidationPackSender:
         return f"line_{line_number:03d}"
 
     def _load_index(self) -> ValidationIndex:
-        index_path = self.paths.index_path
-        try:
-            return load_validation_index(index_path)
-        except FileNotFoundError as exc:
-            raise ValidationPackError(f"Validation index missing: {index_path}") from exc
-        except json.JSONDecodeError as exc:
-            raise ValidationPackError(f"Validation index is not valid JSON: {index_path}") from exc
-        except TypeError as exc:
-            raise ValidationPackError("Validation index root must be an object") from exc
-        except OSError as exc:
-            raise ValidationPackError(f"Unable to read validation index: {index_path}") from exc
+        return self._index
 
     def _log(self, event: str, **payload: Any) -> None:
-        log_path = self.paths.log_path
+        log_path = self._log_path
         log_path.parent.mkdir(parents=True, exist_ok=True)
         entry: MutableMapping[str, Any] = {
             "timestamp": _utc_now(),
@@ -531,12 +695,11 @@ class ValidationPackSender:
 
 
 def send_validation_packs(
-    manifest: Mapping[str, Any] | Path | str,
+    manifest: Mapping[str, Any] | ValidationIndex | Path | str,
 ) -> list[dict[str, Any]]:
     """Send all validation packs referenced by ``manifest``."""
 
-    manifest_data = load_manifest_from_source(manifest)
-    sender = ValidationPackSender(manifest_data)
+    sender = ValidationPackSender(manifest)
     return sender.send()
 
 

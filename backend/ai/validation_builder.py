@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -15,12 +16,15 @@ from backend.ai.validation_index import (
 )
 
 from backend.core.ai.paths import (
+    validation_base_dir,
     validation_index_path,
     validation_pack_filename_for_account,
     validation_packs_dir,
     validation_result_filename_for_account,
     validation_results_dir,
+    validation_logs_path,
 )
+from backend.pipeline.runs import RunManifest, persist_manifest
 
 log = logging.getLogger(__name__)
 
@@ -478,3 +482,83 @@ class ValidationPackWriter:
             except Exception:  # pragma: no cover - defensive
                 continue
         return normalized
+
+
+_WRITER_CACHE: dict[tuple[str, Path], "ValidationPackWriter"] = {}
+_WRITER_CACHE_LOCK = threading.Lock()
+
+
+def _resolve_runs_root_from_artifacts(
+    sid: str, *paths: Path | str | None
+) -> Path:
+    for raw in paths:
+        if raw is None:
+            continue
+        try:
+            candidate = Path(raw).resolve()
+        except Exception:
+            continue
+        for parent in candidate.parents:
+            if parent.name == sid:
+                return parent.parent.resolve()
+    return Path("runs").resolve()
+
+
+def _get_writer(sid: str, runs_root: Path | str) -> ValidationPackWriter:
+    resolved_root = Path(runs_root).resolve()
+    key = (str(sid), resolved_root)
+    with _WRITER_CACHE_LOCK:
+        writer = _WRITER_CACHE.get(key)
+        if writer is None:
+            writer = ValidationPackWriter(sid, runs_root=resolved_root)
+            _WRITER_CACHE[key] = writer
+    return writer
+
+
+def _update_manifest_for_run(sid: str, runs_root: Path | str) -> None:
+    runs_root_path = Path(runs_root).resolve()
+    base_dir = validation_base_dir(sid, runs_root=runs_root_path, create=True)
+    packs_dir = validation_packs_dir(sid, runs_root=runs_root_path, create=True)
+    results_dir = validation_results_dir(sid, runs_root=runs_root_path, create=True)
+    index_path = validation_index_path(sid, runs_root=runs_root_path, create=True)
+    log_path = validation_logs_path(sid, runs_root=runs_root_path, create=True)
+
+    manifest_path = runs_root_path / sid / "manifest.json"
+    manifest = RunManifest.load_or_create(manifest_path, sid)
+    manifest.upsert_validation_packs_dir(
+        base_dir,
+        packs_dir=packs_dir,
+        results_dir=results_dir,
+        index_file=index_path,
+        log_file=log_path,
+    )
+    persist_manifest(manifest)
+
+
+def build_validation_pack_for_account(
+    sid: str,
+    account_id: int | str,
+    summary_path: Path | str,
+    bureaus_path: Path | str,
+) -> list[PackLine]:
+    """Build and persist the validation pack for ``account_id`` within ``sid``."""
+
+    runs_root = _resolve_runs_root_from_artifacts(sid, summary_path, bureaus_path)
+    writer = _get_writer(sid, runs_root)
+    lines = writer.write_pack_for_account(account_id)
+    _update_manifest_for_run(sid, runs_root)
+    return lines
+
+
+def build_validation_packs_for_run(
+    sid: str, *, runs_root: Path | str | None = None
+) -> dict[int, list[PackLine]]:
+    """Build validation packs for every account of ``sid``."""
+
+    runs_root_path = (
+        Path(runs_root).resolve() if runs_root is not None else Path("runs").resolve()
+    )
+    writer = _get_writer(sid, runs_root_path)
+    results = writer.write_all_packs()
+    _update_manifest_for_run(sid, runs_root_path)
+    return results

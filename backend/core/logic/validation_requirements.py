@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Sequence
 
 import yaml
 
+from backend.ai.validation_builder import build_validation_pack_for_account
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, write_tags_atomic
 from backend.core.logic.consistency import compute_field_consistency
@@ -744,6 +745,31 @@ def build_validation_requirements_for_account(account_dir: str | Path) -> Dict[s
         str(entry.get("field")) for entry in requirements if entry.get("field")
     ]
     sync_validation_tag(tags_path, fields, emit=_should_emit_tags())
+
+    sid: str | None = None
+    account_id: str | None = None
+    try:
+        sid = summary_path.parents[3].name
+        account_id = summary_path.parent.name
+    except IndexError:
+        sid = None
+        account_id = None
+
+    if sid and account_id:
+        try:
+            build_validation_pack_for_account(
+                sid,
+                account_id,
+                summary_path,
+                bureaus_path,
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception(
+                "VALIDATION_PACK_BUILD_FAILED sid=%s account=%s summary=%s",
+                sid,
+                account_id,
+                summary_path,
+            )
 
     return {
         "status": "ok",

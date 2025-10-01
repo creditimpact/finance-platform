@@ -135,7 +135,7 @@ class ValidationPackSender:
                     continue
                 self._log(
                     "send_account_failed",
-                    account_id=normalized_account,
+                    account_id=f"{normalized_account:03d}",
                     error=str(exc),
                 )
                 account_summary = self._record_account_failure(
@@ -162,7 +162,7 @@ class ValidationPackSender:
         except ValidationPackError:
             self._log(
                 "send_account_start",
-                account_id=account_int,
+                account_id=f"{account_int:03d}",
                 pack=str(pack_path),
                 lines=0,
             )
@@ -173,7 +173,7 @@ class ValidationPackSender:
 
         self._log(
             "send_account_start",
-            account_id=account_int,
+            account_id=f"{account_int:03d}",
             pack=str(pack_path),
             lines=len(pack_lines),
         )
@@ -210,9 +210,10 @@ class ValidationPackSender:
 
         self._log(
             "send_account_done",
-            account_id=account_int,
+            account_id=f"{account_int:03d}",
             status=status,
             errors=len(errors),
+            results=len(result_lines),
         )
         return summary_payload
 
@@ -235,6 +236,13 @@ class ValidationPackSender:
             "completed_at": _utc_now(),
             "error": error,
         }
+        self._log(
+            "send_account_done",
+            account_id=f"{account_id:03d}",
+            status="error",
+            errors=1,
+            results=0,
+        )
         return summary_payload
 
     def _call_model(self, pack_line: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -342,6 +350,14 @@ class ValidationPackSender:
         summary_path.write_text(
             json.dumps(summary_payload, ensure_ascii=False, sort_keys=True) + "\n",
             encoding="utf-8",
+        )
+        self._log(
+            "send_account_results",
+            account_id=f"{account_id:03d}",
+            jsonl=str(jsonl_path.resolve()),
+            summary=str(summary_path.resolve()),
+            results=len(result_lines),
+            status=status,
         )
         return jsonl_path, summary_path
 

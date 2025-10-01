@@ -123,7 +123,9 @@ def test_manifest_check_reports_missing_pack(tmp_path: Path) -> None:
     assert "MISSING" in output
 
 
-def test_sender_uses_manifest_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sender_uses_manifest_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     manifest, runs_root = _build_manifest(tmp_path, sid="S003")
     builder = ValidationPackBuilder(manifest)
     builder.build()
@@ -136,6 +138,11 @@ def test_sender_uses_manifest_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     results = sender.send()
 
     assert len(results) == 1
+
+    output = capsys.readouterr().out
+    assert "MANIFEST:" in output
+    assert "PACKS: 1, missing: 0" in output
+    assert "[acc=001]" in output
 
     index = load_validation_index(index_path)
     record = index.packs[0]
@@ -153,7 +160,7 @@ def test_sender_uses_manifest_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 def test_sender_reports_missing_pack_with_relative_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     manifest, runs_root = _build_manifest(tmp_path, sid="S004")
     builder = ValidationPackBuilder(manifest)
@@ -176,6 +183,40 @@ def test_sender_reports_missing_pack_with_relative_error(
     assert payload["status"] == "error"
     assert "Pack file missing: " in payload["error"]
     assert record.pack in payload["error"]
+
+    output = capsys.readouterr().out
+    assert "PACKS: 1, missing: 1" in output
+    assert "[MISSING:" in output
+
+
+def test_sender_includes_context_on_api_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class _ErrorClient:
+        def create(self, *, model, messages, response_format):  # type: ignore[override]
+            raise RuntimeError("boom")
+
+    manifest, runs_root = _build_manifest(tmp_path, sid="S999")
+    builder = ValidationPackBuilder(manifest)
+    builder.build()
+
+    monkeypatch.setenv("AI_MODEL", "stub")
+
+    index_path = runs_root / "S999" / "ai_packs" / "validation" / "index.json"
+    sender = ValidationPackSender(index_path, http_client=_ErrorClient())
+
+    results = sender.send()
+
+    assert len(results) == 1
+    payload = results[0]
+    assert payload["status"] == "error"
+    assert "AI request failed for acc 001" in payload["error"]
+    assert "pack=packs/" in payload["error"]
+    assert "results/" in payload["error"]
+    assert "AI request failed for acc 001" in payload["results"][0]["rationale"]
+
+    output = capsys.readouterr().out
+    assert "PACKS: 1, missing: 0" in output
 
 
 def test_sender_supports_v1_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

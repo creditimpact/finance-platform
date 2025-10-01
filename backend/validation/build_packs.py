@@ -77,6 +77,7 @@ class ValidationPackBuilder:
             items.append(
                 {
                     "account_id": account_id,
+                    "account_key": f"{account_id:03d}",
                     "pack": str(pack_path.resolve()),
                 }
             )
@@ -141,7 +142,10 @@ class ValidationPackBuilder:
                 continue
 
             normalized_strength = self._normalize_strength(requirement.get("strength"))
-            include = bool(requirement.get("ai_needed")) or normalized_strength == "weak"
+            include = (
+                self._coerce_bool(requirement.get("ai_needed"))
+                or normalized_strength == "weak"
+            )
             if not include:
                 continue
 
@@ -359,6 +363,20 @@ class ValidationPackBuilder:
         except Exception:
             return None
         return text.strip() or None
+
+    @staticmethod
+    def _coerce_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes", "y"}:
+                return True
+            if lowered in {"false", "0", "no", "n"}:
+                return False
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return False
 
     @staticmethod
     def _normalize_string_list(value: Any) -> list[str]:

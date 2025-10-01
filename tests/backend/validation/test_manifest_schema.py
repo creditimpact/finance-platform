@@ -130,12 +130,13 @@ def test_sender_uses_manifest_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setenv("AI_MODEL", "stub")
 
-    sender = ValidationPackSender(manifest, http_client=_StubClient())
+    index_path = runs_root / "S003" / "ai_packs" / "validation" / "index.json"
+
+    sender = ValidationPackSender(index_path, http_client=_StubClient())
     results = sender.send()
 
     assert len(results) == 1
 
-    index_path = runs_root / "S003" / "ai_packs" / "validation" / "index.json"
     index = load_validation_index(index_path)
     record = index.packs[0]
 
@@ -149,3 +150,29 @@ def test_sender_uses_manifest_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     # ensure the sender wrote results to the manifest-defined location
     assert sender._results_root == index.results_dir_path
+
+
+def test_sender_reports_missing_pack_with_relative_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, runs_root = _build_manifest(tmp_path, sid="S004")
+    builder = ValidationPackBuilder(manifest)
+    builder.build()
+
+    index_path = runs_root / "S004" / "ai_packs" / "validation" / "index.json"
+    index = load_validation_index(index_path)
+    record = index.packs[0]
+
+    pack_path = index.resolve_pack_path(record)
+    pack_path.unlink()
+
+    monkeypatch.setenv("AI_MODEL", "stub")
+
+    sender = ValidationPackSender(index_path, http_client=_StubClient())
+    results = sender.send()
+
+    assert len(results) == 1
+    payload = results[0]
+    assert payload["status"] == "error"
+    assert "Pack file missing: " in payload["error"]
+    assert record.pack in payload["error"]

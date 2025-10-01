@@ -24,6 +24,7 @@ class ValidationPaths:
     """Resolved filesystem locations for validation AI packs."""
 
     base: Path
+    log_file: Path
 
 
 def ensure_validation_paths(
@@ -34,7 +35,7 @@ def ensure_validation_paths(
     base_path = (Path(runs_root) / sid / "ai_packs" / "validation").resolve()
     if create:
         base_path.mkdir(parents=True, exist_ok=True)
-    return ValidationPaths(base=base_path)
+    return ValidationPaths(base=base_path, log_file=base_path / "logs.txt")
 
 
 def ensure_validation_account_paths(

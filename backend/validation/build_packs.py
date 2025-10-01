@@ -5,12 +5,11 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from backend.core.ai.paths import (
-    validation_pack_filename_for_account,
-)
+from backend.core.ai.paths import validation_pack_filename_for_account
 
 
 _SYSTEM_PROMPT = (
@@ -32,6 +31,12 @@ _EXPECTED_OUTPUT_SCHEMA = {
     },
 }
 _BUREAUS = ("transunion", "experian", "equifax")
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00", "Z"
+    )
 
 
 @dataclass(frozen=True)
@@ -108,10 +113,15 @@ class ValidationPackBuilder:
         bureaus = self._read_json(account_dir / "bureaus.json")
         bureaus_map: Mapping[str, Mapping[str, Any]]
         if isinstance(bureaus, Mapping):
-            bureaus_map = {
-                str(name): value if isinstance(value, Mapping) else {}
-                for name, value in bureaus.items()
-            }
+            normalized_bureaus: dict[str, dict[str, Any]] = {}
+            for name, value in bureaus.items():
+                if not isinstance(value, Mapping):
+                    continue
+                bureau_key = str(name).strip().lower()
+                normalized_bureaus[bureau_key] = {
+                    str(key): val for key, val in value.items()
+                }
+            bureaus_map = normalized_bureaus
         else:
             bureaus_map = {}
 
@@ -212,10 +222,16 @@ class ValidationPackBuilder:
 
         if not payloads:
             pack_path.write_text("", encoding="utf-8")
-            return pack_path
+        else:
+            lines = [json.dumps(item, ensure_ascii=False, sort_keys=True) for item in payloads]
+            pack_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-        lines = [json.dumps(item, ensure_ascii=False, sort_keys=True) for item in payloads]
-        pack_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self._log(
+            "pack_created",
+            account_id=f"{account_id:03d}",
+            pack=str(pack_path.resolve()),
+            fields=len(payloads),
+        )
         return pack_path
 
     def _write_index(self, items: Sequence[Mapping[str, Any]]) -> None:
@@ -302,7 +318,7 @@ class ValidationPackBuilder:
                 return "weak"
             if normalized:
                 return normalized
-        return "weak"
+        return "unknown"
 
     @staticmethod
     def _coerce_optional_int(value: Any) -> int | None:
@@ -440,6 +456,22 @@ class ValidationPackBuilder:
             return json.loads(text)
         except json.JSONDecodeError:
             return None
+
+    # ------------------------------------------------------------------
+    # Logging helpers
+    # ------------------------------------------------------------------
+    def _log(self, event: str, **payload: Any) -> None:
+        log_path = self.paths.log_path
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "timestamp": _utc_now(),
+            "sid": self.paths.sid,
+            "event": event,
+        }
+        record.update(payload)
+        line = json.dumps(record, ensure_ascii=False, sort_keys=True)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
 
 
 def load_manifest_from_source(

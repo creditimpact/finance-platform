@@ -36,16 +36,17 @@ from backend.core.merge.acctnum import acctnum_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
 from backend.core.logic.summary_compact import compact_merge_sections
+from backend.ai.validation_builder import (
+    build_validation_pack_for_account,
+    build_validation_packs_for_run,
+)
 from backend.core.logic.validation_requirements import (
     apply_validation_summary,
     build_summary_payload as build_validation_summary_payload,
     build_validation_requirements,
     sync_validation_tag,
 )
-from backend.core.logic.validation_ai_packs import (
-    build_validation_ai_packs_for_accounts,
-    load_validation_packs_config_for_run,
-)
+from backend.core.logic.validation_ai_packs import load_validation_packs_config_for_run
 
 __all__ = [
     "load_bureaus",
@@ -2894,6 +2895,22 @@ def persist_merge_tags(
             ]
             sync_validation_tag(tag_path, fields_for_tag, emit=emit_validation_tag)
 
+        bureaus_path = summary_path.parent / "bureaus.json"
+        try:
+            build_validation_pack_for_account(
+                sid,
+                idx,
+                summary_path,
+                bureaus_path,
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception(
+                "VALIDATION_PACK_BUILD_FAILED sid=%s account=%s summary=%s",
+                sid,
+                idx,
+                summary_path,
+            )
+
         validation_block = (
             summary_after.get("validation_requirements")
             if isinstance(summary_after, Mapping)
@@ -2916,13 +2933,9 @@ def persist_merge_tags(
         sid, runs_root=runs_root
     )
 
-    if validation_ai_indices and config.enable_write:
+    if config.enable_write:
         try:
-            build_validation_ai_packs_for_accounts(
-                sid,
-                account_indices=validation_ai_indices,
-                runs_root=runs_root,
-            )
+            build_validation_packs_for_run(sid, runs_root=runs_root)
         except Exception:
             logger.exception(
                 "VALIDATION_AI_PACKS_BUILD_FAILED sid=%s runs_root=%s indices=%s",

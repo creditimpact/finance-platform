@@ -17,7 +17,7 @@ from backend.core.ai.paths import (
     validation_result_summary_filename_for_account,
 )
 
-from .build_packs import resolve_manifest_paths
+from .build_packs import load_manifest_from_source, resolve_manifest_paths
 
 _DEFAULT_MODEL = "gpt-4o-mini"
 _DEFAULT_TIMEOUT = 30.0
@@ -480,12 +480,13 @@ class ValidationPackSender:
             handle.write(line + "\n")
 
 
-def send_validation_packs(manifest_path: Path | str) -> list[dict[str, Any]]:
-    """Read ``manifest_path`` and send all validation packs it references."""
+def send_validation_packs(
+    manifest: Mapping[str, Any] | Path | str,
+) -> list[dict[str, Any]]:
+    """Send all validation packs referenced by ``manifest``."""
 
-    manifest_text = Path(manifest_path).read_text(encoding="utf-8")
-    manifest = json.loads(manifest_text)
-    sender = ValidationPackSender(manifest)
+    manifest_data = load_manifest_from_source(manifest)
+    sender = ValidationPackSender(manifest_data)
     return sender.send()
 
 

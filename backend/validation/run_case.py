@@ -44,7 +44,7 @@ def run_case(manifest_path: Path | str) -> Mapping[str, Any]:
 
     _append_log(paths.log_path, "validation_ai_start", sid=paths.sid)
     try:
-        build_items = build_validation_packs(manifest_path)
+        build_items = build_validation_packs(manifest)
         _append_log(
             paths.log_path,
             "validation_ai_built",
@@ -52,7 +52,7 @@ def run_case(manifest_path: Path | str) -> Mapping[str, Any]:
             accounts=len(build_items),
         )
 
-        send_results = send_validation_packs(manifest_path)
+        send_results = send_validation_packs(manifest)
         _append_log(
             paths.log_path,
             "validation_ai_sent",

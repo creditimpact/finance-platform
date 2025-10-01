@@ -9,9 +9,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from backend.ai.validation_index import (
+    ValidationIndexEntry,
+    ValidationPackIndexWriter,
+)
+
 from backend.core.ai.paths import (
+    validation_index_path,
     validation_pack_filename_for_account,
     validation_packs_dir,
+    validation_result_filename_for_account,
+    validation_results_dir,
 )
 
 log = logging.getLogger(__name__)
@@ -62,6 +70,16 @@ class ValidationPackWriter:
         self._packs_dir = validation_packs_dir(
             self.sid, runs_root=self._runs_root, create=True
         )
+        self._results_dir = validation_results_dir(
+            self.sid, runs_root=self._runs_root, create=True
+        )
+        index_path = validation_index_path(
+            self.sid, runs_root=self._runs_root, create=True
+        )
+        self._index_writer = ValidationPackIndexWriter(
+            sid=self.sid,
+            index_path=index_path,
+        )
         self._per_field = per_field
 
     # ------------------------------------------------------------------
@@ -82,6 +100,7 @@ class ValidationPackWriter:
         pack_lines = self.build_pack_lines(normalized_id)
         pack_path = self._packs_dir / validation_pack_filename_for_account(normalized_id)
         self._write_pack_file(pack_path, pack_lines)
+        self._update_index(normalized_id, pack_path, pack_lines)
         return pack_lines
 
     def build_pack_lines(self, account_id: int) -> list[PackLine]:
@@ -126,6 +145,37 @@ class ValidationPackWriter:
 
         serialized = "\n".join(line.to_json() for line in lines) + "\n"
         path.write_text(serialized, encoding="utf-8")
+
+    def _update_index(
+        self, account_id: int, pack_path: Path, lines: Sequence[PackLine]
+    ) -> None:
+        result_path = self._results_dir / validation_result_filename_for_account(
+            account_id
+        )
+        weak_fields: list[str] = []
+        for line in lines:
+            if not isinstance(line, PackLine):
+                continue
+            payload = line.payload
+            if not isinstance(payload, Mapping):
+                continue
+            field_key = str(payload.get("field_key") or "").strip()
+            if not field_key:
+                raw_field = payload.get("field")
+                field_key = str(raw_field).strip() if raw_field is not None else ""
+            if not field_key:
+                continue
+            weak_fields.append(field_key)
+
+        entry = ValidationIndexEntry(
+            account_id=account_id,
+            pack_path=pack_path.resolve(),
+            result_path=result_path.resolve(),
+            weak_fields=tuple(weak_fields),
+            line_count=len(lines),
+            status="built",
+        )
+        self._index_writer.upsert(entry)
 
     # ------------------------------------------------------------------
     # Builders

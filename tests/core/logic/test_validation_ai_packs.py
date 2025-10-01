@@ -9,6 +9,7 @@ from backend.core.ai.paths import (
     ensure_validation_account_paths,
     ensure_validation_paths,
 )
+from backend.core.logic import validation_ai_packs
 from backend.core.logic.validation_ai_packs import build_validation_ai_packs_for_accounts
 from backend.pipeline.runs import RUNS_ROOT_ENV
 
@@ -45,6 +46,7 @@ def test_builder_creates_validation_structure(
         pack_payload = json.loads(_read(account_paths.pack_file))
         assert pack_payload == {"weak_items": []}
         assert json.loads(_read(account_paths.model_results_file)) == {}
+        assert _read(account_paths.prompt_file) == ""
 
     manifest_path = runs_root / sid / "manifest.json"
     assert manifest_path.exists()
@@ -156,5 +158,8 @@ def test_builder_populates_pack_and_preserves_prompt_and_results(
             }
         ]
     }
-    assert _read(account_paths.prompt_file) == "Existing prompt"
+    expected_prompt = validation_ai_packs._render_prompt(
+        sid, 42, pack_payload["weak_items"]
+    )
+    assert _read(account_paths.prompt_file) == expected_prompt
     assert _read(account_paths.model_results_file) == "{\"status\": \"done\"}\n"

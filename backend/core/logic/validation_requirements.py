@@ -338,6 +338,161 @@ _HISTORY_REQUIREMENT_OVERRIDES: Mapping[str, ValidationRule] = {
         ai_needed=False,
     ),
 }
+
+_DELINQUENCY_MARKERS = {
+    "30",
+    "60",
+    "90",
+    "120",
+    "150",
+    "180",
+    "CO",
+    "LATE30",
+    "LATE60",
+    "LATE90",
+}
+
+
+def _coerce_history_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _is_structured_history_value(field: str, value: Any) -> bool:
+    if value is None:
+        return False
+    if field == "two_year_payment_history":
+        if isinstance(value, Mapping):
+            return True
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            return True
+        return False
+    if field == "seven_year_history":
+        return isinstance(value, Mapping)
+    return True
+
+
+def _history_counts_signature(field: str, value: Any) -> tuple[int, ...]:
+    if not isinstance(value, Mapping):
+        return ()
+    if field == "two_year_payment_history":
+        counts = value.get("counts")
+        if not isinstance(counts, Mapping):
+            return ()
+        return (
+            _coerce_history_int(counts.get("CO")),
+            _coerce_history_int(counts.get("late30")),
+            _coerce_history_int(counts.get("late60")),
+            _coerce_history_int(counts.get("late90")),
+        )
+    if field == "seven_year_history":
+        return (
+            _coerce_history_int(value.get("late30")),
+            _coerce_history_int(value.get("late60")),
+            _coerce_history_int(value.get("late90")),
+        )
+    return ()
+
+
+def _history_tokens_signature(field: str, value: Any) -> tuple[str, ...]:
+    if field != "two_year_payment_history":
+        return ()
+    if not isinstance(value, Mapping):
+        return ()
+    tokens = value.get("tokens")
+    if not isinstance(tokens, Sequence) or isinstance(tokens, (str, bytes, bytearray)):
+        return ()
+    signature: list[str] = []
+    for token in tokens:
+        if token is None:
+            continue
+        if isinstance(token, Mapping):
+            status = token.get("status")
+            if status is not None:
+                text = str(status).strip().upper()
+                if text:
+                    signature.append(text)
+                continue
+            serialized = json.dumps(token, sort_keys=True)
+            if serialized:
+                signature.append(serialized.upper())
+            continue
+        text = str(token).strip()
+        if text:
+            signature.append(text.upper())
+    return tuple(signature)
+
+
+def _history_signature_has_delinquency(signature: Sequence[str]) -> bool:
+    for token in signature:
+        normalized = str(token).strip().upper()
+        if not normalized:
+            continue
+        condensed = normalized.replace(" ", "")
+        if condensed in _DELINQUENCY_MARKERS:
+            return True
+        if any(marker in normalized for marker in {"CHARGE", "COLLECT", "DEROG"}):
+            return True
+    return False
+
+
+def _determine_history_strength(
+    field: str, details: Mapping[str, Any]
+) -> tuple[str, bool]:
+    normalized = details.get("normalized")
+    if not isinstance(normalized, Mapping):
+        return "strong", False
+
+    missing_raw = details.get("missing_bureaus") or []
+    if isinstance(missing_raw, Sequence) and not isinstance(
+        missing_raw, (str, bytes, bytearray)
+    ):
+        missing = {str(bureau) for bureau in missing_raw}
+    else:
+        missing = set()
+
+    present_bureaus = [
+        str(bureau)
+        for bureau in normalized.keys()
+        if str(bureau) not in missing
+    ]
+    if missing and present_bureaus:
+        return "soft", True
+
+    if not present_bureaus:
+        return "strong", False
+
+    raw_values = details.get("raw")
+    raw_map = raw_values if isinstance(raw_values, Mapping) else {}
+
+    for bureau in present_bureaus:
+        if not _is_structured_history_value(field, raw_map.get(bureau)):
+            return "soft", True
+
+    counts_signatures = [
+        _history_counts_signature(field, normalized.get(bureau))
+        for bureau in present_bureaus
+    ]
+    if field == "two_year_payment_history":
+        unique_counts = {signature for signature in counts_signatures}
+        if len(unique_counts) <= 1:
+            token_signatures = [
+                _history_tokens_signature(field, normalized.get(bureau))
+                for bureau in present_bureaus
+            ]
+            unique_tokens = {signature for signature in token_signatures}
+            if len(unique_tokens) > 1:
+                if not any(
+                    _history_signature_has_delinquency(signature)
+                    for signature in unique_tokens
+                ):
+                    return "soft", True
+
+    return "strong", False
 _SEMANTIC_FIELDS = {"account_type", "creditor_type", "creditor_remarks"}
 
 
@@ -410,7 +565,7 @@ def _apply_strength_policy(
     ai_needed = rule.ai_needed
 
     if field in _HISTORY_FIELDS:
-        strength, ai_needed = "strong", False
+        strength, ai_needed = _determine_history_strength(field, details)
     elif field == "account_number_display":
         strength, ai_needed = _determine_account_number_strength(normalized)
     elif field in _SEMANTIC_FIELDS:

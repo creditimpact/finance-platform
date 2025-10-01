@@ -28,7 +28,8 @@ class ValidationIndexEntry:
 
     account_id: int
     pack_path: Path
-    result_path: Path
+    result_jsonl_path: Path
+    result_summary_path: Path
     weak_fields: Sequence[str]
     line_count: int
     status: str
@@ -45,7 +46,9 @@ class ValidationIndexEntry:
         payload: dict[str, object] = {
             "account_id": int(self.account_id),
             "pack_path": str(self.pack_path.resolve()),
-            "result_path": str(self.result_path.resolve()),
+            "result_jsonl_path": str(self.result_jsonl_path.resolve()),
+            "result_summary_path": str(self.result_summary_path.resolve()),
+            "result_path": str(self.result_summary_path.resolve()),
             "weak_fields": weak_fields,
             "lines": int(self.line_count),
             "built_at": str(self.built_at or _utc_now()),

@@ -53,13 +53,8 @@ def test_validation_path_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert (
         validation_pack_filename_for_account("15") == "val_acc_015.jsonl"
     )
-    assert (
-        validation_result_filename_for_account(7) == "val_acc_007.result.json"
-    )
-    assert (
-        validation_result_filename_for_account("15")
-        == "val_acc_015.result.json"
-    )
+    assert validation_result_filename_for_account(7) == "acc_007.result.json"
+    assert validation_result_filename_for_account("15") == "acc_015.result.json"
 
 
 def test_builder_creates_validation_structure(
@@ -86,7 +81,7 @@ def test_builder_creates_validation_structure(
         assert account_paths.account_id == int(idx)
         assert account_paths.pack_file.exists()
         assert account_paths.prompt_file.exists()
-        assert account_paths.model_results_file.exists()
+        assert account_paths.result_summary_file.exists()
 
         pack_lines = [
             json.loads(line)
@@ -94,7 +89,7 @@ def test_builder_creates_validation_structure(
             if line
         ]
         assert pack_lines == []
-        model_results = json.loads(_read(account_paths.model_results_file))
+        model_results = json.loads(_read(account_paths.result_summary_file))
         assert model_results["status"] == "skipped"
         assert model_results["reason"] == "no_weak_items"
         assert model_results["model"] == "gpt-4o-mini"
@@ -181,7 +176,7 @@ def test_builder_populates_pack_and_preserves_prompt_and_results(
 
     account_paths.pack_file.write_text("", encoding="utf-8")
     account_paths.prompt_file.write_text("Existing prompt", encoding="utf-8")
-    account_paths.model_results_file.write_text(
+    account_paths.result_summary_file.write_text(
         "{\"status\": \"done\"}\n", encoding="utf-8"
     )
 
@@ -272,7 +267,7 @@ def test_builder_populates_pack_and_preserves_prompt_and_results(
     }
     expected_prompt = validation_ai_packs._render_prompt(sid, 42, [legacy_item])
     assert _read(account_paths.prompt_file) == expected_prompt
-    model_results = json.loads(_read(account_paths.model_results_file))
+    model_results = json.loads(_read(account_paths.result_summary_file))
     assert model_results["status"] == "ok"
     assert model_results["model"] == "gpt-4o-mini"
 
@@ -465,7 +460,7 @@ def test_builder_uses_configured_model(
     sent_payload = fake_ai.chat_payloads[0]
     assert sent_payload["model"] == "gpt-validation-test"
 
-    results_payload = json.loads(_read(account_paths.model_results_file))
+    results_payload = json.loads(_read(account_paths.result_summary_file))
     assert results_payload["model"] == "gpt-validation-test"
 
 
@@ -566,7 +561,7 @@ def test_builder_skips_inference_when_disabled(
     )
 
     assert not fake_ai.chat_payloads
-    results_payload = json.loads(_read(account_paths.model_results_file))
+    results_payload = json.loads(_read(account_paths.result_summary_file))
     assert results_payload["status"] == "skipped"
     assert results_payload["reason"] == "inference_disabled"
     assert results_payload["attempts"] == 0

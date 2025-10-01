@@ -14,6 +14,7 @@ from backend.ai.validation_results import (
 )
 from backend.core.ai.paths import (
     validation_index_path,
+    validation_result_jsonl_filename_for_account,
     validation_result_filename_for_account,
     validation_results_dir,
 )
@@ -247,14 +248,20 @@ def test_writer_updates_index(tmp_path: Path) -> None:
     entry = index_payload["packs"][0]
     expected_pack = (runs_root / sid / "ai_packs" / "validation" / "packs" / "val_acc_001.jsonl").resolve()
     expected_result_dir = validation_results_dir(sid, runs_root=runs_root)
-    expected_result = (
+    expected_summary = (
         expected_result_dir
         / validation_result_filename_for_account(1)
+    ).resolve()
+    expected_jsonl = (
+        expected_result_dir
+        / validation_result_jsonl_filename_for_account(1)
     ).resolve()
 
     assert entry["account_id"] == 1
     assert entry["pack_path"] == str(expected_pack)
-    assert entry["result_path"] == str(expected_result)
+    assert entry["result_summary_path"] == str(expected_summary)
+    assert entry["result_jsonl_path"] == str(expected_jsonl)
+    assert entry["result_path"] == str(expected_summary)
     assert entry["lines"] == 2
     assert entry["weak_fields"] == ["balance_owed", "account_status"]
     assert entry["status"] == "built"
@@ -393,6 +400,23 @@ def test_store_validation_result_updates_index_and_writes_file(
     assert stored_payload["request_lines"] == len(lines)
     assert stored_payload["raw_response"] == {"id": "resp_123"}
     assert isinstance(stored_payload["completed_at"], str)
+    assert stored_payload["results"] == [
+        {
+            "id": "acc_004__balance_owed",
+            "account_id": account_id,
+            "field": "balance_owed",
+            "decision": "strong",
+            "rationale": "values diverge",
+            "citations": [],
+        }
+    ]
+
+    results_dir = validation_results_dir(sid, runs_root=runs_root)
+    jsonl_path = (
+        results_dir / validation_result_jsonl_filename_for_account(account_id)
+    )
+    jsonl_lines = _read_jsonl(jsonl_path)
+    assert jsonl_lines == stored_payload["results"]
 
     index_path = validation_index_path(sid, runs_root=runs_root)
     index_payload = _read_index(index_path)
@@ -428,6 +452,7 @@ def test_store_validation_result_error(tmp_path: Path) -> None:
     stored_payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert stored_payload["status"] == "error"
     assert stored_payload["error"] == "api_timeout"
+    assert stored_payload["results"] == []
 
     index_path = validation_index_path(sid, runs_root=runs_root)
     entry = _index_entry_for_account(_read_index(index_path), account_id)

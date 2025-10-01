@@ -11,9 +11,8 @@ runs/<SID>/ai_packs/validation/
     # Optional (per-field variant):
     # val_acc_<ACCID>__field_<FIELDKEY>.jsonl
   results/
-    val_acc_<ACCID>.result.json
-    # Optional (per-field variant):
-    # val_acc_<ACCID>__field_<FIELDKEY>.result.json
+    acc_<ACCID>.result.jsonl
+    acc_<ACCID>.result.json
   index.json
   logs.txt
 ```
@@ -30,7 +29,10 @@ runs/<SID>/ai_packs/validation/
   enabled.
 * Pack files use the `.jsonl` extension to hold one JSON line per weak field
   payload.
-* AI results use the `.result.json` suffix to pair with their pack name.
+* Validation results emit two artifacts per account:
+  * `acc_<ACCID>.result.jsonl` contains one JSON line per prompt response.
+  * `acc_<ACCID>.result.json` is a compact summary object that embeds the
+    JSONL lines and metadata.
 
 ## Pack granularity
 
@@ -48,3 +50,83 @@ runs/<SID>/ai_packs/validation/
 * The run-level `manifest.json` should reference the `ai_packs.validation`
   locations so orchestration tools can discover validation artifacts the same
   way they do for merge packs.
+
+## Data contracts
+
+Copy these payloads verbatim when building or validating artifacts:
+
+### 1.1 Pack line (JSONL) — one line per weak field
+
+```
+{
+  "sid": "UUID",
+  "account_id": 14,
+  "account_key": "014",
+  "id": "acc_014__account_type",
+  "field": "account_type",
+  "category": "open_ident",
+  "min_days": 2,
+  "documents": ["account_opening_contract","application_form","monthly_statement"],
+  "strength": "weak",
+  "context": {
+    "consensus": "majority|split|null",
+    "disagreeing_bureaus": ["equifax"],
+    "missing_bureaus": ["experian","transunion"]
+  },
+  "bureaus": {
+    "equifax":   {"raw": "…", "normalized": "…"},
+    "experian":  {"raw": "…", "normalized": "…"},
+    "transunion":{"raw": "…", "normalized": "…"}
+  },
+  "expected_output": {
+    "type": "object",
+    "required": ["decision", "rationale", "citations"],
+    "properties": {
+      "decision":  {"type": "string", "enum": ["strong","no_case"]},
+      "rationale": {"type": "string"},
+      "citations": {"type": "array", "items": {"type":"string"}}
+    }
+  },
+  "prompt": {
+    "system": "You are an adjudication assistant reviewing credit report discrepancies. Decide if there is a strong consumer claim.",
+    "guidance": "Return JSON with keys: decision ('strong'|'no_case'), rationale, citations.",
+    "user": {
+      "sid": "UUID",
+      "account_id": 14,
+      "account_key": "014",
+      "field": "account_type",
+      "category": "open_ident",
+      "documents": ["…"],
+      "context": { "consensus": "…", "disagreeing_bureaus": ["…"], "missing_bureaus": ["…"] },
+      "bureaus": {
+        "equifax":   {"raw": "…", "normalized": "…"},
+        "experian":  {"raw": "…", "normalized": "…"},
+        "transunion":{"raw": "…", "normalized": "…"}
+      }
+    }
+  }
+}
+```
+
+### 1.2 Result line (JSONL) — one line per input line
+
+```
+{
+  "id": "acc_014__account_type",
+  "account_id": 14,
+  "field": "account_type",
+  "decision": "strong",
+  "rationale": "…",
+  "citations": ["…","…"]
+}
+```
+
+### 1.3 Result summary (JSON)
+
+```
+{
+  "sid": "UUID",
+  "account_id": 14,
+  "results": [ /* array of result lines */ ]
+}
+```

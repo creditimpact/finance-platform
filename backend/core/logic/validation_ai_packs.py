@@ -312,7 +312,7 @@ def build_validation_ai_packs_for_accounts(
         )
 
         pack_exists = account_paths.pack_file.exists()
-        result_exists = account_paths.model_results_file.exists()
+        result_exists = account_paths.result_summary_file.exists()
         prompt_exists = account_paths.prompt_file.exists()
 
         skip_build = (
@@ -329,7 +329,7 @@ def build_validation_ai_packs_for_accounts(
             statuses = ["up_to_date"]
             if line_count == 0:
                 statuses.append("no_weak_items")
-            result_payload = _load_model_results(account_paths.model_results_file)
+            result_payload = _load_model_results(account_paths.result_summary_file)
             if result_payload is None:
                 result_payload = {
                     "status": str(existing_entry.get("status") or "unknown"),
@@ -368,7 +368,7 @@ def build_validation_ai_packs_for_accounts(
                 has_weak_items=bool(weak_items),
                 config=packs_config,
             )
-            _write_model_results(account_paths.model_results_file, result_payload)
+            _write_model_results(account_paths.result_summary_file, result_payload)
 
             inference_status = str(result_payload.get("status") or "unknown")
             if inference_status == "ok":
@@ -402,7 +402,8 @@ def build_validation_ai_packs_for_accounts(
             ValidationIndexEntry(
                 account_id=int(idx),
                 pack_path=account_paths.pack_file,
-                result_path=account_paths.model_results_file,
+                result_jsonl_path=account_paths.result_jsonl_file,
+                result_summary_path=account_paths.result_summary_file,
                 weak_fields=weak_fields,
                 line_count=line_count,
                 status=inference_status,
@@ -442,7 +443,7 @@ def _ensure_placeholder_files(paths: ValidationAccountPaths) -> None:
 
     _ensure_file(paths.pack_file)
     _ensure_file(paths.prompt_file)
-    _ensure_file(paths.model_results_file, "{}\n")
+    _ensure_file(paths.result_summary_file, "{}\n")
 
 
 def _ensure_file(path: Path, default_contents: str = "") -> None:

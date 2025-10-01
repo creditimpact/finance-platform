@@ -14,6 +14,7 @@ from backend.core.ai.paths import (
     validation_index_path,
     validation_pack_filename_for_account,
     validation_packs_dir,
+    validation_result_jsonl_filename_for_account,
     validation_result_filename_for_account,
     validation_results_dir,
 )
@@ -53,7 +54,7 @@ def test_validation_pack_path_generation(tmp_path: Path) -> None:
 
     assert validation_pack_filename_for_account(3) == "val_acc_003.jsonl"
     assert validation_pack_filename_for_account("12") == "val_acc_012.jsonl"
-    assert validation_result_filename_for_account(7) == "val_acc_007.result.json"
+    assert validation_result_filename_for_account(7) == "acc_007.result.json"
 
 
 def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
@@ -159,18 +160,26 @@ def test_validation_index_round_trip(tmp_path: Path) -> None:
     index_path = validation_index_path(sid, runs_root=runs_root)
     writer = ValidationPackIndexWriter(sid=sid, index_path=index_path)
 
+    pack_path1 = packs_dir / validation_pack_filename_for_account(1)
+    summary_path1 = results_dir / validation_result_filename_for_account(1)
+    jsonl_path1 = results_dir / validation_result_jsonl_filename_for_account(1)
     entry1 = ValidationIndexEntry(
         account_id=1,
-        pack_path=packs_dir / validation_pack_filename_for_account(1),
-        result_path=results_dir / validation_result_filename_for_account(1),
+        pack_path=pack_path1,
+        result_jsonl_path=jsonl_path1,
+        result_summary_path=summary_path1,
         weak_fields=("balance_owed",),
         line_count=1,
         status="built",
     )
+    pack_path2 = packs_dir / validation_pack_filename_for_account(2)
+    summary_path2 = results_dir / validation_result_filename_for_account(2)
+    jsonl_path2 = results_dir / validation_result_jsonl_filename_for_account(2)
     entry2 = ValidationIndexEntry(
         account_id=2,
-        pack_path=packs_dir / validation_pack_filename_for_account(2),
-        result_path=results_dir / validation_result_filename_for_account(2),
+        pack_path=pack_path2,
+        result_jsonl_path=jsonl_path2,
+        result_summary_path=summary_path2,
         weak_fields=("payment_history", "balance_owed"),
         line_count=2,
         status="built",

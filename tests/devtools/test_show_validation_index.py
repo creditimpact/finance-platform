@@ -6,6 +6,7 @@ from backend.ai.validation_index import ValidationIndexEntry, ValidationPackInde
 from backend.core.ai.paths import (
     ensure_validation_paths,
     validation_pack_filename_for_account,
+    validation_result_jsonl_filename_for_account,
     validation_result_filename_for_account,
 )
 
@@ -25,18 +26,22 @@ def _create_index_entry(
     results_dir = validation_root / "results"
 
     pack_path = packs_dir / validation_pack_filename_for_account(account_id)
-    result_path = results_dir / validation_result_filename_for_account(account_id)
+    summary_path = results_dir / validation_result_filename_for_account(account_id)
+    jsonl_path = results_dir / validation_result_jsonl_filename_for_account(account_id)
 
     pack_path.parent.mkdir(parents=True, exist_ok=True)
-    result_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    jsonl_path.parent.mkdir(parents=True, exist_ok=True)
 
     pack_path.write_text("", encoding="utf-8")
-    result_path.write_text("{}\n", encoding="utf-8")
+    summary_path.write_text("{}\n", encoding="utf-8")
+    jsonl_path.write_text("", encoding="utf-8")
 
     return ValidationIndexEntry(
         account_id=account_id,
         pack_path=pack_path,
-        result_path=result_path,
+        result_jsonl_path=jsonl_path,
+        result_summary_path=summary_path,
         weak_fields=weak_fields or [],
         line_count=lines or len(weak_fields or ()),
         status=status,

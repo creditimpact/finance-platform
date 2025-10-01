@@ -9,7 +9,8 @@ The script moves legacy per-account validation folders into the new structure::
     ai_packs/validation/
       packs/val_acc_<ACC>.jsonl
       packs/val_acc_<ACC>.jsonl.prompt.txt
-      results/val_acc_<ACC>.result.json
+      results/acc_<ACC>.result.jsonl
+      results/acc_<ACC>.result.json
       index.json
 
 It is safe to run multiple times and skips accounts that are already migrated.
@@ -34,6 +35,7 @@ from backend.ai.validation_index import ValidationIndexEntry, ValidationPackInde
 from backend.core.ai.paths import (
     ensure_validation_paths,
     validation_pack_filename_for_account,
+    validation_result_jsonl_filename_for_account,
     validation_result_filename_for_account,
 )
 from backend.core.logic.validation_ai_packs import _write_pack as write_pack_lines
@@ -184,8 +186,10 @@ def migrate_sid(sid: str, runs_root: Path, *, dry_run: bool = False) -> None:
             prompt_path.write_text(legacy_prompt.read_text(encoding="utf-8"), encoding="utf-8")
             legacy_prompt.unlink(missing_ok=True)
 
-        result_filename = validation_result_filename_for_account(account_id)
-        result_path = validation_paths.results_dir / result_filename
+        summary_filename = validation_result_filename_for_account(account_id)
+        jsonl_filename = validation_result_jsonl_filename_for_account(account_id)
+        result_path = validation_paths.results_dir / summary_filename
+        jsonl_path = validation_paths.results_dir / jsonl_filename
         result_payload: Mapping[str, object] | None = None
 
         source_result = _choose_result_file(legacy_results_dir)
@@ -194,9 +198,19 @@ def migrate_sid(sid: str, runs_root: Path, *, dry_run: bool = False) -> None:
             if not dry_run:
                 result_path.parent.mkdir(parents=True, exist_ok=True)
                 result_path.write_text(source_result.read_text(encoding="utf-8"), encoding="utf-8")
+                jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+                if jsonl_path.exists():
+                    jsonl_path.unlink()
+                jsonl_path.write_text("", encoding="utf-8")
                 source_result.unlink(missing_ok=True)
         elif result_path.exists():
             result_payload = _load_result_payload(result_path)
+        elif jsonl_path.exists():
+            jsonl_path.unlink(missing_ok=True)
+            jsonl_path.write_text("", encoding="utf-8")
+        elif not dry_run:
+            jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+            jsonl_path.write_text("", encoding="utf-8")
 
         status = "built"
         built_at = None
@@ -214,7 +228,8 @@ def migrate_sid(sid: str, runs_root: Path, *, dry_run: bool = False) -> None:
         entry = ValidationIndexEntry(
             account_id=account_id,
             pack_path=pack_path,
-            result_path=result_path,
+            result_jsonl_path=jsonl_path,
+            result_summary_path=result_path,
             weak_fields=tuple(field for field in weak_fields if field),
             line_count=line_count,
             status=status,

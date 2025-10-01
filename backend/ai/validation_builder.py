@@ -24,6 +24,7 @@ from backend.core.ai.paths import (
     validation_index_path,
     validation_pack_filename_for_account,
     validation_packs_dir,
+    validation_result_jsonl_filename_for_account,
     validation_result_filename_for_account,
     validation_results_dir,
     validation_logs_path,
@@ -202,8 +203,13 @@ class ValidationPackWriter:
         *,
         summary: Mapping[str, Any] | None = None,
     ) -> None:
-        result_path = self._results_dir / validation_result_filename_for_account(
-            account_id
+        result_summary_path = (
+            self._results_dir
+            / validation_result_filename_for_account(account_id)
+        )
+        result_jsonl_path = (
+            self._results_dir
+            / validation_result_jsonl_filename_for_account(account_id)
         )
         weak_fields: list[str] = []
         for line in lines:
@@ -227,7 +233,8 @@ class ValidationPackWriter:
         entry = ValidationIndexEntry(
             account_id=account_id,
             pack_path=pack_path.resolve(),
-            result_path=result_path.resolve(),
+            result_jsonl_path=result_jsonl_path.resolve(),
+            result_summary_path=result_summary_path.resolve(),
             weak_fields=tuple(weak_fields),
             line_count=len(lines),
             status="built",

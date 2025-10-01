@@ -41,8 +41,8 @@ schema embedded in the pack line:
   absence.
 
 Additional metadata (e.g., `model`, `request_lines`, timestamps) is attached by
-our ingestion helpers when writing the `.result.json` files to
-`runs/<SID>/ai_packs/validation/results/`.
+our ingestion helpers when writing the `.result.jsonl` and `.result.json` files
+to `runs/<SID>/ai_packs/validation/results/`.
 
 ## Decision labels quick reference
 

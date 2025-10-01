@@ -17,7 +17,8 @@ class ValidationAccountPaths:
     account_id: int
     pack_file: Path
     prompt_file: Path
-    model_results_file: Path
+    result_jsonl_file: Path
+    result_summary_file: Path
 
 
 @dataclass(frozen=True)
@@ -69,20 +70,25 @@ def ensure_validation_account_paths(
     pack_filename = validation_pack_filename_for_account(normalized_idx)
     pack_file = paths.packs_dir / pack_filename
     prompt_file = paths.packs_dir / f"{pack_filename}.prompt.txt"
-    model_results_file = (
+    result_jsonl_file = (
+        paths.results_dir / validation_result_jsonl_filename_for_account(normalized_idx)
+    )
+    result_summary_file = (
         paths.results_dir / validation_result_filename_for_account(normalized_idx)
     )
 
     if create:
         pack_file.parent.mkdir(parents=True, exist_ok=True)
         prompt_file.parent.mkdir(parents=True, exist_ok=True)
-        model_results_file.parent.mkdir(parents=True, exist_ok=True)
+        result_jsonl_file.parent.mkdir(parents=True, exist_ok=True)
+        result_summary_file.parent.mkdir(parents=True, exist_ok=True)
 
     return ValidationAccountPaths(
         account_id=normalized_idx,
         pack_file=pack_file,
         prompt_file=prompt_file,
-        model_results_file=model_results_file,
+        result_jsonl_file=result_jsonl_file,
+        result_summary_file=result_summary_file,
     )
 
 
@@ -274,9 +280,22 @@ def validation_pack_filename_for_account(account_id: int | str) -> str:
     return f"val_acc_{normalized:03d}.jsonl"
 
 
-def validation_result_filename_for_account(account_id: int | str) -> str:
-    """Return the canonical validation result filename for ``account_id``."""
+def validation_result_jsonl_filename_for_account(account_id: int | str) -> str:
+    """Return the canonical validation result JSONL filename for ``account_id``."""
 
     normalized = _normalize_account_id(account_id)
-    return f"val_acc_{normalized:03d}.result.json"
+    return f"acc_{normalized:03d}.result.jsonl"
+
+
+def validation_result_summary_filename_for_account(account_id: int | str) -> str:
+    """Return the canonical validation result summary filename for ``account_id``."""
+
+    normalized = _normalize_account_id(account_id)
+    return f"acc_{normalized:03d}.result.json"
+
+
+def validation_result_filename_for_account(account_id: int | str) -> str:
+    """Backward-compatible alias for the summary filename."""
+
+    return validation_result_summary_filename_for_account(account_id)
 

@@ -35,6 +35,11 @@ log = logging.getLogger(__name__)
 
 _PACKS_ENABLED_ENV = "VALIDATION_PACKS_ENABLED"
 _PACKS_PER_FIELD_ENV = "VALIDATION_PACKS_PER_FIELD"
+_AUTO_SEND_ENV_VARS: tuple[str, ...] = (
+    "ENABLE_VALIDATION_SENDER",
+    "AUTO_VALIDATION_SEND",
+    "VALIDATION_SEND_ON_BUILD",
+)
 
 _BUREAUS = ("transunion", "experian", "equifax")
 _SYSTEM_PROMPT = (
@@ -727,6 +732,20 @@ def _packs_per_field_enabled() -> bool:
     return _env_flag(_PACKS_PER_FIELD_ENV, False)
 
 
+def _auto_send_enabled() -> bool:
+    return any(_env_flag(name, False) for name in _AUTO_SEND_ENV_VARS)
+
+
+def _maybe_send_validation_packs(sid: str, runs_root: Path) -> None:
+    if not _auto_send_enabled():
+        return
+
+    from backend.validation.send_packs import send_validation_packs
+
+    index_path = validation_index_path(sid, runs_root=runs_root, create=True)
+    send_validation_packs(index_path)
+
+
 def _get_writer(sid: str, runs_root: Path | str) -> ValidationPackWriter:
     resolved_root = Path(runs_root).resolve()
     per_field = _packs_per_field_enabled()
@@ -799,4 +818,5 @@ def build_validation_packs_for_run(
     writer = _get_writer(sid, runs_root_path)
     results = writer.write_all_packs()
     _update_manifest_for_run(sid, runs_root_path)
+    _maybe_send_validation_packs(sid, runs_root_path)
     return results

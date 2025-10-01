@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 from pathlib import Path
 from typing import Any, Mapping
+
+import pytest
+
+sys.modules.setdefault(
+    "requests", types.SimpleNamespace(post=lambda *args, **kwargs: None)
+)
 
 from backend.ai.validation_builder import (
     ValidationPackWriter,
     build_validation_pack_for_account,
+    build_validation_packs_for_run,
 )
 from backend.ai.validation_results import (
     mark_validation_pack_sent,
@@ -524,3 +533,57 @@ def test_build_validation_pack_respects_env_toggle(
     pack_path = runs_root / sid / "ai_packs" / "validation" / "packs" / "val_acc_005.jsonl"
     assert not pack_path.exists()
 
+
+def test_build_validation_packs_for_run_auto_send(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "S601"
+    runs_root = tmp_path / "runs"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+    account_dir.mkdir(parents=True, exist_ok=True)
+
+    summary_payload = {
+        "validation_requirements": {
+            "requirements": [
+                {
+                    "field": "balance_owed",
+                    "category": "activity",
+                    "strength": "weak",
+                    "ai_needed": True,
+                }
+            ],
+            "field_consistency": {
+                "balance_owed": {"raw": {"transunion": "$100"}}
+            },
+        }
+    }
+    bureaus_payload = {"transunion": {"balance_owed": "$100"}}
+
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+
+    monkeypatch.setenv("AUTO_VALIDATION_SEND", "1")
+    monkeypatch.delenv("ENABLE_VALIDATION_SENDER", raising=False)
+    monkeypatch.delenv("VALIDATION_SEND_ON_BUILD", raising=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "requests",
+        types.SimpleNamespace(post=lambda *args, **kwargs: None),
+    )
+
+    captured: dict[str, Any] = {}
+
+    def _fake_send(manifest: Any) -> list[dict[str, Any]]:
+        captured["manifest"] = manifest
+        return []
+
+    monkeypatch.setattr(
+        "backend.validation.send_packs.send_validation_packs",
+        _fake_send,
+    )
+
+    build_validation_packs_for_run(sid, runs_root=runs_root)
+
+    assert "manifest" in captured
+    expected_index = validation_index_path(sid, runs_root=runs_root)
+    assert Path(captured["manifest"]) == expected_index

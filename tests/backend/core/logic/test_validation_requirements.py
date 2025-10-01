@@ -241,8 +241,8 @@ def test_history_missing_vs_present_requires_strong_documents():
         "monthly_statements_2y",
         "internal_payment_history",
     ]
-    assert two_year_req["strength"] == "strong"
-    assert two_year_req["ai_needed"] is False
+    assert two_year_req["strength"] == "soft"
+    assert two_year_req["ai_needed"] is True
     assert two_year_req["bureaus"] == ["equifax", "experian", "transunion"]
     assert (
         inconsistencies["two_year_payment_history"]["consensus"] != "unanimous"
@@ -257,8 +257,8 @@ def test_history_missing_vs_present_requires_strong_documents():
         "cra_audit_logs",
         "collection_history",
     ]
-    assert seven_req["strength"] == "strong"
-    assert seven_req["ai_needed"] is False
+    assert seven_req["strength"] == "soft"
+    assert seven_req["ai_needed"] is True
     assert seven_req["bureaus"] == ["equifax", "experian", "transunion"]
     assert inconsistencies["seven_year_history"]["consensus"] != "unanimous"
 
@@ -318,6 +318,69 @@ def test_build_validation_requirements_for_account_respects_summary_consensus(
         validation_block["field_consistency"]["seven_year_history"]["consensus"]
         == "unanimous"
     )
+
+
+def test_two_year_history_free_text_requires_ai() -> None:
+    bureaus = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+        "two_year_payment_history": {
+            "transunion": ["OK", "OK"],
+            "experian": "SEE REMARKS",
+            "equifax": ["OK", "OK"],
+        },
+    }
+
+    requirements, _, _ = build_validation_requirements(bureaus)
+    fields = {entry["field"]: entry for entry in requirements}
+
+    assert "two_year_payment_history" in fields
+    history_req = fields["two_year_payment_history"]
+    assert history_req["strength"] == "soft"
+    assert history_req["ai_needed"] is True
+
+
+def test_two_year_history_partial_months_requires_ai() -> None:
+    bureaus = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+        "two_year_payment_history": {
+            "transunion": ["OK"] * 24,
+            "experian": ["OK"] * 6,
+            "equifax": ["OK"] * 12,
+        },
+    }
+
+    requirements, _, _ = build_validation_requirements(bureaus)
+    fields = {entry["field"]: entry for entry in requirements}
+
+    assert "two_year_payment_history" in fields
+    history_req = fields["two_year_payment_history"]
+    assert history_req["strength"] == "soft"
+    assert history_req["ai_needed"] is True
+
+
+def test_two_year_history_delinquency_remains_strong() -> None:
+    bureaus = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+        "two_year_payment_history": {
+            "transunion": ["OK"] * 23 + ["30"],
+            "experian": ["OK"] * 24,
+            "equifax": ["OK"] * 24,
+        },
+    }
+
+    requirements, _, _ = build_validation_requirements(bureaus)
+    fields = {entry["field"]: entry for entry in requirements}
+
+    assert "two_year_payment_history" in fields
+    history_req = fields["two_year_payment_history"]
+    assert history_req["strength"] == "strong"
+    assert history_req["ai_needed"] is False
 
 
 def test_apply_validation_summary_and_sync_validation_tag(tmp_path):

@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 import textwrap
 from typing import Any, Iterable, Mapping, Sequence
@@ -23,6 +25,207 @@ from backend.core.logic.utils.json_utils import parse_json
 log = logging.getLogger(__name__)
 
 _DEFAULT_MODEL = "gpt-4o-mini"
+_CONFIG_PATH = Path(__file__).with_name("ai_packs_config.yml")
+_DEFAULT_RETRY_BACKOFF = (1.0, 3.0, 10.0)
+
+
+@dataclass(frozen=True)
+class ValidationPacksConfig:
+    """Configuration for validation AI pack generation."""
+
+    enable_write: bool = True
+    enable_infer: bool = True
+    model: str = _DEFAULT_MODEL
+    weak_limit: int = 0
+    max_attempts: int = 3
+    backoff_seconds: tuple[float, ...] = _DEFAULT_RETRY_BACKOFF
+
+
+def _load_yaml_mapping(path: Path) -> Mapping[str, Any]:
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        log.warning("VALIDATION_AI_CONFIG_READ_FAILED path=%s", path, exc_info=True)
+        return {}
+
+    try:
+        loaded = yaml.safe_load(raw_text) or {}
+    except Exception:
+        log.warning("VALIDATION_AI_CONFIG_PARSE_FAILED path=%s", path, exc_info=True)
+        return {}
+
+    if isinstance(loaded, Mapping):
+        return loaded
+
+    log.warning(
+        "VALIDATION_AI_CONFIG_TYPE_INVALID path=%s type=%s",
+        path,
+        type(loaded).__name__,
+    )
+    return {}
+
+
+@lru_cache(maxsize=1)
+def _load_global_config_section() -> Mapping[str, Any]:
+    data = _load_yaml_mapping(_CONFIG_PATH)
+    section = data.get("validation_packs") if isinstance(data, Mapping) else None
+    if isinstance(section, Mapping):
+        return dict(section)
+    return dict(data) if isinstance(data, Mapping) else {}
+
+
+def _load_local_config_section(base_dir: Path) -> Mapping[str, Any]:
+    config_path = Path(base_dir) / "ai_packs_config.yml"
+    data = _load_yaml_mapping(config_path)
+    section = data.get("validation_packs") if isinstance(data, Mapping) else None
+    if isinstance(section, Mapping):
+        return dict(section)
+    return dict(data) if isinstance(data, Mapping) else {}
+
+
+def _coerce_bool(raw: Any, default: bool) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        lowered = raw.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return bool(raw)
+    return default
+
+
+def _coerce_int(raw: Any, default: int, *, minimum: int | None = None) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = int(default)
+    if minimum is not None and value < minimum:
+        return minimum
+    return value
+
+
+def _coerce_str(raw: Any, default: str) -> str:
+    if isinstance(raw, str):
+        text = raw.strip()
+        return text or default
+    if raw is None:
+        return default
+    return str(raw)
+
+
+def _coerce_backoff(raw: Any) -> tuple[int, tuple[float, ...]]:
+    attempts = 3
+    schedule: tuple[float, ...] = _DEFAULT_RETRY_BACKOFF
+
+    if isinstance(raw, Mapping):
+        raw_attempts = raw.get("max_attempts") or raw.get("attempts")
+        if raw_attempts is not None:
+            attempts = _coerce_int(raw_attempts, attempts, minimum=1)
+
+        backoff_value = (
+            raw.get("backoff_seconds")
+            or raw.get("backoff")
+            or raw.get("delays")
+            or raw.get("schedule")
+        )
+        if isinstance(backoff_value, Sequence) and not isinstance(
+            backoff_value, (str, bytes, bytearray)
+        ):
+            parsed = _coerce_float_sequence(backoff_value)
+            if parsed:
+                schedule = parsed
+        elif backoff_value is not None:
+            try:
+                single = float(backoff_value)
+            except (TypeError, ValueError):
+                single = None
+            if single is not None:
+                schedule = (max(0.0, single),)
+
+    elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+        parsed = _coerce_float_sequence(raw)
+        if parsed:
+            schedule = parsed
+            attempts = max(attempts, len(schedule) + 1)
+    elif raw is not None:
+        try:
+            single_val = float(raw)
+        except (TypeError, ValueError):
+            single_val = None
+        if single_val is not None:
+            schedule = (max(0.0, single_val),)
+            attempts = max(attempts, 2)
+
+    if attempts < 1:
+        attempts = 1
+
+    if not schedule:
+        schedule = _DEFAULT_RETRY_BACKOFF
+
+    return attempts, schedule
+
+
+def _coerce_float_sequence(raw: Sequence[Any]) -> tuple[float, ...]:
+    values: list[float] = []
+    for entry in raw:
+        if entry is None:
+            continue
+        try:
+            val = float(entry)
+        except (TypeError, ValueError):
+            continue
+        values.append(max(0.0, val))
+    return tuple(values)
+
+
+def _coerce_validation_config(raw: Mapping[str, Any]) -> ValidationPacksConfig:
+    enable_write = _coerce_bool(raw.get("enable_write"), True)
+    enable_infer = _coerce_bool(raw.get("enable_infer"), True)
+    model = _coerce_str(raw.get("model"), _DEFAULT_MODEL)
+    weak_limit = _coerce_int(raw.get("weak_limit"), 0, minimum=0)
+
+    attempts, backoff_schedule = _coerce_backoff(raw.get("retry"))
+
+    return ValidationPacksConfig(
+        enable_write=enable_write,
+        enable_infer=enable_infer,
+        model=model,
+        weak_limit=weak_limit,
+        max_attempts=attempts,
+        backoff_seconds=backoff_schedule,
+    )
+
+
+def load_validation_packs_config(
+    base_dir: Path | str | None = None,
+) -> ValidationPacksConfig:
+    """Return the effective validation packs configuration."""
+
+    base_path = Path(base_dir) if base_dir is not None else None
+
+    merged: dict[str, Any] = {}
+    merged.update(_load_global_config_section())
+    if base_path is not None:
+        merged.update(_load_local_config_section(base_path))
+
+    return _coerce_validation_config(merged)
+
+
+def load_validation_packs_config_for_run(
+    sid: str,
+    *,
+    runs_root: Path | str | None = None,
+) -> ValidationPacksConfig:
+    """Convenience wrapper to read config for ``sid`` without touching disk."""
+
+    root_path = Path(runs_root) if runs_root is not None else Path("runs")
+    base_dir = root_path / sid / "ai_packs" / "validation"
+    return load_validation_packs_config(base_dir)
 
 
 def _normalize_indices(indices: Iterable[int | str]) -> list[int]:
@@ -53,12 +256,26 @@ def build_validation_ai_packs_for_accounts(
         return
 
     runs_root_path = Path(runs_root) if runs_root is not None else Path("runs")
+    base_dir = runs_root_path / sid / "ai_packs" / "validation"
+    packs_config = load_validation_packs_config(base_dir)
+
+    if not packs_config.enable_write:
+        log.info(
+            "VALIDATION_AI_PACKS_DISABLED sid=%s reason=write_disabled base=%s",
+            sid,
+            base_dir,
+        )
+        return
+
     validation_paths = ensure_validation_paths(runs_root_path, sid, create=True)
 
-    packs_config = _load_packs_config(validation_paths.base)
-    model_name = _select_model_name(packs_config)
+    model_name = packs_config.model
 
-    ai_client = ai_client if ai_client is not None else _build_ai_client()
+    if ai_client is None and packs_config.enable_infer:
+        ai_client = _build_ai_client()
+
+    if not packs_config.enable_infer:
+        ai_client = None
 
     created: list[ValidationAccountPaths] = []
     accounts_root = runs_root_path / sid / "cases" / "accounts"
@@ -71,6 +288,8 @@ def build_validation_ai_packs_for_accounts(
 
         summary = _load_summary(accounts_root, idx)
         weak_items = _collect_weak_items(summary)
+        if packs_config.weak_limit > 0:
+            weak_items = weak_items[: packs_config.weak_limit]
         pack_payload = {"weak_items": weak_items}
         _write_pack(account_paths.pack_file, pack_payload)
 
@@ -88,6 +307,7 @@ def build_validation_ai_packs_for_accounts(
             sid=sid,
             account_idx=idx,
             has_weak_items=bool(weak_items),
+            config=packs_config,
         )
         _write_model_results(account_paths.model_results_file, result_payload)
 
@@ -357,34 +577,6 @@ def _utc_now() -> str:
     )
 
 
-def _load_packs_config(base_dir: Path) -> Mapping[str, Any]:
-    config_path = base_dir / "ai_packs_config.yml"
-    if not config_path.exists():
-        return {}
-    try:
-        data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except Exception:
-        log.warning(
-            "VALIDATION_AI_CONFIG_LOAD_FAILED path=%s", config_path, exc_info=True
-        )
-        return {}
-    if isinstance(data, Mapping):
-        return data
-    log.warning(
-        "VALIDATION_AI_CONFIG_INVALID path=%s type=%s",
-        config_path,
-        type(data).__name__,
-    )
-    return {}
-
-
-def _select_model_name(config: Mapping[str, Any]) -> str:
-    raw_model = config.get("model") if isinstance(config, Mapping) else None
-    if isinstance(raw_model, str) and raw_model.strip():
-        return raw_model.strip()
-    return _DEFAULT_MODEL
-
-
 def _build_ai_client() -> Any | None:
     try:
         from backend.core.services.ai_client import get_ai_client
@@ -434,6 +626,7 @@ def _run_model_inference(
     sid: str,
     account_idx: int | str,
     has_weak_items: bool,
+    config: ValidationPacksConfig,
 ) -> dict[str, Any]:
     timestamp = _utc_now()
 
@@ -444,6 +637,17 @@ def _run_model_inference(
             "model": model,
             "timestamp": timestamp,
             "duration_ms": 0,
+            "attempts": 0,
+        }
+
+    if not config.enable_infer:
+        return {
+            "status": "skipped",
+            "reason": "inference_disabled",
+            "model": model,
+            "timestamp": timestamp,
+            "duration_ms": 0,
+            "attempts": 0,
         }
 
     if ai_client is None:
@@ -456,30 +660,56 @@ def _run_model_inference(
             "model": model,
             "timestamp": timestamp,
             "duration_ms": 0,
+            "attempts": 0,
         }
 
-    started = time.perf_counter()
-    try:
-        response = ai_client.response_json(
-            prompt=prompt,
-            model=model,
-            response_format={"type": "json_object"},
-        )
-        duration_ms = int((time.perf_counter() - started) * 1000)
-    except Exception as exc:  # pragma: no cover - defensive logging
-        duration_ms = int((time.perf_counter() - started) * 1000)
-        log.warning(
-            "VALIDATION_AI_CALL_FAILED sid=%s account=%s error=%s",
-            sid,
-            account_idx,
-            exc,
-        )
+    attempts = 0
+    total_duration_ms = 0
+    response: Any | None = None
+    last_error: Exception | None = None
+
+    max_attempts = max(1, config.max_attempts)
+
+    while attempts < max_attempts:
+        attempts += 1
+        started = time.perf_counter()
+        try:
+            response = ai_client.response_json(
+                prompt=prompt,
+                model=model,
+                response_format={"type": "json_object"},
+            )
+            total_duration_ms += int((time.perf_counter() - started) * 1000)
+            last_error = None
+            break
+        except Exception as exc:  # pragma: no cover - defensive logging
+            total_duration_ms += int((time.perf_counter() - started) * 1000)
+            last_error = exc
+            log.warning(
+                "VALIDATION_AI_CALL_FAILED sid=%s account=%s attempt=%s error=%s",
+                sid,
+                account_idx,
+                attempts,
+                exc,
+            )
+            if attempts >= max_attempts:
+                break
+            backoff_idx = min(attempts - 1, len(config.backoff_seconds) - 1)
+            delay = config.backoff_seconds[backoff_idx]
+            if delay > 0:
+                time.sleep(delay)
+
+    if last_error is not None or response is None:
+        reason = "unknown"
+        if last_error is not None:
+            reason = last_error.__class__.__name__
         return {
             "status": "error",
-            "reason": exc.__class__.__name__,
+            "reason": reason,
             "model": model,
             "timestamp": timestamp,
-            "duration_ms": duration_ms,
+            "duration_ms": total_duration_ms,
+            "attempts": attempts,
         }
 
     raw_text = _extract_response_text(response)
@@ -487,7 +717,8 @@ def _run_model_inference(
         "status": "ok",
         "model": model,
         "timestamp": timestamp,
-        "duration_ms": duration_ms,
+        "duration_ms": total_duration_ms,
+        "attempts": attempts,
     }
 
     if raw_text is None:

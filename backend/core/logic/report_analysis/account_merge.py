@@ -44,6 +44,7 @@ from backend.core.logic.validation_requirements import (
 )
 from backend.core.logic.validation_ai_packs import (
     build_validation_ai_packs_for_accounts,
+    load_validation_packs_config_for_run,
 )
 
 __all__ = [
@@ -2911,7 +2912,11 @@ def persist_merge_tags(
         ):
             validation_ai_indices.append(int(idx))
 
-    if validation_ai_indices:
+    config = load_validation_packs_config_for_run(
+        sid, runs_root=runs_root
+    )
+
+    if validation_ai_indices and config.enable_write:
         try:
             build_validation_ai_packs_for_accounts(
                 sid,
@@ -2925,6 +2930,10 @@ def persist_merge_tags(
                 runs_root,
                 validation_ai_indices,
             )
+    elif validation_ai_indices:
+        logger.info(
+            "VALIDATION_AI_PACKS_DISABLED sid=%s indices=%s", sid, validation_ai_indices
+        )
 
     return merge_tags
 

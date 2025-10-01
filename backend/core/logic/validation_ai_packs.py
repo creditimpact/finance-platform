@@ -15,6 +15,10 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import yaml
 
+from backend.ai.validation_index import (
+    ValidationIndexEntry,
+    ValidationPackIndexWriter,
+)
 from backend.core.ai.paths import (
     ValidationAccountPaths,
     ensure_validation_account_paths,
@@ -280,8 +284,9 @@ def build_validation_ai_packs_for_accounts(
         ai_client = None
 
     created: list[ValidationAccountPaths] = []
-    index_entries: list[dict[str, Any]] = []
+    index_entries: list[ValidationIndexEntry] = []
     accounts_root = runs_root_path / sid / "cases" / "accounts"
+    index_writer = ValidationPackIndexWriter(sid=sid, index_path=validation_paths.index_file)
 
     for idx in normalized_indices:
         account_paths = ensure_validation_account_paths(
@@ -295,8 +300,12 @@ def build_validation_ai_packs_for_accounts(
             weak_items = weak_items[: packs_config.weak_limit]
         weak_count = len(weak_items)
         statuses: list[str] = ["pack_written"]
-        pack_payload = {"weak_items": weak_items}
-        _write_pack(account_paths.pack_file, pack_payload)
+        line_count, weak_fields = _write_pack(
+            account_paths.pack_file,
+            account_id=account_paths.account_id,
+            sid=sid,
+            weak_items=weak_items,
+        )
 
         if weak_items:
             prompt_text = _render_prompt(sid, idx, weak_items)
@@ -341,22 +350,24 @@ def build_validation_ai_packs_for_accounts(
 
         created.append(account_paths)
         index_entries.append(
-            {
-                "account_index": int(idx),
-                "pack_path": str(account_paths.pack_file.resolve()),
-                "created_at": str(
-                    result_payload.get("timestamp") or _utc_now()
-                ),
-                "status": str(result_payload.get("status") or "unknown"),
-            }
+            ValidationIndexEntry(
+                account_id=int(idx),
+                pack_path=account_paths.pack_file,
+                result_path=account_paths.model_results_file,
+                weak_fields=weak_fields,
+                line_count=line_count,
+                status=str(result_payload.get("status") or "unknown"),
+                built_at=str(result_payload.get("timestamp") or _utc_now()),
+                request_lines=line_count or None,
+                model=str(model_used) if model_used else None,
+            )
         )
 
     manifest_path = runs_root_path / sid / "manifest.json"
     manifest = RunManifest.load_or_create(manifest_path, sid)
+    index_path = validation_paths.index_file
     if created:
-        last_account = created[-1]
-        index_path = validation_paths.index_file
-        _append_validation_index_entries(index_path, index_entries)
+        index_writer.bulk_upsert(index_entries)
         manifest.upsert_validation_packs_dir(
             validation_paths.base,
             packs_dir=validation_paths.packs_dir,
@@ -377,19 +388,19 @@ def build_validation_ai_packs_for_accounts(
         "VALIDATION_AI_PACKS_INITIALIZED sid=%s base=%s accounts=%s",
         sid,
         validation_paths.base,
-        ",".join(str(path.base.name) for path in created),
+        ",".join(f"{path.account_id:03d}" for path in created),
     )
 
 
 def _ensure_placeholder_files(paths: ValidationAccountPaths) -> None:
     """Create empty scaffold files for a validation pack if they are missing."""
 
-    _ensure_file(paths.pack_file, "{}\n")
-    _ensure_file(paths.prompt_file, "")
+    _ensure_file(paths.pack_file)
+    _ensure_file(paths.prompt_file)
     _ensure_file(paths.model_results_file, "{}\n")
 
 
-def _ensure_file(path: Path, default_contents: str) -> None:
+def _ensure_file(path: Path, default_contents: str = "") -> None:
     if path.exists():
         return
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -538,17 +549,46 @@ def _collect_weak_items(summary: Mapping[str, Any] | None) -> list[dict[str, Any
     return weak_items
 
 
-def _write_pack(path: Path, payload: Mapping[str, Any]) -> None:
-    """Write ``payload`` to ``path`` as JSON."""
+def _write_pack(
+    path: Path,
+    *,
+    account_id: int,
+    sid: str,
+    weak_items: Sequence[Mapping[str, Any]],
+) -> tuple[int, list[str]]:
+    """Write ``weak_items`` as JSONL entries to ``path``.
 
-    try:
-        serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-    except TypeError:
-        log.exception("VALIDATION_PACK_SERIALIZE_FAILED path=%s", path)
-        return
+    Returns a tuple of ``(line_count, weak_fields)`` where ``weak_fields`` is the
+    ordered list of field identifiers written to the pack.
+    """
+
+    normalized_lines: list[str] = []
+    weak_fields: list[str] = []
+
+    for idx, entry in enumerate(weak_items, start=1):
+        if not isinstance(entry, Mapping):
+            continue
+
+        line_payload = {"account_id": int(account_id), "field_index": idx, "sid": sid}
+        line_payload.update({key: value for key, value in entry.items()})
+
+        try:
+            serialized = json.dumps(line_payload, sort_keys=True, ensure_ascii=False)
+        except TypeError:
+            log.exception("VALIDATION_PACK_SERIALIZE_FAILED path=%s", path)
+            continue
+
+        normalized_lines.append(serialized)
+        field_name = entry.get("field")
+        if isinstance(field_name, str) and field_name.strip():
+            weak_fields.append(field_name.strip())
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(serialized + "\n", encoding="utf-8")
+    contents = "\n".join(normalized_lines)
+    if contents:
+        contents += "\n"
+    path.write_text(contents, encoding="utf-8")
+    return len(normalized_lines), weak_fields
 
 
 def _append_validation_log_entry(path: Path, entry: Mapping[str, Any]) -> None:
@@ -645,64 +685,6 @@ def _write_model_results(path: Path, payload: Mapping[str, Any]) -> None:
     except TypeError:
         log.exception("VALIDATION_AI_RESULTS_SERIALIZE_FAILED path=%s", path)
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(serialized + "\n", encoding="utf-8")
-
-
-def _append_validation_index_entries(
-    path: Path, entries: Sequence[Mapping[str, Any]]
-) -> None:
-    if not entries:
-        return
-
-    existing = _load_validation_index_entries(path)
-    normalized: list[dict[str, Any]] = []
-    for entry in entries:
-        if not isinstance(entry, Mapping):
-            continue
-        normalized.append(dict(entry))
-
-    if not normalized:
-        return
-
-    existing.extend(normalized)
-    _write_validation_index_entries(path, existing)
-
-
-def _load_validation_index_entries(path: Path) -> list[dict[str, Any]]:
-    try:
-        raw_text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return []
-    except OSError:
-        log.warning("VALIDATION_INDEX_READ_FAILED path=%s", path, exc_info=True)
-        return []
-
-    try:
-        payload = json.loads(raw_text)
-    except json.JSONDecodeError:
-        log.warning("VALIDATION_INDEX_INVALID_JSON path=%s", path, exc_info=True)
-        return []
-
-    if not isinstance(payload, list):
-        log.warning("VALIDATION_INDEX_INVALID_TYPE path=%s type=%s", path, type(payload))
-        return []
-
-    normalized: list[dict[str, Any]] = []
-    for entry in payload:
-        if isinstance(entry, Mapping):
-            normalized.append(dict(entry))
-
-    return normalized
-
-
-def _write_validation_index_entries(path: Path, entries: Sequence[Mapping[str, Any]]) -> None:
-    try:
-        serialized = json.dumps(list(entries), ensure_ascii=False, indent=2)
-    except TypeError:
-        log.exception("VALIDATION_INDEX_SERIALIZE_FAILED path=%s", path)
-        return
-
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(serialized + "\n", encoding="utf-8")
 

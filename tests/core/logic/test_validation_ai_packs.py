@@ -78,17 +78,22 @@ def test_builder_creates_validation_structure(
     validation_paths = ensure_validation_paths(runs_root, sid, create=False)
     base_dir = validation_paths.base
 
-    created_indices = {"14", "15"}
+    created_indices = {14, 15}
     for idx in created_indices:
         account_paths = ensure_validation_account_paths(
             validation_paths, idx, create=False
         )
+        assert account_paths.account_id == int(idx)
         assert account_paths.pack_file.exists()
         assert account_paths.prompt_file.exists()
         assert account_paths.model_results_file.exists()
 
-        pack_payload = json.loads(_read(account_paths.pack_file))
-        assert pack_payload == {"weak_items": []}
+        pack_lines = [
+            json.loads(line)
+            for line in _read(account_paths.pack_file).splitlines()
+            if line
+        ]
+        assert pack_lines == []
         model_results = json.loads(_read(account_paths.model_results_file))
         assert model_results["status"] == "skipped"
         assert model_results["reason"] == "no_weak_items"
@@ -120,13 +125,20 @@ def test_builder_creates_validation_structure(
     assert packs_validation["logs"] == str(validation_paths.log_file)
     assert isinstance(packs_validation["last_built_at"], str)
 
-    index_entries = json.loads(expected_index.read_text(encoding="utf-8"))
-    assert {entry["account_index"] for entry in index_entries} == {14, 15}
-    for entry in index_entries:
+    index_payload = json.loads(expected_index.read_text(encoding="utf-8"))
+    assert index_payload["sid"] == sid
+    assert index_payload["schema_version"] == 1
+    pack_accounts = {entry["account_id"] for entry in index_payload["packs"]}
+    assert pack_accounts == {14, 15}
+    for entry in index_payload["packs"]:
         assert entry["status"] == "skipped"
-        assert isinstance(entry["created_at"], str)
+        assert entry["weak_fields"] == []
+        assert entry["lines"] == 0
+        assert "request_lines" not in entry
+        assert isinstance(entry["built_at"], str)
         assert Path(entry["pack_path"]) == (
-            base_dir / str(entry["account_index"]) / "pack.json"
+            validation_paths.packs_dir
+            / validation_pack_filename_for_account(entry["account_id"])
         ).resolve()
 
     log_path = validation_paths.log_file
@@ -166,7 +178,7 @@ def test_builder_populates_pack_and_preserves_prompt_and_results(
         validation_paths, 42, create=True
     )
 
-    account_paths.pack_file.write_text("{\"preseed\": true}\n", encoding="utf-8")
+    account_paths.pack_file.write_text("", encoding="utf-8")
     account_paths.prompt_file.write_text("Existing prompt", encoding="utf-8")
     account_paths.model_results_file.write_text(
         "{\"status\": \"done\"}\n", encoding="utf-8"
@@ -234,43 +246,45 @@ def test_builder_populates_pack_and_preserves_prompt_and_results(
         ai_client=fake_ai,
     )
 
-    pack_payload = json.loads(_read(account_paths.pack_file))
-    assert pack_payload == {
-        "weak_items": [
-            {
-                "field": "balance_owed",
-                "category": "activity",
-                "min_days": 30,
-                "documents": ["statement"],
-                "consensus": "split",
-                "disagreeing_bureaus": ["experian"],
-                "missing_bureaus": ["equifax"],
-                "values": {
-                    "transunion": {"raw": "100", "normalized": 100},
-                    "experian": {"raw": "150", "normalized": 150},
-                    "equifax": {"raw": None, "normalized": None},
-                },
-            }
-        ]
+    pack_lines = [
+        json.loads(line)
+        for line in _read(account_paths.pack_file).splitlines()
+        if line
+    ]
+    assert len(pack_lines) == 1
+    pack_entry = pack_lines[0]
+    assert pack_entry["field"] == "balance_owed"
+    assert pack_entry["account_id"] == 42
+    assert pack_entry["documents"] == ["statement"]
+    assert pack_entry["consensus"] == "split"
+    assert pack_entry["disagreeing_bureaus"] == ["experian"]
+    assert pack_entry["missing_bureaus"] == ["equifax"]
+    assert pack_entry["values"] == {
+        "transunion": {"raw": "100", "normalized": 100},
+        "experian": {"raw": "150", "normalized": 150},
+        "equifax": {"raw": None, "normalized": None},
     }
-    expected_prompt = validation_ai_packs._render_prompt(
-        sid, 42, pack_payload["weak_items"]
-    )
+    legacy_item = {
+        key: value
+        for key, value in pack_entry.items()
+        if key not in {"account_id", "sid", "field_index"}
+    }
+    expected_prompt = validation_ai_packs._render_prompt(sid, 42, [legacy_item])
     assert _read(account_paths.prompt_file) == expected_prompt
     model_results = json.loads(_read(account_paths.model_results_file))
     assert model_results["status"] == "ok"
     assert model_results["model"] == "gpt-4o-mini"
 
-    index_entries = json.loads(
+    index_payload = json.loads(
         (validation_paths.base / "index.json").read_text(encoding="utf-8")
     )
-    assert index_entries[-1]["account_index"] == 42
-    assert index_entries[-1]["status"] == model_results["status"]
-    assert isinstance(index_entries[-1]["created_at"], str)
-    assert (
-        Path(index_entries[-1]["pack_path"]).resolve()
-        == account_paths.pack_file.resolve()
-    )
+    packs_map = {entry["account_id"]: entry for entry in index_payload["packs"]}
+    account_entry = packs_map[42]
+    assert account_entry["status"] == model_results["status"]
+    assert isinstance(account_entry["built_at"], str)
+    assert Path(account_entry["pack_path"]).resolve() == account_paths.pack_file.resolve()
+    assert account_entry["weak_fields"] == ["balance_owed"]
+    assert account_entry["lines"] == 1
     assert isinstance(model_results["timestamp"], str)
     assert isinstance(model_results["duration_ms"], int)
     assert model_results["response"] == {
@@ -534,8 +548,12 @@ def test_builder_honors_weak_limit(
         ai_client=fake_ai,
     )
 
-    pack_payload = json.loads(_read(account_paths.pack_file))
-    assert len(pack_payload["weak_items"]) == 1
+    pack_lines = [
+        json.loads(line)
+        for line in _read(account_paths.pack_file).splitlines()
+        if line
+    ]
+    assert len(pack_lines) == 1
     prompt_payload = _read(account_paths.prompt_file)
     assert "balance_owed" in prompt_payload or "account_status" in prompt_payload
     assert fake_ai.chat_payloads

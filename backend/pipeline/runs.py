@@ -104,10 +104,14 @@ class RunManifest:
                     "logs": None,
                     "validation": {
                         "base": None,
+                        "dir": None,
                         "packs": None,
+                        "packs_dir": None,
                         "results": None,
+                        "results_dir": None,
                         "index": None,
                         "last_built_at": None,
+                        "logs": None,
                     },
                 },
                 "validation": {
@@ -327,14 +331,28 @@ class RunManifest:
         if not isinstance(validation_section, dict):
             validation_section = {
                 "base": None,
+                "dir": None,
                 "packs": None,
+                "packs_dir": None,
                 "results": None,
+                "results_dir": None,
                 "index": None,
                 "last_built_at": None,
+                "logs": None,
             }
             packs["validation"] = validation_section
         else:
-            for key in ("base", "packs", "results", "index", "last_built_at"):
+            for key in (
+                "base",
+                "dir",
+                "packs",
+                "packs_dir",
+                "results",
+                "results_dir",
+                "index",
+                "last_built_at",
+                "logs",
+            ):
                 validation_section.setdefault(key, None)
         ai.setdefault(
             "validation",
@@ -364,10 +382,14 @@ class RunManifest:
             "validation",
             {
                 "base": None,
+                "dir": None,
                 "packs": None,
+                "packs_dir": None,
                 "results": None,
+                "results_dir": None,
                 "index": None,
                 "last_built_at": None,
+                "logs": None,
             },
         )
         if not isinstance(validation, dict):
@@ -414,9 +436,11 @@ class RunManifest:
         self,
         base_dir: Path,
         *,
-        account_dir: Path | None = None,
+        packs_dir: Path | None = None,
         results_dir: Path | None = None,
         index_file: Path | None = None,
+        log_file: Path | None = None,
+        account_dir: Path | None = None,
     ) -> "RunManifest":
         validation = self._ensure_validation_section()
         resolved = Path(base_dir).resolve()
@@ -432,30 +456,25 @@ class RunManifest:
         packs_validation = self._ensure_ai_validation_pack_section()
         packs_validation["base"] = resolved_str
 
-        account_path: Path | None = None
-        if account_dir is not None:
-            account_path = Path(account_dir).resolve()
-        elif packs_validation.get("packs"):
-            try:
-                account_path = Path(str(packs_validation["packs"]))
-            except (TypeError, ValueError):
-                account_path = None
+        pack_path: Path
+        if packs_dir is not None:
+            pack_path = Path(packs_dir).resolve()
+        elif account_dir is not None:
+            pack_path = Path(account_dir).resolve()
+        else:
+            pack_path = (resolved / "packs").resolve()
+        packs_validation["dir"] = resolved_str
+        packs_validation["packs"] = str(pack_path)
+        packs_validation["packs_dir"] = str(pack_path)
 
-        if account_path is not None:
-            packs_validation["packs"] = str(account_path)
-        elif packs_validation.get("packs") is None:
-            packs_validation["packs"] = resolved_str
-
-        results_path: Path | None = None
         if results_dir is not None:
             results_path = Path(results_dir).resolve()
-        elif account_path is not None:
-            results_path = (account_path / "results").resolve()
-
-        if results_path is not None:
-            packs_validation["results"] = str(results_path)
-        elif packs_validation.get("results") is None and packs_validation.get("packs"):
-            packs_validation["results"] = str(Path(str(packs_validation["packs"])) / "results")
+        elif account_dir is not None:
+            results_path = (Path(account_dir).resolve() / "results").resolve()
+        else:
+            results_path = (resolved / "results").resolve()
+        packs_validation["results"] = str(results_path)
+        packs_validation["results_dir"] = str(results_path)
 
         index_path = (
             Path(index_file).resolve(strict=False)
@@ -463,6 +482,13 @@ class RunManifest:
             else (resolved / "index.json").resolve(strict=False)
         )
         packs_validation["index"] = str(index_path)
+
+        log_path = (
+            Path(log_file).resolve(strict=False)
+            if log_file is not None
+            else (resolved / "logs.txt").resolve(strict=False)
+        )
+        packs_validation["logs"] = str(log_path)
         packs_validation["last_built_at"] = timestamp
 
         return self.save()

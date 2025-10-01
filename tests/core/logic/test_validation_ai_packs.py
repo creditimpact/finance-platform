@@ -110,13 +110,14 @@ def test_builder_creates_validation_structure(
 
     packs_validation = manifest_data["ai"]["packs"]["validation"]
     assert packs_validation["base"] == str(base_dir.resolve())
-    packs_path = Path(packs_validation["packs"])
-    assert packs_path.parent == base_dir.resolve()
-    assert packs_path.name in created_indices
-    expected_results = (packs_path / "results").resolve()
-    assert packs_validation["results"] == str(expected_results)
-    expected_index = (base_dir / "index.json").resolve()
+    assert packs_validation["dir"] == str(base_dir.resolve())
+    assert packs_validation["packs"] == str(validation_paths.packs_dir)
+    assert packs_validation["packs_dir"] == str(validation_paths.packs_dir)
+    assert packs_validation["results"] == str(validation_paths.results_dir)
+    assert packs_validation["results_dir"] == str(validation_paths.results_dir)
+    expected_index = validation_paths.index_file.resolve()
     assert packs_validation["index"] == str(expected_index)
+    assert packs_validation["logs"] == str(validation_paths.log_file)
     assert isinstance(packs_validation["last_built_at"], str)
 
     index_entries = json.loads(expected_index.read_text(encoding="utf-8"))

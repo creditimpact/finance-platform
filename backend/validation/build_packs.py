@@ -43,6 +43,7 @@ class ManifestPaths:
     packs_dir: Path
     results_dir: Path
     index_path: Path
+    log_path: Path
 
 
 class ValidationPackBuilder:
@@ -264,6 +265,11 @@ class ValidationPackBuilder:
         packs_dir_raw = validation_section.get("packs_dir") or validation_section.get("packs")
         results_dir_raw = validation_section.get("results_dir") or validation_section.get("results")
         index_path_raw = validation_section.get("index")
+        log_path_raw = (
+            validation_section.get("logs")
+            or validation_section.get("log")
+            or validation_section.get("log_file")
+        )
 
         if not packs_dir_raw:
             raise ValueError("Manifest missing ai.packs.validation.packs_dir")
@@ -271,10 +277,13 @@ class ValidationPackBuilder:
             raise ValueError("Manifest missing ai.packs.validation.results_dir")
         if not index_path_raw:
             raise ValueError("Manifest missing ai.packs.validation.index")
+        if not log_path_raw:
+            raise ValueError("Manifest missing ai.packs.validation.logs")
 
         packs_dir = Path(str(packs_dir_raw))
         results_dir = Path(str(results_dir_raw))
         index_path = Path(str(index_path_raw))
+        log_path = Path(str(log_path_raw))
 
         return ManifestPaths(
             sid=sid,
@@ -282,6 +291,7 @@ class ValidationPackBuilder:
             packs_dir=packs_dir,
             results_dir=results_dir,
             index_path=index_path,
+            log_path=log_path,
         )
 
     @staticmethod
@@ -441,4 +451,15 @@ def build_validation_packs(manifest_path: Path | str) -> list[dict[str, Any]]:
     return builder.build()
 
 
-__all__ = ["build_validation_packs", "ValidationPackBuilder", "ManifestPaths"]
+def resolve_manifest_paths(manifest: Mapping[str, Any]) -> ManifestPaths:
+    """Return the resolved :class:`ManifestPaths` from ``manifest``."""
+
+    return ValidationPackBuilder._resolve_manifest_paths(manifest)
+
+
+__all__ = [
+    "build_validation_packs",
+    "resolve_manifest_paths",
+    "ValidationPackBuilder",
+    "ManifestPaths",
+]

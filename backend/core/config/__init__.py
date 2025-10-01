@@ -14,7 +14,11 @@ code, which keeps orchestrator logic straightforward and easy to test.
 from __future__ import annotations
 
 from .flags import env_bool
-from backend.config import ENABLE_VALIDATION_REQUIREMENTS, VALIDATION_DEBUG
+from backend.config import (
+    ENABLE_VALIDATION_AI,
+    ENABLE_VALIDATION_REQUIREMENTS,
+    VALIDATION_DEBUG,
+)
 
 # Whether to remove trace files after Stage-A export.  Defaulted ``False`` so
 # cleanup occurs in the Celery chain; tests may override via the
@@ -23,6 +27,7 @@ CLEANUP_AFTER_EXPORT: bool = env_bool("CLEANUP_AFTER_EXPORT", False)
 
 __all__ = [
     "CLEANUP_AFTER_EXPORT",
+    "ENABLE_VALIDATION_AI",
     "ENABLE_VALIDATION_REQUIREMENTS",
     "VALIDATION_DEBUG",
 ]

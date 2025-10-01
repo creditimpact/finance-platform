@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from backend.core.ai.paths import validation_pack_filename_for_account
+from backend.core.ai.paths import (
+    validation_pack_filename_for_account,
+    validation_result_jsonl_filename_for_account,
+    validation_result_summary_filename_for_account,
+)
+from backend.validation.index_schema import (
+    ValidationPackRecord,
+    build_validation_index,
+)
 
 
 _SYSTEM_PROMPT = (
@@ -63,9 +73,11 @@ class ValidationPackBuilder:
     def build(self) -> list[dict[str, Any]]:
         """Generate packs for every account referenced in the manifest."""
 
-        items: list[dict[str, Any]] = []
+        records: list[ValidationPackRecord] = []
+        serialized_records: list[dict[str, Any]] = []
         for account_id, account_dir in self._iter_accounts():
-            payloads, skip_reason = self._build_account_pack(account_id, account_dir)
+            payloads, metadata = self._build_account_pack(account_id, account_dir)
+            skip_reason = metadata.get("skip_reason") if isinstance(metadata, Mapping) else None
             if not payloads:
                 self._log(
                     "pack_skipped",
@@ -74,15 +86,12 @@ class ValidationPackBuilder:
                 )
                 continue
             pack_path = self._write_pack(account_id, payloads)
-            items.append(
-                {
-                    "account_id": account_id,
-                    "account_key": f"{account_id:03d}",
-                    "pack": str(pack_path.resolve()),
-                }
-            )
-        self._write_index(items)
-        return items
+            record = self._build_index_record(account_id, pack_path, payloads, metadata)
+            records.append(record)
+            serialized_records.append(record.to_json_payload())
+
+        self._write_index(records)
+        return serialized_records
 
     # ------------------------------------------------------------------
     # Account pack construction
@@ -103,18 +112,18 @@ class ValidationPackBuilder:
 
     def _build_account_pack(
         self, account_id: int, account_dir: Path
-    ) -> tuple[list[dict[str, Any]], str | None]:
+    ) -> tuple[list[dict[str, Any]], Mapping[str, Any]]:
         summary = self._read_json(account_dir / "summary.json")
         if not isinstance(summary, Mapping):
-            return [], "missing_summary"
+            return [], {"skip_reason": "missing_summary"}
 
         validation_block = summary.get("validation_requirements")
         if not isinstance(validation_block, Mapping):
-            return [], "missing_validation_requirements"
+            return [], {"skip_reason": "missing_validation_requirements"}
 
         requirements = validation_block.get("requirements")
         if not isinstance(requirements, Sequence):
-            return [], "missing_requirements"
+            return [], {"skip_reason": "missing_requirements"}
 
         field_consistency = validation_block.get("field_consistency")
         if not isinstance(field_consistency, Mapping):
@@ -136,7 +145,8 @@ class ValidationPackBuilder:
             bureaus_map = {}
 
         payloads: list[dict[str, Any]] = []
-        weak_fields_found = False
+        weak_fields: list[str] = []
+        included_requirements: list[Mapping[str, Any]] = []
         for requirement in requirements:
             if not isinstance(requirement, Mapping):
                 continue
@@ -149,11 +159,13 @@ class ValidationPackBuilder:
             if not include:
                 continue
 
-            weak_fields_found = True
-
             field = requirement.get("field")
             if not field:
                 continue
+
+            field_name = str(field)
+            weak_fields.append(field_name)
+            included_requirements.append(self._json_clone(requirement))
 
             line = self._build_line(
                 account_id,
@@ -165,13 +177,25 @@ class ValidationPackBuilder:
             if line is not None:
                 payloads.append(line)
 
-        if not payloads and weak_fields_found:
-            return payloads, "no_valid_requirements"
-
         if not payloads:
-            return payloads, "no_weak_fields"
+            reason = "no_valid_requirements" if weak_fields else "no_weak_fields"
+            return payloads, {"skip_reason": reason}
 
-        return payloads, None
+        metadata = {
+            "weak_fields": weak_fields,
+            "field_consistency": field_consistency,
+            "requirements": included_requirements,
+            "summary": summary,
+            "built_at": _utc_now(),
+            "source_hash": self._build_source_hash(
+                summary,
+                included_requirements,
+                field_consistency,
+                payloads,
+            ),
+        }
+
+        return payloads, metadata
 
     def _build_line(
         self,
@@ -256,19 +280,87 @@ class ValidationPackBuilder:
         )
         return pack_path
 
-    def _write_index(self, items: Sequence[Mapping[str, Any]]) -> None:
+    def _write_index(self, records: Sequence[ValidationPackRecord]) -> None:
         self.paths.results_dir.mkdir(parents=True, exist_ok=True)
+        index = build_validation_index(
+            index_path=self.paths.index_path,
+            sid=self.paths.sid,
+            packs_dir=self.paths.packs_dir,
+            results_dir=self.paths.results_dir,
+            records=records,
+        )
+        index.write()
 
-        index_payload = {
-            "sid": self.paths.sid,
-            "packs_dir": str(self.paths.packs_dir.resolve()),
-            "results_dir": str(self.paths.results_dir.resolve()),
-            "items": list(items),
-        }
-        index_path = self.paths.index_path
-        index_path.parent.mkdir(parents=True, exist_ok=True)
-        serialized = json.dumps(index_payload, ensure_ascii=False, indent=2)
-        index_path.write_text(serialized + "\n", encoding="utf-8")
+    def _build_index_record(
+        self,
+        account_id: int,
+        pack_path: Path,
+        payloads: Sequence[Mapping[str, Any]],
+        metadata: Mapping[str, Any],
+    ) -> ValidationPackRecord:
+        index_dir = self.paths.index_path.parent.resolve()
+        pack_rel = self._relative_to_index(pack_path, index_dir)
+        jsonl_path = self.paths.results_dir / validation_result_jsonl_filename_for_account(
+            account_id
+        )
+        summary_path = self.paths.results_dir / validation_result_summary_filename_for_account(
+            account_id
+        )
+
+        result_jsonl_rel = self._relative_to_index(jsonl_path, index_dir)
+        result_json_rel = self._relative_to_index(summary_path, index_dir)
+
+        weak_fields = metadata.get("weak_fields")
+        weak_fields_tuple: tuple[str, ...]
+        if isinstance(weak_fields, Sequence) and not isinstance(
+            weak_fields, (bytes, bytearray, str)
+        ):
+            weak_fields_tuple = tuple(
+                str(field).strip() for field in weak_fields if str(field).strip()
+            )
+        else:
+            weak_fields_tuple = ()
+
+        built_at = metadata.get("built_at")
+        if isinstance(built_at, str) and built_at.strip():
+            built_timestamp = built_at.strip()
+        else:
+            built_timestamp = _utc_now()
+
+        source_hash = metadata.get("source_hash")
+        if isinstance(source_hash, str) and source_hash.strip():
+            source_hash_value = source_hash.strip()
+        else:
+            source_hash_value = None
+
+        extra: dict[str, Any] = {"account_key": f"{account_id:03d}"}
+
+        return ValidationPackRecord(
+            account_id=account_id,
+            pack=pack_rel,
+            result_jsonl=result_jsonl_rel,
+            result_json=result_json_rel,
+            lines=len(payloads),
+            status="built",
+            built_at=built_timestamp,
+            weak_fields=weak_fields_tuple,
+            source_hash=source_hash_value,
+            extra=extra,
+        )
+
+    @staticmethod
+    def _relative_to_index(path: Path, index_dir: Path) -> str:
+        resolved_path = path.resolve()
+        base = index_dir.resolve()
+        try:
+            relative = resolved_path.relative_to(base)
+        except ValueError:
+            try:
+                relative = Path(os.path.relpath(resolved_path, base))
+            except ValueError:
+                return resolved_path.as_posix()
+        posix_path = relative.as_posix()
+        return posix_path or "."
 
     # ------------------------------------------------------------------
     # Helper utilities
@@ -341,6 +433,29 @@ class ValidationPackBuilder:
             if normalized:
                 return normalized
         return "unknown"
+
+    @staticmethod
+    def _json_clone(value: Any) -> Any:
+        try:
+            return json.loads(json.dumps(value, ensure_ascii=False, sort_keys=True))
+        except (TypeError, ValueError):
+            return value
+
+    @staticmethod
+    def _build_source_hash(
+        summary: Mapping[str, Any] | None,
+        requirements: Sequence[Mapping[str, Any]],
+        field_consistency: Mapping[str, Any],
+        pack_lines: Sequence[Mapping[str, Any]],
+    ) -> str:
+        payload = {
+            "summary": summary or {},
+            "requirements": list(requirements),
+            "field_consistency": field_consistency,
+            "pack_lines": list(pack_lines),
+        }
+        serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _coerce_optional_int(value: Any) -> int | None:

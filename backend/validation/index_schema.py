@@ -1,0 +1,392 @@
+"""Utilities for working with validation manifest index files."""
+
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
+from typing import Any, Iterable, Mapping, Sequence
+
+from backend.core.ai.paths import (
+    validation_result_jsonl_filename_for_account,
+    validation_result_summary_filename_for_account,
+)
+
+SCHEMA_VERSION = 2
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _ensure_posix(path: Path) -> str:
+    text = path.as_posix()
+    return text or "."
+
+
+def _relativize(target: Path, base: Path) -> str:
+    target_resolved = target.resolve()
+    base_resolved = base.resolve()
+
+    try:
+        relative = target_resolved.relative_to(base_resolved)
+    except ValueError:
+        try:
+            relative = Path(os.path.relpath(target_resolved, base_resolved))
+        except ValueError:
+            # ``relpath`` can raise ValueError on Windows when the drive differs.
+            # Fall back to the absolute POSIX representation – callers should
+            # ensure paths share a common root when generating schema v2 files.
+            return _ensure_posix(target_resolved)
+
+    return _ensure_posix(relative)
+
+
+def _normalize_string(value: Any, *, default: str = "") -> str:
+    if isinstance(value, str):
+        text = value.strip()
+        return text or default
+    if value is None:
+        return default
+    return str(value)
+
+
+def _normalize_int(value: Any, *, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_string_list(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
+        return ()
+    result: list[str] = []
+    for item in value:
+        if item is None:
+            continue
+        text = str(item).strip()
+        if text:
+            result.append(text)
+    return tuple(result)
+
+
+def _collect_unknown_fields(
+    data: Mapping[str, Any], known_keys: Iterable[str]
+) -> dict[str, Any]:
+    known = set(known_keys)
+    extras: dict[str, Any] = {}
+    for key, value in data.items():
+        if key in known:
+            continue
+        extras[key] = value
+    return extras
+
+
+@dataclass(frozen=True)
+class ValidationPackRecord:
+    """Single entry within the validation manifest index."""
+
+    account_id: int
+    pack: str
+    result_jsonl: str
+    result_json: str
+    lines: int
+    status: str
+    built_at: str
+    weak_fields: tuple[str, ...] = ()
+    source_hash: str | None = None
+    extra: Mapping[str, Any] = field(default_factory=dict)
+
+    @staticmethod
+    def from_mapping(data: Mapping[str, Any]) -> "ValidationPackRecord":
+        account_id = _normalize_int(data.get("account_id"))
+        pack_path = _normalize_string(
+            data.get("pack")
+            or data.get("pack_path")
+            or data.get("pack_file")
+            or data.get("pack_filename")
+        )
+        result_jsonl = _normalize_string(
+            data.get("result_jsonl")
+            or data.get("result_jsonl_path")
+            or data.get("result_jsonl_file")
+        )
+        result_json = _normalize_string(
+            data.get("result_json")
+            or data.get("result_json_path")
+            or data.get("result_summary_path")
+            or data.get("result_path")
+        )
+
+        lines = _normalize_int(data.get("lines") or data.get("line_count"))
+        status = _normalize_string(data.get("status"), default="built")
+        built_at = _normalize_string(data.get("built_at"), default=_utc_now())
+        weak_fields = _normalize_string_list(data.get("weak_fields"))
+        source_hash_value = data.get("source_hash")
+        if isinstance(source_hash_value, str) and source_hash_value.strip():
+            source_hash = source_hash_value.strip()
+        else:
+            source_hash = None
+
+        extras = _collect_unknown_fields(
+            data,
+            (
+                "account_id",
+                "pack",
+                "pack_path",
+                "pack_file",
+                "pack_filename",
+                "result_jsonl",
+                "result_jsonl_path",
+                "result_jsonl_file",
+                "result_json",
+                "result_json_path",
+                "result_summary_path",
+                "result_path",
+                "lines",
+                "line_count",
+                "status",
+                "built_at",
+                "weak_fields",
+                "source_hash",
+            ),
+        )
+
+        return ValidationPackRecord(
+            account_id=account_id,
+            pack=pack_path or "",
+            result_jsonl=result_jsonl or "",
+            result_json=result_json or "",
+            lines=lines,
+            status=status or "built",
+            built_at=built_at,
+            weak_fields=weak_fields,
+            source_hash=source_hash,
+            extra=extras,
+        )
+
+    def to_json_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "account_id": self.account_id,
+            "pack": self.pack,
+            "result_jsonl": self.result_jsonl,
+            "result_json": self.result_json,
+            "lines": self.lines,
+            "status": self.status,
+            "built_at": self.built_at,
+        }
+        if self.weak_fields:
+            payload["weak_fields"] = list(self.weak_fields)
+        if self.source_hash:
+            payload["source_hash"] = self.source_hash
+        if self.extra:
+            payload.update(self.extra)
+        return payload
+
+
+@dataclass(frozen=True)
+class ValidationIndex:
+    """Represents the validation manifest index."""
+
+    index_path: Path
+    sid: str
+    packs_dir: str
+    results_dir: str
+    packs: Sequence[ValidationPackRecord]
+    schema_version: int = SCHEMA_VERSION
+    root: str = "."
+
+    @property
+    def index_dir(self) -> Path:
+        return self.index_path.parent.resolve()
+
+    @property
+    def root_dir(self) -> Path:
+        return (self.index_dir / PurePosixPath(self.root)).resolve()
+
+    @property
+    def packs_dir_path(self) -> Path:
+        return (self.root_dir / PurePosixPath(self.packs_dir)).resolve()
+
+    @property
+    def results_dir_path(self) -> Path:
+        return (self.root_dir / PurePosixPath(self.results_dir)).resolve()
+
+    def resolve_path(self, relative: str) -> Path:
+        posix_path = PurePosixPath(relative)
+        return (self.index_dir / posix_path).resolve()
+
+    def resolve_pack_path(self, record: ValidationPackRecord) -> Path:
+        return self.resolve_path(record.pack)
+
+    def resolve_result_jsonl_path(self, record: ValidationPackRecord) -> Path:
+        return self.resolve_path(record.result_jsonl)
+
+    def resolve_result_json_path(self, record: ValidationPackRecord) -> Path:
+        return self.resolve_path(record.result_json)
+
+    def to_json_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "sid": self.sid,
+            "root": self.root,
+            "packs_dir": self.packs_dir,
+            "results_dir": self.results_dir,
+            "packs": [record.to_json_payload() for record in self.packs],
+        }
+
+    def write(self) -> None:
+        document = self.to_json_payload()
+        serialized = json.dumps(document, ensure_ascii=False, indent=2)
+        self.index_path.parent.mkdir(parents=True, exist_ok=True)
+        self.index_path.write_text(serialized + "\n", encoding="utf-8")
+
+
+def _normalize_root(packs_dir: Path, results_dir: Path, index_dir: Path) -> str:
+    try:
+        common_base = Path(os.path.commonpath([packs_dir, results_dir]))
+    except ValueError:
+        common_base = index_dir
+    return _relativize(common_base, index_dir)
+
+
+def build_validation_index(
+    *,
+    index_path: Path,
+    sid: str,
+    packs_dir: Path,
+    results_dir: Path,
+    records: Sequence[ValidationPackRecord],
+) -> ValidationIndex:
+    index_dir = index_path.parent.resolve()
+    packs_dir_resolved = packs_dir.resolve()
+    results_dir_resolved = results_dir.resolve()
+
+    root = _normalize_root(packs_dir_resolved, results_dir_resolved, index_dir)
+    root_path = (index_dir / PurePosixPath(root)).resolve()
+
+    packs_dir_rel = _relativize(packs_dir_resolved, root_path)
+    results_dir_rel = _relativize(results_dir_resolved, root_path)
+
+    return ValidationIndex(
+        index_path=index_path,
+        sid=sid,
+        root=root or ".",
+        packs_dir=packs_dir_rel,
+        results_dir=results_dir_rel,
+        packs=list(records),
+    )
+
+
+def load_validation_index(path: Path | str) -> ValidationIndex:
+    index_path = Path(path)
+    text = index_path.read_text(encoding="utf-8")
+    document = json.loads(text)
+    if not isinstance(document, Mapping):
+        raise TypeError("Validation index root must be a mapping")
+    return _index_from_document(document, index_path)
+
+
+def _index_from_document(document: Mapping[str, Any], index_path: Path) -> ValidationIndex:
+    schema_version = _normalize_int(document.get("schema_version"), default=1)
+
+    if schema_version >= 2:
+        sid = _normalize_string(document.get("sid"))
+        root = _normalize_string(document.get("root"), default=".")
+        packs_dir = _normalize_string(document.get("packs_dir"), default="packs")
+        results_dir = _normalize_string(document.get("results_dir"), default="results")
+
+        raw_packs = document.get("packs")
+        entries: list[ValidationPackRecord] = []
+        if isinstance(raw_packs, Sequence):
+            for pack in raw_packs:
+                if isinstance(pack, Mapping):
+                    entries.append(ValidationPackRecord.from_mapping(pack))
+
+        return ValidationIndex(
+            index_path=index_path,
+            sid=sid,
+            root=root or ".",
+            packs_dir=packs_dir or "packs",
+            results_dir=results_dir or "results",
+            packs=entries,
+            schema_version=schema_version,
+        )
+
+    # legacy schema (v1)
+    sid = _normalize_string(document.get("sid"))
+    packs_dir_raw = document.get("packs_dir")
+    results_dir_raw = document.get("results_dir")
+    index_dir = index_path.parent.resolve()
+
+    packs_dir = Path(_normalize_string(packs_dir_raw)).resolve()
+    results_dir = Path(_normalize_string(results_dir_raw)).resolve()
+
+    raw_items = document.get("items")
+    records: list[ValidationPackRecord] = []
+    if isinstance(raw_items, Sequence):
+        for item in raw_items:
+            if not isinstance(item, Mapping):
+                continue
+            account_id = _normalize_int(item.get("account_id"))
+            pack_raw = _normalize_string(item.get("pack"))
+            pack_path = Path(pack_raw).resolve() if pack_raw else packs_dir
+
+            pack_rel = _relativize(pack_path, index_dir)
+            result_jsonl_path = (
+                results_dir / validation_result_jsonl_filename_for_account(account_id)
+            )
+            result_summary_path = (
+                results_dir / validation_result_summary_filename_for_account(account_id)
+            )
+
+            record = ValidationPackRecord(
+                account_id=account_id,
+                pack=pack_rel,
+                result_jsonl=_relativize(result_jsonl_path, index_dir),
+                result_json=_relativize(result_summary_path, index_dir),
+                lines=_normalize_int(item.get("lines")),
+                status=_normalize_string(item.get("status"), default="built"),
+                built_at=_normalize_string(item.get("built_at"), default=_utc_now()),
+                weak_fields=_normalize_string_list(item.get("weak_fields")),
+                source_hash=_normalize_string(item.get("source_hash")) or None,
+                extra=_collect_unknown_fields(
+                    item,
+                    (
+                        "account_id",
+                        "account_key",
+                        "pack",
+                        "lines",
+                        "status",
+                        "built_at",
+                        "weak_fields",
+                        "source_hash",
+                    ),
+                ),
+            )
+            records.append(record)
+
+    return build_validation_index(
+        index_path=index_path,
+        sid=sid,
+        packs_dir=packs_dir,
+        results_dir=results_dir,
+        records=records,
+    )
+
+
+__all__ = [
+    "SCHEMA_VERSION",
+    "ValidationIndex",
+    "ValidationPackRecord",
+    "build_validation_index",
+    "load_validation_index",
+]
+

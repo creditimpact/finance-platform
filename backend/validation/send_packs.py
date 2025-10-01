@@ -16,6 +16,10 @@ from backend.core.ai.paths import (
     validation_result_jsonl_filename_for_account,
     validation_result_summary_filename_for_account,
 )
+from backend.validation.index_schema import (
+    ValidationIndex,
+    load_validation_index,
+)
 
 from .build_packs import load_manifest_from_source, resolve_manifest_paths
 
@@ -92,6 +96,7 @@ class ValidationPackSender:
         self.model = os.getenv("AI_MODEL", _DEFAULT_MODEL)
         self._client = http_client or self._build_client()
         self._throttle = _THROTTLE_SECONDS
+        self._results_root: Path | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -99,31 +104,28 @@ class ValidationPackSender:
     def send(self) -> list[dict[str, Any]]:
         """Send every pack referenced by the manifest index."""
 
-        index_payload = self._load_index()
-        items = index_payload.get("items")
-        if not isinstance(items, Sequence):
-            return []
+        index = self._load_index()
+        self._results_root = index.results_dir_path
 
         results: list[dict[str, Any]] = []
-        for item in items:
-            if not isinstance(item, Mapping):
-                continue
-            account_id = item.get("account_id")
-            pack_path = item.get("pack")
-            if pack_path is None:
-                continue
+        for record in index.packs:
+            account_id = record.account_id
             try:
                 normalized_account = self._normalize_account_id(account_id)
             except ValueError:
                 normalized_account = None
-            resolved_pack = Path(str(pack_path))
-            if not resolved_pack.is_absolute():
-                resolved_pack = (self.paths.packs_dir / resolved_pack).resolve()
+
+            resolved_pack = index.resolve_pack_path(record)
+            result_jsonl_path = index.resolve_result_jsonl_path(record)
+            result_json_path = index.resolve_result_json_path(record)
+
             try:
                 account_summary = self._process_account(
                     account_id,
                     normalized_account,
                     resolved_pack,
+                    result_jsonl_path,
+                    result_json_path,
                 )
             except ValidationPackError as exc:
                 if normalized_account is None:
@@ -139,7 +141,11 @@ class ValidationPackSender:
                     error=str(exc),
                 )
                 account_summary = self._record_account_failure(
-                    normalized_account, resolved_pack, str(exc)
+                    normalized_account,
+                    resolved_pack,
+                    result_jsonl_path,
+                    result_json_path,
+                    str(exc),
                 )
             results.append(account_summary)
         return results
@@ -152,6 +158,8 @@ class ValidationPackSender:
         account_id: Any,
         normalized_account: int | None,
         pack_path: Path,
+        result_jsonl_path: Path,
+        result_summary_path: Path,
     ) -> dict[str, Any]:
         account_int = normalized_account
         if account_int is None:
@@ -190,7 +198,12 @@ class ValidationPackSender:
         status = "error" if errors else "done"
         error_message = "; ".join(errors) if errors else None
         jsonl_path, summary_path = self._write_results(
-            account_int, result_lines, status=status, error=error_message
+            account_int,
+            result_lines,
+            status=status,
+            error=error_message,
+            jsonl_path=result_jsonl_path,
+            summary_path=result_summary_path,
         )
 
         summary_payload: dict[str, Any] = {
@@ -218,10 +231,20 @@ class ValidationPackSender:
         return summary_payload
 
     def _record_account_failure(
-        self, account_id: int, pack_path: Path, error: str
+        self,
+        account_id: int,
+        pack_path: Path,
+        result_jsonl_path: Path,
+        result_summary_path: Path,
+        error: str,
     ) -> dict[str, Any]:
         jsonl_path, summary_path = self._write_results(
-            account_id, [], status="error", error=error
+            account_id,
+            [],
+            status="error",
+            error=error,
+            jsonl_path=result_jsonl_path,
+            summary_path=result_summary_path,
         )
         summary_payload = {
             "sid": self.sid,
@@ -319,14 +342,28 @@ class ValidationPackSender:
         *,
         status: str = "done",
         error: str | None = None,
+        jsonl_path: Path | None = None,
+        summary_path: Path | None = None,
     ) -> tuple[Path, Path]:
-        results_dir = self.paths.results_dir
-        results_dir.mkdir(parents=True, exist_ok=True)
+        results_root = self._results_root or self.paths.results_dir
+        results_root.mkdir(parents=True, exist_ok=True)
 
-        jsonl_path = results_dir / validation_result_jsonl_filename_for_account(account_id)
-        summary_path = (
-            results_dir / validation_result_summary_filename_for_account(account_id)
-        )
+        if jsonl_path is None:
+            jsonl_path = (
+                results_root / validation_result_jsonl_filename_for_account(account_id)
+            )
+        else:
+            jsonl_path = jsonl_path
+
+        if summary_path is None:
+            summary_path = (
+                results_root / validation_result_summary_filename_for_account(account_id)
+            )
+        else:
+            summary_path = summary_path
+
+        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
 
         jsonl_lines = [
             json.dumps(line, ensure_ascii=False, sort_keys=True) for line in result_lines
@@ -466,21 +503,18 @@ class ValidationPackSender:
             return field_key.strip()
         return f"line_{line_number:03d}"
 
-    def _load_index(self) -> Mapping[str, Any]:
+    def _load_index(self) -> ValidationIndex:
         index_path = self.paths.index_path
         try:
-            text = index_path.read_text(encoding="utf-8")
+            return load_validation_index(index_path)
         except FileNotFoundError as exc:
             raise ValidationPackError(f"Validation index missing: {index_path}") from exc
-        except OSError as exc:
-            raise ValidationPackError(f"Unable to read validation index: {index_path}") from exc
-        try:
-            document = json.loads(text)
         except json.JSONDecodeError as exc:
             raise ValidationPackError(f"Validation index is not valid JSON: {index_path}") from exc
-        if not isinstance(document, Mapping):
-            raise ValidationPackError("Validation index root must be an object")
-        return document
+        except TypeError as exc:
+            raise ValidationPackError("Validation index root must be an object") from exc
+        except OSError as exc:
+            raise ValidationPackError(f"Unable to read validation index: {index_path}") from exc
 
     def _log(self, event: str, **payload: Any) -> None:
         log_path = self.paths.log_path

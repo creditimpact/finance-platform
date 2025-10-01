@@ -1,0 +1,151 @@
+from __future__ import annotations
+
+import io
+import json
+from pathlib import Path
+
+import pytest
+import sys
+import types
+
+
+_requests_stub = types.ModuleType("requests")
+
+
+def _post_stub(*args, **kwargs):  # pragma: no cover - safety net
+    raise AssertionError("requests.post should not be invoked in tests")
+
+
+_requests_stub.post = _post_stub
+sys.modules.setdefault("requests", _requests_stub)
+
+from backend.validation.build_packs import ValidationPackBuilder
+from backend.validation.manifest import check_index
+from backend.validation.send_packs import ValidationPackSender
+from backend.validation.index_schema import load_validation_index
+
+
+class _StubClient:
+    def create(self, *, model: str, messages, response_format):  # type: ignore[override]
+        payload = {
+            "decision": "strong",
+            "rationale": "auto",
+            "citations": [],
+        }
+        return {"choices": [{"message": {"content": json.dumps(payload)}}]}
+
+
+def _build_manifest(tmp_path: Path, sid: str = "S001") -> tuple[dict[str, object], Path]:
+    base = tmp_path / sid / "ai_packs" / "validation"
+    packs_dir = base / "packs"
+    results_dir = base / "results"
+    index_path = base / "index.json"
+    log_path = base / "logs.txt"
+    accounts_dir = tmp_path / sid / "cases" / "accounts"
+    account_dir = accounts_dir / "1"
+    account_dir.mkdir(parents=True, exist_ok=True)
+
+    summary = {
+        "validation_requirements": {
+            "requirements": [
+                {
+                    "field": "Account Name",
+                    "strength": "weak",
+                    "ai_needed": False,
+                    "documents": ["statement"],
+                    "category": "identity",
+                }
+            ],
+            "field_consistency": {},
+        }
+    }
+    (account_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    bureaus = {
+        "transunion": {"Account Name": {"raw": "Value"}},
+        "experian": {},
+        "equifax": {},
+    }
+    (account_dir / "bureaus.json").write_text(json.dumps(bureaus), encoding="utf-8")
+
+    manifest: dict[str, object] = {
+        "sid": sid,
+        "base_dirs": {"cases_accounts_dir": str(accounts_dir)},
+        "ai": {
+            "packs": {
+                "validation": {
+                    "packs_dir": str(packs_dir),
+                    "results_dir": str(results_dir),
+                    "index": str(index_path),
+                    "logs": str(log_path),
+                }
+            }
+        },
+    }
+    return manifest, tmp_path
+
+
+def test_builder_writes_schema_v2(tmp_path: Path) -> None:
+    manifest, _ = _build_manifest(tmp_path)
+    builder = ValidationPackBuilder(manifest)
+    records = builder.build()
+
+    assert len(records) == 1
+
+    index_path = tmp_path / "S001" / "ai_packs" / "validation" / "index.json"
+    document = json.loads(index_path.read_text(encoding="utf-8"))
+    assert document["schema_version"] == 2
+    assert document["root"] == "."
+    assert document["packs_dir"] == "packs"
+    assert document["results_dir"] == "results"
+    entry = document["packs"][0]
+    assert entry["pack"].startswith("packs/")
+    assert entry["result_jsonl"].startswith("results/")
+    assert entry["result_json"].startswith("results/")
+
+
+def test_manifest_check_reports_missing_pack(tmp_path: Path) -> None:
+    manifest, _ = _build_manifest(tmp_path, sid="S002")
+    builder = ValidationPackBuilder(manifest)
+    builder.build()
+
+    index_path = tmp_path / "S002" / "ai_packs" / "validation" / "index.json"
+    index = load_validation_index(index_path)
+
+    buffer = io.StringIO()
+    assert check_index(index, stream=buffer) is True
+
+    pack_path = index.resolve_pack_path(index.packs[0])
+    pack_path.unlink()
+
+    buffer = io.StringIO()
+    assert check_index(index, stream=buffer) is False
+    output = buffer.getvalue()
+    assert "MISSING" in output
+
+
+def test_sender_uses_manifest_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest, runs_root = _build_manifest(tmp_path, sid="S003")
+    builder = ValidationPackBuilder(manifest)
+    builder.build()
+
+    monkeypatch.setenv("AI_MODEL", "stub")
+
+    sender = ValidationPackSender(manifest, http_client=_StubClient())
+    results = sender.send()
+
+    assert len(results) == 1
+
+    index_path = runs_root / "S003" / "ai_packs" / "validation" / "index.json"
+    index = load_validation_index(index_path)
+    record = index.packs[0]
+
+    pack_path = index.resolve_pack_path(record)
+    assert pack_path.is_file()
+
+    jsonl_path = index.resolve_result_jsonl_path(record)
+    summary_path = index.resolve_result_json_path(record)
+    assert jsonl_path.is_file()
+    assert summary_path.is_file()
+
+    # ensure the sender wrote results to the manifest-defined location
+    assert sender._results_root == index.results_dir_path

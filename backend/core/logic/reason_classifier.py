@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping
 
-__all__ = ["classify_reason"]
+__all__ = ["classify_reason", "decide_send_to_ai"]
 
 
 _REASON_LABELS: Dict[str, str] = {
@@ -115,4 +115,46 @@ def classify_reason(bureau_values: Mapping[str, Any]) -> Mapping[str, Any]:
         "present_count": present_count,
         "distinct_values": distinct_values,
     }
+
+
+_AI_FIELDS = {"account_type", "account_rating", "creditor_remarks"}
+_AI_ALLOWED_REASONS = {"C3", "C4", "C5"}
+
+
+def decide_send_to_ai(field: Any, reason: Any) -> bool:
+    """Return ``True`` when ``field`` should be escalated to AI adjudication.
+
+    Parameters
+    ----------
+    field:
+        The field identifier under review. Only a small subset of free-text
+        fields are eligible for AI review.
+    reason:
+        The escalation reason. This may be a reason code string such as
+        ``"C3_TWO_PRESENT_CONFLICT"`` or a mapping containing a ``reason_code``
+        entry (for compatibility with :func:`classify_reason` output).
+    """
+
+    if not isinstance(field, str):
+        return False
+
+    normalized_field = field.strip().lower()
+    if normalized_field not in _AI_FIELDS:
+        return False
+
+    reason_code: str | None = None
+    if isinstance(reason, str):
+        reason_code = reason.strip()
+    elif isinstance(reason, Mapping):
+        for key in ("reason_code", "code", "reason"):
+            candidate = reason.get(key)
+            if isinstance(candidate, str):
+                reason_code = candidate.strip()
+                break
+
+    if not reason_code:
+        return False
+
+    prefix = reason_code.upper().split("_", 1)[0]
+    return prefix in _AI_ALLOWED_REASONS
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -43,6 +44,9 @@ _EXPECTED_OUTPUT_SCHEMA = {
 _BUREAUS = ("transunion", "experian", "equifax")
 
 
+log = logging.getLogger(__name__)
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
         "+00:00", "Z"
@@ -76,19 +80,33 @@ class ValidationPackBuilder:
         records: list[ValidationPackRecord] = []
         serialized_records: list[dict[str, Any]] = []
         for account_id, account_dir in self._iter_accounts():
-            payloads, metadata = self._build_account_pack(account_id, account_dir)
-            skip_reason = metadata.get("skip_reason") if isinstance(metadata, Mapping) else None
-            if not payloads:
-                self._log(
-                    "pack_skipped",
-                    account_id=f"{account_id:03d}",
-                    reason=skip_reason or "no_payloads",
+            pack_path: Path | None = None
+            try:
+                payloads, metadata = self._build_account_pack(account_id, account_dir)
+                skip_reason = (
+                    metadata.get("skip_reason") if isinstance(metadata, Mapping) else None
+                )
+                if not payloads:
+                    self._log(
+                        "pack_skipped",
+                        account_id=f"{account_id:03d}",
+                        reason=skip_reason or "no_payloads",
+                    )
+                    continue
+
+                pack_path = self._write_pack(account_id, payloads)
+                record = self._build_index_record(account_id, pack_path, payloads, metadata)
+                records.append(record)
+                serialized_records.append(record.to_json_payload())
+            except Exception:  # pragma: no cover - defensive logging
+                log.exception(
+                    "VALIDATION_PACK_BUILD_FAILED sid=%s account_id=%s pack=%s account_dir=%s",
+                    self.paths.sid,
+                    f"{account_id:03d}" if isinstance(account_id, int) else account_id,
+                    pack_path,
+                    account_dir,
                 )
                 continue
-            pack_path = self._write_pack(account_id, payloads)
-            record = self._build_index_record(account_id, pack_path, payloads, metadata)
-            records.append(record)
-            serialized_records.append(record.to_json_payload())
 
         self._write_index(records)
         return serialized_records

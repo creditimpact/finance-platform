@@ -214,7 +214,28 @@ class ValidationPackWriter:
 
         results: dict[int, list[PackLine]] = {}
         for account_id in self._discover_account_ids():
-            results[account_id] = self.write_pack_for_account(account_id)
+            try:
+                results[account_id] = self.write_pack_for_account(account_id)
+            except Exception:
+                pack_path: Path | None = None
+                account_label = account_id
+                try:
+                    normalized_id = self._normalize_account_id(account_id)
+                    pack_path = (
+                        self._packs_dir
+                        / validation_pack_filename_for_account(normalized_id)
+                    )
+                    account_label = (
+                        f"{normalized_id:03d}" if isinstance(normalized_id, int) else normalized_id
+                    )
+                except Exception:
+                    pass
+                log.exception(
+                    "VALIDATION_PACK_WRITE_FAILED sid=%s account_id=%s pack=%s",
+                    self.sid,
+                    account_label,
+                    pack_path,
+                )
         return results
 
     def write_pack_for_account(self, account_id: int | str) -> list[PackLine]:

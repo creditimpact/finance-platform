@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import time
-from itertools import islice
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,13 +42,13 @@ DEFAULT_INFLIGHT_TTL_SECONDS = 30 * 60
 
 
 def _maybe_slice(iterable: Iterable[object]) -> Iterable[object]:
-    """Optionally limit ``iterable`` to the first ``DEBUG_FIRST_N`` items."""
+    """Return ``iterable`` unchanged to ensure all accounts are processed."""
 
     debug_first_n = os.getenv("DEBUG_FIRST_N", "").strip()
-    if debug_first_n and debug_first_n.isdigit():
-        limit = int(debug_first_n)
-        if limit > 0:
-            return islice(iterable, limit)
+    if debug_first_n:
+        logger.debug(
+            "DEBUG_FIRST_N=%s ignored; processing all items", debug_first_n
+        )
     return iterable
 
 

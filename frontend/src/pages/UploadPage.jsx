@@ -1,5 +1,100 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { uploadReport, pollResult, listAccounts, getAccount } from '../api';
+
+const STATUS_BADGES = [
+  { key: 'missing', label: 'Missing', className: 'missing' },
+  { key: 'mismatch', label: 'Mismatch', className: 'mismatch' },
+  { key: 'both', label: 'Both', className: 'both' },
+];
+
+function buildCoverageLabel(values = []) {
+  if (!Array.isArray(values) || values.length === 0) {
+    return 'None';
+  }
+  return values.join(', ');
+}
+
+function buildTooltip(reason = {}) {
+  if (!reason || typeof reason !== 'object') {
+    return undefined;
+  }
+  const parts = [];
+  if (typeof reason.pattern === 'string' && reason.pattern) {
+    parts.push(`Pattern: ${reason.pattern}`);
+  }
+  const coverage = reason.coverage || {};
+  const missing = buildCoverageLabel(coverage.missing_bureaus);
+  const present = buildCoverageLabel(coverage.present_bureaus);
+  parts.push(`Missing bureaus: ${missing}`);
+  parts.push(`Present bureaus: ${present}`);
+  return parts.join('\n');
+}
+
+function WeakFieldBadges({ reason }) {
+  if (!reason || typeof reason !== 'object') {
+    return null;
+  }
+
+  const badges = STATUS_BADGES.filter((badge) => Boolean(reason[badge.key]));
+  if (badges.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="weak-field-badges" title={buildTooltip(reason)}>
+      {badges.map((badge) => (
+        <span key={badge.key} className={`weak-field-badge weak-field-badge--${badge.className}`}>
+          {badge.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function extractWeakFields(detail) {
+  if (!detail || typeof detail !== 'object') {
+    return [];
+  }
+
+  const results = [];
+  const seenFields = new Set();
+  const visited = new Set();
+
+  const visit = (node) => {
+    if (!node || typeof node !== 'object') {
+      return;
+    }
+    if (visited.has(node)) {
+      return;
+    }
+    visited.add(node);
+
+    const fieldName =
+      typeof node.field === 'string'
+        ? node.field
+        : typeof node.field_name === 'string'
+        ? node.field_name
+        : null;
+    const reason = node.reason;
+
+    if (fieldName && reason && typeof reason === 'object' && !seenFields.has(fieldName)) {
+      results.push({ field: fieldName, reason });
+      seenFields.add(fieldName);
+    }
+
+    for (const [key, value] of Object.entries(node)) {
+      if (key === 'reason') {
+        continue;
+      }
+      if (value && typeof value === 'object') {
+        visit(value);
+      }
+    }
+  };
+
+  visit(detail);
+  return results;
+}
 
 export default function UploadPage() {
   const [email, setEmail] = useState('');
@@ -11,6 +106,8 @@ export default function UploadPage() {
   const [selectedId, setSelectedId] = useState(null);
   const [accountDetail, setAccountDetail] = useState(null);
   const abortRef = useRef(null);
+
+  const weakFieldEntries = useMemo(() => extractWeakFields(accountDetail), [accountDetail]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -149,6 +246,29 @@ export default function UploadPage() {
           {selectedId && accountDetail && (
             <details style={{ marginTop: 12 }} open>
               <summary>Details for {selectedId}</summary>
+              {weakFieldEntries.length > 0 && (
+                <div className="weak-fields-card">
+                  <h4 className="weak-fields-heading">Weak fields</h4>
+                  <table className="weak-fields-table">
+                    <thead>
+                      <tr>
+                        <th>Field</th>
+                        <th>Reason</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {weakFieldEntries.map((entry) => (
+                        <tr key={entry.field}>
+                          <td>{entry.field}</td>
+                          <td>
+                            <WeakFieldBadges reason={entry.reason} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
               <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(accountDetail, null, 2)}</pre>
             </details>
           )}

@@ -13,6 +13,17 @@ flowchart LR
     R -- no --> B[Rollback]
 ```
 
+### Validation field scope
+
+Validation only investigates the 21 fields documented in
+[`docs/validation.md`](validation.md). Treat the 18 "always-investigatable"
+fields as hard requirements—any cross-bureau mismatch or missing value should
+open/keep a case. The three conditional fields
+(`creditor_remarks`, `account_rating`, `account_number_display`) stay in the
+pipeline but only elevate to **strong** disputes when the content substantiates
+the claim. `account_description`, `dispute_status`, and `last_verified` remain
+informational-only and must not trigger escalations.
+
 ## Staging Batch
 
 1. Merge the change to `main`.

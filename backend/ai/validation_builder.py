@@ -565,7 +565,7 @@ class ValidationPackWriter:
             log.exception(
                 "VALIDATION_REASON_CLASSIFY_FAILED field=%s", field_name
             )
-            return None, False
+            pattern = "unknown"
 
         if field_name in {"two_year_payment_history", "seven_year_history"}:
             canonicalizer = canonicalize_history
@@ -574,7 +574,15 @@ class ValidationPackWriter:
 
         canonical_values: dict[str, Any] = {}
         for bureau in _BUREAUS:
-            canonical_values[bureau] = canonicalizer(raw_values.get(bureau))
+            try:
+                canonical_values[bureau] = canonicalizer(raw_values.get(bureau))
+            except Exception:  # pragma: no cover - defensive
+                log.exception(
+                    "VALIDATION_REASON_CANONICALIZE_FAILED field=%s bureau=%s",
+                    field_name,
+                    bureau,
+                )
+                canonical_values[bureau] = None
 
         flags = compute_reason_flags(field_name, pattern, match_matrix={})
 

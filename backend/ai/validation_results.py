@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +17,20 @@ from backend.core.ai.paths import (
     validation_result_jsonl_filename_for_account,
     validation_result_summary_filename_for_account,
 )
+from backend.core.ai.eligibility_policy import (
+    canonicalize_history,
+    canonicalize_scalar,
+)
+from backend.core.ai.report_compare import compute_reason_flags, classify_reporting_pattern
+
+
+log = logging.getLogger(__name__)
+
+_BUREAUS: tuple[str, ...] = ("transunion", "experian", "equifax")
+
+
+def _reasons_enabled() -> bool:
+    return os.getenv("VALIDATION_REASON_ENABLED") == "1"
 
 
 def _clone_jsonish(value: Any) -> Any:
@@ -151,6 +167,90 @@ def _load_pack_lookup(pack_path: Path) -> dict[str, Mapping[str, Any]]:
     return lookup
 
 
+def _default_reason_payload() -> dict[str, Any]:
+    return {
+        "schema": 1,
+        "pattern": "unknown",
+        "missing": False,
+        "mismatch": False,
+        "both": False,
+        "eligible": False,
+        "coverage": {
+            "missing_bureaus": [],
+            "present_bureaus": [],
+        },
+        "values": {},
+    }
+
+
+def _build_reason_from_pack(field_name: str, pack_payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    existing = pack_payload.get("reason")
+    if isinstance(existing, Mapping):
+        cloned = _clone_jsonish(existing)
+        cloned.setdefault("schema", 1)
+        return cloned
+
+    bureaus = pack_payload.get("bureaus")
+    if not isinstance(bureaus, Mapping):
+        return _default_reason_payload()
+
+    raw_values: dict[str, Any] = {}
+    for bureau in _BUREAUS:
+        bureau_payload = bureaus.get(bureau)
+        if isinstance(bureau_payload, Mapping):
+            raw_values[bureau] = bureau_payload.get("raw")
+        else:
+            raw_values[bureau] = None
+
+    try:
+        pattern = classify_reporting_pattern(raw_values)
+    except Exception:  # pragma: no cover - defensive
+        log.exception(
+            "VALIDATION_RESULT_REASON_CLASSIFY_FAILED field=%s", field_name
+        )
+        pattern = "unknown"
+
+    if field_name in {"two_year_payment_history", "seven_year_history"}:
+        canonicalizer = canonicalize_history
+    else:
+        canonicalizer = canonicalize_scalar
+
+    canonical_values: dict[str, Any] = {}
+    missing_bureaus: list[str] = []
+    present_bureaus: list[str] = []
+    for bureau in _BUREAUS:
+        try:
+            canonical = canonicalizer(raw_values.get(bureau))
+        except Exception:  # pragma: no cover - defensive
+            log.exception(
+                "VALIDATION_RESULT_REASON_CANONICALIZE_FAILED field=%s bureau=%s",
+                field_name,
+                bureau,
+            )
+            canonical = None
+        canonical_values[bureau] = canonical
+        if canonical is None:
+            missing_bureaus.append(bureau)
+        else:
+            present_bureaus.append(bureau)
+
+    flags = compute_reason_flags(field_name, pattern, match_matrix={})
+
+    return {
+        "schema": 1,
+        "pattern": pattern,
+        "missing": flags.get("missing", False),
+        "mismatch": flags.get("mismatch", False),
+        "both": flags.get("both", False),
+        "eligible": flags.get("eligible", False),
+        "coverage": {
+            "missing_bureaus": missing_bureaus,
+            "present_bureaus": present_bureaus,
+        },
+        "values": canonical_values,
+    }
+
+
 def _normalize_decision(decision: Any) -> str:
     value = str(decision or "").strip().lower()
     if value == "strong":
@@ -231,10 +331,14 @@ def _build_result_lines(
             rationale = ""
 
         reason_payload = None
-        if isinstance(pack_payload, Mapping):
-            candidate = pack_payload.get("reason")
-            if isinstance(candidate, Mapping):
-                reason_payload = _clone_jsonish(candidate)
+        if _reasons_enabled() and isinstance(pack_payload, Mapping):
+            try:
+                reason_payload = _build_reason_from_pack(field_name, pack_payload)
+            except Exception:  # pragma: no cover - defensive
+                log.exception(
+                    "VALIDATION_RESULT_REASON_BUILD_FAILED field=%s", field_name
+                )
+                reason_payload = _default_reason_payload()
 
         result_line = {
             "id": line_id,

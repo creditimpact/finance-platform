@@ -443,9 +443,6 @@ class ValidationPackWriter:
         if not isinstance(requirement, Mapping):
             return None
 
-        if not requirement.get("ai_needed"):
-            return None
-
         field = requirement.get("field")
         if field is None and canonical_field is None:
             return None
@@ -488,13 +485,9 @@ class ValidationPackWriter:
             field_name, bureaus_data, consistency
         )
 
-        if _reasons_enabled():
-            reason_payload, ai_needed = self._build_reason_metadata(
-                field_name, bureau_values
-            )
-            if reason_payload is not None:
-                payload["reason"] = reason_payload
-                payload["ai_needed"] = ai_needed
+        reason_payload, ai_needed = self._build_reason_metadata(
+            field_name, bureau_values
+        )
 
         guidance = (
             "Return a JSON object with a decision of either 'strong' or 'no_case', "
@@ -542,6 +535,11 @@ class ValidationPackWriter:
             "prompt": prompt_payload,
             "expected_output": _EXPECTED_OUTPUT_SCHEMA,
         }
+
+        payload["ai_needed"] = ai_needed
+
+        if _reasons_enabled() and reason_payload is not None:
+            payload["reason"] = reason_payload
 
         extra_context = requirement.get("notes") or requirement.get("reason")
         if extra_context:

@@ -30,6 +30,14 @@ from backend.core.ai.paths import (
     validation_logs_path,
 )
 from backend.pipeline.runs import RunManifest, persist_manifest
+from backend.core.ai.eligibility_policy import (
+    canonicalize_history,
+    canonicalize_scalar,
+)
+from backend.core.ai.report_compare import (
+    classify_reporting_pattern,
+    compute_reason_flags,
+)
 from backend.core.logic.validation_field_sets import (
     ALL_VALIDATION_FIELD_SET,
     ALL_VALIDATION_FIELDS,
@@ -121,6 +129,10 @@ _ALLOWED_FIELDS: frozenset[str] = frozenset(ALL_VALIDATION_FIELDS)
 _ALLOWED_CATEGORIES: frozenset[str] = frozenset(
     _ALLOWED_FIELD_CATEGORIES.values()
 )
+
+
+def _reasons_enabled() -> bool:
+    return os.getenv("VALIDATION_REASON_ENABLED") == "1"
 
 
 @dataclass(frozen=True)
@@ -476,6 +488,14 @@ class ValidationPackWriter:
             field_name, bureaus_data, consistency
         )
 
+        if _reasons_enabled():
+            reason_payload, ai_needed = self._build_reason_metadata(
+                field_name, bureau_values
+            )
+            if reason_payload is not None:
+                payload["reason"] = reason_payload
+                payload["ai_needed"] = ai_needed
+
         guidance = (
             "Return a JSON object with a decision of either 'strong' or 'no_case', "
             "along with rationale and any supporting citations."
@@ -530,6 +550,59 @@ class ValidationPackWriter:
             )
 
         return payload
+
+    def _build_reason_metadata(
+        self,
+        field_name: str,
+        bureau_values: Mapping[str, Mapping[str, Any]],
+    ) -> tuple[Mapping[str, Any] | None, bool]:
+        raw_values: dict[str, Any] = {}
+        for bureau in _BUREAUS:
+            bureau_data = bureau_values.get(bureau, {})
+            raw_values[bureau] = bureau_data.get("raw")
+
+        try:
+            pattern = classify_reporting_pattern(raw_values)
+        except Exception:  # pragma: no cover - defensive
+            log.exception(
+                "VALIDATION_REASON_CLASSIFY_FAILED field=%s", field_name
+            )
+            return None, False
+
+        if field_name in {"two_year_payment_history", "seven_year_history"}:
+            canonicalizer = canonicalize_history
+        else:
+            canonicalizer = canonicalize_scalar
+
+        canonical_values: dict[str, Any] = {}
+        for bureau in _BUREAUS:
+            canonical_values[bureau] = canonicalizer(raw_values.get(bureau))
+
+        flags = compute_reason_flags(field_name, pattern, match_matrix={})
+
+        missing_bureaus = [
+            bureau for bureau in _BUREAUS if canonical_values.get(bureau) is None
+        ]
+        present_bureaus = [
+            bureau for bureau in _BUREAUS if canonical_values.get(bureau) is not None
+        ]
+
+        reason_payload = {
+            "schema": 1,
+            "pattern": pattern,
+            "missing": flags.get("missing", False),
+            "mismatch": flags.get("mismatch", False),
+            "both": flags.get("both", False),
+            "eligible": flags.get("eligible", False),
+            "coverage": {
+                "missing_bureaus": missing_bureaus,
+                "present_bureaus": present_bureaus,
+            },
+            "values": canonical_values,
+        }
+
+        ai_needed = field_name in _CONDITIONAL_FIELDS and bool(flags.get("eligible"))
+        return reason_payload, ai_needed
 
     def _build_context(
         self, consistency: Mapping[str, Any] | None

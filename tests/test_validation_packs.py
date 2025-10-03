@@ -73,11 +73,12 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
                     "ai_needed": True,
                 },
                 {
-                    "field": "payment_history",
-                    "category": "history",
-                    "strength": "weak",
+                    "field": "creditor_remarks",
+                    "category": "status",
+                    "strength": "soft",
                     "ai_needed": True,
-                    "notes": "recent late payments",
+                    "notes": "recent remark change",
+                    "conditional_gate": True,
                 },
             ],
             "field_consistency": {
@@ -98,15 +99,17 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
                         "experian": 150,
                     },
                 },
-                "payment_history": {
-                    "consensus": "mixed",
-                    "history": {
-                        "2y": {"late_payments": 2},
-                        "7y": {"late_payments": 4},
-                    },
+                "creditor_remarks": {
+                    "consensus": "majority",
                     "raw": {
-                        "transunion": "1 late",
-                        "experian": "2 late",
+                        "transunion": "Account closed by lender",
+                        "experian": "Account closed by lender",
+                        "equifax": "Account closed by creditor",
+                    },
+                    "normalized": {
+                        "transunion": "account closed by lender",
+                        "experian": "account closed by lender",
+                        "equifax": "account closed by creditor",
                     },
                 },
             },
@@ -116,14 +119,15 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
     bureaus_payload = {
         "transunion": {
             "balance_owed": "$100",
-            "payment_history": "1 late",
+            "creditor_remarks": "Account closed by lender",
         },
         "experian": {
             "balance_owed": "$150",
-            "payment_history": "2 late",
+            "creditor_remarks": "Account closed by lender",
         },
         "equifax": {
             "balance_owed": None,
+            "creditor_remarks": "Account closed by creditor",
         },
     }
 
@@ -136,7 +140,13 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
 
     assert len(lines) == 2
     fields = {line.payload["field"] for line in lines}
-    assert fields == {"balance_owed", "payment_history"}
+    assert fields == {"balance_owed", "creditor_remarks"}
+
+    conditional_guidance = {
+        line.payload["field"]: line.payload["prompt"]["guidance"] for line in lines
+    }
+    assert "Treat this as conditional" not in conditional_guidance["balance_owed"]
+    assert "Treat this as conditional" in conditional_guidance["creditor_remarks"]
 
     pack_path = validation_packs_dir(sid, runs_root=runs_root) / validation_pack_filename_for_account(
         account_id
@@ -147,7 +157,7 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
     index_payload = _read_json(validation_index_path(sid, runs_root=runs_root))
     packs = index_payload.get("packs", [])
     assert len(packs) == 1
-    assert packs[0]["weak_fields"] == ["balance_owed", "payment_history"]
+    assert packs[0]["weak_fields"] == ["balance_owed", "creditor_remarks"]
     assert packs[0]["lines"] == 2
 
 
@@ -185,7 +195,7 @@ def test_validation_index_round_trip(tmp_path: Path) -> None:
         pack_path=pack_path2,
         result_jsonl_path=jsonl_path2,
         result_json_path=summary_path2,
-        weak_fields=("payment_history", "balance_owed"),
+        weak_fields=("creditor_remarks", "balance_owed"),
         line_count=2,
         status="built",
     )
@@ -195,7 +205,7 @@ def test_validation_index_round_trip(tmp_path: Path) -> None:
     accounts = writer.load_accounts()
     assert set(accounts) == {1, 2}
     assert accounts[1]["weak_fields"] == ["balance_owed"]
-    assert accounts[2]["weak_fields"] == ["payment_history", "balance_owed"]
+    assert accounts[2]["weak_fields"] == ["creditor_remarks", "balance_owed"]
     assert accounts[2]["lines"] == 2
 
 

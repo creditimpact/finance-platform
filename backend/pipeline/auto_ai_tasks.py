@@ -545,10 +545,10 @@ def ai_validation_requirements_step(
     payload["validation_requirements"] = stats
 
     logger.info(
-        "AI_VALIDATION_REQUIREMENTS_END sid=%s processed=%d requirements=%d",
+        "AI_VALIDATION_REQUIREMENTS_END sid=%s processed=%d findings=%d",
         sid,
         stats.get("processed_accounts", 0),
-        stats.get("requirements", 0),
+        stats.get("findings", 0),
     )
 
     return payload

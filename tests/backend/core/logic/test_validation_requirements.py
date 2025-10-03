@@ -88,6 +88,7 @@ def test_build_summary_payload_includes_field_consistency():
         requirements, field_consistency=field_consistency
     )
 
+    assert payload["schema_version"] == 3
     assert payload["count"] == 1
     expected_consistency = {
         "balance_owed": {
@@ -138,6 +139,7 @@ def test_build_summary_payload_can_disable_reason_enrichment(monkeypatch):
         requirements, field_consistency=field_consistency
     )
 
+    assert payload["schema_version"] == 3
     assert payload["count"] == 1
     assert len(payload["findings"]) == 1
     assert payload["findings"][0]["field"] == "balance_owed"
@@ -441,6 +443,7 @@ def test_build_validation_requirements_for_account_respects_summary_consensus(
 
     summary_after = json.loads(summary_path.read_text(encoding="utf-8"))
     validation_block = summary_after["validation_requirements"]
+    assert validation_block["schema_version"] == 3
     assert validation_block["count"] == 0
     assert validation_block["findings"] == []
     assert "requirements" not in validation_block
@@ -543,6 +546,7 @@ def test_apply_validation_summary_and_sync_validation_tag(tmp_path):
     apply_validation_summary(summary_path, payload)
     summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
     validation_block = summary_data["validation_requirements"]
+    assert validation_block["schema_version"] == 3
     assert validation_block["count"] == 1
     assert summary_data["existing"] is True
     assert "requirements" not in validation_block
@@ -601,6 +605,7 @@ def test_build_validation_requirements_for_account_writes_summary_and_tags(
     assert result["count"] == 2
     assert set(result["fields"]) == {"balance_owed", "payment_status"}
     validation_payload = result["validation_requirements"]
+    assert validation_payload["schema_version"] == 3
     assert validation_payload["count"] == 2
     assert "requirements" not in validation_payload
     assert {entry["field"] for entry in validation_payload["findings"]} == {
@@ -614,6 +619,7 @@ def test_build_validation_requirements_for_account_writes_summary_and_tags(
     summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["existing"] is True
     validation_block = summary["validation_requirements"]
+    assert validation_block["schema_version"] == 3
     assert validation_block["count"] == 2
     assert "requirements" not in validation_block
     assert {entry["field"] for entry in validation_block["findings"]} == {
@@ -683,6 +689,7 @@ def test_build_validation_requirements_for_account_clears_when_empty(tmp_path, m
     assert result["count"] == 0
     assert result["fields"] == []
     validation_payload = result["validation_requirements"]
+    assert validation_payload["schema_version"] == 3
     assert validation_payload["count"] == 0
     assert "requirements" not in validation_payload
     assert validation_payload["findings"] == []
@@ -693,6 +700,7 @@ def test_build_validation_requirements_for_account_clears_when_empty(tmp_path, m
 
     summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
     validation_block = summary["validation_requirements"]
+    assert validation_block["schema_version"] == 3
     assert validation_block["count"] == 0
     assert "requirements" not in validation_block
     assert validation_block["findings"] == []

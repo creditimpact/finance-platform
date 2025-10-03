@@ -36,6 +36,7 @@ __all__ = [
 
 _VALIDATION_TAG_KIND = "validation_required"
 _CONFIG_PATH = Path(__file__).with_name("validation_config.yml")
+_SUMMARY_SCHEMA_VERSION = 3
 
 
 def _is_validation_reason_enabled() -> bool:
@@ -842,17 +843,6 @@ def build_summary_payload(
     normalized_requirements = [dict(entry) for entry in requirements]
     reasons_enabled = _is_validation_reason_enabled()
 
-    include_requirements = os.getenv(
-        "VALIDATION_SUMMARY_INCLUDE_REQUIREMENTS", "0"
-    )
-    include_requirements_flag = str(include_requirements).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "y",
-        "on",
-    }
-
     if reasons_enabled:
         findings = [
             _build_finding(entry, field_consistency)
@@ -862,12 +852,10 @@ def build_summary_payload(
         findings = [dict(entry) for entry in normalized_requirements]
 
     payload: Dict[str, Any] = {
+        "schema_version": _SUMMARY_SCHEMA_VERSION,
         "findings": findings,
         "count": len(findings),
     }
-
-    if include_requirements_flag:
-        payload["requirements"] = normalized_requirements
 
     if field_consistency:
         if reasons_enabled:
@@ -1050,9 +1038,17 @@ def build_validation_requirements_for_account(account_dir: str | Path) -> Dict[s
                 compact_merge_sections(summary_after)
             _atomic_write_json(summary_path, summary_after)
 
-    fields = [
-        str(entry.get("field")) for entry in requirements if entry.get("field")
-    ]
+    findings_payload = payload.get("findings")
+    if isinstance(findings_payload, Sequence):
+        fields = [
+            str(entry.get("field"))
+            for entry in findings_payload
+            if isinstance(entry, Mapping) and entry.get("field")
+        ]
+        findings_count = len(findings_payload)
+    else:
+        fields = []
+        findings_count = 0
     sync_validation_tag(tags_path, fields, emit=_should_emit_tags())
 
     sid: str | None = None
@@ -1082,7 +1078,7 @@ def build_validation_requirements_for_account(account_dir: str | Path) -> Dict[s
 
     return {
         "status": "ok",
-        "count": len(requirements),
+        "count": findings_count,
         "fields": fields,
         "validation_requirements": payload,
     }

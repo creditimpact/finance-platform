@@ -35,4 +35,7 @@ def run(account_dir: str) -> dict:
     except Exception as exc:  # pragma: no cover - defensive logging path
         return {"skipped": True, "reason": f"write_error:{exc}"}
 
-    return {"skipped": False, "requirements_count": req.get("count")}
+    return {
+        "skipped": False,
+        "findings_count": int(req.get("count") or 0),
+    }

@@ -510,11 +510,7 @@ def _collect_weak_items(summary: Mapping[str, Any] | None) -> list[dict[str, Any
 
     findings = validation.get("findings")
     if not isinstance(findings, Sequence):
-        legacy_requirements = validation.get("requirements")
-        if isinstance(legacy_requirements, Sequence):
-            findings = list(legacy_requirements)
-        else:
-            return []
+        return []
 
     field_consistency = validation.get("field_consistency")
     if isinstance(field_consistency, Mapping):
@@ -700,8 +696,6 @@ def _extract_weak_source_segment(
         validation = summary.get("validation_requirements")
         if isinstance(validation, Mapping):
             raw_findings = validation.get("findings")
-            if not isinstance(raw_findings, Sequence):
-                raw_findings = validation.get("requirements")
             if isinstance(raw_findings, Sequence):
                 for entry in raw_findings:
                     if not isinstance(entry, Mapping):

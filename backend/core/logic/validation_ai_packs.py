@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import time
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
+from itertools import islice
 from pathlib import Path
 import textwrap
 from typing import Any, Iterable, Mapping, Sequence
@@ -33,6 +35,17 @@ log = logging.getLogger(__name__)
 _DEFAULT_MODEL = "gpt-4o-mini"
 _CONFIG_PATH = Path(__file__).with_name("ai_packs_config.yml")
 _DEFAULT_RETRY_BACKOFF = (1.0, 3.0, 10.0)
+
+
+def _maybe_slice(iterable: Iterable[int]) -> Iterable[int]:
+    """Optionally truncate ``iterable`` based on ``DEBUG_FIRST_N``."""
+
+    debug_first_n = os.getenv("DEBUG_FIRST_N", "").strip()
+    if debug_first_n and debug_first_n.isdigit():
+        limit = int(debug_first_n)
+        if limit > 0:
+            return islice(iterable, limit)
+    return iterable
 
 
 @dataclass(frozen=True)
@@ -295,132 +308,147 @@ def build_validation_ai_packs_for_accounts(
     )
     existing_index = index_writer.load_accounts()
 
-    for idx in normalized_indices:
-        account_paths = ensure_validation_account_paths(
-            validation_paths, idx, create=True
-        )
-        processed_accounts.append(account_paths.account_id)
-
-        summary = _load_summary(accounts_root, idx)
-        weak_items = _collect_weak_items(summary)
-        if packs_config.weak_limit > 0:
-            weak_items = weak_items[: packs_config.weak_limit]
-        weak_count = len(weak_items)
-        pack_lines, weak_fields = _build_pack_lines(
-            account_paths.account_id, sid, weak_items
-        )
-        line_count = len(pack_lines)
-        source_hash = _compute_source_hash(summary, weak_items, pack_lines)
-        existing_entry = existing_index.get(account_paths.account_id)
-        existing_hash = (
-            str(existing_entry.get("source_hash") or "") if existing_entry else ""
-        )
-
-        pack_exists = account_paths.pack_file.exists()
-        result_exists = account_paths.result_summary_file.exists()
-        prompt_exists = account_paths.prompt_file.exists()
-
-        skip_build = (
-            bool(existing_entry)
-            and existing_hash
-            and existing_hash == source_hash
-            and pack_exists
-            and result_exists
-            and prompt_exists
-        )
-
-        statuses: list[str]
-        if skip_build:
-            statuses = ["up_to_date"]
-            if line_count == 0:
-                statuses.append("no_weak_items")
-            result_payload = _load_model_results(account_paths.result_summary_file)
-            if result_payload is None:
-                result_payload = {
-                    "status": str(existing_entry.get("status") or "unknown"),
-                    "timestamp": existing_entry.get("built_at") or _utc_now(),
-                    "model": existing_entry.get("model") or model_name,
-                }
-            inference_status = str(result_payload.get("status") or "unknown")
-            model_used = (
-                result_payload.get("model")
-                or existing_entry.get("model")
-                or model_name
+    for idx in _maybe_slice(normalized_indices):
+        account_id: int | None = None
+        try:
+            account_paths = ensure_validation_account_paths(
+                validation_paths, idx, create=True
             )
-            built_at = str(existing_entry.get("built_at") or result_payload.get("timestamp") or _utc_now())
-            request_lines = existing_entry.get("request_lines")
-            sent_at = existing_entry.get("sent_at")
-            completed_at = existing_entry.get("completed_at")
-            error_msg = existing_entry.get("error")
-        else:
-            statuses = ["pack_written"]
-            _persist_pack_lines(account_paths.pack_file, pack_lines)
+            account_id = account_paths.account_id
 
-            if weak_items:
-                prompt_text = _render_prompt(sid, idx, weak_items)
-                _write_prompt(account_paths.prompt_file, prompt_text)
+            summary = _load_summary(accounts_root, idx)
+            weak_items = _collect_weak_items(summary)
+            if packs_config.weak_limit > 0:
+                weak_items = weak_items[: packs_config.weak_limit]
+            weak_count = len(weak_items)
+            pack_lines, weak_fields = _build_pack_lines(
+                account_paths.account_id, sid, weak_items
+            )
+            line_count = len(pack_lines)
+            source_hash = _compute_source_hash(summary, weak_items, pack_lines)
+            existing_entry = existing_index.get(account_paths.account_id)
+            existing_hash = (
+                str(existing_entry.get("source_hash") or "") if existing_entry else ""
+            )
+
+            pack_exists = account_paths.pack_file.exists()
+            result_exists = account_paths.result_summary_file.exists()
+            prompt_exists = account_paths.prompt_file.exists()
+
+            skip_build = (
+                bool(existing_entry)
+                and existing_hash
+                and existing_hash == source_hash
+                and pack_exists
+                and result_exists
+                and prompt_exists
+            )
+
+            statuses: list[str]
+            if skip_build:
+                statuses = ["up_to_date"]
+                if line_count == 0:
+                    statuses.append("no_weak_items")
+                result_payload = _load_model_results(account_paths.result_summary_file)
+                if result_payload is None:
+                    result_payload = {
+                        "status": str(existing_entry.get("status") or "unknown"),
+                        "timestamp": existing_entry.get("built_at") or _utc_now(),
+                        "model": existing_entry.get("model") or model_name,
+                    }
+                inference_status = str(result_payload.get("status") or "unknown")
+                model_used = (
+                    result_payload.get("model")
+                    or existing_entry.get("model")
+                    or model_name
+                )
+                built_at = str(
+                    existing_entry.get("built_at")
+                    or result_payload.get("timestamp")
+                    or _utc_now()
+                )
+                request_lines = existing_entry.get("request_lines")
+                sent_at = existing_entry.get("sent_at")
+                completed_at = existing_entry.get("completed_at")
+                error_msg = existing_entry.get("error")
             else:
-                prompt_text = ""
-                _write_prompt(account_paths.prompt_file, prompt_text)
-                statuses.append("no_weak_items")
+                statuses = ["pack_written"]
+                _persist_pack_lines(account_paths.pack_file, pack_lines)
 
-            result_payload = _run_model_inference(
-                ai_client,
-                prompt_text,
-                model_name,
-                sid=sid,
-                account_idx=idx,
-                has_weak_items=bool(weak_items),
-                config=packs_config,
+                if weak_items:
+                    prompt_text = _render_prompt(sid, idx, weak_items)
+                    _write_prompt(account_paths.prompt_file, prompt_text)
+                else:
+                    prompt_text = ""
+                    _write_prompt(account_paths.prompt_file, prompt_text)
+                    statuses.append("no_weak_items")
+
+                result_payload = _run_model_inference(
+                    ai_client,
+                    prompt_text,
+                    model_name,
+                    sid=sid,
+                    account_idx=idx,
+                    has_weak_items=bool(weak_items),
+                    config=packs_config,
+                )
+                _write_model_results(account_paths.result_summary_file, result_payload)
+
+                inference_status = str(result_payload.get("status") or "unknown")
+                if inference_status == "ok":
+                    statuses.append("infer_done")
+                elif inference_status == "error":
+                    statuses.append("errors")
+
+                model_used = result_payload.get("model") or model_name
+                built_at = str(result_payload.get("timestamp") or _utc_now())
+                request_lines = line_count or None
+                sent_at = None
+                completed_at = None
+                error_msg = None
+
+            log_entry: dict[str, Any] = {
+                "timestamp": result_payload.get("timestamp") or _utc_now(),
+                "account_index": int(idx),
+                "weak_count": weak_count,
+                "statuses": statuses,
+                "inference_status": inference_status,
+            }
+            reason = result_payload.get("reason")
+            if reason:
+                log_entry["inference_reason"] = str(reason)
+            if model_used:
+                log_entry["model"] = str(model_used)
+
+            _append_validation_log_entry(log_path, log_entry)
+
+            index_entries.append(
+                ValidationIndexEntry(
+                    account_id=int(idx),
+                    pack_path=account_paths.pack_file,
+                    result_jsonl_path=account_paths.result_jsonl_file,
+                    result_json_path=account_paths.result_summary_file,
+                    weak_fields=weak_fields,
+                    line_count=line_count,
+                    status=inference_status,
+                    built_at=built_at,
+                    request_lines=request_lines if request_lines is not None else None,
+                    model=str(model_used) if model_used else None,
+                    sent_at=str(sent_at) if sent_at else None,
+                    completed_at=str(completed_at) if completed_at else None,
+                    error=str(error_msg) if error_msg else None,
+                    source_hash=source_hash,
+                )
             )
-            _write_model_results(account_paths.result_summary_file, result_payload)
 
-            inference_status = str(result_payload.get("status") or "unknown")
-            if inference_status == "ok":
-                statuses.append("infer_done")
-            elif inference_status == "error":
-                statuses.append("errors")
-
-            model_used = result_payload.get("model") or model_name
-            built_at = str(result_payload.get("timestamp") or _utc_now())
-            request_lines = line_count or None
-            sent_at = None
-            completed_at = None
-            error_msg = None
-
-        log_entry: dict[str, Any] = {
-            "timestamp": result_payload.get("timestamp") or _utc_now(),
-            "account_index": int(idx),
-            "weak_count": weak_count,
-            "statuses": statuses,
-            "inference_status": inference_status,
-        }
-        reason = result_payload.get("reason")
-        if reason:
-            log_entry["inference_reason"] = str(reason)
-        if model_used:
-            log_entry["model"] = str(model_used)
-
-        _append_validation_log_entry(log_path, log_entry)
-
-        index_entries.append(
-            ValidationIndexEntry(
-                account_id=int(idx),
-                pack_path=account_paths.pack_file,
-                result_jsonl_path=account_paths.result_jsonl_file,
-                result_json_path=account_paths.result_summary_file,
-                weak_fields=weak_fields,
-                line_count=line_count,
-                status=inference_status,
-                built_at=built_at,
-                request_lines=request_lines if request_lines is not None else None,
-                model=str(model_used) if model_used else None,
-                sent_at=str(sent_at) if sent_at else None,
-                completed_at=str(completed_at) if completed_at else None,
-                error=str(error_msg) if error_msg else None,
-                source_hash=source_hash,
+            processed_accounts.append(account_paths.account_id)
+        except Exception:  # pragma: no cover - defensive logging
+            log.exception(
+                "VALIDATION_AI_PACK_ACCOUNT_FAILED sid=%s account=%s",
+                sid,
+                account_id if account_id is not None else idx,
             )
-        )
+            continue
 
     manifest_path = runs_root_path / sid / "manifest.json"
     manifest = RunManifest.load_or_create(manifest_path, sid)

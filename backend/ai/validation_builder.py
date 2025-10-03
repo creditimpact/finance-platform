@@ -417,6 +417,18 @@ class ValidationPackWriter:
             field_name, bureaus_data, consistency
         )
 
+        guidance = (
+            "Return a JSON object with a decision of either 'strong' or 'no_case', "
+            "along with rationale and any supporting citations."
+        )
+        if conditional_gate:
+            guidance += (
+                " Treat this as conditional. Return 'strong' only if the content "
+                "shows a materially incorrect report: a contradiction across "
+                "bureaus corroborated by documentation or CRA logs. Otherwise "
+                "respond with 'no_case'."
+            )
+
         prompt_payload = {
             "system": _SYSTEM_PROMPT,
             "user": {
@@ -430,10 +442,7 @@ class ValidationPackWriter:
                 "bureaus": bureau_values,
                 "context": context,
             },
-            "guidance": (
-                "Return a JSON object with a decision of either 'strong' or 'no_case', "
-                "along with rationale and any supporting citations."
-            ),
+            "guidance": guidance,
         }
 
         payload: dict[str, Any] = {

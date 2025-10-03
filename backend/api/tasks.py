@@ -244,10 +244,10 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
             if isinstance(summary, dict):
                 summary["validation_requirements"] = stats
             log.info(
-                "VALIDATION_REQUIREMENTS_PIPELINE_DONE sid=%s processed=%s requirements=%s",
+                "VALIDATION_REQUIREMENTS_PIPELINE_DONE sid=%s processed=%s findings=%s",
                 sid,
                 stats.get("processed_accounts", 0),
-                stats.get("requirements", 0),
+                stats.get("findings", 0),
             )
 
     if os.environ.get("ENABLE_AUTO_AI_PIPELINE", "1") in ("1", "true", "True"):

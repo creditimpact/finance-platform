@@ -68,7 +68,7 @@ def run_validation_requirements_for_all_accounts(
         "sid": sid,
         "total_accounts": 0,
         "processed_accounts": 0,
-        "requirements": 0,
+        "findings": 0,
         "missing_bureaus": 0,
         "errors": 0,
     }
@@ -99,14 +99,14 @@ def run_validation_requirements_for_all_accounts(
             continue
 
         stats["processed_accounts"] += 1
-        stats["requirements"] += int(result.get("count") or 0)
+        stats["findings"] += int(result.get("count") or 0)
 
     logger.info(
-        "VALIDATION_REQUIREMENTS_SUMMARY sid=%s accounts=%d processed=%d requirements=%d missing=%d errors=%d",
+        "VALIDATION_REQUIREMENTS_SUMMARY sid=%s accounts=%d processed=%d findings=%d missing=%d errors=%d",
         sid,
         stats["total_accounts"],
         stats["processed_accounts"],
-        stats["requirements"],
+        stats["findings"],
         stats["missing_bureaus"],
         stats["errors"],
     )

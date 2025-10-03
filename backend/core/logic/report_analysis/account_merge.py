@@ -2921,8 +2921,6 @@ def persist_merge_tags(
 
         findings_entries = validation_block.get("findings")
         if not isinstance(findings_entries, Sequence):
-            findings_entries = validation_block.get("requirements")
-        if not isinstance(findings_entries, Sequence):
             continue
 
         if any(

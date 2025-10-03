@@ -123,18 +123,14 @@ class ValidationPackBuilder:
 
         findings = validation_block.get("findings")
         if not isinstance(findings, Sequence):
-            legacy_requirements = validation_block.get("requirements")
-            if isinstance(legacy_requirements, Sequence):
-                findings = list(legacy_requirements)
-            else:
-                return [], {"skip_reason": "missing_findings"}
+            return [], {"skip_reason": "missing_findings"}
 
         field_consistency = validation_block.get("field_consistency")
         if not isinstance(field_consistency, Mapping):
             field_consistency = {}
 
         send_to_ai_map = self._build_send_to_ai_map(
-            validation_block.get("findings")
+            findings
         )
         has_enriched_findings = bool(send_to_ai_map)
 

@@ -811,12 +811,7 @@ class ValidationPackWriter:
                 entry for entry in raw_findings if isinstance(entry, Mapping)
             ]
         else:
-            legacy_requirements = block.get("requirements")
-            if not isinstance(legacy_requirements, Sequence):
-                return None
-            findings_list = [
-                entry for entry in legacy_requirements if isinstance(entry, Mapping)
-            ]
+            return None
 
         consistency = block.get("field_consistency")
         consistency_map = (
@@ -926,10 +921,6 @@ class ValidationPackWriter:
             raw_findings: Sequence[Any] | None = validation_block.get("findings")
             if not isinstance(raw_findings, Sequence):
                 raw_findings = None
-            if raw_findings is None:
-                legacy_requirements = validation_block.get("requirements")
-                if isinstance(legacy_requirements, Sequence):
-                    raw_findings = list(legacy_requirements)
             send_to_ai_map = validation_block.get("send_to_ai", {})
             if isinstance(raw_findings, Sequence):
                 for entry in raw_findings:

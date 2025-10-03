@@ -17,6 +17,7 @@ from backend.ai.validation_builder import build_validation_pack_for_account
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, write_tags_atomic
 from backend.core.logic.consistency import compute_field_consistency
+from backend.core.logic.reason_classifier import classify_reason, decide_send_to_ai
 from backend.core.logic.summary_compact import compact_merge_sections
 
 logger = logging.getLogger(__name__)
@@ -770,6 +771,42 @@ def build_validation_requirements(
     return requirements, inconsistencies, field_consistency_full
 
 
+def _coerce_normalized_map(details: Mapping[str, Any] | None) -> Dict[str, Any]:
+    """Extract a mapping of bureau values from ``details`` safely."""
+
+    if not isinstance(details, Mapping):
+        return {}
+
+    normalized = details.get("normalized")
+    if isinstance(normalized, Mapping):
+        return {str(key): value for key, value in normalized.items()}
+
+    return {}
+
+
+def _build_finding(
+    entry: Mapping[str, Any],
+    field_consistency: Mapping[str, Any] | None,
+) -> Dict[str, Any]:
+    """Return a finding enriched with reason metadata and AI routing."""
+
+    finding = dict(entry)
+
+    field_name = finding.get("field")
+    details: Mapping[str, Any] | None = None
+    if isinstance(field_consistency, Mapping) and isinstance(field_name, str):
+        candidate = field_consistency.get(field_name)
+        if isinstance(candidate, Mapping):
+            details = candidate
+
+    reason_details = classify_reason(_coerce_normalized_map(details))
+
+    finding.update(reason_details)
+    finding["send_to_ai"] = decide_send_to_ai(field_name, reason_details)
+
+    return finding
+
+
 def build_summary_payload(
     requirements: Sequence[Mapping[str, Any]],
     *,
@@ -777,8 +814,9 @@ def build_summary_payload(
 ) -> Dict[str, Any]:
     """Build the summary.json payload for validation requirements."""
 
-    entries = [dict(item) for item in requirements]
-    payload = {"requirements": entries, "count": len(entries)}
+    findings = [_build_finding(entry, field_consistency) for entry in requirements]
+
+    payload = {"requirements": findings, "count": len(findings)}
     if field_consistency:
         payload["field_consistency"] = dict(field_consistency)
     return payload

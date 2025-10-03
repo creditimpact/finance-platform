@@ -59,11 +59,23 @@ def classify_reason(bureau_values: Mapping[str, Any]) -> Mapping[str, Any]:
         mismatch counts, and helper booleans that downstream callers can use.
     """
 
-    total_bureaus = len(bureau_values)
+    normalized_values: Dict[str, Any] = {}
+
+    for bureau, value in bureau_values.items():
+        if isinstance(value, str):
+            value = value.strip()
+            if value in {"", "--"}:
+                value = None
+        elif value in {"", "--"}:  # pragma: no cover - defensive, non-str inputs unlikely
+            value = None
+
+        normalized_values[bureau] = value
+
+    total_bureaus = len(normalized_values)
     missing_count = 0
     present_values: list[Any] = []
 
-    for value in bureau_values.values():
+    for value in normalized_values.values():
         if _is_missing(value):
             missing_count += 1
         else:

@@ -90,3 +90,18 @@ def test_classify_all_diff():
     assert result["is_missing"] is False
     assert result["is_mismatch"] is True
 
+
+def test_normalizes_whitespace_and_missing_markers():
+    result = classify_reason({
+        "experian": "  open  ",
+        "equifax": " -- ",
+        "transunion": " ",
+    })
+
+    assert result["reason_code"] == "C2_ONE_MISSING"
+    assert result["missing_count"] == 2
+    assert result["present_count"] == 1
+    assert result["distinct_values"] == 1
+    assert result["is_missing"] is True
+    assert result["is_mismatch"] is False
+

@@ -262,16 +262,37 @@ def build_validation_ai_packs_for_accounts(
     account_indices: Sequence[int | str],
     runs_root: Path | str | None = None,
     ai_client: Any | None = None,
-) -> None:
+) -> dict[str, Any]:
     """Trigger validation AI pack building for the provided account indices.
 
     The builder currently ensures the filesystem scaffold for validation AI
     packs exists so subsequent stages can populate payloads and prompts.
+
+    Returns a statistics mapping describing how many accounts were processed,
+    skipped, or failed so that callers can surface operational issues without
+    inspecting logs.
     """
 
     normalized_indices = _normalize_indices(account_indices)
+    stats = {
+        "sid": sid,
+        "total_accounts": len(normalized_indices),
+        "written_accounts": 0,
+        "skipped_accounts": 0,
+        "errors": 0,
+        "inference_errors": 0,
+    }
     if not normalized_indices:
-        return
+        log.info(
+            "VALIDATION_AI_PACKS_SUMMARY sid=%s total=%d written=%d skipped=%d errors=%d inference_errors=%d",
+            sid,
+            stats["total_accounts"],
+            stats["written_accounts"],
+            stats["skipped_accounts"],
+            stats["errors"],
+            stats["inference_errors"],
+        )
+        return stats
 
     runs_root_path = Path(runs_root) if runs_root is not None else Path("runs")
     base_dir = runs_root_path / sid / "ai_packs" / "validation"
@@ -283,7 +304,16 @@ def build_validation_ai_packs_for_accounts(
             sid,
             base_dir,
         )
-        return
+        log.info(
+            "VALIDATION_AI_PACKS_SUMMARY sid=%s total=%d written=%d skipped=%d errors=%d inference_errors=%d",
+            sid,
+            stats["total_accounts"],
+            stats["written_accounts"],
+            stats["skipped_accounts"],
+            stats["errors"],
+            stats["inference_errors"],
+        )
+        return stats
 
     validation_paths = ensure_validation_paths(runs_root_path, sid, create=True)
     log_path = validation_paths.log_file
@@ -370,6 +400,7 @@ def build_validation_ai_packs_for_accounts(
                 sent_at = existing_entry.get("sent_at")
                 completed_at = existing_entry.get("completed_at")
                 error_msg = existing_entry.get("error")
+                stats["skipped_accounts"] += 1
             else:
                 statuses = ["pack_written"]
                 _persist_pack_lines(account_paths.pack_file, pack_lines)
@@ -405,6 +436,13 @@ def build_validation_ai_packs_for_accounts(
                 sent_at = None
                 completed_at = None
                 error_msg = None
+
+                stats["written_accounts"] += 1
+
+                if inference_status == "skipped":
+                    stats["skipped_accounts"] += 1
+                elif inference_status == "error":
+                    stats["inference_errors"] += 1
 
             log_entry: dict[str, Any] = {
                 "timestamp": result_payload.get("timestamp") or _utc_now(),
@@ -442,6 +480,7 @@ def build_validation_ai_packs_for_accounts(
 
             processed_accounts.append(account_paths.account_id)
         except Exception:  # pragma: no cover - defensive logging
+            stats["errors"] += 1
             log.exception(
                 "VALIDATION_AI_PACK_ACCOUNT_FAILED sid=%s account=%s",
                 sid,
@@ -468,6 +507,18 @@ def build_validation_ai_packs_for_accounts(
         validation_paths.base,
         ",".join(f"{account_id:03d}" for account_id in processed_accounts),
     )
+
+    log.info(
+        "VALIDATION_AI_PACKS_SUMMARY sid=%s total=%d written=%d skipped=%d errors=%d inference_errors=%d",
+        sid,
+        stats["total_accounts"],
+        stats["written_accounts"],
+        stats["skipped_accounts"],
+        stats["errors"],
+        stats["inference_errors"],
+    )
+
+    return stats
 
 
 def _ensure_placeholder_files(paths: ValidationAccountPaths) -> None:

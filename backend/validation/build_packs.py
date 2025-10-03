@@ -79,7 +79,14 @@ class ValidationPackBuilder:
 
         records: list[ValidationPackRecord] = []
         serialized_records: list[dict[str, Any]] = []
+        stats = {
+            "total_accounts": 0,
+            "written_accounts": 0,
+            "skipped_accounts": 0,
+            "errors": 0,
+        }
         for account_id, account_dir in self._iter_accounts():
+            stats["total_accounts"] += 1
             pack_path: Path | None = None
             try:
                 payloads, metadata = self._build_account_pack(account_id, account_dir)
@@ -92,13 +99,16 @@ class ValidationPackBuilder:
                         account_id=f"{account_id:03d}",
                         reason=skip_reason or "no_payloads",
                     )
+                    stats["skipped_accounts"] += 1
                     continue
 
                 pack_path = self._write_pack(account_id, payloads)
                 record = self._build_index_record(account_id, pack_path, payloads, metadata)
                 records.append(record)
                 serialized_records.append(record.to_json_payload())
+                stats["written_accounts"] += 1
             except Exception:  # pragma: no cover - defensive logging
+                stats["errors"] += 1
                 log.exception(
                     "VALIDATION_PACK_BUILD_FAILED sid=%s account_id=%s pack=%s account_dir=%s",
                     self.paths.sid,
@@ -107,6 +117,15 @@ class ValidationPackBuilder:
                     account_dir,
                 )
                 continue
+
+        log.info(
+            "VALIDATION_PACK_BUILD_SUMMARY sid=%s total=%d written=%d skipped=%d errors=%d",
+            self.paths.sid,
+            stats["total_accounts"],
+            stats["written_accounts"],
+            stats["skipped_accounts"],
+            stats["errors"],
+        )
 
         self._write_index(records)
         return serialized_records

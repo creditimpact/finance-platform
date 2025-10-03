@@ -175,7 +175,7 @@ def main() -> None:
     account_indices = _iter_account_indices(accounts_root)
 
     with _InferenceOverride(args.no_infer):
-        validation_ai_packs.build_validation_ai_packs_for_accounts(
+        pack_stats = validation_ai_packs.build_validation_ai_packs_for_accounts(
             sid,
             account_indices=account_indices,
             runs_root=runs_root,
@@ -210,6 +210,7 @@ def main() -> None:
             "backoff_seconds": list(effective_config.backoff_seconds),
         },
         "accounts_processed": len(account_indices),
+        "pack_stats": pack_stats,
         "status_counts": status_counts,
         "weak_accounts": weak_accounts,
         "weak_item_total": weak_total,

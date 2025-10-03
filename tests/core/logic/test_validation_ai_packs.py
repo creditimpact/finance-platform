@@ -64,11 +64,20 @@ def test_builder_creates_validation_structure(
     runs_root = tmp_path / "runs"
     monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
 
-    build_validation_ai_packs_for_accounts(
+    stats = build_validation_ai_packs_for_accounts(
         sid,
         account_indices=[14, "15", "14"],
         runs_root=runs_root,
     )
+
+    assert stats == {
+        "sid": sid,
+        "total_accounts": 2,
+        "written_accounts": 2,
+        "skipped_accounts": 2,
+        "errors": 0,
+        "inference_errors": 0,
+    }
 
     validation_paths = ensure_validation_paths(runs_root, sid, create=False)
     base_dir = validation_paths.base
@@ -241,12 +250,21 @@ def test_builder_populates_pack_and_preserves_prompt_and_results(
         )
     )
 
-    build_validation_ai_packs_for_accounts(
+    stats = build_validation_ai_packs_for_accounts(
         sid,
         account_indices=[42],
         runs_root=runs_root,
         ai_client=fake_ai,
     )
+
+    assert stats == {
+        "sid": sid,
+        "total_accounts": 1,
+        "written_accounts": 1,
+        "skipped_accounts": 0,
+        "errors": 0,
+        "inference_errors": 0,
+    }
 
     pack_lines = [
         json.loads(line)
@@ -372,12 +390,21 @@ def test_builder_skips_when_source_unchanged(
         json.dumps({"sid": sid, "account_index": 11, "decisions": []})
     )
 
-    build_validation_ai_packs_for_accounts(
+    stats_first = build_validation_ai_packs_for_accounts(
         sid,
         account_indices=[11],
         runs_root=runs_root,
         ai_client=fake_ai_first,
     )
+
+    assert stats_first == {
+        "sid": sid,
+        "total_accounts": 1,
+        "written_accounts": 1,
+        "skipped_accounts": 0,
+        "errors": 0,
+        "inference_errors": 0,
+    }
 
     initial_pack_contents = account_paths.pack_file.read_text(encoding="utf-8")
     index_path = validation_paths.index_file
@@ -385,12 +412,21 @@ def test_builder_skips_when_source_unchanged(
     initial_entry = {entry["account_id"]: entry for entry in initial_index["packs"]}[11]
 
     fake_ai_second = FakeAIClient()
-    build_validation_ai_packs_for_accounts(
+    stats_second = build_validation_ai_packs_for_accounts(
         sid,
         account_indices=[11],
         runs_root=runs_root,
         ai_client=fake_ai_second,
     )
+
+    assert stats_second == {
+        "sid": sid,
+        "total_accounts": 1,
+        "written_accounts": 0,
+        "skipped_accounts": 1,
+        "errors": 0,
+        "inference_errors": 0,
+    }
 
     assert fake_ai_second.chat_payloads == []
     assert account_paths.pack_file.read_text(encoding="utf-8") == initial_pack_contents
@@ -461,12 +497,21 @@ def test_builder_uses_configured_model(
         )
     )
 
-    build_validation_ai_packs_for_accounts(
+    stats = build_validation_ai_packs_for_accounts(
         sid,
         account_indices=[7],
         runs_root=runs_root,
         ai_client=fake_ai,
     )
+
+    assert stats == {
+        "sid": sid,
+        "total_accounts": 1,
+        "written_accounts": 1,
+        "skipped_accounts": 0,
+        "errors": 0,
+        "inference_errors": 0,
+    }
 
     sent_payload = fake_ai.chat_payloads[0]
     assert sent_payload["model"] == "gpt-validation-test"
@@ -513,12 +558,21 @@ def test_builder_skips_when_write_disabled(
 
     fake_ai = FakeAIClient()
 
-    build_validation_ai_packs_for_accounts(
+    stats = build_validation_ai_packs_for_accounts(
         sid,
         account_indices=[5],
         runs_root=runs_root,
         ai_client=fake_ai,
     )
+
+    assert stats == {
+        "sid": sid,
+        "total_accounts": 1,
+        "written_accounts": 0,
+        "skipped_accounts": 0,
+        "errors": 0,
+        "inference_errors": 0,
+    }
 
     assert not fake_ai.chat_payloads
     account_pack_dir = base_dir / "5"
@@ -566,12 +620,21 @@ def test_builder_skips_inference_when_disabled(
 
     fake_ai = FakeAIClient()
 
-    build_validation_ai_packs_for_accounts(
+    stats = build_validation_ai_packs_for_accounts(
         sid,
         account_indices=[3],
         runs_root=runs_root,
         ai_client=fake_ai,
     )
+
+    assert stats == {
+        "sid": sid,
+        "total_accounts": 1,
+        "written_accounts": 1,
+        "skipped_accounts": 1,
+        "errors": 0,
+        "inference_errors": 0,
+    }
 
     assert not fake_ai.chat_payloads
     results_payload = json.loads(_read(account_paths.result_summary_file))
@@ -638,12 +701,21 @@ def test_builder_honors_weak_limit(
         )
     )
 
-    build_validation_ai_packs_for_accounts(
+    stats = build_validation_ai_packs_for_accounts(
         sid,
         account_indices=[9],
         runs_root=runs_root,
         ai_client=fake_ai,
     )
+
+    assert stats == {
+        "sid": sid,
+        "total_accounts": 1,
+        "written_accounts": 1,
+        "skipped_accounts": 0,
+        "errors": 0,
+        "inference_errors": 0,
+    }
 
     pack_lines = [
         json.loads(line)

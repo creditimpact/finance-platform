@@ -42,7 +42,7 @@ def _account_number_pack_line(last4_a: str, last4_b: Optional[str]) -> dict:
 
 
 def test_account_number_gate_rejects_masking_only() -> None:
-    decision, rationale = _enforce_conditional_gate(
+    decision, rationale, info = _enforce_conditional_gate(
         "account_number_display",
         "strong",
         "Masking only",
@@ -51,6 +51,8 @@ def test_account_number_gate_rejects_masking_only() -> None:
 
     assert decision == "no_case"
     assert "conditional_gate" in rationale
+    assert info is not None
+    assert info["reason"] == "insufficient_evidence"
 
 
 def test_validation_field_sets_match_spec() -> None:
@@ -70,7 +72,7 @@ def test_validation_field_sets_match_spec() -> None:
 
 
 def test_account_number_gate_allows_true_conflict() -> None:
-    decision, rationale = _enforce_conditional_gate(
+    decision, rationale, info = _enforce_conditional_gate(
         "account_number_display",
         "strong",
         "Digits conflict",
@@ -79,6 +81,7 @@ def test_account_number_gate_allows_true_conflict() -> None:
 
     assert decision == "strong"
     assert rationale == "Digits conflict"
+    assert info is None
 
 
 def _creditor_remarks_pack_line(remarks_a: str, remarks_b: str) -> dict:
@@ -100,7 +103,7 @@ def _creditor_remarks_pack_line(remarks_a: str, remarks_b: str) -> dict:
 
 
 def test_creditor_remarks_gate_requires_high_signal() -> None:
-    decision, rationale = _enforce_conditional_gate(
+    decision, rationale, info = _enforce_conditional_gate(
         "creditor_remarks",
         "strong",
         "Low signal",
@@ -109,10 +112,12 @@ def test_creditor_remarks_gate_requires_high_signal() -> None:
 
     assert decision == "no_case"
     assert "conditional_gate" in rationale
+    assert info is not None
+    assert info["reason"] == "insufficient_evidence"
 
 
 def test_creditor_remarks_gate_allows_keyword_conflict() -> None:
-    decision, rationale = _enforce_conditional_gate(
+    decision, rationale, info = _enforce_conditional_gate(
         "creditor_remarks",
         "strong",
         "Conflicting remarks",
@@ -124,6 +129,7 @@ def test_creditor_remarks_gate_allows_keyword_conflict() -> None:
 
     assert decision == "strong"
     assert rationale == "Conflicting remarks"
+    assert info is None
 
 
 def test_account_rating_gate_needs_multiple_values() -> None:
@@ -137,9 +143,11 @@ def test_account_rating_gate_needs_multiple_values() -> None:
         },
     }
 
-    decision, rationale = _enforce_conditional_gate(
+    decision, rationale, info = _enforce_conditional_gate(
         "account_rating", "strong", "Single bureau", pack_line
     )
 
     assert decision == "no_case"
     assert "conditional_gate" in rationale
+    assert info is not None
+    assert info["reason"] == "insufficient_evidence"

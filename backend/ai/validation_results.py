@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from backend.ai.validation_index import ValidationPackIndexWriter
+from backend.analytics.analytics_tracker import emit_counter
 from backend.core.ai.paths import (
     ensure_validation_paths,
     validation_pack_filename_for_account,
@@ -22,6 +23,7 @@ from backend.core.ai.eligibility_policy import (
     canonicalize_scalar,
 )
 from backend.core.ai.report_compare import compute_reason_flags, classify_reporting_pattern
+from backend.core.logic.validation_field_sets import CONDITIONAL_FIELDS
 
 
 log = logging.getLogger(__name__)
@@ -39,6 +41,40 @@ def _clone_jsonish(value: Any) -> Any:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_clone_jsonish(entry) for entry in value]
     return value
+
+
+def _emit_reason_observability(
+    sid: str | None,
+    account_id: Any,
+    field_name: str,
+    pattern: str,
+    flags: Mapping[str, Any],
+) -> None:
+    if not _reasons_enabled():
+        return
+
+    missing = bool(flags.get("missing", False))
+    mismatch = bool(flags.get("mismatch", False))
+    eligible = bool(flags.get("eligible", False))
+    ai_needed = field_name in CONDITIONAL_FIELDS and eligible
+
+    metric_pattern = pattern if isinstance(pattern, str) and pattern else "unknown"
+
+    log.info(
+        "VALIDATION_ESCALATION_REASON sid=%s account_id=%s field=%s pattern=%s "
+        "missing=%s mismatch=%s eligible=%s",
+        sid,
+        account_id,
+        field_name,
+        metric_pattern,
+        missing,
+        mismatch,
+        eligible,
+    )
+
+    emit_counter(f"validation.pattern.{metric_pattern}")
+    emit_counter(f"validation.eligible.{str(eligible).lower()}")
+    emit_counter(f"validation.ai_needed.{str(ai_needed).lower()}")
 
 
 def _utc_now() -> str:
@@ -235,6 +271,14 @@ def _build_reason_from_pack(field_name: str, pack_payload: Mapping[str, Any]) ->
             present_bureaus.append(bureau)
 
     flags = compute_reason_flags(field_name, pattern, match_matrix={})
+
+    _emit_reason_observability(
+        str(pack_payload.get("sid") or "") or None,
+        pack_payload.get("account_id"),
+        field_name,
+        pattern,
+        flags,
+    )
 
     return {
         "schema": 1,

@@ -332,14 +332,53 @@ class ValidationPackWriter:
         summary: Mapping[str, Any] | None,
     ) -> None:
         statuses = self._derive_statuses(summary, lines)
+        total_fields = self._count_total_requirements(summary)
+        conditional_fields_built = sum(
+            1
+            for line in lines
+            if (field := self._extract_line_field(line)) and field in _CONDITIONAL_FIELDS
+        )
         entry = {
             "timestamp": _utc_now(),
             "account_index": int(account_id),
             "weak_count": len(lines),
+            "fields_built": len(lines),
+            "total_fields": total_fields,
+            "conditional_fields_built": conditional_fields_built,
             "statuses": statuses,
             "mode": "per_field" if self._per_field else "per_account",
         }
         _append_validation_log_entry(self._log_path, entry)
+
+    def _count_total_requirements(
+        self, summary: Mapping[str, Any] | None
+    ) -> int:
+        if not summary:
+            return 0
+        validation_block = self._extract_validation_block(summary)
+        if not validation_block:
+            return 0
+        requirements = validation_block.get("requirements")
+        if not isinstance(requirements, Sequence):
+            return 0
+        return sum(1 for requirement in requirements if isinstance(requirement, Mapping))
+
+    @staticmethod
+    def _extract_line_field(line: PackLine) -> str | None:
+        payload: Mapping[str, Any] | None
+        if isinstance(line, PackLine):
+            payload = line.payload
+        else:
+            payload = line  # type: ignore[assignment]
+        if not isinstance(payload, Mapping):
+            return None
+        field_key = payload.get("field_key")
+        if isinstance(field_key, str) and field_key.strip():
+            return field_key.strip()
+        field = payload.get("field")
+        if isinstance(field, str) and field.strip():
+            return field.strip()
+        return None
 
     def _derive_statuses(
         self, summary: Mapping[str, Any] | None, lines: Sequence[PackLine]

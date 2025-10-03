@@ -194,18 +194,27 @@ def _append_gate_note(rationale: str, reason: str) -> str:
     return f"{rationale} {note}"
 
 
+def _empty_decision_metrics() -> dict[str, dict[str, int]]:
+    buckets = {"conditional": 0, "non_conditional": 0}
+    return {
+        "strong": dict(buckets),
+        "weak": dict(buckets),
+        "no_case": dict(buckets),
+    }
+
+
 def _enforce_conditional_gate(
     field: str,
     decision: str,
     rationale: str,
     pack_line: Mapping[str, Any],
-) -> tuple[str, str]:
+) -> tuple[str, str, Mapping[str, Any] | None]:
     if field not in _CONDITIONAL_FIELDS:
-        return decision, rationale
+        return decision, rationale, None
     if decision != "strong":
-        return decision, rationale
+        return decision, rationale, None
     if not _coerce_bool_flag(pack_line.get("conditional_gate")):
-        return decision, rationale
+        return decision, rationale, None
 
     min_corroboration = max(1, _coerce_int_value(pack_line.get("min_corroboration"), 1))
     mismatch, corroboration, normalized_values = _conditional_mismatch_metrics(
@@ -217,9 +226,21 @@ def _enforce_conditional_gate(
             mismatch = False
 
     if not mismatch or corroboration < min_corroboration:
-        return "no_case", _append_gate_note(rationale, "insufficient_evidence")
+        gate_payload: dict[str, Any] = {
+            "reason": "insufficient_evidence",
+            "corroboration": corroboration,
+            "unique_values": sorted(set(normalized_values)),
+            "required_corroboration": min_corroboration,
+        }
+        if field == "creditor_remarks":
+            gate_payload["high_signal_keywords"] = _CREDITOR_REMARK_KEYWORDS
+        return (
+            "no_case",
+            _append_gate_note(rationale, "insufficient_evidence"),
+            gate_payload,
+        )
 
-    return decision, rationale
+    return decision, rationale, None
 
 
 class ValidationPackError(RuntimeError):
@@ -733,6 +754,10 @@ class ValidationPackSender:
 
         result_lines: list[dict[str, Any]] = []
         errors: list[str] = []
+        total_fields = len(pack_lines)
+        fields_sent = 0
+        conditional_sent = 0
+        decision_metrics = _empty_decision_metrics()
 
         self._log(
             "send_account_start",
@@ -763,11 +788,52 @@ class ValidationPackSender:
                 )
                 errors.append(error_message)
                 response = self._fallback_response(error_message)
-            result_lines.append(self._build_result_line(account_int, idx, pack_line, response))
+            line_result, metadata = self._build_result_line(
+                account_int, idx, pack_line, response
+            )
+            result_lines.append(line_result)
+            fields_sent += 1
+            is_conditional = bool(metadata.get("conditional"))
+            bucket = "conditional" if is_conditional else "non_conditional"
+            if is_conditional:
+                conditional_sent += 1
+
+            gate_info = metadata.get("gate_info") or None
+            if gate_info:
+                decision_metrics["weak"][bucket] += 1
+                gate_log: dict[str, Any] = {
+                    "account_id": f"{account_int:03d}",
+                    "line_number": idx,
+                    "field": metadata.get("field"),
+                    "reason": gate_info.get("reason"),
+                    "original_decision": metadata.get("original_decision"),
+                    "final_decision": metadata.get("final_decision"),
+                    "corroboration": gate_info.get("corroboration"),
+                    "required_corroboration": gate_info.get("required_corroboration"),
+                }
+                unique_values = gate_info.get("unique_values")
+                if unique_values is not None:
+                    gate_log["unique_values"] = unique_values
+                if "high_signal_keywords" in gate_info:
+                    gate_log["high_signal_keywords"] = gate_info["high_signal_keywords"]
+                self._log("send_conditional_gate_downgrade", **gate_log)
+            else:
+                final_decision = metadata.get("final_decision", "no_case")
+                decision_metrics.setdefault(
+                    final_decision, {"conditional": 0, "non_conditional": 0}
+                )
+                decision_metrics[final_decision][bucket] += 1
             time.sleep(self._throttle)
 
         status = "error" if errors else "done"
         error_message = "; ".join(errors) if errors else None
+        metrics_payload = {
+            "total_fields": total_fields,
+            "fields_sent": fields_sent,
+            "fields_skipped": max(total_fields - fields_sent, 0),
+            "conditional_fields_sent": conditional_sent,
+            "decision_counts": decision_metrics,
+        }
         jsonl_path, summary_path = self._write_results(
             account_int,
             result_lines,
@@ -796,6 +862,7 @@ class ValidationPackSender:
         }
         if error_message:
             summary_payload["error"] = error_message
+        summary_payload["metrics"] = metrics_payload
 
         self._log(
             "send_account_done",
@@ -803,6 +870,11 @@ class ValidationPackSender:
             status=status,
             errors=len(errors),
             results=len(result_lines),
+        )
+        self._log(
+            "send_account_metrics",
+            account_id=f"{account_int:03d}",
+            **metrics_payload,
         )
         return summary_payload
 
@@ -843,12 +915,25 @@ class ValidationPackSender:
             "completed_at": _utc_now(),
             "error": error,
         }
+        metrics_payload = {
+            "total_fields": 0,
+            "fields_sent": 0,
+            "fields_skipped": 0,
+            "conditional_fields_sent": 0,
+            "decision_counts": _empty_decision_metrics(),
+        }
+        summary_payload["metrics"] = metrics_payload
         self._log(
             "send_account_done",
             account_id=f"{account_id:03d}",
             status="error",
             errors=1,
             results=0,
+        )
+        self._log(
+            "send_account_metrics",
+            account_id=f"{account_id:03d}",
+            **metrics_payload,
         )
         return summary_payload
 
@@ -899,7 +984,7 @@ class ValidationPackSender:
         line_number: int,
         pack_line: Mapping[str, Any],
         response: Mapping[str, Any],
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         line_id = self._coerce_identifier(account_id, line_number, pack_line.get("id"))
         field = self._coerce_field_name(pack_line, line_number)
         decision = self._normalize_decision(response.get("decision"))
@@ -907,7 +992,8 @@ class ValidationPackSender:
         citations = self._normalize_citations(response.get("citations"))
         confidence = self._normalize_confidence(response.get("confidence"))
 
-        decision, rationale = _enforce_conditional_gate(
+        original_decision = decision
+        decision, rationale, gate_info = _enforce_conditional_gate(
             field, decision, rationale, pack_line
         )
 
@@ -921,7 +1007,15 @@ class ValidationPackSender:
         }
         if confidence is not None:
             result["confidence"] = confidence
-        return result
+
+        metadata: dict[str, Any] = {
+            "field": field,
+            "final_decision": decision,
+            "original_decision": original_decision,
+            "conditional": field in _CONDITIONAL_FIELDS,
+            "gate_info": gate_info,
+        }
+        return result, metadata
 
     def _write_results(
         self,
@@ -1088,12 +1182,12 @@ class ValidationPackSender:
     def _coerce_field_name(
         self, pack_line: Mapping[str, Any], line_number: int
     ) -> str:
-        field = pack_line.get("field")
-        if isinstance(field, str) and field.strip():
-            return field.strip()
         field_key = pack_line.get("field_key")
         if isinstance(field_key, str) and field_key.strip():
             return field_key.strip()
+        field = pack_line.get("field")
+        if isinstance(field, str) and field.strip():
+            return field.strip()
         return f"line_{line_number:03d}"
 
     def _is_allowed_field(self, field: str) -> bool:

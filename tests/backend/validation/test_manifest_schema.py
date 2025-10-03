@@ -49,7 +49,7 @@ def _build_manifest(tmp_path: Path, sid: str = "S001") -> tuple[dict[str, object
         "validation_requirements": {
             "requirements": [
                 {
-                    "field": "Account Name",
+                    "field": "Account Status",
                     "strength": "weak",
                     "ai_needed": False,
                     "documents": ["statement"],
@@ -61,7 +61,7 @@ def _build_manifest(tmp_path: Path, sid: str = "S001") -> tuple[dict[str, object
     }
     (account_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
     bureaus = {
-        "transunion": {"Account Name": {"raw": "Value"}},
+        "transunion": {"Account Status": {"raw": "Value"}},
         "experian": {},
         "equifax": {},
     }
@@ -230,7 +230,7 @@ def test_sender_supports_v1_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyP
     pack_path = packs_dir / "account_001.jsonl"
     pack_payload = {
         "id": "line-001",
-        "field": "Account Name",
+        "field": "Account Status",
         "prompt": {"system": "test", "user": {"account": 1}},
     }
     pack_path.write_text(json.dumps(pack_payload) + "\n", encoding="utf-8")

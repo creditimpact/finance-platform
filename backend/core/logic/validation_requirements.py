@@ -304,6 +304,20 @@ def _clone_field_consistency(
     return {str(field): _clone(details) for field, details in field_consistency.items()}
 
 
+def _strip_raw_from_field_consistency(
+    field_consistency: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Return a deep copy of ``field_consistency`` without bureau raw values."""
+
+    cloned = _clone_field_consistency(field_consistency)
+
+    for field, details in list(cloned.items()):
+        if isinstance(details, dict):
+            details.pop("raw", None)
+
+    return cloned
+
+
 def _filter_inconsistent_fields(
     field_consistency: Mapping[str, Any]
 ) -> Dict[str, Dict[str, Any]]:
@@ -825,7 +839,9 @@ def build_summary_payload(
         "count": len(findings),
     }
     if field_consistency:
-        payload["field_consistency"] = dict(field_consistency)
+        sanitized_consistency = _strip_raw_from_field_consistency(field_consistency)
+        if sanitized_consistency:
+            payload["field_consistency"] = sanitized_consistency
     return payload
 
 

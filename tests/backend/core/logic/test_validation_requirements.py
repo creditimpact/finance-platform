@@ -81,7 +81,14 @@ def test_build_summary_payload_includes_field_consistency():
     )
 
     assert payload["count"] == 1
-    assert payload["field_consistency"] == field_consistency
+    expected_consistency = {
+        "balance_owed": {
+            "consensus": "split",
+            "normalized": {"transunion": 100.0, "experian": 150.0},
+            "disagreeing_bureaus": ["experian"],
+        }
+    }
+    assert payload["field_consistency"] == expected_consistency
     assert len(payload["requirements"]) == 1
     requirement = payload["requirements"][0]
     assert requirement["field"] == "balance_owed"

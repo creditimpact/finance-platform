@@ -5,13 +5,24 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
 from itertools import count
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence, TextIO
 
-from backend.core.ai.paths import validation_index_path
+from backend.core.ai.paths import (
+    ensure_validation_paths,
+    validation_index_path,
+    validation_pack_filename_for_account,
+    validation_result_jsonl_filename_for_account,
+    validation_result_summary_filename_for_account,
+)
 
-from .index_schema import ValidationIndex, load_validation_index
+from .index_schema import (
+    ValidationIndex,
+    build_validation_index,
+    load_validation_index,
+)
 
 
 def load_index_for_sid(sid: str, *, runs_root: Path | str | None = None) -> ValidationIndex:
@@ -174,6 +185,107 @@ def rewrite_index_to_v2(
     index.write()
     stream.write(f"Rewrote validation manifest to schema v2 at {index_path}.\n")
     return index, True
+
+
+def rewrite_index_to_canonical_layout(
+    index_path: Path,
+    *,
+    runs_root: Path | str | None = None,
+    stream: TextIO = sys.stdout,
+) -> tuple[ValidationIndex, bool]:
+    """Align ``index.json`` paths with the ai_packs/validation layout."""
+
+    index = load_validation_index(index_path)
+    base_dir = index_path.parent.resolve()
+
+    sid_hint: str | None = None
+    try:
+        sid_hint = base_dir.parents[1].name
+    except IndexError:
+        sid_hint = None
+
+    sid = index.sid or sid_hint
+    if not sid:
+        raise ValueError(f"Unable to determine SID for manifest at {index_path}")
+
+    if runs_root is None:
+        try:
+            runs_root_path = base_dir.parents[2]
+        except IndexError as exc:  # pragma: no cover - defensive
+            raise ValueError(
+                f"Unable to determine runs root for manifest at {index_path}"
+            ) from exc
+        runs_root_path = runs_root_path.resolve()
+    else:
+        runs_root_path = Path(runs_root).resolve()
+
+    validation_paths = ensure_validation_paths(runs_root_path, sid, create=True)
+
+    expected_base = validation_paths.base.resolve()
+    expected_packs_dir = validation_paths.packs_dir.resolve()
+    expected_results_dir = validation_paths.results_dir.resolve()
+
+    changed = False
+
+    if index.root_dir.resolve() != expected_base:
+        changed = True
+    if index.packs_dir_path.resolve() != expected_packs_dir:
+        changed = True
+    if index.results_dir_path.resolve() != expected_results_dir:
+        changed = True
+
+    canonical_records = []
+    for record in index.packs:
+        pack_filename = validation_pack_filename_for_account(record.account_id)
+        jsonl_filename = validation_result_jsonl_filename_for_account(record.account_id)
+        json_filename = validation_result_summary_filename_for_account(record.account_id)
+
+        expected_pack_path = validation_paths.packs_dir / pack_filename
+        expected_jsonl_path = validation_paths.results_dir / jsonl_filename
+        expected_json_path = validation_paths.results_dir / json_filename
+
+        if index.resolve_pack_path(record).resolve() != expected_pack_path.resolve():
+            changed = True
+        if (
+            index.resolve_result_jsonl_path(record).resolve()
+            != expected_jsonl_path.resolve()
+        ):
+            changed = True
+        if index.resolve_result_json_path(record).resolve() != expected_json_path.resolve():
+            changed = True
+
+        pack_rel = (PurePosixPath("packs") / pack_filename).as_posix()
+        jsonl_rel = (PurePosixPath("results") / jsonl_filename).as_posix()
+        json_rel = (PurePosixPath("results") / json_filename).as_posix()
+
+        canonical_records.append(
+            replace(
+                record,
+                pack=pack_rel,
+                result_jsonl=jsonl_rel,
+                result_json=json_rel,
+            )
+        )
+
+    if not changed:
+        return index, False
+
+    canonical_index = build_validation_index(
+        index_path=index_path,
+        sid=sid,
+        packs_dir=validation_paths.packs_dir,
+        results_dir=validation_paths.results_dir,
+        records=tuple(canonical_records),
+    )
+    canonical_index = replace(
+        canonical_index,
+        schema_version=index.schema_version or canonical_index.schema_version,
+    )
+    canonical_index.write()
+    stream.write(
+        f"Rewrote validation manifest to canonical layout at {index_path}.\n"
+    )
+    return canonical_index, True
 
 
 def _parse_argv(argv: Sequence[str] | None) -> argparse.Namespace:

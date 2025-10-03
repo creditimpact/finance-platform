@@ -27,6 +27,7 @@ from backend.core.ai.paths import (
     validation_result_filename_for_account,
     validation_results_dir,
 )
+from backend.validation.manifest import rewrite_index_to_canonical_layout
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -587,3 +588,63 @@ def test_build_validation_packs_for_run_auto_send(
     assert "manifest" in captured
     expected_index = validation_index_path(sid, runs_root=runs_root)
     assert Path(captured["manifest"]) == expected_index
+
+
+def test_rewrite_index_to_canonical_layout(tmp_path: Path) -> None:
+    sid = "S777"
+    runs_root = tmp_path / "runs"
+
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+    summary_payload = {
+        "validation_requirements": {
+            "requirements": [
+                {
+                    "field": "balance_owed",
+                    "category": "activity",
+                    "strength": "weak",
+                    "ai_needed": True,
+                }
+            ],
+            "field_consistency": {
+                "balance_owed": {
+                    "raw": {"transunion": "$100"},
+                }
+            },
+        }
+    }
+    bureaus_payload = {
+        "transunion": {"balance_owed": "$100"},
+        "experian": {"balance_owed": "$105"},
+    }
+
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+
+    writer = ValidationPackWriter(sid, runs_root=runs_root)
+    writer.write_pack_for_account(1)
+
+    index_path = validation_index_path(sid, runs_root=runs_root)
+    payload = _read_index(index_path)
+    entry = _index_entry_for_account(payload, 1)
+
+    payload["packs_dir"] = "../cases/accounts"
+    payload["results_dir"] = "../cases/accounts/results"
+    entry["pack"] = "../cases/accounts/1/pack.jsonl"
+    entry["result_jsonl"] = "../cases/accounts/1/result.jsonl"
+    entry["result_json"] = "../cases/accounts/1/result.json"
+    _write_json(index_path, payload)
+
+    _, changed = rewrite_index_to_canonical_layout(index_path, runs_root=runs_root)
+    assert changed is True
+
+    rewritten = _read_index(index_path)
+    assert rewritten["packs_dir"] == "packs"
+    assert rewritten["results_dir"] == "results"
+
+    rewritten_entry = _index_entry_for_account(rewritten, 1)
+    assert rewritten_entry["pack"] == "packs/val_acc_001.jsonl"
+    assert rewritten_entry["result_jsonl"] == "results/acc_001.result.jsonl"
+    assert rewritten_entry["result_json"] == "results/acc_001.result.json"
+
+    _, unchanged = rewrite_index_to_canonical_layout(index_path, runs_root=runs_root)
+    assert unchanged is False

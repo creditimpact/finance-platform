@@ -249,10 +249,9 @@ def validation_index_path(
 ) -> Path:
     """Return the manifest index path for validation packs."""
 
-    base = validation_base_dir(sid, runs_root=runs_root, create=create)
-    if create:
-        base.mkdir(parents=True, exist_ok=True)
-    return (base / "index.json").resolve()
+    runs_root_path = _resolve_runs_root(runs_root).resolve()
+    validation_paths = ensure_validation_paths(runs_root_path, sid, create=create)
+    return validation_paths.index_file
 
 
 def validation_logs_path(

@@ -2880,20 +2880,47 @@ def persist_merge_tags(
             )
             continue
 
-        requirements, inconsistencies, field_consistency = build_validation_requirements(
-            bureaus_payload
-        )
-        summary_payload = build_validation_summary_payload(
-            requirements, field_consistency=field_consistency
-        )
-        summary_after = apply_validation_summary(summary_path, summary_payload)
+        try:
+            requirements, inconsistencies, field_consistency = build_validation_requirements(
+                bureaus_payload
+            )
+        except Exception:
+            logger.exception(
+                "VALIDATION_REQUIREMENTS_COMPUTE_FAILED sid=%s idx=%s runs_root=%s",
+                sid,
+                idx,
+                runs_root,
+            )
+            continue
+
+        try:
+            summary_payload = build_validation_summary_payload(
+                requirements, field_consistency=field_consistency
+            )
+            summary_after = apply_validation_summary(summary_path, summary_payload)
+        except Exception:
+            logger.exception(
+                "VALIDATION_SUMMARY_WRITE_FAILED sid=%s idx=%s summary=%s",
+                sid,
+                idx,
+                summary_path,
+            )
+            continue
 
         tag_path = tag_paths.get(idx)
         if tag_path is not None:
-            fields_for_tag = [
-                str(entry["field"]) for entry in requirements if entry.get("field")
-            ]
-            sync_validation_tag(tag_path, fields_for_tag, emit=emit_validation_tag)
+            try:
+                fields_for_tag = [
+                    str(entry["field"]) for entry in requirements if entry.get("field")
+                ]
+                sync_validation_tag(tag_path, fields_for_tag, emit=emit_validation_tag)
+            except Exception:
+                logger.exception(
+                    "VALIDATION_TAG_SYNC_FAILED sid=%s idx=%s path=%s",
+                    sid,
+                    idx,
+                    tag_path,
+                )
 
         bureaus_path = summary_path.parent / "bureaus.json"
         try:

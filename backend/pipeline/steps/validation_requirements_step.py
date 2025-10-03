@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Mapping
 
 from backend.core.config import ENABLE_VALIDATION_REQUIREMENTS, VALIDATION_DEBUG
 from backend.core.logic.validation_requirements import (
@@ -21,12 +22,19 @@ def run(account_dir: str) -> dict:
     if not (os.path.isfile(bureaus_json) and os.path.isfile(summary_json)):
         return {"skipped": True, "reason": "missing_inputs"}
 
-    req = build_validation_requirements_for_account(account_dir) or {}
+    result = build_validation_requirements_for_account(account_dir) or {}
 
     try:
         with open(summary_json, "r+", encoding="utf-8") as f:
             summary = json.load(f)
-            summary["validation_requirements"] = req
+            block = result.get("validation_requirements")
+            if isinstance(block, Mapping):
+                summary["validation_requirements"] = dict(block)
+            else:
+                summary["validation_requirements"] = {
+                    "schema_version": 3,
+                    "findings": [],
+                }
             if not VALIDATION_DEBUG and "validation_debug" in summary:
                 summary.pop("validation_debug", None)
             f.seek(0)
@@ -37,5 +45,5 @@ def run(account_dir: str) -> dict:
 
     return {
         "skipped": False,
-        "findings_count": int(req.get("count") or 0),
+        "findings_count": int(result.get("count") or 0),
     }

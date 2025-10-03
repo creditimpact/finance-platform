@@ -82,6 +82,17 @@ def test_build_summary_payload_includes_field_consistency():
 
     assert payload["count"] == 1
     assert payload["field_consistency"] == field_consistency
+    assert len(payload["requirements"]) == 1
+
+    finding = payload["requirements"][0]
+    assert finding["reason_code"] == "C4_TWO_MATCH_ONE_DIFF"
+    assert finding["reason_label"] == "two bureaus agree, one differs"
+    assert finding["is_missing"] is False
+    assert finding["is_mismatch"] is True
+    assert finding["missing_count"] == 0
+    assert finding["present_count"] == 2
+    assert finding["distinct_values"] == 2
+    assert finding["send_to_ai"] is False
 
 
 def test_compute_inconsistent_fields_handles_histories():

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import importlib
 import json
+import logging
 import os
 import re
 import time
@@ -10,8 +12,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
-
-import requests
 
 from backend.core.ai.paths import (
     validation_result_jsonl_filename_for_account,
@@ -45,6 +45,11 @@ _CREDITOR_REMARK_KEYWORDS = (
     "fraudulent",
     "repossession",
 )
+
+
+log = logging.getLogger(__name__)
+
+requests: Any | None = None
 
 
 def _coerce_bool_flag(value: Any) -> bool:
@@ -247,6 +252,23 @@ class ValidationPackError(RuntimeError):
     """Raised when the Validation AI sender encounters a fatal error."""
 
 
+def _ensure_requests_module() -> Any:
+    """Load the ``requests`` module lazily so tests can stub it."""
+
+    global requests
+    if requests is not None:
+        return requests
+
+    try:
+        requests = importlib.import_module("requests")
+    except ModuleNotFoundError as exc:  # pragma: no cover - defensive import
+        raise ValidationPackError(
+            "requests library is required to send validation packs"
+        ) from exc
+
+    return requests
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
         "+00:00", "Z"
@@ -291,7 +313,8 @@ class _ChatCompletionClient:
             "messages": list(messages),
             "response_format": dict(response_format),
         }
-        response = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
+        request_lib = _ensure_requests_module()
+        response = request_lib.post(url, headers=headers, json=payload, timeout=self.timeout)
         response.raise_for_status()
         return response.json()
 
@@ -683,6 +706,20 @@ class ValidationPackSender:
             result_jsonl_path = account.result_jsonl_path
             result_json_path = account.result_json_path
 
+            account_label = (
+                f"{normalized_account:03d}"
+                if normalized_account is not None
+                else str(account_id)
+            )
+            log.info(
+                "PROCESSING account_id=%s pack=%s result_json=%s",
+                account_label,
+                pack_relative
+                or self._display_path(resolved_pack, base=index.index_dir),
+                result_json_relative
+                or self._display_path(result_json_path, base=index.index_dir),
+            )
+
             try:
                 account_summary = self._process_account(
                     account_id,
@@ -695,6 +732,32 @@ class ValidationPackSender:
                     result_json_relative,
                 )
             except ValidationPackError as exc:
+                if normalized_account is None:
+                    self._log(
+                        "send_account_failed",
+                        account_id=str(account_id),
+                        error=str(exc),
+                    )
+                    continue
+                self._log(
+                    "send_account_failed",
+                    account_id=f"{normalized_account:03d}",
+                    error=str(exc),
+                )
+                account_summary = self._record_account_failure(
+                    normalized_account,
+                    resolved_pack,
+                    pack_relative,
+                    result_jsonl_path,
+                    result_jsonl_relative,
+                    result_json_path,
+                    result_json_relative,
+                    str(exc),
+                )
+            except Exception as exc:  # pragma: no cover - defensive logging
+                log.exception(
+                    "VALIDATION_PACK_ACCOUNT_UNEXPECTED sid=%s account=%s", self.sid, account_label
+                )
                 if normalized_account is None:
                     self._log(
                         "send_account_failed",
@@ -1191,7 +1254,15 @@ class ValidationPackSender:
         return f"line_{line_number:03d}"
 
     def _is_allowed_field(self, field: str) -> bool:
-        return field in _ALLOWED_FIELDS
+        if field in _ALLOWED_FIELDS:
+            return True
+
+        canonical = field.strip().lower().replace(" ", "_")
+        if canonical in _ALLOWED_FIELDS:
+            return True
+
+        log.debug("ALLOWING_UNKNOWN_FIELD field=%s canonical=%s", field, canonical)
+        return True
 
     def _load_index(self) -> ValidationIndex:
         return self._index

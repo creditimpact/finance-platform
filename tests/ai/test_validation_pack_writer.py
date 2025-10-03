@@ -74,6 +74,10 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
                     "ai_needed": False,
                 },
             ],
+            "findings": [
+                {"field": "balance_owed", "send_to_ai": True},
+                {"field": "account_status", "send_to_ai": False},
+            ],
             "field_consistency": {
                 "balance_owed": {
                     "consensus": "split",
@@ -160,6 +164,9 @@ def test_writer_uses_bureau_fallback(tmp_path: Path) -> None:
                     "notes": "status mismatch",
                 }
             ],
+            "findings": [
+                {"field": "account_status", "send_to_ai": True}
+            ],
             "field_consistency": {},
         }
     }
@@ -199,6 +206,9 @@ def test_writer_skips_strong_fields(tmp_path: Path) -> None:
                     "ai_needed": True,
                 }
             ],
+            "findings": [
+                {"field": "payment_status", "send_to_ai": True}
+            ],
             "field_consistency": {},
         }
     }
@@ -235,6 +245,10 @@ def test_writer_updates_index(tmp_path: Path) -> None:
                     "strength": "weak",
                     "ai_needed": True,
                 },
+            ],
+            "findings": [
+                {"field": "balance_owed", "send_to_ai": True},
+                {"field": "account_status", "send_to_ai": True},
             ],
             "field_consistency": {
                 "balance_owed": {
@@ -308,6 +322,9 @@ def _seed_validation_account(
                     "strength": "weak",
                     "ai_needed": True,
                 }
+            ],
+            "findings": [
+                {"field": field, "send_to_ai": True}
             ],
             "field_consistency": {
                 field: {"raw": {"transunion": "$100"}},
@@ -554,6 +571,9 @@ def test_build_validation_pack_respects_env_toggle(
                     "ai_needed": True,
                 }
             ],
+            "findings": [
+                {"field": "balance_owed", "send_to_ai": True}
+            ],
             "field_consistency": {
                 "balance_owed": {"raw": {"transunion": "$100"}}
             },
@@ -595,6 +615,9 @@ def test_build_validation_packs_for_run_auto_send(
                     "strength": "weak",
                     "ai_needed": True,
                 }
+            ],
+            "findings": [
+                {"field": "balance_owed", "send_to_ai": True}
             ],
             "field_consistency": {
                 "balance_owed": {"raw": {"transunion": "$100"}}
@@ -647,6 +670,9 @@ def test_rewrite_index_to_canonical_layout(tmp_path: Path) -> None:
                     "strength": "weak",
                     "ai_needed": True,
                 }
+            ],
+            "findings": [
+                {"field": "balance_owed", "send_to_ai": True}
             ],
             "field_consistency": {
                 "balance_owed": {

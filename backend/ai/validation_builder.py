@@ -250,6 +250,7 @@ class ValidationPackWriter:
             return []
 
         consistency_map = validation_block["field_consistency"]
+        send_to_ai_map = validation_block.get("send_to_ai", {})
         bureaus_data = self._load_bureaus(account_id)
 
         pack_lines: list[PackLine] = []
@@ -259,6 +260,13 @@ class ValidationPackWriter:
 
             canonical_field = self._canonical_field_name(requirement.get("field"))
             if canonical_field is None:
+                continue
+
+            if not self._should_send_to_ai(
+                requirement,
+                canonical_field,
+                send_to_ai_map=send_to_ai_map,
+            ):
                 continue
 
             consistency = consistency_map.get(canonical_field)
@@ -412,14 +420,22 @@ class ValidationPackWriter:
             return statuses
 
         requirements = validation_block.get("requirements") or []
+        send_to_ai_map = validation_block.get("send_to_ai", {})
         has_ai_needed = False
         for requirement in requirements:
             if not isinstance(requirement, Mapping):
                 continue
-            if not requirement.get("ai_needed"):
-                continue
             strength = self._normalize_strength(requirement.get("strength"))
             if strength == "strong":
+                continue
+            canonical_field = self._canonical_field_name(requirement.get("field"))
+            if canonical_field is None:
+                continue
+            if not self._should_send_to_ai(
+                requirement,
+                canonical_field,
+                send_to_ai_map=send_to_ai_map,
+            ):
                 continue
             has_ai_needed = True
             break
@@ -798,10 +814,65 @@ class ValidationPackWriter:
             consistency if isinstance(consistency, Mapping) else {}
         )
 
+        send_to_ai_entries = block.get("findings")
+        send_to_ai_map: dict[str, bool] = {}
+        if isinstance(send_to_ai_entries, Sequence):
+            for entry in send_to_ai_entries:
+                if not isinstance(entry, Mapping):
+                    continue
+                field_name = entry.get("field")
+                canonical = self._canonical_field_name(field_name)
+                if canonical is None:
+                    continue
+                send_flag = bool(entry.get("send_to_ai"))
+                send_to_ai_map[canonical] = send_flag
+
+                if isinstance(field_name, str):
+                    alias = field_name.strip().lower()
+                elif field_name is not None:
+                    alias = str(field_name).strip().lower()
+                else:
+                    alias = ""
+
+                if alias and alias not in send_to_ai_map:
+                    send_to_ai_map[alias] = send_flag
+
         return {
             "requirements": list(requirements),
             "field_consistency": consistency_map,
+            "send_to_ai": send_to_ai_map,
         }
+
+    def _should_send_to_ai(
+        self,
+        requirement: Mapping[str, Any],
+        canonical_field: str,
+        *,
+        send_to_ai_map: Mapping[str, Any] | None = None,
+    ) -> bool:
+        """Determine whether ``requirement`` should be routed to AI."""
+
+        lookup_keys: list[str] = [canonical_field]
+        raw_field = requirement.get("field")
+        if isinstance(raw_field, str):
+            alias = raw_field.strip().lower()
+        elif raw_field is not None:
+            alias = str(raw_field).strip().lower()
+        else:
+            alias = ""
+
+        if alias and alias not in lookup_keys:
+            lookup_keys.append(alias)
+
+        if isinstance(send_to_ai_map, Mapping):
+            for key in lookup_keys:
+                if key in send_to_ai_map:
+                    return bool(send_to_ai_map[key])
+
+        ai_needed = requirement.get("ai_needed")
+        if isinstance(ai_needed, bool):
+            return ai_needed
+        return bool(ai_needed)
 
     @staticmethod
     def _normalize_account_id(account_id: int | str) -> int:
@@ -840,14 +911,19 @@ class ValidationPackWriter:
         if isinstance(summary, Mapping):
             validation_block = self._extract_validation_block(summary) or {}
             raw_requirements = validation_block.get("requirements")
+            send_to_ai_map = validation_block.get("send_to_ai", {})
             if isinstance(raw_requirements, Sequence):
                 for entry in raw_requirements:
                     if not isinstance(entry, Mapping):
                         continue
-                    if not entry.get("ai_needed"):
-                        continue
                     canonical_field = self._canonical_field_name(entry.get("field"))
                     if canonical_field is None:
+                        continue
+                    if not self._should_send_to_ai(
+                        entry,
+                        canonical_field,
+                        send_to_ai_map=send_to_ai_map,
+                    ):
                         continue
 
                     cloned = _json_clone(entry)

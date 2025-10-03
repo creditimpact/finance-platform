@@ -56,6 +56,9 @@ def _build_manifest(tmp_path: Path, sid: str = "S001") -> tuple[dict[str, object
                     "category": "identity",
                 }
             ],
+            "findings": [
+                {"field": "Account Status", "send_to_ai": True}
+            ],
             "field_consistency": {},
         }
     }

@@ -814,9 +814,16 @@ def build_summary_payload(
 ) -> Dict[str, Any]:
     """Build the summary.json payload for validation requirements."""
 
-    findings = [_build_finding(entry, field_consistency) for entry in requirements]
+    normalized_requirements = [dict(entry) for entry in requirements]
+    findings = [
+        _build_finding(entry, field_consistency) for entry in normalized_requirements
+    ]
 
-    payload = {"requirements": findings, "count": len(findings)}
+    payload = {
+        "requirements": normalized_requirements,
+        "findings": findings,
+        "count": len(findings),
+    }
     if field_consistency:
         payload["field_consistency"] = dict(field_consistency)
     return payload

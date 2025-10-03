@@ -215,6 +215,10 @@ class ValidationPackBuilder:
         documents = self._normalize_string_list(requirement.get("documents"))
         category = self._coerce_optional_str(requirement.get("category"))
         min_days = self._coerce_optional_int(requirement.get("min_days"))
+        min_corroboration = self._coerce_optional_int(
+            requirement.get("min_corroboration")
+        )
+        conditional_gate = self._coerce_bool(requirement.get("conditional_gate"))
 
         context = self._build_context(consistency)
         extra_context = requirement.get("notes") or requirement.get("reason")
@@ -255,6 +259,11 @@ class ValidationPackBuilder:
                 "user": prompt_user,
             },
         }
+
+        if min_corroboration is not None:
+            payload["min_corroboration"] = min_corroboration
+        if conditional_gate:
+            payload["conditional_gate"] = True
 
         return payload
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,6 +26,190 @@ _DEFAULT_MODEL = "gpt-4o-mini"
 _DEFAULT_TIMEOUT = 30.0
 _THROTTLE_SECONDS = 0.05
 _VALID_DECISIONS = {"strong", "no_case"}
+_CREDITOR_REMARK_KEYWORDS = (
+    "charge off",
+    "charge-off",
+    "consumer dispute",
+    "consumer disputes",
+    "consumer states",
+    "fcra",
+    "fraud",
+    "fraudulent",
+    "repossession",
+)
+
+
+def _coerce_bool_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    return False
+
+
+def _coerce_int_value(value: Any, default: int = 1) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _extract_bureau_records(
+    pack_line: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
+    bureaus = pack_line.get("bureaus")
+    if not isinstance(bureaus, Mapping):
+        return {}
+    records: dict[str, dict[str, Any]] = {}
+    for bureau, value in bureaus.items():
+        if isinstance(value, Mapping):
+            records[str(bureau)] = {
+                "raw": value.get("raw"),
+                "normalized": value.get("normalized"),
+            }
+    return records
+
+
+def _normalize_account_number_token(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        last4 = value.get("last4")
+        if isinstance(last4, str) and last4.strip():
+            return last4.strip()
+        display = value.get("display")
+        if isinstance(display, str) and display.strip():
+            digits = re.findall(r"\d", display)
+            if len(digits) >= 4:
+                return "".join(digits[-4:])
+            return display.strip().lower()
+        for candidate in ("normalized", "raw", "value", "text"):
+            if candidate in value:
+                token = _normalize_account_number_token(value[candidate])
+                if token:
+                    return token
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        digits = re.findall(r"\d", text)
+        if len(digits) >= 4:
+            return "".join(digits[-4:])
+        return text.lower()
+    try:
+        text = str(value).strip()
+    except Exception:
+        return None
+    if not text:
+        return None
+    digits = re.findall(r"\d", text)
+    if len(digits) >= 4:
+        return "".join(digits[-4:])
+    return text.lower()
+
+
+def _normalize_text_fragment(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        for candidate in ("normalized", "raw", "value", "text", "display"):
+            if candidate in value:
+                normalized = _normalize_text_fragment(value[candidate])
+                if normalized:
+                    return normalized
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    return " ".join(text.split())
+
+
+def _normalize_text_value(data: Mapping[str, Any]) -> str | None:
+    for key in ("normalized", "raw"):
+        if key in data:
+            normalized = _normalize_text_fragment(data[key])
+            if normalized:
+                return normalized
+    return None
+
+
+def _normalize_account_number_value(data: Mapping[str, Any]) -> str | None:
+    for key in ("normalized", "raw"):
+        if key in data:
+            token = _normalize_account_number_token(data[key])
+            if token:
+                return token
+    return None
+
+
+def _conditional_mismatch_metrics(
+    field: str, pack_line: Mapping[str, Any]
+) -> tuple[bool, int, list[str]]:
+    records = _extract_bureau_records(pack_line)
+    normalized_values: list[str] = []
+
+    if field == "account_number_display":
+        for record in records.values():
+            token = _normalize_account_number_value(record)
+            if token:
+                normalized_values.append(token)
+    else:
+        for record in records.values():
+            token = _normalize_text_value(record)
+            if token:
+                normalized_values.append(token)
+
+    unique_values = sorted(set(normalized_values))
+    mismatch = len(unique_values) >= 2
+    corroboration = len(unique_values)
+    return mismatch, corroboration, normalized_values
+
+
+def _has_high_signal_creditor_remarks(values: Sequence[str]) -> bool:
+    for value in values:
+        if any(keyword in value for keyword in _CREDITOR_REMARK_KEYWORDS):
+            return True
+    return False
+
+
+def _append_gate_note(rationale: str, reason: str) -> str:
+    note = f"[conditional_gate:{reason}]"
+    if not rationale:
+        return note
+    return f"{rationale} {note}"
+
+
+def _enforce_conditional_gate(
+    field: str,
+    decision: str,
+    rationale: str,
+    pack_line: Mapping[str, Any],
+) -> tuple[str, str]:
+    if decision != "strong":
+        return decision, rationale
+    if not _coerce_bool_flag(pack_line.get("conditional_gate")):
+        return decision, rationale
+
+    min_corroboration = max(1, _coerce_int_value(pack_line.get("min_corroboration"), 1))
+    mismatch, corroboration, normalized_values = _conditional_mismatch_metrics(
+        field, pack_line
+    )
+
+    if field == "creditor_remarks" and mismatch:
+        if not _has_high_signal_creditor_remarks(normalized_values):
+            mismatch = False
+
+    if not mismatch or corroboration < min_corroboration:
+        return "no_case", _append_gate_note(rationale, "insufficient_evidence")
+
+    return decision, rationale
 
 
 class ValidationPackError(RuntimeError):
@@ -701,6 +886,10 @@ class ValidationPackSender:
         rationale = self._normalize_rationale(response.get("rationale"))
         citations = self._normalize_citations(response.get("citations"))
         confidence = self._normalize_confidence(response.get("confidence"))
+
+        decision, rationale = _enforce_conditional_gate(
+            field, decision, rationale, pack_line
+        )
 
         result: dict[str, Any] = {
             "id": line_id,

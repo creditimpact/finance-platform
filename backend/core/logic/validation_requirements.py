@@ -27,6 +27,7 @@ __all__ = [
     "ValidationConfig",
     "load_validation_config",
     "build_validation_requirements",
+    "build_findings",
     "build_summary_payload",
     "apply_validation_summary",
     "sync_validation_tag",
@@ -70,6 +71,15 @@ def _include_legacy_requirements() -> bool:
     raw_value = os.getenv("VALIDATION_SUMMARY_INCLUDE_REQUIREMENTS", "0")
     if raw_value is None:
         return False
+
+    normalized = raw_value.strip().lower()
+    return normalized in {"1", "true", "yes", "y", "on"}
+
+
+def _should_write_empty_requirements() -> bool:
+    raw_value = os.getenv("REQUIREMENTS_WRITE_EMPTY", "1")
+    if raw_value is None:
+        return True
 
     normalized = raw_value.strip().lower()
     return normalized in {"1", "true", "yes", "y", "on"}
@@ -858,6 +868,49 @@ def _build_finding(
     return finding
 
 
+def build_findings(
+    requirements: Sequence[Mapping[str, Any]],
+    *,
+    field_consistency: Mapping[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    """Return normalized findings enriched with metadata when enabled."""
+
+    findings: List[Dict[str, Any]] = []
+    reasons_enabled = _is_validation_reason_enabled()
+
+    for entry in requirements:
+        if not isinstance(entry, Mapping):
+            continue
+
+        try:
+            normalized_entry = dict(entry)
+        except Exception:  # pragma: no cover - defensive fallback
+            logger.exception(
+                "VALIDATION_FINDING_NORMALIZE_FAILED field=%s", entry
+            )
+            continue
+
+        if not normalized_entry.get("field"):
+            findings.append(normalized_entry)
+            continue
+
+        if reasons_enabled:
+            try:
+                finding = _build_finding(normalized_entry, field_consistency)
+            except Exception:  # pragma: no cover - defensive enrichment
+                logger.exception(
+                    "VALIDATION_FINDING_ENRICH_FAILED field=%s",
+                    normalized_entry.get("field"),
+                )
+                finding = dict(normalized_entry)
+        else:
+            finding = dict(normalized_entry)
+
+        findings.append(finding)
+
+    return findings
+
+
 def build_summary_payload(
     requirements: Sequence[Mapping[str, Any]],
     *,
@@ -865,21 +918,17 @@ def build_summary_payload(
 ) -> Dict[str, Any]:
     """Build the summary.json payload for validation requirements."""
 
-    normalized_requirements = [dict(entry) for entry in requirements]
+    normalized_requirements = [
+        dict(entry) for entry in requirements if isinstance(entry, Mapping)
+    ]
     reasons_enabled = _is_validation_reason_enabled()
-
-    if reasons_enabled:
-        findings = [
-            _build_finding(entry, field_consistency)
-            for entry in normalized_requirements
-        ]
-    else:
-        findings = [dict(entry) for entry in normalized_requirements]
+    findings = build_findings(
+        normalized_requirements, field_consistency=field_consistency
+    )
 
     payload: Dict[str, Any] = {
         "schema_version": _SUMMARY_SCHEMA_VERSION,
         "findings": findings,
-        "count": len(findings),
     }
 
     if _include_legacy_requirements():
@@ -1043,18 +1092,54 @@ def apply_validation_summary(
 
     include_field_consistency = _include_field_consistency()
     normalized_payload = dict(payload)
+
+    findings_payload = normalized_payload.get("findings")
+    if isinstance(findings_payload, Sequence) and not isinstance(
+        findings_payload, (str, bytes, bytearray)
+    ):
+        findings_list = [
+            entry for entry in findings_payload if isinstance(entry, Mapping)
+        ]
+    else:
+        findings_list = []
+    findings_count = len(findings_list)
+    normalized_payload["findings"] = findings_list
+
     if not include_field_consistency:
         normalized_payload.pop("field_consistency", None)
 
-    count = int(payload.get("count") or 0)
+    if not _include_legacy_requirements():
+        normalized_payload.pop("requirements", None)
     existing_block = summary_data.get("validation_requirements")
     existing_normalized = (
         dict(existing_block) if isinstance(existing_block, Mapping) else None
     )
-    if isinstance(existing_normalized, dict) and not include_field_consistency:
-        existing_normalized.pop("field_consistency", None)
+    if isinstance(existing_normalized, dict):
+        if not include_field_consistency:
+            existing_normalized.pop("field_consistency", None)
+        if not _include_legacy_requirements():
+            existing_normalized.pop("requirements", None)
 
     needs_update = existing_normalized != normalized_payload
+
+    if findings_count == 0 and not _should_write_empty_requirements():
+        write_required = scaffold_changed
+        if existing_block is not None:
+            summary_data.pop("validation_requirements", None)
+            write_required = True
+        if write_required:
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
+                compact_merge_sections(summary_data)
+            logger.debug(
+                "summary: findings=%s, requirements_written=%s, schema_version=%s",
+                findings_count,
+                False,
+                normalized_payload.get("schema_version"),
+            )
+            _atomic_write_json(summary_path, summary_data)
+        return summary_data
+
     if needs_update:
         summary_data["validation_requirements"] = dict(normalized_payload)
 
@@ -1075,7 +1160,7 @@ def apply_validation_summary(
             compact_merge_sections(summary_data)
         logger.debug(
             "summary: findings=%s, requirements_written=%s, schema_version=%s",
-            count,
+            findings_count,
             "requirements" in normalized_payload,
             normalized_payload.get("schema_version"),
         )

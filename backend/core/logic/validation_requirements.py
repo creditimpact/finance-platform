@@ -1207,8 +1207,23 @@ def _should_emit_tags() -> bool:
     return os.environ.get("WRITE_VALIDATION_TAGS") == "1"
 
 
-def build_validation_requirements_for_account(account_dir: str | Path) -> Dict[str, Any]:
-    """Compute and persist validation requirements for ``account_dir``."""
+def build_validation_requirements_for_account(
+    account_dir: str | Path,
+    *,
+    build_pack: bool = True,
+) -> Dict[str, Any]:
+    """Compute and persist validation requirements for ``account_dir``.
+
+    Parameters
+    ----------
+    account_dir:
+        Filesystem path pointing at ``runs/<sid>/cases/accounts/<idx>``.
+    build_pack:
+        When ``True`` (the default) a validation pack is built for the account
+        after the summary has been written.  The pipeline orchestrator can pass
+        ``False`` to defer pack generation until it explicitly decides the
+        account should be queued for AI review.
+    """
 
     account_path = Path(account_dir)
     bureaus_path = account_path / "bureaus.json"
@@ -1312,7 +1327,7 @@ def build_validation_requirements_for_account(account_dir: str | Path) -> Dict[s
         sid = None
         account_id = None
 
-    if sid and account_id:
+    if build_pack and sid and account_id:
         try:
             build_validation_pack_for_account(
                 sid,

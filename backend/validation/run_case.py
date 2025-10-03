@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 from backend.config import ENABLE_VALIDATION_AI
 
-from .build_packs import build_validation_packs, resolve_manifest_paths
+from .build_packs import resolve_manifest_paths
 from .send_packs import send_validation_packs
 
 
@@ -44,12 +44,19 @@ def run_case(manifest_path: Path | str) -> Mapping[str, Any]:
 
     _append_log(paths.log_path, "validation_ai_start", sid=paths.sid)
     try:
-        build_items = build_validation_packs(manifest)
+        from .pipeline import ValidationPipelineConfig, run_validation_summary_pipeline
+
+        pipeline_cfg = ValidationPipelineConfig()
+        summary_stats = run_validation_summary_pipeline(manifest, cfg=pipeline_cfg)
         _append_log(
             paths.log_path,
             "validation_ai_built",
             sid=paths.sid,
-            accounts=len(build_items),
+            total_accounts=summary_stats.get("total_accounts", 0),
+            summaries=summary_stats.get("summaries_written", 0),
+            packs=summary_stats.get("packs_built", 0),
+            skipped=summary_stats.get("skipped_accounts", 0),
+            errors=summary_stats.get("errors", 0),
         )
 
         send_results = send_validation_packs(manifest)
@@ -70,7 +77,7 @@ def run_case(manifest_path: Path | str) -> Mapping[str, Any]:
 
     return {
         "enabled": True,
-        "build": build_items,
+        "build": summary_stats,
         "send": send_results,
     }
 

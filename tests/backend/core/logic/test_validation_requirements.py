@@ -106,6 +106,42 @@ def test_build_summary_payload_includes_field_consistency():
     assert finding["send_to_ai"] is False
 
 
+def test_build_summary_payload_can_disable_reason_enrichment(monkeypatch):
+    monkeypatch.setenv("VALIDATION_REASON_ENABLED", "0")
+
+    requirements = [
+        {
+            "field": "balance_owed",
+            "category": "activity",
+            "min_days": 8,
+            "documents": ["monthly_statement"],
+            "strength": "strong",
+            "ai_needed": False,
+            "bureaus": ["experian", "transunion"],
+        }
+    ]
+    field_consistency = {
+        "balance_owed": {
+            "consensus": "split",
+            "normalized": {"transunion": 100.0, "experian": 150.0},
+            "raw": {"transunion": "100", "experian": "150"},
+            "disagreeing_bureaus": ["experian"],
+        }
+    }
+
+    payload = build_summary_payload(
+        requirements, field_consistency=field_consistency
+    )
+
+    assert payload["count"] == 1
+    assert payload["requirements"][0]["field"] == "balance_owed"
+    assert "findings" not in payload
+    # raw values should be preserved when enrichment is disabled
+    balance_consistency = payload["field_consistency"]["balance_owed"]
+    assert "raw" in balance_consistency
+    assert balance_consistency["raw"]["transunion"] == "100"
+
+
 def test_compute_inconsistent_fields_handles_histories():
     bureaus = {
         "transunion": {"account_status": "Open"},

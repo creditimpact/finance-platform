@@ -38,6 +38,17 @@ _VALIDATION_TAG_KIND = "validation_required"
 _CONFIG_PATH = Path(__file__).with_name("validation_config.yml")
 
 
+def _is_validation_reason_enabled() -> bool:
+    """Return ``True`` when reason enrichment should be applied."""
+
+    raw_value = os.getenv("VALIDATION_REASON_ENABLED", "1")
+    if raw_value is None:
+        return True
+
+    normalized = raw_value.strip().lower()
+    return normalized in {"1", "true", "yes", "y", "on"}
+
+
 @dataclass(frozen=True)
 class ValidationRule:
     """Metadata describing the validation needed for a field."""
@@ -829,19 +840,31 @@ def build_summary_payload(
     """Build the summary.json payload for validation requirements."""
 
     normalized_requirements = [dict(entry) for entry in requirements]
-    findings = [
-        _build_finding(entry, field_consistency) for entry in normalized_requirements
-    ]
+    reasons_enabled = _is_validation_reason_enabled()
 
-    payload = {
+    payload: Dict[str, Any] = {
         "requirements": normalized_requirements,
-        "findings": findings,
-        "count": len(findings),
+        "count": len(normalized_requirements),
     }
+
+    if reasons_enabled:
+        findings = [
+            _build_finding(entry, field_consistency)
+            for entry in normalized_requirements
+        ]
+        payload["findings"] = findings
+        payload["count"] = len(findings)
+
     if field_consistency:
-        sanitized_consistency = _strip_raw_from_field_consistency(field_consistency)
-        if sanitized_consistency:
-            payload["field_consistency"] = sanitized_consistency
+        if reasons_enabled:
+            sanitized_consistency = _strip_raw_from_field_consistency(field_consistency)
+            if sanitized_consistency:
+                payload["field_consistency"] = sanitized_consistency
+        else:
+            cloned_consistency = _clone_field_consistency(field_consistency)
+            if cloned_consistency:
+                payload["field_consistency"] = cloned_consistency
+
     return payload
 
 

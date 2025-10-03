@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from itertools import islice
 from os import PathLike
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence, Union
@@ -42,13 +41,11 @@ log = logging.getLogger(__name__)
 
 
 def _maybe_slice(iterable: Iterable[Path]) -> Iterable[Path]:
-    """Optionally limit iteration via the ``DEBUG_FIRST_N`` env toggle."""
+    """Return ``iterable`` unchanged so tag compaction covers all accounts."""
 
     debug_first_n = os.getenv("DEBUG_FIRST_N", "").strip()
-    if debug_first_n and debug_first_n.isdigit():
-        limit = int(debug_first_n)
-        if limit > 0:
-            return islice(iterable, limit)
+    if debug_first_n:
+        log.debug("DEBUG_FIRST_N=%s ignored for tag compaction", debug_first_n)
     return iterable
 
 

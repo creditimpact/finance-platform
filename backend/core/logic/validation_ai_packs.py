@@ -11,7 +11,6 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
-from itertools import islice
 from pathlib import Path
 import textwrap
 from typing import Any, Iterable, Mapping, Sequence
@@ -38,13 +37,13 @@ _DEFAULT_RETRY_BACKOFF = (1.0, 3.0, 10.0)
 
 
 def _maybe_slice(iterable: Iterable[int]) -> Iterable[int]:
-    """Optionally truncate ``iterable`` based on ``DEBUG_FIRST_N``."""
+    """Return ``iterable`` unchanged so every account index is handled."""
 
     debug_first_n = os.getenv("DEBUG_FIRST_N", "").strip()
-    if debug_first_n and debug_first_n.isdigit():
-        limit = int(debug_first_n)
-        if limit > 0:
-            return islice(iterable, limit)
+    if debug_first_n:
+        log.debug(
+            "DEBUG_FIRST_N=%s ignored for validation AI packs", debug_first_n
+        )
     return iterable
 
 

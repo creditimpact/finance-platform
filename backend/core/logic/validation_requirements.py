@@ -50,6 +50,15 @@ def _is_validation_reason_enabled() -> bool:
     return normalized in {"1", "true", "yes", "y", "on"}
 
 
+def _include_legacy_requirements() -> bool:
+    raw_value = os.getenv("VALIDATION_SUMMARY_INCLUDE_REQUIREMENTS", "0")
+    if raw_value is None:
+        return False
+
+    normalized = raw_value.strip().lower()
+    return normalized in {"1", "true", "yes", "y", "on"}
+
+
 @dataclass(frozen=True)
 class ValidationRule:
     """Metadata describing the validation needed for a field."""
@@ -904,6 +913,12 @@ def apply_validation_summary(
             summary_path.parent.mkdir(parents=True, exist_ok=True)
             if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
                 compact_merge_sections(summary_data)
+            logger.debug(
+                "summary: findings=%s, requirements_written=%s, schema_version=%s",
+                count,
+                "requirements" in payload,
+                payload.get("schema_version"),
+            )
             _atomic_write_json(summary_path, summary_data)
         return summary_data
 
@@ -912,6 +927,12 @@ def apply_validation_summary(
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
             compact_merge_sections(summary_data)
+        logger.debug(
+            "summary: findings=%s, requirements_written=%s, schema_version=%s",
+            count,
+            "requirements" in payload,
+            payload.get("schema_version"),
+        )
         _atomic_write_json(summary_path, summary_data)
 
     return summary_data
@@ -1076,10 +1097,19 @@ def build_validation_requirements_for_account(account_dir: str | Path) -> Dict[s
                 summary_path,
             )
 
-    return {
+    result = {
         "status": "ok",
         "count": findings_count,
         "fields": fields,
         "validation_requirements": payload,
     }
+
+    if __debug__ and not _include_legacy_requirements():
+        validation_payload = result.get("validation_requirements")
+        if isinstance(validation_payload, Mapping):
+            assert (
+                "requirements" not in validation_payload
+            ), "Legacy requirements array must not be written when VALIDATION_SUMMARY_INCLUDE_REQUIREMENTS=0"
+
+    return result
 

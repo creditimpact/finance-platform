@@ -112,6 +112,57 @@ def test_build_summary_payload_includes_field_consistency():
     assert finding["send_to_ai"] is False
 
 
+def test_build_summary_payload_can_optionally_include_legacy_requirements(monkeypatch):
+    monkeypatch.setenv("VALIDATION_SUMMARY_INCLUDE_REQUIREMENTS", "1")
+
+    requirements = [
+        {
+            "field": "balance_owed",
+            "category": "activity",
+            "min_days": 8,
+            "documents": ["monthly_statement"],
+            "strength": "strong",
+            "ai_needed": False,
+            "bureaus": ["experian", "transunion"],
+        },
+        {
+            "field": "account_status",
+            "category": "status",
+            "min_days": 10,
+            "documents": ["account_statement"],
+            "strength": "soft",
+            "ai_needed": True,
+            "bureaus": ["experian", "equifax"],
+        },
+    ]
+
+    payload = build_summary_payload(requirements)
+
+    assert payload["schema_version"] == 3
+    assert payload["count"] == 2
+    assert payload["findings"]
+    assert payload["requirements"] == [
+        {
+            "field": "balance_owed",
+            "category": "activity",
+            "min_days": 8,
+            "documents": ["monthly_statement"],
+            "strength": "strong",
+            "ai_needed": False,
+            "bureaus": ["experian", "transunion"],
+        },
+        {
+            "field": "account_status",
+            "category": "status",
+            "min_days": 10,
+            "documents": ["account_statement"],
+            "strength": "soft",
+            "ai_needed": True,
+            "bureaus": ["experian", "equifax"],
+        },
+    ]
+
+
 def test_build_summary_payload_can_disable_reason_enrichment(monkeypatch):
     monkeypatch.setenv("VALIDATION_REASON_ENABLED", "0")
 

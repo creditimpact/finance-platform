@@ -37,6 +37,13 @@ __all__ = [
 _VALIDATION_TAG_KIND = "validation_required"
 _CONFIG_PATH = Path(__file__).with_name("validation_config.yml")
 _SUMMARY_SCHEMA_VERSION = 3
+_DEFAULT_SUMMARY_POINTERS = {
+    "raw": "raw_lines.json",
+    "bureaus": "bureaus.json",
+    "flat": "fields_flat.json",
+    "tags": "tags.json",
+    "summary": "summary.json",
+}
 
 
 def _include_field_consistency() -> bool:
@@ -907,6 +914,124 @@ def _load_summary(summary_path: Path) -> MutableMapping[str, Any]:
     return dict(loaded)
 
 
+def _load_summary_meta(summary_path: Path) -> Mapping[str, Any]:
+    meta_path = summary_path.parent / "meta.json"
+    try:
+        raw = meta_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        return {}
+
+    try:
+        loaded = json.loads(raw)
+    except Exception:
+        return {}
+
+    if not isinstance(loaded, Mapping):
+        return {}
+
+    return dict(loaded)
+
+
+def _coerce_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return int(str(value))
+        except (TypeError, ValueError):
+            return None
+
+
+def _coerce_string_list(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, (str, bytes, bytearray)):
+        text = str(raw).strip()
+        return [text] if text else []
+    if isinstance(raw, Sequence):
+        result: list[str] = []
+        for entry in raw:
+            if entry is None:
+                continue
+            text = str(entry).strip()
+            if text:
+                result.append(text)
+        return result
+    text = str(raw).strip()
+    return [text] if text else []
+
+
+def _ensure_list_field(
+    summary_data: MutableMapping[str, Any], key: str, fallback: Any
+) -> bool:
+    if key in summary_data:
+        normalized = _coerce_string_list(summary_data.get(key))
+        if summary_data.get(key) != normalized:
+            summary_data[key] = normalized
+            return True
+        return False
+
+    normalized_fallback = _coerce_string_list(fallback)
+    summary_data[key] = normalized_fallback
+    return True
+
+
+def _ensure_summary_scaffold(
+    summary_path: Path, summary_data: MutableMapping[str, Any]
+) -> bool:
+    changed = False
+    meta = _load_summary_meta(summary_path)
+
+    idx_value = summary_data.get("account_index")
+    if idx_value is None:
+        idx_value = meta.get("account_index")
+        if idx_value is None:
+            idx_value = summary_path.parent.name
+    idx_int = _coerce_int(idx_value)
+    if idx_int is not None:
+        if summary_data.get("account_index") != idx_int:
+            summary_data["account_index"] = idx_int
+            changed = True
+
+    pointers_map: dict[str, Any] = dict(_DEFAULT_SUMMARY_POINTERS)
+    meta_pointers = meta.get("pointers")
+    if isinstance(meta_pointers, Mapping):
+        for key, value in meta_pointers.items():
+            pointers_map[str(key)] = str(value)
+
+    existing_pointers = summary_data.get("pointers")
+    if isinstance(existing_pointers, Mapping):
+        for key, value in existing_pointers.items():
+            pointers_map[str(key)] = str(value)
+    if summary_data.get("pointers") != pointers_map:
+        summary_data["pointers"] = pointers_map
+        changed = True
+
+    if "account_id" in summary_data:
+        account_id = summary_data.get("account_id")
+        if account_id is not None:
+            normalized_account_id = str(account_id)
+            if summary_data.get("account_id") != normalized_account_id:
+                summary_data["account_id"] = normalized_account_id
+                changed = True
+    else:
+        account_id_meta = meta.get("account_id")
+        if account_id_meta is None and idx_int is not None:
+            account_id_meta = f"idx-{idx_int:03d}"
+        if account_id_meta is not None:
+            summary_data["account_id"] = str(account_id_meta)
+            changed = True
+
+    if _ensure_list_field(summary_data, "problem_reasons", meta.get("problem_reasons")):
+        changed = True
+    if _ensure_list_field(summary_data, "problem_tags", meta.get("problem_tags")):
+        changed = True
+
+    return changed
+
+
 def apply_validation_summary(
     summary_path: Path,
     payload: Mapping[str, Any],
@@ -914,53 +1039,46 @@ def apply_validation_summary(
     """Update ``summary.json`` with validation requirements when they changed."""
 
     summary_data = _load_summary(summary_path)
-    existing = summary_data.get("validation_requirements")
+    scaffold_changed = _ensure_summary_scaffold(summary_path, summary_data)
 
     include_field_consistency = _include_field_consistency()
-    if not include_field_consistency and "field_consistency" in payload:
-        payload = dict(payload)
-        payload.pop("field_consistency", None)
+    normalized_payload = dict(payload)
+    if not include_field_consistency:
+        normalized_payload.pop("field_consistency", None)
 
     count = int(payload.get("count") or 0)
-    field_consistency = payload.get("field_consistency") if include_field_consistency else None
-    has_consistency = (
-        include_field_consistency
-        and isinstance(field_consistency, Mapping)
-        and bool(field_consistency)
+    existing_block = summary_data.get("validation_requirements")
+    existing_normalized = (
+        dict(existing_block) if isinstance(existing_block, Mapping) else None
     )
-    if count <= 0 and not has_consistency:
-        if "validation_requirements" in summary_data:
-            summary_data.pop("validation_requirements", None)
-            summary_path.parent.mkdir(parents=True, exist_ok=True)
-            if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
-                compact_merge_sections(summary_data)
-            logger.debug(
-                "summary: findings=%s, requirements_written=%s, schema_version=%s",
-                count,
-                "requirements" in payload,
-                payload.get("schema_version"),
-            )
-            if not include_field_consistency:
-                summary_data.pop("field_consistency", None)
-            _atomic_write_json(summary_path, summary_data)
-        return summary_data
+    if isinstance(existing_normalized, dict) and not include_field_consistency:
+        existing_normalized.pop("field_consistency", None)
 
-    if not isinstance(existing, Mapping) or dict(existing) != dict(payload):
-        summary_data["validation_requirements"] = dict(payload)
+    needs_update = existing_normalized != normalized_payload
+    if needs_update:
+        summary_data["validation_requirements"] = dict(normalized_payload)
+
+    write_required = scaffold_changed or needs_update
+
+    if not include_field_consistency:
+        removed_top_level = summary_data.pop("field_consistency", None) is not None
+        block = summary_data.get("validation_requirements")
+        removed_block = False
+        if isinstance(block, MutableMapping):
+            removed_block = block.pop("field_consistency", None) is not None
+        if removed_top_level or removed_block:
+            write_required = True
+
+    if write_required:
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
             compact_merge_sections(summary_data)
         logger.debug(
             "summary: findings=%s, requirements_written=%s, schema_version=%s",
             count,
-            "requirements" in payload,
-            payload.get("schema_version"),
+            "requirements" in normalized_payload,
+            normalized_payload.get("schema_version"),
         )
-        if not include_field_consistency:
-            summary_data.pop("field_consistency", None)
-            validation_requirements = summary_data.get("validation_requirements")
-            if isinstance(validation_requirements, MutableMapping):
-                validation_requirements.pop("field_consistency", None)
         _atomic_write_json(summary_path, summary_data)
 
     return summary_data

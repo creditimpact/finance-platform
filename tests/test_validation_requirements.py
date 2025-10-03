@@ -7,17 +7,18 @@ from backend.core.logic.validation_requirements import build_validation_requirem
 @pytest.fixture
 def account_with_histories():
     return {
-        "transunion": {
-            "two_year_payment_history": ["CO", "30", "OK", "120"],
-            "seven_year_history": {"late30": "2", "co_count": 1},
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+        "two_year_payment_history": {
+            "transunion": ["CO", "30", "OK", "120"],
+            "experian": ["OK", "OK", "OK"],
+            "equifax": [],
         },
-        "experian": {
-            "two_year_payment_history": ["OK", "OK", "OK"],
-            "seven_year_history": {"late30": 0, "co_count": 0},
-        },
-        "equifax": {
-            "two_year_payment_history": [],
-            "seven_year_history": {"late30": 0, "co_count": 0},
+        "seven_year_history": {
+            "transunion": {"late30": "2", "late60": 0, "late90": 1, "co_count": 1},
+            "experian": {"late30": 0, "late60": 0, "late90": 0, "co_count": 0},
+            "equifax": {"late30": 0, "late60": 0, "late90": 0, "co_count": 0},
         },
     }
 
@@ -148,6 +149,8 @@ def test_account_number_masking_needs_soft_review(account_number_masking_only):
     assert rule["strength"] == "soft"
     assert rule["ai_needed"] is True
     assert rule["bureaus"] == ["equifax", "experian", "transunion"]
+    assert rule["min_corroboration"] == 2
+    assert rule["conditional_gate"] is True
 
     field_consistency = compute_field_consistency(account_number_masking_only)
     assert field_consistency["account_number_display"]["consensus"] == "majority"
@@ -166,31 +169,52 @@ def test_soft_semantics_require_ai(account_soft_semantics):
     assert rule["ai_needed"] is True
 
 
+def test_account_rating_uses_conditional_gate():
+    bureaus = {
+        "transunion": {"account_rating": "A"},
+        "experian": {"account_rating": "B"},
+        "equifax": {},
+    }
+
+    requirements, _ = _requirements_by_field(bureaus)
+
+    assert "account_rating" in requirements
+    rule = requirements["account_rating"]
+    assert rule["strength"] == "medium"
+    assert rule["ai_needed"] is True
+    assert rule["min_corroboration"] == 2
+    assert rule["conditional_gate"] is True
+
+
 def test_sanity_example_strong_and_soft_requirements():
     bureaus = {
         "transunion": {
-            "two_year_payment_history": [],
-            "seven_year_history": {"late30": 0, "late60": 0, "late90": 0},
             "date_of_last_activity": "16.8.2022",
             "dispute_status": "Not disputed",
             "account_number_display": "****1234",
             "creditor_remarks": "Account transferred to recovery",
         },
         "experian": {
-            "two_year_payment_history": ["CO"] * 24,
-            "seven_year_history": {"late30": 0, "late60": 0, "late90": 0},
             "date_of_last_activity": "1.8.2023",
             "dispute_status": "not disputed",
             "account_number_display": "1234",
             "creditor_remarks": "Account closed at customer request",
         },
         "equifax": {
-            "two_year_payment_history": "",
-            "seven_year_history": {"late30": 0, "late60": 0, "late90": 28},
             "date_of_last_activity": "1.11.2022",
             "dispute_status": "Account disputed",
             "account_number_display": "xxxx-1234",
             "creditor_remarks": "Consumer states balance incorrect",
+        },
+        "two_year_payment_history": {
+            "transunion": [],
+            "experian": ["CO"] * 24,
+            "equifax": "",
+        },
+        "seven_year_history": {
+            "transunion": {"late30": 0, "late60": 0, "late90": 0},
+            "experian": {"late30": 0, "late60": 0, "late90": 0},
+            "equifax": {"late30": 0, "late60": 0, "late90": 28},
         },
     }
 
@@ -198,8 +222,8 @@ def test_sanity_example_strong_and_soft_requirements():
 
     assert "two_year_payment_history" in requirements
     two_year_rule = requirements["two_year_payment_history"]
-    assert two_year_rule["strength"] == "strong"
-    assert two_year_rule["ai_needed"] is False
+    assert two_year_rule["strength"] == "soft"
+    assert two_year_rule["ai_needed"] is True
     assert two_year_rule["min_days"] == 18
     assert two_year_rule["documents"] == [
         "monthly_statements_2y",
@@ -221,12 +245,13 @@ def test_sanity_example_strong_and_soft_requirements():
     assert "date_of_last_activity" in requirements
     assert requirements["date_of_last_activity"]["strength"] == "strong"
 
-    assert "dispute_status" in requirements
-    assert requirements["dispute_status"]["strength"] == "strong"
+    assert "dispute_status" not in requirements
 
     assert "creditor_remarks" in requirements
     creditor_rule = requirements["creditor_remarks"]
     assert creditor_rule["strength"] == "soft"
     assert creditor_rule["ai_needed"] is True
+    assert creditor_rule["min_corroboration"] == 2
+    assert creditor_rule["conditional_gate"] is True
 
     assert "account_number_display" not in requirements

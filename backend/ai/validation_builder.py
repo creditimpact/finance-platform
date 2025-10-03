@@ -332,6 +332,12 @@ class ValidationPackWriter:
         documents = self._normalize_string_list(requirement.get("documents"))
         category = self._coerce_optional_str(requirement.get("category"))
         min_days = self._coerce_optional_int(requirement.get("min_days"))
+        min_corroboration = self._coerce_optional_int(
+            requirement.get("min_corroboration")
+        )
+        conditional_gate = self._coerce_optional_bool(
+            requirement.get("conditional_gate")
+        )
 
         context = self._build_context(consistency)
         bureau_values = self._build_bureau_values(
@@ -367,7 +373,9 @@ class ValidationPackWriter:
             "category": category,
             "documents": documents,
             "min_days": min_days,
+            "min_corroboration": min_corroboration,
             "strength": strength,
+            "conditional_gate": conditional_gate,
             "bureaus": bureau_values,
             "context": context,
             "prompt": prompt_payload,
@@ -602,6 +610,22 @@ class ValidationPackWriter:
             text = value.strip()
             return text or None
         return str(value)
+
+    @staticmethod
+    def _coerce_optional_bool(value: Any) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return None
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "y", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "n", "off"}:
+                return False
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return bool(value)
+        return None
 
     @staticmethod
     def _normalize_string_list(value: Any) -> list[str]:

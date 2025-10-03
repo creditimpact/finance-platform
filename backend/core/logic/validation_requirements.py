@@ -47,6 +47,8 @@ class ValidationRule:
     points: int
     strength: str
     ai_needed: bool
+    min_corroboration: int
+    conditional_gate: bool
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,14 @@ def _coerce_points(raw: Any, fallback: int) -> int:
         return int(fallback)
 
 
+def _coerce_min_corroboration(raw: Any, fallback: int) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = int(fallback)
+    return max(1, value)
+
+
 def _coerce_strength(raw: Any, fallback: str) -> str:
     if raw is None:
         return fallback
@@ -151,8 +161,16 @@ def load_validation_config(path: str | Path = _CONFIG_PATH) -> ValidationConfig:
         raw_text = config_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         logger.warning("VALIDATION_CONFIG_MISSING path=%s", config_path)
-        defaults = ValidationRule("unknown", 3, tuple(), 3, "soft", False)
-        return ValidationConfig(defaults=defaults, fields={})
+        defaults = ValidationRule("unknown", 3, tuple(), 3, "soft", False, 1, False)
+        return ValidationConfig(
+            defaults=defaults,
+            fields={},
+            category_defaults={},
+            schema_version=1,
+            mode="broad",
+            broadcast_disputes=True,
+            threshold_points=45,
+        )
 
     try:
         loaded = yaml.safe_load(raw_text) or {}
@@ -168,6 +186,12 @@ def load_validation_config(path: str | Path = _CONFIG_PATH) -> ValidationConfig:
         default_points = _coerce_points(defaults_raw.get("points"), 3)
         default_strength = _coerce_strength(defaults_raw.get("strength"), "soft")
         default_ai_needed = _coerce_ai_needed(defaults_raw.get("ai_needed"), False)
+        default_min_corroboration = _coerce_min_corroboration(
+            defaults_raw.get("min_corroboration"), 1
+        )
+        default_conditional_gate = _coerce_bool(
+            defaults_raw.get("conditional_gate"), False
+        )
     else:
         default_category = "unknown"
         default_min_days = 3
@@ -175,6 +199,8 @@ def load_validation_config(path: str | Path = _CONFIG_PATH) -> ValidationConfig:
         default_points = 3
         default_strength = "soft"
         default_ai_needed = False
+        default_min_corroboration = 1
+        default_conditional_gate = False
 
     defaults = ValidationRule(
         default_category,
@@ -183,6 +209,8 @@ def load_validation_config(path: str | Path = _CONFIG_PATH) -> ValidationConfig:
         default_points,
         default_strength,
         default_ai_needed,
+        default_min_corroboration,
+        default_conditional_gate,
     )
 
     category_defaults_raw = (
@@ -213,7 +241,22 @@ def load_validation_config(path: str | Path = _CONFIG_PATH) -> ValidationConfig:
         points = _coerce_points(value.get("points"), defaults.points)
         strength = _coerce_strength(value.get("strength"), defaults.strength)
         ai_needed = _coerce_ai_needed(value.get("ai_needed"), defaults.ai_needed)
-        return ValidationRule(category, min_days, documents, points, strength, ai_needed)
+        min_corroboration = _coerce_min_corroboration(
+            value.get("min_corroboration"), defaults.min_corroboration
+        )
+        conditional_gate = _coerce_bool(
+            value.get("conditional_gate"), defaults.conditional_gate
+        )
+        return ValidationRule(
+            category,
+            min_days,
+            documents,
+            points,
+            strength,
+            ai_needed,
+            min_corroboration,
+            conditional_gate,
+        )
 
     fields_cfg: Dict[str, ValidationRule] = {}
     fields_raw = loaded.get("fields") if isinstance(loaded, Mapping) else None
@@ -324,6 +367,8 @@ _HISTORY_REQUIREMENT_OVERRIDES: Mapping[str, ValidationRule] = {
         points=10,
         strength="strong",
         ai_needed=False,
+        min_corroboration=1,
+        conditional_gate=False,
     ),
     "seven_year_history": ValidationRule(
         category="history",
@@ -336,6 +381,8 @@ _HISTORY_REQUIREMENT_OVERRIDES: Mapping[str, ValidationRule] = {
         points=12,
         strength="strong",
         ai_needed=False,
+        min_corroboration=1,
+        conditional_gate=False,
     ),
 }
 
@@ -589,6 +636,8 @@ def _apply_strength_policy(
         rule.points,
         strength,
         ai_needed,
+        rule.min_corroboration,
+        rule.conditional_gate,
     )
 
 
@@ -663,7 +712,10 @@ def _build_requirement_entries(
     requirements: List[Dict[str, Any]] = []
     for field in sorted(fields.keys()):
         details = fields[field]
-        rule = config.fields.get(field, config.defaults)
+        base_rule = config.fields.get(field)
+        if base_rule is None and field not in _HISTORY_REQUIREMENT_OVERRIDES:
+            continue
+        rule = base_rule or config.defaults
 
         if field in _HISTORY_REQUIREMENT_OVERRIDES:
             override = _HISTORY_REQUIREMENT_OVERRIDES[field]
@@ -674,6 +726,8 @@ def _build_requirement_entries(
                 points=override.points,
                 strength=override.strength,
                 ai_needed=override.ai_needed,
+                min_corroboration=override.min_corroboration,
+                conditional_gate=override.conditional_gate,
             )
 
         rule = _apply_strength_policy(field, details, rule)
@@ -686,6 +740,8 @@ def _build_requirement_entries(
                 "documents": list(rule.documents),
                 "strength": rule.strength,
                 "ai_needed": rule.ai_needed,
+                "min_corroboration": rule.min_corroboration,
+                "conditional_gate": rule.conditional_gate,
                 "bureaus": bureaus,
             }
         )

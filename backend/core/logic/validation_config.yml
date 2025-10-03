@@ -18,6 +18,8 @@ defaults:
   documents: []
   strength: "soft"
   ai_needed: false
+  min_corroboration: 1
+  conditional_gate: false
 
 fields:
   # ---- Open/Identification ----
@@ -28,6 +30,8 @@ fields:
     documents: [account_opening_contract, monthly_statement, collection_report]
     strength: soft
     ai_needed: true         # masking vs true mismatch
+    min_corroboration: 2
+    conditional_gate: true
 
   date_opened:
     category: open_ident
@@ -58,14 +62,6 @@ fields:
     min_days: 6
     points: 6
     documents: [account_opening_contract, lender_agreement, cra_report]
-    strength: soft
-    ai_needed: true
-
-  account_description:
-    category: open_ident
-    min_days: 6
-    points: 6
-    documents: [application_form, account_opening_contract]
     strength: soft
     ai_needed: true
 
@@ -167,6 +163,8 @@ fields:
     documents: [cra_report, cra_audit_log]
     strength: soft     # semantics differ across bureaus
     ai_needed: true
+    min_corroboration: 2
+    conditional_gate: true
 
   creditor_remarks:
     category: status
@@ -175,28 +173,14 @@ fields:
     documents: [collection_notes, customer_letters, cra_log]
     strength: soft
     ai_needed: true     # free text needs LLM to judge usefulness
-
-  dispute_status:
-    category: status
-    min_days: 6
-    points: 6
-    documents: [cra_audit_log, eoscar_system]
-    strength: strong
-    ai_needed: false
+    min_corroboration: 2
+    conditional_gate: true
 
   date_reported:
     category: status
     min_days: 3
     points: 3
     documents: [cra_reporting_log, cra_report]
-    strength: strong
-    ai_needed: false
-
-  last_verified:
-    category: status
-    min_days: 6
-    points: 6
-    documents: [internal_audit_log, verification_report]
     strength: strong
     ai_needed: false
 

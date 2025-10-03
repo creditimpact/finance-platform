@@ -26,6 +26,32 @@ _DEFAULT_MODEL = "gpt-4o-mini"
 _DEFAULT_TIMEOUT = 30.0
 _THROTTLE_SECONDS = 0.05
 _VALID_DECISIONS = {"strong", "no_case"}
+_ALWAYS_INVESTIGATABLE_FIELDS = (
+    "date_opened",
+    "closed_date",
+    "account_type",
+    "creditor_type",
+    "high_balance",
+    "credit_limit",
+    "term_length",
+    "payment_amount",
+    "payment_frequency",
+    "balance_owed",
+    "last_payment",
+    "past_due_amount",
+    "date_of_last_activity",
+    "account_status",
+    "payment_status",
+    "date_reported",
+    "two_year_payment_history",
+    "seven_year_history",
+)
+_CONDITIONAL_FIELDS = (
+    "creditor_remarks",
+    "account_rating",
+    "account_number_display",
+)
+_ALLOWED_FIELDS = set(_ALWAYS_INVESTIGATABLE_FIELDS) | set(_CONDITIONAL_FIELDS)
 _CREDITOR_REMARK_KEYWORDS = (
     "charge off",
     "charge-off",
@@ -192,6 +218,8 @@ def _enforce_conditional_gate(
     rationale: str,
     pack_line: Mapping[str, Any],
 ) -> tuple[str, str]:
+    if field not in _CONDITIONAL_FIELDS:
+        return decision, rationale
     if decision != "strong":
         return decision, rationale
     if not _coerce_bool_flag(pack_line.get("conditional_gate")):
@@ -733,6 +761,16 @@ class ValidationPackSender:
         )
 
         for idx, pack_line in enumerate(pack_lines, start=1):
+            field_name = self._coerce_field_name(pack_line, idx)
+            if not self._is_allowed_field(field_name):
+                self._log(
+                    "send_line_skipped",
+                    account_id=f"{account_int:03d}",
+                    line_number=idx,
+                    field=field_name,
+                    reason="field_not_allowed",
+                )
+                continue
             try:
                 response = self._call_model(pack_line)
             except Exception as exc:
@@ -1075,6 +1113,9 @@ class ValidationPackSender:
         if isinstance(field_key, str) and field_key.strip():
             return field_key.strip()
         return f"line_{line_number:03d}"
+
+    def _is_allowed_field(self, field: str) -> bool:
+        return field in _ALLOWED_FIELDS
 
     def _load_index(self) -> ValidationIndex:
         return self._index

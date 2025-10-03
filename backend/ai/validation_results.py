@@ -10,12 +10,10 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from backend.ai.validation_index import ValidationPackIndexWriter
 from backend.core.ai.paths import (
-    validation_index_path,
+    ensure_validation_paths,
     validation_pack_filename_for_account,
-    validation_packs_dir,
     validation_result_jsonl_filename_for_account,
     validation_result_summary_filename_for_account,
-    validation_results_dir,
 )
 
 
@@ -31,15 +29,15 @@ def _resolve_runs_root(runs_root: Path | str | None) -> Path:
     return Path(runs_root).resolve()
 
 
-def _index_writer(sid: str, runs_root: Path) -> ValidationPackIndexWriter:
-    index_path = validation_index_path(sid, runs_root=runs_root, create=True)
-    packs_dir = validation_packs_dir(sid, runs_root=runs_root, create=True)
-    results_dir = validation_results_dir(sid, runs_root=runs_root, create=True)
+def _index_writer(
+    sid: str, runs_root: Path, paths: "ValidationPaths | None" = None
+) -> ValidationPackIndexWriter:
+    validation_paths = paths or ensure_validation_paths(runs_root, sid, create=True)
     return ValidationPackIndexWriter(
         sid=sid,
-        index_path=index_path,
-        packs_dir=packs_dir,
-        results_dir=results_dir,
+        index_path=validation_paths.index_file,
+        packs_dir=validation_paths.packs_dir,
+        results_dir=validation_paths.results_dir,
     )
 
 
@@ -54,10 +52,10 @@ def mark_validation_pack_sent(
     """Mark the pack for ``account_id`` as sent in the validation index."""
 
     runs_root_path = _resolve_runs_root(runs_root)
-    packs_dir = validation_packs_dir(sid, runs_root=runs_root_path, create=True)
+    validation_paths = ensure_validation_paths(runs_root_path, sid, create=True)
     pack_filename = validation_pack_filename_for_account(account_id)
-    pack_path = packs_dir / pack_filename
-    writer = _index_writer(sid, runs_root_path)
+    pack_path = validation_paths.packs_dir / pack_filename
+    writer = _index_writer(sid, runs_root_path, validation_paths)
     return writer.mark_sent(
         pack_path,
         request_lines=request_lines,
@@ -257,15 +255,14 @@ def store_validation_result(
         raise ValueError("status must be 'done' or 'error'")
 
     runs_root_path = _resolve_runs_root(runs_root)
-    results_dir = validation_results_dir(sid, runs_root=runs_root_path, create=True)
+    validation_paths = ensure_validation_paths(runs_root_path, sid, create=True)
     summary_filename = validation_result_summary_filename_for_account(account_id)
     jsonl_filename = validation_result_jsonl_filename_for_account(account_id)
-    summary_path = results_dir / summary_filename
-    jsonl_path = results_dir / jsonl_filename
+    summary_path = validation_paths.results_dir / summary_filename
+    jsonl_path = validation_paths.results_dir / jsonl_filename
 
-    packs_dir = validation_packs_dir(sid, runs_root=runs_root_path, create=True)
     pack_filename = validation_pack_filename_for_account(account_id)
-    pack_path = packs_dir / pack_filename
+    pack_path = validation_paths.packs_dir / pack_filename
     pack_lookup = _load_pack_lookup(pack_path)
 
     result_lines = _build_result_lines(account_id, response_payload, pack_lookup)
@@ -298,7 +295,7 @@ def store_validation_result(
     jsonl_path.parent.mkdir(parents=True, exist_ok=True)
     jsonl_path.write_text(jsonl_contents, encoding="utf-8")
 
-    writer = _index_writer(sid, runs_root_path)
+    writer = _index_writer(sid, runs_root_path, validation_paths)
     writer.record_result(
         pack_path,
         status=normalized_status,

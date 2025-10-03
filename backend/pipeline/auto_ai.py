@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
-from typing import Iterable, Mapping, MutableMapping, Sequence
+from typing import Any, Dict, Iterable, Mapping, MutableMapping, Sequence
 
 from celery import shared_task
 
@@ -39,6 +39,35 @@ AUTO_AI_PIPELINE_DIRNAME = Path("ai_packs") / "merge"
 INFLIGHT_LOCK_FILENAME = "inflight.lock"
 LAST_OK_FILENAME = "last_ok.json"
 DEFAULT_INFLIGHT_TTL_SECONDS = 30 * 60
+
+
+def _clone_without_raw(value: Any) -> Any:
+    """Return a JSON-serializable clone of ``value`` without ``"raw"`` keys."""
+
+    if isinstance(value, Mapping):
+        result: Dict[str, Any] = {}
+        for key, item in value.items():
+            key_str = str(key)
+            if key_str == "raw":
+                continue
+            result[key_str] = _clone_without_raw(item)
+        return result
+
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_clone_without_raw(item) for item in value]
+
+    return value
+
+
+def _normalize_consistency_without_raw(
+    consistency: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Normalize ``consistency`` for summary.json without embedding bureau raw values."""
+
+    return {
+        str(field): _clone_without_raw(details)
+        for field, details in consistency.items()
+    }
 
 
 def packs_dir_for(sid: str, *, runs_root: Path | str | None = None) -> Path:
@@ -182,10 +211,7 @@ def run_consistency_writeback_for_all_accounts(
             )
             continue
 
-        normalized_consistency = {
-            str(field): dict(details) if isinstance(details, Mapping) else details
-            for field, details in field_consistency.items()
-        }
+        normalized_consistency = _normalize_consistency_without_raw(field_consistency)
 
         def _update_summary(summary_data: MutableMapping[str, object]) -> MutableMapping[str, object]:
             if not isinstance(summary_data, MutableMapping):

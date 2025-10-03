@@ -1,5 +1,7 @@
 from backend.core.ai import eligibility_policy as policy
-from backend.core.ai.report_compare import classify_reporting_pattern
+import pytest
+
+from backend.core.ai.report_compare import classify_reporting_pattern, compute_reason_flags
 
 
 def test_case_1_single_present():
@@ -40,3 +42,35 @@ def test_canonicalization_with_history():
     }
     assert policy.canonicalize_history(values["equifax"]) == "ok|late"
     assert classify_reporting_pattern(values) == "case_2"
+
+
+@pytest.mark.parametrize(
+    "pattern,expected",
+    [
+        ("case_1", {"missing": True, "mismatch": False, "both": False, "eligible": True}),
+        ("case_2", {"missing": True, "mismatch": False, "both": False, "eligible": True}),
+        ("case_3", {"missing": True, "mismatch": True, "both": True, "eligible": True}),
+        ("case_4", {"missing": False, "mismatch": True, "both": False, "eligible": True}),
+        ("case_5", {"missing": False, "mismatch": True, "both": False, "eligible": True}),
+        ("case_6", {"missing": True, "mismatch": False, "both": False, "eligible": True}),
+    ],
+)
+def test_reason_flags_for_always_eligible(pattern, expected):
+    result = compute_reason_flags("date_opened", pattern, match_matrix={})
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    "pattern,expected",
+    [
+        ("case_1", {"missing": True, "mismatch": False, "both": False, "eligible": False}),
+        ("case_2", {"missing": True, "mismatch": False, "both": False, "eligible": False}),
+        ("case_3", {"missing": True, "mismatch": True, "both": True, "eligible": True}),
+        ("case_4", {"missing": False, "mismatch": True, "both": False, "eligible": True}),
+        ("case_5", {"missing": False, "mismatch": True, "both": False, "eligible": True}),
+        ("case_6", {"missing": True, "mismatch": False, "both": False, "eligible": False}),
+    ],
+)
+def test_reason_flags_for_conditional(pattern, expected):
+    result = compute_reason_flags("account_number_display", pattern, match_matrix={})
+    assert result == expected

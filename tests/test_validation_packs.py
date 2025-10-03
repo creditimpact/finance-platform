@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
+import types
 from pathlib import Path
 from typing import Any, Mapping
+
+sys.modules.setdefault(
+    "requests", types.SimpleNamespace(post=lambda *args, **kwargs: None)
+)
 
 from backend.ai.validation_builder import (
     ValidationPackWriter,
@@ -161,6 +168,71 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
     assert packs[0]["lines"] == 2
 
 
+def test_removed_fields_are_never_emitted(tmp_path: Path) -> None:
+    sid = "SID099"
+    runs_root = tmp_path / "runs"
+    account_id = 5
+
+    summary_payload = {
+        "validation_requirements": {
+            "requirements": [
+                {
+                    "field": "balance_owed",
+                    "category": "activity",
+                    "strength": "weak",
+                    "ai_needed": True,
+                },
+                {
+                    "field": "account_description",
+                    "category": "status",
+                    "strength": "weak",
+                    "ai_needed": True,
+                },
+                {
+                    "field": "dispute_status",
+                    "category": "status",
+                    "strength": "weak",
+                    "ai_needed": True,
+                },
+                {
+                    "field": "last_verified",
+                    "category": "status",
+                    "strength": "weak",
+                    "ai_needed": True,
+                },
+            ],
+            "field_consistency": {},
+        }
+    }
+
+    bureaus_payload = {
+        "transunion": {"balance_owed": "$200", "account_description": "Individual"},
+        "experian": {"balance_owed": "$220", "dispute_status": "Not disputed"},
+        "equifax": {"balance_owed": "$210", "last_verified": "2023-10-10"},
+    }
+
+    account_dir = runs_root / sid / "cases" / "accounts" / str(account_id)
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+
+    writer = ValidationPackWriter(sid, runs_root=runs_root)
+    lines = writer.write_pack_for_account(account_id)
+
+    assert len(lines) == 1
+    assert lines[0].payload["field"] == "balance_owed"
+
+    pack_path = validation_packs_dir(sid, runs_root=runs_root) / validation_pack_filename_for_account(
+        account_id
+    )
+    on_disk = _read_jsonl(pack_path)
+    assert {entry["field"] for entry in on_disk} == {"balance_owed"}
+
+    index_payload = _read_json(validation_index_path(sid, runs_root=runs_root))
+    packs = index_payload.get("packs", [])
+    assert len(packs) == 1
+    assert packs[0]["weak_fields"] == ["balance_owed"]
+    assert packs[0]["lines"] == 1
+
 def test_validation_index_round_trip(tmp_path: Path) -> None:
     sid = "SID003"
     runs_root = tmp_path / "runs"
@@ -209,10 +281,12 @@ def test_validation_index_round_trip(tmp_path: Path) -> None:
     assert accounts[2]["lines"] == 2
 
 
-def test_manifest_updated_after_first_pack(tmp_path: Path) -> None:
+def test_manifest_updated_after_first_pack(tmp_path: Path, monkeypatch) -> None:
     sid = "SID004"
     runs_root = tmp_path / "runs"
     account_id = 5
+
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
 
     summary_payload = {
         "validation_requirements": {
@@ -253,10 +327,12 @@ def test_manifest_updated_after_first_pack(tmp_path: Path) -> None:
     assert ai_validation["accounts_dir"] == expected_base
 
 
-def test_build_validation_pack_idempotent(tmp_path: Path) -> None:
+def test_build_validation_pack_idempotent(tmp_path: Path, monkeypatch) -> None:
     sid = "SID005"
     runs_root = tmp_path / "runs"
     account_id = 8
+
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
 
     summary_payload = {
         "validation_requirements": {

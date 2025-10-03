@@ -151,3 +151,23 @@ def test_account_rating_gate_needs_multiple_values() -> None:
     assert "conditional_gate" in rationale
     assert info is not None
     assert info["reason"] == "insufficient_evidence"
+
+
+def test_account_rating_gate_allows_conflict_with_evidence() -> None:
+    pack_line = {
+        "field": "account_rating",
+        "conditional_gate": True,
+        "min_corroboration": 2,
+        "bureaus": {
+            "transunion": {"raw": "A", "normalized": "a"},
+            "experian": {"raw": "B", "normalized": "b"},
+        },
+    }
+
+    decision, rationale, info = _enforce_conditional_gate(
+        "account_rating", "strong", "Conflicting ratings", pack_line
+    )
+
+    assert decision == "strong"
+    assert rationale == "Conflicting ratings"
+    assert info is None

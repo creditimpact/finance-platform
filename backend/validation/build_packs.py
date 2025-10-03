@@ -121,6 +121,20 @@ class ValidationPackBuilder:
         if not isinstance(validation_block, Mapping):
             return [], {"skip_reason": "missing_validation_requirements"}
 
+        legacy_requirements = validation_block.get("requirements")
+        if legacy_requirements:
+            if isinstance(legacy_requirements, Sequence) and not isinstance(
+                legacy_requirements, (str, bytes, bytearray)
+            ):
+                legacy_count = len(legacy_requirements)
+            else:
+                legacy_count = 1
+            self._log(
+                "legacy_requirements_ignored",
+                account_id=f"{account_id:03d}",
+                legacy_count=legacy_count,
+            )
+
         findings = validation_block.get("findings")
         if not isinstance(findings, Sequence):
             return [], {"skip_reason": "missing_findings"}

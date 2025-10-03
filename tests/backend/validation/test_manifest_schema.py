@@ -158,6 +158,54 @@ def test_builder_respects_summary_findings(tmp_path: Path) -> None:
     assert payloads[0]["field"] == "creditor_remarks"
 
 
+def test_builder_ignores_legacy_requirements(tmp_path: Path) -> None:
+    manifest, runs_root = _build_manifest(tmp_path, sid="S011")
+
+    account_dir = runs_root / "S011" / "cases" / "accounts" / "1"
+    summary_path = account_dir / "summary.json"
+    bureaus_path = account_dir / "bureaus.json"
+
+    summary_payload = {
+        "validation_requirements": {
+            "findings": [
+                {
+                    "field": "account_type",
+                    "strength": "weak",
+                    "ai_needed": True,
+                    "send_to_ai": False,
+                }
+            ],
+            "requirements": [
+                {
+                    "field": "creditor_remarks",
+                    "strength": "weak",
+                    "ai_needed": True,
+                }
+            ],
+            "field_consistency": {},
+        }
+    }
+
+    summary_path.write_text(json.dumps(summary_payload), encoding="utf-8")
+    bureaus_path.write_text(json.dumps({}), encoding="utf-8")
+
+    builder = ValidationPackBuilder(manifest)
+    records = builder.build()
+
+    assert records == []
+
+    pack_files = list(builder.paths.packs_dir.glob("*.jsonl"))
+    assert pack_files == []
+
+    log_entries = [
+        json.loads(line)
+        for line in builder.paths.log_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert any(entry.get("event") == "legacy_requirements_ignored" for entry in log_entries)
+    assert all(entry.get("event") != "pack_created" for entry in log_entries)
+
+
 def test_manifest_check_reports_missing_pack(tmp_path: Path) -> None:
     manifest, _ = _build_manifest(tmp_path, sid="S002")
     builder = ValidationPackBuilder(manifest)

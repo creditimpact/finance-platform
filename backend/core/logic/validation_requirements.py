@@ -866,6 +866,9 @@ def build_summary_payload(
         "count": len(findings),
     }
 
+    if _include_legacy_requirements():
+        payload["requirements"] = normalized_requirements
+
     if field_consistency:
         if reasons_enabled:
             sanitized_consistency = _strip_raw_from_field_consistency(field_consistency)

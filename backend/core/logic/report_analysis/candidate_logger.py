@@ -22,6 +22,7 @@ from backend.config import (
     CASESTORE_DIR,
     ENABLE_CANDIDATE_TOKEN_LOGGER,
 )
+from backend.core.logic.validation_field_sets import ALL_VALIDATION_FIELDS
 from backend.core.case_store.telemetry import emit
 
 # ---------------------------------------------------------------------------
@@ -36,20 +37,7 @@ def candidate_tokens_path(session_id: str) -> str:
     return os.path.join(CASESTORE_DIR, f"{session_id}.candidate_tokens.{ext}")
 
 
-_ALLOWED_FIELDS = {
-    "payment_status",
-    "account_status",
-    "creditor_remarks",
-    "past_due_amount",
-    "balance_owed",
-    "credit_limit",
-    "high_balance",
-    "two_year_payment_history",
-    "days_late_7y",
-    "account_type",
-    "creditor_type",
-    "dispute_status",
-}
+_ALLOWED_FIELDS: tuple[str, ...] = ALL_VALIDATION_FIELDS
 
 
 # PII regexes ---------------------------------------------------------------

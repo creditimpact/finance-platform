@@ -30,6 +30,12 @@ from backend.core.ai.paths import (
     validation_logs_path,
 )
 from backend.pipeline.runs import RunManifest, persist_manifest
+from backend.core.logic.validation_field_sets import (
+    ALL_VALIDATION_FIELD_SET,
+    ALL_VALIDATION_FIELDS,
+    ALWAYS_INVESTIGATABLE_FIELDS,
+    CONDITIONAL_FIELDS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -60,12 +66,13 @@ _EXPECTED_OUTPUT_SCHEMA = {
     },
 }
 
-_ALWAYS_INVESTIGATABLE_FIELDS: dict[str, str] = {
+_FIELD_CATEGORY_MAP: dict[str, str] = {
     # Open / Identification
     "date_opened": "open_ident",
     "closed_date": "open_ident",
     "account_type": "open_ident",
     "creditor_type": "open_ident",
+    "account_number_display": "open_ident",
     # Terms
     "high_balance": "terms",
     "credit_limit": "terms",
@@ -81,23 +88,36 @@ _ALWAYS_INVESTIGATABLE_FIELDS: dict[str, str] = {
     "account_status": "status",
     "payment_status": "status",
     "date_reported": "status",
+    "account_rating": "status",
+    "creditor_remarks": "status",
     # Histories
     "two_year_payment_history": "history",
     "seven_year_history": "history",
 }
 
+_missing_fields = ALL_VALIDATION_FIELD_SET - set(_FIELD_CATEGORY_MAP)
+if _missing_fields:
+    missing = ", ".join(sorted(_missing_fields))
+    raise RuntimeError(f"Missing validation categories for fields: {missing}")
+
+_extra_fields = set(_FIELD_CATEGORY_MAP) - ALL_VALIDATION_FIELD_SET
+if _extra_fields:
+    extra = ", ".join(sorted(_extra_fields))
+    raise RuntimeError(f"Unexpected validation fields in category map: {extra}")
+
+_ALWAYS_INVESTIGATABLE_FIELDS: dict[str, str] = {
+    field: _FIELD_CATEGORY_MAP[field] for field in ALWAYS_INVESTIGATABLE_FIELDS
+}
+
 _CONDITIONAL_FIELDS: dict[str, str] = {
-    "account_number_display": "open_ident",
-    "account_rating": "status",
-    "creditor_remarks": "status",
+    field: _FIELD_CATEGORY_MAP[field] for field in CONDITIONAL_FIELDS
 }
 
 _ALLOWED_FIELD_CATEGORIES: dict[str, str] = {
-    **_ALWAYS_INVESTIGATABLE_FIELDS,
-    **_CONDITIONAL_FIELDS,
+    field: _FIELD_CATEGORY_MAP[field] for field in ALL_VALIDATION_FIELDS
 }
 
-_ALLOWED_FIELDS: frozenset[str] = frozenset(_ALLOWED_FIELD_CATEGORIES)
+_ALLOWED_FIELDS: frozenset[str] = frozenset(ALL_VALIDATION_FIELDS)
 _ALLOWED_CATEGORIES: frozenset[str] = frozenset(
     _ALLOWED_FIELD_CATEGORIES.values()
 )

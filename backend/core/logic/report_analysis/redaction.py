@@ -6,23 +6,9 @@ import hashlib
 from typing import Any, Dict
 
 from backend.config import AI_REDACT_STRATEGY
+from backend.core.logic.validation_field_sets import ALL_VALIDATION_FIELDS
 
-_ALLOWED_FIELDS = {
-    "normalized_name",
-    "account_status",
-    "payment_status",
-    "creditor_remarks",
-    "account_description",
-    "account_rating",
-    "past_due_amount",
-    "days_late_history",
-    "high_utilization",
-    "balance_owed",
-    "credit_limit",
-    "creditor_type",
-    "account_type",
-    "dispute_status",
-}
+_ALLOWED_FIELDS = {"normalized_name", *ALL_VALIDATION_FIELDS}
 
 
 def _mask_last4(last4: str) -> str:

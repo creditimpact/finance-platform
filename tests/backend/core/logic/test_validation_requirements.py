@@ -41,7 +41,7 @@ def test_build_validation_requirements_uses_config_and_defaults():
     requirements, inconsistencies, field_consistency = build_validation_requirements(bureaus)
     fields = [entry["field"] for entry in requirements]
 
-    assert fields == ["balance_owed", "mystery_field"]
+    assert fields == ["balance_owed"]
 
     balance_rule = next(entry for entry in requirements if entry["field"] == "balance_owed")
     assert balance_rule["category"] == "activity"
@@ -51,13 +51,6 @@ def test_build_validation_requirements_uses_config_and_defaults():
     assert balance_rule["ai_needed"] is False
     assert balance_rule["bureaus"] == ["equifax", "experian", "transunion"]
 
-    mystery_rule = next(entry for entry in requirements if entry["field"] == "mystery_field")
-    assert mystery_rule["category"] == "unknown"
-    assert mystery_rule["min_days"] == 3
-    assert mystery_rule["documents"] == []
-    assert mystery_rule["strength"] == "soft"
-    assert mystery_rule["ai_needed"] is False
-    assert mystery_rule["bureaus"] == ["equifax", "experian", "transunion"]
     assert set(inconsistencies.keys()) == {"balance_owed", "mystery_field"}
     assert {"balance_owed", "mystery_field"}.issubset(field_consistency.keys())
 

@@ -1,5 +1,13 @@
 import json
+import sys
+import types
 from pathlib import Path
+
+import pytest
+
+sys.modules.setdefault(
+    "requests", types.SimpleNamespace(post=lambda *args, **kwargs: None)
+)
 
 from backend.core.logic.consistency import compute_inconsistent_fields
 from backend.core.logic.consistency import compute_field_consistency
@@ -140,6 +148,82 @@ def test_build_summary_payload_can_disable_reason_enrichment(monkeypatch):
     balance_consistency = payload["field_consistency"]["balance_owed"]
     assert "raw" in balance_consistency
     assert balance_consistency["raw"]["transunion"] == "100"
+
+
+@pytest.mark.parametrize(
+    "field, values, expected_code, expected_ai",
+    [
+        (
+            "balance_owed",
+            {"experian": "200", "equifax": "200", "transunion": None},
+            "C1_TWO_PRESENT_ONE_MISSING",
+            False,
+        ),
+        (
+            "balance_owed",
+            {"experian": "open", "equifax": None, "transunion": "--"},
+            "C2_ONE_MISSING",
+            False,
+        ),
+        (
+            "account_type",
+            {"experian": "revolving", "equifax": "installment", "transunion": None},
+            "C3_TWO_PRESENT_CONFLICT",
+            True,
+        ),
+        (
+            "account_rating",
+            {"experian": "1", "equifax": "1", "transunion": "2"},
+            "C4_TWO_MATCH_ONE_DIFF",
+            True,
+        ),
+        (
+            "creditor_remarks",
+            {
+                "experian": "interest only",
+                "equifax": "account closed",
+                "transunion": "charge-off",
+            },
+            "C5_ALL_DIFF",
+            True,
+        ),
+        (
+            "account_status",
+            {"experian": None, "equifax": "", "transunion": "--"},
+            "C6_ALL_MISSING",
+            False,
+        ),
+    ],
+)
+def test_build_summary_payload_reason_codes_send_to_ai(
+    field: str,
+    values: dict[str, object],
+    expected_code: str,
+    expected_ai: bool,
+) -> None:
+    requirements = [
+        {
+            "field": field,
+            "category": "status",
+            "min_days": 0,
+            "documents": ["stub"],
+            "strength": "weak",
+            "ai_needed": False,
+        }
+    ]
+
+    payload = build_summary_payload(
+        requirements,
+        field_consistency={field: {"normalized": values}},
+    )
+
+    assert "findings" in payload
+    assert payload["count"] == 1
+
+    finding = payload["findings"][0]
+    assert finding["field"] == field
+    assert finding["reason_code"] == expected_code
+    assert finding["send_to_ai"] is expected_ai
 
 
 def test_compute_inconsistent_fields_handles_histories():

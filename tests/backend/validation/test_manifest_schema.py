@@ -106,6 +106,62 @@ def test_builder_writes_schema_v2(tmp_path: Path) -> None:
     assert entry["result_json"].startswith("results/")
 
 
+def test_builder_respects_summary_findings(tmp_path: Path) -> None:
+    manifest, runs_root = _build_manifest(tmp_path, sid="S010")
+
+    account_dir = runs_root / "S010" / "cases" / "accounts" / "1"
+    summary_path = account_dir / "summary.json"
+    bureaus_path = account_dir / "bureaus.json"
+
+    summary_payload = {
+        "validation_requirements": {
+            "requirements": [
+                {
+                    "field": "account_type",
+                    "strength": "weak",
+                    "ai_needed": True,
+                },
+                {
+                    "field": "creditor_remarks",
+                    "strength": "weak",
+                    "ai_needed": True,
+                },
+            ],
+            "findings": [
+                {"field": "account_type", "send_to_ai": False},
+                {"field": "creditor_remarks", "send_to_ai": True},
+            ],
+            "field_consistency": {},
+        }
+    }
+    bureaus_payload = {
+        "transunion": {
+            "account_type": "mortgage",
+            "creditor_remarks": "Account closed",
+        }
+    }
+
+    summary_path.write_text(json.dumps(summary_payload), encoding="utf-8")
+    bureaus_path.write_text(json.dumps(bureaus_payload), encoding="utf-8")
+
+    builder = ValidationPackBuilder(manifest)
+    records = builder.build()
+
+    assert len(records) == 1
+    record = records[0]
+    assert record.get("weak_fields") == ["creditor_remarks"]
+
+    pack_files = sorted(builder.paths.packs_dir.glob("*.jsonl"))
+    assert len(pack_files) == 1
+    payloads = [
+        json.loads(line)
+        for line in pack_files[0].read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert len(payloads) == 1
+    assert payloads[0]["field"] == "creditor_remarks"
+
+
 def test_manifest_check_reports_missing_pack(tmp_path: Path) -> None:
     manifest, _ = _build_manifest(tmp_path, sid="S002")
     builder = ValidationPackBuilder(manifest)

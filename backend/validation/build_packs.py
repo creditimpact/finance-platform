@@ -129,6 +129,11 @@ class ValidationPackBuilder:
         if not isinstance(field_consistency, Mapping):
             field_consistency = {}
 
+        send_to_ai_map = self._build_send_to_ai_map(
+            validation_block.get("findings")
+        )
+        has_enriched_findings = bool(send_to_ai_map)
+
         bureaus = self._read_json(account_dir / "bureaus.json")
         bureaus_map: Mapping[str, Mapping[str, Any]]
         if isinstance(bureaus, Mapping):
@@ -152,15 +157,23 @@ class ValidationPackBuilder:
                 continue
 
             normalized_strength = self._normalize_strength(requirement.get("strength"))
-            include = (
-                self._coerce_bool(requirement.get("ai_needed"))
-                or normalized_strength == "weak"
-            )
-            if not include:
-                continue
 
             field = requirement.get("field")
             if not field:
+                continue
+
+            canonical_field = self._canonical_field_key(field)
+            if canonical_field is None:
+                continue
+
+            send_flag = send_to_ai_map.get(canonical_field)
+            include = self._should_include_requirement(
+                requirement,
+                normalized_strength,
+                send_flag=send_flag,
+                allow_fallback=not has_enriched_findings,
+            )
+            if not include:
                 continue
 
             field_name = str(field)
@@ -196,6 +209,48 @@ class ValidationPackBuilder:
         }
 
         return payloads, metadata
+
+    @staticmethod
+    def _build_send_to_ai_map(findings: Any) -> dict[str, bool]:
+        if not isinstance(findings, Sequence):
+            return {}
+
+        mapping: dict[str, bool] = {}
+        for entry in findings:
+            if not isinstance(entry, Mapping):
+                continue
+            field_key = ValidationPackBuilder._canonical_field_key(entry.get("field"))
+            if field_key is None:
+                continue
+            send_flag = bool(entry.get("send_to_ai"))
+            mapping[field_key] = send_flag
+        return mapping
+
+    @staticmethod
+    def _canonical_field_key(field: Any) -> str | None:
+        if field is None:
+            return None
+        if isinstance(field, str):
+            text = field.strip()
+        else:
+            text = str(field).strip()
+        if not text:
+            return None
+        return text.lower()
+
+    def _should_include_requirement(
+        self,
+        requirement: Mapping[str, Any],
+        strength: str,
+        *,
+        send_flag: bool | None,
+        allow_fallback: bool,
+    ) -> bool:
+        if send_flag is not None:
+            return send_flag
+        if not allow_fallback:
+            return False
+        return self._coerce_bool(requirement.get("ai_needed")) or strength == "weak"
 
     def _build_line(
         self,

@@ -1,4 +1,6 @@
-from backend.core.logic.reason_classifier import classify_reason
+import pytest
+
+from backend.core.logic.reason_classifier import classify_reason, decide_send_to_ai
 
 
 def test_classify_all_missing():
@@ -104,4 +106,19 @@ def test_normalizes_whitespace_and_missing_markers():
     assert result["distinct_values"] == 1
     assert result["is_missing"] is True
     assert result["is_mismatch"] is False
+
+
+@pytest.mark.parametrize(
+    "field, reason, expected",
+    [
+        ("account_type", "C3_TWO_PRESENT_CONFLICT", True),
+        ("account_rating", {"reason_code": "C4_TWO_MATCH_ONE_DIFF"}, True),
+        ("creditor_remarks", "C5_ALL_DIFF", True),
+        ("account_type", "C1_TWO_PRESENT_ONE_MISSING", False),
+        ("balance", "C3_TWO_PRESENT_CONFLICT", False),
+        ("account_rating", {}, False),
+    ],
+)
+def test_decide_send_to_ai(field, reason, expected):
+    assert decide_send_to_ai(field, reason) is expected
 

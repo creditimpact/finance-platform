@@ -83,8 +83,12 @@ def test_build_summary_payload_includes_field_consistency():
     assert payload["count"] == 1
     assert payload["field_consistency"] == field_consistency
     assert len(payload["requirements"]) == 1
+    requirement = payload["requirements"][0]
+    assert requirement["field"] == "balance_owed"
+    assert "reason_code" not in requirement
 
-    finding = payload["requirements"][0]
+    assert len(payload["findings"]) == 1
+    finding = payload["findings"][0]
     assert finding["reason_code"] == "C4_TWO_MATCH_ONE_DIFF"
     assert finding["reason_label"] == "two bureaus agree, one differs"
     assert finding["is_missing"] is False
@@ -412,8 +416,12 @@ def test_apply_validation_summary_and_sync_validation_tag(tmp_path):
 
     apply_validation_summary(summary_path, payload)
     summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
-    assert summary_data["validation_requirements"]["count"] == 1
+    validation_block = summary_data["validation_requirements"]
+    assert validation_block["count"] == 1
     assert summary_data["existing"] is True
+    assert len(validation_block["requirements"]) == 1
+    assert len(validation_block["findings"]) == 1
+    assert validation_block["findings"][0]["field"] == "balance_owed"
 
     sync_validation_tag(tag_path, ["balance_owed"], emit=True)
     tags = json.loads(tag_path.read_text(encoding="utf-8"))
@@ -474,6 +482,12 @@ def test_build_validation_requirements_for_account_writes_summary_and_tags(
     }
     for entry in validation_payload["requirements"]:
         assert entry["bureaus"] == ["equifax", "experian", "transunion"]
+    assert {entry["field"] for entry in validation_payload["findings"]} == {
+        "balance_owed",
+        "payment_status",
+    }
+    for entry in validation_payload["findings"]:
+        assert entry["reason_code"].startswith("C")
 
     summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["existing"] is True
@@ -483,6 +497,12 @@ def test_build_validation_requirements_for_account_writes_summary_and_tags(
     assert fields == {"balance_owed", "payment_status"}
     for entry in validation_block["requirements"]:
         assert entry["bureaus"] == ["equifax", "experian", "transunion"]
+    assert {entry["field"] for entry in validation_block["findings"]} == {
+        "balance_owed",
+        "payment_status",
+    }
+    for entry in validation_block["findings"]:
+        assert entry["reason_code"].startswith("C")
     field_consistency = validation_block["field_consistency"]
     assert {"balance_owed", "payment_status"}.issubset(field_consistency.keys())
     assert field_consistency["balance_owed"]["consensus"] in {"majority", "split"}
@@ -545,6 +565,7 @@ def test_build_validation_requirements_for_account_clears_when_empty(tmp_path, m
     validation_payload = result["validation_requirements"]
     assert validation_payload["count"] == 0
     assert validation_payload["requirements"] == []
+    assert validation_payload["findings"] == []
     assert "field_consistency" in validation_payload
     field_consistency = validation_payload["field_consistency"]
     assert "balance_owed" in field_consistency
@@ -554,6 +575,7 @@ def test_build_validation_requirements_for_account_clears_when_empty(tmp_path, m
     validation_block = summary["validation_requirements"]
     assert validation_block["count"] == 0
     assert validation_block["requirements"] == []
+    assert validation_block["findings"] == []
     assert "balance_owed" in validation_block["field_consistency"]
 
     tags = json.loads((account_dir / "tags.json").read_text(encoding="utf-8"))

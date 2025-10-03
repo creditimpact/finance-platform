@@ -88,6 +88,10 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
                     "conditional_gate": True,
                 },
             ],
+            "findings": [
+                {"field": "balance_owed", "send_to_ai": True},
+                {"field": "creditor_remarks", "send_to_ai": True},
+            ],
             "field_consistency": {
                 "balance_owed": {
                     "consensus": "split",
@@ -201,6 +205,12 @@ def test_removed_fields_are_never_emitted(tmp_path: Path) -> None:
                     "ai_needed": True,
                 },
             ],
+            "findings": [
+                {"field": "balance_owed", "send_to_ai": True},
+                {"field": "account_description", "send_to_ai": True},
+                {"field": "dispute_status", "send_to_ai": True},
+                {"field": "last_verified", "send_to_ai": True},
+            ],
             "field_consistency": {},
         }
     }
@@ -297,6 +307,9 @@ def test_manifest_updated_after_first_pack(tmp_path: Path, monkeypatch) -> None:
                     "ai_needed": True,
                 }
             ],
+            "findings": [
+                {"field": "balance_owed", "send_to_ai": True}
+            ],
             "field_consistency": {},
         }
     }
@@ -347,6 +360,10 @@ def test_build_validation_pack_idempotent(tmp_path: Path, monkeypatch) -> None:
                     "strength": "weak",
                     "ai_needed": True,
                 },
+            ],
+            "findings": [
+                {"field": "balance_owed", "send_to_ai": True},
+                {"field": "account_status", "send_to_ai": True},
             ],
             "field_consistency": {},
         }

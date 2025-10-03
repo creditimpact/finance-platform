@@ -17,6 +17,14 @@ from backend.core.ai.paths import (
 )
 
 
+def _clone_jsonish(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _clone_jsonish(val) for key, val in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_clone_jsonish(entry) for entry in value]
+    return value
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
         "+00:00", "Z"
@@ -222,6 +230,12 @@ def _build_result_lines(
         if not isinstance(rationale, str):
             rationale = ""
 
+        reason_payload = None
+        if isinstance(pack_payload, Mapping):
+            candidate = pack_payload.get("reason")
+            if isinstance(candidate, Mapping):
+                reason_payload = _clone_jsonish(candidate)
+
         result_line = {
             "id": line_id,
             "account_id": account_int if account_int is not None else account_id,
@@ -230,6 +244,9 @@ def _build_result_lines(
             "rationale": rationale,
             "citations": _normalize_citations(entry.get("citations")),
         }
+
+        if reason_payload is not None:
+            result_line["reason"] = reason_payload
 
         result_lines.append(result_line)
 

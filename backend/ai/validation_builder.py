@@ -60,6 +60,48 @@ _EXPECTED_OUTPUT_SCHEMA = {
     },
 }
 
+_ALWAYS_INVESTIGATABLE_FIELDS: dict[str, str] = {
+    # Open / Identification
+    "date_opened": "open_ident",
+    "closed_date": "open_ident",
+    "account_type": "open_ident",
+    "creditor_type": "open_ident",
+    # Terms
+    "high_balance": "terms",
+    "credit_limit": "terms",
+    "term_length": "terms",
+    "payment_amount": "terms",
+    "payment_frequency": "terms",
+    # Activity
+    "balance_owed": "activity",
+    "last_payment": "activity",
+    "past_due_amount": "activity",
+    "date_of_last_activity": "activity",
+    # Status / Reporting
+    "account_status": "status",
+    "payment_status": "status",
+    "date_reported": "status",
+    # Histories
+    "two_year_payment_history": "history",
+    "seven_year_history": "history",
+}
+
+_CONDITIONAL_FIELDS: dict[str, str] = {
+    "account_number_display": "open_ident",
+    "account_rating": "status",
+    "creditor_remarks": "status",
+}
+
+_ALLOWED_FIELD_CATEGORIES: dict[str, str] = {
+    **_ALWAYS_INVESTIGATABLE_FIELDS,
+    **_CONDITIONAL_FIELDS,
+}
+
+_ALLOWED_FIELDS: frozenset[str] = frozenset(_ALLOWED_FIELD_CATEGORIES)
+_ALLOWED_CATEGORIES: frozenset[str] = frozenset(
+    _ALLOWED_FIELD_CATEGORIES.values()
+)
+
 
 @dataclass(frozen=True)
 class PackLine:
@@ -179,11 +221,25 @@ class ValidationPackWriter:
 
         pack_lines: list[PackLine] = []
         for requirement in requirements:
+            if not isinstance(requirement, Mapping):
+                continue
+
+            canonical_field = self._canonical_field_name(requirement.get("field"))
+            if canonical_field is None:
+                continue
+
+            consistency = consistency_map.get(canonical_field)
+            if consistency is None:
+                raw_field = requirement.get("field")
+                if isinstance(raw_field, str):
+                    consistency = consistency_map.get(raw_field)
+
             line = self._build_line(
                 account_id,
                 requirement,
                 bureaus_data,
-                consistency_map.get(requirement.get("field")),
+                consistency,
+                canonical_field=canonical_field,
             )
             if line is not None:
                 pack_lines.append(PackLine(line))
@@ -310,6 +366,8 @@ class ValidationPackWriter:
         requirement: Mapping[str, Any],
         bureaus_data: Mapping[str, Mapping[str, Any]],
         consistency: Mapping[str, Any] | None,
+        *,
+        canonical_field: str | None = None,
     ) -> Mapping[str, Any] | None:
         if not isinstance(requirement, Mapping):
             return None
@@ -318,19 +376,34 @@ class ValidationPackWriter:
             return None
 
         field = requirement.get("field")
-        if field is None:
+        if field is None and canonical_field is None:
             return None
 
         strength = self._normalize_strength(requirement.get("strength"))
         if strength == "strong":
             return None
 
-        field_name = str(field)
+        field_name = canonical_field or self._canonical_field_name(field)
+        if field_name is None:
+            return None
+
         field_key = self._field_key(field_name)
         account_key = f"{account_id:03d}"
 
         documents = self._normalize_string_list(requirement.get("documents"))
-        category = self._coerce_optional_str(requirement.get("category"))
+        raw_category = self._coerce_optional_str(requirement.get("category"))
+        category = _ALLOWED_FIELD_CATEGORIES[field_name]
+        if raw_category and raw_category not in _ALLOWED_CATEGORIES:
+            log.debug(
+                "VALIDATION_UNKNOWN_CATEGORY field=%s category=%s", field_name, raw_category
+            )
+        elif raw_category and raw_category != category:
+            log.debug(
+                "VALIDATION_CATEGORY_MISMATCH field=%s expected=%s actual=%s",
+                field_name,
+                category,
+                raw_category,
+            )
         min_days = self._coerce_optional_int(requirement.get("min_days"))
         min_corroboration = self._coerce_optional_int(
             requirement.get("min_corroboration")
@@ -544,6 +617,25 @@ class ValidationPackWriter:
             return account_id
         return int(str(account_id).strip())
 
+    @staticmethod
+    def _canonical_field_name(field: Any) -> str | None:
+        if field is None:
+            return None
+
+        if isinstance(field, str):
+            text = field.strip()
+        else:
+            text = str(field).strip()
+
+        if not text:
+            return None
+
+        normalized = text.lower()
+        if normalized not in _ALLOWED_FIELDS:
+            return None
+
+        return normalized
+
     def _build_source_hash(
         self,
         summary: Mapping[str, Any] | None,
@@ -551,6 +643,7 @@ class ValidationPackWriter:
     ) -> str:
         requirements: list[Any] = []
         field_consistency: dict[str, Any] = {}
+        canonical_fields: dict[str, set[str]] = {}
 
         if isinstance(summary, Mapping):
             validation_block = self._extract_validation_block(summary) or {}
@@ -561,16 +654,44 @@ class ValidationPackWriter:
                         continue
                     if not entry.get("ai_needed"):
                         continue
-                    requirements.append(_json_clone(entry))
+                    canonical_field = self._canonical_field_name(entry.get("field"))
+                    if canonical_field is None:
+                        continue
+
+                    cloned = _json_clone(entry)
+                    if isinstance(cloned, Mapping):
+                        try:
+                            cloned["field"] = canonical_field
+                        except Exception:  # pragma: no cover - defensive
+                            pass
+                        expected_category = _ALLOWED_FIELD_CATEGORIES[canonical_field]
+                        try:
+                            cloned["category"] = expected_category
+                        except Exception:  # pragma: no cover - defensive
+                            pass
+                    requirements.append(cloned)
+
+                    raw_field = entry.get("field")
+                    aliases: set[str] = canonical_fields.setdefault(
+                        canonical_field, set()
+                    )
+                    if isinstance(raw_field, str):
+                        candidate = raw_field.strip()
+                    elif raw_field is not None:
+                        candidate = str(raw_field).strip()
+                    else:
+                        candidate = ""
+                    if candidate and candidate != canonical_field:
+                        aliases.add(candidate)
             raw_consistency = validation_block.get("field_consistency")
             if isinstance(raw_consistency, Mapping):
-                fields = []
-                for requirement in requirements:
-                    field_name = requirement.get("field")
-                    if isinstance(field_name, str) and field_name.strip():
-                        fields.append(field_name.strip())
-                for field in sorted({field for field in fields if field}):
+                for field in sorted(canonical_fields):
                     value = raw_consistency.get(field)
+                    if value is None:
+                        for alias in canonical_fields[field]:
+                            value = raw_consistency.get(alias)
+                            if value is not None:
+                                break
                     field_consistency[field] = (
                         _json_clone(value) if value is not None else None
                     )

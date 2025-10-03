@@ -842,9 +842,15 @@ def build_summary_payload(
     normalized_requirements = [dict(entry) for entry in requirements]
     reasons_enabled = _is_validation_reason_enabled()
 
-    payload: Dict[str, Any] = {
-        "requirements": normalized_requirements,
-        "count": len(normalized_requirements),
+    include_requirements = os.getenv(
+        "VALIDATION_SUMMARY_INCLUDE_REQUIREMENTS", "0"
+    )
+    include_requirements_flag = str(include_requirements).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
     }
 
     if reasons_enabled:
@@ -852,8 +858,16 @@ def build_summary_payload(
             _build_finding(entry, field_consistency)
             for entry in normalized_requirements
         ]
-        payload["findings"] = findings
-        payload["count"] = len(findings)
+    else:
+        findings = [dict(entry) for entry in normalized_requirements]
+
+    payload: Dict[str, Any] = {
+        "findings": findings,
+        "count": len(findings),
+    }
+
+    if include_requirements_flag:
+        payload["requirements"] = normalized_requirements
 
     if field_consistency:
         if reasons_enabled:

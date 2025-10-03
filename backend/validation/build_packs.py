@@ -121,9 +121,13 @@ class ValidationPackBuilder:
         if not isinstance(validation_block, Mapping):
             return [], {"skip_reason": "missing_validation_requirements"}
 
-        requirements = validation_block.get("requirements")
-        if not isinstance(requirements, Sequence):
-            return [], {"skip_reason": "missing_requirements"}
+        findings = validation_block.get("findings")
+        if not isinstance(findings, Sequence):
+            legacy_requirements = validation_block.get("requirements")
+            if isinstance(legacy_requirements, Sequence):
+                findings = list(legacy_requirements)
+            else:
+                return [], {"skip_reason": "missing_findings"}
 
         field_consistency = validation_block.get("field_consistency")
         if not isinstance(field_consistency, Mapping):
@@ -151,8 +155,8 @@ class ValidationPackBuilder:
 
         payloads: list[dict[str, Any]] = []
         weak_fields: list[str] = []
-        included_requirements: list[Mapping[str, Any]] = []
-        for requirement in requirements:
+        included_findings: list[Mapping[str, Any]] = []
+        for requirement in findings:
             if not isinstance(requirement, Mapping):
                 continue
 
@@ -178,7 +182,7 @@ class ValidationPackBuilder:
 
             field_name = str(field)
             weak_fields.append(field_name)
-            included_requirements.append(self._json_clone(requirement))
+            included_findings.append(self._json_clone(requirement))
 
             line = self._build_line(
                 account_id,
@@ -197,12 +201,12 @@ class ValidationPackBuilder:
         metadata = {
             "weak_fields": weak_fields,
             "field_consistency": field_consistency,
-            "requirements": included_requirements,
+            "findings": included_findings,
             "summary": summary,
             "built_at": _utc_now(),
             "source_hash": self._build_source_hash(
                 summary,
-                included_requirements,
+                included_findings,
                 field_consistency,
                 payloads,
             ),
@@ -508,13 +512,13 @@ class ValidationPackBuilder:
     @staticmethod
     def _build_source_hash(
         summary: Mapping[str, Any] | None,
-        requirements: Sequence[Mapping[str, Any]],
+        findings: Sequence[Mapping[str, Any]],
         field_consistency: Mapping[str, Any],
         pack_lines: Sequence[Mapping[str, Any]],
     ) -> str:
         payload = {
             "summary": summary or {},
-            "requirements": list(requirements),
+            "findings": list(findings),
             "field_consistency": field_consistency,
             "pack_lines": list(pack_lines),
         }

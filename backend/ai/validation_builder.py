@@ -245,8 +245,8 @@ class ValidationPackWriter:
         if not validation_block:
             return []
 
-        requirements = validation_block["requirements"]
-        if not requirements:
+        findings = validation_block["findings"]
+        if not findings:
             return []
 
         consistency_map = validation_block["field_consistency"]
@@ -254,7 +254,7 @@ class ValidationPackWriter:
         bureaus_data = self._load_bureaus(account_id)
 
         pack_lines: list[PackLine] = []
-        for requirement in requirements:
+        for requirement in findings:
             if not isinstance(requirement, Mapping):
                 continue
 
@@ -379,10 +379,10 @@ class ValidationPackWriter:
         validation_block = self._extract_validation_block(summary)
         if not validation_block:
             return 0
-        requirements = validation_block.get("requirements")
-        if not isinstance(requirements, Sequence):
+        findings = validation_block.get("findings")
+        if not isinstance(findings, Sequence):
             return 0
-        return sum(1 for requirement in requirements if isinstance(requirement, Mapping))
+        return sum(1 for requirement in findings if isinstance(requirement, Mapping))
 
     @staticmethod
     def _extract_line_field(line: PackLine) -> str | None:
@@ -419,7 +419,7 @@ class ValidationPackWriter:
             statuses.append("no_weak_items")
             return statuses
 
-        requirements = validation_block.get("requirements") or []
+        requirements = validation_block.get("findings") or []
         send_to_ai_map = validation_block.get("send_to_ai", {})
         has_ai_needed = False
         for requirement in requirements:
@@ -805,16 +805,29 @@ class ValidationPackWriter:
         if not isinstance(block, Mapping):
             return None
 
-        requirements = block.get("requirements")
-        if not isinstance(requirements, Sequence):
-            return None
+        raw_findings = block.get("findings")
+        if isinstance(raw_findings, Sequence):
+            findings_list = [
+                entry for entry in raw_findings if isinstance(entry, Mapping)
+            ]
+        else:
+            legacy_requirements = block.get("requirements")
+            if not isinstance(legacy_requirements, Sequence):
+                return None
+            findings_list = [
+                entry for entry in legacy_requirements if isinstance(entry, Mapping)
+            ]
 
         consistency = block.get("field_consistency")
         consistency_map = (
             consistency if isinstance(consistency, Mapping) else {}
         )
 
-        send_to_ai_entries = block.get("findings")
+        send_to_ai_entries: Sequence[Any] | None
+        if isinstance(raw_findings, Sequence):
+            send_to_ai_entries = raw_findings
+        else:
+            send_to_ai_entries = None
         send_to_ai_map: dict[str, bool] = {}
         if isinstance(send_to_ai_entries, Sequence):
             for entry in send_to_ai_entries:
@@ -838,7 +851,7 @@ class ValidationPackWriter:
                     send_to_ai_map[alias] = send_flag
 
         return {
-            "requirements": list(requirements),
+            "findings": findings_list,
             "field_consistency": consistency_map,
             "send_to_ai": send_to_ai_map,
         }
@@ -904,16 +917,22 @@ class ValidationPackWriter:
         summary: Mapping[str, Any] | None,
         lines: Sequence[PackLine],
     ) -> str:
-        requirements: list[Any] = []
+        findings: list[Any] = []
         field_consistency: dict[str, Any] = {}
         canonical_fields: dict[str, set[str]] = {}
 
         if isinstance(summary, Mapping):
             validation_block = self._extract_validation_block(summary) or {}
-            raw_requirements = validation_block.get("requirements")
+            raw_findings: Sequence[Any] | None = validation_block.get("findings")
+            if not isinstance(raw_findings, Sequence):
+                raw_findings = None
+            if raw_findings is None:
+                legacy_requirements = validation_block.get("requirements")
+                if isinstance(legacy_requirements, Sequence):
+                    raw_findings = list(legacy_requirements)
             send_to_ai_map = validation_block.get("send_to_ai", {})
-            if isinstance(raw_requirements, Sequence):
-                for entry in raw_requirements:
+            if isinstance(raw_findings, Sequence):
+                for entry in raw_findings:
                     if not isinstance(entry, Mapping):
                         continue
                     canonical_field = self._canonical_field_name(entry.get("field"))
@@ -937,7 +956,7 @@ class ValidationPackWriter:
                             cloned["category"] = expected_category
                         except Exception:  # pragma: no cover - defensive
                             pass
-                    requirements.append(cloned)
+                    findings.append(cloned)
 
                     raw_field = entry.get("field")
                     aliases: set[str] = canonical_fields.setdefault(
@@ -965,7 +984,7 @@ class ValidationPackWriter:
                     )
 
         payload = {
-            "requirements": requirements,
+            "findings": findings,
             "field_consistency": field_consistency,
             "pack_lines": [line.to_json() for line in lines],
         }

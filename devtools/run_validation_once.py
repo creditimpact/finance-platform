@@ -20,10 +20,13 @@ def main(sid: str):
         if not os.path.isfile(os.path.join(acc_dir, "bureaus.json")):
             continue
         res = build_validation_requirements_for_account(acc_dir) or {}
+        findings = res.get("findings") or []
+        if not isinstance(findings, list):
+            findings = []
         out.append({
             "account": idx,
             "count": res.get("count"),
-            "fields": [r.get("field") for r in res.get("requirements", [])]
+            "fields": [r.get("field") for r in findings if isinstance(r, dict)]
         })
     print(json.dumps(out, ensure_ascii=False, indent=2))
 

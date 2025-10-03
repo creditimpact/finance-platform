@@ -508,9 +508,13 @@ def _collect_weak_items(summary: Mapping[str, Any] | None) -> list[dict[str, Any
     if not isinstance(validation, Mapping):
         return []
 
-    requirements = validation.get("requirements")
-    if not isinstance(requirements, Sequence):
-        return []
+    findings = validation.get("findings")
+    if not isinstance(findings, Sequence):
+        legacy_requirements = validation.get("requirements")
+        if isinstance(legacy_requirements, Sequence):
+            findings = list(legacy_requirements)
+        else:
+            return []
 
     field_consistency = validation.get("field_consistency")
     if isinstance(field_consistency, Mapping):
@@ -520,7 +524,7 @@ def _collect_weak_items(summary: Mapping[str, Any] | None) -> list[dict[str, Any
 
     weak_items: list[dict[str, Any]] = []
 
-    for entry in requirements:
+    for entry in findings:
         if not isinstance(entry, Mapping):
             continue
 
@@ -689,20 +693,22 @@ def _extract_weak_source_segment(
     summary: Mapping[str, Any] | None,
     weak_items: Sequence[Mapping[str, Any]],
 ) -> Mapping[str, Any]:
-    requirements: list[Any] = []
+    findings: list[Any] = []
     fields: list[str] = []
 
     if isinstance(summary, Mapping):
         validation = summary.get("validation_requirements")
         if isinstance(validation, Mapping):
-            raw_requirements = validation.get("requirements")
-            if isinstance(raw_requirements, Sequence):
-                for entry in raw_requirements:
+            raw_findings = validation.get("findings")
+            if not isinstance(raw_findings, Sequence):
+                raw_findings = validation.get("requirements")
+            if isinstance(raw_findings, Sequence):
+                for entry in raw_findings:
                     if not isinstance(entry, Mapping):
                         continue
                     if not entry.get("ai_needed"):
                         continue
-                    requirements.append(_json_clone(entry))
+                    findings.append(_json_clone(entry))
                     field_name = entry.get("field")
                     if isinstance(field_name, str) and field_name.strip():
                         fields.append(field_name.strip())
@@ -729,7 +735,7 @@ def _extract_weak_source_segment(
         consistency = {}
 
     return {
-        "requirements": requirements,
+        "findings": findings,
         "field_consistency": consistency,
     }
 

@@ -59,7 +59,7 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
 
     summary_payload = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": "balance_owed",
                     "category": "activity",
@@ -67,16 +67,14 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
                     "documents": ["statement", "   "],
                     "strength": "weak",
                     "ai_needed": True,
+                    "send_to_ai": True,
                 },
                 {
                     "field": "account_status",
                     "category": "status",
                     "ai_needed": False,
+                    "send_to_ai": False,
                 },
-            ],
-            "findings": [
-                {"field": "balance_owed", "send_to_ai": True},
-                {"field": "account_status", "send_to_ai": False},
             ],
             "field_consistency": {
                 "balance_owed": {
@@ -155,17 +153,15 @@ def test_writer_uses_bureau_fallback(tmp_path: Path) -> None:
 
     summary_payload = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": "account_status",
                     "category": "status",
                     "strength": "soft",
                     "ai_needed": True,
                     "notes": "status mismatch",
+                    "send_to_ai": True,
                 }
-            ],
-            "findings": [
-                {"field": "account_status", "send_to_ai": True}
             ],
             "field_consistency": {},
         }
@@ -198,16 +194,14 @@ def test_writer_skips_strong_fields(tmp_path: Path) -> None:
 
     summary_payload = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": "payment_status",
                     "category": "status",
                     "strength": "strong",
                     "ai_needed": True,
+                    "send_to_ai": True,
                 }
-            ],
-            "findings": [
-                {"field": "payment_status", "send_to_ai": True}
             ],
             "field_consistency": {},
         }
@@ -232,23 +226,21 @@ def test_writer_updates_index(tmp_path: Path) -> None:
 
     summary_payload = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": "balance_owed",
                     "category": "activity",
                     "strength": "weak",
                     "ai_needed": True,
+                    "send_to_ai": True,
                 },
                 {
                     "field": "account_status",
                     "category": "status",
                     "strength": "weak",
                     "ai_needed": True,
+                    "send_to_ai": True,
                 },
-            ],
-            "findings": [
-                {"field": "balance_owed", "send_to_ai": True},
-                {"field": "account_status", "send_to_ai": True},
             ],
             "field_consistency": {
                 "balance_owed": {
@@ -289,8 +281,8 @@ def test_writer_updates_index(tmp_path: Path) -> None:
     assert isinstance(entry.get("source_hash"), str) and len(entry["source_hash"]) == 64
 
     # Update summary to remove one requirement and rebuild.
-    summary_payload["validation_requirements"]["requirements"] = [
-        summary_payload["validation_requirements"]["requirements"][0]
+    summary_payload["validation_requirements"]["findings"] = [
+        summary_payload["validation_requirements"]["findings"][0]
     ]
     _write_json(account_dir / "summary.json", summary_payload)
 
@@ -315,16 +307,14 @@ def _seed_validation_account(
     account_dir = runs_root / sid / "cases" / "accounts" / str(account_id)
     summary_payload = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": field,
                     "category": "activity",
                     "strength": "weak",
                     "ai_needed": True,
+                    "send_to_ai": True,
                 }
-            ],
-            "findings": [
-                {"field": field, "send_to_ai": True}
             ],
             "field_consistency": {
                 field: {"raw": {"transunion": "$100"}},
@@ -563,16 +553,14 @@ def test_build_validation_pack_respects_env_toggle(
     account_dir.mkdir(parents=True, exist_ok=True)
     summary_payload = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": "balance_owed",
                     "category": "activity",
                     "strength": "weak",
                     "ai_needed": True,
+                    "send_to_ai": True,
                 }
-            ],
-            "findings": [
-                {"field": "balance_owed", "send_to_ai": True}
             ],
             "field_consistency": {
                 "balance_owed": {"raw": {"transunion": "$100"}}
@@ -608,16 +596,14 @@ def test_build_validation_packs_for_run_auto_send(
 
     summary_payload = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": "balance_owed",
                     "category": "activity",
                     "strength": "weak",
                     "ai_needed": True,
+                    "send_to_ai": True,
                 }
-            ],
-            "findings": [
-                {"field": "balance_owed", "send_to_ai": True}
             ],
             "field_consistency": {
                 "balance_owed": {"raw": {"transunion": "$100"}}
@@ -663,16 +649,14 @@ def test_rewrite_index_to_canonical_layout(tmp_path: Path) -> None:
     account_dir = runs_root / sid / "cases" / "accounts" / "1"
     summary_payload = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": "balance_owed",
                     "category": "activity",
                     "strength": "weak",
                     "ai_needed": True,
+                    "send_to_ai": True,
                 }
-            ],
-            "findings": [
-                {"field": "balance_owed", "send_to_ai": True}
             ],
             "field_consistency": {
                 "balance_owed": {

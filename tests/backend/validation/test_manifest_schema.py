@@ -47,17 +47,15 @@ def _build_manifest(tmp_path: Path, sid: str = "S001") -> tuple[dict[str, object
 
     summary = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": "Account Status",
                     "strength": "weak",
                     "ai_needed": False,
                     "documents": ["statement"],
                     "category": "identity",
+                    "send_to_ai": True,
                 }
-            ],
-            "findings": [
-                {"field": "Account Status", "send_to_ai": True}
             ],
             "field_consistency": {},
         }
@@ -115,21 +113,19 @@ def test_builder_respects_summary_findings(tmp_path: Path) -> None:
 
     summary_payload = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": "account_type",
                     "strength": "weak",
                     "ai_needed": True,
+                    "send_to_ai": False,
                 },
                 {
                     "field": "creditor_remarks",
                     "strength": "weak",
                     "ai_needed": True,
+                    "send_to_ai": True,
                 },
-            ],
-            "findings": [
-                {"field": "account_type", "send_to_ai": False},
-                {"field": "creditor_remarks", "send_to_ai": True},
             ],
             "field_consistency": {},
         }

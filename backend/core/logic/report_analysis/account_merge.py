@@ -2919,13 +2919,15 @@ def persist_merge_tags(
         if not isinstance(validation_block, Mapping):
             continue
 
-        req_entries = validation_block.get("requirements")
-        if not isinstance(req_entries, Sequence):
+        findings_entries = validation_block.get("findings")
+        if not isinstance(findings_entries, Sequence):
+            findings_entries = validation_block.get("requirements")
+        if not isinstance(findings_entries, Sequence):
             continue
 
         if any(
             isinstance(entry, Mapping) and bool(entry.get("ai_needed"))
-            for entry in req_entries
+            for entry in findings_entries
         ):
             validation_ai_indices.append(int(idx))
 

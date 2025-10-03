@@ -189,13 +189,14 @@ def test_builder_populates_pack_and_preserves_prompt_and_results(
     account_dir.mkdir(parents=True, exist_ok=True)
     summary_payload = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": "balance_owed",
                     "category": "activity",
                     "min_days": 30,
                     "documents": ["statement"],
                     "ai_needed": True,
+                    "send_to_ai": True,
                 },
                 {
                     "field": "payment_status",
@@ -203,6 +204,7 @@ def test_builder_populates_pack_and_preserves_prompt_and_results(
                     "min_days": 10,
                     "documents": [],
                     "ai_needed": False,
+                    "send_to_ai": False,
                 },
             ],
             "field_consistency": {
@@ -337,13 +339,14 @@ def test_builder_skips_when_source_unchanged(
     account_dir.mkdir(parents=True, exist_ok=True)
     summary_payload = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": "balance_owed",
                     "category": "activity",
                     "min_days": 30,
                     "documents": ["statement"],
                     "ai_needed": True,
+                    "send_to_ai": True,
                 }
             ],
             "field_consistency": {
@@ -430,13 +433,14 @@ def test_builder_uses_configured_model(
     account_dir.mkdir(parents=True, exist_ok=True)
     summary_payload = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": "account_status",
                     "category": "status",
                     "min_days": 10,
                     "documents": ["statement"],
                     "ai_needed": True,
+                    "send_to_ai": True,
                 }
             ],
             "field_consistency": {},
@@ -490,13 +494,14 @@ def test_builder_skips_when_write_disabled(
     account_dir.mkdir(parents=True, exist_ok=True)
     summary_payload = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": "account_status",
                     "category": "status",
                     "min_days": 3,
                     "documents": ["statement"],
                     "ai_needed": True,
+                    "send_to_ai": True,
                 }
             ],
             "field_consistency": {},
@@ -542,13 +547,14 @@ def test_builder_skips_inference_when_disabled(
     account_dir.mkdir(parents=True, exist_ok=True)
     summary_payload = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": "account_status",
                     "category": "status",
                     "min_days": 3,
                     "documents": ["statement"],
                     "ai_needed": True,
+                    "send_to_ai": True,
                 }
             ],
             "field_consistency": {},
@@ -596,13 +602,14 @@ def test_builder_honors_weak_limit(
     account_dir.mkdir(parents=True, exist_ok=True)
     summary_payload = {
         "validation_requirements": {
-            "requirements": [
+            "findings": [
                 {
                     "field": "balance_owed",
                     "category": "activity",
                     "min_days": 30,
                     "documents": ["statement"],
                     "ai_needed": True,
+                    "send_to_ai": True,
                 },
                 {
                     "field": "account_status",
@@ -610,6 +617,7 @@ def test_builder_honors_weak_limit(
                     "min_days": 10,
                     "documents": ["statement"],
                     "ai_needed": True,
+                    "send_to_ai": True,
                 },
             ],
             "field_consistency": {},

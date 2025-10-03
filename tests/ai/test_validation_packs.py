@@ -95,10 +95,9 @@ def test_pack_writer_emits_all_21_fields(tmp_path: Path, account_id: int) -> Non
 
     summary_payload = {
         "validation_requirements": {
-            "requirements": requirements,
             "findings": [
-                {"field": field, "send_to_ai": True}
-                for field in ALL_VALIDATION_FIELDS
+                dict(requirement, send_to_ai=True)
+                for requirement in requirements
             ],
             "field_consistency": {},
         }
@@ -257,10 +256,9 @@ def reason_pack_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict
 
     summary_payload = {
         "validation_requirements": {
-            "requirements": requirements,
             "findings": [
-                {"field": field, "send_to_ai": True}
-                for field in field_patterns
+                dict(requirement, send_to_ai=True)
+                for requirement in requirements
             ],
             "field_consistency": field_consistency,
         }

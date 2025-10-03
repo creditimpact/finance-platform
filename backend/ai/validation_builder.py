@@ -18,6 +18,7 @@ from backend.ai.validation_index import (
     ValidationIndexEntry,
     ValidationPackIndexWriter,
 )
+from backend.analytics.analytics_tracker import emit_counter
 
 from backend.core.ai.paths import (
     validation_base_dir,
@@ -486,7 +487,9 @@ class ValidationPackWriter:
         )
 
         reason_payload, ai_needed = self._build_reason_metadata(
-            field_name, bureau_values
+            account_id,
+            field_name,
+            bureau_values,
         )
 
         guidance = (
@@ -551,6 +554,7 @@ class ValidationPackWriter:
 
     def _build_reason_metadata(
         self,
+        account_id: int,
         field_name: str,
         bureau_values: Mapping[str, Mapping[str, Any]],
     ) -> tuple[Mapping[str, Any] | None, bool]:
@@ -608,7 +612,48 @@ class ValidationPackWriter:
         }
 
         ai_needed = field_name in _CONDITIONAL_FIELDS and bool(flags.get("eligible"))
+
+        if _reasons_enabled():
+            self._record_reason_observability(
+                account_id,
+                field_name,
+                pattern,
+                flags,
+                ai_needed,
+            )
         return reason_payload, ai_needed
+
+    def _record_reason_observability(
+        self,
+        account_id: int,
+        field_name: str,
+        pattern: str,
+        flags: Mapping[str, Any],
+        ai_needed: bool,
+    ) -> None:
+        """Log and emit metrics describing the escalation rationale."""
+
+        missing = bool(flags.get("missing", False))
+        mismatch = bool(flags.get("mismatch", False))
+        eligible = bool(flags.get("eligible", False))
+
+        metric_pattern = pattern if isinstance(pattern, str) and pattern else "unknown"
+
+        log.info(
+            "VALIDATION_ESCALATION_REASON sid=%s account_id=%s field=%s pattern=%s "
+            "missing=%s mismatch=%s eligible=%s",
+            self.sid,
+            account_id,
+            field_name,
+            metric_pattern,
+            missing,
+            mismatch,
+            eligible,
+        )
+
+        emit_counter(f"validation.pattern.{metric_pattern}")
+        emit_counter(f"validation.eligible.{str(eligible).lower()}")
+        emit_counter(f"validation.ai_needed.{str(ai_needed).lower()}")
 
     def _build_context(
         self, consistency: Mapping[str, Any] | None

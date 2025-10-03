@@ -17,6 +17,11 @@ from backend.core.ai.paths import (
     validation_result_jsonl_filename_for_account,
     validation_result_summary_filename_for_account,
 )
+from backend.core.logic.validation_field_sets import (
+    ALL_VALIDATION_FIELDS,
+    ALWAYS_INVESTIGATABLE_FIELDS,
+    CONDITIONAL_FIELDS,
+)
 from backend.validation.index_schema import (
     ValidationIndex,
     ValidationPackRecord,
@@ -26,32 +31,9 @@ _DEFAULT_MODEL = "gpt-4o-mini"
 _DEFAULT_TIMEOUT = 30.0
 _THROTTLE_SECONDS = 0.05
 _VALID_DECISIONS = {"strong", "no_case"}
-_ALWAYS_INVESTIGATABLE_FIELDS = (
-    "date_opened",
-    "closed_date",
-    "account_type",
-    "creditor_type",
-    "high_balance",
-    "credit_limit",
-    "term_length",
-    "payment_amount",
-    "payment_frequency",
-    "balance_owed",
-    "last_payment",
-    "past_due_amount",
-    "date_of_last_activity",
-    "account_status",
-    "payment_status",
-    "date_reported",
-    "two_year_payment_history",
-    "seven_year_history",
-)
-_CONDITIONAL_FIELDS = (
-    "creditor_remarks",
-    "account_rating",
-    "account_number_display",
-)
-_ALLOWED_FIELDS = set(_ALWAYS_INVESTIGATABLE_FIELDS) | set(_CONDITIONAL_FIELDS)
+_ALWAYS_INVESTIGATABLE_FIELDS = ALWAYS_INVESTIGATABLE_FIELDS
+_CONDITIONAL_FIELDS = CONDITIONAL_FIELDS
+_ALLOWED_FIELDS = frozenset(ALL_VALIDATION_FIELDS)
 _CREDITOR_REMARK_KEYWORDS = (
     "charge off",
     "charge-off",

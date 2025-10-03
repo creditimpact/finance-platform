@@ -4,6 +4,7 @@ import pytest
 
 from backend.core.case_store import telemetry
 from backend.core.logic.report_analysis import candidate_logger
+from backend.core.logic.validation_field_sets import ALL_VALIDATION_FIELDS
 
 
 @pytest.fixture
@@ -77,3 +78,7 @@ def test_mask_counts_idempotent(tmp_path, monkeypatch, capture_telemetry):
     )
     second_event = capture_telemetry[-1][1]
     assert second_event["fields_masked_total"] == 0
+
+
+def test_candidate_logger_field_scope_matches_spec() -> None:
+    assert set(candidate_logger._ALLOWED_FIELDS) == set(ALL_VALIDATION_FIELDS)

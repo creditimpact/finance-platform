@@ -113,6 +113,52 @@ _ENUM_DOMAINS: Dict[str, Dict[str, str]] = {
 }
 
 _HISTORY_FIELDS = {"two_year_payment_history", "seven_year_history"}
+
+_SEVEN_YEAR_KEY_ALIASES = {
+    "late30": "late30",
+    "30 days late": "late30",
+    "30 day late": "late30",
+    "30": "late30",
+    "past due 30": "late30",
+    "30 days past due": "late30",
+    "late60": "late60",
+    "60 days late": "late60",
+    "60 day late": "late60",
+    "60": "late60",
+    "past due 60": "late60",
+    "late90": "late90",
+    "90 days late": "late90",
+    "90 day late": "late90",
+    "90": "late90",
+    "past due 90": "late90",
+    "charge off": "late90",
+    "charge offs": "late90",
+    "charge-off count": "late90",
+    "charge off count": "late90",
+    "chargeoffs": "late90",
+    "co_count": "late90",
+    "co count": "late90",
+    "co": "late90",
+}
+
+
+def _coerce_history_count(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    if value is None:
+        return 0
+    text = str(value).strip()
+    if not text or text in {"--"}:
+        return 0
+    match = re.search(r"-?\d+", text)
+    if not match:
+        return 0
+    try:
+        return int(match.group())
+    except ValueError:
+        return 0
 _ACCOUNT_NUMBER_FIELDS = {"account_number_display"}
 
 DATE_PATS = [
@@ -139,13 +185,23 @@ def _get_bureau_value(bureaus_json: Mapping[str, Any], field: str, bureau: str) 
     if field == "two_year_payment_history":
         block = bureaus_json.get("two_year_payment_history", {})
         if isinstance(block, Mapping):
-            return block.get(bureau)
+            value = block.get(bureau)
+            if value is not None:
+                return value
+        branch = bureaus_json.get(bureau, {})
+        if isinstance(branch, Mapping):
+            return branch.get(field)
         return None
 
     if field == "seven_year_history":
         block = bureaus_json.get("seven_year_history", {})
         if isinstance(block, Mapping):
-            return block.get(bureau)
+            value = block.get(bureau)
+            if value is not None:
+                return value
+        branch = bureaus_json.get(bureau, {})
+        if isinstance(branch, Mapping):
+            return branch.get(field)
         return None
 
     return None
@@ -260,11 +316,26 @@ def normalize_account_number_display(raw: Optional[str]) -> Dict[str, Optional[s
 def normalize_two_year_history(raw: Any) -> Dict[str, Any]:
     """Normalize two-year payment history tokens and summary counts."""
 
-    tokens = raw if isinstance(raw, list) else []
+    raw_tokens: list[str] = []
+    if isinstance(raw, str):
+        raw_tokens = [part.strip() for part in re.split(r"[\s,]+", raw) if part.strip()]
+    elif isinstance(raw, Sequence) and not isinstance(raw, (bytes, bytearray, str)):
+        for entry in raw:
+            if isinstance(entry, Mapping):
+                status = entry.get("status") or entry.get("value")
+                if status:
+                    raw_tokens.append(str(status).strip())
+            elif entry is not None:
+                raw_tokens.append(str(entry).strip())
+
+    tokens: list[str] = []
     counts = {"CO": 0, "late30": 0, "late60": 0, "late90": 0}
 
-    for token in tokens:
-        s = (token or "").strip().upper()
+    for token in raw_tokens:
+        s = token.strip().upper()
+        if not s:
+            continue
+        tokens.append(s)
         if s == "CO":
             counts["CO"] += 1
         elif s in ("30", "LATE30"):
@@ -280,12 +351,33 @@ def normalize_two_year_history(raw: Any) -> Dict[str, Any]:
 def normalize_seven_year_history(raw: Any) -> Dict[str, int]:
     """Normalize seven-year history counters to late30/late60/late90."""
 
-    data = raw if isinstance(raw, Mapping) else {}
-    return {
-        "late30": int(data.get("late30") or 0),
-        "late60": int(data.get("late60") or 0),
-        "late90": int(data.get("late90") or 0),
-    }
+    counts = {"late30": 0, "late60": 0, "late90": 0}
+
+    if isinstance(raw, Mapping):
+        items = raw.items()
+    else:
+        items = []
+
+    for key, value in items:
+        key_text = str(key).strip().lower()
+        key_text = re.sub(r"[\s_-]+", " ", key_text)
+        canonical = _SEVEN_YEAR_KEY_ALIASES.get(key_text)
+        if not canonical:
+            continue
+        counts[canonical] += _coerce_history_count(value)
+
+    if not isinstance(raw, Mapping):
+        tokens: list[str] = []
+        if isinstance(raw, str):
+            tokens = [part.strip() for part in re.split(r"[\s,]+", raw) if part.strip()]
+        elif isinstance(raw, Sequence) and not isinstance(raw, (bytes, bytearray, str)):
+            tokens = [str(part).strip() for part in raw if part]
+        for token in tokens:
+            canonical = _SEVEN_YEAR_KEY_ALIASES.get(token.lower())
+            if canonical:
+                counts[canonical] += 1
+
+    return counts
 
 
 def _looks_like_amount(field: str) -> bool:

@@ -39,6 +39,15 @@ _CONFIG_PATH = Path(__file__).with_name("validation_config.yml")
 _SUMMARY_SCHEMA_VERSION = 3
 
 
+def _include_field_consistency() -> bool:
+    raw_value = os.getenv("SUMMARY_INCLUDE_FIELD_CONSISTENCY", "1")
+    if raw_value is None:
+        return True
+
+    normalized = raw_value.strip().lower()
+    return normalized in {"1", "true", "yes", "y", "on"}
+
+
 def _is_validation_reason_enabled() -> bool:
     """Return ``True`` when reason enrichment should be applied."""
 
@@ -869,7 +878,7 @@ def build_summary_payload(
     if _include_legacy_requirements():
         payload["requirements"] = normalized_requirements
 
-    if field_consistency:
+    if field_consistency and _include_field_consistency():
         if reasons_enabled:
             sanitized_consistency = _strip_raw_from_field_consistency(field_consistency)
             if sanitized_consistency:
@@ -907,9 +916,18 @@ def apply_validation_summary(
     summary_data = _load_summary(summary_path)
     existing = summary_data.get("validation_requirements")
 
+    include_field_consistency = _include_field_consistency()
+    if not include_field_consistency and "field_consistency" in payload:
+        payload = dict(payload)
+        payload.pop("field_consistency", None)
+
     count = int(payload.get("count") or 0)
-    field_consistency = payload.get("field_consistency")
-    has_consistency = isinstance(field_consistency, Mapping) and bool(field_consistency)
+    field_consistency = payload.get("field_consistency") if include_field_consistency else None
+    has_consistency = (
+        include_field_consistency
+        and isinstance(field_consistency, Mapping)
+        and bool(field_consistency)
+    )
     if count <= 0 and not has_consistency:
         if "validation_requirements" in summary_data:
             summary_data.pop("validation_requirements", None)
@@ -922,6 +940,8 @@ def apply_validation_summary(
                 "requirements" in payload,
                 payload.get("schema_version"),
             )
+            if not include_field_consistency:
+                summary_data.pop("field_consistency", None)
             _atomic_write_json(summary_path, summary_data)
         return summary_data
 
@@ -936,6 +956,11 @@ def apply_validation_summary(
             "requirements" in payload,
             payload.get("schema_version"),
         )
+        if not include_field_consistency:
+            summary_data.pop("field_consistency", None)
+            validation_requirements = summary_data.get("validation_requirements")
+            if isinstance(validation_requirements, MutableMapping):
+                validation_requirements.pop("field_consistency", None)
         _atomic_write_json(summary_path, summary_data)
 
     return summary_data

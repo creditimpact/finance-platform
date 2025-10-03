@@ -66,9 +66,12 @@ Python backend powering ingestion, analysis, strategy generation, letter creatio
 Reference materials such as data models, stage guides, and contributing
 instructions. Includes pipeline docs like [Stage 2.5](docs/STAGE_2_5.md),
 [Stage 3 Hardening](docs/stage3_hardening.md), and the
-[Case-First Debug Runbook](docs/casefirst-debug.md). The mismatch-to-tag
-rulebook lives in [`docs/rulebook`](docs/rulebook/README.md). No dedicated
-README; browse files within [`docs`](docs) for deeper documentation.
+[Case-First Debug Runbook](docs/casefirst-debug.md). Deterministic escalation
+policy details live in
+[docs/validation_reasoning.md](docs/validation_reasoning.md). The
+mismatch-to-tag rulebook lives in
+[`docs/rulebook`](docs/rulebook/README.md). No dedicated README; browse files
+within [`docs`](docs) for deeper documentation.
 
 ### frontend
 React client that interacts with the API to upload reports and display results. See [frontend/README.md](frontend/README.md) for build and run instructions.

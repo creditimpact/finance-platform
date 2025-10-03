@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from itertools import islice
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +40,17 @@ AUTO_AI_PIPELINE_DIRNAME = Path("ai_packs") / "merge"
 INFLIGHT_LOCK_FILENAME = "inflight.lock"
 LAST_OK_FILENAME = "last_ok.json"
 DEFAULT_INFLIGHT_TTL_SECONDS = 30 * 60
+
+
+def _maybe_slice(iterable: Iterable[object]) -> Iterable[object]:
+    """Optionally limit ``iterable`` to the first ``DEBUG_FIRST_N`` items."""
+
+    debug_first_n = os.getenv("DEBUG_FIRST_N", "").strip()
+    if debug_first_n and debug_first_n.isdigit():
+        limit = int(debug_first_n)
+        if limit > 0:
+            return islice(iterable, limit)
+    return iterable
 
 
 def _clone_without_raw(value: Any) -> Any:
@@ -106,7 +118,7 @@ def run_validation_requirements_for_all_accounts(
         return stats
 
     account_paths = [path for path in accounts_root.iterdir() if path.is_dir()]
-    for account_path in sorted(account_paths, key=_account_sort_key):
+    for account_path in _maybe_slice(sorted(account_paths, key=_account_sort_key)):
         stats["total_accounts"] += 1
         try:
             result = build_validation_requirements_for_account(account_path)
@@ -164,7 +176,7 @@ def run_consistency_writeback_for_all_accounts(
         return stats
 
     account_paths = [path for path in accounts_root.iterdir() if path.is_dir()]
-    for account_path in sorted(account_paths, key=_account_sort_key):
+    for account_path in _maybe_slice(sorted(account_paths, key=_account_sort_key)):
         stats["total_accounts"] += 1
 
         bureaus_path = account_path / "bureaus.json"
@@ -925,7 +937,9 @@ def _run_auto_ai_pipeline(sid: str):
     if ENABLE_VALIDATION_REQUIREMENTS:
         accounts_root = RUNS_ROOT / sid / "cases" / "accounts"
         if accounts_root.exists():
-            for account_path in sorted(accounts_root.iterdir(), key=_account_sort_key):
+            for account_path in _maybe_slice(
+                sorted(accounts_root.iterdir(), key=_account_sort_key)
+            ):
                 if not account_path.is_dir():
                     continue
                 try:

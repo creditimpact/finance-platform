@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from itertools import islice
 from os import PathLike
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence, Union
@@ -38,6 +39,17 @@ Pathish = Union[str, Path, PathLike[str]]
 
 
 log = logging.getLogger(__name__)
+
+
+def _maybe_slice(iterable: Iterable[Path]) -> Iterable[Path]:
+    """Optionally limit iteration via the ``DEBUG_FIRST_N`` env toggle."""
+
+    debug_first_n = os.getenv("DEBUG_FIRST_N", "").strip()
+    if debug_first_n and debug_first_n.isdigit():
+        limit = int(debug_first_n)
+        if limit > 0:
+            return islice(iterable, limit)
+    return iterable
 
 
 def _coerce_int(value: object) -> int | None:
@@ -802,13 +814,22 @@ def compact_tags_for_run(
     if not accounts_dir.exists() or not accounts_dir.is_dir():
         return
 
-    for account_dir in sorted(accounts_dir.iterdir()):
-        if account_dir.is_dir():
+    for account_dir in _maybe_slice(sorted(accounts_dir.iterdir())):
+        if not account_dir.is_dir():
+            continue
+        try:
             compact_account_tags(
                 account_dir,
                 minimal_only=minimal_only,
                 explanations_to_summary=explanations_to_summary,
             )
+        except Exception:  # pragma: no cover - defensive logging
+            log.exception(
+                "TAGS_COMPACT_FAILED sid=%s account_dir=%s",
+                sid,
+                account_dir,
+            )
+            continue
 
 
 def compact_tags_for_sid(

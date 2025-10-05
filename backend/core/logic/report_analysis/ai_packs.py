@@ -428,7 +428,7 @@ def _tolerance_hint() -> Mapping[str, float | int]:
     return {
         "amount_abs_usd": _get_float("AMOUNT_TOL_ABS", 50.0),
         "amount_ratio": _get_float("AMOUNT_TOL_RATIO", 0.01),
-        "last_payment_day_tol": _get_int("LAST_PAYMENT_DAY_TOL", 7),
+        "last_payment_day_tol": _get_int("LAST_PAYMENT_DAY_TOL", 5),
     }
 
 

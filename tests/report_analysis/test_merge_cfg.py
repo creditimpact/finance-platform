@@ -32,7 +32,7 @@ def test_get_merge_cfg_defaults(monkeypatch):
     assert cfg.triggers["MERGE_AI_ON_ALL_DATES"] is True
     assert cfg.tolerances["AMOUNT_TOL_ABS"] == 50.0
     assert cfg.tolerances["AMOUNT_TOL_RATIO"] == 0.01
-    assert cfg.tolerances["LAST_PAYMENT_DAY_TOL"] == 7
+    assert cfg.tolerances["LAST_PAYMENT_DAY_TOL"] == 5
     assert cfg.tolerances["COUNT_ZERO_PAYMENT_MATCH"] == 0
 
 

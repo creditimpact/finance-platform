@@ -20,6 +20,7 @@ from backend.core.logic import summary_writer
 from backend.core.logic.consistency import compute_field_consistency
 from backend.core.logic.reason_classifier import classify_reason, decide_send_to_ai
 from backend.core.logic.summary_compact import compact_merge_sections
+from backend.core.telemetry import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -803,6 +804,7 @@ def build_validation_requirements(
         field_consistency_full = _clone_field_consistency(field_consistency)
 
     inconsistencies = _filter_inconsistent_fields(field_consistency_full)
+    _emit_field_debug(field_consistency_full, inconsistencies)
     broadcast_all = _should_broadcast(config)
     requirements = _build_requirement_entries(
         inconsistencies, config, broadcast_all=broadcast_all
@@ -822,6 +824,173 @@ def _coerce_normalized_map(details: Mapping[str, Any] | None) -> Dict[str, Any]:
         return {str(key): value for key, value in normalized.items()}
 
     return {}
+
+
+def _coerce_raw_map(details: Mapping[str, Any] | None) -> Dict[str, Any]:
+    """Extract raw bureau values from ``details`` safely."""
+
+    if not isinstance(details, Mapping):
+        return {}
+
+    raw = details.get("raw")
+    if isinstance(raw, Mapping):
+        return {str(key): value for key, value in raw.items()}
+
+    return {}
+
+
+def _sanitize_for_log(value: Any) -> Any:
+    """Convert ``value`` into JSON-serializable primitives for logging."""
+
+    if isinstance(value, Mapping):
+        return {str(key): _sanitize_for_log(item) for key, item in value.items()}
+
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_sanitize_for_log(item) for item in value]
+
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:  # pragma: no cover - defensive guard
+            return repr(value)
+
+    try:
+        json.dumps(value)
+        return value
+    except TypeError:
+        return repr(value)
+
+
+def _json_default(value: Any) -> str:
+    """Fallback JSON serializer for structured debug output."""
+
+    return repr(value)
+
+
+def _compute_mismatch_rate(
+    details: Mapping[str, Any] | None,
+    reason_details: Mapping[str, Any],
+) -> float:
+    """Compute mismatch rate for telemetry reporting."""
+
+    present_count = reason_details.get("present_count")
+    try:
+        present_total = float(present_count)
+    except (TypeError, ValueError):
+        present_total = 0.0
+
+    if present_total <= 0.0:
+        return 0.0
+
+    disagreeing: Sequence[Any] | None = None
+    if isinstance(details, Mapping):
+        candidate = details.get("disagreeing_bureaus")
+        if isinstance(candidate, Sequence) and not isinstance(
+            candidate, (str, bytes, bytearray)
+        ):
+            disagreeing = candidate
+
+    disagreeing_count = float(len(disagreeing or ()))
+
+    if disagreeing_count <= 0.0 and bool(reason_details.get("is_mismatch")):
+        distinct_values = reason_details.get("distinct_values")
+        try:
+            distinct_total = float(distinct_values)
+        except (TypeError, ValueError):
+            distinct_total = 0.0
+        if distinct_total > 1.0:
+            disagreeing_count = max(distinct_total - 1.0, 0.0)
+
+    mismatch_rate = disagreeing_count / present_total
+
+    if mismatch_rate < 0.0:
+        return 0.0
+    if mismatch_rate > 1.0:
+        return 1.0
+    return mismatch_rate
+
+
+def _emit_field_debug(
+    field_consistency: Mapping[str, Any],
+    inconsistencies: Mapping[str, Any],
+) -> None:
+    """Emit structured debug logs and telemetry for every field."""
+
+    debug_enabled = os.getenv("VALIDATION_DEBUG") == "1"
+    reasons_enabled = _is_validation_reason_enabled()
+
+    for field, details in sorted(field_consistency.items(), key=lambda item: str(item[0])):
+        if not isinstance(details, Mapping):
+            continue
+
+        normalized_map = _coerce_normalized_map(details)
+        raw_map = _coerce_raw_map(details)
+
+        try:
+            reason_details = classify_reason(normalized_map)
+        except Exception:  # pragma: no cover - defensive guard
+            logger.exception("VALIDATION_FIELD_CLASSIFY_FAILED field=%s", field)
+            reason_details = {
+                "reason_code": None,
+                "reason_label": None,
+                "is_missing": False,
+                "is_mismatch": False,
+                "missing_count": None,
+                "present_count": None,
+                "distinct_values": None,
+            }
+
+        send_to_ai = False
+        if reasons_enabled and field in inconsistencies:
+            try:
+                send_to_ai = bool(decide_send_to_ai(field, reason_details))
+            except Exception:  # pragma: no cover - defensive guard
+                logger.exception("VALIDATION_FIELD_AI_DECISION_FAILED field=%s", field)
+
+        mismatch_rate = _compute_mismatch_rate(details, reason_details)
+
+        metrics.gauge(
+            "validation.field_mismatch_rate",
+            mismatch_rate,
+            tags={
+                "field": str(field),
+                "reason_code": str(reason_details.get("reason_code") or ""),
+            },
+        )
+
+        if not debug_enabled:
+            continue
+
+        log_payload = {
+            "field": str(field),
+            "consensus": details.get("consensus"),
+            "raw": _sanitize_for_log(raw_map),
+            "normalized": _sanitize_for_log(normalized_map),
+            "missing_bureaus": _sanitize_for_log(
+                details.get("missing_bureaus") or []
+            ),
+            "disagreeing_bureaus": _sanitize_for_log(
+                details.get("disagreeing_bureaus") or []
+            ),
+            "reason_code": reason_details.get("reason_code"),
+            "reason_label": reason_details.get("reason_label"),
+            "is_missing": reason_details.get("is_missing"),
+            "is_mismatch": reason_details.get("is_mismatch"),
+            "missing_count": reason_details.get("missing_count"),
+            "present_count": reason_details.get("present_count"),
+            "distinct_values": reason_details.get("distinct_values"),
+            "has_finding": field in inconsistencies,
+            "send_to_ai": send_to_ai,
+            "mismatch_rate": mismatch_rate,
+        }
+
+        try:
+            logger.debug(
+                "VALIDATION_FIELD_TRACE %s",
+                json.dumps(log_payload, default=_json_default, sort_keys=True),
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception("VALIDATION_FIELD_TRACE_FAILED field=%s", field)
 
 
 def _build_finding(

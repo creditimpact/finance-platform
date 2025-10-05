@@ -1166,11 +1166,42 @@ def _value_is_missing(value: Any) -> bool:
     return False
 
 
+def _raw_value_provider_for_account_factory(
+    bureaus_dict: Mapping[str, Mapping[str, Any]] | None,
+):
+    """Return a callable that yields raw bureau values for the active account."""
+
+    if not isinstance(bureaus_dict, Mapping):
+        sanitized: dict[str, Mapping[str, Any]] = {}
+    else:
+        sanitized = {
+            str(bureau): value
+            for bureau, value in bureaus_dict.items()
+            if isinstance(value, Mapping)
+        }
+
+    def _provider(field_name: Any, bureau_name: Any) -> Any:
+        bureau_key = str(bureau_name)
+        field_key = str(field_name)
+        branch = sanitized.get(bureau_key)
+        if branch is None:
+            return None
+        value = branch.get(field_key)
+        if value in (None, "", "--"):
+            return None
+        return value
+
+    return _provider
+
+
 def _build_bureau_value_snapshot(
+    field_name: Any,
     details: Mapping[str, Any] | None,
+    *,
+    raw_value_provider: Any | None = None,
 ) -> Dict[str, Dict[str, Any]]:
     normalized_map = _coerce_normalized_map(details)
-    raw_map = _coerce_raw_map(details)
+    raw_map = _coerce_raw_map(details) if raw_value_provider is None else {}
 
     missing_set: set[str] = set()
     if isinstance(details, Mapping):
@@ -1182,15 +1213,26 @@ def _build_bureau_value_snapshot(
 
     snapshot: Dict[str, Dict[str, Any]] = {}
     for bureau in _SUMMARY_BUREAUS:
-        raw_value = raw_map.get(bureau) if raw_map else None
+        raw_value = None
+        if raw_value_provider is not None:
+            try:
+                raw_value = raw_value_provider(field_name, bureau)
+            except Exception:  # pragma: no cover - defensive guard
+                logger.exception(
+                    "VALIDATION_BUREAU_RAW_PROVIDER_FAILED field=%s bureau=%s",
+                    field_name,
+                    bureau,
+                )
+                raw_value = None
+        if raw_value is None and raw_map:
+            raw_value = raw_map.get(bureau)
         normalized_value = normalized_map.get(bureau)
 
         present = bureau not in missing_set
         if present:
-            if raw_map and bureau in raw_map:
-                present = not _value_is_missing(raw_value)
-            else:
-                present = not _value_is_missing(normalized_value)
+            present = not _value_is_missing(raw_value) or not _value_is_missing(
+                normalized_value
+            )
 
         if not present:
             raw_value = None
@@ -1210,6 +1252,7 @@ def _build_finding(
     field_consistency: Mapping[str, Any] | None,
     *,
     details: Mapping[str, Any] | None = None,
+    raw_value_provider: Any | None = None,
 ) -> Dict[str, Any]:
     """Return a finding enriched with reason metadata and AI routing."""
 
@@ -1223,7 +1266,11 @@ def _build_finding(
 
     finding.update(reason_details)
     finding["send_to_ai"] = decide_send_to_ai(field_name, reason_details)
-    finding["bureau_values"] = _build_bureau_value_snapshot(details)
+    finding["bureau_values"] = _build_bureau_value_snapshot(
+        field_name,
+        details,
+        raw_value_provider=raw_value_provider,
+    )
 
     return finding
 
@@ -1232,6 +1279,7 @@ def build_findings(
     requirements: Sequence[Mapping[str, Any]],
     *,
     field_consistency: Mapping[str, Any] | None = None,
+    raw_value_provider: Any | None = None,
 ) -> List[Dict[str, Any]]:
     """Return normalized findings enriched with metadata when enabled."""
 
@@ -1264,6 +1312,7 @@ def build_findings(
                     normalized_entry,
                     field_consistency,
                     details=details,
+                    raw_value_provider=raw_value_provider,
                 )
             except Exception:  # pragma: no cover - defensive enrichment
                 logger.exception(
@@ -1275,7 +1324,11 @@ def build_findings(
             finding = dict(normalized_entry)
 
         if "bureau_values" not in finding:
-            finding["bureau_values"] = _build_bureau_value_snapshot(details)
+            finding["bureau_values"] = _build_bureau_value_snapshot(
+                field_name,
+                details,
+                raw_value_provider=raw_value_provider,
+            )
 
         findings.append(finding)
 
@@ -1286,6 +1339,7 @@ def build_summary_payload(
     requirements: Sequence[Mapping[str, Any]],
     *,
     field_consistency: Mapping[str, Any] | None = None,
+    raw_value_provider: Any | None = None,
 ) -> Dict[str, Any]:
     """Build the summary.json payload for validation requirements."""
 
@@ -1294,7 +1348,9 @@ def build_summary_payload(
     ]
     reasons_enabled = _is_validation_reason_enabled()
     findings = build_findings(
-        normalized_requirements, field_consistency=field_consistency
+        normalized_requirements,
+        field_consistency=field_consistency,
+        raw_value_provider=raw_value_provider,
     )
 
     payload: Dict[str, Any] = {
@@ -1702,8 +1758,11 @@ def build_validation_requirements_for_account(
     requirements, _, field_consistency_full = build_validation_requirements(
         bureaus_raw, field_consistency=consistency_override
     )
+    raw_provider = _raw_value_provider_for_account_factory(bureaus_raw)
     payload = build_summary_payload(
-        requirements, field_consistency=field_consistency_full
+        requirements,
+        field_consistency=field_consistency_full,
+        raw_value_provider=raw_provider,
     )
     if dry_run_enabled:
         summary_after = _apply_dry_run_summary(summary_path, payload)

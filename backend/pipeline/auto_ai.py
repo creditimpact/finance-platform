@@ -117,14 +117,20 @@ def run_validation_requirements_for_all_accounts(
         return stats
 
     account_paths = [path for path in accounts_root.iterdir() if path.is_dir()]
-    for account_path in _maybe_slice(sorted(account_paths, key=_account_sort_key)):
-        stats["total_accounts"] += 1
+    sorted_accounts = sorted(account_paths, key=_account_sort_key)
+    stats["total_accounts"] = len(sorted_accounts)
+
+    for position, account_path in enumerate(_maybe_slice(sorted_accounts), start=1):
+        account_label = account_path.name
+        logger.info("PROCESSING account_id=%s index=%d", account_label, position)
         try:
             result = build_validation_requirements_for_account(account_path)
         except Exception:  # pragma: no cover - defensive logging
             stats["errors"] += 1
             logger.exception(
-                "VALIDATION_REQUIREMENTS_ACCOUNT_FAILED sid=%s account_dir=%s",
+                "ERROR account_id=%s index=%d sid=%s path=%s",
+                account_label,
+                position,
                 sid,
                 account_path,
             )

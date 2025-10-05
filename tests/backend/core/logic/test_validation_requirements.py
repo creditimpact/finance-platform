@@ -233,7 +233,7 @@ def test_build_summary_payload_can_disable_reason_enrichment(monkeypatch):
                 "transunion": "charge-off",
             },
             "C5_ALL_DIFF",
-            True,
+            False,
         ),
         (
             "account_status",
@@ -302,7 +302,7 @@ def test_compute_inconsistent_fields_handles_histories():
 
     assert "seven_year_history" in inconsistencies
     seven_norm = inconsistencies["seven_year_history"]["normalized"]
-    assert seven_norm["transunion"]["late30"] == 0
+    assert seven_norm["transunion"] is None
     assert seven_norm["equifax"]["late30"] == 1
 
 

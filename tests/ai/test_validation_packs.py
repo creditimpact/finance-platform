@@ -50,7 +50,6 @@ FIELD_CATEGORY_MAP: dict[str, str] = {
     "payment_status": "status",
     "date_reported": "status",
     "account_rating": "status",
-    "creditor_remarks": "status",
     # Histories
     "two_year_payment_history": "history",
     "seven_year_history": "history",
@@ -75,7 +74,7 @@ def _expected_documents(field: str) -> list[str]:
 
 
 @pytest.mark.parametrize("account_id", [1, 2])
-def test_pack_writer_emits_all_21_fields(tmp_path: Path, account_id: int) -> None:
+def test_pack_writer_emits_all_validation_fields(tmp_path: Path, account_id: int) -> None:
     sid = "SID021"
     runs_root = tmp_path / "runs"
 
@@ -226,7 +225,6 @@ def reason_pack_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict
         "two_year_payment_history": "case_5",
         "seven_year_history": "case_6",
         # Conditional fields
-        "creditor_remarks": "case_1",
         "account_rating": "case_4",
         "account_number_display": "case_3",
     }

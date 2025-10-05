@@ -27,7 +27,6 @@ ALWAYS_ELIGIBLE_FIELDS: set[str] = {
 }
 
 CONDITIONAL_FIELDS: set[str] = {
-    "creditor_remarks",
     "account_rating",
     "account_number_display",
 }

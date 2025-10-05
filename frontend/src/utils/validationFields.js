@@ -27,7 +27,6 @@ export const ALWAYS_INVESTIGATABLE_FIELDS = [
 export const CONDITIONAL_FIELDS = [
   'account_number_display',
   'account_rating',
-  'creditor_remarks',
 ];
 
 export const ALL_VALIDATION_FIELDS = [
@@ -59,7 +58,6 @@ export const FIELD_LABELS = {
   seven_year_history: '7-Year History',
   account_number_display: 'Account Number',
   account_rating: 'Account Rating',
-  creditor_remarks: 'Creditor Remarks',
 };
 
 export function formatValidationField(field) {

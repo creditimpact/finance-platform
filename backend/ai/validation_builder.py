@@ -98,7 +98,6 @@ _FIELD_CATEGORY_MAP: dict[str, str] = {
     "payment_status": "status",
     "date_reported": "status",
     "account_rating": "status",
-    "creditor_remarks": "status",
     # Histories
     "two_year_payment_history": "history",
     "seven_year_history": "history",

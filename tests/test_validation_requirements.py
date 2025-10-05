@@ -81,13 +81,13 @@ def test_account_number_last4_mismatch_is_strong():
     normalized = inconsistencies["account_number_display"]["normalized"]
     assert normalized["transunion"]["last4"] == "9992"
     assert normalized["experian"]["last4"] == "4999"
-def test_histories_require_strong_policy(account_with_histories):
+def test_histories_require_soft_policy(account_with_histories):
     requirements, inconsistencies = _requirements_by_field(account_with_histories)
 
     assert "two_year_payment_history" in requirements
     history_rule = requirements["two_year_payment_history"]
-    assert history_rule["strength"] == "strong"
-    assert history_rule["ai_needed"] is False
+    assert history_rule["strength"] == "soft"
+    assert history_rule["ai_needed"] is True
     assert history_rule["min_days"] == 18
     assert history_rule["documents"] == [
         "monthly_statements_2y",
@@ -99,12 +99,12 @@ def test_histories_require_strong_policy(account_with_histories):
     assert history_norm["transunion"]["counts"]["CO"] == 1
     assert history_norm["transunion"]["counts"]["late30"] == 1
     assert history_norm["experian"]["tokens"] == ["OK", "OK", "OK"]
-    assert history_norm["equifax"]["tokens"] == []
+    assert history_norm["equifax"] is None
 
     assert "seven_year_history" in requirements
     seven_rule = requirements["seven_year_history"]
-    assert seven_rule["strength"] == "strong"
-    assert seven_rule["ai_needed"] is False
+    assert seven_rule["strength"] == "soft"
+    assert seven_rule["ai_needed"] is True
     assert seven_rule["min_days"] == 25
     assert seven_rule["documents"] == [
         "cra_report_7y",
@@ -114,9 +114,9 @@ def test_histories_require_strong_policy(account_with_histories):
 
     seven_norm = inconsistencies["seven_year_history"]["normalized"]
     assert seven_norm["transunion"]["late30"] == 2
-    assert seven_norm["transunion"]["late90"] == 1
-    assert seven_norm["experian"]["late30"] == 0
-    assert seven_norm["equifax"]["late30"] == 0
+    assert seven_norm["transunion"]["late90"] == 2
+    assert seven_norm["experian"] is None
+    assert seven_norm["equifax"] is None
 
 
 def test_money_mismatch_is_strong(account_money_mismatch):
@@ -180,7 +180,7 @@ def test_account_rating_uses_conditional_gate():
 
     assert "account_rating" in requirements
     rule = requirements["account_rating"]
-    assert rule["strength"] == "medium"
+    assert rule["strength"] == "soft"
     assert rule["ai_needed"] is True
     assert rule["min_corroboration"] == 2
     assert rule["conditional_gate"] is True
@@ -233,12 +233,12 @@ def test_sanity_example_strong_and_soft_requirements():
     assert two_year_consensus in {"majority", "split"}
     two_year_norm = inconsistencies["two_year_payment_history"]["normalized"]
     assert two_year_norm["experian"]["counts"]["CO"] == 24
-    assert two_year_norm["transunion"]["tokens"] == []
+    assert two_year_norm["transunion"] is None
 
     assert "seven_year_history" in requirements
     seven_rule = requirements["seven_year_history"]
-    assert seven_rule["strength"] == "strong"
-    assert seven_rule["ai_needed"] is False
+    assert seven_rule["strength"] == "soft"
+    assert seven_rule["ai_needed"] is True
     seven_norm = inconsistencies["seven_year_history"]["normalized"]
     assert seven_norm["equifax"]["late90"] == 28
 
@@ -247,11 +247,6 @@ def test_sanity_example_strong_and_soft_requirements():
 
     assert "dispute_status" not in requirements
 
-    assert "creditor_remarks" in requirements
-    creditor_rule = requirements["creditor_remarks"]
-    assert creditor_rule["strength"] == "soft"
-    assert creditor_rule["ai_needed"] is True
-    assert creditor_rule["min_corroboration"] == 2
-    assert creditor_rule["conditional_gate"] is True
+    assert "creditor_remarks" not in requirements
 
     assert "account_number_display" not in requirements

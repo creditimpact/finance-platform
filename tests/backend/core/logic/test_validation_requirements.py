@@ -226,16 +226,6 @@ def test_build_summary_payload_can_disable_reason_enrichment(monkeypatch):
             True,
         ),
         (
-            "creditor_remarks",
-            {
-                "experian": "interest only",
-                "equifax": "account closed",
-                "transunion": "charge-off",
-            },
-            "C5_ALL_DIFF",
-            False,
-        ),
-        (
             "account_status",
             {"experian": None, "equifax": "", "transunion": "--"},
             "C6_ALL_MISSING",

@@ -59,6 +59,18 @@ def _is_validation_reason_enabled() -> bool:
     return normalized in {"1", "true", "yes", "y", "on"}
 
 
+@lru_cache(maxsize=1)
+def _include_creditor_remarks() -> bool:
+    """Return ``True`` when ``creditor_remarks`` validation is enabled."""
+
+    raw_value = os.getenv("VALIDATION_INCLUDE_CREDITOR_REMARKS")
+    if raw_value is None:
+        return False
+
+    normalized = raw_value.strip().lower()
+    return normalized in {"1", "true", "yes", "y", "on"}
+
+
 @dataclass(frozen=True)
 class ValidationRule:
     """Metadata describing the validation needed for a field."""
@@ -576,7 +588,7 @@ def _determine_history_strength(
                     return "soft", True
 
     return "strong", False
-_SEMANTIC_FIELDS = {"account_type", "creditor_type", "creditor_remarks"}
+_SEMANTIC_FIELDS = {"account_type", "creditor_type", "account_rating"}
 
 
 def _looks_like_date_field(field: str) -> bool:
@@ -748,6 +760,8 @@ def _build_requirement_entries(
     requirements: List[Dict[str, Any]] = []
     for field in sorted(fields.keys()):
         details = fields[field]
+        if field == "creditor_remarks" and not _include_creditor_remarks():
+            continue
         base_rule = config.fields.get(field)
         if base_rule is None and field not in _HISTORY_REQUIREMENT_OVERRIDES:
             continue

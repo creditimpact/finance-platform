@@ -67,6 +67,146 @@ def test_build_validation_requirements_uses_config_and_defaults():
     assert {"balance_owed", "mystery_field"}.issubset(field_consistency.keys())
 
 
+def test_finding_embeds_bureau_values_amount():
+    bureaus = {
+        "transunion": {"credit_limit": "$5,000"},
+        "experian": {"credit_limit": "5000"},
+        "equifax": {"credit_limit": 5000},
+    }
+
+    requirements = [
+        {
+            "field": "credit_limit",
+            "category": "limits",
+            "min_days": 5,
+            "documents": ["statement"],
+            "strength": "strong",
+            "ai_needed": False,
+            "bureaus": ["equifax", "experian", "transunion"],
+        }
+    ]
+
+    field_consistency = compute_field_consistency(dict(bureaus))
+    payload = build_summary_payload(
+        requirements,
+        field_consistency=field_consistency,
+        raw_value_provider=_raw_value_provider_for_account_factory(bureaus),
+    )
+
+    finding = payload["findings"][0]
+    bureau_values = finding["bureau_values"]
+
+    assert bureau_values["equifax"] == {
+        "present": True,
+        "raw": 5000,
+        "normalized": 5000.0,
+    }
+    assert bureau_values["experian"] == {
+        "present": True,
+        "raw": "5000",
+        "normalized": 5000.0,
+    }
+    assert bureau_values["transunion"] == {
+        "present": True,
+        "raw": "$5,000",
+        "normalized": 5000.0,
+    }
+
+
+def test_finding_embeds_missing_bureau():
+    bureaus = {
+        "transunion": {"date_opened": "01/02/2023"},
+        "experian": {"date_opened": "--"},
+        "equifax": {"date_opened": "2023-01-05"},
+    }
+
+    requirements = [
+        {
+            "field": "date_opened",
+            "category": "dates",
+            "min_days": 10,
+            "documents": [],
+            "strength": "medium",
+            "ai_needed": False,
+            "bureaus": ["equifax", "experian", "transunion"],
+        }
+    ]
+
+    field_consistency = compute_field_consistency(dict(bureaus))
+    payload = build_summary_payload(
+        requirements,
+        field_consistency=field_consistency,
+        raw_value_provider=_raw_value_provider_for_account_factory(bureaus),
+    )
+
+    finding = payload["findings"][0]
+    bureau_values = finding["bureau_values"]
+
+    assert bureau_values["transunion"] == {
+        "present": True,
+        "raw": "01/02/2023",
+        "normalized": "2023-01-02",
+    }
+    assert bureau_values["equifax"] == {
+        "present": True,
+        "raw": "2023-01-05",
+        "normalized": "2023-01-05",
+    }
+    assert bureau_values["experian"] == {
+        "present": False,
+        "raw": None,
+        "normalized": None,
+    }
+
+
+def test_finding_embeds_histories_shape():
+    bureaus = {
+        "transunion": {"two_year_payment_history": ["OK", "30", "OK", "60"]},
+        "experian": {"two_year_payment_history": "OK,30,OK"},
+        "equifax": {},
+        "two_year_payment_history": {
+            "transunion": ["OK", "30", "OK", "60"],
+            "experian": "OK,30,OK",
+        },
+    }
+
+    requirements = [
+        {
+            "field": "two_year_payment_history",
+            "category": "history",
+            "min_days": 12,
+            "documents": ["payment_history"],
+            "strength": "medium",
+            "ai_needed": True,
+            "bureaus": ["equifax", "experian", "transunion"],
+        }
+    ]
+
+    field_consistency = compute_field_consistency(dict(bureaus))
+    payload = build_summary_payload(
+        requirements,
+        field_consistency=field_consistency,
+        raw_value_provider=_raw_value_provider_for_account_factory(bureaus),
+    )
+
+    finding = payload["findings"][0]
+    bureau_values = finding["bureau_values"]
+
+    transunion_normalized = bureau_values["transunion"]["normalized"]
+    experian_normalized = bureau_values["experian"]["normalized"]
+
+    assert isinstance(transunion_normalized, dict)
+    assert set(transunion_normalized.keys()) == {"tokens", "counts"}
+    assert isinstance(transunion_normalized["tokens"], list)
+    assert isinstance(transunion_normalized["counts"], dict)
+    assert isinstance(experian_normalized, dict)
+    assert set(experian_normalized.keys()) == {"tokens", "counts"}
+    assert bureau_values["equifax"] == {
+        "present": False,
+        "raw": None,
+        "normalized": None,
+    }
+
 def test_build_summary_payload_includes_field_consistency():
     requirements = [
         {

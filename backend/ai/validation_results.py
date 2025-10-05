@@ -32,7 +32,16 @@ _BUREAUS: tuple[str, ...] = ("transunion", "experian", "equifax")
 
 
 def _reasons_enabled() -> bool:
-    return os.getenv("VALIDATION_REASON_ENABLED") == "1"
+    raw = os.getenv("VALIDATION_REASON_ENABLED", "1")
+    if raw is None:
+        return True
+
+    lowered = raw.strip().lower()
+    if lowered in {"1", "true", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    return True
 
 
 def _clone_jsonish(value: Any) -> Any:

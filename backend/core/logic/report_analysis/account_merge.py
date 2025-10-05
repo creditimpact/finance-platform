@@ -384,7 +384,7 @@ _TRIGGER_DEFAULTS: Dict[str, Union[int, str, bool]] = {
 _TOLERANCE_DEFAULTS: Dict[str, Union[int, float]] = {
     "AMOUNT_TOL_ABS": 50.0,
     "AMOUNT_TOL_RATIO": 0.01,
-    "LAST_PAYMENT_DAY_TOL": 7,
+    "LAST_PAYMENT_DAY_TOL": 5,
     "COUNT_ZERO_PAYMENT_MATCH": 0,
     "CA_DATE_MONTH_TOL": 6,
 }

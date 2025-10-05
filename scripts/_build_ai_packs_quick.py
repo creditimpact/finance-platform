@@ -77,7 +77,7 @@ def build_prompt(pair_summary, context_a, context_b):
         "tolerances_hint": {
             "amount_abs_usd": int(os.environ.get("AMOUNT_TOL_ABS","50")),
             "amount_ratio": float(os.environ.get("AMOUNT_TOL_RATIO","0.01")),
-            "last_payment_day_tol": int(os.environ.get("LAST_PAYMENT_DAY_TOL","7"))
+            "last_payment_day_tol": int(os.environ.get("LAST_PAYMENT_DAY_TOL","5"))
         },
         "context": {
             "a": context_a,

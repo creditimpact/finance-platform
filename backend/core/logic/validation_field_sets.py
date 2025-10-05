@@ -33,7 +33,6 @@ ALWAYS_INVESTIGATABLE_FIELDS: tuple[str, ...] = (
 CONDITIONAL_FIELDS: tuple[str, ...] = (
     "account_number_display",
     "account_rating",
-    "creditor_remarks",
 )
 
 ALL_VALIDATION_FIELDS: tuple[str, ...] = (

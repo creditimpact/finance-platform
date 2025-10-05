@@ -166,16 +166,6 @@ fields:
     min_corroboration: 2
     conditional_gate: true
 
-  creditor_remarks:
-    category: status
-    min_days: 25
-    points: 12
-    documents: [collection_notes, customer_letters, cra_log]
-    strength: soft
-    ai_needed: true     # free text needs LLM to judge usefulness
-    min_corroboration: 2
-    conditional_gate: true
-
   date_reported:
     category: status
     min_days: 3

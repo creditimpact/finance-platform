@@ -121,7 +121,7 @@ def test_builder_respects_summary_findings(tmp_path: Path) -> None:
                     "send_to_ai": False,
                 },
                 {
-                    "field": "creditor_remarks",
+                    "field": "account_rating",
                     "strength": "weak",
                     "ai_needed": True,
                     "send_to_ai": True,
@@ -133,7 +133,7 @@ def test_builder_respects_summary_findings(tmp_path: Path) -> None:
     bureaus_payload = {
         "transunion": {
             "account_type": "mortgage",
-            "creditor_remarks": "Account closed",
+            "account_rating": "1",
         }
     }
 
@@ -145,7 +145,7 @@ def test_builder_respects_summary_findings(tmp_path: Path) -> None:
 
     assert len(records) == 1
     record = records[0]
-    assert record.get("weak_fields") == ["creditor_remarks"]
+    assert record.get("weak_fields") == ["account_rating"]
 
     pack_files = sorted(builder.paths.packs_dir.glob("*.jsonl"))
     assert len(pack_files) == 1
@@ -155,7 +155,7 @@ def test_builder_respects_summary_findings(tmp_path: Path) -> None:
         if line
     ]
     assert len(payloads) == 1
-    assert payloads[0]["field"] == "creditor_remarks"
+    assert payloads[0]["field"] == "account_rating"
 
 
 def test_builder_ignores_legacy_requirements(tmp_path: Path) -> None:
@@ -177,7 +177,7 @@ def test_builder_ignores_legacy_requirements(tmp_path: Path) -> None:
             ],
             "requirements": [
                 {
-                    "field": "creditor_remarks",
+                    "field": "account_rating",
                     "strength": "weak",
                     "ai_needed": True,
                 }

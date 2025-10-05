@@ -283,6 +283,9 @@ class ValidationPackWriter:
             if canonical_field is None:
                 continue
 
+            if requirement.get("is_missing") is True:
+                continue
+
             if not self._should_send_to_ai(
                 requirement,
                 canonical_field,

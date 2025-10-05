@@ -23,6 +23,8 @@ from backend.ai.validation_results import (
 )
 from backend.core.ai.paths import (
     validation_index_path,
+    validation_pack_filename_for_account,
+    validation_packs_dir,
     validation_result_jsonl_filename_for_account,
     validation_result_filename_for_account,
     validation_results_dir,
@@ -124,6 +126,7 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
     assert payload["field"] == "balance_owed"
     assert payload["strength"] == "weak"
     assert payload["documents"] == ["statement"]
+    assert isinstance(payload.get("pack_key"), str) and len(payload["pack_key"]) == 64
 
     bureaus = payload["bureaus"]
     assert bureaus["transunion"]["raw"] == "$100"
@@ -328,6 +331,106 @@ def _seed_validation_account(
     }
     _write_json(account_dir / "summary.json", summary_payload)
     _write_json(account_dir / "bureaus.json", bureaus_payload)
+
+
+def test_writer_caches_bureau_values_for_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "S570"
+    runs_root = tmp_path / "runs"
+    account_id = 4
+
+    _seed_validation_account(runs_root, sid, account_id)
+
+    writer = ValidationPackWriter(sid, runs_root=runs_root)
+
+    call_count = {"count": 0}
+    original = ValidationPackWriter._build_bureau_values
+
+    def tracking(self, field, bureaus_data, consistency):
+        call_count["count"] += 1
+        return original(self, field, bureaus_data, consistency)
+
+    monkeypatch.setattr(ValidationPackWriter, "_build_bureau_values", tracking)
+
+    writer.write_pack_for_account(account_id)
+    initial_calls = call_count["count"]
+    assert initial_calls > 0
+
+    writer.write_pack_for_account(account_id)
+    assert call_count["count"] == initial_calls
+
+    bureaus_path = (
+        runs_root
+        / sid
+        / "cases"
+        / "accounts"
+        / str(account_id)
+        / "bureaus.json"
+    )
+    new_payload = {"transunion": {"balance_owed": "$200"}}
+    _write_json(bureaus_path, new_payload)
+
+    writer.write_pack_for_account(account_id)
+    assert call_count["count"] > initial_calls
+
+
+def test_writer_pack_key_deduplicates_duplicates(tmp_path: Path) -> None:
+    sid = "S571"
+    runs_root = tmp_path / "runs"
+    account_id = 6
+
+    summary_payload = {
+        "validation_requirements": {
+            "findings": [
+                {
+                    "field": "balance_owed",
+                    "category": "activity",
+                    "strength": "weak",
+                    "ai_needed": True,
+                    "send_to_ai": True,
+                },
+                {
+                    "field": "balance_owed",
+                    "category": "activity",
+                    "strength": "weak",
+                    "ai_needed": True,
+                    "send_to_ai": True,
+                },
+            ],
+            "field_consistency": {
+                "balance_owed": {"raw": {"transunion": "$100"}},
+            },
+        }
+    }
+    bureaus_payload = {
+        "transunion": {"balance_owed": "$100"},
+        "experian": {"balance_owed": "$105"},
+    }
+
+    account_dir = runs_root / sid / "cases" / "accounts" / str(account_id)
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+
+    writer = ValidationPackWriter(sid, runs_root=runs_root)
+
+    first_lines = writer.write_pack_for_account(account_id)
+    assert len(first_lines) == 1
+    first_payload = first_lines[0].payload
+    assert first_payload["field"] == "balance_owed"
+    first_key = first_payload["pack_key"]
+
+    second_lines = writer.write_pack_for_account(account_id)
+    assert len(second_lines) == 1
+    assert second_lines[0].payload["pack_key"] == first_key
+
+    pack_path = (
+        validation_packs_dir(sid, runs_root=runs_root)
+        / validation_pack_filename_for_account(account_id)
+    )
+    on_disk = _read_jsonl(pack_path)
+    assert len(on_disk) == 1
+    assert on_disk[0]["pack_key"] == first_key
 
 
 def test_mark_validation_pack_sent_updates_index(tmp_path: Path) -> None:

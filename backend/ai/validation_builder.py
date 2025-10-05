@@ -254,6 +254,12 @@ class ValidationPackWriter:
         )
         self._field_counts: Counter[str] = Counter()
         self._size_stats = _PackSizeStats()
+        # Cache bureau value maps keyed by the hash of the raw bureau snapshot so
+        # identical reruns avoid recomputing normalization logic.
+        self._bureau_values_cache: dict[
+            int,
+            tuple[str, dict[str, Mapping[str, Mapping[str, Any]]]],
+        ] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -337,8 +343,17 @@ class ValidationPackWriter:
         consistency_map = validation_block["field_consistency"]
         send_to_ai_map = validation_block.get("send_to_ai", {})
         bureaus_data = self._load_bureaus(account_id)
+        bureaus_hash = self._build_bureaus_hash(bureaus_data)
+
+        cached_snapshot = self._bureau_values_cache.get(account_id)
+        if cached_snapshot is None or cached_snapshot[0] != bureaus_hash:
+            bureau_cache: dict[str, Mapping[str, Mapping[str, Any]]] = {}
+            self._bureau_values_cache[account_id] = (bureaus_hash, bureau_cache)
+        else:
+            bureau_cache = cached_snapshot[1]
 
         pack_lines: list[PackLine] = []
+        seen_pack_keys: set[str] = set()
         for requirement in findings:
             if not isinstance(requirement, Mapping):
                 continue
@@ -363,12 +378,33 @@ class ValidationPackWriter:
                 if isinstance(raw_field, str):
                     consistency = consistency_map.get(raw_field)
 
+            pack_key = self._build_pack_key(
+                account_id,
+                canonical_field,
+                requirement,
+                bureaus_hash,
+            )
+            if pack_key in seen_pack_keys:
+                continue
+            seen_pack_keys.add(pack_key)
+
+            bureau_values = bureau_cache.get(canonical_field)
+            if bureau_values is None:
+                bureau_values = self._build_bureau_values(
+                    canonical_field,
+                    bureaus_data,
+                    consistency,
+                )
+                bureau_cache[canonical_field] = bureau_values
+
             line = self._build_line(
                 account_id,
                 requirement,
                 bureaus_data,
                 consistency,
                 canonical_field=canonical_field,
+                bureau_values=bureau_values,
+                pack_key=pack_key,
             )
             if line is not None:
                 pack_lines.append(PackLine(line))
@@ -626,6 +662,8 @@ class ValidationPackWriter:
         consistency: Mapping[str, Any] | None,
         *,
         canonical_field: str | None = None,
+        bureau_values: Mapping[str, Mapping[str, Any]] | None = None,
+        pack_key: str | None = None,
     ) -> Mapping[str, Any] | None:
         if not isinstance(requirement, Mapping):
             return None
@@ -668,9 +706,10 @@ class ValidationPackWriter:
         )
 
         context = self._build_context(consistency)
-        bureau_values = self._build_bureau_values(
-            field_name, bureaus_data, consistency
-        )
+        if bureau_values is None:
+            bureau_values = self._build_bureau_values(
+                field_name, bureaus_data, consistency
+            )
 
         reason_payload, ai_needed = self._build_reason_metadata(
             account_id,
@@ -726,6 +765,9 @@ class ValidationPackWriter:
         }
 
         payload["ai_needed"] = ai_needed
+
+        if pack_key:
+            payload["pack_key"] = pack_key
 
         if _reasons_enabled() and reason_payload is not None:
             payload["reason"] = reason_payload
@@ -899,6 +941,33 @@ class ValidationPackWriter:
             }
 
         return values
+
+    @staticmethod
+    def _build_bureaus_hash(
+        bureaus_data: Mapping[str, Mapping[str, Any]] | None,
+    ) -> str:
+        if not isinstance(bureaus_data, Mapping):
+            normalized: Mapping[str, Any] = {}
+        else:
+            normalized = _json_clone(bureaus_data)
+        serialized = json.dumps(normalized, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    def _build_pack_key(
+        self,
+        account_id: int,
+        canonical_field: str,
+        requirement: Mapping[str, Any],
+        bureaus_hash: str,
+    ) -> str:
+        payload = {
+            "account_id": int(account_id),
+            "field": canonical_field,
+            "bureaus_hash": bureaus_hash,
+            "requirement": _json_clone(requirement),
+        }
+        serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     # ------------------------------------------------------------------
     # Loaders

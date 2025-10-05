@@ -2,6 +2,7 @@ import json
 import sys
 import types
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -13,6 +14,7 @@ from backend.core.logic.consistency import compute_inconsistent_fields
 from backend.core.logic.consistency import compute_field_consistency
 from backend.core.logic.validation_requirements import (
     apply_validation_summary,
+    build_findings,
     build_summary_payload,
     build_validation_requirements,
     build_validation_requirements_for_account,
@@ -196,6 +198,130 @@ def test_build_summary_payload_can_disable_reason_enrichment(monkeypatch):
     balance_consistency = payload["field_consistency"]["balance_owed"]
     assert "raw" in balance_consistency
     assert balance_consistency["raw"]["transunion"] == "100"
+
+
+def _make_requirement(field: str) -> dict[str, Any]:
+    return {
+        "field": field,
+        "category": "test",
+        "min_days": 0,
+        "documents": [],
+        "strength": "soft",
+        "ai_needed": False,
+        "bureaus": ["equifax", "experian", "transunion"],
+    }
+
+
+def test_only_semantic_fields_send_to_ai(monkeypatch):
+    monkeypatch.delenv("VALIDATION_REASON_ENABLED", raising=False)
+
+    requirements = [
+        _make_requirement("account_type"),
+        _make_requirement("creditor_type"),
+        _make_requirement("account_rating"),
+        _make_requirement("balance_owed"),
+        _make_requirement("creditor_remarks"),
+    ]
+
+    field_consistency = {
+        "account_type": {
+            "normalized": {
+                "experian": "credit_card",
+                "equifax": "installment",
+                "transunion": "credit_card",
+            },
+            "consensus": "split",
+        },
+        "creditor_type": {
+            "normalized": {
+                "experian": "bank",
+                "equifax": "collection_agency",
+                "transunion": None,
+            },
+            "consensus": "split",
+        },
+        "account_rating": {
+            "normalized": {
+                "experian": "positive",
+                "equifax": "neutral",
+                "transunion": "negative",
+            },
+            "consensus": "split",
+        },
+        "balance_owed": {
+            "normalized": {
+                "experian": 100.0,
+                "equifax": 200.0,
+                "transunion": 300.0,
+            },
+            "consensus": "split",
+        },
+        "creditor_remarks": {
+            "normalized": {
+                "experian": "updated remarks",
+                "equifax": "other remarks",
+                "transunion": "updated remarks",
+            },
+            "consensus": "split",
+        },
+    }
+
+    findings = build_findings(requirements, field_consistency=field_consistency)
+    findings_by_field = {finding["field"]: finding for finding in findings}
+
+    assert findings_by_field["account_type"]["send_to_ai"] is True
+    assert findings_by_field["creditor_type"]["send_to_ai"] is True
+    assert findings_by_field["account_rating"]["send_to_ai"] is True
+    assert findings_by_field["balance_owed"]["send_to_ai"] is False
+    assert findings_by_field["creditor_remarks"]["send_to_ai"] is False
+
+
+def test_semantic_missing_values_do_not_trigger_ai(monkeypatch):
+    monkeypatch.delenv("VALIDATION_REASON_ENABLED", raising=False)
+
+    requirements = [_make_requirement("account_type")]
+    field_consistency = {
+        "account_type": {
+            "normalized": {
+                "experian": None,
+                "equifax": None,
+                "transunion": "credit_card",
+            },
+            "consensus": "majority",
+        }
+    }
+
+    findings = build_findings(requirements, field_consistency=field_consistency)
+    finding = findings[0]
+
+    assert finding["reason_code"] == "C2_ONE_MISSING"
+    assert finding["send_to_ai"] is False
+
+
+def test_empty_history_generates_missing_reason(monkeypatch):
+    monkeypatch.delenv("VALIDATION_REASON_ENABLED", raising=False)
+
+    bureaus = {
+        "transunion": {"two_year_payment_history": {}},
+        "experian": {"two_year_payment_history": ["30", "CO"]},
+        "equifax": {"two_year_payment_history": []},
+    }
+
+    requirements, inconsistencies, field_consistency = build_validation_requirements(
+        bureaus
+    )
+
+    assert "two_year_payment_history" in inconsistencies
+
+    findings = build_findings(requirements, field_consistency=field_consistency)
+    history_finding = next(
+        item for item in findings if item["field"] == "two_year_payment_history"
+    )
+
+    assert history_finding["reason_code"] == "C2_ONE_MISSING"
+    assert history_finding["is_missing"] is True
+    assert history_finding["is_mismatch"] is False
+    assert history_finding["send_to_ai"] is False
 
 
 @pytest.mark.parametrize(

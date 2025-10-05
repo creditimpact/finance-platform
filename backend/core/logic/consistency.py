@@ -90,14 +90,41 @@ _ENUM_DOMAINS: Dict[str, Dict[str, str]] = {
     },
     "creditor_type": {
         "bank": "bank",
+        "banks": "bank",
+        "banking": "bank",
+        "bankinstitution": "bank",
+        "bankinstitutions": "bank",
         "allbanks": "bank",
+        "allbank": "bank",
+        "thebank": "bank",
         "bankcreditcards": "bank_credit_cards",
         "bankcard": "bank_credit_cards",
         "bankcards": "bank_credit_cards",
+        "bankcreditcard": "bank_credit_cards",
+        "creditcard": "bank_credit_cards",
+        "creditcards": "bank_credit_cards",
+        "creditcardcompany": "bank_credit_cards",
+        "creditcardcompanies": "bank_credit_cards",
+        "nationalcreditcardcompanies": "bank_credit_cards",
         "collectionagency": "collection_agency",
         "collectionagencies": "collection_agency",
+        "debtcollectionagency": "collection_agency",
+        "debtcollector": "collection_agency",
+        "debtcollectors": "collection_agency",
         "creditunion": "credit_union",
+        "creditunions": "credit_union",
         "mortgagelender": "mortgage_lender",
+        "mortgagelenders": "mortgage_lender",
+        "mortgagecompany": "mortgage_lender",
+        "mortgagecompanies": "mortgage_lender",
+        "mortgagefinance": "mortgage_lender",
+        "mortgagefinancing": "mortgage_lender",
+        "mortgageloan": "mortgage_lender",
+        "mortgageloans": "mortgage_lender",
+        "mortgage": "mortgage_lender",
+        "mortgagecompaniesfinance": "mortgage_lender",
+        "bankmortgageloans": "mortgage_lender",
+        "savingsandloansmortgage": "mortgage_lender",
     },
     "dispute_status": {
         "disputed": "disputed",
@@ -168,6 +195,28 @@ DATE_PATS = [
 ]
 
 _NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]")
+
+_CREDITOR_TYPE_NOISE_WORDS = {
+    "the",
+    "all",
+    "and",
+    "of",
+    "for",
+    "to",
+    "by",
+    "at",
+    "on",
+    "company",
+    "companies",
+    "co",
+    "corp",
+    "corporation",
+    "inc",
+    "incorporated",
+    "llc",
+    "ltd",
+    "na",
+}
 
 
 def _get_env_float(name: str, default: float) -> float:
@@ -411,6 +460,26 @@ def normalize_payment_frequency(raw: Any) -> Optional[str]:
     return _normalize_text(raw)
 
 
+def _creditor_type_lookup_keys(text: str) -> Sequence[str]:
+    lowered = text.lower()
+    cleaned = re.sub(r"[^a-z0-9]+", " ", lowered)
+    tokens = [
+        token
+        for token in cleaned.split()
+        if token and token not in _CREDITOR_TYPE_NOISE_WORDS
+    ]
+    if not tokens:
+        return ()
+
+    collapsed = "".join(tokens)
+    spaced = " ".join(tokens)
+
+    if collapsed == spaced.replace(" ", ""):
+        return (collapsed, spaced)
+
+    return (collapsed, spaced, *tokens)
+
+
 def _normalize_text(raw: Any) -> Optional[str]:
     if _is_missing(raw):
         return None
@@ -432,13 +501,34 @@ def normalize_enum(field: str, raw: Optional[str]) -> Optional[str]:
     if not text:
         return None
 
-    compact = _NON_ALNUM_RE.sub("", text)
     domain = _ENUM_DOMAINS.get(field, {})
-    if compact in domain:
-        return domain[compact]
-    if text in domain:
-        return domain[text]
-    return " ".join(text.split())
+    compact = _NON_ALNUM_RE.sub("", text)
+    normalized_space = " ".join(text.split())
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add_candidate(value: Optional[str]) -> None:
+        if not value:
+            return
+        if value in seen:
+            return
+        candidates.append(value)
+        seen.add(value)
+
+    add_candidate(compact)
+    add_candidate(text)
+    add_candidate(normalized_space)
+
+    if field == "creditor_type":
+        for key in _creditor_type_lookup_keys(text):
+            add_candidate(key)
+
+    for key in candidates:
+        if key in domain:
+            return domain[key]
+
+    return normalized_space
 
 
 def normalize_account_number_display(raw: Optional[str]) -> Dict[str, Optional[str]]:

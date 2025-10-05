@@ -642,13 +642,6 @@ def _determine_account_number_strength(normalized: Mapping[str, Any]) -> tuple[s
     return "soft", True
 
 
-def _determine_dispute_strength(normalized: Mapping[str, Any]) -> tuple[str, bool]:
-    seen = {str(value) for value in normalized.values() if value is not None}
-    if len(seen) > 1 or _has_missing_mismatch(normalized):
-        return "strong", False
-    return "strong", False
-
-
 def _apply_strength_policy(
     field: str, details: Mapping[str, Any], rule: ValidationRule
 ) -> ValidationRule:
@@ -669,8 +662,6 @@ def _apply_strength_policy(
         strength, ai_needed = "strong", False
     elif _is_numeric_field(field, normalized):
         strength, ai_needed = "strong", False
-    elif field == "dispute_status":
-        strength, ai_needed = _determine_dispute_strength(normalized)
     elif _has_missing_mismatch(normalized) and strength != "strong":
         strength = "medium"
 

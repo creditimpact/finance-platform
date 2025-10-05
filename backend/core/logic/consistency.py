@@ -126,18 +126,6 @@ _ENUM_DOMAINS: Dict[str, Dict[str, str]] = {
         "bankmortgageloans": "mortgage_lender",
         "savingsandloansmortgage": "mortgage_lender",
     },
-    "dispute_status": {
-        "disputed": "disputed",
-        "indispute": "disputed",
-        "dispute": "disputed",
-        "open_dispute": "disputed",
-        "notdisputed": "not_disputed",
-        "nodispute": "not_disputed",
-        "undisputed": "not_disputed",
-        "resolved": "resolved",
-        "closed": "resolved",
-        "previouslydisputed": "previously_disputed",
-    },
 }
 
 _HISTORY_FIELDS = {"two_year_payment_history", "seven_year_history"}

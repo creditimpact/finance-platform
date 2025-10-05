@@ -13,6 +13,14 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Sequence
 
 import yaml
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    conint,
+    field_validator,
+)
 
 from backend import config as backend_config
 from backend.ai.validation_builder import build_validation_pack_for_account
@@ -29,6 +37,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "ValidationRule",
     "ValidationConfig",
+    "ValidationConfigError",
     "load_validation_config",
     "build_validation_requirements",
     "build_findings",
@@ -150,9 +159,21 @@ class ValidationConfig:
     threshold_points: int
 
 
-def _coerce_documents(raw: Any, fallback: Sequence[str]) -> tuple[str, ...]:
-    if isinstance(raw, (str, bytes)):
-        return tuple(fallback)
+class ValidationConfigError(RuntimeError):
+    """Raised when validation requirements configuration is invalid."""
+
+
+_VALID_BOOL_STRINGS: frozenset[str] = frozenset(
+    {"1", "0", "true", "false", "yes", "no", "on", "off", "y", "n"}
+)
+
+
+def _normalize_documents(raw: Any) -> tuple[str, ...]:
+    if raw is None:
+        return tuple()
+    if isinstance(raw, (str, bytes, bytearray)):
+        text = str(raw).strip()
+        return (text,) if text else tuple()
     if isinstance(raw, Iterable):
         collected: List[str] = []
         for entry in raw:
@@ -161,75 +182,256 @@ def _coerce_documents(raw: Any, fallback: Sequence[str]) -> tuple[str, ...]:
             text = str(entry).strip()
             if text:
                 collected.append(text)
-        if collected:
-            return tuple(collected)
-    return tuple(fallback)
+        return tuple(collected)
+    raise TypeError("documents must be an iterable of strings")
 
 
-def _coerce_min_days(raw: Any, fallback: int) -> int:
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return int(fallback)
+def _normalize_strength(value: str) -> str:
+    lowered = value.strip().lower()
+    if lowered not in {"strong", "medium", "soft"}:
+        raise ValueError("strength must be one of: strong, medium, soft")
+    return lowered
 
 
-def _coerce_category(raw: Any, fallback: str) -> str:
-    if raw is None:
-        return str(fallback)
-    text = str(raw).strip()
-    return text or str(fallback)
+class _BaseSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
-def _coerce_points(raw: Any, fallback: int) -> int:
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return int(fallback)
+class ValidationDefaultsSchema(_BaseSchema):
+    category: str
+    min_days: conint(ge=0)  # type: ignore[call-overload]
+    points: conint(ge=0)  # type: ignore[call-overload]
+    documents: tuple[str, ...] = Field(default_factory=tuple)
+    strength: str
+    ai_needed: bool
+    min_corroboration: conint(ge=1) = 1  # type: ignore[call-overload]
+    conditional_gate: bool = False
 
-
-def _coerce_min_corroboration(raw: Any, fallback: int) -> int:
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        value = int(fallback)
-    return max(1, value)
-
-
-def _coerce_strength(raw: Any, fallback: str) -> str:
-    if raw is None:
-        return fallback
-    text = str(raw).strip().lower()
-    if text in {"strong", "soft", "medium"}:
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalize_category(cls, value: Any) -> str:
+        text = str(value).strip()
+        if not text:
+            raise ValueError("category must not be empty")
         return text
-    return fallback
+
+    @field_validator("documents", mode="before")
+    @classmethod
+    def _normalize_documents_validator(cls, value: Any) -> tuple[str, ...]:
+        return _normalize_documents(value)
+
+    @field_validator("strength", mode="before")
+    @classmethod
+    def _normalize_strength_validator(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("strength must be a string")
+        return _normalize_strength(value)
 
 
-def _coerce_ai_needed(raw: Any, fallback: bool) -> bool:
-    if isinstance(raw, bool):
-        return raw
-    if isinstance(raw, str):
-        lowered = raw.strip().lower()
-        if lowered in {"1", "true", "yes", "y", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "n", "off"}:
-            return False
-    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
-        return bool(raw)
-    return fallback
+class CategoryRuleSchema(_BaseSchema):
+    min_days: conint(ge=0)  # type: ignore[call-overload]
+    documents: tuple[str, ...] = Field(default_factory=tuple)
+
+    @field_validator("documents", mode="before")
+    @classmethod
+    def _normalize_documents_validator(cls, value: Any) -> tuple[str, ...]:
+        return _normalize_documents(value)
 
 
-def _coerce_bool(raw: Any, fallback: bool) -> bool:
-    if isinstance(raw, bool):
-        return raw
-    if isinstance(raw, str):
-        lowered = raw.strip().lower()
-        if lowered in {"1", "true", "yes", "y", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "n", "off"}:
-            return False
-    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
-        return bool(raw)
-    return fallback
+class ValidationFieldSchema(_BaseSchema):
+    category: str
+    min_days: conint(ge=0)  # type: ignore[call-overload]
+    points: conint(ge=0) | None = None  # type: ignore[call-overload]
+    documents: tuple[str, ...] | None = None
+    strength: str
+    ai_needed: bool
+    min_corroboration: conint(ge=1) | None = None  # type: ignore[call-overload]
+    conditional_gate: bool | None = None
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalize_category(cls, value: Any) -> str:
+        text = str(value).strip()
+        if not text:
+            raise ValueError("category must not be empty")
+        return text
+
+    @field_validator("documents", mode="before")
+    @classmethod
+    def _normalize_documents_validator(
+        cls, value: Any
+    ) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        return _normalize_documents(value)
+
+    @field_validator("strength", mode="before")
+    @classmethod
+    def _normalize_strength_validator(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("strength must be a string")
+        return _normalize_strength(value)
+
+
+class ValidationConfigSchema(_BaseSchema):
+    schema_version: conint(ge=1) = 1  # type: ignore[call-overload]
+    mode: str = "broad"
+    broadcast_disputes: bool | None = None
+    threshold_points: conint(ge=0) = 45  # type: ignore[call-overload]
+    defaults: ValidationDefaultsSchema
+    fields: Dict[str, ValidationFieldSchema]
+    category_defaults: Dict[str, CategoryRuleSchema] = Field(default_factory=dict)
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _normalize_mode(cls, value: Any) -> str:
+        if value is None:
+            return "broad"
+        text = str(value).strip().lower()
+        if text not in {"broad", "strict"}:
+            raise ValueError("mode must be 'broad' or 'strict'")
+        return text
+
+    @field_validator("fields")
+    @classmethod
+    def _ensure_fields_present(
+        cls, value: Dict[str, ValidationFieldSchema]
+    ) -> Dict[str, ValidationFieldSchema]:
+        if not value:
+            raise ValueError("fields section must not be empty")
+        return value
+
+
+def _build_validation_defaults(schema: ValidationDefaultsSchema) -> ValidationRule:
+    return ValidationRule(
+        schema.category,
+        int(schema.min_days),
+        tuple(schema.documents),
+        int(schema.points),
+        schema.strength,
+        bool(schema.ai_needed),
+        int(schema.min_corroboration),
+        bool(schema.conditional_gate),
+    )
+
+
+def _build_category_defaults(
+    schema: Mapping[str, CategoryRuleSchema]
+) -> Dict[str, CategoryRule]:
+    category_defaults: Dict[str, CategoryRule] = {}
+    for name, entry in schema.items():
+        category_defaults[str(name)] = CategoryRule(
+            min_days=int(entry.min_days),
+            documents=tuple(entry.documents),
+        )
+    return category_defaults
+
+
+def _select_documents(
+    requested: tuple[str, ...] | None,
+    category_fallback: CategoryRule | None,
+    defaults: ValidationRule,
+) -> tuple[str, ...]:
+    if requested:
+        return tuple(requested)
+    if category_fallback and category_fallback.documents:
+        return tuple(category_fallback.documents)
+    return tuple(defaults.documents)
+
+
+def _build_field_rule(
+    schema: ValidationFieldSchema,
+    defaults: ValidationRule,
+    category_defaults: Mapping[str, CategoryRule],
+) -> ValidationRule:
+    category = schema.category or defaults.category
+    category_fallback = category_defaults.get(category)
+    min_days = int(schema.min_days)
+    documents = _select_documents(schema.documents, category_fallback, defaults)
+    points = int(schema.points) if schema.points is not None else defaults.points
+    strength = schema.strength
+    ai_needed = bool(schema.ai_needed)
+    min_corroboration = (
+        int(schema.min_corroboration)
+        if schema.min_corroboration is not None
+        else defaults.min_corroboration
+    )
+    conditional_gate = (
+        bool(schema.conditional_gate)
+        if schema.conditional_gate is not None
+        else defaults.conditional_gate
+    )
+    return ValidationRule(
+        category,
+        min_days,
+        documents,
+        points,
+        strength,
+        ai_needed,
+        min_corroboration,
+        conditional_gate,
+    )
+
+
+def _build_validation_config_from_schema(
+    schema: ValidationConfigSchema,
+) -> ValidationConfig:
+    defaults = _build_validation_defaults(schema.defaults)
+    category_defaults = _build_category_defaults(schema.category_defaults)
+    fields: Dict[str, ValidationRule] = {}
+    for field_name, rule_schema in schema.fields.items():
+        fields[str(field_name)] = _build_field_rule(
+            rule_schema, defaults, category_defaults
+        )
+
+    broadcast = schema.broadcast_disputes
+    if broadcast is None:
+        broadcast = True if schema.mode == "broad" else False
+
+    return ValidationConfig(
+        defaults=defaults,
+        fields=fields,
+        category_defaults=category_defaults,
+        schema_version=int(schema.schema_version),
+        mode=schema.mode,
+        broadcast_disputes=bool(broadcast),
+        threshold_points=int(schema.threshold_points),
+    )
+
+
+def _validate_environment_settings() -> None:
+    errors: List[str] = []
+
+    percent_raw = os.getenv("VALIDATION_CANARY_PERCENT")
+    if percent_raw:
+        try:
+            percent = int(percent_raw)
+        except ValueError:
+            errors.append(
+                "VALIDATION_CANARY_PERCENT must be an integer between 0 and 100"
+            )
+        else:
+            if not 0 <= percent <= 100:
+                errors.append(
+                    "VALIDATION_CANARY_PERCENT must be between 0 and 100"
+                )
+
+    mode_raw = os.getenv("VALIDATION_MODE")
+    if mode_raw:
+        normalized_mode = mode_raw.strip().lower()
+        if normalized_mode not in {"broad", "strict"}:
+            errors.append("VALIDATION_MODE must be either 'broad' or 'strict'")
+
+    broadcast_raw = os.getenv("BROADCAST_DISPUTES")
+    if broadcast_raw is not None and broadcast_raw.strip():
+        normalized_broadcast = broadcast_raw.strip().lower()
+        if normalized_broadcast not in _VALID_BOOL_STRINGS:
+            errors.append(
+                "BROADCAST_DISPUTES must be a boolean flag (use 1/0 or true/false)"
+            )
+
+    if errors:
+        raise ValidationConfigError("; ".join(errors))
 
 
 @lru_cache(maxsize=1)
@@ -239,133 +441,30 @@ def load_validation_config(path: str | Path = _CONFIG_PATH) -> ValidationConfig:
     config_path = Path(path)
     try:
         raw_text = config_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        logger.warning("VALIDATION_CONFIG_MISSING path=%s", config_path)
-        defaults = ValidationRule("unknown", 3, tuple(), 3, "soft", False, 1, False)
-        return ValidationConfig(
-            defaults=defaults,
-            fields={},
-            category_defaults={},
-            schema_version=1,
-            mode="broad",
-            broadcast_disputes=True,
-            threshold_points=45,
+    except FileNotFoundError as exc:
+        message = f"validation configuration not found at {config_path}"
+        raise ValidationConfigError(message) from exc
+
+    try:
+        loaded = yaml.safe_load(raw_text)
+    except yaml.YAMLError as exc:
+        message = f"validation configuration could not be parsed: {config_path}"
+        raise ValidationConfigError(message) from exc
+
+    if not isinstance(loaded, Mapping):
+        raise ValidationConfigError(
+            f"validation configuration must be a mapping: {config_path}"
         )
 
     try:
-        loaded = yaml.safe_load(raw_text) or {}
-    except yaml.YAMLError:
-        logger.exception("VALIDATION_CONFIG_PARSE_FAILED path=%s", config_path)
-        loaded = {}
+        schema = ValidationConfigSchema.model_validate(loaded)
+    except ValidationError as exc:
+        message = f"validation configuration invalid: {config_path}\n{exc}"
+        raise ValidationConfigError(message) from exc
 
-    defaults_raw = loaded.get("defaults") if isinstance(loaded, Mapping) else None
-    if isinstance(defaults_raw, Mapping):
-        default_category = _coerce_category(defaults_raw.get("category"), "unknown")
-        default_min_days = _coerce_min_days(defaults_raw.get("min_days"), 3)
-        default_documents = _coerce_documents(defaults_raw.get("documents"), ())
-        default_points = _coerce_points(defaults_raw.get("points"), 3)
-        default_strength = _coerce_strength(defaults_raw.get("strength"), "soft")
-        default_ai_needed = _coerce_ai_needed(defaults_raw.get("ai_needed"), False)
-        default_min_corroboration = _coerce_min_corroboration(
-            defaults_raw.get("min_corroboration"), 1
-        )
-        default_conditional_gate = _coerce_bool(
-            defaults_raw.get("conditional_gate"), False
-        )
-    else:
-        default_category = "unknown"
-        default_min_days = 3
-        default_documents = tuple()
-        default_points = 3
-        default_strength = "soft"
-        default_ai_needed = False
-        default_min_corroboration = 1
-        default_conditional_gate = False
-
-    defaults = ValidationRule(
-        default_category,
-        default_min_days,
-        default_documents,
-        default_points,
-        default_strength,
-        default_ai_needed,
-        default_min_corroboration,
-        default_conditional_gate,
-    )
-
-    category_defaults_raw = (
-        loaded.get("category_defaults") if isinstance(loaded, Mapping) else None
-    )
-    category_defaults: Dict[str, CategoryRule] = {}
-    if isinstance(category_defaults_raw, Mapping):
-        for key, value in category_defaults_raw.items():
-            if not isinstance(value, Mapping):
-                continue
-            min_days = _coerce_min_days(value.get("min_days"), defaults.min_days)
-            documents = _coerce_documents(value.get("documents"), defaults.documents)
-            category_defaults[str(key)] = CategoryRule(min_days=min_days, documents=documents)
-
-    def _resolve_field_rule(field: str, value: Mapping[str, Any]) -> ValidationRule:
-        category = _coerce_category(value.get("category"), defaults.category)
-        category_fallback = category_defaults.get(category)
-        fallback_min_days = (
-            category_fallback.min_days if category_fallback else defaults.min_days
-        )
-        fallback_documents = (
-            category_fallback.documents
-            if category_fallback and category_fallback.documents
-            else defaults.documents
-        )
-        min_days = _coerce_min_days(value.get("min_days"), fallback_min_days)
-        documents = _coerce_documents(value.get("documents"), fallback_documents)
-        points = _coerce_points(value.get("points"), defaults.points)
-        strength = _coerce_strength(value.get("strength"), defaults.strength)
-        ai_needed = _coerce_ai_needed(value.get("ai_needed"), defaults.ai_needed)
-        min_corroboration = _coerce_min_corroboration(
-            value.get("min_corroboration"), defaults.min_corroboration
-        )
-        conditional_gate = _coerce_bool(
-            value.get("conditional_gate"), defaults.conditional_gate
-        )
-        return ValidationRule(
-            category,
-            min_days,
-            documents,
-            points,
-            strength,
-            ai_needed,
-            min_corroboration,
-            conditional_gate,
-        )
-
-    fields_cfg: Dict[str, ValidationRule] = {}
-    fields_raw = loaded.get("fields") if isinstance(loaded, Mapping) else None
-    if isinstance(fields_raw, Mapping):
-        for key, value in fields_raw.items():
-            if not isinstance(value, Mapping):
-                continue
-            fields_cfg[str(key)] = _resolve_field_rule(str(key), value)
-
-    schema_version = _coerce_points(loaded.get("schema_version"), 1)
-    mode_raw = str(loaded.get("mode", "broad")) if isinstance(loaded, Mapping) else "broad"
-    mode = mode_raw.strip().lower()
-    if mode not in {"broad", "strict"}:
-        mode = "broad"
-    broadcast_default = True if mode == "broad" else False
-    broadcast_disputes = _coerce_bool(
-        loaded.get("broadcast_disputes"), broadcast_default
-    )
-    threshold_points = _coerce_points(loaded.get("threshold_points"), 45)
-
-    return ValidationConfig(
-        defaults=defaults,
-        fields=fields_cfg,
-        category_defaults=category_defaults,
-        schema_version=schema_version,
-        mode=mode,
-        broadcast_disputes=broadcast_disputes,
-        threshold_points=threshold_points,
-    )
+    config = _build_validation_config_from_schema(schema)
+    _validate_environment_settings()
+    return config
 
 
 def _clone_field_consistency(

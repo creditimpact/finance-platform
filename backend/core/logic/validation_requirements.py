@@ -51,6 +51,7 @@ __all__ = [
 _VALIDATION_TAG_KIND = "validation_required"
 _CONFIG_PATH = Path(__file__).with_name("validation_config.yml")
 _SUMMARY_SCHEMA_VERSION = 3
+_SUMMARY_BUREAUS: tuple[str, ...] = ("equifax", "experian", "transunion")
 _DEFAULT_SUMMARY_POINTERS = {
     "raw": "raw_lines.json",
     "bureaus": "bureaus.json",
@@ -108,7 +109,7 @@ def _is_validation_reason_enabled() -> bool:
 
     raw_value = os.getenv("VALIDATION_REASON_ENABLED")
     if raw_value is None:
-        return False
+        return True
 
     normalized = raw_value.strip().lower()
     if normalized in {"1", "true", "yes", "y", "on"}:
@@ -1141,25 +1142,88 @@ def _emit_field_debug(
             logger.exception("VALIDATION_FIELD_TRACE_FAILED field=%s", field)
 
 
+def _extract_field_details(
+    field_consistency: Mapping[str, Any] | None, field_name: Any
+) -> Mapping[str, Any] | None:
+    if not isinstance(field_consistency, Mapping) or not isinstance(field_name, str):
+        return None
+
+    candidate = field_consistency.get(field_name)
+    if isinstance(candidate, Mapping):
+        return candidate
+    return None
+
+
+def _value_is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return True
+        if text == "--":
+            return True
+    return False
+
+
+def _build_bureau_value_snapshot(
+    details: Mapping[str, Any] | None,
+) -> Dict[str, Dict[str, Any]]:
+    normalized_map = _coerce_normalized_map(details)
+    raw_map = _coerce_raw_map(details)
+
+    missing_set: set[str] = set()
+    if isinstance(details, Mapping):
+        missing = details.get("missing_bureaus")
+        if isinstance(missing, Sequence) and not isinstance(
+            missing, (str, bytes, bytearray)
+        ):
+            missing_set = {str(entry) for entry in missing}
+
+    snapshot: Dict[str, Dict[str, Any]] = {}
+    for bureau in _SUMMARY_BUREAUS:
+        raw_value = raw_map.get(bureau) if raw_map else None
+        normalized_value = normalized_map.get(bureau)
+
+        present = bureau not in missing_set
+        if present:
+            if raw_map and bureau in raw_map:
+                present = not _value_is_missing(raw_value)
+            else:
+                present = not _value_is_missing(normalized_value)
+
+        if not present:
+            raw_value = None
+            normalized_value = None
+
+        snapshot[bureau] = {
+            "present": present,
+            "raw": raw_value,
+            "normalized": normalized_value,
+        }
+
+    return snapshot
+
+
 def _build_finding(
     entry: Mapping[str, Any],
     field_consistency: Mapping[str, Any] | None,
+    *,
+    details: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Return a finding enriched with reason metadata and AI routing."""
 
     finding = dict(entry)
 
     field_name = finding.get("field")
-    details: Mapping[str, Any] | None = None
-    if isinstance(field_consistency, Mapping) and isinstance(field_name, str):
-        candidate = field_consistency.get(field_name)
-        if isinstance(candidate, Mapping):
-            details = candidate
+    if details is None:
+        details = _extract_field_details(field_consistency, field_name)
 
     reason_details = classify_reason(_coerce_normalized_map(details))
 
     finding.update(reason_details)
     finding["send_to_ai"] = decide_send_to_ai(field_name, reason_details)
+    finding["bureau_values"] = _build_bureau_value_snapshot(details)
 
     return finding
 
@@ -1186,13 +1250,21 @@ def build_findings(
             )
             continue
 
-        if not normalized_entry.get("field"):
+        field_name = normalized_entry.get("field")
+
+        if not field_name:
             findings.append(normalized_entry)
             continue
 
+        details = _extract_field_details(field_consistency, field_name)
+
         if reasons_enabled:
             try:
-                finding = _build_finding(normalized_entry, field_consistency)
+                finding = _build_finding(
+                    normalized_entry,
+                    field_consistency,
+                    details=details,
+                )
             except Exception:  # pragma: no cover - defensive enrichment
                 logger.exception(
                     "VALIDATION_FINDING_ENRICH_FAILED field=%s",
@@ -1201,6 +1273,9 @@ def build_findings(
                 finding = dict(normalized_entry)
         else:
             finding = dict(normalized_entry)
+
+        if "bureau_values" not in finding:
+            finding["bureau_values"] = _build_bureau_value_snapshot(details)
 
         findings.append(finding)
 

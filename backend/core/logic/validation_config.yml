@@ -166,6 +166,14 @@ fields:
     min_corroboration: 2
     conditional_gate: true
 
+  last_verified:
+    category: status
+    min_days: 6
+    points: 4
+    documents: [cra_report, cra_reporting_log, monthly_statement]
+    strength: strong
+    ai_needed: false
+
   date_reported:
     category: status
     min_days: 3

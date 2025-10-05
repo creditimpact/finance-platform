@@ -190,6 +190,7 @@ def _coerce_history_count(value: Any) -> int:
 _ACCOUNT_NUMBER_FIELDS = {"account_number_display"}
 
 DATE_PATS = [
+    (re.compile(r"^\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*$"), "%Y-%m-%d"),  # 2024-01-08
     (re.compile(r"^\s*(\d{1,2})\.(\d{1,2})\.(\d{4})\s*$"), "%d.%m.%Y"),  # 16.8.2022
     (re.compile(r"^\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*$"), "%m/%d/%Y"),    # 1/8/2024
 ]
@@ -351,9 +352,27 @@ def normalize_date(raw: Optional[str]) -> Optional[str]:
                 pass
 
     try:
-        parts = re.split(r"[.\-/]", s)
+        parts = [part for part in re.split(r"[.\-/]", s) if part]
         if len(parts) == 3:
-            d, m, y = map(int, parts)
+            nums = [int(part) for part in parts]
+
+            def normalize_year(value: int) -> int:
+                if value < 100:
+                    return 2000 + value if value < 50 else 1900 + value
+                return value
+
+            first_len = len(parts[0])
+            third_len = len(parts[2])
+            first, second, third = nums
+
+            if first_len == 4 or first > 31:
+                y, m, d = first, second, third
+            elif third_len == 4 or third > 31:
+                d, m, y = first, second, third
+            else:
+                m, d, y = first, second, third
+
+            y = normalize_year(y)
             return datetime(y, m, d).strftime("%Y-%m-%d")
     except Exception:
         return None
@@ -636,7 +655,7 @@ def _normalize_field(field: str, value: Any) -> Any:
         return normalize_term_length(value)
     if field == "payment_frequency":
         return normalize_payment_frequency(value)
-    if field == "last_payment":
+    if field in {"last_payment", "last_verified"}:
         return normalize_date(value)
     if "date" in field.lower():
         return normalize_date(value)

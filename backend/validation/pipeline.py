@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from backend.core.logic.validation_requirements import (
+    apply_validation_summary,
     build_validation_requirements_for_account,
 )
 from backend.validation.build_packs import (
@@ -73,9 +74,35 @@ def write_summary_for_account(
     config = cfg or ValidationPipelineConfig()
     builder = config.summary_builder or _default_summary_builder
 
-    result = builder(acc_ctx.account_dir)
+    raw_result = builder(acc_ctx.account_dir)
 
-    block = result.get("validation_requirements") if isinstance(result, Mapping) else None
+    if isinstance(raw_result, Mapping):
+        result: dict[str, Any] = dict(raw_result)
+    else:
+        result = {}
+
+    block = result.get("validation_requirements")
+    if not isinstance(block, Mapping):
+        empty_payload: Mapping[str, Any] = {"schema_version": 3, "findings": []}
+        try:
+            summary_after = apply_validation_summary(acc_ctx.summary_path, empty_payload)
+        except Exception:  # pragma: no cover - defensive summary guard
+            log.exception(
+                "SUMMARY_WRITE_EMPTY_FAILED sid=%s account_id=%s", acc_ctx.sid, acc_ctx.account_id
+            )
+            result.setdefault("validation_requirements", dict(empty_payload))
+        else:
+            normalized_block = (
+                summary_after.get("validation_requirements")
+                if isinstance(summary_after, Mapping)
+                else None
+            )
+            if isinstance(normalized_block, Mapping):
+                result["validation_requirements"] = dict(normalized_block)
+            else:
+                result["validation_requirements"] = dict(empty_payload)
+        block = result.get("validation_requirements")
+
     findings = _sanitize_findings(block.get("findings")) if isinstance(block, Mapping) else []
     acc_ctx.cached_findings = findings
 

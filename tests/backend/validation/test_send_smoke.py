@@ -19,15 +19,12 @@ _requests_stub.post = _post_stub
 sys.modules.setdefault("requests", _requests_stub)
 
 
-class _SmokeStubClient:
+class _FixedResponseStubClient:
+    def __init__(self, payload: dict[str, object]):
+        self._payload = payload
+
     def create(self, *, model: str, messages, response_format):  # type: ignore[override]
-        payload = {
-            "decision": "strong",
-            "rationale": "auto",
-            "citations": [],
-            "confidence": 0.75,
-        }
-        return {"choices": [{"message": {"content": json.dumps(payload)}}]}
+        return {"choices": [{"message": {"content": json.dumps(self._payload)}}]}
 
 
 def _pack_line(field: str) -> str:
@@ -42,10 +39,9 @@ def _pack_line(field: str) -> str:
     return json.dumps(payload)
 
 
-def test_validation_sender_smoke_writes_results(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    sid = "SMOKE001"
+def _seed_manifest(
+    tmp_path: Path, account_ids: list[int], sid: str = "SMOKE001"
+) -> tuple[str, Path, Path]:
     base_dir = tmp_path / "runs" / sid / "ai_packs" / "validation"
     packs_dir = base_dir / "packs"
     results_dir = base_dir / "results"
@@ -53,11 +49,24 @@ def test_validation_sender_smoke_writes_results(
 
     packs_dir.mkdir(parents=True, exist_ok=True)
 
-    pack1 = packs_dir / "account_001.pack.jsonl"
-    pack1.write_text("\n".join((_pack_line("Account Name"), "")), encoding="utf-8")
-
-    pack2 = packs_dir / "account_002.pack.jsonl"
-    pack2.write_text("\n".join((_pack_line("Balance"), "")), encoding="utf-8")
+    manifest_accounts: list[dict[str, object]] = []
+    for account_id in account_ids:
+        pack_path = packs_dir / f"account_{account_id:03d}.pack.jsonl"
+        pack_path.write_text(
+            "\n".join((_pack_line(f"Field {account_id}"), "")),
+            encoding="utf-8",
+        )
+        manifest_accounts.append(
+            {
+                "account_id": account_id,
+                "pack": f"packs/account_{account_id:03d}.pack.jsonl",
+                "result_jsonl": f"results/account_{account_id:03d}.result.jsonl",
+                "result_json": f"results/account_{account_id:03d}.result.json",
+                "lines": 1,
+                "status": "built",
+                "built_at": "2024-01-01T00:00:00Z",
+            }
+        )
 
     manifest = {
         "schema_version": 2,
@@ -65,34 +74,32 @@ def test_validation_sender_smoke_writes_results(
         "root": ".",
         "packs_dir": "packs",
         "results_dir": "results",
-        "packs": [
-            {
-                "account_id": 1,
-                "pack": "packs/account_001.pack.jsonl",
-                "result_jsonl": "results/account_001.result.jsonl",
-                "result_json": "results/account_001.result.json",
-                "lines": 1,
-                "status": "built",
-                "built_at": "2024-01-01T00:00:00Z",
-            },
-            {
-                "account_id": 2,
-                "pack": "packs/account_002.pack.jsonl",
-                "result_jsonl": "results/account_002.result.jsonl",
-                "result_json": "results/account_002.result.json",
-                "lines": 1,
-                "status": "built",
-                "built_at": "2024-01-01T00:00:00Z",
-            },
-        ],
+        "packs": manifest_accounts,
     }
 
     index_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    return sid, index_path, results_dir
+
+
+def test_validation_sender_smoke_writes_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid, index_path, results_dir = _seed_manifest(tmp_path, [1, 2])
     monkeypatch.setenv("AI_MODEL", "stub-model")
 
-    sender = ValidationPackSender(index_path, http_client=_SmokeStubClient())
+    payload = {
+        "decision": "strong",
+        "justification": "auto",
+        "labels": ["deterministic_match"],
+        "citations": ["transunion.raw"],
+        "confidence": 0.75,
+    }
+
+    sender = ValidationPackSender(
+        index_path, http_client=_FixedResponseStubClient(payload)
+    )
     results = sender.send()
 
     assert {item["account_id"] for item in results} == {1, 2}
@@ -106,8 +113,87 @@ def test_validation_sender_smoke_writes_results(
 
         lines = [line for line in jsonl_file.read_text(encoding="utf-8").splitlines() if line]
         assert lines, f"expected result lines for account {account_id}"
+        entry = json.loads(lines[0])
+        assert entry["decision"] == "strong"
+        assert entry["labels"] == ["deterministic_match"]
+        assert entry["citations"] == ["transunion.raw"]
+        assert entry["confidence"] == 0.75
 
         summary = json.loads(summary_file.read_text(encoding="utf-8"))
         assert summary["status"] == "done"
         assert summary["account_id"] == account_id
         assert summary["results"], "summary should include results"
+        summary_entry = summary["results"][0]
+        assert summary_entry["labels"] == ["deterministic_match"]
+
+
+def test_validation_sender_invalid_response_guardrail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, index_path, results_dir = _seed_manifest(tmp_path, [1], sid="GUARD001")
+    monkeypatch.setenv("AI_MODEL", "stub-model")
+    monkeypatch.setenv("ENABLE_OBSERVABILITY_H", "1")
+
+    from backend.analytics import analytics_tracker
+
+    analytics_tracker.reset_counters()
+
+    payload = {
+        "decision": "strong",
+        "justification": "auto",
+        "citations": ["transunion.raw"],
+        "confidence": 0.92,
+    }
+
+    sender = ValidationPackSender(
+        index_path, http_client=_FixedResponseStubClient(payload)
+    )
+    sender.send()
+
+    summary_path = results_dir / "account_001.result.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    result_entry = summary["results"][0]
+
+    assert result_entry["decision"] == "no_case"
+    assert result_entry["rationale"] == "[guardrail:invalid_response]"
+    assert "labels" not in result_entry
+
+    counters = analytics_tracker.get_counters()
+    assert counters.get("validation.ai.response_invalid", 0) >= 1
+
+
+def test_validation_sender_low_confidence_guardrail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, index_path, results_dir = _seed_manifest(tmp_path, [1], sid="GUARD002")
+    monkeypatch.setenv("AI_MODEL", "stub-model")
+    monkeypatch.setenv("ENABLE_OBSERVABILITY_H", "1")
+
+    from backend.analytics import analytics_tracker
+
+    analytics_tracker.reset_counters()
+
+    payload = {
+        "decision": "strong",
+        "justification": "auto",
+        "labels": ["semantic_review"],
+        "citations": ["equifax.normalized"],
+        "confidence": 0.25,
+    }
+
+    sender = ValidationPackSender(
+        index_path, http_client=_FixedResponseStubClient(payload)
+    )
+    sender.send()
+
+    summary_path = results_dir / "account_001.result.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    result_entry = summary["results"][0]
+
+    assert result_entry["decision"] == "no_case"
+    assert result_entry["rationale"].endswith("[guardrail:low_confidence]")
+    assert result_entry["labels"] == ["semantic_review"]
+    assert result_entry["confidence"] == 0.25
+
+    counters = analytics_tracker.get_counters()
+    assert counters.get("validation.ai.response_low_confidence", 0) >= 1

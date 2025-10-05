@@ -13,6 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
 
+from jsonschema import Draft7Validator
+
+from backend.analytics.analytics_tracker import emit_counter
 from backend.core.ai.paths import (
     validation_result_jsonl_filename_for_account,
     validation_result_summary_filename_for_account,
@@ -47,10 +50,62 @@ _CREDITOR_REMARK_KEYWORDS = (
     "repossession",
 )
 
+_RESPONSE_SCHEMA = {
+    "type": "object",
+    "required": ["decision", "justification", "labels", "confidence"],
+    "additionalProperties": False,
+    "properties": {
+        "decision": {"type": "string", "enum": ["strong", "no_case"]},
+        "justification": {"type": "string", "minLength": 1},
+        "labels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1},
+        },
+        "citations": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "default": [],
+        },
+        "confidence": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+        },
+    },
+}
+
+_RESPONSE_VALIDATOR = Draft7Validator(_RESPONSE_SCHEMA)
+_CONFIDENCE_THRESHOLD_ENV = "VALIDATION_AI_MIN_CONFIDENCE"
+_DEFAULT_CONFIDENCE_THRESHOLD = 0.70
+
 
 log = logging.getLogger(__name__)
 
 requests: Any | None = None
+
+
+def _confidence_threshold() -> float:
+    raw = os.getenv(_CONFIDENCE_THRESHOLD_ENV)
+    if raw is None:
+        return _DEFAULT_CONFIDENCE_THRESHOLD
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        log.warning(
+            "VALIDATION_AI_CONFIDENCE_PARSE_FAILED value=%s default=%s",
+            raw,
+            _DEFAULT_CONFIDENCE_THRESHOLD,
+        )
+        return _DEFAULT_CONFIDENCE_THRESHOLD
+    if value < 0 or value > 1:
+        log.warning(
+            "VALIDATION_AI_CONFIDENCE_OUT_OF_RANGE value=%s default=%s",
+            value,
+            _DEFAULT_CONFIDENCE_THRESHOLD,
+        )
+        return _DEFAULT_CONFIDENCE_THRESHOLD
+    return value
 
 
 def _coerce_bool_flag(value: Any) -> bool:
@@ -195,6 +250,13 @@ def _has_high_signal_creditor_remarks(values: Sequence[str]) -> bool:
 
 def _append_gate_note(rationale: str, reason: str) -> str:
     note = f"[conditional_gate:{reason}]"
+    if not rationale:
+        return note
+    return f"{rationale} {note}"
+
+
+def _append_guardrail_note(rationale: str, reason: str) -> str:
+    note = f"[guardrail:{reason}]"
     if not rationale:
         return note
     return f"{rationale} {note}"
@@ -573,6 +635,7 @@ class ValidationPackSender:
         self._throttle = _THROTTLE_SECONDS
         self._results_root: Path | None = None
         self._log_path = view.log_path
+        self._confidence_threshold = _confidence_threshold()
 
     # ------------------------------------------------------------------
     # Pre-flight validation
@@ -1078,6 +1141,36 @@ class ValidationPackSender:
         return parsed
 
     # ------------------------------------------------------------------
+    # Guardrails
+    # ------------------------------------------------------------------
+    def _validate_response_payload(
+        self, response: Mapping[str, Any]
+    ) -> tuple[dict[str, Any] | None, list[str]]:
+        if not isinstance(response, Mapping):
+            return None, ["response_not_mapping"]
+
+        errors = [error.message for error in _RESPONSE_VALIDATOR.iter_errors(response)]
+        if errors:
+            return None, errors
+
+        justification = self._normalize_justification(response.get("justification"))
+        labels = self._normalize_labels(response.get("labels"))
+        if not justification:
+            return None, ["empty_justification"]
+        if not labels:
+            return None, ["empty_labels"]
+
+        normalized = {
+            "decision": self._normalize_decision(response.get("decision")),
+            "justification": justification,
+            "citations": self._normalize_citations(response.get("citations")),
+            "confidence": self._normalize_confidence(response.get("confidence")),
+            "labels": labels,
+        }
+
+        return normalized, []
+
+    # ------------------------------------------------------------------
     # Result construction & persistence
     # ------------------------------------------------------------------
     def _build_result_line(
@@ -1089,12 +1182,52 @@ class ValidationPackSender:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         line_id = self._coerce_identifier(account_id, line_number, pack_line.get("id"))
         field = self._coerce_field_name(pack_line, line_number)
-        decision = self._normalize_decision(response.get("decision"))
-        rationale = self._normalize_rationale(response.get("rationale"))
-        citations = self._normalize_citations(response.get("citations"))
-        confidence = self._normalize_confidence(response.get("confidence"))
+        normalized_response, schema_errors = self._validate_response_payload(response)
 
-        original_decision = decision
+        guardrail_info: dict[str, Any] | None = None
+        if normalized_response is None:
+            emit_counter("validation.ai.response_invalid")
+            log.warning(
+                "VALIDATION_AI_RESPONSE_INVALID field=%s errors=%s",
+                field,
+                schema_errors,
+            )
+            original_decision = self._normalize_decision(response.get("decision"))
+            decision = "no_case"
+            fallback_text = self._normalize_justification(response.get("rationale"))
+            rationale = _append_guardrail_note(fallback_text, "invalid_response")
+            citations: list[str] = []
+            confidence: float | None = None
+            labels: list[str] = []
+            guardrail_info = {"reason": "invalid_response", "errors": schema_errors}
+        else:
+            decision = normalized_response["decision"]
+            original_decision = decision
+            rationale = normalized_response["justification"]
+            citations = normalized_response["citations"]
+            confidence = normalized_response["confidence"]
+            labels = normalized_response["labels"]
+
+            if (
+                decision == "strong"
+                and confidence is not None
+                and confidence < self._confidence_threshold
+            ):
+                emit_counter("validation.ai.response_low_confidence")
+                log.warning(
+                    "VALIDATION_AI_LOW_CONFIDENCE field=%s confidence=%.6f threshold=%.6f",
+                    field,
+                    confidence,
+                    self._confidence_threshold,
+                )
+                guardrail_info = {
+                    "reason": "low_confidence",
+                    "confidence": confidence,
+                    "threshold": self._confidence_threshold,
+                }
+                decision = "no_case"
+                rationale = _append_guardrail_note(rationale, "low_confidence")
+
         decision, rationale, gate_info = _enforce_conditional_gate(
             field, decision, rationale, pack_line
         )
@@ -1109,6 +1242,8 @@ class ValidationPackSender:
         }
         if confidence is not None:
             result["confidence"] = confidence
+        if normalized_response is not None and labels:
+            result["labels"] = labels
 
         metadata: dict[str, Any] = {
             "field": field,
@@ -1117,6 +1252,23 @@ class ValidationPackSender:
             "conditional": field in _CONDITIONAL_FIELDS,
             "gate_info": gate_info,
         }
+        if normalized_response is not None and labels:
+            metadata["labels"] = labels
+        if guardrail_info is not None:
+            metadata["guardrail"] = guardrail_info
+            log_payload: dict[str, Any] = {
+                "account_id": f"{account_id:03d}",
+                "line_number": line_number,
+                "field": field,
+                "reason": guardrail_info.get("reason"),
+            }
+            if "confidence" in guardrail_info:
+                log_payload["confidence"] = guardrail_info["confidence"]
+            if "threshold" in guardrail_info:
+                log_payload["threshold"] = guardrail_info["threshold"]
+            if "errors" in guardrail_info:
+                log_payload["errors"] = guardrail_info["errors"]
+            self._log("send_guardrail_triggered", **log_payload)
         return result, metadata
 
     def _write_results(
@@ -1247,12 +1399,24 @@ class ValidationPackSender:
         return "no_case"
 
     @staticmethod
-    def _normalize_rationale(value: Any) -> str:
+    def _normalize_justification(value: Any) -> str:
         if isinstance(value, str):
             text = value.strip()
             if text:
                 return text
         return ""
+
+    @staticmethod
+    def _normalize_labels(value: Any) -> list[str]:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+            return []
+        labels: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    labels.append(text)
+        return labels
 
     @staticmethod
     def _normalize_citations(value: Any) -> list[str]:

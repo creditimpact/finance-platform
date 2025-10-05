@@ -543,7 +543,7 @@ def normalize_account_number_display(raw: Optional[str]) -> Dict[str, Optional[s
     return {"display": text, "last4": last4 if len(last4 or "") == 4 else None}
 
 
-def normalize_two_year_history(raw: Any) -> Dict[str, Any]:
+def normalize_two_year_history(raw: Any) -> Dict[str, Any] | None:
     """Normalize two-year payment history tokens and summary counts."""
 
     raw_tokens: list[str] = []
@@ -575,10 +575,13 @@ def normalize_two_year_history(raw: Any) -> Dict[str, Any]:
         elif s in ("90", "120", "150", "180", "LATE90"):
             counts["late90"] += 1
 
+    if not tokens and all(count == 0 for count in counts.values()):
+        return None
+
     return {"tokens": tokens, "counts": counts}
 
 
-def normalize_seven_year_history(raw: Any) -> Dict[str, int]:
+def normalize_seven_year_history(raw: Any) -> Dict[str, int] | None:
     """Normalize seven-year history counters to late30/late60/late90."""
 
     counts = {"late30": 0, "late60": 0, "late90": 0}
@@ -606,6 +609,9 @@ def normalize_seven_year_history(raw: Any) -> Dict[str, int]:
             canonical = _SEVEN_YEAR_KEY_ALIASES.get(token.lower())
             if canonical:
                 counts[canonical] += 1
+
+    if all(value == 0 for value in counts.values()):
+        return None
 
     return counts
 
@@ -751,9 +757,13 @@ def compute_field_consistency(bureaus_json: Dict[str, Any]) -> Dict[str, Any]:
         for bureau in _BUREAU_KEYS:
             value = _get_bureau_value(bureaus_json, field, bureau)
             raw[bureau] = value
-            is_missing = _is_missing(value)
             norm_value = _normalize_field(field, value)
             normalized[bureau] = norm_value
+
+            is_missing = _is_missing(value)
+            if not is_missing and field in _HISTORY_FIELDS and norm_value is None:
+                is_missing = True
+
             if is_missing:
                 missing_bureaus.append(bureau)
                 key = ("__missing__",)

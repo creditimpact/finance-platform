@@ -66,8 +66,12 @@ def classify_reason(bureau_values: Mapping[str, Any]) -> Mapping[str, Any]:
             value = value.strip()
             if value in {"", "--"}:
                 value = None
-        elif value in {"", "--"}:  # pragma: no cover - defensive, non-str inputs unlikely
-            value = None
+        else:  # pragma: no branch - convert other sentinel markers when possible
+            try:
+                if value in {"", "--"}:  # type: ignore[operator]
+                    value = None
+            except TypeError:  # pragma: no cover - unhashable values
+                pass
 
         normalized_values[bureau] = value
 

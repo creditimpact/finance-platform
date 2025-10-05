@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Sequence
 
 import yaml
 
+from backend import config as backend_config
 from backend.ai.validation_builder import build_validation_pack_for_account
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, write_tags_atomic
@@ -47,6 +49,49 @@ _DEFAULT_SUMMARY_POINTERS = {
     "tags": "tags.json",
     "summary": "summary.json",
 }
+
+
+def _is_dry_run_enabled() -> bool:
+    return bool(getattr(backend_config, "VALIDATION_DRY_RUN", False))
+
+
+def _get_canary_percent() -> int:
+    try:
+        percent = int(getattr(backend_config, "VALIDATION_CANARY_PERCENT", 100))
+    except Exception:
+        return 100
+    if percent < 0:
+        return 0
+    if percent > 100:
+        return 100
+    return percent
+
+
+def _derive_canary_identifier(account_path: Path) -> str:
+    account_id = account_path.name
+    sid: str | None = None
+    try:
+        sid_candidate = account_path.parents[2].name
+    except IndexError:
+        sid_candidate = None
+    if sid_candidate and sid_candidate not in {"", "."}:
+        sid = sid_candidate
+
+    if sid:
+        return f"{sid}:{account_id}"
+    return str(account_path)
+
+
+def _account_selected_for_canary(account_path: Path, percent: int) -> bool:
+    if percent >= 100:
+        return True
+    if percent <= 0:
+        return False
+
+    identifier = _derive_canary_identifier(account_path)
+    digest = hashlib.sha256(identifier.encode("utf-8")).digest()
+    bucket = int.from_bytes(digest[:2], "big") % 100
+    return bucket < percent
 
 
 def _is_validation_reason_enabled() -> bool:
@@ -1304,6 +1349,62 @@ def apply_validation_summary(
     return summary_data
 
 
+def _apply_dry_run_summary(
+    summary_path: Path, payload: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """Persist dry-run validation payload alongside existing results."""
+
+    summary_data = _load_summary(summary_path)
+    scaffold_changed = _ensure_summary_scaffold(summary_path, summary_data)
+
+    normalized_payload = dict(payload)
+
+    findings_payload = normalized_payload.get("findings")
+    if isinstance(findings_payload, Sequence) and not isinstance(
+        findings_payload, (str, bytes, bytearray)
+    ):
+        findings_list = [
+            entry for entry in findings_payload if isinstance(entry, Mapping)
+        ]
+    else:
+        findings_list = []
+
+    findings_count = len(findings_list)
+    normalized_payload["findings"] = findings_list
+    normalized_payload = summary_writer.sanitize_validation_payload(normalized_payload)
+
+    existing_block = summary_data.get("validation_requirements_dry_run")
+    existing_normalized = (
+        dict(existing_block) if isinstance(existing_block, Mapping) else None
+    )
+    if isinstance(existing_normalized, dict):
+        existing_normalized = summary_writer.sanitize_validation_payload(
+            existing_normalized
+        )
+
+    write_required = scaffold_changed
+
+    if findings_count == 0 and not summary_writer.should_write_empty_requirements():
+        if existing_block is not None:
+            summary_data.pop("validation_requirements_dry_run", None)
+            write_required = True
+    else:
+        if existing_normalized != normalized_payload:
+            summary_data["validation_requirements_dry_run"] = dict(normalized_payload)
+            write_required = True
+
+    if summary_writer.strip_disallowed_sections(summary_data):
+        write_required = True
+
+    if write_required:
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
+            compact_merge_sections(summary_data)
+        _atomic_write_json(summary_path, summary_data)
+
+    return summary_data
+
+
 def sync_validation_tag(
     tag_path: Path,
     fields: Sequence[str],
@@ -1362,6 +1463,8 @@ def build_validation_requirements_for_account(
 
     account_path = Path(account_dir)
     account_label = account_path.name
+    dry_run_enabled = _is_dry_run_enabled()
+    canary_percent = _get_canary_percent()
     bureaus_path = account_path / "bureaus.json"
     summary_path = account_path / "summary.json"
     tags_path = account_path / "tags.json"
@@ -1396,6 +1499,20 @@ def build_validation_requirements_for_account(
         )
         return {"status": "invalid_bureaus_json"}
 
+    if not _account_selected_for_canary(account_path, canary_percent):
+        logger.info(
+            "VALIDATION_REQUIREMENTS_CANARY_SKIP account=%s percent=%s",
+            account_label,
+            canary_percent,
+        )
+        return {
+            "status": "canary_skipped",
+            "count": 0,
+            "fields": [],
+            "validation_requirements": None,
+            "dry_run": dry_run_enabled,
+        }
+
     summary_snapshot = _load_summary(summary_path)
     summary_consistency = summary_snapshot.get("field_consistency")
     consistency_override = (
@@ -1410,7 +1527,10 @@ def build_validation_requirements_for_account(
     payload = build_summary_payload(
         requirements, field_consistency=field_consistency_full
     )
-    summary_after = apply_validation_summary(summary_path, payload)
+    if dry_run_enabled:
+        summary_after = _apply_dry_run_summary(summary_path, payload)
+    else:
+        summary_after = apply_validation_summary(summary_path, payload)
 
     debug_enabled = os.getenv("VALIDATION_DEBUG") == "1"
     debug_key = "validation_debug"
@@ -1441,7 +1561,7 @@ def build_validation_requirements_for_account(
                 compact_merge_sections(summary_after)
             _atomic_write_json(summary_path, summary_after)
 
-    logger.info("SUMMARY_WRITTEN account_id=%s", account_label)
+    logger.info("SUMMARY_WRITTEN account_id=%s dry_run=%s", account_label, dry_run_enabled)
 
     findings_payload = payload.get("findings")
     if isinstance(findings_payload, Sequence):
@@ -1454,7 +1574,8 @@ def build_validation_requirements_for_account(
     else:
         fields = []
         findings_count = 0
-    sync_validation_tag(tags_path, fields, emit=_should_emit_tags())
+    if not dry_run_enabled:
+        sync_validation_tag(tags_path, fields, emit=_should_emit_tags())
 
     sid: str | None = None
     account_id: str | None = None
@@ -1465,7 +1586,7 @@ def build_validation_requirements_for_account(
         sid = None
         account_id = None
 
-    if build_pack and sid and account_id:
+    if build_pack and not dry_run_enabled and sid and account_id:
         try:
             pack_lines = build_validation_pack_for_account(
                 sid,
@@ -1494,6 +1615,8 @@ def build_validation_requirements_for_account(
         "fields": fields,
         "validation_requirements": payload,
     }
+
+    result["dry_run"] = dry_run_enabled
 
     if __debug__ and not summary_writer.include_legacy_requirements():
         validation_payload = result.get("validation_requirements")

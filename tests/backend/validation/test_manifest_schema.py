@@ -29,8 +29,10 @@ class _StubClient:
     def create(self, *, model: str, messages, response_format):  # type: ignore[override]
         payload = {
             "decision": "strong",
-            "rationale": "auto",
-            "citations": [],
+            "justification": "auto",
+            "labels": ["semantic_review"],
+            "citations": ["experian.raw"],
+            "confidence": 0.82,
         }
         return {"choices": [{"message": {"content": json.dumps(payload)}}]}
 

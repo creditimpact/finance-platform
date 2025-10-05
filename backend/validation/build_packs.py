@@ -31,15 +31,32 @@ _SYSTEM_PROMPT = (
 )
 _GUIDANCE_TEXT = (
     "Return a JSON object with a decision of either 'strong' or 'no_case', "
-    "along with rationale and any supporting citations."
+    "a justification explaining the call, at least one supporting label, "
+    "and any citations that back up the judgment. Include a confidence value "
+    "between 0 and 1."
 )
 _EXPECTED_OUTPUT_SCHEMA = {
     "type": "object",
-    "required": ["decision", "rationale", "citations"],
+    "required": ["decision", "justification", "labels", "confidence"],
+    "additionalProperties": False,
     "properties": {
         "decision": {"type": "string", "enum": ["strong", "no_case"]},
-        "rationale": {"type": "string"},
-        "citations": {"type": "array", "items": {"type": "string"}},
+        "justification": {"type": "string", "minLength": 1},
+        "labels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1},
+        },
+        "citations": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "default": [],
+        },
+        "confidence": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+        },
     },
 }
 _BUREAUS = ("transunion", "experian", "equifax")

@@ -34,11 +34,12 @@ schema embedded in the pack line:
 
 * `decision`: either `strong` (consumer has a usable validation argument) or
   `no_case` (insufficient basis).
-* `rationale`: free-form explanation that justifies the decision.
+* `justification`: free-form explanation that justifies the decision.
+* `labels`: non-empty array of strings tagging the drivers behind the call.
 * `citations`: array of strings referencing the bureau facts relied upon.
-* `confidence` *(optional)*: float between `0` and `1` indicating the model's
-  self-assessed certainty. The builder and result ingesters gracefully handle its
-  absence.
+* `confidence`: float between `0` and `1` indicating the model's self-assessed
+  certainty. Low-confidence (`< AI_MIN_CONFIDENCE`) responses are downgraded to
+  `no_case` by the sender guardrails.
 
 Additional metadata (e.g., `model`, `request_lines`, timestamps) is attached by
 our ingestion helpers when writing the `.result.jsonl` and `.result.json` files
@@ -53,7 +54,7 @@ to `runs/<SID>/ai_packs/validation/results/`.
 
 ## Rationale and confidence expectations
 
-Responses should always provide a concise rationale describing the deciding
-facts. When available, include the optional `confidence` value so analysts can
-triage borderline calls quickly. Lack of confidence simply means the model was
-unable or unwilling to provide an estimate.
+Responses must include justification text, at least one supporting label, and a
+confidence score. The sender rejects malformed outputs (missing required keys)
+and downgrades `strong` decisions when the reported confidence falls below the
+configured guardrail threshold.

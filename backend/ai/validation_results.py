@@ -325,6 +325,30 @@ def _normalize_citations(raw: Any) -> list[str]:
     return citations
 
 
+def _normalize_labels(raw: Any) -> list[str]:
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
+        return []
+    labels: list[str] = []
+    for item in raw:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                labels.append(text)
+    return labels
+
+
+def _normalize_confidence(raw: Any) -> float | None:
+    try:
+        if raw is None:
+            return None
+        confidence = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if confidence < 0 or confidence > 1:
+        return None
+    return round(confidence, 6)
+
+
 def _fallback_result_id(account_int: int | None, field_name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "_", field_name.lower()).strip("_")
     if not slug:
@@ -401,6 +425,12 @@ def _build_result_lines(
             "rationale": rationale,
             "citations": _normalize_citations(entry.get("citations")),
         }
+        confidence_value = _normalize_confidence(entry.get("confidence"))
+        if confidence_value is not None:
+            result_line["confidence"] = confidence_value
+        labels_value = _normalize_labels(entry.get("labels"))
+        if labels_value:
+            result_line["labels"] = labels_value
 
         if reason_payload is not None:
             result_line["reason"] = reason_payload

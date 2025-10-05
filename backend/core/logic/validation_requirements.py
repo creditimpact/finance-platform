@@ -27,7 +27,7 @@ from backend.ai.validation_builder import build_validation_pack_for_account
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, write_tags_atomic
 from backend.core.logic import summary_writer
-from backend.core.logic.consistency import compute_field_consistency
+from backend.core.logic.consistency import _get_bureau_value, compute_field_consistency
 from backend.core.logic.reason_classifier import classify_reason, decide_send_to_ai
 from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.telemetry import metrics
@@ -1172,21 +1172,14 @@ def _raw_value_provider_for_account_factory(
     """Return a callable that yields raw bureau values for the active account."""
 
     if not isinstance(bureaus_dict, Mapping):
-        sanitized: dict[str, Mapping[str, Any]] = {}
+        sanitized: dict[str, Any] = {}
     else:
-        sanitized = {
-            str(bureau): value
-            for bureau, value in bureaus_dict.items()
-            if isinstance(value, Mapping)
-        }
+        sanitized = {str(key): value for key, value in bureaus_dict.items()}
 
     def _provider(field_name: Any, bureau_name: Any) -> Any:
         bureau_key = str(bureau_name)
         field_key = str(field_name)
-        branch = sanitized.get(bureau_key)
-        if branch is None:
-            return None
-        value = branch.get(field_key)
+        value = _get_bureau_value(sanitized, field_key, bureau_key)
         if value in (None, "", "--"):
             return None
         return value
@@ -1205,7 +1198,7 @@ def _build_bureau_value_snapshot(
         normalized_values = {str(key): value for key, value in normalized_map.items()}
     else:
         normalized_values = _coerce_normalized_map(details)
-    raw_map = _coerce_raw_map(details) if raw_value_provider is None else {}
+    raw_map = _coerce_raw_map(details)
 
     missing_set: set[str] = set()
     if isinstance(details, Mapping):

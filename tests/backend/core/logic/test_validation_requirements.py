@@ -291,6 +291,65 @@ def test_bureau_values_use_raw_provider_when_raw_missing():
     }
 
 
+def test_bureau_values_use_raw_provider_for_history_blocks():
+    requirements = [
+        {
+            "field": "two_year_payment_history",
+            "category": "history",
+            "min_days": 12,
+            "documents": ["payment_history"],
+            "strength": "soft",
+            "ai_needed": True,
+            "bureaus": ["equifax", "experian", "transunion"],
+        }
+    ]
+
+    bureaus = {
+        "transunion": {},
+        "experian": {},
+        "equifax": {},
+        "two_year_payment_history": {
+            "transunion": ["OK", "30", "OK"],
+            "experian": "ok,30,CO",
+            "equifax": [],
+        },
+    }
+
+    full_consistency = compute_field_consistency(dict(bureaus))
+    history_details = dict(full_consistency["two_year_payment_history"])
+    history_details.pop("raw", None)
+
+    field_consistency = {"two_year_payment_history": history_details}
+
+    raw_provider = _raw_value_provider_for_account_factory(bureaus)
+
+    payload = build_summary_payload(
+        requirements,
+        field_consistency=field_consistency,
+        raw_value_provider=raw_provider,
+    )
+
+    finding = payload["findings"][0]
+    bureau_values = finding["bureau_values"]
+    normalized = history_details["normalized"]
+
+    assert bureau_values["transunion"] == {
+        "present": True,
+        "raw": ["OK", "30", "OK"],
+        "normalized": normalized["transunion"],
+    }
+    assert bureau_values["experian"] == {
+        "present": True,
+        "raw": "ok,30,CO",
+        "normalized": normalized["experian"],
+    }
+    assert bureau_values["equifax"] == {
+        "present": False,
+        "raw": None,
+        "normalized": None,
+    }
+
+
 def _make_requirement(field: str) -> dict[str, Any]:
     return {
         "field": field,

@@ -26,6 +26,7 @@ from backend.validation.index_schema import (
     ValidationIndex,
     ValidationPackRecord,
 )
+from backend.validation.redaction import sanitize_validation_log_payload
 
 _DEFAULT_MODEL = "gpt-4o-mini"
 _DEFAULT_TIMEOUT = 30.0
@@ -1313,7 +1314,7 @@ class ValidationPackSender:
             "sid": self.sid,
             "event": event,
         }
-        entry.update(payload)
+        entry.update(sanitize_validation_log_payload(payload))
         line = json.dumps(entry, ensure_ascii=False, sort_keys=True)
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(line + "\n")

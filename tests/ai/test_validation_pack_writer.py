@@ -151,6 +151,65 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
     assert any(line["id"] == payload["id"] for line in on_disk)
 
 
+def test_writer_redacts_account_number_display(tmp_path: Path) -> None:
+    sid = "S890"
+    runs_root = tmp_path / "runs"
+
+    summary_payload = {
+        "validation_requirements": {
+            "findings": [
+                {
+                    "field": "account_number_display",
+                    "category": "open_ident",
+                    "strength": "weak",
+                    "documents": ["statement"],
+                    "ai_needed": True,
+                    "send_to_ai": True,
+                }
+            ],
+            "field_consistency": {
+                "account_number_display": {
+                    "raw": {"transunion": "123456789012"},
+                    "normalized": {
+                        "transunion": {
+                            "display": "1234-5678-9012",
+                            "last4": "9012",
+                        },
+                        "experian": {"display": "9012", "last4": "9012"},
+                    },
+                }
+            },
+        }
+    }
+
+    bureaus_payload = {
+        "transunion": {"account_number_display": "123456789012"},
+        "experian": {"account_number_display": "Account 9012"},
+        "equifax": {},
+    }
+
+    account_dir = runs_root / sid / "cases" / "accounts" / "5"
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+
+    writer = ValidationPackWriter(sid, runs_root=runs_root)
+    lines = writer.write_pack_for_account(5)
+
+    assert len(lines) == 1
+    payload = lines[0].payload
+
+    tu = payload["bureaus"]["transunion"]
+    assert tu["raw"] == "********9012"
+    assert tu["normalized"]["display"] == "****-****-9012"
+    assert tu["normalized"]["last4"] == "9012"
+
+    prompt_tu = payload["prompt"]["user"]["bureaus"]["transunion"]
+    assert prompt_tu["raw"] == "********9012"
+    assert prompt_tu["normalized"]["display"] == "****-****-9012"
+
+    xp = payload["bureaus"]["experian"]
+    assert xp["raw"] == "Account 9012"
+    assert xp["normalized"]["display"] == "9012"
 def test_writer_uses_bureau_fallback(tmp_path: Path) -> None:
     sid = "S234"
     runs_root = tmp_path / "runs"

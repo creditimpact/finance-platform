@@ -1,5 +1,7 @@
+import json
 import sys
 from types import SimpleNamespace
+from pathlib import Path
 from typing import Optional
 
 if "requests" not in sys.modules:
@@ -10,9 +12,13 @@ from backend.core.logic.validation_field_sets import (
     ALWAYS_INVESTIGATABLE_FIELDS,
     CONDITIONAL_FIELDS,
 )
-from backend.validation.send_packs import _CONDITIONAL_FIELDS, _ALLOWED_FIELDS
-from backend.validation.send_packs import _ALWAYS_INVESTIGATABLE_FIELDS
-from backend.validation.send_packs import _enforce_conditional_gate
+from backend.validation.send_packs import (
+    ValidationPackSender,
+    _ALWAYS_INVESTIGATABLE_FIELDS,
+    _CONDITIONAL_FIELDS,
+    _ALLOWED_FIELDS,
+    _enforce_conditional_gate,
+)
 from backend.ai import validation_builder
 
 
@@ -123,3 +129,23 @@ def test_account_rating_gate_allows_conflict_with_evidence() -> None:
     assert decision == "strong"
     assert rationale == "Conflicting ratings"
     assert info is None
+
+
+def test_send_packs_log_redacts_pii(tmp_path: Path) -> None:
+    sender = ValidationPackSender.__new__(ValidationPackSender)
+    sender.sid = "SID123"
+    sender._log_path = tmp_path / "validation.log"
+
+    sender._log(
+        "test_event",
+        contact_name="John Doe",
+        contact_phone="555-111-2222",
+        account_number_display="123456789",
+    )
+
+    raw = sender._log_path.read_text(encoding="utf-8").strip()
+    entry = json.loads(raw)
+
+    assert entry["contact_name"] == "[REDACTED_NAME]"
+    assert entry["contact_phone"] == "[REDACTED_PHONE]"
+    assert entry["account_number_display"] == "*****6789"

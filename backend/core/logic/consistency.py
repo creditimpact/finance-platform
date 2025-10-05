@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime
 from typing import Any, Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
@@ -167,6 +168,27 @@ DATE_PATS = [
 ]
 
 _NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]")
+
+
+def _get_env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+_AMOUNT_TOL_ABS = _get_env_float("AMOUNT_TOL_ABS", 50.0)
+_AMOUNT_TOL_RATIO = _get_env_float("AMOUNT_TOL_RATIO", 0.01)
+_TOLERANT_AMOUNT_FIELDS = {
+    "high_balance",
+    "credit_limit",
+    "payment_amount",
+    "balance_owed",
+    "past_due_amount",
+}
 
 
 def _is_missing(v: Any) -> bool:
@@ -457,6 +479,20 @@ def _determine_consensus(field: str, groups: Mapping[Any, Sequence[str]]) -> Tup
     return "split", disagreeing
 
 
+def _amounts_equal_with_tolerance(a: float, b: float) -> bool:
+    diff = abs(a - b)
+    scale = max(abs(a), abs(b))
+    tolerance = max(_AMOUNT_TOL_ABS, _AMOUNT_TOL_RATIO * scale)
+    return diff <= tolerance
+
+
+def _select_amount_group_key(groups: Mapping[Any, Sequence[str]], value: float) -> float:
+    for key in list(groups.keys()):
+        if isinstance(key, (int, float)) and _amounts_equal_with_tolerance(value, float(key)):
+            return float(key)
+    return value
+
+
 def compute_field_consistency(bureaus_json: Dict[str, Any]) -> Dict[str, Any]:
     """Compute normalized values and consensus for every field across bureaus."""
 
@@ -484,9 +520,17 @@ def compute_field_consistency(bureaus_json: Dict[str, Any]) -> Dict[str, Any]:
             normalized[bureau] = norm_value
             if is_missing:
                 missing_bureaus.append(bureau)
+                key = ("__missing__",)
             else:
                 present_bureaus.append(bureau)
-            key = ("__missing__",) if is_missing else _freeze_value(field, norm_value)
+                frozen = _freeze_value(field, norm_value)
+                if (
+                    field in _TOLERANT_AMOUNT_FIELDS
+                    and isinstance(frozen, (int, float))
+                ):
+                    key = _select_amount_group_key(groups, float(frozen))
+                else:
+                    key = frozen
             groups.setdefault(key, []).append(bureau)
 
         if all(norm is None for norm in normalized.values()):

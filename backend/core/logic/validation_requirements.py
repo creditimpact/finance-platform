@@ -16,6 +16,7 @@ import yaml
 from backend.ai.validation_builder import build_validation_pack_for_account
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, write_tags_atomic
+from backend.core.logic import summary_writer
 from backend.core.logic.consistency import compute_field_consistency
 from backend.core.logic.reason_classifier import classify_reason, decide_send_to_ai
 from backend.core.logic.summary_compact import compact_merge_sections
@@ -47,37 +48,10 @@ _DEFAULT_SUMMARY_POINTERS = {
 }
 
 
-def _include_field_consistency() -> bool:
-    raw_value = os.getenv("SUMMARY_INCLUDE_FIELD_CONSISTENCY", "1")
-    if raw_value is None:
-        return True
-
-    normalized = raw_value.strip().lower()
-    return normalized in {"1", "true", "yes", "y", "on"}
-
-
 def _is_validation_reason_enabled() -> bool:
     """Return ``True`` when reason enrichment should be applied."""
 
     raw_value = os.getenv("VALIDATION_REASON_ENABLED", "1")
-    if raw_value is None:
-        return True
-
-    normalized = raw_value.strip().lower()
-    return normalized in {"1", "true", "yes", "y", "on"}
-
-
-def _include_legacy_requirements() -> bool:
-    raw_value = os.getenv("VALIDATION_SUMMARY_INCLUDE_REQUIREMENTS", "0")
-    if raw_value is None:
-        return False
-
-    normalized = raw_value.strip().lower()
-    return normalized in {"1", "true", "yes", "y", "on"}
-
-
-def _should_write_empty_requirements() -> bool:
-    raw_value = os.getenv("REQUIREMENTS_WRITE_EMPTY", "1")
     if raw_value is None:
         return True
 
@@ -931,10 +905,10 @@ def build_summary_payload(
         "findings": findings,
     }
 
-    if _include_legacy_requirements():
+    if summary_writer.include_legacy_requirements():
         payload["requirements"] = normalized_requirements
 
-    if field_consistency and _include_field_consistency():
+    if field_consistency and summary_writer.include_field_consistency():
         if reasons_enabled:
             sanitized_consistency = _strip_raw_from_field_consistency(field_consistency)
             if sanitized_consistency:
@@ -944,7 +918,7 @@ def build_summary_payload(
             if cloned_consistency:
                 payload["field_consistency"] = cloned_consistency
 
-    return payload
+    return summary_writer.sanitize_validation_payload(payload)
 
 
 def _load_summary(summary_path: Path) -> MutableMapping[str, Any]:
@@ -1090,7 +1064,6 @@ def apply_validation_summary(
     summary_data = _load_summary(summary_path)
     scaffold_changed = _ensure_summary_scaffold(summary_path, summary_data)
 
-    include_field_consistency = _include_field_consistency()
     normalized_payload = dict(payload)
 
     findings_payload = normalized_payload.get("findings")
@@ -1104,25 +1077,19 @@ def apply_validation_summary(
         findings_list = []
     findings_count = len(findings_list)
     normalized_payload["findings"] = findings_list
-
-    if not include_field_consistency:
-        normalized_payload.pop("field_consistency", None)
-
-    if not _include_legacy_requirements():
-        normalized_payload.pop("requirements", None)
+    normalized_payload = summary_writer.sanitize_validation_payload(normalized_payload)
     existing_block = summary_data.get("validation_requirements")
     existing_normalized = (
         dict(existing_block) if isinstance(existing_block, Mapping) else None
     )
     if isinstance(existing_normalized, dict):
-        if not include_field_consistency:
-            existing_normalized.pop("field_consistency", None)
-        if not _include_legacy_requirements():
-            existing_normalized.pop("requirements", None)
+        existing_normalized = summary_writer.sanitize_validation_payload(
+            existing_normalized
+        )
 
     needs_update = existing_normalized != normalized_payload
 
-    if findings_count == 0 and not _should_write_empty_requirements():
+    if findings_count == 0 and not summary_writer.should_write_empty_requirements():
         write_required = scaffold_changed
         if existing_block is not None:
             summary_data.pop("validation_requirements", None)
@@ -1145,14 +1112,8 @@ def apply_validation_summary(
 
     write_required = scaffold_changed or needs_update
 
-    if not include_field_consistency:
-        removed_top_level = summary_data.pop("field_consistency", None) is not None
-        block = summary_data.get("validation_requirements")
-        removed_block = False
-        if isinstance(block, MutableMapping):
-            removed_block = block.pop("field_consistency", None) is not None
-        if removed_top_level or removed_block:
-            write_required = True
+    if summary_writer.strip_disallowed_sections(summary_data):
+        write_required = True
 
     if write_required:
         summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1350,7 +1311,7 @@ def build_validation_requirements_for_account(
         "validation_requirements": payload,
     }
 
-    if __debug__ and not _include_legacy_requirements():
+    if __debug__ and not summary_writer.include_legacy_requirements():
         validation_payload = result.get("validation_requirements")
         if isinstance(validation_payload, Mapping):
             assert (

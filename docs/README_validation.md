@@ -35,6 +35,7 @@ value is supplied.
 | `AMOUNT_TOL_ABS` | `50` | Absolute USD tolerance for amount mismatches. |
 | `AMOUNT_TOL_RATIO` | `0.01` | Relative ratio tolerance for amount mismatches. |
 | `LAST_PAYMENT_DAY_TOL` | `5` | Day window applied when comparing payment dates. |
+| `VALIDATION_ROLLBACK` | `0` | Master kill-switch that restores the legacy pipeline by disabling validation requirements and AI routes. |
 | `VALIDATION_PACKS_ENABLED` | `1` | Toggle to build validation packs. |
 | `VALIDATION_REASON_ENABLED` | `0` | Enables reason capture and observability logging. |
 | `VALIDATION_INCLUDE_CREDITOR_REMARKS` | `0` | Optional toggle to include `creditor_remarks` validation (disabled by default). |
@@ -50,7 +51,9 @@ These flags are consumed by both the deterministic merge layer and the AI pack
 builders. For example, tolerance defaults flow into the merge configuration used
 by `account_merge.get_merge_cfg`, while `_reasons_enabled()` and
 `_packs_enabled()` in the AI path read their respective toggles when deciding
-whether to attach packs, send them automatically, and emit reason codes.
+whether to attach packs, send them automatically, and emit reason codes. See the
+[Validation Requirements Runbook](./VALIDATION_RUNBOOK.md) for operational
+procedures, smoke tests, and rollback guidance.
 
 ## History normalisation
 

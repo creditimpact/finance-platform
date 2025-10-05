@@ -1198,9 +1198,13 @@ def _build_bureau_value_snapshot(
     field_name: Any,
     details: Mapping[str, Any] | None,
     *,
+    normalized_map: Mapping[str, Any] | None = None,
     raw_value_provider: Any | None = None,
 ) -> Dict[str, Dict[str, Any]]:
-    normalized_map = _coerce_normalized_map(details)
+    if isinstance(normalized_map, Mapping):
+        normalized_values = {str(key): value for key, value in normalized_map.items()}
+    else:
+        normalized_values = _coerce_normalized_map(details)
     raw_map = _coerce_raw_map(details) if raw_value_provider is None else {}
 
     missing_set: set[str] = set()
@@ -1226,7 +1230,7 @@ def _build_bureau_value_snapshot(
                 raw_value = None
         if raw_value is None and raw_map:
             raw_value = raw_map.get(bureau)
-        normalized_value = normalized_map.get(bureau)
+        normalized_value = normalized_values.get(bureau)
 
         present = bureau not in missing_set
         if present:
@@ -1252,6 +1256,7 @@ def _build_finding(
     field_consistency: Mapping[str, Any] | None,
     *,
     details: Mapping[str, Any] | None = None,
+    normalized_map: Mapping[str, Any] | None = None,
     raw_value_provider: Any | None = None,
 ) -> Dict[str, Any]:
     """Return a finding enriched with reason metadata and AI routing."""
@@ -1262,13 +1267,17 @@ def _build_finding(
     if details is None:
         details = _extract_field_details(field_consistency, field_name)
 
-    reason_details = classify_reason(_coerce_normalized_map(details))
+    if normalized_map is None:
+        normalized_map = _coerce_normalized_map(details)
+
+    reason_details = classify_reason(dict(normalized_map))
 
     finding.update(reason_details)
     finding["send_to_ai"] = decide_send_to_ai(field_name, reason_details)
     finding["bureau_values"] = _build_bureau_value_snapshot(
         field_name,
         details,
+        normalized_map=normalized_map,
         raw_value_provider=raw_value_provider,
     )
 
@@ -1305,6 +1314,7 @@ def build_findings(
             continue
 
         details = _extract_field_details(field_consistency, field_name)
+        normalized_map = _coerce_normalized_map(details)
 
         if reasons_enabled:
             try:
@@ -1312,6 +1322,7 @@ def build_findings(
                     normalized_entry,
                     field_consistency,
                     details=details,
+                    normalized_map=normalized_map,
                     raw_value_provider=raw_value_provider,
                 )
             except Exception:  # pragma: no cover - defensive enrichment
@@ -1327,6 +1338,7 @@ def build_findings(
             finding["bureau_values"] = _build_bureau_value_snapshot(
                 field_name,
                 details,
+                normalized_map=normalized_map,
                 raw_value_provider=raw_value_provider,
             )
 

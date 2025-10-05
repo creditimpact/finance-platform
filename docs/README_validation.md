@@ -38,6 +38,8 @@ value is supplied.
 | `VALIDATION_PACKS_ENABLED` | `1` | Toggle to build validation packs. |
 | `VALIDATION_REASON_ENABLED` | `1` | Enables reason capture and observability logging. |
 | `VALIDATION_INCLUDE_CREDITOR_REMARKS` | `0` | Optional toggle to include `creditor_remarks` validation (disabled by default). |
+| `VALIDATION_DRY_RUN` | `0` | When `1`, writes shadow findings without updating legacy outputs. |
+| `VALIDATION_CANARY_PERCENT` | `100` | Percentage of accounts evaluated by the new validator (0–100). |
 
 Boolean toggles accept the standard set of truthy values (`1`, `true`, `yes`,
 `on`, `y`) and falsy values (`0`, `false`, `no`, `off`, `n`). Unrecognised inputs

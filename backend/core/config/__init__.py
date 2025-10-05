@@ -17,7 +17,9 @@ from .flags import env_bool
 from backend.config import (
     ENABLE_VALIDATION_AI,
     ENABLE_VALIDATION_REQUIREMENTS,
+    VALIDATION_CANARY_PERCENT,
     VALIDATION_DEBUG,
+    VALIDATION_DRY_RUN,
 )
 
 # Whether to remove trace files after Stage-A export.  Defaulted ``False`` so
@@ -29,5 +31,7 @@ __all__ = [
     "CLEANUP_AFTER_EXPORT",
     "ENABLE_VALIDATION_AI",
     "ENABLE_VALIDATION_REQUIREMENTS",
+    "VALIDATION_CANARY_PERCENT",
     "VALIDATION_DEBUG",
+    "VALIDATION_DRY_RUN",
 ]

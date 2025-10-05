@@ -802,6 +802,110 @@ def test_build_validation_requirements_for_account_writes_summary_and_tags(
     assert validation_tag["fields"] == ["balance_owed", "payment_status"]
 
 
+def test_build_validation_requirements_for_account_dry_run(tmp_path, monkeypatch):
+    account_dir = tmp_path / "dry"
+    account_dir.mkdir()
+
+    bureaus = {
+        "transunion": {"balance_owed": "100", "payment_status": "late"},
+        "experian": {"balance_owed": "150", "payment_status": "ok"},
+        "equifax": {"balance_owed": "200", "payment_status": "late"},
+    }
+    (account_dir / "bureaus.json").write_text(json.dumps(bureaus), encoding="utf-8")
+
+    existing_summary = {
+        "validation_requirements": {
+            "schema_version": 2,
+            "findings": [{"field": "legacy", "reason_code": "L0"}],
+        }
+    }
+    (account_dir / "summary.json").write_text(
+        json.dumps(existing_summary), encoding="utf-8"
+    )
+
+    existing_tags = [
+        {"kind": "other", "value": 2},
+        {"kind": "validation_required", "fields": ["old"], "at": "2024"},
+    ]
+    (account_dir / "tags.json").write_text(json.dumps(existing_tags), encoding="utf-8")
+
+    monkeypatch.setenv("WRITE_VALIDATION_TAGS", "1")
+    monkeypatch.setattr(
+        "backend.core.logic.validation_requirements.backend_config.VALIDATION_DRY_RUN",
+        True,
+    )
+    monkeypatch.setattr(
+        "backend.core.logic.validation_requirements.backend_config.VALIDATION_CANARY_PERCENT",
+        100,
+    )
+
+    build_called = False
+
+    def _fail_build(*_args, **_kwargs):
+        nonlocal build_called
+        build_called = True
+        raise AssertionError("build_validation_pack_for_account should not be called")
+
+    monkeypatch.setattr(
+        "backend.core.logic.validation_requirements.build_validation_pack_for_account",
+        _fail_build,
+    )
+
+    result = build_validation_requirements_for_account(account_dir)
+
+    assert result["status"] == "ok"
+    assert result["dry_run"] is True
+    assert set(result["fields"]) == {"balance_owed", "payment_status"}
+    assert build_called is False
+
+    summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["validation_requirements"] == existing_summary["validation_requirements"]
+    shadow_block = summary["validation_requirements_dry_run"]
+    assert shadow_block["schema_version"] == 3
+    assert {entry["field"] for entry in shadow_block["findings"]} == {
+        "balance_owed",
+        "payment_status",
+    }
+
+    tags = json.loads((account_dir / "tags.json").read_text(encoding="utf-8"))
+    assert tags == existing_tags
+
+
+def test_build_validation_requirements_for_account_canary_skip(tmp_path, monkeypatch):
+    account_dir = tmp_path / "skip"
+    account_dir.mkdir()
+
+    bureaus = {
+        "transunion": {"balance_owed": "100", "payment_status": "late"},
+        "experian": {"balance_owed": "150", "payment_status": "ok"},
+        "equifax": {"balance_owed": "200", "payment_status": "late"},
+    }
+    (account_dir / "bureaus.json").write_text(json.dumps(bureaus), encoding="utf-8")
+
+    original_summary = {"existing": True}
+    (account_dir / "summary.json").write_text(
+        json.dumps(original_summary), encoding="utf-8"
+    )
+
+    monkeypatch.setattr(
+        "backend.core.logic.validation_requirements.backend_config.VALIDATION_CANARY_PERCENT",
+        0,
+    )
+    monkeypatch.setattr(
+        "backend.core.logic.validation_requirements.backend_config.VALIDATION_DRY_RUN",
+        False,
+    )
+
+    result = build_validation_requirements_for_account(account_dir)
+
+    assert result["status"] == "canary_skipped"
+    assert result["count"] == 0
+    assert result["fields"] == []
+    assert result["validation_requirements"] is None
+    assert result["dry_run"] is False
+
+    summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary == original_summary
 def test_build_validation_requirements_for_account_clears_when_empty(tmp_path, monkeypatch):
     account_dir = tmp_path / "1"
     account_dir.mkdir()

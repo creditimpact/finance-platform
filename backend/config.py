@@ -205,6 +205,20 @@ ENABLE_VALIDATION_REQUIREMENTS = (
 ENABLE_VALIDATION_AI = _env_bool("ENABLE_VALIDATION_AI", False)
 VALIDATION_DEBUG = os.getenv("VALIDATION_DEBUG", "0") == "1"
 
+
+def _clamp(value: int, *, lower: int, upper: int) -> int:
+    if value < lower:
+        return lower
+    if value > upper:
+        return upper
+    return value
+
+
+VALIDATION_DRY_RUN = _env_bool("VALIDATION_DRY_RUN", False)
+VALIDATION_CANARY_PERCENT = _clamp(
+    env_int("VALIDATION_CANARY_PERCENT", 100), lower=0, upper=100
+)
+
 ACCTNUM_EXACT_WEIGHT = env_int("ACCTNUM_EXACT_WEIGHT", 40)
 ACCTNUM_MASKED_WEIGHT = env_int("ACCTNUM_MASKED_WEIGHT", 15)
 

@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,6 +45,9 @@ _EXPECTED_OUTPUT_SCHEMA = {
 _BUREAUS = ("transunion", "experian", "equifax")
 
 
+_PACK_MAX_SIZE_ENV = "VALIDATION_PACK_MAX_SIZE_KB"
+
+
 log = logging.getLogger(__name__)
 
 
@@ -51,6 +55,61 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
         "+00:00", "Z"
     )
+
+
+def _bytes_to_kb(size_bytes: int) -> float:
+    return size_bytes / 1024
+
+
+def _pack_max_size_kb() -> float | None:
+    raw = os.getenv(_PACK_MAX_SIZE_ENV)
+    if raw is None:
+        return None
+
+    if isinstance(raw, str):
+        raw_value = raw.strip()
+    else:
+        raw_value = str(raw)
+
+    if not raw_value:
+        return None
+
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        log.warning(
+            "VALIDATION_PACK_MAX_SIZE_INVALID env_value=%r", raw,
+        )
+        return None
+
+    if value <= 0:
+        return None
+
+    return value
+
+
+@dataclass
+class _PackSizeStats:
+    count: int = 0
+    total_bytes: int = 0
+    max_bytes: int = 0
+
+    def observe(self, size_bytes: int) -> None:
+        self.count += 1
+        self.total_bytes += max(size_bytes, 0)
+        if size_bytes > self.max_bytes:
+            self.max_bytes = size_bytes
+
+    def average_bytes(self) -> float:
+        if not self.count:
+            return 0.0
+        return self.total_bytes / self.count
+
+    def average_kb(self) -> float:
+        return self.average_bytes() / 1024
+
+    def max_kb(self) -> float:
+        return self.max_bytes / 1024
 
 
 @dataclass(frozen=True)
@@ -70,6 +129,10 @@ class ValidationPackBuilder:
 
     def __init__(self, manifest: Mapping[str, Any]) -> None:
         self.paths = self._resolve_manifest_paths(manifest)
+        self._pack_max_size_kb = _pack_max_size_kb()
+        self._pack_max_size_bytes = (
+            int(self._pack_max_size_kb * 1024) if self._pack_max_size_kb is not None else None
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -85,6 +148,8 @@ class ValidationPackBuilder:
             "skipped_accounts": 0,
             "errors": 0,
         }
+        field_counts: Counter[str] = Counter()
+        size_stats = _PackSizeStats()
         for account_id, account_dir in self._iter_accounts():
             stats["total_accounts"] += 1
             pack_path: Path | None = None
@@ -102,11 +167,50 @@ class ValidationPackBuilder:
                     stats["skipped_accounts"] += 1
                     continue
 
-                pack_path = self._write_pack(account_id, payloads)
+                serialized, size_bytes = self._serialize_payloads(payloads)
+                if (
+                    payloads
+                    and self._pack_max_size_bytes is not None
+                    and size_bytes > self._pack_max_size_bytes
+                ):
+                    size_kb = _bytes_to_kb(size_bytes)
+                    self._log(
+                        "pack_blocked_max_size",
+                        account_id=f"{account_id:03d}",
+                        fields=len(payloads),
+                        size_bytes=size_bytes,
+                        size_kb=size_kb,
+                        max_size_kb=self._pack_max_size_kb,
+                    )
+                    log.warning(
+                        "VALIDATION_PACK_SIZE_BLOCKED sid=%s account_id=%03d size_bytes=%d max_kb=%s",
+                        self.paths.sid,
+                        account_id,
+                        size_bytes,
+                        self._pack_max_size_kb,
+                    )
+                    stats["skipped_accounts"] += 1
+                    continue
+
+                pack_path = self._write_pack(
+                    account_id,
+                    serialized,
+                    field_count=len(payloads),
+                    size_bytes=size_bytes,
+                )
                 record = self._build_index_record(account_id, pack_path, payloads, metadata)
                 records.append(record)
                 serialized_records.append(record.to_json_payload())
                 stats["written_accounts"] += 1
+
+                for line in payloads:
+                    if not isinstance(line, Mapping):
+                        continue
+                    field_value = line.get("field")
+                    field_key = str(field_value).strip() if field_value is not None else ""
+                    if field_key:
+                        field_counts[field_key] += 1
+                size_stats.observe(size_bytes)
             except Exception:  # pragma: no cover - defensive logging
                 stats["errors"] += 1
                 log.exception(
@@ -118,13 +222,30 @@ class ValidationPackBuilder:
                 )
                 continue
 
+        avg_kb = size_stats.average_kb()
+        max_kb = size_stats.max_kb()
         log.info(
-            "VALIDATION_PACK_BUILD_SUMMARY sid=%s total=%d written=%d skipped=%d errors=%d",
+            "VALIDATION_PACK_BUILD_SUMMARY sid=%s total=%d written=%d skipped=%d errors=%d avg_kb=%.3f max_kb=%.3f",
             self.paths.sid,
             stats["total_accounts"],
             stats["written_accounts"],
             stats["skipped_accounts"],
             stats["errors"],
+            avg_kb,
+            max_kb,
+        )
+
+        self._log(
+            "pack_build_summary",
+            total_accounts=stats["total_accounts"],
+            written_accounts=stats["written_accounts"],
+            skipped_accounts=stats["skipped_accounts"],
+            errors=stats["errors"],
+            average_size_bytes=size_stats.average_bytes(),
+            average_size_kb=avg_kb,
+            max_size_bytes=size_stats.max_bytes,
+            max_size_kb=max_kb,
+            field_counts=dict(field_counts),
         )
 
         self._write_index(records)
@@ -376,24 +497,43 @@ class ValidationPackBuilder:
     # ------------------------------------------------------------------
     # Serialisation helpers
     # ------------------------------------------------------------------
-    def _write_pack(self, account_id: int, payloads: Sequence[Mapping[str, Any]]) -> Path:
+    def _write_pack(
+        self,
+        account_id: int,
+        serialized: str,
+        *,
+        field_count: int,
+        size_bytes: int,
+    ) -> Path:
         packs_dir = self.paths.packs_dir
         packs_dir.mkdir(parents=True, exist_ok=True)
         pack_path = packs_dir / validation_pack_filename_for_account(account_id)
 
-        if not payloads:
-            pack_path.write_text("", encoding="utf-8")
-        else:
-            lines = [json.dumps(item, ensure_ascii=False, sort_keys=True) for item in payloads]
-            pack_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        pack_path.write_text(serialized, encoding="utf-8")
+
+        size_kb = _bytes_to_kb(size_bytes)
 
         self._log(
             "pack_created",
             account_id=f"{account_id:03d}",
             pack=str(pack_path.resolve()),
-            fields=len(payloads),
+            fields=field_count,
+            size_bytes=size_bytes,
+            size_kb=size_kb,
         )
         return pack_path
+
+    @staticmethod
+    def _serialize_payloads(
+        payloads: Sequence[Mapping[str, Any]],
+    ) -> tuple[str, int]:
+        if not payloads:
+            return "", 0
+
+        lines = [json.dumps(item, ensure_ascii=False, sort_keys=True) for item in payloads]
+        serialized = "\n".join(lines) + "\n"
+        size_bytes = len(serialized.encode("utf-8"))
+        return serialized, size_bytes
 
     def _write_index(self, records: Sequence[ValidationPackRecord]) -> None:
         self.paths.results_dir.mkdir(parents=True, exist_ok=True)

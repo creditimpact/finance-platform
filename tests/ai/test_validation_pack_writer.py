@@ -26,6 +26,7 @@ from backend.core.ai.paths import (
     validation_result_jsonl_filename_for_account,
     validation_result_filename_for_account,
     validation_results_dir,
+    validation_logs_path,
 )
 from backend.validation.manifest import rewrite_index_to_canonical_layout
 
@@ -538,6 +539,95 @@ def test_writer_appends_log_entries(tmp_path: Path) -> None:
     assert entry["weak_count"] == 1
     assert entry["statuses"] == ["pack_written"]
     assert entry["mode"] == "per_account"
+
+
+def test_writer_logs_pack_metrics(tmp_path: Path) -> None:
+    sid = "S611"
+    runs_root = tmp_path / "runs"
+    account_id = 11
+
+    _seed_validation_account(runs_root, sid, account_id)
+
+    writer = ValidationPackWriter(sid, runs_root=runs_root)
+    lines = writer.write_pack_for_account(account_id)
+
+    assert len(lines) == 1
+
+    logs_path = validation_logs_path(sid, runs_root=runs_root)
+    log_entries = _read_jsonl(logs_path)
+    assert log_entries, "expected log entries to be written"
+    entry = log_entries[-1]
+
+    assert entry["pack_size_bytes"] > 0
+    assert entry["pack_size_kb"] > 0
+    assert entry["cumulative_size"]["count"] >= 1
+    assert entry["cumulative_size"]["max_bytes"] >= entry["pack_size_bytes"]
+    assert entry["fields_emitted"] == ["balance_owed"]
+    assert entry["cumulative_field_counts"]["balance_owed"] >= 1
+
+
+def test_writer_blocks_pack_exceeding_size_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "S612"
+    runs_root = tmp_path / "runs"
+    account_id = 12
+
+    summary_payload = {
+        "validation_requirements": {
+            "findings": [
+                {
+                    "field": "balance_owed",
+                    "category": "activity",
+                    "strength": "weak",
+                    "ai_needed": True,
+                    "send_to_ai": True,
+                    "notes": "X" * 4096,
+                }
+            ],
+            "field_consistency": {
+                "balance_owed": {
+                    "raw": {"transunion": "$100", "experian": "$120"}
+                }
+            },
+        }
+    }
+    bureaus_payload = {
+        "transunion": {"balance_owed": "$100"},
+        "experian": {"balance_owed": "$120"},
+    }
+
+    account_dir = runs_root / sid / "cases" / "accounts" / str(account_id)
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+
+    monkeypatch.setenv("VALIDATION_PACK_MAX_SIZE_KB", "1")
+
+    writer = ValidationPackWriter(sid, runs_root=runs_root)
+    lines = writer.write_pack_for_account(account_id)
+
+    assert lines == []
+
+    pack_path = (
+        runs_root
+        / sid
+        / "ai_packs"
+        / "validation"
+        / "packs"
+        / "val_acc_012.jsonl"
+    )
+    assert not pack_path.exists()
+
+    index_path = validation_index_path(sid, runs_root=runs_root)
+    assert not index_path.exists()
+
+    log_entries = _read_jsonl(validation_logs_path(sid, runs_root=runs_root))
+    assert log_entries, "expected blocked pack to be logged"
+    entry = log_entries[-1]
+    assert entry["statuses"] == ["pack_blocked_max_size"]
+    assert entry["pack_size_limit_kb"] == 1.0
+    assert entry["pack_size_bytes"] > 0
+    assert entry["cumulative_size"]["count"] == 0
 
 
 def test_build_validation_pack_respects_env_toggle(

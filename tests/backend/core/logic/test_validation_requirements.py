@@ -112,6 +112,24 @@ def test_build_summary_payload_includes_field_consistency():
     assert finding["distinct_values"] == 2
     assert finding["send_to_ai"] is False
 
+    bureau_values = finding["bureau_values"]
+    assert set(bureau_values.keys()) == {"equifax", "experian", "transunion"}
+    assert bureau_values["transunion"] == {
+        "present": True,
+        "raw": "100",
+        "normalized": 100.0,
+    }
+    assert bureau_values["experian"] == {
+        "present": True,
+        "raw": "150",
+        "normalized": 150.0,
+    }
+    assert bureau_values["equifax"] == {
+        "present": False,
+        "raw": None,
+        "normalized": None,
+    }
+
 
 def test_build_summary_payload_can_optionally_include_legacy_requirements(monkeypatch):
     monkeypatch.setenv("VALIDATION_SUMMARY_INCLUDE_REQUIREMENTS", "1")
@@ -198,6 +216,23 @@ def test_build_summary_payload_can_disable_reason_enrichment(monkeypatch):
     balance_consistency = payload["field_consistency"]["balance_owed"]
     assert "raw" in balance_consistency
     assert balance_consistency["raw"]["transunion"] == "100"
+
+    bureau_values = payload["findings"][0]["bureau_values"]
+    assert bureau_values["transunion"] == {
+        "present": True,
+        "raw": "100",
+        "normalized": 100.0,
+    }
+    assert bureau_values["experian"] == {
+        "present": True,
+        "raw": "150",
+        "normalized": 150.0,
+    }
+    assert bureau_values["equifax"] == {
+        "present": False,
+        "raw": None,
+        "normalized": None,
+    }
 
 
 def _make_requirement(field: str) -> dict[str, Any]:
@@ -388,6 +423,21 @@ def test_build_summary_payload_reason_codes_send_to_ai(
     assert finding["field"] == field
     assert finding["reason_code"] == expected_code
     assert finding["send_to_ai"] is expected_ai
+
+    bureau_values = finding["bureau_values"]
+    assert set(bureau_values.keys()) == {"equifax", "experian", "transunion"}
+    for bureau, expected in values.items():
+        snapshot = bureau_values[bureau]
+        is_missing = expected is None
+        if isinstance(expected, str) and expected.strip() in {"", "--"}:
+            is_missing = True
+
+        if is_missing:
+            assert snapshot["present"] is False
+            assert snapshot["normalized"] is None
+        else:
+            assert snapshot["present"] is True
+            assert snapshot["normalized"] == expected
 
 
 def test_compute_inconsistent_fields_handles_histories():

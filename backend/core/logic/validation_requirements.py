@@ -1187,6 +1187,7 @@ def build_validation_requirements_for_account(
     """
 
     account_path = Path(account_dir)
+    account_label = account_path.name
     bureaus_path = account_path / "bureaus.json"
     summary_path = account_path / "summary.json"
     tags_path = account_path / "tags.json"
@@ -1266,6 +1267,8 @@ def build_validation_requirements_for_account(
                 compact_merge_sections(summary_after)
             _atomic_write_json(summary_path, summary_after)
 
+    logger.info("SUMMARY_WRITTEN account_id=%s", account_label)
+
     findings_payload = payload.get("findings")
     if isinstance(findings_payload, Sequence):
         fields = [
@@ -1290,17 +1293,24 @@ def build_validation_requirements_for_account(
 
     if build_pack and sid and account_id:
         try:
-            build_validation_pack_for_account(
+            pack_lines = build_validation_pack_for_account(
                 sid,
                 account_id,
                 summary_path,
                 bureaus_path,
             )
+            pack_count = len(pack_lines)
+            logger.info(
+                "PACKS_BUILT account_id=%s count=%d",
+                account_id,
+                pack_count,
+            )
+            logger.info("PACKS_SENT account_id=%s", account_id)
         except Exception:  # pragma: no cover - defensive logging
             logger.exception(
-                "VALIDATION_PACK_BUILD_FAILED sid=%s account=%s summary=%s",
-                sid,
+                "ERROR account_id=%s sid=%s summary=%s event=VALIDATION_PACK_BUILD_FAILED",
                 account_id,
+                sid,
                 summary_path,
             )
 

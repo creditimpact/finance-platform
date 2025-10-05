@@ -1,6 +1,9 @@
 """Tests for field consistency logic."""
 
-from backend.core.logic.consistency import compute_field_consistency
+from backend.core.logic.consistency import (
+    compute_field_consistency,
+    compute_inconsistent_fields,
+)
 from backend.core.logic.reason_classifier import classify_reason
 
 
@@ -116,3 +119,61 @@ def test_empty_seven_year_history_entries_are_missing() -> None:
     reason = classify_reason(history["normalized"])
     assert reason["reason_code"] == "C2_ONE_MISSING"
     assert reason["is_mismatch"] is False
+
+
+def test_amount_tolerance_within_threshold_is_unanimous() -> None:
+    bureaus_json = {
+        "transunion": {"balance_owed": "$1,000.00"},
+        "experian": {"balance_owed": "1000.40"},
+        "equifax": {"balance_owed": "1001"},
+    }
+
+    consistency = compute_field_consistency(bureaus_json)
+
+    assert consistency["balance_owed"]["consensus"] == "unanimous"
+    assert compute_inconsistent_fields(bureaus_json) == {}
+
+
+def test_date_tolerance_allows_small_differences_for_last_payment() -> None:
+    bureaus_json = {
+        "transunion": {"last_payment": "2024-01-01"},
+        "experian": {"last_payment": "01/04/2024"},
+        "equifax": {"last_payment": "2024-01-02"},
+    }
+
+    consistency = compute_field_consistency(bureaus_json)
+
+    assert consistency["last_payment"]["consensus"] == "unanimous"
+    assert compute_inconsistent_fields(bureaus_json) == {}
+
+
+def test_payment_frequency_is_canonicalized() -> None:
+    bureaus_json = {
+        "transunion": {"payment_frequency": "Monthly (every month)"},
+        "experian": {"payment_frequency": "monthly"},
+        "equifax": {"payment_frequency": "Once a month"},
+    }
+
+    consistency = compute_field_consistency(bureaus_json)
+
+    normalized = consistency["payment_frequency"]["normalized"]
+    assert {normalized["transunion"], normalized["experian"], normalized["equifax"]} == {
+        "monthly"
+    }
+    assert consistency["payment_frequency"]["consensus"] == "unanimous"
+
+
+def test_term_length_normalizes_years_to_months() -> None:
+    bureaus_json = {
+        "transunion": {"term_length": "30 years"},
+        "experian": {"term_length": "360 Month(s)"},
+        "equifax": {"term_length": 360},
+    }
+
+    consistency = compute_field_consistency(bureaus_json)
+
+    normalized = consistency["term_length"]["normalized"]
+    assert normalized["transunion"] == 360
+    assert normalized["experian"] == 360
+    assert normalized["equifax"] == 360
+    assert consistency["term_length"]["consensus"] == "unanimous"

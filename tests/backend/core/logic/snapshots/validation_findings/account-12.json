@@ -1,0 +1,302 @@
+{
+  "findings": [
+    {
+      "ai_needed": true,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "category": "open_ident",
+      "conditional_gate": false,
+      "distinct_values": 1,
+      "documents": [
+        "account_opening_contract",
+        "application_form",
+        "monthly_statement"
+      ],
+      "field": "account_type",
+      "is_mismatch": false,
+      "is_missing": true,
+      "min_corroboration": 1,
+      "min_days": 2,
+      "missing_count": 1,
+      "present_count": 2,
+      "reason_code": "C1_TWO_PRESENT_ONE_MISSING",
+      "reason_label": "two present, one missing",
+      "send_to_ai": false,
+      "strength": "soft"
+    },
+    {
+      "ai_needed": false,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "category": "open_ident",
+      "conditional_gate": false,
+      "distinct_values": 1,
+      "documents": [
+        "closure_letter",
+        "internal_closure_report"
+      ],
+      "field": "closed_date",
+      "is_mismatch": false,
+      "is_missing": true,
+      "min_corroboration": 1,
+      "min_days": 6,
+      "missing_count": 2,
+      "present_count": 1,
+      "reason_code": "C2_ONE_MISSING",
+      "reason_label": "only one bureau reported a value",
+      "send_to_ai": false,
+      "strength": "strong"
+    },
+    {
+      "ai_needed": false,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "category": "terms",
+      "conditional_gate": false,
+      "distinct_values": 2,
+      "documents": [
+        "credit_line_agreement",
+        "limit_change_record",
+        "monthly_statement"
+      ],
+      "field": "credit_limit",
+      "is_mismatch": true,
+      "is_missing": false,
+      "min_corroboration": 1,
+      "min_days": 8,
+      "missing_count": 0,
+      "present_count": 3,
+      "reason_code": "C4_TWO_MATCH_ONE_DIFF",
+      "reason_label": "two bureaus agree, one differs",
+      "send_to_ai": false,
+      "strength": "strong"
+    },
+    {
+      "ai_needed": true,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "category": "open_ident",
+      "conditional_gate": false,
+      "distinct_values": 2,
+      "documents": [
+        "account_opening_contract",
+        "lender_agreement",
+        "cra_report"
+      ],
+      "field": "creditor_type",
+      "is_mismatch": true,
+      "is_missing": false,
+      "min_corroboration": 1,
+      "min_days": 6,
+      "missing_count": 0,
+      "present_count": 3,
+      "reason_code": "C4_TWO_MATCH_ONE_DIFF",
+      "reason_label": "two bureaus agree, one differs",
+      "send_to_ai": true,
+      "strength": "soft"
+    },
+    {
+      "ai_needed": false,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "category": "activity",
+      "conditional_gate": false,
+      "distinct_values": 3,
+      "documents": [
+        "monthly_statement",
+        "system_activity_log",
+        "internal_report"
+      ],
+      "field": "date_of_last_activity",
+      "is_mismatch": true,
+      "is_missing": false,
+      "min_corroboration": 1,
+      "min_days": 12,
+      "missing_count": 0,
+      "present_count": 3,
+      "reason_code": "C5_ALL_DIFF",
+      "reason_label": "all bureaus reported different values",
+      "send_to_ai": false,
+      "strength": "strong"
+    },
+    {
+      "ai_needed": false,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "category": "open_ident",
+      "conditional_gate": false,
+      "distinct_values": 2,
+      "documents": [
+        "account_opening_contract",
+        "application_form",
+        "system_audit_log"
+      ],
+      "field": "date_opened",
+      "is_mismatch": true,
+      "is_missing": false,
+      "min_corroboration": 1,
+      "min_days": 3,
+      "missing_count": 0,
+      "present_count": 3,
+      "reason_code": "C4_TWO_MATCH_ONE_DIFF",
+      "reason_label": "two bureaus agree, one differs",
+      "send_to_ai": false,
+      "strength": "strong"
+    },
+    {
+      "ai_needed": false,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "category": "terms",
+      "conditional_gate": false,
+      "distinct_values": 3,
+      "documents": [
+        "loan_agreement",
+        "monthly_statement",
+        "internal_balance_report"
+      ],
+      "field": "high_balance",
+      "is_mismatch": true,
+      "is_missing": false,
+      "min_corroboration": 1,
+      "min_days": 8,
+      "missing_count": 0,
+      "present_count": 3,
+      "reason_code": "C5_ALL_DIFF",
+      "reason_label": "all bureaus reported different values",
+      "send_to_ai": false,
+      "strength": "strong"
+    },
+    {
+      "ai_needed": false,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "category": "activity",
+      "conditional_gate": false,
+      "distinct_values": 2,
+      "documents": [
+        "monthly_statement",
+        "payment_receipt",
+        "internal_payment_log"
+      ],
+      "field": "last_payment",
+      "is_mismatch": true,
+      "is_missing": false,
+      "min_corroboration": 1,
+      "min_days": 3,
+      "missing_count": 0,
+      "present_count": 3,
+      "reason_code": "C4_TWO_MATCH_ONE_DIFF",
+      "reason_label": "two bureaus agree, one differs",
+      "send_to_ai": false,
+      "strength": "strong"
+    },
+    {
+      "ai_needed": false,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "category": "status",
+      "conditional_gate": false,
+      "distinct_values": 1,
+      "documents": [
+        "cra_report",
+        "cra_reporting_log",
+        "monthly_statement"
+      ],
+      "field": "last_verified",
+      "is_mismatch": false,
+      "is_missing": true,
+      "min_corroboration": 1,
+      "min_days": 6,
+      "missing_count": 2,
+      "present_count": 1,
+      "reason_code": "C2_ONE_MISSING",
+      "reason_label": "only one bureau reported a value",
+      "send_to_ai": false,
+      "strength": "strong"
+    },
+    {
+      "ai_needed": true,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "category": "history",
+      "conditional_gate": false,
+      "distinct_values": 2,
+      "documents": [
+        "cra_report_7y",
+        "cra_audit_logs",
+        "collection_history"
+      ],
+      "field": "seven_year_history",
+      "is_mismatch": true,
+      "is_missing": true,
+      "min_corroboration": 1,
+      "min_days": 25,
+      "missing_count": 1,
+      "present_count": 2,
+      "reason_code": "C3_TWO_PRESENT_CONFLICT",
+      "reason_label": "conflict with one bureau missing",
+      "send_to_ai": false,
+      "strength": "soft"
+    },
+    {
+      "ai_needed": true,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "category": "history",
+      "conditional_gate": false,
+      "distinct_values": 2,
+      "documents": [
+        "monthly_statements_2y",
+        "internal_payment_history"
+      ],
+      "field": "two_year_payment_history",
+      "is_mismatch": true,
+      "is_missing": true,
+      "min_corroboration": 1,
+      "min_days": 18,
+      "missing_count": 1,
+      "present_count": 2,
+      "reason_code": "C3_TWO_PRESENT_CONFLICT",
+      "reason_label": "conflict with one bureau missing",
+      "send_to_ai": false,
+      "strength": "soft"
+    }
+  ],
+  "ai_fields": [
+    "creditor_type"
+  ]
+}

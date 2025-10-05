@@ -312,6 +312,39 @@ def normalize_date(raw: Optional[str]) -> Optional[str]:
     return None
 
 
+def normalize_term_length(raw: Any) -> Optional[int]:
+    """Convert textual term length descriptors into months."""
+
+    if _is_missing(raw):
+        return None
+
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return int(round(float(raw)))
+
+    text = str(raw).strip().lower()
+    if not text:
+        return None
+
+    text = text.replace(",", " ")
+    text = text.replace("(", " ").replace(")", " ")
+
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+
+    try:
+        value = float(match.group())
+    except ValueError:
+        return None
+
+    if re.search(r"\b(years?|yrs?|yr\b|y\b)", text):
+        months = value * 12
+    else:
+        months = value
+
+    return int(round(months))
+
+
 def normalize_payment_frequency(raw: Any) -> Optional[str]:
     """Map payment frequency text into a canonical label."""
 
@@ -503,6 +536,8 @@ def _normalize_field(field: str, value: Any) -> Any:
         return normalize_account_number_display(value)
     if field in _ENUM_DOMAINS:
         return normalize_enum(field, value)
+    if field == "term_length":
+        return normalize_term_length(value)
     if field == "payment_frequency":
         return normalize_payment_frequency(value)
     if field == "last_payment":

@@ -32,6 +32,7 @@ from backend.core.ai.paths import (
     validation_logs_path,
 )
 from backend.pipeline.runs import RunManifest, persist_manifest
+from backend.validation.redaction import sanitize_validation_payload
 from backend.core.ai.eligibility_policy import (
     canonicalize_history,
     canonicalize_scalar,
@@ -778,7 +779,7 @@ class ValidationPackWriter:
                 extra_context
             )
 
-        return payload
+        return sanitize_validation_payload(payload)
 
     def _build_reason_metadata(
         self,

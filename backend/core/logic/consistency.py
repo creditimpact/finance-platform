@@ -312,6 +312,72 @@ def normalize_date(raw: Optional[str]) -> Optional[str]:
     return None
 
 
+def normalize_payment_frequency(raw: Any) -> Optional[str]:
+    """Map payment frequency text into a canonical label."""
+
+    if _is_missing(raw):
+        return None
+
+    text = str(raw).strip().lower()
+    if not text:
+        return None
+
+    cleaned = re.sub(r"[^a-z0-9]+", " ", text)
+    collapsed = " ".join(cleaned.split())
+
+    direct_map = {
+        "monthly": "monthly",
+        "per month": "monthly",
+        "every month": "monthly",
+        "once a month": "monthly",
+        "monthly every month": "monthly",
+        "month": "monthly",
+        "bi weekly": "biweekly",
+        "biweekly": "biweekly",
+        "every other week": "biweekly",
+        "fortnightly": "biweekly",
+        "once every two weeks": "biweekly",
+        "twice a month": "semimonthly",
+        "twice monthly": "semimonthly",
+        "two per month": "semimonthly",
+        "semi monthly": "semimonthly",
+        "semimonthly": "semimonthly",
+        "semi monthly pay": "semimonthly",
+        "weekly": "weekly",
+        "per week": "weekly",
+        "every week": "weekly",
+        "once a week": "weekly",
+        "quarterly": "quarterly",
+        "per quarter": "quarterly",
+        "every quarter": "quarterly",
+        "annually": "annually",
+        "annual": "annually",
+        "per year": "annually",
+        "every year": "annually",
+        "once a year": "annually",
+        "yearly": "annually",
+    }
+
+    if collapsed in direct_map:
+        return direct_map[collapsed]
+
+    # Handle descriptive phrasing that includes multiple tokens.
+    if "month" in collapsed:
+        if "twice" in collapsed or "two" in collapsed:
+            return "semimonthly"
+        return "monthly"
+    if "week" in collapsed:
+        if "other" in collapsed or "two" in collapsed:
+            return "biweekly"
+        return "weekly"
+    if "quarter" in collapsed:
+        return "quarterly"
+    if "year" in collapsed or "annual" in collapsed:
+        return "annually"
+
+    return _normalize_text(raw)
+
+
 def _normalize_text(raw: Any) -> Optional[str]:
     if _is_missing(raw):
         return None
@@ -437,6 +503,8 @@ def _normalize_field(field: str, value: Any) -> Any:
         return normalize_account_number_display(value)
     if field in _ENUM_DOMAINS:
         return normalize_enum(field, value)
+    if field == "payment_frequency":
+        return normalize_payment_frequency(value)
     if field == "last_payment":
         return normalize_date(value)
     if "date" in field.lower():

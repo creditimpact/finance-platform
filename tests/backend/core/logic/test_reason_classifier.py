@@ -113,8 +113,9 @@ def test_normalizes_whitespace_and_missing_markers():
     [
         ("account_type", "C3_TWO_PRESENT_CONFLICT", True),
         ("account_rating", {"reason_code": "C4_TWO_MATCH_ONE_DIFF"}, True),
-        ("creditor_remarks", "C5_ALL_DIFF", True),
+        ("creditor_type", "C5_ALL_DIFF", True),
         ("account_type", "C1_TWO_PRESENT_ONE_MISSING", False),
+        ("creditor_type", "C2_ONE_MISSING", False),
         ("balance", "C3_TWO_PRESENT_CONFLICT", False),
         ("account_rating", {}, False),
     ],

@@ -711,6 +711,44 @@ class ValidationPackSender:
                 if normalized_account is not None
                 else str(account_id)
             )
+
+            if account.pack_missing:
+                missing_display = pack_relative or self._display_path(
+                    resolved_pack, base=index.index_dir
+                )
+                error_message = f"Pack file missing: {missing_display}"
+                log.warning(
+                    "VALIDATION_PACK_MISSING sid=%s account_id=%s pack=%s",
+                    self.sid,
+                    account_label,
+                    missing_display,
+                )
+                if normalized_account is None:
+                    self._log(
+                        "send_account_failed",
+                        account_id=str(account_id),
+                        error=error_message,
+                    )
+                    continue
+
+                self._log(
+                    "send_account_failed",
+                    account_id=f"{normalized_account:03d}",
+                    error=error_message,
+                )
+                account_summary = self._record_account_failure(
+                    normalized_account,
+                    resolved_pack,
+                    pack_relative,
+                    result_jsonl_path,
+                    result_jsonl_relative,
+                    result_json_path,
+                    result_json_relative,
+                    error_message,
+                )
+                results.append(account_summary)
+                continue
+
             log.info(
                 "PROCESSING account_id=%s pack=%s result_json=%s",
                 account_label,

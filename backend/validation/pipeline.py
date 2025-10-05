@@ -136,12 +136,20 @@ def build_and_queue_packs(
         return []
 
     builder = config.pack_builder or _default_pack_builder
-    pack_lines = builder(
-        acc_ctx.sid,
-        acc_ctx.index,
-        acc_ctx.summary_path,
-        acc_ctx.bureaus_path,
-    )
+    try:
+        pack_lines = builder(
+            acc_ctx.sid,
+            acc_ctx.index,
+            acc_ctx.summary_path,
+            acc_ctx.bureaus_path,
+        )
+    except Exception:  # pragma: no cover - defensive pack builder guard
+        log.exception(
+            "VALIDATION_PACK_BUILD_FAILED sid=%s account_id=%s",
+            acc_ctx.sid,
+            acc_ctx.account_id,
+        )
+        return []
 
     callback = config.send_callback
     if callback is not None:

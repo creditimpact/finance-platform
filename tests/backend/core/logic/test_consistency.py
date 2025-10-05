@@ -63,6 +63,42 @@ def test_empty_history_entries_are_treated_as_missing() -> None:
     assert reason["is_mismatch"] is False
 
 
+def test_account_number_display_missing_masks_are_treated_as_missing() -> None:
+    bureaus_json = {
+        "transunion": {"account_number_display": "****"},
+        "experian": {"account_number_display": None},
+        "equifax": {"account_number_display": "****1234"},
+    }
+
+    consistency = compute_field_consistency(bureaus_json)
+    account_display = consistency["account_number_display"]
+
+    assert account_display["missing_bureaus"] == ["experian", "transunion"]
+    assert account_display["normalized"]["transunion"] is None
+    assert account_display["normalized"]["experian"] is None
+    assert account_display["normalized"]["equifax"]["last4"] == "1234"
+    assert account_display["normalized"]["equifax"]["mask_class"] == "masked_last4"
+
+
+def test_account_number_display_groups_by_last4_and_mask() -> None:
+    bureaus_json = {
+        "transunion": {"account_number_display": "****1234"},
+        "experian": {"account_number_display": "XXXX-1234"},
+        "equifax": {"account_number_display": "***1234"},
+    }
+
+    consistency = compute_field_consistency(bureaus_json)
+    account_display = consistency["account_number_display"]
+
+    assert account_display["consensus"] == "unanimous"
+    assert account_display["disagreeing_bureaus"] == []
+    mask_classes = {
+        account_display["normalized"][bureau]["mask_class"]
+        for bureau in ("transunion", "experian", "equifax")
+    }
+    assert mask_classes == {"masked_last4"}
+
+
 def test_empty_seven_year_history_entries_are_missing() -> None:
     bureaus_json = {
         "transunion": {"seven_year_history": {}},

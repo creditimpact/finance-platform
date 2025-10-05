@@ -550,16 +550,74 @@ def normalize_enum(field: str, raw: Optional[str]) -> Optional[str]:
     return normalized_space
 
 
-def normalize_account_number_display(raw: Optional[str]) -> Dict[str, Optional[str]]:
+_ACCOUNT_NUMBER_MISSING_WORDS = {
+    "na",
+    "none",
+    "notavailable",
+    "notprovided",
+    "unknown",
+}
+_ACCOUNT_NUMBER_MASK_ONLY_RE = re.compile(r"^[\s\-#*xX]+$")
+
+
+def _account_number_mask_class(text: str, digits: Sequence[str]) -> str:
+    stripped = text.strip()
+    if not stripped:
+        return "missing"
+
+    upper = stripped.upper()
+
+    if not digits:
+        letters = re.sub(r"[^A-Z]+", "", upper)
+        if not letters or letters.lower() in _ACCOUNT_NUMBER_MISSING_WORDS:
+            return "missing"
+        if _ACCOUNT_NUMBER_MASK_ONLY_RE.match(upper):
+            return "missing"
+        return "nondigit"
+
+    if _ACCOUNT_NUMBER_MASK_ONLY_RE.match(upper):
+        return "missing"
+
+    digit_count = len(digits)
+    has_mask_char = bool(re.search(r"[#*X]", upper))
+    has_alpha = bool(re.search(r"[A-Z]", upper))
+
+    if has_mask_char:
+        if digit_count <= 4:
+            return "masked_last4"
+        return "masked"
+
+    if has_alpha:
+        if digit_count <= 4:
+            return "text_last4"
+        return "alphanumeric"
+
+    if digit_count <= 4:
+        return "last4_only"
+
+    return "unmasked"
+
+
+def normalize_account_number_display(
+    raw: Optional[str],
+) -> Optional[Dict[str, Optional[str]]]:
     """Return a display/last4 structure for account numbers."""
 
     if _is_missing(raw):
-        return {"display": "", "last4": None}
+        return None
 
     text = str(raw).strip()
     digits = re.findall(r"\d", text)
+    mask_class = _account_number_mask_class(text, digits)
+
+    if mask_class == "missing":
+        return None
+
     last4 = "".join(digits[-4:]) if digits else None
-    return {"display": text, "last4": last4 if len(last4 or "") == 4 else None}
+    if last4 and len(last4) != 4:
+        last4 = None
+
+    return {"display": text, "last4": last4, "mask_class": mask_class}
 
 
 def normalize_two_year_history(raw: Any) -> Dict[str, Any] | None:
@@ -669,7 +727,7 @@ def _freeze_value(field: str, value: Any) -> Any:
         return None
     if field == "account_number_display":
         if isinstance(value, Mapping):
-            return value.get("last4") or value.get("display")
+            return (value.get("last4"), value.get("mask_class"))
     if field == "two_year_payment_history":
         if isinstance(value, Mapping):
             counts = value.get("counts", {})
@@ -781,6 +839,8 @@ def compute_field_consistency(bureaus_json: Dict[str, Any]) -> Dict[str, Any]:
 
             is_missing = _is_missing(value)
             if not is_missing and field in _HISTORY_FIELDS and norm_value is None:
+                is_missing = True
+            if not is_missing and field == "account_number_display" and norm_value is None:
                 is_missing = True
 
             if is_missing:

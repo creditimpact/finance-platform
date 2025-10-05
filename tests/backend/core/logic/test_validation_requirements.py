@@ -14,6 +14,7 @@ from backend.core.logic.consistency import compute_inconsistent_fields
 from backend.core.logic.consistency import compute_field_consistency
 from backend.core.logic.validation_requirements import (
     _raw_value_provider_for_account_factory,
+    _should_redact_pii,
     apply_validation_summary,
     build_findings,
     build_summary_payload,
@@ -348,6 +349,62 @@ def test_bureau_values_use_raw_provider_for_history_blocks():
         "raw": None,
         "normalized": None,
     }
+
+
+def test_account_number_raw_can_be_redacted(monkeypatch):
+    _should_redact_pii.cache_clear()
+    monkeypatch.setenv("VALIDATION_REDACT_PII", "1")
+
+    requirements = [
+        {
+            "field": "account_number_display",
+            "category": "identity",
+            "min_days": 5,
+            "documents": [],
+            "strength": "medium",
+            "ai_needed": False,
+            "bureaus": ["experian", "transunion"],
+        }
+    ]
+
+    bureaus = {
+        "transunion": {"account_number_display": "1234 5678 9012 3456"},
+        "experian": {"account_number_display": "****-5678"},
+        "equifax": {},
+    }
+
+    field_consistency = compute_field_consistency(dict(bureaus))
+
+    payload = build_summary_payload(
+        requirements,
+        field_consistency=field_consistency,
+        raw_value_provider=_raw_value_provider_for_account_factory(bureaus),
+    )
+
+    finding = payload["findings"][0]
+    bureau_values = finding["bureau_values"]
+
+    assert bureau_values["transunion"] == {
+        "present": True,
+        "raw": "**** **** **** 3456",
+        "normalized": field_consistency["account_number_display"]["normalized"][
+            "transunion"
+        ],
+    }
+    assert bureau_values["experian"] == {
+        "present": True,
+        "raw": "****-5678",
+        "normalized": field_consistency["account_number_display"]["normalized"][
+            "experian"
+        ],
+    }
+    assert bureau_values["equifax"] == {
+        "present": False,
+        "raw": None,
+        "normalized": None,
+    }
+
+    _should_redact_pii.cache_clear()
 
 
 def _make_requirement(field: str) -> dict[str, Any]:

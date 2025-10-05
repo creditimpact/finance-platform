@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 __all__ = ["compute_field_consistency", "compute_inconsistent_fields"]
@@ -180,6 +180,16 @@ def _get_env_float(name: str, default: float) -> float:
         return default
 
 
+def _get_env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 _AMOUNT_TOL_ABS = _get_env_float("AMOUNT_TOL_ABS", 50.0)
 _AMOUNT_TOL_RATIO = _get_env_float("AMOUNT_TOL_RATIO", 0.01)
 _TOLERANT_AMOUNT_FIELDS = {
@@ -188,6 +198,15 @@ _TOLERANT_AMOUNT_FIELDS = {
     "payment_amount",
     "balance_owed",
     "past_due_amount",
+}
+
+_DATE_TOLERANCE_DAYS = max(0, _get_env_int("LAST_PAYMENT_DAY_TOL", 5))
+_DATE_TOLERANT_FIELDS = {
+    "date_opened",
+    "closed_date",
+    "date_of_last_activity",
+    "date_reported",
+    "last_payment",
 }
 
 
@@ -418,6 +437,8 @@ def _normalize_field(field: str, value: Any) -> Any:
         return normalize_account_number_display(value)
     if field in _ENUM_DOMAINS:
         return normalize_enum(field, value)
+    if field == "last_payment":
+        return normalize_date(value)
     if "date" in field.lower():
         return normalize_date(value)
     if _looks_like_amount(field):
@@ -493,6 +514,28 @@ def _select_amount_group_key(groups: Mapping[Any, Sequence[str]], value: float) 
     return value
 
 
+def _parse_normalized_date(value: Any) -> Optional[date]:
+    if isinstance(value, str):
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").date()
+        except ValueError:
+            return None
+    return None
+
+
+def _dates_equal_with_tolerance(a: date, b: date) -> bool:
+    if _DATE_TOLERANCE_DAYS <= 0:
+        return a == b
+    return abs((a - b).days) <= _DATE_TOLERANCE_DAYS
+
+
+def _select_date_group_key(groups: Mapping[Any, Sequence[str]], value: date) -> date:
+    for key in list(groups.keys()):
+        if isinstance(key, date) and _dates_equal_with_tolerance(value, key):
+            return key
+    return value
+
+
 def compute_field_consistency(bureaus_json: Dict[str, Any]) -> Dict[str, Any]:
     """Compute normalized values and consensus for every field across bureaus."""
 
@@ -524,7 +567,12 @@ def compute_field_consistency(bureaus_json: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 present_bureaus.append(bureau)
                 frozen = _freeze_value(field, norm_value)
-                if (
+                date_key = None
+                if field in _DATE_TOLERANT_FIELDS:
+                    date_key = _parse_normalized_date(norm_value)
+                if date_key is not None:
+                    key = _select_date_group_key(groups, date_key)
+                elif (
                     field in _TOLERANT_AMOUNT_FIELDS
                     and isinstance(frozen, (int, float))
                 ):

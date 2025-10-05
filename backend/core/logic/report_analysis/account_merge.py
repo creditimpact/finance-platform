@@ -41,6 +41,7 @@ from backend.ai.validation_builder import (
     build_validation_packs_for_run,
 )
 from backend.core.logic.validation_requirements import (
+    _raw_value_provider_for_account_factory,
     apply_validation_summary,
     build_summary_payload as build_validation_summary_payload,
     build_validation_requirements,
@@ -2894,8 +2895,11 @@ def persist_merge_tags(
             continue
 
         try:
+            raw_provider = _raw_value_provider_for_account_factory(bureaus_payload)
             summary_payload = build_validation_summary_payload(
-                requirements, field_consistency=field_consistency
+                requirements,
+                field_consistency=field_consistency,
+                raw_value_provider=raw_provider,
             )
             summary_after = apply_validation_summary(summary_path, summary_payload)
         except Exception:

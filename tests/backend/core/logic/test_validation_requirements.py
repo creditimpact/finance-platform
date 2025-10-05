@@ -13,6 +13,7 @@ sys.modules.setdefault(
 from backend.core.logic.consistency import compute_inconsistent_fields
 from backend.core.logic.consistency import compute_field_consistency
 from backend.core.logic.validation_requirements import (
+    _raw_value_provider_for_account_factory,
     apply_validation_summary,
     build_findings,
     build_summary_payload,
@@ -221,6 +222,61 @@ def test_build_summary_payload_can_disable_reason_enrichment(monkeypatch):
     assert bureau_values["transunion"] == {
         "present": True,
         "raw": "100",
+        "normalized": 100.0,
+    }
+    assert bureau_values["experian"] == {
+        "present": True,
+        "raw": "150",
+        "normalized": 150.0,
+    }
+    assert bureau_values["equifax"] == {
+        "present": False,
+        "raw": None,
+        "normalized": None,
+    }
+
+
+def test_bureau_values_use_raw_provider_when_raw_missing():
+    requirements = [
+        {
+            "field": "balance_owed",
+            "category": "activity",
+            "min_days": 8,
+            "documents": ["monthly_statement"],
+            "strength": "strong",
+            "ai_needed": False,
+            "bureaus": ["experian", "transunion"],
+        }
+    ]
+
+    field_consistency = {
+        "balance_owed": {
+            "consensus": "split",
+            "normalized": {"transunion": 100.0, "experian": 150.0},
+            "disagreeing_bureaus": ["experian"],
+        }
+    }
+
+    bureaus = {
+        "transunion": {"balance_owed": "$100.00"},
+        "experian": {"balance_owed": "150"},
+        "equifax": {},
+    }
+
+    raw_provider = _raw_value_provider_for_account_factory(bureaus)
+
+    payload = build_summary_payload(
+        requirements,
+        field_consistency=field_consistency,
+        raw_value_provider=raw_provider,
+    )
+
+    finding = payload["findings"][0]
+    bureau_values = finding["bureau_values"]
+
+    assert bureau_values["transunion"] == {
+        "present": True,
+        "raw": "$100.00",
         "normalized": 100.0,
     }
     assert bureau_values["experian"] == {

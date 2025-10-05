@@ -120,6 +120,40 @@ def _is_validation_reason_enabled() -> bool:
 
 
 @lru_cache(maxsize=1)
+def _should_redact_pii() -> bool:
+    """Return ``True`` when optional PII redaction should be applied."""
+
+    raw_value = os.getenv("VALIDATION_REDACT_PII")
+    if raw_value is None:
+        return False
+
+    normalized = raw_value.strip().lower()
+    return normalized in {"1", "true", "yes", "y", "on"}
+
+
+def _redact_account_number_raw(raw_value: Any) -> Any:
+    """Mask account numbers so only the last four digits remain visible."""
+
+    if not isinstance(raw_value, str):
+        return raw_value
+
+    masked_chars: list[str] = []
+    digits_seen = 0
+
+    for char in reversed(raw_value):
+        if char.isdigit():
+            digits_seen += 1
+            if digits_seen > 4:
+                masked_chars.append("*")
+            else:
+                masked_chars.append(char)
+        else:
+            masked_chars.append(char)
+
+    return "".join(reversed(masked_chars))
+
+
+@lru_cache(maxsize=1)
 def _include_creditor_remarks() -> bool:
     """Return ``True`` when ``creditor_remarks`` validation is enabled."""
 
@@ -1209,6 +1243,8 @@ def _build_bureau_value_snapshot(
             missing_set = {str(entry) for entry in missing}
 
     snapshot: Dict[str, Dict[str, Any]] = {}
+    redact_pii = _should_redact_pii() and str(field_name) == "account_number_display"
+
     for bureau in _SUMMARY_BUREAUS:
         raw_value = None
         if raw_value_provider is not None:
@@ -1234,6 +1270,8 @@ def _build_bureau_value_snapshot(
         if not present:
             raw_value = None
             normalized_value = None
+        elif redact_pii and isinstance(raw_value, str):
+            raw_value = _redact_account_number_raw(raw_value)
 
         snapshot[bureau] = {
             "present": present,

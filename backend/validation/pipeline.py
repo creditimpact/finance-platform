@@ -12,6 +12,9 @@ from backend.core.logic.validation_requirements import (
     apply_validation_summary,
     build_validation_requirements_for_account,
 )
+from backend.core.summary.summary_reader import (
+    load_findings_from_summary as core_load_findings_from_summary,
+)
 from backend.validation.build_packs import (
     load_manifest_from_source,
     resolve_manifest_paths,
@@ -116,38 +119,8 @@ def load_findings_from_summary(
 ) -> list[Mapping[str, Any]]:
     """Return cached findings for ``account_key`` from summary.json."""
 
-    summary_path = (
-        Path(runs_root)
-        / str(sid)
-        / "cases"
-        / "accounts"
-        / str(account_key)
-        / "summary.json"
-    )
-
-    try:
-        raw_text = summary_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return []
-    except OSError:
-        log.debug("SUMMARY_READ_FAILED path=%s", summary_path, exc_info=True)
-        return []
-
-    try:
-        summary = json.loads(raw_text)
-    except Exception:
-        log.debug("SUMMARY_PARSE_FAILED path=%s", summary_path, exc_info=True)
-        return []
-
-    if not isinstance(summary, Mapping):
-        return []
-
-    validation_block = summary.get("validation_requirements")
-    if not isinstance(validation_block, Mapping):
-        return []
-
-    findings = validation_block.get("findings")
-    return _sanitize_findings(findings)
+    raw_findings = core_load_findings_from_summary(runs_root, sid, account_key)
+    return _sanitize_findings(raw_findings)
 
 
 def build_and_queue_packs(
@@ -223,9 +196,10 @@ def run_validation_summary_pipeline(
             stats["summaries_written"] += 1
             findings = acc_ctx.cached_findings
             if findings is None:
-                findings = load_findings_from_summary(
+                raw_findings = core_load_findings_from_summary(
                     acc_ctx.runs_root, acc_ctx.sid, acc_ctx.account_key
                 )
+                findings = _sanitize_findings(raw_findings)
                 acc_ctx.cached_findings = findings
 
             if config.build_packs and _should_queue_pack(findings):

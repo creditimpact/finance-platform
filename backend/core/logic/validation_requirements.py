@@ -106,12 +106,16 @@ def _account_selected_for_canary(account_path: Path, percent: int) -> bool:
 def _is_validation_reason_enabled() -> bool:
     """Return ``True`` when reason enrichment should be applied."""
 
-    raw_value = os.getenv("VALIDATION_REASON_ENABLED", "1")
+    raw_value = os.getenv("VALIDATION_REASON_ENABLED")
     if raw_value is None:
-        return True
+        return False
 
     normalized = raw_value.strip().lower()
-    return normalized in {"1", "true", "yes", "y", "on"}
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return False
 
 
 @lru_cache(maxsize=1)

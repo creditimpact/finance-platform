@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import threading
+from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -50,6 +51,7 @@ log = logging.getLogger(__name__)
 
 _PACKS_ENABLED_ENV = "VALIDATION_PACKS_ENABLED"
 _PACKS_PER_FIELD_ENV = "VALIDATION_PACKS_PER_FIELD"
+_PACK_MAX_SIZE_ENV = "VALIDATION_PACK_MAX_SIZE_KB"
 _AUTO_SEND_ENV_VARS: tuple[str, ...] = (
     "ENABLE_VALIDATION_SENDER",
     "AUTO_VALIDATION_SEND",
@@ -132,16 +134,16 @@ _ALLOWED_CATEGORIES: frozenset[str] = frozenset(
 
 
 def _reasons_enabled() -> bool:
-    raw = os.getenv("VALIDATION_REASON_ENABLED", "1")
+    raw = os.getenv("VALIDATION_REASON_ENABLED")
     if raw is None:
-        return True
+        return False
 
     lowered = raw.strip().lower()
     if lowered in {"1", "true", "yes", "y", "on"}:
         return True
     if lowered in {"0", "false", "no", "n", "off"}:
         return False
-    return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -181,6 +183,39 @@ class PackLine:
         return json.dumps(self.payload, ensure_ascii=False, sort_keys=True)
 
 
+@dataclass
+class _PackSizeStats:
+    count: int = 0
+    total_bytes: int = 0
+    max_bytes: int = 0
+
+    def observe(self, size_bytes: int) -> None:
+        self.count += 1
+        self.total_bytes += max(size_bytes, 0)
+        if size_bytes > self.max_bytes:
+            self.max_bytes = size_bytes
+
+    def average_bytes(self) -> float:
+        if not self.count:
+            return 0.0
+        return self.total_bytes / self.count
+
+    def average_kb(self) -> float:
+        return self.average_bytes() / 1024
+
+    def max_kb(self) -> float:
+        return self.max_bytes / 1024
+
+    def to_payload(self) -> Mapping[str, float | int]:
+        return {
+            "count": self.count,
+            "avg_bytes": self.average_bytes(),
+            "avg_kb": self.average_kb(),
+            "max_bytes": self.max_bytes,
+            "max_kb": self.max_kb(),
+        }
+
+
 class ValidationPackWriter:
     """Build consolidated validation packs for a run."""
 
@@ -213,6 +248,12 @@ class ValidationPackWriter:
             results_dir=self._results_dir,
         )
         self._per_field = per_field
+        self._pack_max_size_kb = _pack_max_size_kb()
+        self._pack_max_size_bytes = (
+            int(self._pack_max_size_kb * 1024) if self._pack_max_size_kb is not None else None
+        )
+        self._field_counts: Counter[str] = Counter()
+        self._size_stats = _PackSizeStats()
 
     # ------------------------------------------------------------------
     # Public API
@@ -252,10 +293,25 @@ class ValidationPackWriter:
         normalized_id = self._normalize_account_id(account_id)
         summary = self._load_summary(normalized_id)
         pack_lines = self._build_pack_lines_from_summary(normalized_id, summary)
+        serialized, size_bytes = self._serialize_pack_lines(pack_lines)
         pack_path = self._packs_dir / validation_pack_filename_for_account(normalized_id)
-        self._write_pack_file(pack_path, pack_lines)
+
+        if (
+            pack_lines
+            and self._pack_max_size_bytes is not None
+            and size_bytes > self._pack_max_size_bytes
+        ):
+            self._handle_blocked_pack(normalized_id, pack_lines, summary, size_bytes)
+            return []
+
+        self._write_pack_file(pack_path, serialized)
         self._update_index(normalized_id, pack_path, pack_lines, summary=summary)
-        self._append_log_entry(normalized_id, pack_lines, summary)
+        self._append_log_entry(
+            normalized_id,
+            pack_lines,
+            summary,
+            pack_size_bytes=size_bytes,
+        )
         return pack_lines
 
     def build_pack_lines(self, account_id: int) -> list[PackLine]:
@@ -322,14 +378,73 @@ class ValidationPackWriter:
     # ------------------------------------------------------------------
     # File helpers
     # ------------------------------------------------------------------
-    def _write_pack_file(self, path: Path, lines: Sequence[PackLine]) -> None:
+    def _write_pack_file(self, path: Path, serialized: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        if not lines:
-            path.write_text("", encoding="utf-8")
-            return
-
-        serialized = "\n".join(line.to_json() for line in lines) + "\n"
         path.write_text(serialized, encoding="utf-8")
+
+    @staticmethod
+    def _serialize_pack_lines(
+        lines: Sequence[PackLine],
+    ) -> tuple[str, int]:
+        if not lines:
+            return "", 0
+
+        serialized_lines: list[str] = []
+        for line in lines:
+            if isinstance(line, PackLine):
+                serialized_lines.append(line.to_json())
+            elif isinstance(line, Mapping):  # pragma: no cover - defensive
+                serialized_lines.append(
+                    json.dumps(line, ensure_ascii=False, sort_keys=True)
+                )
+            else:  # pragma: no cover - defensive
+                serialized_lines.append(json.dumps(line, ensure_ascii=False))
+
+        serialized = "\n".join(serialized_lines) + "\n"
+        size_bytes = len(serialized.encode("utf-8"))
+        return serialized, size_bytes
+
+    def _handle_blocked_pack(
+        self,
+        account_id: int,
+        lines: Sequence[PackLine],
+        summary: Mapping[str, Any] | None,
+        size_bytes: int,
+    ) -> None:
+        account_label = f"{account_id:03d}" if isinstance(account_id, int) else str(account_id)
+        log.warning(
+            "VALIDATION_PACK_SIZE_BLOCKED sid=%s account_id=%s size_bytes=%d max_kb=%s",
+            self.sid,
+            account_label,
+            size_bytes,
+            self._pack_max_size_kb,
+        )
+
+        total_fields = self._count_total_requirements(summary)
+        entry = {
+            "timestamp": _utc_now(),
+            "account_index": int(account_id),
+            "weak_count": len(lines),
+            "fields_built": 0,
+            "total_fields": total_fields,
+            "conditional_fields_built": 0,
+            "statuses": ["pack_blocked_max_size"],
+            "mode": "per_field" if self._per_field else "per_account",
+            "pack_size_bytes": size_bytes,
+            "pack_size_kb": _bytes_to_kb(size_bytes),
+            "pack_size_limit_kb": self._pack_max_size_kb,
+            "fields_emitted": [
+                field
+                for field in (
+                    self._extract_line_field(line)
+                    for line in lines
+                )
+                if field
+            ],
+            "cumulative_field_counts": dict(self._field_counts),
+            "cumulative_size": self._size_stats.to_payload(),
+        }
+        _append_validation_log_entry(self._log_path, entry)
 
     def _update_index(
         self,
@@ -383,6 +498,8 @@ class ValidationPackWriter:
         account_id: int,
         lines: Sequence[PackLine],
         summary: Mapping[str, Any] | None,
+        *,
+        pack_size_bytes: int,
     ) -> None:
         statuses = self._derive_statuses(summary, lines)
         total_fields = self._count_total_requirements(summary)
@@ -400,7 +517,28 @@ class ValidationPackWriter:
             "conditional_fields_built": conditional_fields_built,
             "statuses": statuses,
             "mode": "per_field" if self._per_field else "per_account",
+            "pack_size_bytes": pack_size_bytes,
+            "pack_size_kb": _bytes_to_kb(pack_size_bytes),
+            "pack_size_limit_kb": self._pack_max_size_kb,
         }
+
+        fields_emitted = [
+            field
+            for field in (
+                self._extract_line_field(line)
+                for line in lines
+            )
+            if field
+        ]
+        entry["fields_emitted"] = fields_emitted
+
+        if fields_emitted:
+            for field in fields_emitted:
+                self._field_counts[field] += 1
+            self._size_stats.observe(pack_size_bytes)
+
+        entry["cumulative_field_counts"] = dict(self._field_counts)
+        entry["cumulative_size"] = self._size_stats.to_payload()
         _append_validation_log_entry(self._log_path, entry)
 
     def _count_total_requirements(
@@ -1112,6 +1250,10 @@ def _utc_now() -> str:
     )
 
 
+def _bytes_to_kb(size_bytes: int) -> float:
+    return size_bytes / 1024
+
+
 def _append_validation_log_entry(path: Path, entry: Mapping[str, Any]) -> None:
     try:
         serialized = json.dumps(entry, sort_keys=True, ensure_ascii=False)
@@ -1189,6 +1331,33 @@ def _packs_per_field_enabled() -> bool:
 
 def _auto_send_enabled() -> bool:
     return any(_env_flag(name, False) for name in _AUTO_SEND_ENV_VARS)
+
+
+def _pack_max_size_kb() -> float | None:
+    raw = os.getenv(_PACK_MAX_SIZE_ENV)
+    if raw is None:
+        return None
+
+    if isinstance(raw, str):
+        raw_value = raw.strip()
+    else:
+        raw_value = str(raw)
+
+    if not raw_value:
+        return None
+
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        log.warning(
+            "VALIDATION_PACK_MAX_SIZE_INVALID env_value=%r", raw,
+        )
+        return None
+
+    if value <= 0:
+        return None
+
+    return value
 
 
 def _maybe_send_validation_packs(sid: str, runs_root: Path) -> None:

@@ -683,6 +683,135 @@ def _stage_path_is_validation(path: Path | None) -> Path | None:
     return path
 
 
+def _safe_resolve(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
+def _manifest_sid(manifest: Mapping[str, Any]) -> str | None:
+    for key in ("sid", "run_sid", "run_id"):
+        value = manifest.get(key)
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text
+    return None
+
+
+def _validation_base_from_hint(hint: Any) -> Path | None:
+    if hint is None:
+        return None
+    try:
+        candidate = Path(str(hint))
+    except (TypeError, ValueError):
+        return None
+
+    if candidate.suffix:
+        candidate = candidate.parent
+
+    parts = [part.lower() for part in candidate.parts]
+    for idx in range(len(parts) - 1, -1, -1):
+        if parts[idx] == _MANIFEST_STAGE:
+            return Path(*candidate.parts[: idx + 1])
+    return None
+
+
+def _default_validation_stage_paths_for_manifest(
+    manifest: Mapping[str, Any]
+) -> StageManifestPaths:
+    hints: list[Any] = []
+    for key in (
+        "__stage_dir__",
+        "__validation_dir__",
+        "__manifest_dir__",
+        "__base_dir__",
+        "__index_dir__",
+        "__index_path__",
+    ):
+        value = manifest.get(key)
+        if value is not None:
+            hints.append(value)
+
+    for hint in hints:
+        base = _validation_base_from_hint(hint)
+        if base is not None:
+            base_resolved = _safe_resolve(base)
+            return StageManifestPaths(
+                base_dir=base_resolved,
+                packs_dir=_safe_resolve(base_resolved / "packs"),
+                results_dir=_safe_resolve(base_resolved / "results"),
+                index_file=_safe_resolve(base_resolved / "index.json"),
+                log_file=_safe_resolve(base_resolved / "logs.txt"),
+            )
+
+    sid = _manifest_sid(manifest)
+    if sid is None:
+        raise ValidationPackError(
+            "Validation manifest is missing a sid for validation paths",
+        )
+
+    base_dir = _safe_resolve(Path("runs") / sid / "ai_packs" / _MANIFEST_STAGE)
+    return StageManifestPaths(
+        base_dir=base_dir,
+        packs_dir=_safe_resolve(base_dir / "packs"),
+        results_dir=_safe_resolve(base_dir / "results"),
+        index_file=_safe_resolve(base_dir / "index.json"),
+        log_file=_safe_resolve(base_dir / "logs.txt"),
+    )
+
+
+def _resolve_validation_stage_paths(
+    manifest: Mapping[str, Any],
+    raw_stage_paths: StageManifestPaths | None,
+) -> StageManifestPaths:
+    sanitized = _sanitize_stage_paths(raw_stage_paths, _MANIFEST_STAGE)
+    if sanitized is None:
+        sanitized = StageManifestPaths()
+
+    default: StageManifestPaths | None = None
+
+    def _default() -> StageManifestPaths:
+        nonlocal default
+        if default is None:
+            default = _default_validation_stage_paths_for_manifest(manifest)
+        return default
+
+    if sanitized.base_dir is None:
+        defaults = _default()
+        sanitized = replace(sanitized, base_dir=defaults.base_dir)
+
+    if sanitized.packs_dir is None:
+        defaults = _default()
+        sanitized = replace(sanitized, packs_dir=defaults.packs_dir)
+
+    if sanitized.results_dir is None:
+        defaults = _default()
+        sanitized = replace(sanitized, results_dir=defaults.results_dir)
+
+    if sanitized.index_file is None:
+        defaults = _default()
+        sanitized = replace(sanitized, index_file=defaults.index_file)
+
+    if sanitized.log_file is None:
+        defaults = _default()
+        sanitized = replace(sanitized, log_file=defaults.log_file)
+
+    return sanitized
+
+
+def _resolve_stage_paths(
+    manifest: Mapping[str, Any],
+    stage: str,
+    is_index_document: bool,
+) -> StageManifestPaths | None:
+    raw_stage_paths = extract_stage_manifest_paths(manifest, stage)
+    if _is_validation_stage(stage) and not is_index_document:
+        return _resolve_validation_stage_paths(manifest, raw_stage_paths)
+    return _sanitize_stage_paths(raw_stage_paths, stage)
+
+
 def _sanitize_stage_paths(
     stage_paths: StageManifestPaths | None, stage: str | None
 ) -> StageManifestPaths | None:
@@ -1031,11 +1160,9 @@ def _load_manifest_view(
         return _ManifestView(index=index, log_path=log_path, stage_paths=None)
 
     if isinstance(manifest, Mapping):
-        stage_paths = _sanitize_stage_paths(
-            extract_stage_manifest_paths(manifest, stage), stage
-        )
         is_index_document = _document_is_index_document(manifest)
-        force_stage_only = _is_validation_stage(stage)
+        stage_paths = _resolve_stage_paths(manifest, stage, is_index_document)
+        force_stage_only = _is_validation_stage(stage) and not is_index_document
         use_manifest_paths = _should_use_manifest_paths() or force_stage_only
 
         if not is_index_document:
@@ -1099,11 +1226,9 @@ def _load_manifest_view(
         if not isinstance(document, Mapping):
             raise ValidationPackError("Validation index root must be an object")
 
-        stage_paths = _sanitize_stage_paths(
-            extract_stage_manifest_paths(document, stage), stage
-        )
         is_index_document = _document_is_index_document(document)
-        force_stage_only = _is_validation_stage(stage)
+        stage_paths = _resolve_stage_paths(document, stage, is_index_document)
+        force_stage_only = _is_validation_stage(stage) and not is_index_document
         if not is_index_document:
             if stage_paths is None or not stage_paths.has_any():
                 if attempt < _MANIFEST_RETRY_ATTEMPTS - 1:

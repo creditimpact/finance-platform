@@ -73,8 +73,8 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
         "validation_requirements": {
             "findings": [
                 {
-                    "field": "balance_owed",
-                    "category": "activity",
+                    "field": "account_type",
+                    "category": "open_ident",
                     "strength": "weak",
                     "documents": ["statement"],
                     "ai_needed": True,
@@ -91,7 +91,7 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
                 },
             ],
             "field_consistency": {
-                "balance_owed": {
+                "account_type": {
                     "consensus": "split",
                     "disagreeing_bureaus": ["experian"],
                     "missing_bureaus": ["equifax"],
@@ -100,12 +100,12 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
                         "7y": {"late_payments": 2},
                     },
                     "raw": {
-                        "transunion": "$100",
-                        "experian": "$150",
+                        "transunion": "Mortgage",
+                        "experian": "Installment",
                     },
                     "normalized": {
-                        "transunion": 100,
-                        "experian": 150,
+                        "transunion": "mortgage",
+                        "experian": "installment",
                     },
                 },
                 "account_rating": {
@@ -127,15 +127,15 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
 
     bureaus_payload = {
         "transunion": {
-            "balance_owed": "$100",
+            "account_type": "Mortgage",
             "account_rating": "1",
         },
         "experian": {
-            "balance_owed": "$150",
+            "account_type": "Installment",
             "account_rating": "1",
         },
         "equifax": {
-            "balance_owed": None,
+            "account_type": None,
             "account_rating": "2",
         },
     }
@@ -149,13 +149,11 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
 
     assert len(lines) == 2
     fields = {line.payload["field"] for line in lines}
-    assert fields == {"balance_owed", "account_rating"}
+    assert fields == {"account_type", "account_rating"}
 
-    conditional_guidance = {
-        line.payload["field"]: line.payload["prompt"]["guidance"] for line in lines
-    }
-    assert "Treat this as conditional" not in conditional_guidance["balance_owed"]
-    assert "Treat this as conditional" in conditional_guidance["account_rating"]
+    findings = {line.payload["field"]: line.payload["finding"] for line in lines}
+    assert not findings["account_type"].get("conditional_gate")
+    assert findings["account_rating"].get("conditional_gate") is True
 
     pack_path = validation_packs_dir(sid, runs_root=runs_root) / validation_pack_filename_for_account(
         account_id
@@ -166,7 +164,7 @@ def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:
     index_payload = _read_json(validation_index_path(sid, runs_root=runs_root))
     packs = index_payload.get("packs", [])
     assert len(packs) == 1
-    assert packs[0]["weak_fields"] == ["balance_owed", "account_rating"]
+    assert packs[0]["weak_fields"] == ["account_type", "account_rating"]
     assert packs[0]["lines"] == 2
 
 
@@ -224,20 +222,19 @@ def test_removed_fields_are_never_emitted(tmp_path: Path) -> None:
     writer = ValidationPackWriter(sid, runs_root=runs_root)
     lines = writer.write_pack_for_account(account_id)
 
-    assert len(lines) == 1
-    assert lines[0].payload["field"] == "balance_owed"
+    assert lines == []
 
     pack_path = validation_packs_dir(sid, runs_root=runs_root) / validation_pack_filename_for_account(
         account_id
     )
     on_disk = _read_jsonl(pack_path)
-    assert {entry["field"] for entry in on_disk} == {"balance_owed"}
+    assert on_disk == []
 
     index_payload = _read_json(validation_index_path(sid, runs_root=runs_root))
     packs = index_payload.get("packs", [])
     assert len(packs) == 1
-    assert packs[0]["weak_fields"] == ["balance_owed"]
-    assert packs[0]["lines"] == 1
+    assert packs[0]["weak_fields"] == []
+    assert packs[0]["lines"] == 0
 
 def test_validation_index_round_trip(tmp_path: Path) -> None:
     sid = "SID003"
@@ -261,7 +258,7 @@ def test_validation_index_round_trip(tmp_path: Path) -> None:
         pack_path=pack_path1,
         result_jsonl_path=jsonl_path1,
         result_json_path=summary_path1,
-        weak_fields=("balance_owed",),
+        weak_fields=("account_rating",),
         line_count=1,
         status="built",
     )
@@ -273,7 +270,7 @@ def test_validation_index_round_trip(tmp_path: Path) -> None:
         pack_path=pack_path2,
         result_jsonl_path=jsonl_path2,
         result_json_path=summary_path2,
-        weak_fields=("account_rating", "balance_owed"),
+        weak_fields=("account_type", "account_rating"),
         line_count=2,
         status="built",
     )
@@ -282,8 +279,8 @@ def test_validation_index_round_trip(tmp_path: Path) -> None:
 
     accounts = writer.load_accounts()
     assert set(accounts) == {1, 2}
-    assert accounts[1]["weak_fields"] == ["balance_owed"]
-    assert accounts[2]["weak_fields"] == ["account_rating", "balance_owed"]
+    assert accounts[1]["weak_fields"] == ["account_rating"]
+    assert accounts[2]["weak_fields"] == ["account_type", "account_rating"]
     assert accounts[2]["lines"] == 2
 
 
@@ -298,7 +295,7 @@ def test_manifest_updated_after_first_pack(tmp_path: Path, monkeypatch) -> None:
         "validation_requirements": {
             "findings": [
                 {
-                    "field": "balance_owed",
+                    "field": "account_rating",
                     "strength": "weak",
                     "ai_needed": True,
                     "send_to_ai": True,
@@ -345,13 +342,13 @@ def test_build_validation_pack_idempotent(tmp_path: Path, monkeypatch) -> None:
         "validation_requirements": {
             "findings": [
                 {
-                    "field": "balance_owed",
+                    "field": "account_type",
                     "strength": "weak",
                     "ai_needed": True,
                     "send_to_ai": True,
                 },
                 {
-                    "field": "account_status",
+                    "field": "account_rating",
                     "strength": "weak",
                     "ai_needed": True,
                     "send_to_ai": True,
@@ -382,7 +379,7 @@ def test_build_validation_pack_idempotent(tmp_path: Path, monkeypatch) -> None:
     packs = index_payload.get("packs", [])
     assert len(packs) == 1
     assert packs[0]["lines"] == 2
-    assert packs[0]["weak_fields"] == ["balance_owed", "account_status"]
+    assert packs[0]["weak_fields"] == ["account_type", "account_rating"]
 
     results_path = validation_results_dir(sid, runs_root=runs_root)
     result_file = results_path / validation_result_filename_for_account(account_id)

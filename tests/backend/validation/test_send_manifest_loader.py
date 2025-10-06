@@ -226,3 +226,40 @@ def test_sender_falls_back_to_ai_validation_dir(
     assert index.packs_dir_path == packs_dir.resolve()
     assert index.results_dir_path == results_dir.resolve()
     assert sender._log_path == log_path.resolve()  # type: ignore[attr-defined]
+
+
+def test_sender_defaults_to_runs_validation_layout(
+    tmp_path: Path, loader_client: _LoaderStubClient
+) -> None:
+    sid = "SID559"
+    base_dir = tmp_path / "custom" / "runs" / sid / "ai_packs" / "validation"
+    packs_dir = base_dir / "packs"
+    results_dir = base_dir / "results"
+    log_path = base_dir / "logs.txt"
+    index_path = base_dir / "index.json"
+
+    packs_dir.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    index_payload = {
+        "schema_version": 2,
+        "sid": sid,
+        "root": ".",
+        "packs_dir": "packs",
+        "results_dir": "results",
+        "packs": [],
+    }
+    index_path.write_text(json.dumps(index_payload), encoding="utf-8")
+
+    manifest = {
+        "sid": sid,
+        "__index_path__": str(index_path),
+    }
+
+    sender = ValidationPackSender(manifest, http_client=loader_client)
+
+    index = sender._index  # type: ignore[attr-defined]
+    assert index.index_path == index_path.resolve()
+    assert index.packs_dir_path == packs_dir.resolve()
+    assert index.results_dir_path == results_dir.resolve()
+    assert sender._log_path == log_path.resolve()  # type: ignore[attr-defined]

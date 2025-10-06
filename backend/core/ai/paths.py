@@ -37,9 +37,23 @@ def ensure_validation_paths(
 ) -> ValidationPaths:
     """Return the canonical validation AI pack paths for ``sid``."""
 
-    base_path = (Path(runs_root) / sid / "ai_packs" / "validation").resolve()
-    packs_dir = base_path / "packs"
-    results_dir = base_path / "results"
+    runs_root_path = Path(runs_root).resolve()
+    base_path = (runs_root_path / sid / "ai_packs" / "validation").resolve()
+
+    def _resolve_override(env_name: str, default: Path) -> Path:
+        raw = os.getenv(env_name)
+        if not raw:
+            return default
+
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = (runs_root_path / sid / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+        return candidate
+
+    packs_dir = _resolve_override("VALIDATION_PACKS_DIR", base_path / "packs")
+    results_dir = _resolve_override("VALIDATION_RESULTS_DIR", base_path / "results")
     index_file = base_path / "index.json"
     log_file = base_path / "logs.txt"
 

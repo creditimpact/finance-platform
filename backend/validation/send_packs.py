@@ -865,6 +865,17 @@ class ValidationPackSender:
             "set" if base_url_set else "missing",
         )
 
+        log.info(
+            "VALIDATION_PACKS_DIR_USED sid=%s dir=%s",
+            self.sid,
+            str(index.packs_dir_path),
+        )
+        log.info(
+            "VALIDATION_RESULTS_DIR_USED sid=%s dir=%s",
+            self.sid,
+            str(index.results_dir_path),
+        )
+
     def send(self) -> list[dict[str, Any]]:
         """Send every pack referenced by the manifest index."""
 

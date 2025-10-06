@@ -62,15 +62,24 @@ _AUTO_SEND_ENV_VARS: tuple[str, ...] = (
 _BUREAUS = ("transunion", "experian", "equifax")
 _SYSTEM_PROMPT = (
     "You are an adjudication assistant reviewing credit report discrepancies. "
-    "Evaluate the provided bureau data and decide if the consumer has a strong claim."
+    "Only use the JSON provided in this pack. Do not assume facts not present."
 )
 _USER_PROMPT = (
-    "Review the validation finding JSON for the disputed field. "
-    "Base your assessment solely on the provided information to determine whether "
-    "the consumer has a strong validation argument."
+    "Given the field finding below (including raw and normalized values per bureau), "
+    "decide if the consumer has a strong validation case.\n\n"
+    "Decision policy:\n"
+    "- strong if the discrepancy is material AND supports the consumer’s position based on the normalized values and required documents.\n"
+    "- otherwise return no_case.\n\n"
+    "Return JSON only.\n\n"
+    "Field:\n"
+    "<the 'finding' blob as provided>\n\n"
+    "You must output an object matching expected_output {decision, rationale, citations}.\n"
+    "- decision ∈ {strong, no_case}\n"
+    "- rationale: ≤ 120 words, mention the mismatch code (e.g., C4/C5) and why it helps or not.\n"
+    "- citations: array of strings like \"equifax: <normalized>\" listing the values you relied on."
 )
 _GUIDANCE_PROMPT = (
-    "Respond with a JSON object that matches the expected output schema."
+    "Respond with strictly valid JSON matching the expected_output schema."
 )
 _SHARED_PROMPT = {
     "system": _SYSTEM_PROMPT,

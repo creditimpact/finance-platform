@@ -143,14 +143,46 @@ _ALLOWED_CATEGORIES: frozenset[str] = frozenset(
     _ALLOWED_FIELD_CATEGORIES.values()
 )
 
-_PACK_ELIGIBLE_FIELDS: frozenset[str] = frozenset(
+AI_FIELDS: frozenset[str] = frozenset(
     {
         "account_type",
         "creditor_type",
         "account_rating",
-        "two_year_payment_history",
     }
 )
+FALLBACK_FIELDS: frozenset[str] = frozenset({"two_year_payment_history"})
+EXCLUDED_FIELDS: frozenset[str] = frozenset(
+    {"seven_year_history", "account_number_display"}
+)
+
+_PACK_ELIGIBLE_FIELDS: frozenset[str] = frozenset(AI_FIELDS | FALLBACK_FIELDS)
+
+_TRUE_STRINGS: frozenset[str] = frozenset({"1", "true", "yes", "y", "on"})
+_FALSE_STRINGS: frozenset[str] = frozenset({"0", "false", "no", "n", "off", ""})
+
+
+def _normalize_flag(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in _TRUE_STRINGS:
+            return True
+        if lowered in _FALSE_STRINGS:
+            return False
+    return None
+
+
+def _is_mismatch(requirement: Mapping[str, Any]) -> bool:
+    return _normalize_flag(requirement.get("is_mismatch")) is True
+
+
+def _history_2y_allowed(requirement: Mapping[str, Any]) -> bool:
+    """Placeholder hook for enabling two-year history fallback logic."""
+
+    return True
 
 
 def _reasons_enabled() -> bool:
@@ -990,6 +1022,18 @@ class ValidationPackWriter:
     ) -> bool:
         """Determine whether ``requirement`` should be routed to AI."""
 
+        if canonical_field in EXCLUDED_FIELDS:
+            return False
+
+        if canonical_field in FALLBACK_FIELDS:
+            return _is_mismatch(requirement) and _history_2y_allowed(requirement)
+
+        if canonical_field not in AI_FIELDS:
+            return False
+
+        if not _is_mismatch(requirement):
+            return False
+
         lookup_keys: list[str] = [canonical_field]
         raw_field = requirement.get("field")
         if isinstance(raw_field, str):
@@ -999,24 +1043,22 @@ class ValidationPackWriter:
         else:
             alias = ""
 
-        if (
-            canonical_field == "two_year_payment_history"
-            and requirement.get("is_mismatch") is True
-        ):
-            return True
-
         if alias and alias not in lookup_keys:
             lookup_keys.append(alias)
 
-        if isinstance(send_to_ai_map, Mapping):
+        send_flag = _normalize_flag(requirement.get("send_to_ai"))
+
+        if send_flag is None and isinstance(send_to_ai_map, Mapping):
             for key in lookup_keys:
                 if key in send_to_ai_map:
-                    return bool(send_to_ai_map[key])
+                    send_flag = _normalize_flag(send_to_ai_map[key])
+                    if send_flag is not None:
+                        break
 
-        ai_needed = requirement.get("ai_needed")
-        if isinstance(ai_needed, bool):
-            return ai_needed
-        return bool(ai_needed)
+        if send_flag is None:
+            return False
+
+        return send_flag is True
 
     @staticmethod
     def _normalize_account_id(account_id: int | str) -> int:

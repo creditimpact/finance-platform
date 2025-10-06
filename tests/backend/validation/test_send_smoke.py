@@ -23,7 +23,7 @@ class _FixedResponseStubClient:
     def __init__(self, payload: dict[str, object]):
         self._payload = payload
 
-    def create(self, *, model: str, messages, response_format):  # type: ignore[override]
+    def create(self, *, model: str, messages, response_format, **_: object):  # type: ignore[override]
         return {"choices": [{"message": {"content": json.dumps(self._payload)}}]}
 
 

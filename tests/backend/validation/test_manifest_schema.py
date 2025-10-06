@@ -31,7 +31,7 @@ def _legacy_results(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class _StubClient:
-    def create(self, *, model: str, messages, response_format):  # type: ignore[override]
+    def create(self, *, model: str, messages, response_format, **_: object):  # type: ignore[override]
         payload = {
             "decision": "strong",
             "justification": "auto",
@@ -308,7 +308,7 @@ def test_sender_includes_context_on_api_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     class _ErrorClient:
-        def create(self, *, model, messages, response_format):  # type: ignore[override]
+        def create(self, *, model, messages, response_format, **_: object):  # type: ignore[override]
             raise RuntimeError("boom")
 
     manifest, runs_root = _build_manifest(tmp_path, sid="S999")

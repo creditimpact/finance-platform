@@ -450,10 +450,10 @@ class _ChatCompletionClient:
 
         if not getattr(response, "ok", False):
             log.error(
-                "VALIDATION_HTTP_ERROR status=%s body=%s pack=%s",
+                "VALIDATION_HTTP_ERROR pack=%s status=%s body=%s",
+                pack_id or "<unknown>",
                 status_code,
                 snippet or "<empty>",
-                pack_id or "<unknown>",
             )
             try:
                 normalized_status = int(status_code)
@@ -487,7 +487,7 @@ class _ChatCompletionClient:
         try:
             payload = response.json()
         except ValueError as exc:
-            log.error("VALIDATION_EMPTY_CONTENT pack=%s", pack_id or "<unknown>")
+            log.error("VALIDATION_EMPTY_RESPONSE pack=%s", pack_id or "<unknown>")
             try:
                 normalized_status = int(status_code)
             except (TypeError, ValueError):
@@ -495,7 +495,7 @@ class _ChatCompletionClient:
             on_error(normalized_status, snippet or "")
             raise ValidationPackError("Response JSON parse failed") from exc
         if payload is None:
-            log.error("VALIDATION_EMPTY_CONTENT pack=%s", pack_id or "<unknown>")
+            log.error("VALIDATION_EMPTY_RESPONSE pack=%s", pack_id or "<unknown>")
             try:
                 normalized_status = int(status_code)
             except (TypeError, ValueError):
@@ -511,6 +511,7 @@ class _ManifestView:
 
     index: ValidationIndex
     log_path: Path
+    stage_paths: StageManifestPaths | None = None
 
 
 @dataclass(frozen=True)
@@ -518,6 +519,7 @@ class _IndexPreparationResult:
     """Outcome of preparing the validation index prior to sending."""
 
     index: ValidationIndex | None
+    view: _ManifestView | None
     skip: bool = False
 
 
@@ -565,6 +567,7 @@ def _index_path_from_mapping(
     stage_paths: StageManifestPaths | None,
     use_manifest_paths: bool,
     is_index_document: bool,
+    manifest_path: Path | None = None,
 ) -> Path:
     if stage_paths and stage_paths.index_file:
         return stage_paths.index_file
@@ -578,6 +581,16 @@ def _index_path_from_mapping(
     if index_path_override:
         return Path(str(index_path_override)).resolve()
 
+    manifest_resolved: Path | None = None
+    if manifest_path is not None:
+        try:
+            manifest_resolved = manifest_path.resolve()
+        except OSError:
+            manifest_resolved = manifest_path
+
+    if manifest_resolved is not None and is_index_document:
+        return manifest_resolved
+
     base_dir_override = (
         document.get("__base_dir__")
         or document.get("__manifest_dir__")
@@ -585,6 +598,8 @@ def _index_path_from_mapping(
     )
     if base_dir_override:
         base_dir = Path(str(base_dir_override)).resolve()
+    elif manifest_resolved is not None:
+        base_dir = manifest_resolved.parent.resolve()
     else:
         base_dir = Path.cwd()
 
@@ -761,69 +776,6 @@ def _looks_like_validation_packs_dir(path: Path) -> bool:
     return any("validation" in part for part in parts) and (parts and parts[-1] == "packs")
 
 
-def _resolve_index_probe_path(
-    manifest: Mapping[str, Any] | ValidationIndex | Path | str,
-    stage_paths: StageManifestPaths | None,
-) -> Path | None:
-    if isinstance(manifest, ValidationIndex):
-        return manifest.index_path
-
-    if isinstance(manifest, Mapping):
-        if stage_paths and stage_paths.index_file:
-            return stage_paths.index_file
-        if stage_paths and stage_paths.base_dir:
-            return (stage_paths.base_dir / "index.json").resolve()
-        return None
-
-    try:
-        raw_path = Path(manifest)
-    except TypeError:
-        return None
-
-    if raw_path.is_dir():
-        return (raw_path / "index.json").resolve()
-
-    return raw_path.resolve()
-
-
-def _wait_for_validation_index(index_path: Path) -> ValidationIndex:
-    attempts = max(1, _INDEX_WAIT_ATTEMPTS)
-    delay = max(0.0, _INDEX_WAIT_DELAY)
-    last_error: Exception | None = None
-
-    for attempt in range(1, attempts + 1):
-        try:
-            return load_validation_index(index_path)
-        except FileNotFoundError as exc:
-            status = "missing"
-            last_error = exc
-        except json.JSONDecodeError as exc:
-            status = "invalid_json"
-            last_error = exc
-        except OSError as exc:
-            status = f"io_error:{exc.__class__.__name__}"
-            last_error = exc
-        except Exception as exc:  # pragma: no cover - defensive logging
-            status = f"error:{exc.__class__.__name__}"
-            last_error = exc
-        else:  # pragma: no cover - unreachable, return in try block
-            break
-
-        log.info(
-            "VALIDATION_INDEX_WAIT attempt=%s status=%s path=%s",
-            attempt,
-            status,
-            str(index_path),
-        )
-
-        if attempt < attempts:
-            time.sleep(delay)
-
-    raise ValidationPackError(
-        f"Validation index missing or invalid: {index_path}",
-    ) from last_error
-
-
 def _validate_index_ready(
     index: ValidationIndex, stage_paths: StageManifestPaths | None
 ) -> bool:
@@ -891,22 +843,22 @@ def _prepare_validation_index(
     *,
     stage: str,
 ) -> _IndexPreparationResult:
-    stage_paths: StageManifestPaths | None = None
-    if isinstance(manifest, Mapping):
-        stage_paths = extract_stage_manifest_paths(manifest, stage)
-
     if isinstance(manifest, ValidationIndex):
-        index = manifest
+        view = _ManifestView(
+            index=manifest,
+            log_path=_resolve_log_path(manifest.index_path, None, stage_paths=None),
+            stage_paths=None,
+        )
     else:
-        index_path = _resolve_index_probe_path(manifest, stage_paths)
-        if index_path is None:
-            return _IndexPreparationResult(index=None, skip=False)
-        index = _wait_for_validation_index(index_path)
+        view = _load_manifest_view(manifest, stage=stage)
+
+    index = view.index
+    stage_paths = view.stage_paths
 
     if not _validate_index_ready(index, stage_paths):
-        return _IndexPreparationResult(index=index, skip=True)
+        return _IndexPreparationResult(index=index, view=view, skip=True)
 
-    return _IndexPreparationResult(index=index, skip=False)
+    return _IndexPreparationResult(index=index, view=view, skip=False)
 
 
 def _load_manifest_view(
@@ -917,17 +869,24 @@ def _load_manifest_view(
     if isinstance(manifest, ValidationIndex):
         index = manifest
         log_path = _resolve_log_path(index.index_path, None, stage_paths=None)
-        return _ManifestView(index=index, log_path=log_path)
+        return _ManifestView(index=index, log_path=log_path, stage_paths=None)
 
     if isinstance(manifest, Mapping):
         stage_paths = extract_stage_manifest_paths(manifest, stage)
         is_index_document = _document_is_index_document(manifest)
         use_manifest_paths = _should_use_manifest_paths()
+
+        if not is_index_document:
+            if stage_paths is None or not stage_paths.has_any():
+                raise ValidationPackError(
+                    "Validation manifest is missing validation stage paths",
+                )
         index_path = _index_path_from_mapping(
             manifest,
             stage_paths=stage_paths,
             use_manifest_paths=use_manifest_paths,
             is_index_document=is_index_document,
+            manifest_path=None,
         )
 
         if is_index_document:
@@ -944,7 +903,7 @@ def _load_manifest_view(
             index = load_validation_index(index_path)
 
         log_path = _resolve_log_path(index_path, manifest, stage_paths=stage_paths)
-        return _ManifestView(index=index, log_path=log_path)
+        return _ManifestView(index=index, log_path=log_path, stage_paths=stage_paths)
 
     manifest_path = Path(manifest)
     use_manifest_paths = _should_use_manifest_paths()
@@ -979,11 +938,26 @@ def _load_manifest_view(
 
         stage_paths = extract_stage_manifest_paths(document, stage)
         is_index_document = _document_is_index_document(document)
+        if not is_index_document:
+            if stage_paths is None or not stage_paths.has_any():
+                if attempt < _MANIFEST_RETRY_ATTEMPTS - 1:
+                    log.info(
+                        "VALIDATION_MANIFEST_STAGE_WAIT stage=%s attempt=%s path=%s",
+                        stage,
+                        attempt + 1,
+                        str(manifest_path),
+                    )
+                    time.sleep(_MANIFEST_RETRY_DELAY)
+                    continue
+                raise ValidationPackError(
+                    "Validation manifest is missing validation stage paths",
+                )
         index_path = _index_path_from_mapping(
             document,
             stage_paths=stage_paths,
             use_manifest_paths=use_manifest_paths,
             is_index_document=is_index_document,
+            manifest_path=manifest_path,
         )
 
         if is_index_document:
@@ -1003,7 +977,7 @@ def _load_manifest_view(
             index = load_validation_index(index_path)
 
         log_path = _resolve_log_path(index_path, document, stage_paths=stage_paths)
-        return _ManifestView(index=index, log_path=log_path)
+        return _ManifestView(index=index, log_path=log_path, stage_paths=stage_paths)
 
     raise ValidationPackError(
         f"Unable to resolve validation manifest: {manifest_path}",
@@ -1019,9 +993,13 @@ class ValidationPackSender:
         *,
         http_client: _ChatCompletionClient | None = None,
         stage: str | None = None,
+        preloaded_view: _ManifestView | None = None,
     ) -> None:
         resolved_stage = stage or _MANIFEST_STAGE
-        view = _load_manifest_view(manifest, stage=resolved_stage)
+        if preloaded_view is not None:
+            view = preloaded_view
+        else:
+            view = _load_manifest_view(manifest, stage=resolved_stage)
         self._index = view.index
         self.sid = self._index.sid
         self._stage = resolved_stage
@@ -1560,6 +1538,8 @@ class ValidationPackSender:
                         line_id=current_line_id,
                         pack_id=pack_identifier,
                         error_path=error_path,
+                        result_path=result_summary_path,
+                        result_display=result_summary_display,
                     )
                 except Exception as exc:
                     error_message = (
@@ -1758,6 +1738,8 @@ class ValidationPackSender:
         line_id: str,
         pack_id: str,
         error_path: Path,
+        result_path: Path,
+        result_display: str,
     ) -> Mapping[str, Any]:
         prompt = pack_line.get("prompt")
         if not isinstance(prompt, Mapping):
@@ -1824,14 +1806,14 @@ class ValidationPackSender:
 
         choices = payload.get("choices")
         if not isinstance(choices, Sequence) or not choices:
-            log.error("VALIDATION_EMPTY_CONTENT pack=%s", pack_id)
+            log.error("VALIDATION_EMPTY_RESPONSE pack=%s", pack_id)
             serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
             _record_sidecar(int(status_code), serialized)
             raise ValidationPackError("Model response missing choices")
         message = choices[0].get("message") if isinstance(choices[0], Mapping) else None
         content = message.get("content") if isinstance(message, Mapping) else None
         if not isinstance(content, str) or not content.strip():
-            log.error("VALIDATION_EMPTY_CONTENT pack=%s", pack_id)
+            log.error("VALIDATION_EMPTY_RESPONSE pack=%s", pack_id)
             serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
             _record_sidecar(int(status_code), serialized)
             raise ValidationPackError("Model response missing content")
@@ -1839,11 +1821,19 @@ class ValidationPackSender:
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError as exc:
-            log.error("VALIDATION_EMPTY_CONTENT pack=%s", pack_id)
+            log.error("VALIDATION_EMPTY_RESPONSE pack=%s", pack_id)
             _record_sidecar(int(status_code), content)
             raise ValidationPackError(f"Model response is not valid JSON: {exc}")
         if not isinstance(parsed, Mapping):
             raise ValidationPackError("Model response is not an object")
+
+        result_target = result_display or str(result_path)
+        log.info(
+            "VALIDATION_SENT_OK pack=%s account=%s -> %s",
+            pack_id,
+            account_label,
+            result_target,
+        )
         return parsed
 
     # ------------------------------------------------------------------
@@ -2247,13 +2237,11 @@ def send_validation_packs(
     if preparation.skip:
         return []
 
-    sender_manifest: Mapping[str, Any] | ValidationIndex | Path | str
-    if preparation.index is not None:
-        sender_manifest = preparation.index
-    else:
-        sender_manifest = manifest
-
-    sender = ValidationPackSender(sender_manifest, stage=resolved_stage)
+    sender = ValidationPackSender(
+        manifest,
+        stage=resolved_stage,
+        preloaded_view=preparation.view,
+    )
     return sender.send()
 
 

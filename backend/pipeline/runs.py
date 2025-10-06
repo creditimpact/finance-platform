@@ -127,6 +127,16 @@ class RunManifest:
                     "sent": False,
                     "compacted": False,
                     "skipped_reason": None,
+                    "merge": {
+                        "built": False,
+                        "sent": False,
+                        "completed_at": None,
+                    },
+                    "validation": {
+                        "built": False,
+                        "sent": False,
+                        "completed_at": None,
+                    },
                 },
             },
             "artifacts": {
@@ -374,7 +384,62 @@ class RunManifest:
                 "skipped_reason": None,
             },
         )
+        for stage_key in ("merge", "validation"):
+            stage_status = status.get(stage_key)
+            if not isinstance(stage_status, dict):
+                stage_status = {
+                    "built": False,
+                    "sent": False,
+                    "completed_at": None,
+                }
+                status[stage_key] = stage_status
+            else:
+                stage_status.setdefault("built", False)
+                stage_status.setdefault("sent", False)
+                stage_status.setdefault("completed_at", None)
         return packs, status
+
+    def ensure_ai_stage_status(self, stage: str) -> dict[str, object]:
+        """Ensure and return the mutable status mapping for ``stage``."""
+
+        stage_key = str(stage).strip().lower()
+        if not stage_key:
+            raise ValueError("stage is required")
+        _, status = self._ensure_ai_section()
+        stage_status = status.get(stage_key)
+        if not isinstance(stage_status, dict):
+            stage_status = {
+                "built": False,
+                "sent": False,
+                "completed_at": None,
+            }
+            status[stage_key] = stage_status
+        else:
+            stage_status.setdefault("built", False)
+            stage_status.setdefault("sent", False)
+            stage_status.setdefault("completed_at", None)
+        return stage_status
+
+    def get_ai_stage_status(self, stage: str) -> dict[str, object]:
+        """Return a copy of the status mapping for ``stage``."""
+
+        stage_key = str(stage).strip().lower()
+        if not stage_key:
+            raise ValueError("stage is required")
+        ai = self.data.get("ai")
+        if not isinstance(ai, Mapping):
+            return {"built": False, "sent": False, "completed_at": None}
+        status = ai.get("status")
+        if not isinstance(status, Mapping):
+            return {"built": False, "sent": False, "completed_at": None}
+        stage_status = status.get(stage_key)
+        if not isinstance(stage_status, Mapping):
+            return {"built": False, "sent": False, "completed_at": None}
+        return {
+            "built": bool(stage_status.get("built")),
+            "sent": bool(stage_status.get("sent")),
+            "completed_at": stage_status.get("completed_at"),
+        }
 
     def _ensure_ai_validation_pack_section(self) -> dict[str, object]:
         packs, _ = self._ensure_ai_section()
@@ -491,6 +556,11 @@ class RunManifest:
         packs_validation["logs"] = str(log_path)
         packs_validation["last_built_at"] = timestamp
 
+        validation_stage_status = self.ensure_ai_stage_status("validation")
+        validation_stage_status["built"] = True
+        validation_stage_status["sent"] = False
+        validation_stage_status["completed_at"] = None
+
         return self.save()
 
     def upsert_ai_packs_dir(self, packs_dir: Path) -> "RunManifest":
@@ -503,6 +573,11 @@ class RunManifest:
         _, status = self._ensure_ai_section()
         status["enqueued"] = True
         status["skipped_reason"] = None
+        for stage_key in ("merge", "validation"):
+            stage_status = self.ensure_ai_stage_status(stage_key)
+            stage_status["built"] = False
+            stage_status["sent"] = False
+            stage_status["completed_at"] = None
         return self.save()
 
     def set_ai_built(self, packs_dir: Path, pairs: int) -> "RunManifest":
@@ -513,16 +588,24 @@ class RunManifest:
         packs["last_built_at"] = _utc_now()
         status["built"] = True
         status["skipped_reason"] = None
+        merge_status = self.ensure_ai_stage_status("merge")
+        merge_status["built"] = True
+        merge_status["sent"] = False
+        merge_status["completed_at"] = None
         return self.save()
 
     def set_ai_sent(self) -> "RunManifest":
         _, status = self._ensure_ai_section()
         status["sent"] = True
+        merge_status = self.ensure_ai_stage_status("merge")
+        merge_status["sent"] = True
         return self.save()
 
     def set_ai_compacted(self) -> "RunManifest":
         _, status = self._ensure_ai_section()
         status["compacted"] = True
+        merge_status = self.ensure_ai_stage_status("merge")
+        merge_status["completed_at"] = _utc_now()
         return self.save()
 
     def set_ai_skipped(self, reason: str) -> "RunManifest":
@@ -531,6 +614,11 @@ class RunManifest:
         status["built"] = False
         status["sent"] = False
         status["compacted"] = False
+        for stage_key in ("merge", "validation"):
+            stage_status = self.ensure_ai_stage_status(stage_key)
+            stage_status["built"] = False
+            stage_status["sent"] = False
+            stage_status["completed_at"] = None
         return self.save()
 
     def update_ai_packs(

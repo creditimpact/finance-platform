@@ -1456,21 +1456,45 @@ def _merge_inflight_lock_path(runs_root: Path, sid: str) -> Path:
     return runs_root / sid / _LOCKS_DIRNAME / _MERGE_INFLIGHT_LOCK_FILENAME
 
 
+def _merge_stage_sent(runs_root: Path, sid: str) -> bool:
+    manifest_path = runs_root / sid / "manifest.json"
+    manifest = RunManifest(manifest_path)
+    try:
+        manifest.load()
+    except FileNotFoundError:
+        return False
+    except Exception:  # pragma: no cover - defensive logging
+        log.debug(
+            "VALIDATION_MERGE_STATUS_LOAD_FAILED sid=%s path=%s",
+            sid,
+            manifest_path,
+            exc_info=True,
+        )
+        return False
+    stage_status = manifest.get_ai_stage_status("merge")
+    return bool(stage_status.get("sent"))
+
+
 def _wait_for_merge_completion(
     sid: str, runs_root: Path, *, poll_interval: float = 0.5
 ) -> None:
     """Block until the merge inflight lock is cleared for ``sid``."""
 
     lock_path = _merge_inflight_lock_path(runs_root, sid)
-    wait_logged = False
+    wait_reasons: set[str] = set()
 
-    while lock_path.exists():
-        if not wait_logged:
-            log.info("VALIDATION_WAITING_FOR_MERGE sid=%s", sid)
-            wait_logged = True
+    while True:
+        lock_exists = lock_path.exists()
+        merge_sent = _merge_stage_sent(runs_root, sid)
+        if not lock_exists and merge_sent:
+            break
+        reason = "lock" if lock_exists else "status"
+        if reason not in wait_reasons:
+            log.info("VALIDATION_WAITING_FOR_MERGE sid=%s reason=%s", sid, reason)
+            wait_reasons.add(reason)
         time.sleep(max(poll_interval, 0.05))
 
-    if wait_logged:
+    if wait_reasons:
         log.info("VALIDATION_RESUMED_AFTER_MERGE sid=%s", sid)
 
 

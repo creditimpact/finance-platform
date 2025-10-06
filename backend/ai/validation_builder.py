@@ -1246,34 +1246,6 @@ class ValidationPackWriter:
         return normalized
 
 
-def _fallback_bureau_values(
-    field: str,
-    loader: Callable[[], Mapping[str, Mapping[str, Any]]],
-) -> Mapping[str, Any] | None:
-    try:
-        bureaus_data = loader()
-    except Exception:  # pragma: no cover - defensive
-        log.warning(
-            "VALIDATION_BUREAU_FALLBACK_FAILED field=%s", field, exc_info=True
-        )
-        return None
-
-    fallback: dict[str, Any] = {}
-    for bureau, bureau_payload in bureaus_data.items():
-        if not isinstance(bureau_payload, Mapping):
-            continue
-        try:
-            bureau_key = str(bureau)
-        except Exception:  # pragma: no cover - defensive
-            continue
-        value = bureau_payload.get(field)
-        if value is None:
-            continue
-        fallback[bureau_key] = {"raw": value}
-
-    return fallback or None
-
-
 def build_line(
     *,
     sid: str,
@@ -1298,14 +1270,6 @@ def build_line(
     field_key = ValidationPackWriter._field_key(field_name)
 
     finding_payload = _json_clone(finding)
-
-    has_bureau_values = (
-        "bureau_values" in finding_payload and finding_payload["bureau_values"] is not None
-    )
-    if not has_bureau_values and fallback_bureaus_loader is not None:
-        bureau_values = _fallback_bureau_values(field_name, fallback_bureaus_loader)
-        if bureau_values:
-            finding_payload["bureau_values"] = bureau_values
 
     payload: dict[str, Any] = {
         "id": f"acc_{account_key}__{field_key}",

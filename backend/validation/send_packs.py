@@ -510,6 +510,14 @@ class _ManifestView:
 
 
 @dataclass(frozen=True)
+class _IndexPreparationResult:
+    """Outcome of preparing the validation index prior to sending."""
+
+    index: ValidationIndex | None
+    skip: bool = False
+
+
+@dataclass(frozen=True)
 class _PreflightAccount:
     """Resolved paths for a single manifest entry during validation."""
 
@@ -742,6 +750,157 @@ def _wait_for_path(path: Path, *, attempts: int, delay: float) -> bool:
         if path.exists():
             return True
     return False
+
+
+def _looks_like_validation_packs_dir(path: Path) -> bool:
+    parts = [part.lower() for part in path.parts]
+    return any("validation" in part for part in parts) and (parts and parts[-1] == "packs")
+
+
+def _resolve_index_probe_path(
+    manifest: Mapping[str, Any] | ValidationIndex | Path | str,
+    stage_paths: StageManifestPaths | None,
+) -> Path | None:
+    if isinstance(manifest, ValidationIndex):
+        return manifest.index_path
+
+    if isinstance(manifest, Mapping):
+        if stage_paths and stage_paths.index_file:
+            return stage_paths.index_file
+        if stage_paths and stage_paths.base_dir:
+            return (stage_paths.base_dir / "index.json").resolve()
+        return None
+
+    try:
+        raw_path = Path(manifest)
+    except TypeError:
+        return None
+
+    if raw_path.is_dir():
+        return (raw_path / "index.json").resolve()
+
+    return raw_path.resolve()
+
+
+def _wait_for_validation_index(index_path: Path) -> ValidationIndex:
+    attempts = max(1, _INDEX_WAIT_ATTEMPTS)
+    delay = max(0.0, _INDEX_WAIT_DELAY)
+    last_error: Exception | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return load_validation_index(index_path)
+        except FileNotFoundError as exc:
+            status = "missing"
+            last_error = exc
+        except json.JSONDecodeError as exc:
+            status = "invalid_json"
+            last_error = exc
+        except OSError as exc:
+            status = f"io_error:{exc.__class__.__name__}"
+            last_error = exc
+        except Exception as exc:  # pragma: no cover - defensive logging
+            status = f"error:{exc.__class__.__name__}"
+            last_error = exc
+        else:  # pragma: no cover - unreachable, return in try block
+            break
+
+        log.info(
+            "VALIDATION_INDEX_WAIT attempt=%s status=%s path=%s",
+            attempt,
+            status,
+            str(index_path),
+        )
+
+        if attempt < attempts:
+            time.sleep(delay)
+
+    raise ValidationPackError(
+        f"Validation index missing or invalid: {index_path}",
+    ) from last_error
+
+
+def _validate_index_ready(
+    index: ValidationIndex, stage_paths: StageManifestPaths | None
+) -> bool:
+    packs_dir_path = index.packs_dir_path
+
+    expected_dir: Path | None = None
+    if stage_paths and stage_paths.packs_dir:
+        try:
+            expected_dir = stage_paths.packs_dir.resolve()
+        except OSError:
+            expected_dir = stage_paths.packs_dir
+
+    if expected_dir is not None and packs_dir_path != expected_dir:
+        log.error(
+            "VALIDATION_PACKS_DIR_MISMATCH sid=%s expected=%s actual=%s index=%s",
+            index.sid or "<unknown>",
+            str(expected_dir),
+            str(packs_dir_path),
+            str(index.index_path),
+        )
+        raise ValidationPackError(
+            "Validation index packs directory does not match manifest",
+        )
+
+    if expected_dir is None and not _looks_like_validation_packs_dir(packs_dir_path):
+        log.error(
+            "VALIDATION_PACKS_DIR_UNEXPECTED sid=%s packs_dir=%s index=%s",
+            index.sid or "<unknown>",
+            str(packs_dir_path),
+            str(index.index_path),
+        )
+        raise ValidationPackError(
+            "Validation index does not reference validation packs",
+        )
+
+    if not packs_dir_path.exists():
+        log.error(
+            "VALIDATION_PACKS_DIR_MISSING sid=%s packs_dir=%s index=%s",
+            index.sid or "<unknown>",
+            str(packs_dir_path),
+            str(index.index_path),
+        )
+        raise ValidationPackError("Validation packs directory is missing")
+
+    eligible_files = [
+        path
+        for path in packs_dir_path.glob("val_acc_*.jsonl")
+        if path.is_file()
+    ]
+
+    if not eligible_files:
+        log.info(
+            "VALIDATION_NO_PACKS_ELIGIBLE sid=%s packs_dir=%s index=%s",
+            index.sid or "<unknown>",
+            str(packs_dir_path),
+            str(index.index_path),
+        )
+        return False
+
+    return True
+
+
+def _prepare_validation_index(
+    manifest: Mapping[str, Any] | ValidationIndex | Path | str,
+) -> _IndexPreparationResult:
+    stage_paths: StageManifestPaths | None = None
+    if isinstance(manifest, Mapping):
+        stage_paths = extract_stage_manifest_paths(manifest, _MANIFEST_STAGE)
+
+    if isinstance(manifest, ValidationIndex):
+        index = manifest
+    else:
+        index_path = _resolve_index_probe_path(manifest, stage_paths)
+        if index_path is None:
+            return _IndexPreparationResult(index=None, skip=False)
+        index = _wait_for_validation_index(index_path)
+
+    if not _validate_index_ready(index, stage_paths):
+        return _IndexPreparationResult(index=index, skip=True)
+
+    return _IndexPreparationResult(index=index, skip=False)
 
 
 def _load_manifest_view(
@@ -2069,7 +2228,17 @@ def send_validation_packs(
 ) -> list[dict[str, Any]]:
     """Send all validation packs referenced by ``manifest``."""
 
-    sender = ValidationPackSender(manifest)
+    preparation = _prepare_validation_index(manifest)
+    if preparation.skip:
+        return []
+
+    sender_manifest: Mapping[str, Any] | ValidationIndex | Path | str
+    if preparation.index is not None:
+        sender_manifest = preparation.index
+    else:
+        sender_manifest = manifest
+
+    sender = ValidationPackSender(sender_manifest)
     return sender.send()
 
 

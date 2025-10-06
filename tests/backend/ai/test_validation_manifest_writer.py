@@ -25,13 +25,12 @@ def test_write_validation_manifest_v2_uses_relative_posix_paths(tmp_path: Path) 
     index_path = base_dir / "index.json"
 
     pack_path = packs_dir / "nested" / "pack.jsonl"
-    result_jsonl_path = results_dir / "nested" / "account_001.result.jsonl"
     result_json_path = results_dir / "nested" / "account_001.result.json"
 
     entry = ValidationIndexEntry(
         account_id=1,
         pack_path=pack_path,
-        result_jsonl_path=result_jsonl_path,
+        result_jsonl_path=result_json_path,
         result_json_path=result_json_path,
         weak_fields=("Account Name",),
         line_count=7,
@@ -61,10 +60,8 @@ def test_write_validation_manifest_v2_uses_relative_posix_paths(tmp_path: Path) 
 
     assert record["account_id"] == 1
     assert record["pack"] == "packs/nested/pack.jsonl"
-    assert record["result_jsonl"] == "results/nested/account_001.result.jsonl"
     assert record["result_json"] == "results/nested/account_001.result.json"
     assert "\\" not in record["pack"]
-    assert "\\" not in record["result_jsonl"]
     assert "\\" not in record["result_json"]
 
     assert record["weak_fields"] == ["Account Name"]
@@ -76,7 +73,6 @@ def test_write_validation_manifest_v2_uses_relative_posix_paths(tmp_path: Path) 
     expected_keys = {
         "account_id",
         "pack",
-        "result_jsonl",
         "result_json",
         "weak_fields",
         "lines",

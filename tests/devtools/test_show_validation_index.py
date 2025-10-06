@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from backend.ai.validation_index import ValidationIndexEntry, ValidationPackIndexWriter
 from backend.core.ai.paths import (
     ensure_validation_paths,
@@ -11,6 +13,11 @@ from backend.core.ai.paths import (
 )
 
 from devtools import show_validation_index
+
+
+@pytest.fixture(autouse=True)
+def _legacy_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VALIDATION_SINGLE_RESULT_FILE", "0")
 
 
 def _create_index_entry(

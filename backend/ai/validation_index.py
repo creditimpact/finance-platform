@@ -11,11 +11,28 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Sequence
 
-from backend.validation.index_schema import ValidationIndex, ValidationPackRecord, load_validation_index
+from backend.validation.index_schema import (
+    ValidationIndex,
+    ValidationPackRecord,
+    load_validation_index,
+)
 
 log = logging.getLogger(__name__)
 
 _SCHEMA_VERSION = 2
+
+
+def _single_result_file_enabled() -> bool:
+    raw = os.getenv("VALIDATION_SINGLE_RESULT_FILE")
+    if raw is None:
+        return True
+
+    lowered = raw.strip().lower()
+    if lowered in {"1", "true", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    return True
 
 
 def _utc_now() -> str:
@@ -49,13 +66,17 @@ class ValidationIndexEntry:
         payload: dict[str, object] = {
             "account_id": int(self.account_id),
             "pack": _relativize_path(self.pack_path, index_dir),
-            "result_jsonl": _relativize_path(self.result_jsonl_path, index_dir),
             "result_json": _relativize_path(self.result_json_path, index_dir),
             "weak_fields": weak_fields,
             "lines": int(self.line_count),
             "built_at": str(self.built_at or _utc_now()),
             "status": str(self.status or "built"),
         }
+
+        if not _single_result_file_enabled():
+            payload["result_jsonl"] = _relativize_path(
+                self.result_jsonl_path, index_dir
+            )
 
         if self.request_lines is not None:
             normalized_request = _normalize_optional_int(self.request_lines)
@@ -329,7 +350,10 @@ class ValidationPackIndexWriter:
         self, index: ValidationIndex, record: ValidationPackRecord
     ) -> ValidationIndexEntry:
         pack_path = index.resolve_pack_path(record)
-        result_jsonl_path = index.resolve_result_jsonl_path(record)
+        if record.result_jsonl:
+            result_jsonl_path = index.resolve_result_jsonl_path(record)
+        else:
+            result_jsonl_path = index.resolve_result_json_path(record)
         result_json_path = index.resolve_result_json_path(record)
 
         extra: dict[str, object] = dict(record.extra)

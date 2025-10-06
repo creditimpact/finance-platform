@@ -95,7 +95,7 @@ class ValidationPackRecord:
 
     account_id: int
     pack: str
-    result_jsonl: str
+    result_jsonl: str | None
     result_json: str
     lines: int
     status: str
@@ -113,11 +113,12 @@ class ValidationPackRecord:
             or data.get("pack_file")
             or data.get("pack_filename")
         )
-        result_jsonl = _normalize_string(
+        result_jsonl_raw = _normalize_string(
             data.get("result_jsonl")
             or data.get("result_jsonl_path")
             or data.get("result_jsonl_file")
         )
+        result_jsonl = result_jsonl_raw or None
         result_json = _normalize_string(
             data.get("result_json")
             or data.get("result_json_path")
@@ -162,7 +163,7 @@ class ValidationPackRecord:
         return ValidationPackRecord(
             account_id=account_id,
             pack=pack_path or "",
-            result_jsonl=result_jsonl or "",
+            result_jsonl=result_jsonl,
             result_json=result_json or "",
             lines=lines,
             status=status or "built",
@@ -176,12 +177,13 @@ class ValidationPackRecord:
         payload: dict[str, Any] = {
             "account_id": self.account_id,
             "pack": self.pack,
-            "result_jsonl": self.result_jsonl,
             "result_json": self.result_json,
             "lines": self.lines,
             "status": self.status,
             "built_at": self.built_at,
         }
+        if self.result_jsonl:
+            payload["result_jsonl"] = self.result_jsonl
         if self.weak_fields:
             payload["weak_fields"] = list(self.weak_fields)
         if self.source_hash:
@@ -227,6 +229,8 @@ class ValidationIndex:
         return self.resolve_path(record.pack)
 
     def resolve_result_jsonl_path(self, record: ValidationPackRecord) -> Path:
+        if not record.result_jsonl:
+            raise ValueError("Validation pack record is missing a result_jsonl path")
         return self.resolve_path(record.result_jsonl)
 
     def resolve_result_json_path(self, record: ValidationPackRecord) -> Path:

@@ -297,6 +297,7 @@ def reason_pack_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict
                 "category": FIELD_CATEGORY_MAP[field],
                 "documents": _expected_documents(field),
                 "strength": "weak",
+                "is_mismatch": True,
                 "ai_needed": True,
             }
         )

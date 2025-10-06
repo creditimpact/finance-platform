@@ -58,6 +58,7 @@ def _build_manifest(tmp_path: Path, sid: str = "S001") -> tuple[dict[str, object
                 {
                     "field": "Account Status",
                     "strength": "weak",
+                    "is_mismatch": True,
                     "ai_needed": False,
                     "documents": ["statement"],
                     "category": "identity",
@@ -124,12 +125,14 @@ def test_builder_respects_summary_findings(tmp_path: Path) -> None:
                 {
                     "field": "account_type",
                     "strength": "weak",
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": False,
                 },
                 {
                     "field": "account_rating",
                     "strength": "weak",
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": True,
                 },
@@ -178,6 +181,7 @@ def test_builder_ignores_legacy_requirements(tmp_path: Path) -> None:
                 {
                     "field": "account_type",
                     "strength": "weak",
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": False,
                 }

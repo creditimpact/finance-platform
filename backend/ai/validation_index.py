@@ -47,8 +47,8 @@ class ValidationIndexEntry:
 
     account_id: int
     pack_path: Path
-    result_jsonl_path: Path
-    result_json_path: Path
+    result_jsonl_path: Path | None
+    result_json_path: Path | None
     weak_fields: Sequence[str]
     line_count: int
     status: str
@@ -66,14 +66,21 @@ class ValidationIndexEntry:
         payload: dict[str, object] = {
             "account_id": int(self.account_id),
             "pack": _relativize_path(self.pack_path, index_dir),
-            "result_json": _relativize_path(self.result_json_path, index_dir),
             "weak_fields": weak_fields,
             "lines": int(self.line_count),
             "built_at": str(self.built_at or _utc_now()),
             "status": str(self.status or "built"),
         }
 
-        if not _single_result_file_enabled():
+        if self.result_json_path is not None:
+            payload["result_json"] = _relativize_path(
+                self.result_json_path, index_dir
+            )
+
+        if (
+            not _single_result_file_enabled()
+            and self.result_jsonl_path is not None
+        ):
             payload["result_jsonl"] = _relativize_path(
                 self.result_jsonl_path, index_dir
             )
@@ -288,12 +295,18 @@ class ValidationPackIndexWriter:
         request_lines: int | None = None,
         model: str | None = None,
         completed_at: str | None = None,
+        result_path: Path | str | None = None,
+        line_count: int | None = None,
     ) -> dict[str, object] | None:
         """Persist the final status for ``pack_path`` in the index."""
 
         normalized_status = str(status).strip().lower()
-        if normalized_status not in {"done", "error"}:
-            raise ValueError("status must be 'done' or 'error'")
+        if normalized_status in {"done", "completed"}:
+            normalized_status = "completed"
+        elif normalized_status in {"error", "failed"}:
+            normalized_status = "failed"
+        else:
+            raise ValueError("status must be 'done'/'completed' or 'error'/'failed'")
 
         set_values: dict[str, object] = {
             "status": normalized_status,
@@ -310,12 +323,27 @@ class ValidationPackIndexWriter:
             if normalized_model is not None:
                 set_values["model"] = normalized_model
 
-        if normalized_status == "error":
+        if line_count is not None:
+            normalized_lines = _normalize_optional_int(line_count)
+            if normalized_lines is not None:
+                set_values["lines"] = normalized_lines
+
+        if normalized_status == "failed":
             normalized_error = _normalize_optional_str(error) or "unknown"
             set_values["error"] = normalized_error
-            remove_keys: tuple[str, ...] = ()
+            if result_path is None:
+                remove_keys = ("result_json", "result_jsonl", "results_path")
+            else:
+                remove_keys = ("result_jsonl",)
         else:
             remove_keys = ("error",)
+            if result_path is not None:
+                set_values["result_json"] = Path(result_path)
+            else:
+                remove_keys = remove_keys + ("result_json", "result_jsonl", "results_path")
+
+        if result_path is None and normalized_status != "failed":
+            remove_keys = remove_keys + ("result_json", "result_jsonl", "results_path")
 
         return self._update_entry_fields(
             Path(pack_path),
@@ -353,8 +381,18 @@ class ValidationPackIndexWriter:
         if record.result_jsonl:
             result_jsonl_path = index.resolve_result_jsonl_path(record)
         else:
-            result_jsonl_path = index.resolve_result_json_path(record)
-        result_json_path = index.resolve_result_json_path(record)
+            result_jsonl_path = None
+
+        result_json_path: Path | None
+        if record.result_json:
+            try:
+                result_json_path = index.resolve_result_json_path(record)
+            except ValueError:
+                result_json_path = None
+            except FileNotFoundError:  # pragma: no cover - defensive
+                result_json_path = None
+        else:
+            result_json_path = None
 
         extra: dict[str, object] = dict(record.extra)
         request_lines = _normalize_optional_int(extra.pop("request_lines", None))
@@ -404,6 +442,11 @@ class ValidationPackIndexWriter:
             normalized_key = str(key)
             if normalized_key in {"request_lines", "model", "sent_at", "completed_at", "error"}:
                 updates[normalized_key] = None
+            elif normalized_key in {"result_json", "result_jsonl", "results_path"}:
+                if normalized_key == "result_jsonl":
+                    updates["result_jsonl_path"] = None
+                else:
+                    updates["result_json_path"] = None
             else:
                 extra.pop(normalized_key, None)
 
@@ -423,6 +466,20 @@ class ValidationPackIndexWriter:
                 updates["completed_at"] = _normalize_optional_str(value)
             elif normalized_key == "error":
                 updates["error"] = _normalize_optional_str(value)
+            elif normalized_key in {"result_json", "result_json_path", "results_path"}:
+                if value in {None, ""}:
+                    updates["result_json_path"] = None
+                else:
+                    updates["result_json_path"] = Path(str(value))
+            elif normalized_key in {"result_jsonl", "result_jsonl_path"}:
+                if value in {None, ""}:
+                    updates["result_jsonl_path"] = None
+                else:
+                    updates["result_jsonl_path"] = Path(str(value))
+            elif normalized_key in {"lines", "line_count"}:
+                normalized_lines = _normalize_optional_int(value)
+                if normalized_lines is not None:
+                    updates["line_count"] = normalized_lines
             else:
                 extra[normalized_key] = value
 

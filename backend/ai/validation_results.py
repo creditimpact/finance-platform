@@ -545,13 +545,16 @@ def store_validation_result(
     )
 
     writer = _index_writer(sid, runs_root_path, validation_paths)
+    index_status = "completed" if normalized_status == "done" else "failed"
     writer.record_result(
         pack_path,
-        status=normalized_status,
+        status=index_status,
         error=error,
         request_lines=request_lines,
         model=normalized_payload.get("model"),
         completed_at=normalized_payload.get("completed_at"),
+        result_path=summary_path if index_status == "completed" else None,
+        line_count=request_lines_count,
     )
 
     return summary_path

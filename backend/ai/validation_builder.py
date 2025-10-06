@@ -358,15 +358,22 @@ class ValidationPackWriter:
         normalized_id = self._normalize_account_id(account_id)
         summary = self._load_summary(normalized_id)
         pack_lines = self._build_pack_lines_from_summary(normalized_id, summary)
-        if not pack_lines and self._last_pack_had_findings:
+        if not pack_lines:
             account_label = (
                 f"{normalized_id:03d}" if isinstance(normalized_id, int) else str(normalized_id)
             )
-            log.info(
-                "validation pack skipped: no eligible lines (sid=%s account=%s)",
-                self.sid,
-                account_label,
-            )
+            if self._last_pack_had_findings:
+                log.info(
+                    "validation pack skipped: no eligible lines (sid=%s account=%s)",
+                    self.sid,
+                    account_label,
+                )
+            else:
+                log.info(
+                    "validation pack skipped: no findings (sid=%s account=%s)",
+                    self.sid,
+                    account_label,
+                )
             return []
 
         serialized, size_bytes = self._serialize_pack_lines(pack_lines)
@@ -558,14 +565,8 @@ class ValidationPackWriter:
         *,
         summary: Mapping[str, Any] | None = None,
     ) -> None:
-        result_json_path = (
-            self._results_dir
-            / validation_result_filename_for_account(account_id)
-        )
-        result_jsonl_path = (
-            self._results_dir
-            / validation_result_jsonl_filename_for_account(account_id)
-        )
+        if not lines:
+            return
         weak_fields: list[str] = []
         for line in lines:
             if not isinstance(line, PackLine):
@@ -588,8 +589,8 @@ class ValidationPackWriter:
         entry = ValidationIndexEntry(
             account_id=account_id,
             pack_path=pack_path.resolve(),
-            result_jsonl_path=result_jsonl_path.resolve(),
-            result_json_path=result_json_path.resolve(),
+            result_jsonl_path=None,
+            result_json_path=None,
             weak_fields=tuple(weak_fields),
             line_count=len(lines),
             status="built",

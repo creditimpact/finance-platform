@@ -535,6 +535,14 @@ def store_validation_result(
     )
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(serialized_summary + "\n", encoding="utf-8")
+    log.info(
+        "VALIDATION_RESULTS_WRITTEN sid=%s account_id=%s summary=%s decisions=%s status=%s",
+        sid,
+        account_id,
+        str(summary_path),
+        len(decisions),
+        normalized_status,
+    )
 
     writer = _index_writer(sid, runs_root_path, validation_paths)
     writer.record_result(

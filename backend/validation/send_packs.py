@@ -349,6 +349,16 @@ def _env_float(name: str, default: float) -> float:
 
 
 @dataclass(slots=True)
+@dataclass(frozen=True)
+class _ChatCompletionResponse:
+    """Wrapper around the chat completion response payload."""
+
+    payload: Mapping[str, Any]
+    status_code: int
+    latency: float
+    retries: int
+
+
 class _ChatCompletionClient:
     """Minimal HTTP client for the OpenAI Chat Completions API."""
 
@@ -365,7 +375,7 @@ class _ChatCompletionClient:
         model: str,
         messages: Sequence[Mapping[str, Any]],
         response_format: Mapping[str, Any],
-    ) -> Mapping[str, Any]:
+    ) -> _ChatCompletionResponse:
         url = f"{self.base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -377,9 +387,16 @@ class _ChatCompletionClient:
             "response_format": dict(response_format),
         }
         request_lib = _ensure_requests_module()
+        start_time = time.monotonic()
         response = request_lib.post(url, headers=headers, json=payload, timeout=self.timeout)
+        latency = time.monotonic() - start_time
         response.raise_for_status()
-        return response.json()
+        return _ChatCompletionResponse(
+            payload=response.json(),
+            status_code=getattr(response, "status_code", 0),
+            latency=latency,
+            retries=0,
+        )
 
 
 @dataclass(frozen=True)
@@ -753,6 +770,15 @@ class ValidationPackSender:
         preflight = self._preflight(index)
         self._results_root = index.results_dir_path
 
+        log.info(
+            "VALIDATION_SEND_DISCOVERY sid=%s manifest=%s packs=%s missing=%s results_dir=%s",
+            self.sid,
+            str(index.index_path),
+            len(preflight.accounts),
+            preflight.missing,
+            str(index.results_dir_path),
+        )
+
         results: list[dict[str, Any]] = []
         for account in preflight.accounts:
             record = account.record
@@ -786,6 +812,15 @@ class ValidationPackSender:
                     self.sid,
                     account_label,
                     missing_display,
+                )
+                log.error(
+                    "VALIDATION_SEND_ACCOUNT_FAILED sid=%s account_id=%s pack=%s exc_type=%s message=%s line_ids=%s",
+                    self.sid,
+                    account_label,
+                    str(resolved_pack),
+                    "FileNotFoundError",
+                    error_message,
+                    [],
                 )
                 if normalized_account is None:
                     self._log(
@@ -834,6 +869,16 @@ class ValidationPackSender:
                     result_json_relative,
                 )
             except ValidationPackError as exc:
+                failed_line_ids = getattr(exc, "line_ids", []) or []
+                log.error(
+                    "VALIDATION_SEND_ACCOUNT_FAILED sid=%s account_id=%s pack=%s exc_type=%s message=%s line_ids=%s",
+                    self.sid,
+                    account_label,
+                    str(resolved_pack),
+                    type(exc).__name__,
+                    exc,
+                    failed_line_ids,
+                )
                 if normalized_account is None:
                     self._log(
                         "send_account_failed",
@@ -857,8 +902,21 @@ class ValidationPackSender:
                     str(exc),
                 )
             except Exception as exc:  # pragma: no cover - defensive logging
+                failed_line_ids = getattr(exc, "line_ids", []) or []
+                log.error(
+                    "VALIDATION_SEND_ACCOUNT_FAILED sid=%s account_id=%s pack=%s exc_type=%s message=%s line_ids=%s",
+                    self.sid,
+                    account_label,
+                    str(resolved_pack),
+                    type(exc).__name__,
+                    exc,
+                    failed_line_ids,
+                )
                 log.exception(
-                    "VALIDATION_PACK_ACCOUNT_UNEXPECTED sid=%s account=%s", self.sid, account_label
+                    "VALIDATION_PACK_ACCOUNT_UNEXPECTED sid=%s account=%s line_ids=%s",
+                    self.sid,
+                    account_label,
+                    failed_line_ids,
                 )
                 if normalized_account is None:
                     self._log(
@@ -917,12 +975,24 @@ class ValidationPackSender:
             )
             raise
 
+        log.info(
+            "VALIDATION_SEND_ACCOUNT_START sid=%s account_id=%03d pack=%s lines=%s results=%s",
+            self.sid,
+            account_int,
+            str(pack_path),
+            len(pack_lines),
+            str(result_summary_path),
+        )
+
         result_lines: list[dict[str, Any]] = []
         errors: list[str] = []
         total_fields = len(pack_lines)
         fields_sent = 0
         conditional_sent = 0
         decision_metrics = _empty_decision_metrics()
+        failed_line_ids: list[str] = []
+        current_line_id: str | None = None
+        start_time = time.monotonic()
 
         self._log(
             "send_account_start",
@@ -932,63 +1002,94 @@ class ValidationPackSender:
             lines=len(pack_lines),
         )
 
-        for idx, pack_line in enumerate(pack_lines, start=1):
-            field_name = self._coerce_field_name(pack_line, idx)
-            if not self._is_allowed_field(field_name):
-                self._log(
-                    "send_line_skipped",
-                    account_id=f"{account_int:03d}",
-                    line_number=idx,
-                    field=field_name,
-                    reason="field_not_allowed",
+        try:
+            for idx, pack_line in enumerate(pack_lines, start=1):
+                field_name = self._coerce_field_name(pack_line, idx)
+                current_line_id = self._coerce_identifier(
+                    account_int, idx, pack_line.get("id")
                 )
-                continue
-            try:
-                response = self._call_model(pack_line)
-            except Exception as exc:
-                error_message = (
-                    "AI request failed for acc "
-                    f"{account_int:03d} pack={pack_display} -> "
-                    f"{result_jsonl_display}, {result_summary_display}: {exc}"
+                if not self._is_allowed_field(field_name):
+                    self._log(
+                        "send_line_skipped",
+                        account_id=f"{account_int:03d}",
+                        line_number=idx,
+                        field=field_name,
+                        reason="field_not_allowed",
+                    )
+                    continue
+                try:
+                    response = self._call_model(
+                        pack_line,
+                        account_id=account_int,
+                        account_label=f"{account_int:03d}",
+                        line_number=idx,
+                        line_id=current_line_id,
+                    )
+                except Exception as exc:
+                    error_message = (
+                        "AI request failed for acc "
+                        f"{account_int:03d} pack={pack_display} -> "
+                        f"{result_jsonl_display}, {result_summary_display}: {exc}"
+                    )
+                    errors.append(error_message)
+                    log.error(
+                        "VALIDATION_SEND_MODEL_ERROR sid=%s account_id=%03d line_id=%s "
+                        "exc_type=%s message=%s",
+                        self.sid,
+                        account_int,
+                        current_line_id,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    response = self._fallback_response(error_message)
+                line_result, metadata = self._build_result_line(
+                    account_int, idx, pack_line, response
                 )
-                errors.append(error_message)
-                response = self._fallback_response(error_message)
-            line_result, metadata = self._build_result_line(
-                account_int, idx, pack_line, response
-            )
-            result_lines.append(line_result)
-            fields_sent += 1
-            is_conditional = bool(metadata.get("conditional"))
-            bucket = "conditional" if is_conditional else "non_conditional"
-            if is_conditional:
-                conditional_sent += 1
+                result_lines.append(line_result)
+                fields_sent += 1
+                is_conditional = bool(metadata.get("conditional"))
+                bucket = "conditional" if is_conditional else "non_conditional"
+                if is_conditional:
+                    conditional_sent += 1
 
-            gate_info = metadata.get("gate_info") or None
-            if gate_info:
-                decision_metrics["weak"][bucket] += 1
-                gate_log: dict[str, Any] = {
-                    "account_id": f"{account_int:03d}",
-                    "line_number": idx,
-                    "field": metadata.get("field"),
-                    "reason": gate_info.get("reason"),
-                    "original_decision": metadata.get("original_decision"),
-                    "final_decision": metadata.get("final_decision"),
-                    "corroboration": gate_info.get("corroboration"),
-                    "required_corroboration": gate_info.get("required_corroboration"),
-                }
-                unique_values = gate_info.get("unique_values")
-                if unique_values is not None:
-                    gate_log["unique_values"] = unique_values
-                if "high_signal_keywords" in gate_info:
-                    gate_log["high_signal_keywords"] = gate_info["high_signal_keywords"]
-                self._log("send_conditional_gate_downgrade", **gate_log)
-            else:
-                final_decision = metadata.get("final_decision", "no_case")
-                decision_metrics.setdefault(
-                    final_decision, {"conditional": 0, "non_conditional": 0}
-                )
-                decision_metrics[final_decision][bucket] += 1
-            time.sleep(self._throttle)
+                gate_info = metadata.get("gate_info") or None
+                if gate_info:
+                    decision_metrics["weak"][bucket] += 1
+                    gate_log: dict[str, Any] = {
+                        "account_id": f"{account_int:03d}",
+                        "line_number": idx,
+                        "field": metadata.get("field"),
+                        "reason": gate_info.get("reason"),
+                        "original_decision": metadata.get("original_decision"),
+                        "final_decision": metadata.get("final_decision"),
+                        "corroboration": gate_info.get("corroboration"),
+                        "required_corroboration": gate_info.get("required_corroboration"),
+                    }
+                    unique_values = gate_info.get("unique_values")
+                    if unique_values is not None:
+                        gate_log["unique_values"] = unique_values
+                    if "high_signal_keywords" in gate_info:
+                        gate_log["high_signal_keywords"] = gate_info["high_signal_keywords"]
+                    self._log("send_conditional_gate_downgrade", **gate_log)
+                else:
+                    final_decision = metadata.get("final_decision", "no_case")
+                    decision_metrics.setdefault(
+                        final_decision, {"conditional": 0, "non_conditional": 0}
+                    )
+                    decision_metrics[final_decision][bucket] += 1
+                time.sleep(self._throttle)
+        except ValidationPackError as exc:
+            if current_line_id:
+                failed_line_ids.append(current_line_id)
+            if not getattr(exc, "line_ids", None) and failed_line_ids:
+                setattr(exc, "line_ids", list(dict.fromkeys(failed_line_ids)))
+            raise
+        except Exception as exc:
+            if current_line_id:
+                failed_line_ids.append(current_line_id)
+            if failed_line_ids and not getattr(exc, "line_ids", None):
+                setattr(exc, "line_ids", list(dict.fromkeys(failed_line_ids)))
+            raise
 
         status = "error" if errors else "done"
         error_message = "; ".join(errors) if errors else None
@@ -1040,6 +1141,15 @@ class ValidationPackSender:
             "send_account_metrics",
             account_id=f"{account_int:03d}",
             **metrics_payload,
+        )
+        duration = time.monotonic() - start_time
+        log.info(
+            "VALIDATION_SEND_ACCOUNT_END sid=%s account_id=%03d status=%s results=%s duration=%.3fs",
+            self.sid,
+            account_int,
+            status,
+            len(result_lines),
+            duration,
         )
         return summary_payload
 
@@ -1102,7 +1212,15 @@ class ValidationPackSender:
         )
         return summary_payload
 
-    def _call_model(self, pack_line: Mapping[str, Any]) -> Mapping[str, Any]:
+    def _call_model(
+        self,
+        pack_line: Mapping[str, Any],
+        *,
+        account_id: int,
+        account_label: str,
+        line_number: int,
+        line_id: str,
+    ) -> Mapping[str, Any]:
         prompt = pack_line.get("prompt")
         if not isinstance(prompt, Mapping):
             raise ValidationPackError("Pack line missing prompt")
@@ -1123,8 +1241,19 @@ class ValidationPackSender:
             messages=messages,
             response_format={"type": "json_object"},
         )
+        payload = response.payload
+        log.info(
+            "VALIDATION_SEND_MODEL_CALL sid=%s account_id=%s line_id=%s line_number=%s status=%s latency=%.3fs retries=%s",
+            self.sid,
+            account_label,
+            line_id,
+            line_number,
+            response.status_code,
+            response.latency,
+            response.retries,
+        )
 
-        choices = response.get("choices")
+        choices = payload.get("choices")
         if not isinstance(choices, Sequence) or not choices:
             raise ValidationPackError("Model response missing choices")
         message = choices[0].get("message") if isinstance(choices[0], Mapping) else None
@@ -1333,6 +1462,15 @@ class ValidationPackSender:
             summary_absolute=str(summary_path.resolve()),
             results=len(result_lines),
             status=status,
+        )
+        log.info(
+            "VALIDATION_SEND_RESULTS_WRITTEN sid=%s account_id=%03d jsonl=%s summary=%s decisions=%s status=%s",
+            self.sid,
+            account_id,
+            str(jsonl_path),
+            str(summary_path),
+            len(result_lines),
+            status,
         )
         return jsonl_path, summary_path
 

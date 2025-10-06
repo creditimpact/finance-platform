@@ -12,7 +12,12 @@ from typing import Mapping, MutableMapping
 
 from celery import chain, shared_task
 
-from backend.core.ai.paths import ensure_merge_paths, probe_legacy_ai_packs
+from backend.ai.validation_builder import build_validation_packs_for_run
+from backend.core.ai.paths import (
+    ensure_merge_paths,
+    probe_legacy_ai_packs,
+    validation_index_path,
+)
 from backend.core.logic import polarity
 from backend.pipeline.auto_ai import (
     INFLIGHT_LOCK_FILENAME,
@@ -29,6 +34,8 @@ from backend.pipeline.auto_ai import (
 )
 from backend.core.ai.validators import validate_ai_result
 from backend.core.io.tags import read_tags, upsert_tag
+from backend.validation.manifest import rewrite_index_to_canonical_layout
+from backend.validation.send_packs import send_validation_packs
 from scripts.score_bureau_pairs import score_accounts
 
 LEGACY_PIPELINE_DIRNAME = "ai_packs"
@@ -424,11 +431,7 @@ def ai_score_step(self, sid: str, runs_root: str | None = None) -> dict[str, obj
     return payload
 
 
-@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
-def ai_build_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, object]:
-    """Build AI merge packs for accounts requiring AI decisions."""
-
-    payload = _ensure_payload(prev)
+def _merge_build_stage(payload: dict[str, object]) -> dict[str, object]:
     sid = str(payload.get("sid") or "")
     if not sid:
         logger.info("AUTO_AI_BUILD_SKIP payload=%s", payload)
@@ -465,7 +468,9 @@ def ai_build_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, ob
     try:
         index_entries = _load_ai_index(index_path)
     except Exception:  # pragma: no cover - defensive logging
-        logger.error("AUTO_AI_BUILD_INVALID_INDEX sid=%s path=%s", sid, index_path, exc_info=True)
+        logger.error(
+            "AUTO_AI_BUILD_INVALID_INDEX sid=%s path=%s", sid, index_path, exc_info=True
+        )
         _cleanup_lock(payload, reason="build_invalid_index")
         raise
 
@@ -480,11 +485,7 @@ def ai_build_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, ob
     return payload
 
 
-@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
-def ai_send_packs_step(self, prev: Mapping[str, object] | None) -> dict[str, object]:
-    """Send AI merge packs for adjudication and persist AI decision tags."""
-
-    payload = _ensure_payload(prev)
+def _merge_send_stage(payload: dict[str, object]) -> dict[str, object]:
     sid = str(payload.get("sid") or "")
     if not sid:
         logger.info("AUTO_AI_SEND_SKIP payload=%s", payload)
@@ -554,11 +555,7 @@ def ai_validation_requirements_step(
     return payload
 
 
-@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
-def ai_compact_tags_step(self, prev: Mapping[str, object] | None) -> dict[str, object]:
-    """Compact tags and summaries for accounts touched by the AI pipeline."""
-
-    payload = _ensure_payload(prev)
+def _merge_compact_stage(payload: dict[str, object]) -> dict[str, object]:
     sid = str(payload.get("sid") or "")
     if not sid:
         logger.info("AUTO_AI_COMPACT_SKIP payload=%s", payload)
@@ -616,14 +613,24 @@ def ai_compact_tags_step(self, prev: Mapping[str, object] | None) -> dict[str, o
     payload["packs"] = packs_count
     payload["pairs"] = pairs_count
 
+    logger.info("MERGE_STAGE_DONE sid=%s", sid)
+    return payload
+
+
+def _finalize_stage(payload: dict[str, object]) -> dict[str, object]:
+    sid = str(payload.get("sid") or "")
+    if not sid:
+        logger.info("AUTO_AI_FINALIZE_SKIP payload=%s", payload)
+        return payload
+
     last_ok_value = payload.get("last_ok_path")
     if last_ok_value:
         last_ok_path = Path(str(last_ok_value))
         last_ok_payload = {
             "sid": sid,
             "finished_at": datetime.now(timezone.utc).isoformat(),
-            "packs": packs_count,
-            "pairs": pairs_count,
+            "packs": payload.get("packs", 0),
+            "pairs": payload.get("pairs", 0),
         }
         try:
             last_ok_path.write_text(
@@ -655,8 +662,8 @@ def ai_compact_tags_step(self, prev: Mapping[str, object] | None) -> dict[str, o
             _append_run_log_entry(
                 runs_root=runs_root_path,
                 sid=sid,
-                packs=packs_count,
-                pairs=pairs_count,
+                packs=int(payload.get("packs", 0)),
+                pairs=int(payload.get("pairs", 0)),
                 reason=reason_text,
             )
 
@@ -671,6 +678,140 @@ def ai_compact_tags_step(self, prev: Mapping[str, object] | None) -> dict[str, o
     )
 
     return payload
+
+
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def merge_build_packs(self, prev: Mapping[str, object] | None) -> dict[str, object]:
+    payload = _ensure_payload(prev)
+    return _merge_build_stage(payload)
+
+
+ai_build_packs_step = merge_build_packs
+
+
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def merge_send(self, prev: Mapping[str, object] | None) -> dict[str, object]:
+    payload = _ensure_payload(prev)
+    return _merge_send_stage(payload)
+
+
+ai_send_packs_step = merge_send
+
+
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def merge_compact(self, prev: Mapping[str, object] | None) -> dict[str, object]:
+    payload = _ensure_payload(prev)
+    return _merge_compact_stage(payload)
+
+
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def validation_build_packs(
+    self, prev: Mapping[str, object] | None
+) -> dict[str, object]:
+    payload = _ensure_payload(prev)
+    sid = str(payload.get("sid") or "")
+    if not sid:
+        logger.info("VALIDATION_BUILD_SKIP payload=%s", payload)
+        return payload
+
+    _populate_common_paths(payload)
+    runs_root = Path(payload["runs_root"])
+
+    logger.info("VALIDATION_STAGE_STARTED sid=%s", sid)
+
+    try:
+        results = build_validation_packs_for_run(sid, runs_root=runs_root)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.error("VALIDATION_BUILD_FAILED sid=%s", sid, exc_info=True)
+        raise
+
+    packs_written = sum(len(entries or []) for entries in results.values())
+    payload["validation_packs"] = packs_written
+    logger.info("VALIDATION_BUILD_DONE sid=%s packs=%d", sid, packs_written)
+    return payload
+
+
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def validation_send(self, prev: Mapping[str, object] | None) -> dict[str, object]:
+    payload = _ensure_payload(prev)
+    sid = str(payload.get("sid") or "")
+    if not sid:
+        logger.info("VALIDATION_SEND_SKIP payload=%s", payload)
+        return payload
+
+    _populate_common_paths(payload)
+    runs_root = Path(payload["runs_root"])
+    index_path = validation_index_path(sid, runs_root=runs_root, create=True)
+
+    if not index_path.exists():
+        logger.info(
+            "VALIDATION_SEND_SKIP sid=%s reason=index_missing path=%s", sid, index_path
+        )
+        return payload
+
+    logger.info("VALIDATION_SEND_START sid=%s path=%s", sid, index_path)
+
+    try:
+        send_validation_packs(index_path, stage="validation")
+    except TypeError as exc:
+        if "stage" not in str(exc):
+            logger.error(
+                "VALIDATION_SEND_FAILED sid=%s path=%s", sid, index_path, exc_info=True
+            )
+            raise
+        send_validation_packs(index_path)
+
+    payload["validation_sent"] = True
+    logger.info("VALIDATION_SEND_DONE sid=%s", sid)
+    return payload
+
+
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def validation_compact(self, prev: Mapping[str, object] | None) -> dict[str, object]:
+    payload = _ensure_payload(prev)
+    sid = str(payload.get("sid") or "")
+    if not sid:
+        logger.info("VALIDATION_COMPACT_SKIP payload=%s", payload)
+        return payload
+
+    _populate_common_paths(payload)
+    runs_root = Path(payload["runs_root"])
+    index_path = validation_index_path(sid, runs_root=runs_root, create=True)
+
+    if not index_path.exists():
+        logger.info(
+            "VALIDATION_COMPACT_SKIP sid=%s reason=index_missing path=%s", sid, index_path
+        )
+        return payload
+
+    logger.info("VALIDATION_COMPACT_START sid=%s", sid)
+
+    try:
+        rewrite_index_to_canonical_layout(index_path, runs_root=runs_root)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.error(
+            "VALIDATION_COMPACT_FAILED sid=%s path=%s", sid, index_path, exc_info=True
+        )
+        raise
+
+    payload["validation_compacted"] = True
+    logger.info("VALIDATION_COMPACT_DONE sid=%s", sid)
+    return payload
+
+
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def pipeline_finalize(self, prev: Mapping[str, object] | None) -> dict[str, object]:
+    payload = _ensure_payload(prev)
+    return _finalize_stage(payload)
+
+
+@shared_task(bind=True, autoretry_for=(), retry_backoff=False)
+def ai_compact_tags_step(self, prev: Mapping[str, object] | None) -> dict[str, object]:
+    """Backwards-compatible task that compacts merge data then finalizes the run."""
+
+    payload = _ensure_payload(prev)
+    payload = _merge_compact_stage(payload)
+    return _finalize_stage(payload)
 
 
 @shared_task(bind=True, autoretry_for=(), retry_backoff=False)
@@ -764,15 +905,20 @@ def enqueue_auto_ai_chain(sid: str, runs_root: Path | str | None = None) -> str:
     runs_root_value = str(runs_root) if runs_root is not None else None
 
     logger.info("AUTO_AI_CHAIN_START sid=%s runs_root=%s", sid, runs_root_value)
+    logger.info("STAGE_CHAIN_STARTED sid=%s", sid)
 
     workflow = chain(
         ai_score_step.s(sid, runs_root_value),
-        ai_build_packs_step.s(),
-        ai_send_packs_step.s(),
+        merge_build_packs.s(),
+        merge_send.s(),
+        merge_compact.s(),
+        validation_build_packs.s(),
+        validation_send.s(),
+        validation_compact.s(),
         ai_polarity_check_step.s(),
         ai_consistency_step.s(),
         ai_validation_requirements_step.s(),
-        ai_compact_tags_step.s(),
+        pipeline_finalize.s(),
     )
 
     result = workflow.apply_async()

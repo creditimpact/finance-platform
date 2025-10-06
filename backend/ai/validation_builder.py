@@ -84,7 +84,6 @@ _FIELD_CATEGORY_MAP: dict[str, str] = {
     "closed_date": "open_ident",
     "account_type": "open_ident",
     "creditor_type": "open_ident",
-    "account_number_display": "open_ident",
     # Terms
     "high_balance": "terms",
     "credit_limit": "terms",
@@ -103,7 +102,6 @@ _FIELD_CATEGORY_MAP: dict[str, str] = {
     "account_rating": "status",
     # Histories
     "two_year_payment_history": "history",
-    "seven_year_history": "history",
 }
 
 _missing_fields = ALL_VALIDATION_FIELD_SET - set(_FIELD_CATEGORY_MAP)
@@ -131,6 +129,15 @@ _ALLOWED_FIELD_CATEGORIES: dict[str, str] = {
 _ALLOWED_FIELDS: frozenset[str] = frozenset(ALL_VALIDATION_FIELDS)
 _ALLOWED_CATEGORIES: frozenset[str] = frozenset(
     _ALLOWED_FIELD_CATEGORIES.values()
+)
+
+_PACK_ELIGIBLE_FIELDS: frozenset[str] = frozenset(
+    {
+        "account_type",
+        "creditor_type",
+        "account_rating",
+        "two_year_payment_history",
+    }
 )
 
 
@@ -361,6 +368,9 @@ class ValidationPackWriter:
 
             canonical_field = self._canonical_field_name(requirement.get("field"))
             if canonical_field is None:
+                continue
+
+            if canonical_field not in _PACK_ELIGIBLE_FIELDS:
                 continue
 
             if requirement.get("is_missing") is True:
@@ -638,6 +648,8 @@ class ValidationPackWriter:
             canonical_field = self._canonical_field_name(requirement.get("field"))
             if canonical_field is None:
                 continue
+            if canonical_field not in _PACK_ELIGIBLE_FIELDS:
+                continue
             if not self._should_send_to_ai(
                 requirement,
                 canonical_field,
@@ -679,6 +691,9 @@ class ValidationPackWriter:
 
         field_name = canonical_field or self._canonical_field_name(field)
         if field_name is None:
+            return None
+
+        if field_name not in _PACK_ELIGIBLE_FIELDS:
             return None
 
         field_key = self._field_key(field_name)
@@ -1168,6 +1183,8 @@ class ValidationPackWriter:
                         continue
                     canonical_field = self._canonical_field_name(entry.get("field"))
                     if canonical_field is None:
+                        continue
+                    if canonical_field not in _PACK_ELIGIBLE_FIELDS:
                         continue
                     if not self._should_send_to_ai(
                         entry,

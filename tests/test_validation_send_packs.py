@@ -48,6 +48,8 @@ def _account_number_pack_line(last4_a: str, last4_b: Optional[str]) -> dict:
 
 
 def test_account_number_gate_rejects_masking_only() -> None:
+    assert "account_number_display" not in _CONDITIONAL_FIELDS
+
     decision, rationale, info = _enforce_conditional_gate(
         "account_number_display",
         "strong",
@@ -55,10 +57,9 @@ def test_account_number_gate_rejects_masking_only() -> None:
         _account_number_pack_line("1234", "1234"),
     )
 
-    assert decision == "no_case"
-    assert "conditional_gate" in rationale
-    assert info is not None
-    assert info["reason"] == "insufficient_evidence"
+    assert decision == "strong"
+    assert rationale == "Masking only"
+    assert info is None
 
 
 def test_validation_field_sets_match_spec() -> None:
@@ -75,9 +76,17 @@ def test_validation_field_sets_match_spec() -> None:
     )
     assert set(validation_builder._CONDITIONAL_FIELDS) == set(expected_conditional)
     assert validation_builder._ALLOWED_FIELDS == expected_all
+    assert validation_builder._PACK_ELIGIBLE_FIELDS == {
+        "account_type",
+        "creditor_type",
+        "account_rating",
+        "two_year_payment_history",
+    }
 
 
 def test_account_number_gate_allows_true_conflict() -> None:
+    assert "account_number_display" not in _CONDITIONAL_FIELDS
+
     decision, rationale, info = _enforce_conditional_gate(
         "account_number_display",
         "strong",

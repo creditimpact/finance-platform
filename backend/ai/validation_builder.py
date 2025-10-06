@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from backend.ai.manifest import Manifest
 from backend.ai.validation_index import (
     ValidationIndexEntry,
     ValidationPackIndexWriter,
@@ -1449,6 +1450,8 @@ def _wait_for_index_materialized(
 
 
 def _maybe_send_validation_packs(sid: str, runs_root: Path) -> None:
+    Manifest.ensure_validation_section(sid, runs_root=runs_root)
+
     if not _auto_send_enabled():
         log.info("VALIDATION_AUTOSEND_SKIPPED sid=%s reason=env_disabled", sid)
         return
@@ -1530,15 +1533,17 @@ def build_validation_packs_for_run(
 ) -> dict[int, list[PackLine]]:
     """Build validation packs for every account of ``sid``."""
 
+    runs_root_path = (
+        Path(runs_root).resolve() if runs_root is not None else Path("runs").resolve()
+    )
+    Manifest.ensure_validation_section(sid, runs_root=runs_root_path)
+
     if not _packs_enabled():
         log.info(
             "VALIDATION_PACKS_DISABLED sid=%s reason=env_toggle", sid,
         )
         return {}
 
-    runs_root_path = (
-        Path(runs_root).resolve() if runs_root is not None else Path("runs").resolve()
-    )
     writer = _get_writer(sid, runs_root_path)
     results = writer.write_all_packs()
     if any(result for result in results.values()):

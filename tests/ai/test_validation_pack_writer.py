@@ -140,8 +140,8 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
     prompt = payload["prompt"]
     assert isinstance(prompt, dict)
     assert prompt["system"].startswith("You are an adjudication assistant")
-    assert prompt["user"].startswith("Review the validation finding JSON")
-    assert prompt["guidance"].startswith("Respond with a JSON object")
+    assert prompt["user"].startswith("Given the field finding below")
+    assert prompt["guidance"].startswith("Respond with strictly valid JSON")
 
     expected_output = payload["expected_output"]
     assert expected_output["properties"]["decision"]["enum"] == ["strong", "no_case"]
@@ -788,7 +788,7 @@ def test_build_validation_pack_respects_env_toggle(
     assert not pack_path.exists()
 
 
-def test_build_validation_packs_for_run_auto_send(
+def test_build_validation_packs_for_run_does_not_auto_send(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sid = "S601"
@@ -829,7 +829,7 @@ def test_build_validation_packs_for_run_auto_send(
 
     captured: dict[str, Any] = {}
 
-    def _fake_send(manifest: Any) -> list[dict[str, Any]]:
+    def _fake_send(manifest: Any) -> list[dict[str, Any]]:  # pragma: no cover - safety
         captured["manifest"] = manifest
         return []
 
@@ -840,9 +840,7 @@ def test_build_validation_packs_for_run_auto_send(
 
     build_validation_packs_for_run(sid, runs_root=runs_root)
 
-    assert "manifest" in captured
-    expected_index = validation_index_path(sid, runs_root=runs_root)
-    assert Path(captured["manifest"]) == expected_index
+    assert captured == {}
 
 
 def test_rewrite_index_to_canonical_layout(tmp_path: Path) -> None:

@@ -438,6 +438,7 @@ class ValidationPackWriter:
         self._last_pack_had_findings = True
 
         send_to_ai_map = validation_block.get("send_to_ai", {})
+        consistency_map = validation_block.get("field_consistency", {})
 
         bureaus_cache: dict[str, Mapping[str, Any]] | None = None
 
@@ -470,10 +471,27 @@ class ValidationPackWriter:
             ):
                 continue
 
+            if isinstance(consistency_map, Mapping):
+                consistency_entry = consistency_map.get(canonical_field)
+            else:
+                consistency_entry = None
+
+            bureaus_payload: Mapping[str, Mapping[str, Any]] = _load_bureaus_if_needed()
+
+            requirement_payload = dict(requirement)
+            if bureaus_payload:
+                requirement_payload["bureau_values"] = self._build_bureau_values(
+                    canonical_field, bureaus_payload, consistency_entry
+                )
+
+            context_payload = self._build_context(consistency_entry)
+            if context_payload:
+                requirement_payload["context"] = context_payload
+
             pack_key = self._build_pack_key(
                 account_id,
                 canonical_field,
-                requirement,
+                requirement_payload,
             )
             if pack_key in seen_pack_keys:
                 continue
@@ -483,7 +501,7 @@ class ValidationPackWriter:
                 sid=self.sid,
                 account_id=account_id,
                 field=canonical_field,
-                finding=requirement,
+                finding=requirement_payload,
                 fallback_bureaus_loader=_load_bureaus_if_needed,
             )
             if line is not None:
@@ -1603,5 +1621,4 @@ def build_validation_packs_for_run(
     results = writer.write_all_packs()
     if any(result for result in results.values()):
         _update_manifest_for_run(sid, runs_root_path)
-        _maybe_send_validation_packs(sid, runs_root_path)
     return results

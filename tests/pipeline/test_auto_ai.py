@@ -458,21 +458,29 @@ def test_enqueue_auto_ai_chain_orders_signatures(monkeypatch) -> None:
             return signature
 
     score_recorder = _Recorder("score")
-    build_recorder = _Recorder("build")
-    send_recorder = _Recorder("send")
+    build_recorder = _Recorder("merge_build")
+    send_recorder = _Recorder("merge_send")
+    compact_recorder = _Recorder("merge_compact")
+    validation_build_recorder = _Recorder("validation_build")
+    validation_send_recorder = _Recorder("validation_send")
+    validation_compact_recorder = _Recorder("validation_compact")
     consistency_recorder = _Recorder("consistency")
-    validation_recorder = _Recorder("validation")
-    compact_recorder = _Recorder("compact")
+    validation_requirements_recorder = _Recorder("validation_requirements")
+    finalize_recorder = _Recorder("finalize")
     polarity_recorder = _Recorder("polarity")
 
     monkeypatch.setattr(auto_ai_tasks, "ai_score_step", score_recorder)
-    monkeypatch.setattr(auto_ai_tasks, "ai_build_packs_step", build_recorder)
-    monkeypatch.setattr(auto_ai_tasks, "ai_send_packs_step", send_recorder)
+    monkeypatch.setattr(auto_ai_tasks, "merge_build_packs", build_recorder)
+    monkeypatch.setattr(auto_ai_tasks, "merge_send", send_recorder)
+    monkeypatch.setattr(auto_ai_tasks, "merge_compact", compact_recorder)
+    monkeypatch.setattr(auto_ai_tasks, "validation_build_packs", validation_build_recorder)
+    monkeypatch.setattr(auto_ai_tasks, "validation_send", validation_send_recorder)
+    monkeypatch.setattr(auto_ai_tasks, "validation_compact", validation_compact_recorder)
     monkeypatch.setattr(auto_ai_tasks, "ai_consistency_step", consistency_recorder)
     monkeypatch.setattr(
-        auto_ai_tasks, "ai_validation_requirements_step", validation_recorder
+        auto_ai_tasks, "ai_validation_requirements_step", validation_requirements_recorder
     )
-    monkeypatch.setattr(auto_ai_tasks, "ai_compact_tags_step", compact_recorder)
+    monkeypatch.setattr(auto_ai_tasks, "pipeline_finalize", finalize_recorder)
     monkeypatch.setattr(auto_ai_tasks, "ai_polarity_check_step", polarity_recorder)
 
     chain_calls: dict[str, Any] = {}
@@ -499,12 +507,16 @@ def test_enqueue_auto_ai_chain_orders_signatures(monkeypatch) -> None:
     assert task_id == "chain-root-task"
     assert chain_calls["steps"] == (
         ("score", (sid, str(runs_root))),
-        ("build", ()),
-        ("send", ()),
+        ("merge_build", ()),
+        ("merge_send", ()),
+        ("merge_compact", ()),
+        ("validation_build", ()),
+        ("validation_send", ()),
+        ("validation_compact", ()),
         ("polarity", ()),
         ("consistency", ()),
-        ("validation", ()),
-        ("compact", ()),
+        ("validation_requirements", ()),
+        ("finalize", ()),
     )
     assert chain_calls["apply_async"] == chain_calls["steps"]
 

@@ -536,17 +536,17 @@ def test_store_validation_result_updates_index_and_writes_file(
     stored_payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert stored_payload["sid"] == sid
     assert stored_payload["account_id"] == account_id
-    assert stored_payload["status"] == "ok"
+    assert stored_payload["status"] == "done"
     assert stored_payload["model"] == "gpt-infer"
     assert stored_payload["request_lines"] == len(lines)
     assert stored_payload["raw_response"] == {"id": "resp_123"}
     assert isinstance(stored_payload["completed_at"], str)
-    assert stored_payload["answers"] == [
-        {
-            "field": "account_rating",
-            "decision": "strong",
-        }
-    ]
+    assert stored_payload["decisions"]
+    decision_entry = stored_payload["decisions"][0]
+    assert decision_entry["field_id"]
+    assert decision_entry["decision"] == "strong"
+    assert decision_entry["rationale"] == "values diverge"
+    assert decision_entry["citations"] == []
 
     results_dir = validation_results_dir(sid, runs_root=runs_root)
     jsonl_path = (
@@ -597,7 +597,7 @@ def test_store_validation_result_error(tmp_path: Path) -> None:
     stored_payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert stored_payload["status"] == "error"
     assert stored_payload["error"] == "api_timeout"
-    assert stored_payload["answers"] == []
+    assert stored_payload["decisions"] == []
 
     index_path = validation_index_path(sid, runs_root=runs_root)
     entry = _index_entry_for_account(_read_index(index_path), account_id)

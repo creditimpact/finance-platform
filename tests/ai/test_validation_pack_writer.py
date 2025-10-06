@@ -70,6 +70,7 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
                     "documents": ["statement", "   "],
                     "strength": "weak",
                     "notes": "rating disagreement",
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": True,
                 },
@@ -164,6 +165,7 @@ def test_writer_skips_account_number_display(
                     "category": "open_ident",
                     "strength": "weak",
                     "documents": ["statement"],
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": True,
                 }
@@ -220,6 +222,7 @@ def test_writer_uses_bureau_fallback(tmp_path: Path) -> None:
                     "field": "account_type",
                     "category": "open_ident",
                     "strength": "soft",
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "notes": "type mismatch",
                     "send_to_ai": True,
@@ -263,6 +266,7 @@ def test_writer_skips_strong_fields(
                     "field": "payment_status",
                     "category": "status",
                     "strength": "strong",
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": True,
                 }
@@ -303,6 +307,7 @@ def test_writer_updates_index(tmp_path: Path) -> None:
                     "field": "account_type",
                     "category": "open_ident",
                     "strength": "weak",
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": True,
                 },
@@ -310,6 +315,7 @@ def test_writer_updates_index(tmp_path: Path) -> None:
                     "field": "account_rating",
                     "category": "status",
                     "strength": "weak",
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": True,
                 },
@@ -344,7 +350,7 @@ def test_writer_updates_index(tmp_path: Path) -> None:
     entry = index_payload["packs"][0]
     assert entry["account_id"] == 1
     assert entry["pack"] == "packs/val_acc_001.jsonl"
-    assert entry["result_json"] == "results/acc_001.result.json"
+    assert "result_json" not in entry
     assert "result_jsonl" not in entry
     assert entry["lines"] == 2
     assert entry["weak_fields"] == ["account_type", "account_rating"]
@@ -384,6 +390,7 @@ def _seed_validation_account(
                     "field": field,
                     "category": "activity",
                     "strength": "weak",
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": True,
                 }
@@ -413,6 +420,7 @@ def test_writer_deduplicates_duplicate_findings(tmp_path: Path) -> None:
                     "field": "account_type",
                     "category": "open_ident",
                     "strength": "weak",
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": True,
                 },
@@ -420,6 +428,7 @@ def test_writer_deduplicates_duplicate_findings(tmp_path: Path) -> None:
                     "field": "account_type",
                     "category": "open_ident",
                     "strength": "weak",
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": True,
                 },
@@ -554,6 +563,13 @@ def test_store_validation_result_updates_index_and_writes_file(
     )
     assert not jsonl_path.exists()
 
+    index_path = validation_index_path(sid, runs_root=runs_root)
+    index_entry = _index_entry_for_account(_read_index(index_path), account_id)
+    assert index_entry["status"] == "completed"
+    assert index_entry["result_json"] == "results/acc_004.result.json"
+    assert index_entry["lines"] == len(lines)
+    assert "error" not in index_entry
+
 
 def test_reason_metadata_flag_is_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VALIDATION_REASON_ENABLED", "1")
@@ -601,10 +617,11 @@ def test_store_validation_result_error(tmp_path: Path) -> None:
 
     index_path = validation_index_path(sid, runs_root=runs_root)
     entry = _index_entry_for_account(_read_index(index_path), account_id)
-    assert entry["status"] == "error"
+    assert entry["status"] == "failed"
     assert entry["error"] == "api_timeout"
     assert isinstance(entry["completed_at"], str)
     assert isinstance(entry.get("source_hash"), str)
+    assert "result_json" not in entry
 
 
 def test_writer_appends_log_entries(tmp_path: Path) -> None:
@@ -673,6 +690,7 @@ def test_writer_blocks_pack_exceeding_size_limit(
                     "field": "account_type",
                     "category": "open_ident",
                     "strength": "weak",
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": True,
                     "notes": "X" * 4096,
@@ -741,6 +759,7 @@ def test_build_validation_pack_respects_env_toggle(
                     "field": "account_rating",
                     "category": "status",
                     "strength": "weak",
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": True,
                 }
@@ -784,6 +803,7 @@ def test_build_validation_packs_for_run_auto_send(
                     "field": "account_rating",
                     "category": "status",
                     "strength": "weak",
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": True,
                 }
@@ -837,6 +857,7 @@ def test_rewrite_index_to_canonical_layout(tmp_path: Path) -> None:
                     "field": "account_rating",
                     "category": "status",
                     "strength": "weak",
+                    "is_mismatch": True,
                     "ai_needed": True,
                     "send_to_ai": True,
                 }

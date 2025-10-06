@@ -6,9 +6,10 @@ import importlib
 import json
 import logging
 import os
+import random
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
@@ -90,6 +91,9 @@ _MANIFEST_RETRY_ATTEMPTS = 5
 _MANIFEST_RETRY_DELAY = 0.5
 _INDEX_WAIT_ATTEMPTS = 10
 _INDEX_WAIT_DELAY = 0.5
+_INDEX_READY_ATTEMPTS = 10
+_INDEX_READY_MIN_DELAY = 0.3
+_INDEX_READY_MAX_DELAY = 0.5
 _DEFAULT_CONFIDENCE_THRESHOLD = 0.70
 
 
@@ -561,6 +565,52 @@ def _coerce_str(value: Any, default: str = "") -> str:
     return str(value)
 
 
+def _is_validation_stage(stage: str | None) -> bool:
+    if stage is None:
+        return False
+    return stage.strip().lower() == _MANIFEST_STAGE
+
+
+def _stage_path_is_validation(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+
+    parts = [part.lower() for part in path.parts]
+    if "merge" in parts:
+        return None
+    return path
+
+
+def _sanitize_stage_paths(
+    stage_paths: StageManifestPaths | None, stage: str | None
+) -> StageManifestPaths | None:
+    if stage_paths is None or not _is_validation_stage(stage):
+        return stage_paths
+
+    sanitized = replace(
+        stage_paths,
+        base_dir=_stage_path_is_validation(stage_paths.base_dir),
+        packs_dir=_stage_path_is_validation(stage_paths.packs_dir),
+        results_dir=_stage_path_is_validation(stage_paths.results_dir),
+        index_file=_stage_path_is_validation(stage_paths.index_file),
+        log_file=_stage_path_is_validation(stage_paths.log_file),
+    )
+    return sanitized
+
+
+def _index_path_from_stage_paths(stage_paths: StageManifestPaths | None) -> Path | None:
+    if stage_paths is None:
+        return None
+
+    if stage_paths.index_file is not None:
+        return stage_paths.index_file
+
+    if stage_paths.base_dir is not None:
+        return (stage_paths.base_dir / "index.json").resolve()
+
+    return None
+
+
 def _index_path_from_mapping(
     document: Mapping[str, Any],
     *,
@@ -568,9 +618,16 @@ def _index_path_from_mapping(
     use_manifest_paths: bool,
     is_index_document: bool,
     manifest_path: Path | None = None,
+    force_stage_paths_only: bool = False,
 ) -> Path:
-    if stage_paths and stage_paths.index_file:
-        return stage_paths.index_file
+    stage_index_path = _index_path_from_stage_paths(stage_paths)
+    if stage_index_path is not None:
+        return stage_index_path
+
+    if force_stage_paths_only:
+        raise ValidationPackError(
+            "Validation manifest is missing validation stage index path",
+        )
 
     if use_manifest_paths and not is_index_document:
         raise ValidationPackError(
@@ -872,9 +929,12 @@ def _load_manifest_view(
         return _ManifestView(index=index, log_path=log_path, stage_paths=None)
 
     if isinstance(manifest, Mapping):
-        stage_paths = extract_stage_manifest_paths(manifest, stage)
+        stage_paths = _sanitize_stage_paths(
+            extract_stage_manifest_paths(manifest, stage), stage
+        )
         is_index_document = _document_is_index_document(manifest)
-        use_manifest_paths = _should_use_manifest_paths()
+        force_stage_only = _is_validation_stage(stage)
+        use_manifest_paths = _should_use_manifest_paths() or force_stage_only
 
         if not is_index_document:
             if stage_paths is None or not stage_paths.has_any():
@@ -887,6 +947,7 @@ def _load_manifest_view(
             use_manifest_paths=use_manifest_paths,
             is_index_document=is_index_document,
             manifest_path=None,
+            force_stage_paths_only=force_stage_only,
         )
 
         if is_index_document:
@@ -936,8 +997,11 @@ def _load_manifest_view(
         if not isinstance(document, Mapping):
             raise ValidationPackError("Validation index root must be an object")
 
-        stage_paths = extract_stage_manifest_paths(document, stage)
+        stage_paths = _sanitize_stage_paths(
+            extract_stage_manifest_paths(document, stage), stage
+        )
         is_index_document = _document_is_index_document(document)
+        force_stage_only = _is_validation_stage(stage)
         if not is_index_document:
             if stage_paths is None or not stage_paths.has_any():
                 if attempt < _MANIFEST_RETRY_ATTEMPTS - 1:
@@ -955,9 +1019,10 @@ def _load_manifest_view(
         index_path = _index_path_from_mapping(
             document,
             stage_paths=stage_paths,
-            use_manifest_paths=use_manifest_paths,
+            use_manifest_paths=use_manifest_paths or force_stage_only,
             is_index_document=is_index_document,
             manifest_path=manifest_path,
+            force_stage_paths_only=force_stage_only,
         )
 
         if is_index_document:
@@ -1020,6 +1085,42 @@ class ValidationPackSender:
         self._default_queue = (
             self._infer_queue_hint(self._index.packs) or _DEFAULT_QUEUE_NAME
         )
+
+    def _await_index_ready(self) -> ValidationIndex:
+        index = self._load_index()
+        index_path = index.index_path
+
+        def _ready() -> bool:
+            try:
+                return index_path.exists() and index_path.stat().st_size > 0
+            except OSError:
+                return False
+
+        if not _ready():
+            for attempt in range(1, _INDEX_READY_ATTEMPTS + 1):
+                log.info("VALIDATION_INDEX_WAIT attempt=%s", attempt)
+                time.sleep(
+                    random.uniform(_INDEX_READY_MIN_DELAY, _INDEX_READY_MAX_DELAY)
+                )
+                if _ready():
+                    break
+
+            if not _ready():
+                raise ValidationPackError(
+                    f"Validation index missing or empty: {index_path}",
+                )
+
+            try:
+                refreshed = load_validation_index(index_path)
+            except Exception as exc:  # pragma: no cover - defensive
+                raise ValidationPackError(
+                    f"Validation index load failed after wait: {index_path}"
+                ) from exc
+            self._index = refreshed
+            index = refreshed
+
+        log.info("VALIDATION_INDEX_READY count=%s", len(index.packs))
+        return index
 
     # ------------------------------------------------------------------
     # Queue routing helpers
@@ -1199,20 +1300,25 @@ class ValidationPackSender:
         )
 
         log.info(
-            "VALIDATION_PACKS_DIR_USED sid=%s dir=%s",
-            self.sid,
+            "VALIDATION_PACKS_DIR_USED=%s sid=%s",
             str(index.packs_dir_path),
+            self.sid,
         )
         log.info(
-            "VALIDATION_RESULTS_DIR_USED sid=%s dir=%s",
-            self.sid,
+            "VALIDATION_RESULTS_DIR_USED=%s sid=%s",
             str(index.results_dir_path),
+            self.sid,
         )
 
     def send(self) -> list[dict[str, Any]]:
         """Send every pack referenced by the manifest index."""
 
-        index = self._load_index()
+        log.info(
+            "VALIDATION_STAGE_STARTED sid=%s stage=%s",
+            self.sid,
+            self._stage,
+        )
+        index = self._await_index_ready()
         self._log_preflight_line(index)
 
         if not self.model:
@@ -1828,12 +1934,7 @@ class ValidationPackSender:
             raise ValidationPackError("Model response is not an object")
 
         result_target = result_display or str(result_path)
-        log.info(
-            "VALIDATION_SENT_OK pack=%s account=%s -> %s",
-            pack_id,
-            account_label,
-            result_target,
-        )
+        log.info("VALIDATION_SENT_OK pack=%s -> %s", pack_id, result_target)
         return parsed
 
     # ------------------------------------------------------------------

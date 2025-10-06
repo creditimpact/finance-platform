@@ -14,6 +14,10 @@ from typing import Any, Dict, Iterable, Mapping, MutableMapping, Sequence
 
 from celery import shared_task
 
+from backend.ai.validation_builder import (
+    _maybe_send_validation_packs,
+    build_validation_packs_for_run,
+)
 from backend.core.ai.paths import ensure_merge_paths, probe_legacy_ai_packs
 from backend.core.config import ENABLE_VALIDATION_REQUIREMENTS
 from backend.core.io.json_io import update_json_in_place
@@ -932,6 +936,9 @@ def _run_auto_ai_pipeline(sid: str):
     manifest.set_ai_sent()
     persist_manifest(manifest)
     logger.info("AUTO_AI_SENT sid=%s dir=%s", sid, packs_source_dir)
+
+    build_validation_packs_for_run(sid, runs_root=RUNS_ROOT)
+    _maybe_send_validation_packs(sid, RUNS_ROOT, stage="validation")
 
     # === 4) compact tags (keep only tags; push explanations to summary.json)
     compact_tags_for_sid(sid)

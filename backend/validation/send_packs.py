@@ -410,10 +410,8 @@ class _ChatCompletionClient:
 
     def create(
         self,
+        payload: Mapping[str, Any],
         *,
-        model: str,
-        messages: Sequence[Mapping[str, Any]],
-        response_format: Mapping[str, Any],
         pack_id: str | None = None,
         on_error: Callable[[int, str], None] | None = None,
     ) -> _ChatCompletionResponse:
@@ -424,21 +422,23 @@ class _ChatCompletionClient:
         }
         if self.project_id:
             headers["OpenAI-Project"] = self.project_id
+
+        response_format = {}
+        if isinstance(payload, Mapping):
+            response_format = payload.get("response_format", {}) or {}
+
         include_beta_header = (
             isinstance(response_format, Mapping)
             and response_format.get("type") == "json_object"
         )
         if include_beta_header:
             headers["OpenAI-Beta"] = "response_format=v1"
+
         log.info(
             "VALIDATION_HTTP_HEADERS_SET beta_structured=%s",
             "true" if include_beta_header else "false",
         )
-        payload = {
-            "model": model,
-            "messages": list(messages),
-            "response_format": dict(response_format),
-        }
+
         request_lib = _ensure_requests_module()
         start_time = time.monotonic()
         response = request_lib.post(url, headers=headers, json=payload, timeout=self.timeout)
@@ -2101,10 +2101,14 @@ class ValidationPackSender:
             }
             self._write_error_sidecar(error_path, payload)
 
+        payload = {
+            "model": self.model,
+            "messages": list(messages),
+            "response_format": {"type": "json_object"},
+        }
+
         response = self._client.create(
-            model=self.model,
-            messages=messages,
-            response_format={"type": "json_object"},
+            payload,
             pack_id=pack_id,
             on_error=_record_sidecar,
         )

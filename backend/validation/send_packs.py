@@ -11,12 +11,13 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Mapping, MutableMapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 from jsonschema import Draft7Validator
 
 from backend.analytics.analytics_tracker import emit_counter
 from backend.core.ai.paths import (
+    validation_result_error_filename_for_account,
     validation_result_jsonl_filename_for_account,
     validation_result_summary_filename_for_account,
 )
@@ -349,6 +350,20 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _truncate_response_body(body: Any, *, limit: int = 300) -> str:
+    text = ""
+    if isinstance(body, str):
+        text = body
+    elif body is None:
+        text = ""
+    else:
+        text = str(body)
+    text = text.strip()
+    if len(text) > limit:
+        return text[:limit]
+    return text
+
+
 @dataclass(slots=True)
 @dataclass(frozen=True)
 class _ChatCompletionResponse:
@@ -374,6 +389,8 @@ class _ChatCompletionClient:
         model: str,
         messages: Sequence[Mapping[str, Any]],
         response_format: Mapping[str, Any],
+        pack_id: str | None = None,
+        on_error: Callable[[int, str], None] | None = None,
     ) -> _ChatCompletionResponse:
         url = f"{self.base_url}/chat/completions"
         headers = {
@@ -398,28 +415,79 @@ class _ChatCompletionClient:
         start_time = time.monotonic()
         response = request_lib.post(url, headers=headers, json=payload, timeout=self.timeout)
         latency = time.monotonic() - start_time
-        if not getattr(response, "ok", False):
-            status_code = getattr(response, "status_code", "?")
+        status_code = getattr(response, "status_code", 0)
+        try:
+            body_text = response.text
+        except Exception:  # pragma: no cover - defensive logging
+            body_text = "<unavailable>"
+        snippet = _truncate_response_body(body_text)
+
+        def _record_error(status: int, body: str) -> None:
+            if on_error is None:
+                return
             try:
-                body_text = response.text
-            except Exception:  # pragma: no cover - defensive logging
-                body_text = "<unavailable>"
-            snippet = str(body_text).strip()
-            if len(snippet) > 500:
-                snippet = snippet[:497] + "..."
+                on_error(status, body)
+            except Exception:  # pragma: no cover - best effort logging
+                log.exception(
+                    "VALIDATION_HTTP_ERROR_SIDECAR_FAILED pack=%s",
+                    pack_id or "<unknown>",
+                )
+
+        if not getattr(response, "ok", False):
             log.error(
-                "VALIDATION_AI_HTTP_ERROR url=%s status=%s body=%s",
-                url,
+                "VALIDATION_HTTP_ERROR status=%s body=%s pack=%s",
                 status_code,
                 snippet or "<empty>",
+                pack_id or "<unknown>",
             )
+            try:
+                normalized_status = int(status_code)
+            except (TypeError, ValueError):
+                normalized_status = 0
+            _record_error(normalized_status, snippet or "")
         response.raise_for_status()
+
         return _ChatCompletionResponse(
-            payload=response.json(),
+            payload=self._safe_json(
+                response,
+                pack_id=pack_id,
+                snippet=snippet,
+                status_code=status_code,
+                on_error=_record_error,
+            ),
             status_code=getattr(response, "status_code", 0),
             latency=latency,
             retries=0,
         )
+
+    @staticmethod
+    def _safe_json(
+        response: Any,
+        *,
+        pack_id: str | None,
+        snippet: str,
+        status_code: Any,
+        on_error: Callable[[int, str], None],
+    ) -> Mapping[str, Any]:
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            log.error("VALIDATION_EMPTY_CONTENT pack=%s", pack_id or "<unknown>")
+            try:
+                normalized_status = int(status_code)
+            except (TypeError, ValueError):
+                normalized_status = 0
+            on_error(normalized_status, snippet or "")
+            raise ValidationPackError("Response JSON parse failed") from exc
+        if payload is None:
+            log.error("VALIDATION_EMPTY_CONTENT pack=%s", pack_id or "<unknown>")
+            try:
+                normalized_status = int(status_code)
+            except (TypeError, ValueError):
+                normalized_status = 0
+            on_error(normalized_status, snippet or "")
+            raise ValidationPackError("Response JSON payload is empty")
+        return payload
 
 
 @dataclass(frozen=True)
@@ -1135,6 +1203,11 @@ class ValidationPackSender:
         if account_int is None:
             raise ValidationPackError(f"Account id is not numeric: {account_id!r}")
 
+        pack_identifier = f"acc_{account_int:03d}"
+        error_filename = validation_result_error_filename_for_account(account_int)
+        error_path = result_summary_path.with_name(error_filename)
+        self._clear_error_sidecar(error_path, pack_id=pack_identifier)
+
         try:
             pack_lines = list(
                 self._iter_pack_lines(pack_path, display_path=pack_display)
@@ -1198,6 +1271,8 @@ class ValidationPackSender:
                         account_label=f"{account_int:03d}",
                         line_number=idx,
                         line_id=current_line_id,
+                        pack_id=pack_identifier,
+                        error_path=error_path,
                     )
                 except Exception as exc:
                     error_message = (
@@ -1394,6 +1469,8 @@ class ValidationPackSender:
         account_label: str,
         line_number: int,
         line_id: str,
+        pack_id: str,
+        error_path: Path,
     ) -> Mapping[str, Any]:
         prompt = pack_line.get("prompt")
         if not isinstance(prompt, Mapping):
@@ -1410,10 +1487,24 @@ class ValidationPackSender:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ]
+        def _record_sidecar(status: int, body: str) -> None:
+            try:
+                normalized_status = int(status)
+            except (TypeError, ValueError):
+                normalized_status = 0
+            payload = {
+                "status": normalized_status,
+                "body": body,
+                "pack_id": pack_id,
+            }
+            self._write_error_sidecar(error_path, payload)
+
         response = self._client.create(
             model=self.model,
             messages=messages,
             response_format={"type": "json_object"},
+            pack_id=pack_id,
+            on_error=_record_sidecar,
         )
         if hasattr(response, "payload"):
             payload = response.payload  # type: ignore[assignment]
@@ -1446,15 +1537,23 @@ class ValidationPackSender:
 
         choices = payload.get("choices")
         if not isinstance(choices, Sequence) or not choices:
+            log.error("VALIDATION_EMPTY_CONTENT pack=%s", pack_id)
+            serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+            _record_sidecar(int(status_code), serialized)
             raise ValidationPackError("Model response missing choices")
         message = choices[0].get("message") if isinstance(choices[0], Mapping) else None
         content = message.get("content") if isinstance(message, Mapping) else None
         if not isinstance(content, str) or not content.strip():
+            log.error("VALIDATION_EMPTY_CONTENT pack=%s", pack_id)
+            serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+            _record_sidecar(int(status_code), serialized)
             raise ValidationPackError("Model response missing content")
 
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError as exc:
+            log.error("VALIDATION_EMPTY_CONTENT pack=%s", pack_id)
+            _record_sidecar(int(status_code), content)
             raise ValidationPackError(f"Model response is not valid JSON: {exc}")
         if not isinstance(parsed, Mapping):
             raise ValidationPackError("Model response is not an object")
@@ -1664,6 +1763,41 @@ class ValidationPackSender:
             status,
         )
         return jsonl_path, summary_path
+
+    def _write_error_sidecar(self, path: Path, payload: Mapping[str, Any]) -> None:
+        data: dict[str, Any] = dict(payload)
+        body_value = data.get("body", "")
+        if not isinstance(body_value, str):
+            body_value = "" if body_value is None else str(body_value)
+        data["body"] = _truncate_response_body(body_value)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(data, ensure_ascii=False, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            log.exception(
+                "VALIDATION_ERROR_SIDECAR_WRITE_FAILED sid=%s pack=%s path=%s error=%s",
+                self.sid,
+                data.get("pack_id", "<unknown>"),
+                str(path),
+                exc,
+            )
+
+    def _clear_error_sidecar(self, path: Path, *, pack_id: str) -> None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        except OSError as exc:  # pragma: no cover - defensive logging
+            log.warning(
+                "VALIDATION_ERROR_SIDECAR_CLEANUP_FAILED sid=%s pack=%s path=%s error=%s",
+                self.sid,
+                pack_id,
+                str(path),
+                exc,
+            )
 
     # ------------------------------------------------------------------
     # Helpers

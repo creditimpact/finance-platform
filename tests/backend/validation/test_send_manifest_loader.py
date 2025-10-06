@@ -20,7 +20,7 @@ sys.modules.setdefault("requests", _requests_stub)
 
 
 class _LoaderStubClient:
-    def create(self, *, model: str, messages, response_format):  # type: ignore[override]
+    def create(self, *, model: str, messages, response_format, **_: object):  # type: ignore[override]
         payload = {
             "decision": "strong",
             "rationale": "stub",

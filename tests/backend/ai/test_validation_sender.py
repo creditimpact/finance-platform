@@ -162,6 +162,8 @@ def test_sender_accepts_valid_json_response(tmp_path: Path) -> None:
         line_id="acc_001__account_type",
         pack_id="acc_001",
         error_path=tmp_path / "acc_001.result.error.json",
+        result_path=tmp_path / "acc_001.result.json",
+        result_display="results/acc_001.result.json",
     )
 
     assert response == payload

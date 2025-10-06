@@ -15,7 +15,6 @@ from backend.analytics.analytics_tracker import emit_counter
 from backend.core.ai.paths import (
     ensure_validation_paths,
     validation_pack_filename_for_account,
-    validation_result_jsonl_filename_for_account,
     validation_result_summary_filename_for_account,
 )
 from backend.core.ai.eligibility_policy import (
@@ -42,19 +41,6 @@ def _reasons_enabled() -> bool:
     if lowered in {"0", "false", "no", "n", "off"}:
         return False
     return False
-
-
-def _single_result_file_enabled() -> bool:
-    raw = os.getenv("VALIDATION_SINGLE_RESULT_FILE")
-    if raw is None:
-        return True
-
-    lowered = raw.strip().lower()
-    if lowered in {"1", "true", "yes", "y", "on"}:
-        return True
-    if lowered in {"0", "false", "no", "n", "off"}:
-        return False
-    return True
 
 
 def _clone_jsonish(value: Any) -> Any:
@@ -474,9 +460,7 @@ def store_validation_result(
     runs_root_path = _resolve_runs_root(runs_root)
     validation_paths = ensure_validation_paths(runs_root_path, sid, create=True)
     summary_filename = validation_result_summary_filename_for_account(account_id)
-    jsonl_filename = validation_result_jsonl_filename_for_account(account_id)
     summary_path = validation_paths.results_dir / summary_filename
-    jsonl_path = validation_paths.results_dir / jsonl_filename
 
     pack_filename = validation_pack_filename_for_account(account_id)
     pack_path = validation_paths.packs_dir / pack_filename
@@ -497,63 +481,60 @@ def store_validation_result(
 
     normalized_payload["results"] = result_lines
 
-    if _single_result_file_enabled():
-        status_value = "ok" if normalized_status == "done" else "error"
-        answers: list[dict[str, Any]] = []
-        for line in result_lines:
-            field = line.get("field")
-            if not isinstance(field, str) or not field.strip():
-                continue
-            answers.append(
-                {
-                    "field": field,
-                    "decision": _clone_jsonish(line.get("decision")),
-                }
-            )
+    decisions: list[dict[str, Any]] = []
+    for line in result_lines:
+        field_id = str(line.get("id") or "").strip()
+        if not field_id:
+            field_id = str(line.get("field") or "").strip()
+        decision_value = _clone_jsonish(line.get("decision"))
+        rationale_value = line.get("rationale")
+        citations_value = line.get("citations")
 
-        summary_payload: dict[str, Any] = {
-            "sid": normalized_payload.get("sid"),
-            "account_id": normalized_payload.get("account_id"),
-            "model": normalized_payload.get("model"),
-            "completed_at": normalized_payload.get("completed_at"),
-            "status": status_value,
-            "answers": answers,
+        decision_entry: dict[str, Any] = {
+            "field_id": field_id,
+            "decision": decision_value,
+            "rationale": rationale_value if isinstance(rationale_value, str) else "",
+            "citations": (
+                list(citations_value)
+                if isinstance(citations_value, Sequence)
+                and not isinstance(citations_value, (str, bytes, bytearray))
+                else []
+            ),
         }
+        decisions.append(decision_entry)
 
-        if normalized_payload.get("error"):
-            summary_payload["error"] = normalized_payload["error"]
-        if "raw_response" in normalized_payload:
-            summary_payload["raw_response"] = _clone_jsonish(
-                normalized_payload["raw_response"]
-            )
-        if "request_lines" in normalized_payload:
-            summary_payload["request_lines"] = normalized_payload["request_lines"]
+    request_lines_value = normalized_payload.get("request_lines")
+    try:
+        request_lines_count = (
+            int(request_lines_value)
+            if request_lines_value is not None
+            else len(decisions)
+        )
+    except (TypeError, ValueError):
+        request_lines_count = len(decisions)
 
-        serialized_summary = json.dumps(
-            summary_payload, ensure_ascii=False, sort_keys=True
+    summary_payload: dict[str, Any] = {
+        "sid": normalized_payload.get("sid"),
+        "account_id": normalized_payload.get("account_id"),
+        "model": normalized_payload.get("model"),
+        "status": normalized_status,
+        "completed_at": normalized_payload.get("completed_at"),
+        "request_lines": request_lines_count,
+        "decisions": decisions,
+    }
+
+    if normalized_payload.get("error"):
+        summary_payload["error"] = normalized_payload["error"]
+    if "raw_response" in normalized_payload:
+        summary_payload["raw_response"] = _clone_jsonish(
+            normalized_payload["raw_response"]
         )
-    else:
-        serialized_summary = json.dumps(
-            normalized_payload, ensure_ascii=False, sort_keys=True
-        )
+
+    serialized_summary = json.dumps(
+        summary_payload, ensure_ascii=False, sort_keys=True
+    )
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(serialized_summary + "\n", encoding="utf-8")
-
-    if _single_result_file_enabled():
-        try:
-            jsonl_path.unlink()
-        except FileNotFoundError:
-            pass
-    else:
-        jsonl_lines = [
-            json.dumps(line, ensure_ascii=False, sort_keys=True)
-            for line in result_lines
-        ]
-        jsonl_contents = "\n".join(jsonl_lines)
-        if jsonl_contents:
-            jsonl_contents += "\n"
-        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-        jsonl_path.write_text(jsonl_contents, encoding="utf-8")
 
     writer = _index_writer(sid, runs_root_path, validation_paths)
     writer.record_result(

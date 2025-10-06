@@ -120,9 +120,7 @@ def test_two_year_history_fallback(tmp_path: Path) -> None:
     assert lines[0].payload["field"] == "two_year_payment_history"
 
 
-def test_single_result_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("VALIDATION_SINGLE_RESULT_FILE", "1")
-
+def test_single_result_file(tmp_path: Path) -> None:
     sid = "SID400"
     account_id = 4
     runs_root = tmp_path / "runs"
@@ -148,6 +146,7 @@ def test_single_result_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     writer = ValidationPackWriter(sid, runs_root=runs_root)
     lines = writer.write_pack_for_account(account_id)
     assert len(lines) == 2
+    expected_ids = [str(line.payload.get("id")) for line in lines]
 
     response_payload = {
         "decision_per_field": [
@@ -184,7 +183,17 @@ def test_single_result_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert entries == [summary_file.name]
 
     stored_payload = json.loads(summary_file.read_text(encoding="utf-8"))
-    assert stored_payload["answers"] == [
-        {"field": "account_type", "decision": "strong"},
-        {"field": "account_rating", "decision": "no_case"},
+    assert stored_payload["decisions"] == [
+        {
+            "field_id": expected_ids[0],
+            "decision": "strong",
+            "rationale": "values diverge",
+            "citations": [],
+        },
+        {
+            "field_id": expected_ids[1],
+            "decision": "no_case",
+            "rationale": "matches reporting",
+            "citations": [],
+        },
     ]

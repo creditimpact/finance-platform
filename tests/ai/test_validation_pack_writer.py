@@ -818,9 +818,9 @@ def test_build_validation_packs_for_run_auto_send(
     _write_json(account_dir / "summary.json", summary_payload)
     _write_json(account_dir / "bureaus.json", bureaus_payload)
 
+    monkeypatch.setenv("ENABLE_VALIDATION_SENDER", "1")
     monkeypatch.setenv("AUTO_VALIDATION_SEND", "1")
-    monkeypatch.delenv("ENABLE_VALIDATION_SENDER", raising=False)
-    monkeypatch.delenv("VALIDATION_SEND_ON_BUILD", raising=False)
+    monkeypatch.setenv("VALIDATION_SEND_ON_BUILD", "1")
     monkeypatch.setitem(
         sys.modules,
         "requests",

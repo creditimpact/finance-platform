@@ -1394,7 +1394,9 @@ def _packs_per_field_enabled() -> bool:
 
 
 def _auto_send_enabled() -> bool:
-    return any(_env_flag(name, False) for name in _AUTO_SEND_ENV_VARS)
+    """Return ``True`` when every auto-send toggle is explicitly enabled."""
+
+    return all(_env_flag(name, False) for name in _AUTO_SEND_ENV_VARS)
 
 
 def _pack_max_size_kb() -> float | None:

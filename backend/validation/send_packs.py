@@ -888,10 +888,12 @@ def _validate_index_ready(
 
 def _prepare_validation_index(
     manifest: Mapping[str, Any] | ValidationIndex | Path | str,
+    *,
+    stage: str,
 ) -> _IndexPreparationResult:
     stage_paths: StageManifestPaths | None = None
     if isinstance(manifest, Mapping):
-        stage_paths = extract_stage_manifest_paths(manifest, _MANIFEST_STAGE)
+        stage_paths = extract_stage_manifest_paths(manifest, stage)
 
     if isinstance(manifest, ValidationIndex):
         index = manifest
@@ -909,6 +911,8 @@ def _prepare_validation_index(
 
 def _load_manifest_view(
     manifest: Mapping[str, Any] | ValidationIndex | Path | str,
+    *,
+    stage: str,
 ) -> _ManifestView:
     if isinstance(manifest, ValidationIndex):
         index = manifest
@@ -916,7 +920,7 @@ def _load_manifest_view(
         return _ManifestView(index=index, log_path=log_path)
 
     if isinstance(manifest, Mapping):
-        stage_paths = extract_stage_manifest_paths(manifest, _MANIFEST_STAGE)
+        stage_paths = extract_stage_manifest_paths(manifest, stage)
         is_index_document = _document_is_index_document(manifest)
         use_manifest_paths = _should_use_manifest_paths()
         index_path = _index_path_from_mapping(
@@ -973,7 +977,7 @@ def _load_manifest_view(
         if not isinstance(document, Mapping):
             raise ValidationPackError("Validation index root must be an object")
 
-        stage_paths = extract_stage_manifest_paths(document, _MANIFEST_STAGE)
+        stage_paths = extract_stage_manifest_paths(document, stage)
         is_index_document = _document_is_index_document(document)
         index_path = _index_path_from_mapping(
             document,
@@ -1014,10 +1018,13 @@ class ValidationPackSender:
         manifest: Mapping[str, Any] | ValidationIndex | Path | str,
         *,
         http_client: _ChatCompletionClient | None = None,
+        stage: str | None = None,
     ) -> None:
-        view = _load_manifest_view(manifest)
+        resolved_stage = stage or _MANIFEST_STAGE
+        view = _load_manifest_view(manifest, stage=resolved_stage)
         self._index = view.index
         self.sid = self._index.sid
+        self._stage = resolved_stage
 
         raw_model = os.getenv("AI_MODEL")
         if raw_model is None or not str(raw_model).strip():
@@ -2229,10 +2236,14 @@ class ValidationPackSender:
 
 def send_validation_packs(
     manifest: Mapping[str, Any] | ValidationIndex | Path | str,
+    *,
+    stage: str | None = None,
 ) -> list[dict[str, Any]]:
     """Send all validation packs referenced by ``manifest``."""
 
-    preparation = _prepare_validation_index(manifest)
+    resolved_stage = stage or _MANIFEST_STAGE
+
+    preparation = _prepare_validation_index(manifest, stage=resolved_stage)
     if preparation.skip:
         return []
 
@@ -2242,7 +2253,7 @@ def send_validation_packs(
     else:
         sender_manifest = manifest
 
-    sender = ValidationPackSender(sender_manifest)
+    sender = ValidationPackSender(sender_manifest, stage=resolved_stage)
     return sender.send()
 
 

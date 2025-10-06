@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import threading
+import time
 from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass
@@ -1426,14 +1427,46 @@ def _pack_max_size_kb() -> float | None:
     return value
 
 
+def _wait_for_index_materialized(
+    index_path: Path, *, attempts: int = 5, delay: float = 0.5
+) -> bool:
+    """Return ``True`` when ``index_path`` exists and has a non-zero size."""
+
+    total_attempts = max(1, attempts)
+
+    for attempt in range(1, total_attempts + 1):
+        try:
+            if index_path.exists() and index_path.stat().st_size > 0:
+                return True
+        except OSError:
+            # Transient filesystem issues should retry until attempts are exhausted.
+            pass
+
+        if attempt < total_attempts:
+            time.sleep(max(delay, 0.0))
+
+    return False
+
+
 def _maybe_send_validation_packs(sid: str, runs_root: Path) -> None:
     if not _auto_send_enabled():
+        log.info("VALIDATION_AUTOSEND_SKIPPED sid=%s reason=env_disabled", sid)
         return
 
     from backend.validation.send_packs import send_validation_packs
 
     index_path = validation_index_path(sid, runs_root=runs_root, create=True)
-    send_validation_packs(index_path)
+
+    if not _wait_for_index_materialized(index_path):
+        log.info(
+            "VALIDATION_AUTOSEND_SKIPPED sid=%s reason=index_unavailable path=%s",
+            sid,
+            index_path,
+        )
+        return
+
+    log.info("VALIDATION_AUTOSEND_TRIGGERED sid=%s path=%s", sid, index_path)
+    send_validation_packs(index_path, stage="validation")
 
 
 def _get_writer(sid: str, runs_root: Path | str) -> ValidationPackWriter:

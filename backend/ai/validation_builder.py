@@ -958,6 +958,12 @@ class ValidationPackWriter:
         else:
             alias = ""
 
+        if (
+            canonical_field == "two_year_payment_history"
+            and requirement.get("is_mismatch") is True
+        ):
+            return True
+
         if alias and alias not in lookup_keys:
             lookup_keys.append(alias)
 

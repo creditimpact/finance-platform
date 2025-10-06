@@ -78,6 +78,37 @@ def _expected_documents(field: str) -> list[str]:
     return [f"conditional_doc_{field}"]
 
 
+def test_two_year_history_mismatch_routes_without_send_flag(tmp_path: Path) -> None:
+    sid = "SID002"
+    writer = ValidationPackWriter(sid, runs_root=tmp_path / "runs")
+
+    requirement = {"field": "two_year_payment_history", "is_mismatch": True}
+    send_to_ai_map = {"two_year_payment_history": False}
+
+    assert writer._should_send_to_ai(
+        requirement,
+        "two_year_payment_history",
+        send_to_ai_map=send_to_ai_map,
+    )
+
+
+def test_other_fields_respect_send_flag(tmp_path: Path) -> None:
+    sid = "SID003"
+    writer = ValidationPackWriter(sid, runs_root=tmp_path / "runs")
+
+    requirement = {"field": "account_type", "is_mismatch": True}
+    send_to_ai_map = {"account_type": False}
+
+    assert (
+        writer._should_send_to_ai(
+            requirement,
+            "account_type",
+            send_to_ai_map=send_to_ai_map,
+        )
+        is False
+    )
+
+
 @pytest.mark.parametrize("account_id", [1, 2])
 def test_pack_writer_emits_pack_eligible_fields(tmp_path: Path, account_id: int) -> None:
     sid = "SID021"

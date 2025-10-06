@@ -12,6 +12,7 @@ from typing import Mapping, MutableMapping
 
 from celery import chain, shared_task
 
+from backend.ai.manifest import ensure_validation_section
 from backend.ai.validation_builder import build_validation_packs_for_run
 from backend.core.ai.paths import (
     ensure_merge_paths,
@@ -717,6 +718,7 @@ def validation_build_packs(
     _populate_common_paths(payload)
     runs_root = Path(payload["runs_root"])
 
+    ensure_validation_section(sid, runs_root=runs_root)
     logger.info("VALIDATION_STAGE_STARTED sid=%s", sid)
 
     try:

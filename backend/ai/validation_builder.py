@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-from backend.ai.manifest import Manifest
+from backend.ai.manifest import ensure_validation_section
 from backend.ai.validation_index import (
     ValidationIndexEntry,
     ValidationPackIndexWriter,
@@ -1510,7 +1510,7 @@ def _maybe_send_validation_packs(
     stage: str = "validation",
     recheck: bool = False,
 ) -> None:
-    Manifest.ensure_validation_section(sid, runs_root=runs_root)
+    ensure_validation_section(sid, runs_root=runs_root)
 
     if not _auto_send_enabled():
         log.info("VALIDATION_AUTOSEND_SKIPPED sid=%s reason=env_disabled", sid)
@@ -1609,7 +1609,7 @@ def build_validation_packs_for_run(
     runs_root_path = (
         Path(runs_root).resolve() if runs_root is not None else Path("runs").resolve()
     )
-    Manifest.ensure_validation_section(sid, runs_root=runs_root_path)
+    ensure_validation_section(sid, runs_root=runs_root_path)
 
     if not _packs_enabled():
         log.info(

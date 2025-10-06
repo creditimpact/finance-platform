@@ -208,4 +208,17 @@ class Manifest:
         return dict(validation_section)
 
 
-__all__ = ["Manifest", "StageManifestPaths", "extract_stage_manifest_paths"]
+def ensure_validation_section(
+    sid: str, *, runs_root: Path | str | None = None
+) -> dict[str, Any]:
+    """Ensure the validation manifest section and directories exist for ``sid``."""
+
+    return Manifest.ensure_validation_section(sid, runs_root=runs_root)
+
+
+__all__ = [
+    "Manifest",
+    "StageManifestPaths",
+    "ensure_validation_section",
+    "extract_stage_manifest_paths",
+]

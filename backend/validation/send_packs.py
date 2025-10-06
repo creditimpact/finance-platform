@@ -36,6 +36,7 @@ from backend.validation.index_schema import (
     ValidationPackRecord,
     load_validation_index,
 )
+from backend.pipeline.runs import RunManifest, persist_manifest, _utc_now
 from backend.validation.redaction import sanitize_validation_log_payload
 
 _DEFAULT_MODEL = "gpt-4o-mini"
@@ -651,6 +652,40 @@ def _infer_manifest_index_wait_info(
 
     sid = _coerce_str(document.get("sid")) or "<unknown>"
     return index_path, sid
+
+
+def _update_stage_status_after_send(index: ValidationIndex | None, stage: str) -> None:
+    if index is None:
+        return
+
+    stage_key = stage.strip().lower()
+    if stage_key not in {"merge", "validation"}:
+        return
+
+    try:
+        run_root = index.index_path.parents[2]
+    except IndexError:
+        run_root = index.index_path.parent
+
+    manifest_path = (run_root / "manifest.json").resolve()
+    sid_hint = index.sid or manifest_path.parent.name
+
+    try:
+        manifest = RunManifest.load_or_create(manifest_path, sid_hint)
+    except Exception:  # pragma: no cover - defensive logging
+        log.debug(
+            "VALIDATION_STAGE_STATUS_MANIFEST_LOAD_FAILED sid=%s path=%s stage=%s",
+            sid_hint,
+            manifest_path,
+            stage_key,
+            exc_info=True,
+        )
+        return
+
+    stage_status = manifest.ensure_ai_stage_status(stage_key)
+    stage_status["sent"] = True
+    stage_status["completed_at"] = _utc_now()
+    persist_manifest(manifest)
 
 
 def _wait_for_index_file(index_path: Path, sid: str) -> bool:
@@ -2592,7 +2627,9 @@ def send_validation_packs(
         stage=resolved_stage,
         preloaded_view=preparation.view,
     )
-    return sender.send()
+    results = sender.send()
+    _update_stage_status_after_send(preparation.index, resolved_stage)
+    return results
 
 
 __all__ = ["send_validation_packs", "ValidationPackSender", "ValidationPackError"]

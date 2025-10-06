@@ -417,6 +417,10 @@ class _ChatCompletionClient:
         )
         if include_beta_header:
             headers["OpenAI-Beta"] = "response_format=v1"
+        log.info(
+            "VALIDATION_HTTP_HEADERS_SET beta_structured=%s",
+            "true" if include_beta_header else "false",
+        )
         payload = {
             "model": model,
             "messages": list(messages),

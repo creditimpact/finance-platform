@@ -26,8 +26,41 @@ from backend.pipeline.runs import RUNS_ROOT_ENV
 from tests.helpers.fake_ai_client import FakeAIClient
 
 
+PACKS_OVERRIDE_ENV = "VALIDATION_PACKS_DIR"
+RESULTS_OVERRIDE_ENV = "VALIDATION_RESULTS_DIR"
+
+
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def test_ensure_validation_paths_honors_env_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "override-sid"
+    runs_root = tmp_path / "runs"
+
+    monkeypatch.delenv(PACKS_OVERRIDE_ENV, raising=False)
+    monkeypatch.delenv(RESULTS_OVERRIDE_ENV, raising=False)
+
+    default_paths = ensure_validation_paths(runs_root, sid, create=True)
+    expected_base = (runs_root / sid / "ai_packs" / "validation").resolve()
+    assert default_paths.packs_dir == (expected_base / "packs").resolve()
+    assert default_paths.results_dir == (expected_base / "results").resolve()
+
+    monkeypatch.setenv(PACKS_OVERRIDE_ENV, "custom/packs")
+    monkeypatch.setenv(RESULTS_OVERRIDE_ENV, "custom/results")
+    override_paths = ensure_validation_paths(runs_root, sid, create=True)
+    assert override_paths.packs_dir == (runs_root / sid / "custom/packs").resolve()
+    assert override_paths.results_dir == (runs_root / sid / "custom/results").resolve()
+
+    absolute_packs = tmp_path / "abs" / "packs"
+    absolute_results = tmp_path / "abs" / "results"
+    monkeypatch.setenv(PACKS_OVERRIDE_ENV, str(absolute_packs))
+    monkeypatch.setenv(RESULTS_OVERRIDE_ENV, str(absolute_results))
+    absolute_paths = ensure_validation_paths(runs_root, sid, create=True)
+    assert absolute_paths.packs_dir == absolute_packs.resolve()
+    assert absolute_paths.results_dir == absolute_results.resolve()
 
 
 def test_validation_path_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

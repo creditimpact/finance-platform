@@ -64,6 +64,9 @@ _AUTO_SEND_ENV_VARS: tuple[str, ...] = (
 _AUTOSEND_RECHECK_MIN_DELAY = 1.0
 _AUTOSEND_RECHECK_MAX_DELAY = 2.0
 
+_LOCKS_DIRNAME = ".locks"
+_MERGE_INFLIGHT_LOCK_FILENAME = "merge_inflight.lock"
+
 _BUREAUS = ("transunion", "experian", "equifax")
 _SYSTEM_PROMPT = (
     "You are an adjudication assistant reviewing credit report discrepancies. "
@@ -1449,6 +1452,28 @@ def _pack_max_size_kb() -> float | None:
     return value
 
 
+def _merge_inflight_lock_path(runs_root: Path, sid: str) -> Path:
+    return runs_root / sid / _LOCKS_DIRNAME / _MERGE_INFLIGHT_LOCK_FILENAME
+
+
+def _wait_for_merge_completion(
+    sid: str, runs_root: Path, *, poll_interval: float = 0.5
+) -> None:
+    """Block until the merge inflight lock is cleared for ``sid``."""
+
+    lock_path = _merge_inflight_lock_path(runs_root, sid)
+    wait_logged = False
+
+    while lock_path.exists():
+        if not wait_logged:
+            log.info("VALIDATION_WAITING_FOR_MERGE sid=%s", sid)
+            wait_logged = True
+        time.sleep(max(poll_interval, 0.05))
+
+    if wait_logged:
+        log.info("VALIDATION_RESUMED_AFTER_MERGE sid=%s", sid)
+
+
 def _wait_for_index_materialized(
     index_path: Path, *, attempts: int = 5, delay: float = 0.5
 ) -> bool:
@@ -1616,6 +1641,8 @@ def build_validation_packs_for_run(
             "VALIDATION_PACKS_DISABLED sid=%s reason=env_toggle", sid,
         )
         return {}
+
+    _wait_for_merge_completion(sid, runs_root_path)
 
     writer = _get_writer(sid, runs_root_path)
     results = writer.write_all_packs()

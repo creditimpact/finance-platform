@@ -36,10 +36,7 @@ from backend.core.merge.acctnum import acctnum_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
 from backend.core.logic.summary_compact import compact_merge_sections
-from backend.ai.validation_builder import (
-    build_validation_pack_for_account,
-    build_validation_packs_for_run,
-)
+from backend.ai.validation_builder import build_validation_pack_for_account
 from backend.core.logic.validation_requirements import (
     _raw_value_provider_for_account_factory,
     apply_validation_summary,
@@ -47,8 +44,6 @@ from backend.core.logic.validation_requirements import (
     build_validation_requirements,
     sync_validation_tag,
 )
-from backend.core.logic.validation_ai_packs import load_validation_packs_config_for_run
-
 __all__ = [
     "load_bureaus",
     "get_merge_cfg",
@@ -71,6 +66,9 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 _candidate_logger = logging.getLogger("ai_packs")
+
+_LOCKS_DIRNAME = ".locks"
+_MERGE_INFLIGHT_LOCK_FILENAME = "merge_inflight.lock"
 
 
 CANON: Dict[str, Dict[str, List[str]]] = {
@@ -2676,310 +2674,302 @@ def persist_merge_tags(
 ) -> Dict[int, Dict[str, Any]]:
     """Persist merge tags for each account based on best-partner selection."""
 
-    merge_tags: Dict[int, Dict[str, Any]] = {}
-    all_indices = sorted(set(scores_by_idx.keys()) | set(best_by_idx.keys()))
-
-    tags_root = runs_root / sid / "cases" / "accounts"
-    tag_paths: Dict[int, Path] = {
-        idx: tags_root / str(idx) / "tags.json" for idx in all_indices
-    }
-    summary_paths: Dict[int, Path] = {
-        idx: tags_root / str(idx) / "summary.json" for idx in all_indices
-    }
-
-    merge_kinds = {"merge_pair", "merge_best"}
-    for idx, path in tag_paths.items():
-        existing_tags = read_tags(path)
-        filtered = [tag for tag in existing_tags if tag.get("kind") not in merge_kinds]
-        if filtered != existing_tags:
-            write_tags_atomic(path, filtered)
-
-    valid_decisions = {"ai", "auto"}
-    processed_pairs: Set[Tuple[int, int]] = set()
-    summary_updates: Dict[int, Dict[str, List[Dict[str, Any]]]] = defaultdict(
-        lambda: {"merge": [], "ai": []}
-    )
-    for left in sorted(scores_by_idx.keys()):
-        partner_map = scores_by_idx.get(left) or {}
-        for right in sorted(partner_map.keys()):
-            if right == left or not isinstance(right, int):
-                continue
-            ordered = (min(left, right), max(left, right))
-            if ordered in processed_pairs:
-                continue
-            processed_pairs.add(ordered)
-
-            result = partner_map.get(right)
-            if not isinstance(result, Mapping):
-                continue
-
-            total_value = _tag_safe_int(result.get("total"))
-            if total_value >= AI_PACK_SCORE_THRESHOLD:
-                left_merge_entry = build_summary_merge_entry("merge_pair", right, result)
-                if left_merge_entry is not None:
-                    summary_updates[left]["merge"].append(left_merge_entry)
-                right_merge_entry = build_summary_merge_entry("merge_pair", left, result)
-                if right_merge_entry is not None:
-                    summary_updates[right]["merge"].append(right_merge_entry)
-
-            left_tag = build_merge_pair_tag(right, result)
-            if left_tag.get("decision") in valid_decisions:
-                left_path = tag_paths.get(left)
-                if left_path is not None:
-                    upsert_tag(left_path, left_tag, unique_keys=("kind", "with"))
-
-                right_tag = build_merge_pair_tag(left, result)
-                right_path = tag_paths.get(right)
-                if right_path is not None:
-                    upsert_tag(right_path, right_tag, unique_keys=("kind", "with"))
-
-                if left_tag.get("decision") == "ai":
-                    highlights_from_pair = _build_ai_highlights(result)
-                    pack_payload = build_ai_pack_for_pair(
-                        sid,
-                        runs_root,
-                        left,
-                        right,
-                        highlights_from_pair,
-                    )
-                    try:
-                        context_payload = pack_payload.get("context", {}) if isinstance(
-                            pack_payload, Mapping
-                        ) else {}
-                        highlights_payload = pack_payload.get("highlights", {}) if isinstance(
-                            pack_payload, Mapping
-                        ) else {}
-
-                        context_a = list(context_payload.get("a") or [])
-                        context_b = list(context_payload.get("b") or [])
-
-                        total_value = highlights_payload.get("total")
-                        try:
-                            total_value = int(total_value)
-                        except (TypeError, ValueError):
-                            total_value = None
-
-                        triggers_raw = highlights_payload.get("triggers", [])
-                        if isinstance(triggers_raw, Iterable) and not isinstance(
-                            triggers_raw, (str, bytes)
-                        ):
-                            triggers_value = [str(item) for item in triggers_raw if item is not None]
-                        else:
-                            triggers_value = []
-
-                        pack_log = {
-                            "sid": sid,
-                            "pair": {"a": left, "b": right},
-                            "lines_a": len(context_a),
-                            "lines_b": len(context_b),
-                            "total": total_value,
-                            "triggers": triggers_value,
-                        }
-                        logger.info("MERGE_V2_PACK %s", json.dumps(pack_log, sort_keys=True))
-                    except Exception:  # pragma: no cover - defensive logging
-                        logger.exception(
-                            "MERGE_V2_PACK_FAILED sid=%s pair=(%s,%s)", sid, left, right
-                        )
-
-    for idx in all_indices:
-        best_info = best_by_idx.get(idx, {})
-        best_tag = build_merge_best_tag(best_info)
-        if not best_tag or best_tag.get("decision") not in valid_decisions:
-            continue
-        path = tag_paths.get(idx)
-        if path is not None:
-            upsert_tag(path, best_tag, unique_keys=("kind",))
-
-        best_partner = best_info.get("partner_index") if isinstance(best_info, Mapping) else None
-        best_result = best_info.get("result") if isinstance(best_info, Mapping) else None
-        if best_partner is not None and isinstance(best_result, Mapping):
-            extra_fields = {
-                "tiebreaker": str(best_info.get("tiebreaker", "none")),
-                "strong_rank": best_info.get("strong_rank"),
-                "score_total": best_info.get("score_total"),
-            }
-            best_entry = build_summary_merge_entry(
-                "merge_best", best_partner, best_result, extra=extra_fields
-            )
-            if best_entry is not None:
-                summary_updates[idx]["merge"].append(best_entry)
-
-                partner_idx = best_entry.get("with")
-                if isinstance(partner_idx, int):
-                    partner_scores = scores_by_idx.get(partner_idx, {})
-                    reverse_result = partner_scores.get(idx)
-                    if not isinstance(reverse_result, Mapping):
-                        reverse_result = best_result
-
-                    partner_info = best_by_idx.get(partner_idx)
-                    if isinstance(partner_info, Mapping):
-                        partner_extra = {
-                            "tiebreaker": str(partner_info.get("tiebreaker", "none")),
-                            "strong_rank": partner_info.get("strong_rank"),
-                            "score_total": partner_info.get("score_total"),
-                        }
-                    else:
-                        partner_extra = {
-                            "tiebreaker": "peer_best",
-                            "strong_rank": None,
-                            "score_total": best_result.get("total")
-                            if isinstance(best_result, Mapping)
-                            else None,
-                        }
-
-                    reverse_entry = build_summary_merge_entry(
-                        "merge_best", idx, reverse_result, extra=partner_extra
-                    )
-                    if reverse_entry is not None:
-                        summary_updates[partner_idx]["merge"].append(reverse_entry)
-
-    for idx in all_indices:
-        partner_scores = scores_by_idx.get(idx, {})
-        best_info = best_by_idx.get(idx, {})
-        merge_tag = _merge_tag_from_best(idx, partner_scores, best_info)
-        merge_tags[idx] = merge_tag
-
-    for idx, updates in summary_updates.items():
-        summary_path = summary_paths.get(idx)
-        if summary_path is None:
-            continue
-        merge_entries = updates.get("merge") or []
-        ai_entries = updates.get("ai") or []
-        if merge_entries or ai_entries:
-            apply_summary_updates(
-                summary_path,
-                merge_entries=merge_entries,
-                ai_entries=ai_entries,
-            )
-
-    emit_validation_tag = _read_env_flag(
-        os.environ, "VALIDATION_REQUIREMENTS_TAGS", False
-    )
-
-    validation_ai_indices: list[int] = []
-
-    for idx in all_indices:
-        summary_path = summary_paths.get(idx)
-        if summary_path is None:
-            continue
+    locks_dir = runs_root / sid / _LOCKS_DIRNAME
+    merge_lock_path = locks_dir / _MERGE_INFLIGHT_LOCK_FILENAME
+    lock_written = False
+    try:
         try:
-            bureaus_payload = load_bureaus(sid, idx, runs_root=runs_root)
-        except FileNotFoundError:
+            locks_dir.mkdir(parents=True, exist_ok=True)
+            merge_lock_path.write_text("1", encoding="utf-8")
+            lock_written = True
+        except Exception:  # pragma: no cover - defensive logging
             logger.warning(
-                "VALIDATION_BUREAUS_MISSING sid=%s idx=%s runs_root=%s",
+                "MERGE_INFLIGHT_LOCK_CREATE_FAILED sid=%s path=%s",
                 sid,
-                idx,
-                runs_root,
+                merge_lock_path,
+                exc_info=True,
             )
-            continue
-        except Exception:
-            logger.exception(
-                "VALIDATION_BUREAUS_LOAD_FAILED sid=%s idx=%s runs_root=%s",
-                sid,
-                idx,
-                runs_root,
-            )
-            continue
 
-        try:
-            requirements, inconsistencies, field_consistency = build_validation_requirements(
-                bureaus_payload
-            )
-        except Exception:
-            logger.exception(
-                "VALIDATION_REQUIREMENTS_COMPUTE_FAILED sid=%s idx=%s runs_root=%s",
-                sid,
-                idx,
-                runs_root,
-            )
-            continue
+        merge_tags: Dict[int, Dict[str, Any]] = {}
+        all_indices = sorted(set(scores_by_idx.keys()) | set(best_by_idx.keys()))
 
-        try:
-            raw_provider = _raw_value_provider_for_account_factory(bureaus_payload)
-            summary_payload = build_validation_summary_payload(
-                requirements,
-                field_consistency=field_consistency,
-                raw_value_provider=raw_provider,
-            )
-            summary_after = apply_validation_summary(summary_path, summary_payload)
-        except Exception:
-            logger.exception(
-                "VALIDATION_SUMMARY_WRITE_FAILED sid=%s idx=%s summary=%s",
-                sid,
-                idx,
-                summary_path,
-            )
-            continue
+        tags_root = runs_root / sid / "cases" / "accounts"
+        tag_paths: Dict[int, Path] = {
+            idx: tags_root / str(idx) / "tags.json" for idx in all_indices
+        }
+        summary_paths: Dict[int, Path] = {
+            idx: tags_root / str(idx) / "summary.json" for idx in all_indices
+        }
 
-        tag_path = tag_paths.get(idx)
-        if tag_path is not None:
-            try:
-                fields_for_tag = [
-                    str(entry["field"]) for entry in requirements if entry.get("field")
-                ]
-                sync_validation_tag(tag_path, fields_for_tag, emit=emit_validation_tag)
-            except Exception:
-                logger.exception(
-                    "VALIDATION_TAG_SYNC_FAILED sid=%s idx=%s path=%s",
-                    sid,
-                    idx,
-                    tag_path,
+        merge_kinds = {"merge_pair", "merge_best"}
+        for idx, path in tag_paths.items():
+            existing_tags = read_tags(path)
+            filtered = [tag for tag in existing_tags if tag.get("kind") not in merge_kinds]
+            if filtered != existing_tags:
+                write_tags_atomic(path, filtered)
+
+        valid_decisions = {"ai", "auto"}
+        processed_pairs: Set[Tuple[int, int]] = set()
+        summary_updates: Dict[int, Dict[str, List[Dict[str, Any]]]] = defaultdict(
+            lambda: {"merge": [], "ai": []}
+        )
+        for left in sorted(scores_by_idx.keys()):
+            partner_map = scores_by_idx.get(left) or {}
+            for right in sorted(partner_map.keys()):
+                if right == left or not isinstance(right, int):
+                    continue
+                ordered = (min(left, right), max(left, right))
+                if ordered in processed_pairs:
+                    continue
+                processed_pairs.add(ordered)
+
+                result = partner_map.get(right)
+                if not isinstance(result, Mapping):
+                    continue
+
+                total_value = _tag_safe_int(result.get("total"))
+                if total_value >= AI_PACK_SCORE_THRESHOLD:
+                    left_merge_entry = build_summary_merge_entry("merge_pair", right, result)
+                    if left_merge_entry is not None:
+                        summary_updates[left]["merge"].append(left_merge_entry)
+                    right_merge_entry = build_summary_merge_entry("merge_pair", left, result)
+                    if right_merge_entry is not None:
+                        summary_updates[right]["merge"].append(right_merge_entry)
+
+                left_tag = build_merge_pair_tag(right, result)
+                if left_tag.get("decision") in valid_decisions:
+                    left_path = tag_paths.get(left)
+                    if left_path is not None:
+                        upsert_tag(left_path, left_tag, unique_keys=("kind", "with"))
+
+                    right_tag = build_merge_pair_tag(left, result)
+                    right_path = tag_paths.get(right)
+                    if right_path is not None:
+                        upsert_tag(right_path, right_tag, unique_keys=("kind", "with"))
+
+                    if left_tag.get("decision") == "ai":
+                        highlights_from_pair = _build_ai_highlights(result)
+                        pack_payload = build_ai_pack_for_pair(
+                            sid,
+                            runs_root,
+                            left,
+                            right,
+                            highlights_from_pair,
+                        )
+                        try:
+                            context_payload = pack_payload.get("context", {}) if isinstance(
+                                pack_payload, Mapping
+                            ) else {}
+                            highlights_payload = pack_payload.get("highlights", {}) if isinstance(
+                                pack_payload, Mapping
+                            ) else {}
+
+                            context_a = list(context_payload.get("a") or [])
+                            context_b = list(context_payload.get("b") or [])
+
+                            total_value = highlights_payload.get("total")
+                            try:
+                                total_value = int(total_value)
+                            except (TypeError, ValueError):
+                                total_value = None
+
+                            triggers_raw = highlights_payload.get("triggers", [])
+                            if isinstance(triggers_raw, Iterable) and not isinstance(
+                                triggers_raw, (str, bytes)
+                            ):
+                                triggers_value = [str(item) for item in triggers_raw if item is not None]
+                            else:
+                                triggers_value = []
+
+                            pack_log = {
+                                "sid": sid,
+                                "pair": {"a": left, "b": right},
+                                "lines_a": len(context_a),
+                                "lines_b": len(context_b),
+                                "total": total_value,
+                                "triggers": triggers_value,
+                            }
+                            logger.info("MERGE_V2_PACK %s", json.dumps(pack_log, sort_keys=True))
+                        except Exception:  # pragma: no cover - defensive logging
+                            logger.exception(
+                                "MERGE_V2_PACK_FAILED sid=%s pair=(%s,%s)", sid, left, right
+                            )
+
+        for idx in all_indices:
+            best_info = best_by_idx.get(idx, {})
+            best_tag = build_merge_best_tag(best_info)
+            if not best_tag or best_tag.get("decision") not in valid_decisions:
+                continue
+            path = tag_paths.get(idx)
+            if path is not None:
+                upsert_tag(path, best_tag, unique_keys=("kind",))
+
+            best_partner = best_info.get("partner_index") if isinstance(best_info, Mapping) else None
+            best_result = best_info.get("result") if isinstance(best_info, Mapping) else None
+            if best_partner is not None and isinstance(best_result, Mapping):
+                extra_fields = {
+                    "tiebreaker": str(best_info.get("tiebreaker", "none")),
+                    "strong_rank": best_info.get("strong_rank"),
+                    "score_total": best_info.get("score_total"),
+                }
+                best_entry = build_summary_merge_entry(
+                    "merge_best", best_partner, best_result, extra=extra_fields
+                )
+                if best_entry is not None:
+                    summary_updates[idx]["merge"].append(best_entry)
+
+                    partner_idx = best_entry.get("with")
+                    if isinstance(partner_idx, int):
+                        partner_scores = scores_by_idx.get(partner_idx, {})
+                        reverse_result = partner_scores.get(idx)
+                        if not isinstance(reverse_result, Mapping):
+                            reverse_result = best_result
+
+                        partner_info = best_by_idx.get(partner_idx)
+                        if isinstance(partner_info, Mapping):
+                            partner_extra = {
+                                "tiebreaker": str(partner_info.get("tiebreaker", "none")),
+                                "strong_rank": partner_info.get("strong_rank"),
+                                "score_total": partner_info.get("score_total"),
+                            }
+                        else:
+                            partner_extra = {
+                                "tiebreaker": "peer_best",
+                                "strong_rank": None,
+                                "score_total": best_result.get("total")
+                                if isinstance(best_result, Mapping)
+                                else None,
+                            }
+
+                        reverse_entry = build_summary_merge_entry(
+                            "merge_best", idx, reverse_result, extra=partner_extra
+                        )
+                        if reverse_entry is not None:
+                            summary_updates[partner_idx]["merge"].append(reverse_entry)
+
+        for idx in all_indices:
+            partner_scores = scores_by_idx.get(idx, {})
+            best_info = best_by_idx.get(idx, {})
+            merge_tag = _merge_tag_from_best(idx, partner_scores, best_info)
+            merge_tags[idx] = merge_tag
+
+        for idx, updates in summary_updates.items():
+            summary_path = summary_paths.get(idx)
+            if summary_path is None:
+                continue
+            merge_entries = updates.get("merge") or []
+            ai_entries = updates.get("ai") or []
+            if merge_entries or ai_entries:
+                apply_summary_updates(
+                    summary_path,
+                    merge_entries=merge_entries,
+                    ai_entries=ai_entries,
                 )
 
-        bureaus_path = summary_path.parent / "bureaus.json"
-        try:
-            build_validation_pack_for_account(
-                sid,
-                idx,
-                summary_path,
-                bureaus_path,
-            )
-        except Exception:  # pragma: no cover - defensive logging
-            logger.exception(
-                "VALIDATION_PACK_BUILD_FAILED sid=%s account=%s summary=%s",
-                sid,
-                idx,
-                summary_path,
-            )
-
-        validation_block = (
-            summary_after.get("validation_requirements")
-            if isinstance(summary_after, Mapping)
-            else None
-        )
-        if not isinstance(validation_block, Mapping):
-            continue
-
-        findings_entries = validation_block.get("findings")
-        if not isinstance(findings_entries, Sequence):
-            continue
-
-        if any(
-            isinstance(entry, Mapping) and bool(entry.get("ai_needed"))
-            for entry in findings_entries
-        ):
-            validation_ai_indices.append(int(idx))
-
-    config = load_validation_packs_config_for_run(
-        sid, runs_root=runs_root
-    )
-
-    if config.enable_write:
-        try:
-            build_validation_packs_for_run(sid, runs_root=runs_root)
-        except Exception:
-            logger.exception(
-                "VALIDATION_AI_PACKS_BUILD_FAILED sid=%s runs_root=%s indices=%s",
-                sid,
-                runs_root,
-                validation_ai_indices,
-            )
-    elif validation_ai_indices:
-        logger.info(
-            "VALIDATION_AI_PACKS_DISABLED sid=%s indices=%s", sid, validation_ai_indices
+        emit_validation_tag = _read_env_flag(
+            os.environ, "VALIDATION_REQUIREMENTS_TAGS", False
         )
 
-    return merge_tags
+        for idx in all_indices:
+            summary_path = summary_paths.get(idx)
+            if summary_path is None:
+                continue
+            try:
+                bureaus_payload = load_bureaus(sid, idx, runs_root=runs_root)
+            except FileNotFoundError:
+                logger.warning(
+                    "VALIDATION_BUREAUS_MISSING sid=%s idx=%s runs_root=%s",
+                    sid,
+                    idx,
+                    runs_root,
+                )
+                continue
+            except Exception:
+                logger.exception(
+                    "VALIDATION_BUREAUS_LOAD_FAILED sid=%s idx=%s runs_root=%s",
+                    sid,
+                    idx,
+                    runs_root,
+                )
+                continue
+
+            try:
+                (
+                    requirements,
+                    inconsistencies,
+                    field_consistency,
+                ) = build_validation_requirements(bureaus_payload)
+            except Exception:
+                logger.exception(
+                    "VALIDATION_REQUIREMENTS_COMPUTE_FAILED sid=%s idx=%s runs_root=%s",
+                    sid,
+                    idx,
+                    runs_root,
+                )
+                continue
+
+            try:
+                raw_provider = _raw_value_provider_for_account_factory(bureaus_payload)
+                summary_payload = build_validation_summary_payload(
+                    requirements,
+                    field_consistency=field_consistency,
+                    raw_value_provider=raw_provider,
+                )
+                summary_after = apply_validation_summary(summary_path, summary_payload)
+            except Exception:
+                logger.exception(
+                    "VALIDATION_SUMMARY_WRITE_FAILED sid=%s idx=%s summary=%s",
+                    sid,
+                    idx,
+                    summary_path,
+                )
+                continue
+
+            tag_path = tag_paths.get(idx)
+            if tag_path is not None:
+                try:
+                    fields_for_tag = [
+                        str(entry["field"]) for entry in requirements if entry.get("field")
+                    ]
+                    sync_validation_tag(tag_path, fields_for_tag, emit=emit_validation_tag)
+                except Exception:
+                    logger.exception(
+                        "VALIDATION_TAG_SYNC_FAILED sid=%s idx=%s path=%s",
+                        sid,
+                        idx,
+                        tag_path,
+                    )
+
+            bureaus_path = summary_path.parent / "bureaus.json"
+            try:
+                build_validation_pack_for_account(
+                    sid,
+                    idx,
+                    summary_path,
+                    bureaus_path,
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception(
+                    "VALIDATION_PACK_BUILD_FAILED sid=%s account=%s summary=%s",
+                    sid,
+                    idx,
+                    summary_path,
+                )
+
+        return merge_tags
+    finally:
+        if lock_written:
+            try:
+                merge_lock_path.unlink()
+            except FileNotFoundError:
+                pass
+            except Exception:  # pragma: no cover - defensive logging
+                logger.warning(
+                    "MERGE_INFLIGHT_LOCK_REMOVE_FAILED sid=%s path=%s",
+                    sid,
+                    merge_lock_path,
+                    exc_info=True,
+                )
 
 
 def score_and_tag_best_partners(

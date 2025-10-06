@@ -121,7 +121,7 @@ def classify_reason(bureau_values: Mapping[str, Any]) -> Mapping[str, Any]:
     }
 
 
-_AI_FIELDS = {"account_type", "account_rating", "creditor_type"}
+_AI_FIELDS = {"account_type", "creditor_type", "account_rating"}
 _AI_ALLOWED_REASONS = {"C3", "C4", "C5"}
 
 

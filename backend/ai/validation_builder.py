@@ -1215,11 +1215,10 @@ def build_line(
     field_key = ValidationPackWriter._field_key(field_name)
 
     finding_payload = _json_clone(finding)
-    existing_field = finding_payload.get("field")
-    if not isinstance(existing_field, str) or not existing_field.strip():
-        finding_payload["field"] = field_name
 
-    has_bureau_values = finding_payload.get("bureau_values")
+    has_bureau_values = (
+        "bureau_values" in finding_payload and finding_payload["bureau_values"] is not None
+    )
     if not has_bureau_values and fallback_bureaus_loader is not None:
         bureau_values = _fallback_bureau_values(field_name, fallback_bureaus_loader)
         if bureau_values:

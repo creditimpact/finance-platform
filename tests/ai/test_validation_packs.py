@@ -92,6 +92,47 @@ def test_two_year_history_mismatch_routes_without_send_flag(tmp_path: Path) -> N
     )
 
 
+def test_missing_findings_are_never_sent_to_ai(tmp_path: Path) -> None:
+    sid = "SID002-missing"
+    writer = ValidationPackWriter(sid, runs_root=tmp_path / "runs")
+
+    requirement = {
+        "field": "account_type",
+        "is_mismatch": True,
+        "is_missing": True,
+        "send_to_ai": True,
+    }
+
+    assert (
+        writer._should_send_to_ai(
+            requirement,
+            "account_type",
+            send_to_ai_map={"account_type": True},
+        )
+        is False
+    )
+
+
+def test_mismatch_gate_required_for_ai_fields(tmp_path: Path) -> None:
+    sid = "SID002-no-mismatch"
+    writer = ValidationPackWriter(sid, runs_root=tmp_path / "runs")
+
+    requirement = {
+        "field": "account_type",
+        "is_mismatch": False,
+        "send_to_ai": True,
+    }
+
+    assert (
+        writer._should_send_to_ai(
+            requirement,
+            "account_type",
+            send_to_ai_map={"account_type": True},
+        )
+        is False
+    )
+
+
 def test_other_fields_respect_send_flag(tmp_path: Path) -> None:
     sid = "SID003"
     writer = ValidationPackWriter(sid, runs_root=tmp_path / "runs")

@@ -1034,13 +1034,19 @@ class ValidationPackWriter:
         if canonical_field in EXCLUDED_FIELDS:
             return False
 
-        if canonical_field in FALLBACK_FIELDS:
-            return _is_mismatch(requirement) and _history_2y_allowed()
+        if canonical_field not in _PACK_ELIGIBLE_FIELDS:
+            return False
 
-        if canonical_field not in AI_FIELDS:
+        if _normalize_flag(requirement.get("is_missing")) is True:
             return False
 
         if not _is_mismatch(requirement):
+            return False
+
+        if canonical_field in FALLBACK_FIELDS:
+            return _history_2y_allowed()
+
+        if canonical_field not in AI_FIELDS:
             return False
 
         lookup_keys: list[str] = [canonical_field]

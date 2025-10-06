@@ -124,5 +124,5 @@ RESULTS DIR: ok
 2. `python -m backend.validation.manifest --sid <SID> --check` should print the tabular summary and `All <N> packs present` when every file exists.
 3. `python -m backend.validation.send --sid <SID>` must write new result files under the manifest-defined `results/` directory.
 4. Remove or rename a pack and re-run `--check`; it should clearly report `MISSING` and exit with a non-zero status.
-5. Run your usual pipeline command with `$env:AUTO_VALIDATION_SEND = "1"` (or set the variable in your orchestrator). The builder generates packs, the manifest stays relative, and the sender runs automatically using only the manifest for resolution.
+5. Run your usual pipeline command with `$env:ENABLE_VALIDATION_SENDER = "1"`, `$env:AUTO_VALIDATION_SEND = "1"`, **and** `$env:VALIDATION_SEND_ON_BUILD = "1"` (or set the variables in your orchestrator). The builder generates packs, the manifest stays relative, and the sender runs automatically using only the manifest for resolution.
 

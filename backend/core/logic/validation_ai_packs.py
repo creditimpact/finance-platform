@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from contextlib import suppress
 from dataclasses import dataclass
@@ -735,18 +736,94 @@ def _load_model_results(path: Path) -> Mapping[str, Any] | None:
     try:
         raw_text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return None
+        return _load_legacy_jsonl_results(path)
     except OSError:
         log.warning("VALIDATION_RESULTS_READ_FAILED path=%s", path, exc_info=True)
-        return None
+        return _load_legacy_jsonl_results(path)
 
     try:
         payload = json.loads(raw_text)
     except json.JSONDecodeError:
         log.warning("VALIDATION_RESULTS_INVALID_JSON path=%s", path, exc_info=True)
+        return _load_legacy_jsonl_results(path)
+
+    if isinstance(payload, Mapping):
+        return payload
+
+    log.warning(
+        "VALIDATION_RESULTS_UNEXPECTED_TYPE path=%s type=%s",
+        path,
+        type(payload).__name__,
+    )
+    return _load_legacy_jsonl_results(path)
+
+
+_LEGACY_RESULT_NAME_RE = re.compile(r"acc_(?P<account>\d+)\.result", re.IGNORECASE)
+
+
+def _load_legacy_jsonl_results(path: Path) -> Mapping[str, Any] | None:
+    legacy_path = path.with_suffix(".jsonl")
+    try:
+        raw_text = legacy_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        log.warning(
+            "VALIDATION_RESULTS_LEGACY_READ_FAILED path=%s",
+            legacy_path,
+            exc_info=True,
+        )
         return None
 
-    return payload if isinstance(payload, Mapping) else None
+    results: list[dict[str, Any]] = []
+    for line_number, line in enumerate(raw_text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            log.warning(
+                "VALIDATION_RESULTS_LEGACY_PARSE_FAILED path=%s line=%d",
+                legacy_path,
+                line_number,
+                exc_info=True,
+            )
+            continue
+
+        if isinstance(payload, Mapping):
+            results.append(dict(payload))
+        else:
+            log.debug(
+                "VALIDATION_RESULTS_LEGACY_NON_MAPPING path=%s line=%d type=%s",
+                legacy_path,
+                line_number,
+                type(payload).__name__,
+            )
+
+    account_id: int | str | None = None
+    match = _LEGACY_RESULT_NAME_RE.match(legacy_path.stem)
+    if match:
+        account_raw = match.group("account")
+        try:
+            account_id = int(account_raw)
+        except (TypeError, ValueError):
+            account_id = account_raw
+
+    summary: dict[str, Any] = {
+        "status": "done",
+        "request_lines": len(results),
+        "results": results,
+        "completed_at": _utc_now(),
+    }
+    if account_id is not None:
+        summary["account_id"] = account_id
+
+    log.info(
+        "VALIDATION_RESULTS_LEGACY_LOADED path=%s results=%d",
+        legacy_path,
+        len(results),
+    )
+    return summary
 
 
 def _compute_source_hash(

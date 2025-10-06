@@ -179,10 +179,10 @@ def _is_mismatch(requirement: Mapping[str, Any]) -> bool:
     return _normalize_flag(requirement.get("is_mismatch")) is True
 
 
-def _history_2y_allowed(requirement: Mapping[str, Any]) -> bool:
-    """Placeholder hook for enabling two-year history fallback logic."""
+def _history_2y_allowed() -> bool:
+    """Return ``True`` if two-year history fallback packs are enabled."""
 
-    return True
+    return os.getenv("VALIDATION_ALLOW_HISTORY_2Y_AI", "1") == "1"
 
 
 def _reasons_enabled() -> bool:
@@ -1026,7 +1026,7 @@ class ValidationPackWriter:
             return False
 
         if canonical_field in FALLBACK_FIELDS:
-            return _is_mismatch(requirement) and _history_2y_allowed(requirement)
+            return _is_mismatch(requirement) and _history_2y_allowed()
 
         if canonical_field not in AI_FIELDS:
             return False

@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 import threading
 import time
@@ -60,6 +61,8 @@ _AUTO_SEND_ENV_VARS: tuple[str, ...] = (
     "AUTO_VALIDATION_SEND",
     "VALIDATION_SEND_ON_BUILD",
 )
+_AUTOSEND_RECHECK_MIN_DELAY = 1.0
+_AUTOSEND_RECHECK_MAX_DELAY = 2.0
 
 _BUREAUS = ("transunion", "experian", "equifax")
 _SYSTEM_PROMPT = (
@@ -1449,7 +1452,46 @@ def _wait_for_index_materialized(
     return False
 
 
-def _maybe_send_validation_packs(sid: str, runs_root: Path) -> None:
+def _schedule_validation_recheck(sid: str, runs_root: Path, stage: str) -> None:
+    delay = random.uniform(_AUTOSEND_RECHECK_MIN_DELAY, _AUTOSEND_RECHECK_MAX_DELAY)
+
+    def _runner() -> None:
+        time.sleep(delay)
+        try:
+            log.info(
+                "VALIDATION_AUTOSEND_RECHECK sid=%s stage=%s delay=%.2f",
+                sid,
+                stage,
+                delay,
+            )
+            _maybe_send_validation_packs(
+                sid,
+                runs_root,
+                stage=stage,
+                recheck=True,
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            log.exception(
+                "VALIDATION_AUTOSEND_RECHECK_FAILED sid=%s stage=%s",
+                sid,
+                stage,
+            )
+
+    thread = threading.Thread(
+        target=_runner,
+        name=f"validation-autosend-recheck-{sid}",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _maybe_send_validation_packs(
+    sid: str,
+    runs_root: Path,
+    *,
+    stage: str = "validation",
+    recheck: bool = False,
+) -> None:
     Manifest.ensure_validation_section(sid, runs_root=runs_root)
 
     if not _auto_send_enabled():
@@ -1468,8 +1510,21 @@ def _maybe_send_validation_packs(sid: str, runs_root: Path) -> None:
         )
         return
 
-    log.info("VALIDATION_AUTOSEND_TRIGGERED sid=%s path=%s", sid, index_path)
-    send_validation_packs(index_path, stage="validation")
+    log.info(
+        "VALIDATION_AUTOSEND_TRIGGERED sid=%s stage=%s path=%s",
+        sid,
+        stage,
+        index_path,
+    )
+    try:
+        send_validation_packs(index_path, stage=stage)
+    except TypeError as exc:
+        if "stage" not in str(exc):
+            raise
+        send_validation_packs(index_path)
+
+    if not recheck:
+        _schedule_validation_recheck(sid, runs_root, stage)
 
 
 def _get_writer(sid: str, runs_root: Path | str) -> ValidationPackWriter:

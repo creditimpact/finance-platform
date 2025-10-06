@@ -26,12 +26,10 @@ ALWAYS_INVESTIGATABLE_FIELDS: tuple[str, ...] = (
     "date_reported",
     # Histories
     "two_year_payment_history",
-    "seven_year_history",
 )
 
 # Fields that require corroboration before escalating to a strong dispute.
 CONDITIONAL_FIELDS: tuple[str, ...] = (
-    "account_number_display",
     "account_rating",
 )
 

@@ -33,7 +33,6 @@ FIELD_CATEGORY_MAP: dict[str, str] = {
     "closed_date": "open_ident",
     "account_type": "open_ident",
     "creditor_type": "open_ident",
-    "account_number_display": "open_ident",
     # Terms
     "high_balance": "terms",
     "credit_limit": "terms",
@@ -52,7 +51,13 @@ FIELD_CATEGORY_MAP: dict[str, str] = {
     "account_rating": "status",
     # Histories
     "two_year_payment_history": "history",
-    "seven_year_history": "history",
+}
+
+PACK_ELIGIBLE_FIELDS: set[str] = {
+    "account_type",
+    "creditor_type",
+    "account_rating",
+    "two_year_payment_history",
 }
 
 
@@ -74,7 +79,7 @@ def _expected_documents(field: str) -> list[str]:
 
 
 @pytest.mark.parametrize("account_id", [1, 2])
-def test_pack_writer_emits_all_validation_fields(tmp_path: Path, account_id: int) -> None:
+def test_pack_writer_emits_pack_eligible_fields(tmp_path: Path, account_id: int) -> None:
     sid = "SID021"
     runs_root = tmp_path / "runs"
 
@@ -114,10 +119,10 @@ def test_pack_writer_emits_all_validation_fields(tmp_path: Path, account_id: int
     writer = ValidationPackWriter(sid, runs_root=runs_root)
     lines = writer.write_pack_for_account(account_id)
 
-    assert len(lines) == len(ALL_VALIDATION_FIELDS)
+    assert len(lines) == len(PACK_ELIGIBLE_FIELDS)
 
     payload_fields = [line.payload["field"] for line in lines]
-    assert sorted(payload_fields) == sorted(ALL_VALIDATION_FIELDS)
+    assert sorted(payload_fields) == sorted(PACK_ELIGIBLE_FIELDS)
 
     for line in lines:
         payload = line.payload
@@ -132,8 +137,8 @@ def test_pack_writer_emits_all_validation_fields(tmp_path: Path, account_id: int
         account_id
     )
     on_disk = _read_jsonl(pack_path)
-    assert len(on_disk) == len(ALL_VALIDATION_FIELDS)
-    assert sorted(entry["field"] for entry in on_disk) == sorted(ALL_VALIDATION_FIELDS)
+    assert len(on_disk) == len(PACK_ELIGIBLE_FIELDS)
+    assert sorted(entry["field"] for entry in on_disk) == sorted(PACK_ELIGIBLE_FIELDS)
 
     index_payload = json.loads(
         validation_index_path(sid, runs_root=runs_root).read_text(encoding="utf-8")
@@ -142,7 +147,7 @@ def test_pack_writer_emits_all_validation_fields(tmp_path: Path, account_id: int
     assert len(packs) == 1
     entry = packs[0]
     assert entry["account_id"] == account_id
-    assert entry["lines"] == len(ALL_VALIDATION_FIELDS)
+    assert entry["lines"] == len(PACK_ELIGIBLE_FIELDS)
 
 
 def _pattern_values(field: str, pattern: str) -> dict[str, Any]:
@@ -186,13 +191,6 @@ def _pattern_values(field: str, pattern: str) -> dict[str, Any]:
             "equifax": ["ok"],
         }
 
-    if field == "seven_year_history" and pattern == "case_6":
-        return {
-            "transunion": [],
-            "experian": [],
-            "equifax": [],
-        }
-
     return dict(base_patterns[pattern])
 
 
@@ -205,28 +203,10 @@ def reason_pack_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict
     runs_root = tmp_path / "runs"
 
     field_patterns: dict[str, str] = {
-        # Always-eligible
-        "date_opened": "case_1",
-        "closed_date": "case_2",
         "account_type": "case_3",
         "creditor_type": "case_4",
-        "high_balance": "case_5",
-        "credit_limit": "case_6",
-        "term_length": "case_1",
-        "payment_amount": "case_2",
-        "payment_frequency": "case_3",
-        "balance_owed": "case_4",
-        "last_payment": "case_5",
-        "past_due_amount": "case_6",
-        "date_of_last_activity": "case_1",
-        "account_status": "case_2",
-        "payment_status": "case_3",
-        "date_reported": "case_4",
-        "two_year_payment_history": "case_5",
-        "seven_year_history": "case_6",
-        # Conditional fields
-        "account_rating": "case_4",
-        "account_number_display": "case_3",
+        "account_rating": "case_5",
+        "two_year_payment_history": "case_1",
     }
 
     requirements: list[dict[str, Any]] = []
@@ -295,7 +275,7 @@ class TestReasonMetadata:
             assert reason["pattern"] == expected_pattern
             observed.add(reason["pattern"])
 
-        assert observed == {f"case_{idx}" for idx in range(1, 7)}
+        assert observed == set(expected_patterns.values())
 
     def test_reason_flags_respect_policy(self, reason_pack_fixture: dict[str, Any]) -> None:
         payloads = reason_pack_fixture["payloads"]
@@ -318,7 +298,7 @@ class TestReasonMetadata:
         conditional_fields = POLICY_CONDITIONAL_FIELDS
 
         assert always_fields.isdisjoint(conditional_fields)
-        assert always_fields | conditional_fields == set(payloads)
+        assert set(payloads) == PACK_ELIGIBLE_FIELDS
 
     def test_ai_needed_only_for_conditional_mismatches(
         self, reason_pack_fixture: dict[str, Any]

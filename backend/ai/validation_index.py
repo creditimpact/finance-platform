@@ -457,6 +457,14 @@ class ValidationPackIndexWriter:
             index_path=self._index_path,
         )
 
+        log.info(
+            "VALIDATION_INDEX_STATUS_TRANSITION sid=%s pack=%s from=%s to=%s",
+            self.sid,
+            key,
+            entry.status,
+            updated_entry.status,
+        )
+
         return updated_entry.to_json_payload(self._index_path.parent.resolve())
 
 

@@ -401,10 +401,14 @@ class _ChatCompletionClient:
                 body_text = response.text
             except Exception:  # pragma: no cover - defensive logging
                 body_text = "<unavailable>"
+            snippet = str(body_text).strip()
+            if len(snippet) > 500:
+                snippet = snippet[:497] + "..."
             log.error(
-                "VALIDATION_AI_HTTP_ERROR status=%s body=%s",
+                "VALIDATION_AI_HTTP_ERROR url=%s status=%s body=%s",
+                url,
                 status_code,
-                body_text,
+                snippet or "<empty>",
             )
         response.raise_for_status()
         return _ChatCompletionResponse(
@@ -663,7 +667,15 @@ class ValidationPackSender:
         view = _load_manifest_view(manifest)
         self._index = view.index
         self.sid = self._index.sid
-        self.model = os.getenv("AI_MODEL", _DEFAULT_MODEL)
+
+        raw_model = os.getenv("AI_MODEL")
+        if raw_model is None or not str(raw_model).strip():
+            fallback_model = os.getenv("VALIDATION_MODEL")
+            if fallback_model is not None:
+                raw_model = fallback_model
+        if raw_model is None:
+            raw_model = _DEFAULT_MODEL
+        self.model = str(raw_model).strip()
         self._client = http_client or self._build_client()
         self._throttle = _THROTTLE_SECONDS
         self._results_root: Path | None = None
@@ -824,10 +836,56 @@ class ValidationPackSender:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+    def _log_preflight_line(self, index: ValidationIndex) -> None:
+        packs_dir = index.packs_dir_path
+        try:
+            pack_count = sum(1 for _ in packs_dir.glob("val_acc_*.jsonl")) if packs_dir.exists() else 0
+        except OSError as exc:  # pragma: no cover - defensive logging
+            log.warning(
+                "VALIDATION_SEND_PREFLIGHT_GLOB_FAILED sid=%s packs_dir=%s error=%s",
+                self.sid,
+                str(packs_dir),
+                exc,
+            )
+            pack_count = 0
+
+        api_key_set = bool(os.getenv("OPENAI_API_KEY"))
+        base_url_set = bool(os.getenv("OPENAI_BASE_URL"))
+
+        log.info(
+            "VALIDATION_SEND_PREFLIGHT sid=%s model=%s packs_dir=%s pack_files=%s env_api_key=%s env_base_url=%s",
+            self.sid,
+            self.model or "<missing>",
+            str(packs_dir),
+            pack_count,
+            "set" if api_key_set else "missing",
+            "set" if base_url_set else "missing",
+        )
+
     def send(self) -> list[dict[str, Any]]:
         """Send every pack referenced by the manifest index."""
 
         index = self._load_index()
+        self._log_preflight_line(index)
+
+        if not self.model:
+            log.error(
+                "VALIDATION_SEND_MODEL_MISSING sid=%s manifest=%s detail=%s",
+                self.sid,
+                str(index.index_path),
+                "no model configured",
+            )
+            return []
+
+        if not index.packs:
+            log.warning(
+                "VALIDATION_SEND_NO_PACKS sid=%s manifest=%s detail=%s",
+                self.sid,
+                str(index.index_path),
+                "no eligible packs found",
+            )
+            return []
+
         preflight = self._preflight(index)
         self._results_root = index.results_dir_path
 

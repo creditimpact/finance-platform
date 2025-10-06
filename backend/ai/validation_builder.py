@@ -13,7 +13,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from backend.ai.validation_index import (
     ValidationIndexEntry,
@@ -65,6 +65,7 @@ _SYSTEM_PROMPT = (
     "Evaluate the provided bureau data and decide if the consumer has a strong claim. "
     "Respond with a JSON object that matches the expected output schema."
 )
+_SHARED_PROMPT = " ".join(part.strip() for part in _SYSTEM_PROMPT if part)
 _EXPECTED_OUTPUT_SCHEMA = {
     "type": "object",
     "required": ["decision", "rationale", "citations"],
@@ -262,12 +263,6 @@ class ValidationPackWriter:
         )
         self._field_counts: Counter[str] = Counter()
         self._size_stats = _PackSizeStats()
-        # Cache bureau value maps keyed by the hash of the raw bureau snapshot so
-        # identical reruns avoid recomputing normalization logic.
-        self._bureau_values_cache: dict[
-            int,
-            tuple[str, dict[str, Mapping[str, Mapping[str, Any]]]],
-        ] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -348,17 +343,15 @@ class ValidationPackWriter:
         if not findings:
             return []
 
-        consistency_map = validation_block["field_consistency"]
         send_to_ai_map = validation_block.get("send_to_ai", {})
-        bureaus_data = self._load_bureaus(account_id)
-        bureaus_hash = self._build_bureaus_hash(bureaus_data)
 
-        cached_snapshot = self._bureau_values_cache.get(account_id)
-        if cached_snapshot is None or cached_snapshot[0] != bureaus_hash:
-            bureau_cache: dict[str, Mapping[str, Mapping[str, Any]]] = {}
-            self._bureau_values_cache[account_id] = (bureaus_hash, bureau_cache)
-        else:
-            bureau_cache = cached_snapshot[1]
+        bureaus_cache: dict[str, Mapping[str, Any]] | None = None
+
+        def _load_bureaus_if_needed() -> Mapping[str, Mapping[str, Any]]:
+            nonlocal bureaus_cache
+            if bureaus_cache is None:
+                bureaus_cache = self._load_bureaus(account_id)
+            return bureaus_cache
 
         pack_lines: list[PackLine] = []
         seen_pack_keys: set[str] = set()
@@ -383,39 +376,21 @@ class ValidationPackWriter:
             ):
                 continue
 
-            consistency = consistency_map.get(canonical_field)
-            if consistency is None:
-                raw_field = requirement.get("field")
-                if isinstance(raw_field, str):
-                    consistency = consistency_map.get(raw_field)
-
             pack_key = self._build_pack_key(
                 account_id,
                 canonical_field,
                 requirement,
-                bureaus_hash,
             )
             if pack_key in seen_pack_keys:
                 continue
             seen_pack_keys.add(pack_key)
 
-            bureau_values = bureau_cache.get(canonical_field)
-            if bureau_values is None:
-                bureau_values = self._build_bureau_values(
-                    canonical_field,
-                    bureaus_data,
-                    consistency,
-                )
-                bureau_cache[canonical_field] = bureau_values
-
-            line = self._build_line(
-                account_id,
-                requirement,
-                bureaus_data,
-                consistency,
-                canonical_field=canonical_field,
-                bureau_values=bureau_values,
-                pack_key=pack_key,
+            line = build_line(
+                sid=self.sid,
+                account_id=account_id,
+                field=canonical_field,
+                finding=requirement,
+                fallback_bureaus_loader=_load_bureaus_if_needed,
             )
             if line is not None:
                 pack_lines.append(PackLine(line))
@@ -667,134 +642,6 @@ class ValidationPackWriter:
     # ------------------------------------------------------------------
     # Builders
     # ------------------------------------------------------------------
-    def _build_line(
-        self,
-        account_id: int,
-        requirement: Mapping[str, Any],
-        bureaus_data: Mapping[str, Mapping[str, Any]],
-        consistency: Mapping[str, Any] | None,
-        *,
-        canonical_field: str | None = None,
-        bureau_values: Mapping[str, Mapping[str, Any]] | None = None,
-        pack_key: str | None = None,
-    ) -> Mapping[str, Any] | None:
-        if not isinstance(requirement, Mapping):
-            return None
-
-        field = requirement.get("field")
-        if field is None and canonical_field is None:
-            return None
-
-        strength = self._normalize_strength(requirement.get("strength"))
-        if strength == "strong":
-            return None
-
-        field_name = canonical_field or self._canonical_field_name(field)
-        if field_name is None:
-            return None
-
-        if field_name not in _PACK_ELIGIBLE_FIELDS:
-            return None
-
-        field_key = self._field_key(field_name)
-        account_key = f"{account_id:03d}"
-
-        documents = self._normalize_string_list(requirement.get("documents"))
-        raw_category = self._coerce_optional_str(requirement.get("category"))
-        category = _ALLOWED_FIELD_CATEGORIES[field_name]
-        if raw_category and raw_category not in _ALLOWED_CATEGORIES:
-            log.debug(
-                "VALIDATION_UNKNOWN_CATEGORY field=%s category=%s", field_name, raw_category
-            )
-        elif raw_category and raw_category != category:
-            log.debug(
-                "VALIDATION_CATEGORY_MISMATCH field=%s expected=%s actual=%s",
-                field_name,
-                category,
-                raw_category,
-            )
-        min_days = self._coerce_optional_int(requirement.get("min_days"))
-        min_corroboration = self._coerce_optional_int(
-            requirement.get("min_corroboration")
-        )
-        conditional_gate = self._coerce_optional_bool(
-            requirement.get("conditional_gate")
-        )
-
-        context = self._build_context(consistency)
-        if bureau_values is None:
-            bureau_values = self._build_bureau_values(
-                field_name, bureaus_data, consistency
-            )
-
-        reason_payload, ai_needed = self._build_reason_metadata(
-            account_id,
-            field_name,
-            bureau_values,
-        )
-
-        guidance = (
-            "Return a JSON object with a decision of either 'strong' or 'no_case', "
-            "along with rationale and any supporting citations."
-        )
-        if conditional_gate:
-            guidance += (
-                " Treat this as conditional. Return 'strong' only if the content "
-                "shows a materially incorrect report: a contradiction across "
-                "bureaus corroborated by documentation or CRA logs. Otherwise "
-                "respond with 'no_case'."
-            )
-
-        prompt_payload = {
-            "system": _SYSTEM_PROMPT,
-            "user": {
-                "sid": self.sid,
-                "account_id": account_id,
-                "account_key": account_key,
-                "field": field_name,
-                "field_key": field_key,
-                "category": category,
-                "documents": documents,
-                "bureaus": bureau_values,
-                "context": context,
-            },
-            "guidance": guidance,
-        }
-
-        payload: dict[str, Any] = {
-            "id": f"acc_{account_key}__{field_key}",
-            "sid": self.sid,
-            "account_id": account_id,
-            "account_key": account_key,
-            "field": field_name,
-            "field_key": field_key,
-            "category": category,
-            "documents": documents,
-            "min_days": min_days,
-            "min_corroboration": min_corroboration,
-            "strength": strength,
-            "conditional_gate": conditional_gate,
-            "bureaus": bureau_values,
-            "context": context,
-            "prompt": prompt_payload,
-            "expected_output": _EXPECTED_OUTPUT_SCHEMA,
-        }
-
-        payload["ai_needed"] = ai_needed
-
-        if pack_key:
-            payload["pack_key"] = pack_key
-
-        if _reasons_enabled() and reason_payload is not None:
-            payload["reason"] = reason_payload
-
-        extra_context = requirement.get("notes") or requirement.get("reason")
-        if extra_context:
-            payload.setdefault("context", {})["requirement_note"] = str(
-                extra_context
-            )
-
-        return sanitize_validation_payload(payload)
 
     def _build_reason_metadata(
         self,
@@ -958,28 +805,15 @@ class ValidationPackWriter:
 
         return values
 
-    @staticmethod
-    def _build_bureaus_hash(
-        bureaus_data: Mapping[str, Mapping[str, Any]] | None,
-    ) -> str:
-        if not isinstance(bureaus_data, Mapping):
-            normalized: Mapping[str, Any] = {}
-        else:
-            normalized = _json_clone(bureaus_data)
-        serialized = json.dumps(normalized, sort_keys=True, ensure_ascii=False)
-        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-
     def _build_pack_key(
         self,
         account_id: int,
         canonical_field: str,
         requirement: Mapping[str, Any],
-        bureaus_hash: str,
     ) -> str:
         payload = {
             "account_id": int(account_id),
             "field": canonical_field,
-            "bureaus_hash": bureaus_hash,
             "requirement": _json_clone(requirement),
         }
         serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
@@ -1321,6 +1155,81 @@ class ValidationPackWriter:
             except Exception:  # pragma: no cover - defensive
                 continue
         return normalized
+
+
+def _fallback_bureau_values(
+    field: str,
+    loader: Callable[[], Mapping[str, Mapping[str, Any]]],
+) -> Mapping[str, Any] | None:
+    try:
+        bureaus_data = loader()
+    except Exception:  # pragma: no cover - defensive
+        log.warning(
+            "VALIDATION_BUREAU_FALLBACK_FAILED field=%s", field, exc_info=True
+        )
+        return None
+
+    fallback: dict[str, Any] = {}
+    for bureau, bureau_payload in bureaus_data.items():
+        if not isinstance(bureau_payload, Mapping):
+            continue
+        try:
+            bureau_key = str(bureau)
+        except Exception:  # pragma: no cover - defensive
+            continue
+        value = bureau_payload.get(field)
+        if value is None:
+            continue
+        fallback[bureau_key] = {"raw": value}
+
+    return fallback or None
+
+
+def build_line(
+    *,
+    sid: str,
+    account_id: int,
+    field: str,
+    finding: Mapping[str, Any],
+    fallback_bureaus_loader: Callable[[], Mapping[str, Mapping[str, Any]]] | None = None,
+) -> Mapping[str, Any] | None:
+    if not isinstance(finding, Mapping):
+        return None
+
+    if not isinstance(field, str):
+        field_name = str(field)
+    else:
+        field_name = field
+
+    field_name = field_name.strip()
+    if not field_name:
+        return None
+
+    account_key = f"{account_id:03d}" if isinstance(account_id, int) else str(account_id)
+    field_key = ValidationPackWriter._field_key(field_name)
+
+    finding_payload = _json_clone(finding)
+    existing_field = finding_payload.get("field")
+    if not isinstance(existing_field, str) or not existing_field.strip():
+        finding_payload["field"] = field_name
+
+    has_bureau_values = finding_payload.get("bureau_values")
+    if not has_bureau_values and fallback_bureaus_loader is not None:
+        bureau_values = _fallback_bureau_values(field_name, fallback_bureaus_loader)
+        if bureau_values:
+            finding_payload["bureau_values"] = bureau_values
+
+    payload: dict[str, Any] = {
+        "id": f"acc_{account_key}__{field_key}",
+        "sid": sid,
+        "account_id": account_id,
+        "field": field_name,
+        "finding": finding_payload,
+        "prompt": _SHARED_PROMPT,
+        "expected_output": _json_clone(_EXPECTED_OUTPUT_SCHEMA),
+    }
+
+    return sanitize_validation_payload(payload)
 
 
 def _json_clone(value: Any) -> Any:

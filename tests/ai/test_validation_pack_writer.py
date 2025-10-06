@@ -64,11 +64,11 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
         "validation_requirements": {
             "findings": [
                 {
-                    "field": "balance_owed",
-                    "category": "activity",
-                    "min_days": 30,
+                    "field": "account_rating",
+                    "category": "status",
                     "documents": ["statement", "   "],
                     "strength": "weak",
+                    "notes": "rating disagreement",
                     "ai_needed": True,
                     "send_to_ai": True,
                 },
@@ -80,18 +80,18 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
                 },
             ],
             "field_consistency": {
-                "balance_owed": {
+                "account_rating": {
                     "consensus": "split",
                     "disagreeing_bureaus": ["experian"],
                     "missing_bureaus": ["equifax"],
                     "history": {"2y": {"late_payments": 1}},
                     "raw": {
-                        "transunion": "$100",
-                        "experian": "$150",
+                        "transunion": "1",
+                        "experian": "2",
                     },
                     "normalized": {
-                        "transunion": 100,
-                        "experian": 150,
+                        "transunion": "1",
+                        "experian": "2",
                     },
                 }
             },
@@ -99,9 +99,9 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
     }
 
     bureaus_payload = {
-        "transunion": {"balance_owed": "$100"},
-        "experian": {"balance_owed": "$155"},
-        "equifax": {"balance_owed": None},
+        "transunion": {"account_rating": "1"},
+        "experian": {"account_rating": "2"},
+        "equifax": {"account_rating": None},
     }
 
     account_dir = runs_root / sid / "cases" / "accounts" / "1"
@@ -117,31 +117,27 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
 
     payload = None
     for line in lines:
-        if line.payload.get("field") == "balance_owed":
+        if line.payload.get("field") == "account_rating":
             payload = line.payload
             break
 
     assert payload is not None
-    assert payload["id"] == "acc_001__balance_owed"
-    assert payload["field"] == "balance_owed"
-    assert payload["strength"] == "weak"
-    assert payload["documents"] == ["statement"]
-    assert isinstance(payload.get("pack_key"), str) and len(payload["pack_key"]) == 64
+    assert payload["id"] == "acc_001__account_rating"
+    assert payload["sid"] == sid
+    assert payload["account_id"] == 1
+    assert payload["field"] == "account_rating"
 
-    bureaus = payload["bureaus"]
-    assert bureaus["transunion"]["raw"] == "$100"
-    assert bureaus["experian"]["normalized"] == 150
-    assert bureaus["equifax"]["raw"] is None
-
-    context = payload["context"]
-    assert context["consensus"] == "split"
-    assert context["disagreeing_bureaus"] == ["experian"]
-    assert context["missing_bureaus"] == ["equifax"]
-    assert context["history"] == {"2y": {"late_payments": 1}}
+    finding = payload["finding"]
+    assert finding["field"] == "account_rating"
+    assert finding["strength"] == "weak"
+    assert finding.get("category") == "status"
+    assert finding.get("documents") == ["statement", "   "]
+    assert finding.get("notes") == "rating disagreement"
+    assert finding.get("bureau_values", {}).get("transunion", {}).get("raw") == "1"
 
     prompt = payload["prompt"]
-    assert prompt["user"]["field_key"] == "balance_owed"
-    assert "strong" in prompt["guidance"].lower()
+    assert isinstance(prompt, str)
+    assert prompt.strip()
 
     expected_output = payload["expected_output"]
     assert expected_output["properties"]["decision"]["enum"] == ["strong", "no_case"]
@@ -151,7 +147,7 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
     assert any(line["id"] == payload["id"] for line in on_disk)
 
 
-def test_writer_redacts_account_number_display(tmp_path: Path) -> None:
+def test_writer_skips_account_number_display(tmp_path: Path) -> None:
     sid = "S890"
     runs_root = tmp_path / "runs"
 
@@ -195,21 +191,11 @@ def test_writer_redacts_account_number_display(tmp_path: Path) -> None:
     writer = ValidationPackWriter(sid, runs_root=runs_root)
     lines = writer.write_pack_for_account(5)
 
-    assert len(lines) == 1
-    payload = lines[0].payload
+    assert lines == []
 
-    tu = payload["bureaus"]["transunion"]
-    assert tu["raw"] == "********9012"
-    assert tu["normalized"]["display"] == "****-****-9012"
-    assert tu["normalized"]["last4"] == "9012"
-
-    prompt_tu = payload["prompt"]["user"]["bureaus"]["transunion"]
-    assert prompt_tu["raw"] == "********9012"
-    assert prompt_tu["normalized"]["display"] == "****-****-9012"
-
-    xp = payload["bureaus"]["experian"]
-    assert xp["raw"] == "Account 9012"
-    assert xp["normalized"]["display"] == "9012"
+    pack_path = runs_root / sid / "ai_packs" / "validation" / "packs" / "val_acc_005.jsonl"
+    assert pack_path.exists()
+    assert pack_path.read_text(encoding="utf-8") == ""
 def test_writer_uses_bureau_fallback(tmp_path: Path) -> None:
     sid = "S234"
     runs_root = tmp_path / "runs"
@@ -218,11 +204,11 @@ def test_writer_uses_bureau_fallback(tmp_path: Path) -> None:
         "validation_requirements": {
             "findings": [
                 {
-                    "field": "account_status",
-                    "category": "status",
+                    "field": "account_type",
+                    "category": "open_ident",
                     "strength": "soft",
                     "ai_needed": True,
-                    "notes": "status mismatch",
+                    "notes": "type mismatch",
                     "send_to_ai": True,
                 }
             ],
@@ -230,7 +216,7 @@ def test_writer_uses_bureau_fallback(tmp_path: Path) -> None:
         }
     }
     bureaus_payload = {
-        "transunion": {"account_status": "Open"},
+        "transunion": {"account_type": "Mortgage"},
     }
 
     account_dir = runs_root / sid / "cases" / "accounts" / "7"
@@ -242,13 +228,13 @@ def test_writer_uses_bureau_fallback(tmp_path: Path) -> None:
 
     assert len(lines) == 1
     payload = lines[0].payload
-    assert payload["strength"] == "weak"
-    assert payload["bureaus"]["transunion"]["raw"] == "Open"
-    assert payload["context"]["requirement_note"] == "status mismatch"
+    finding = payload["finding"]
+    assert finding["notes"] == "type mismatch"
+    assert finding["bureau_values"]["transunion"]["raw"] == "Mortgage"
 
     pack_path = runs_root / sid / "ai_packs" / "validation" / "packs" / "val_acc_007.jsonl"
     on_disk = _read_jsonl(pack_path)
-    assert on_disk[0]["bureaus"]["transunion"]["raw"] == "Open"
+    assert on_disk[0]["finding"]["bureau_values"]["transunion"]["raw"] == "Mortgage"
 
 
 def test_writer_skips_strong_fields(tmp_path: Path) -> None:
@@ -291,14 +277,14 @@ def test_writer_updates_index(tmp_path: Path) -> None:
         "validation_requirements": {
             "findings": [
                 {
-                    "field": "balance_owed",
-                    "category": "activity",
+                    "field": "account_type",
+                    "category": "open_ident",
                     "strength": "weak",
                     "ai_needed": True,
                     "send_to_ai": True,
                 },
                 {
-                    "field": "account_status",
+                    "field": "account_rating",
                     "category": "status",
                     "strength": "weak",
                     "ai_needed": True,
@@ -306,11 +292,11 @@ def test_writer_updates_index(tmp_path: Path) -> None:
                 },
             ],
             "field_consistency": {
-                "balance_owed": {
-                    "raw": {"transunion": "$100"},
+                "account_type": {
+                    "raw": {"transunion": "Mortgage"},
                 },
-                "account_status": {
-                    "raw": {"transunion": "Open"},
+                "account_rating": {
+                    "raw": {"transunion": "1"},
                 },
             },
         }
@@ -338,7 +324,7 @@ def test_writer_updates_index(tmp_path: Path) -> None:
     assert entry["result_json"] == "results/acc_001.result.json"
     assert entry["result_jsonl"] == "results/acc_001.result.jsonl"
     assert entry["lines"] == 2
-    assert entry["weak_fields"] == ["balance_owed", "account_status"]
+    assert entry["weak_fields"] == ["account_type", "account_rating"]
     assert entry["status"] == "built"
     assert isinstance(entry["built_at"], str) and entry["built_at"].endswith("Z")
     assert isinstance(entry.get("source_hash"), str) and len(entry["source_hash"]) == 64
@@ -355,7 +341,7 @@ def test_writer_updates_index(tmp_path: Path) -> None:
     assert len(refreshed_index["packs"]) == 1
     refreshed_entry = refreshed_index["packs"][0]
     assert refreshed_entry["lines"] == 1
-    assert refreshed_entry["weak_fields"] == ["balance_owed"]
+    assert refreshed_entry["weak_fields"] == ["account_type"]
     assert isinstance(refreshed_entry.get("source_hash"), str)
     assert refreshed_entry["source_hash"] != entry["source_hash"]
 
@@ -365,7 +351,7 @@ def _seed_validation_account(
     sid: str,
     account_id: int,
     *,
-    field: str = "balance_owed",
+    field: str = "account_rating",
 ) -> None:
     account_dir = runs_root / sid / "cases" / "accounts" / str(account_id)
     summary_payload = {
@@ -380,61 +366,19 @@ def _seed_validation_account(
                 }
             ],
             "field_consistency": {
-                field: {"raw": {"transunion": "$100"}},
+                field: {"raw": {"transunion": "1"}},
             },
         }
     }
     bureaus_payload = {
-        "transunion": {field: "$100"},
-        "experian": {field: "$105"},
+        "transunion": {field: "1"},
+        "experian": {field: "2"},
     }
     _write_json(account_dir / "summary.json", summary_payload)
     _write_json(account_dir / "bureaus.json", bureaus_payload)
 
 
-def test_writer_caches_bureau_values_for_snapshot(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    sid = "S570"
-    runs_root = tmp_path / "runs"
-    account_id = 4
-
-    _seed_validation_account(runs_root, sid, account_id)
-
-    writer = ValidationPackWriter(sid, runs_root=runs_root)
-
-    call_count = {"count": 0}
-    original = ValidationPackWriter._build_bureau_values
-
-    def tracking(self, field, bureaus_data, consistency):
-        call_count["count"] += 1
-        return original(self, field, bureaus_data, consistency)
-
-    monkeypatch.setattr(ValidationPackWriter, "_build_bureau_values", tracking)
-
-    writer.write_pack_for_account(account_id)
-    initial_calls = call_count["count"]
-    assert initial_calls > 0
-
-    writer.write_pack_for_account(account_id)
-    assert call_count["count"] == initial_calls
-
-    bureaus_path = (
-        runs_root
-        / sid
-        / "cases"
-        / "accounts"
-        / str(account_id)
-        / "bureaus.json"
-    )
-    new_payload = {"transunion": {"balance_owed": "$200"}}
-    _write_json(bureaus_path, new_payload)
-
-    writer.write_pack_for_account(account_id)
-    assert call_count["count"] > initial_calls
-
-
-def test_writer_pack_key_deduplicates_duplicates(tmp_path: Path) -> None:
+def test_writer_deduplicates_duplicate_findings(tmp_path: Path) -> None:
     sid = "S571"
     runs_root = tmp_path / "runs"
     account_id = 6
@@ -443,28 +387,28 @@ def test_writer_pack_key_deduplicates_duplicates(tmp_path: Path) -> None:
         "validation_requirements": {
             "findings": [
                 {
-                    "field": "balance_owed",
-                    "category": "activity",
+                    "field": "account_type",
+                    "category": "open_ident",
                     "strength": "weak",
                     "ai_needed": True,
                     "send_to_ai": True,
                 },
                 {
-                    "field": "balance_owed",
-                    "category": "activity",
+                    "field": "account_type",
+                    "category": "open_ident",
                     "strength": "weak",
                     "ai_needed": True,
                     "send_to_ai": True,
                 },
             ],
             "field_consistency": {
-                "balance_owed": {"raw": {"transunion": "$100"}},
+                "account_type": {"raw": {"transunion": "Mortgage"}},
             },
         }
     }
     bureaus_payload = {
-        "transunion": {"balance_owed": "$100"},
-        "experian": {"balance_owed": "$105"},
+        "transunion": {"account_type": "Mortgage"},
+        "experian": {"account_type": "Installment"},
     }
 
     account_dir = runs_root / sid / "cases" / "accounts" / str(account_id)
@@ -476,12 +420,11 @@ def test_writer_pack_key_deduplicates_duplicates(tmp_path: Path) -> None:
     first_lines = writer.write_pack_for_account(account_id)
     assert len(first_lines) == 1
     first_payload = first_lines[0].payload
-    assert first_payload["field"] == "balance_owed"
-    first_key = first_payload["pack_key"]
+    assert first_payload["field"] == "account_type"
 
     second_lines = writer.write_pack_for_account(account_id)
     assert len(second_lines) == 1
-    assert second_lines[0].payload["pack_key"] == first_key
+    assert second_lines[0].payload["id"] == first_payload["id"]
 
     pack_path = (
         validation_packs_dir(sid, runs_root=runs_root)
@@ -489,7 +432,6 @@ def test_writer_pack_key_deduplicates_duplicates(tmp_path: Path) -> None:
     )
     on_disk = _read_jsonl(pack_path)
     assert len(on_disk) == 1
-    assert on_disk[0]["pack_key"] == first_key
 
 
 def test_mark_validation_pack_sent_updates_index(tmp_path: Path) -> None:
@@ -549,7 +491,7 @@ def test_store_validation_result_updates_index_and_writes_file(
     response_payload = {
         "decision_per_field": [
             {
-                "field": "balance_owed",
+                "field": "account_rating",
                 "decision": "strong",
                 "rationale": "values diverge",
                 "confidence": 0.81,
@@ -578,12 +520,13 @@ def test_store_validation_result_updates_index_and_writes_file(
     assert isinstance(stored_payload["completed_at"], str)
     assert stored_payload["results"] == [
         {
-            "id": "acc_004__balance_owed",
+            "id": "acc_004__account_rating",
             "account_id": account_id,
-            "field": "balance_owed",
+            "field": "account_rating",
             "decision": "strong",
             "rationale": "values diverge",
             "citations": [],
+            "confidence": 0.81,
         }
     ]
 
@@ -595,7 +538,7 @@ def test_store_validation_result_updates_index_and_writes_file(
     assert jsonl_lines == stored_payload["results"]
 
 
-def test_reason_metadata_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reason_metadata_flag_is_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VALIDATION_REASON_ENABLED", "1")
 
     sid = "S901"
@@ -609,47 +552,18 @@ def test_reason_metadata_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     assert len(lines) == 1
     pack_payload = lines[0].payload
-    reason = pack_payload.get("reason")
-    assert isinstance(reason, dict)
-    assert reason["schema"] == 1
-    assert "pattern" in reason
-    assert set(reason["coverage"]) == {"missing_bureaus", "present_bureaus"}
+    assert "reason" not in pack_payload
 
     pack_path = runs_root / sid / "ai_packs" / "validation" / "packs" / "val_acc_009.jsonl"
     on_disk = _read_jsonl(pack_path)
-    assert on_disk[0]["reason"] == reason
-
-    response_payload = {
-        "decision_per_field": [
-            {
-                "field": pack_payload["field"],
-                "decision": "strong",
-                "rationale": "deterministic reason",
-            }
-        ]
-    }
-
-    result_path = store_validation_result(
-        sid,
-        account_id,
-        response_payload,
-        runs_root=runs_root,
-    )
-
-    stored_payload = json.loads(result_path.read_text(encoding="utf-8"))
-    assert stored_payload["results"][0]["reason"] == reason
-
-    results_dir = validation_results_dir(sid, runs_root=runs_root)
-    jsonl_path = results_dir / validation_result_jsonl_filename_for_account(account_id)
-    jsonl_lines = _read_jsonl(jsonl_path)
-    assert jsonl_lines[0]["reason"] == reason
+    assert "reason" not in on_disk[0]
 
 def test_store_validation_result_error(tmp_path: Path) -> None:
     sid = "S789"
     runs_root = tmp_path / "runs"
     account_id = 5
 
-    _seed_validation_account(runs_root, sid, account_id, field="account_status")
+    _seed_validation_account(runs_root, sid, account_id, field="account_type")
 
     writer = ValidationPackWriter(sid, runs_root=runs_root)
     writer.write_pack_for_account(account_id)
@@ -724,8 +638,8 @@ def test_writer_logs_pack_metrics(tmp_path: Path) -> None:
     assert entry["pack_size_kb"] > 0
     assert entry["cumulative_size"]["count"] >= 1
     assert entry["cumulative_size"]["max_bytes"] >= entry["pack_size_bytes"]
-    assert entry["fields_emitted"] == ["balance_owed"]
-    assert entry["cumulative_field_counts"]["balance_owed"] >= 1
+    assert entry["fields_emitted"] == ["account_rating"]
+    assert entry["cumulative_field_counts"]["account_rating"] >= 1
 
 
 def test_writer_blocks_pack_exceeding_size_limit(
@@ -739,8 +653,8 @@ def test_writer_blocks_pack_exceeding_size_limit(
         "validation_requirements": {
             "findings": [
                 {
-                    "field": "balance_owed",
-                    "category": "activity",
+                    "field": "account_type",
+                    "category": "open_ident",
                     "strength": "weak",
                     "ai_needed": True,
                     "send_to_ai": True,
@@ -748,15 +662,15 @@ def test_writer_blocks_pack_exceeding_size_limit(
                 }
             ],
             "field_consistency": {
-                "balance_owed": {
-                    "raw": {"transunion": "$100", "experian": "$120"}
+                "account_type": {
+                    "raw": {"transunion": "Mortgage", "experian": "Installment"}
                 }
             },
         }
     }
     bureaus_payload = {
-        "transunion": {"balance_owed": "$100"},
-        "experian": {"balance_owed": "$120"},
+        "transunion": {"account_type": "Mortgage"},
+        "experian": {"account_type": "Installment"},
     }
 
     account_dir = runs_root / sid / "cases" / "accounts" / str(account_id)
@@ -807,19 +721,19 @@ def test_build_validation_pack_respects_env_toggle(
         "validation_requirements": {
             "findings": [
                 {
-                    "field": "balance_owed",
-                    "category": "activity",
+                    "field": "account_rating",
+                    "category": "status",
                     "strength": "weak",
                     "ai_needed": True,
                     "send_to_ai": True,
                 }
             ],
             "field_consistency": {
-                "balance_owed": {"raw": {"transunion": "$100"}}
+                "account_rating": {"raw": {"transunion": "1"}}
             },
         }
     }
-    bureaus_payload = {"transunion": {"balance_owed": "$100"}}
+    bureaus_payload = {"transunion": {"account_rating": "1"}}
     _write_json(summary_path, summary_payload)
     _write_json(bureaus_path, bureaus_payload)
 
@@ -850,19 +764,19 @@ def test_build_validation_packs_for_run_auto_send(
         "validation_requirements": {
             "findings": [
                 {
-                    "field": "balance_owed",
-                    "category": "activity",
+                    "field": "account_rating",
+                    "category": "status",
                     "strength": "weak",
                     "ai_needed": True,
                     "send_to_ai": True,
                 }
             ],
             "field_consistency": {
-                "balance_owed": {"raw": {"transunion": "$100"}}
+                "account_rating": {"raw": {"transunion": "1"}}
             },
         }
     }
-    bureaus_payload = {"transunion": {"balance_owed": "$100"}}
+    bureaus_payload = {"transunion": {"account_rating": "1"}}
 
     _write_json(account_dir / "summary.json", summary_payload)
     _write_json(account_dir / "bureaus.json", bureaus_payload)
@@ -903,23 +817,23 @@ def test_rewrite_index_to_canonical_layout(tmp_path: Path) -> None:
         "validation_requirements": {
             "findings": [
                 {
-                    "field": "balance_owed",
-                    "category": "activity",
+                    "field": "account_rating",
+                    "category": "status",
                     "strength": "weak",
                     "ai_needed": True,
                     "send_to_ai": True,
                 }
             ],
             "field_consistency": {
-                "balance_owed": {
-                    "raw": {"transunion": "$100"},
+                "account_rating": {
+                    "raw": {"transunion": "1"},
                 }
             },
         }
     }
     bureaus_payload = {
-        "transunion": {"balance_owed": "$100"},
-        "experian": {"balance_owed": "$105"},
+        "transunion": {"account_rating": "1"},
+        "experian": {"account_rating": "2"},
     }
 
     _write_json(account_dir / "summary.json", summary_payload)

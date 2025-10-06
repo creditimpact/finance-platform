@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+
+from backend.core.ai.paths import ensure_validation_paths
+from backend.pipeline.runs import RunManifest, persist_manifest
 
 
 @dataclass(frozen=True)
@@ -114,4 +118,94 @@ def extract_stage_manifest_paths(
     )
 
 
-__all__ = ["StageManifestPaths", "extract_stage_manifest_paths"]
+log = logging.getLogger(__name__)
+
+
+class Manifest:
+    """Helpers for mutating run-level manifest documents."""
+
+    @staticmethod
+    def ensure_validation_section(
+        sid: str, *, runs_root: Path | str | None = None
+    ) -> dict[str, Any]:
+        """Ensure the validation packs section exists for ``sid``.
+
+        The manifest is written to disk when any values are injected.  The
+        function always creates the canonical validation directories so the
+        manifest can reference them immediately.
+        """
+
+        sid_text = str(sid).strip()
+        if not sid_text:
+            raise ValueError("sid is required")
+
+        runs_root_path: Path | None
+        if runs_root is not None:
+            runs_root_path = Path(runs_root).resolve()
+            manifest_path = runs_root_path / sid_text / "manifest.json"
+            manifest = RunManifest.load_or_create(manifest_path, sid_text)
+        else:
+            manifest = RunManifest.for_sid(sid_text)
+            runs_root_path = manifest.path.parent.parent.resolve()
+
+        validation_paths = ensure_validation_paths(
+            runs_root_path, sid_text, create=True
+        )
+
+        data = manifest.data
+        if not isinstance(data, dict):
+            data = {}
+            manifest.data = data
+
+        ai_section = data.get("ai")
+        if not isinstance(ai_section, dict):
+            ai_section = {}
+            data["ai"] = ai_section
+
+        packs_section = ai_section.get("packs")
+        if not isinstance(packs_section, dict):
+            packs_section = {}
+            ai_section["packs"] = packs_section
+
+        validation_section = packs_section.get("validation")
+        if not isinstance(validation_section, dict):
+            validation_section = {}
+            packs_section["validation"] = validation_section
+
+        canonical_values = {
+            "base": str(validation_paths.base),
+            "dir": str(validation_paths.base),
+            "packs": str(validation_paths.packs_dir),
+            "packs_dir": str(validation_paths.packs_dir),
+            "results": str(validation_paths.results_dir),
+            "results_dir": str(validation_paths.results_dir),
+            "index": str(validation_paths.index_file),
+            "logs": str(validation_paths.log_file),
+        }
+
+        changed = False
+        for key, value in canonical_values.items():
+            current = validation_section.get(key)
+            if not isinstance(current, str) or not current.strip():
+                validation_section[key] = value
+                changed = True
+
+        if changed:
+            persist_manifest(manifest)
+
+        packs_dir = validation_section.get("packs_dir") or canonical_values["packs_dir"]
+        results_dir = (
+            validation_section.get("results_dir") or canonical_values["results_dir"]
+        )
+
+        log.info(
+            "VALIDATION_MANIFEST_INJECTED sid=%s packs_dir=%s results_dir=%s",
+            sid_text,
+            packs_dir,
+            results_dir,
+        )
+
+        return dict(validation_section)
+
+
+__all__ = ["Manifest", "StageManifestPaths", "extract_stage_manifest_paths"]

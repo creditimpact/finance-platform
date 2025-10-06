@@ -274,6 +274,9 @@ class ValidationPackWriter:
         )
         self._field_counts: Counter[str] = Counter()
         self._size_stats = _PackSizeStats()
+        self._last_pack_written: bool = False
+        self._last_pack_had_findings: bool = False
+        self._has_written_any_pack: bool = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -310,9 +313,21 @@ class ValidationPackWriter:
     def write_pack_for_account(self, account_id: int | str) -> list[PackLine]:
         """Build and persist the pack for ``account_id``."""
 
+        self._last_pack_written = False
         normalized_id = self._normalize_account_id(account_id)
         summary = self._load_summary(normalized_id)
         pack_lines = self._build_pack_lines_from_summary(normalized_id, summary)
+        if not pack_lines and self._last_pack_had_findings:
+            account_label = (
+                f"{normalized_id:03d}" if isinstance(normalized_id, int) else str(normalized_id)
+            )
+            log.info(
+                "validation pack skipped: no eligible lines (sid=%s account=%s)",
+                self.sid,
+                account_label,
+            )
+            return []
+
         serialized, size_bytes = self._serialize_pack_lines(pack_lines)
         pack_path = self._packs_dir / validation_pack_filename_for_account(normalized_id)
 
@@ -332,7 +347,19 @@ class ValidationPackWriter:
             summary,
             pack_size_bytes=size_bytes,
         )
+        self._last_pack_written = True
+        self._has_written_any_pack = True
         return pack_lines
+
+    def last_pack_was_written(self) -> bool:
+        """Return ``True`` if the latest ``write_pack_for_account`` produced a pack."""
+
+        return self._last_pack_written
+
+    def has_written_any_pack(self) -> bool:
+        """Return ``True`` if any pack has been written during this writer's lifecycle."""
+
+        return self._has_written_any_pack
 
     def build_pack_lines(self, account_id: int) -> list[PackLine]:
         """Return the pack lines for ``account_id`` without writing them."""
@@ -343,6 +370,7 @@ class ValidationPackWriter:
     def _build_pack_lines_from_summary(
         self, account_id: int, summary: Mapping[str, Any] | None
     ) -> list[PackLine]:
+        self._last_pack_had_findings = False
         if not summary:
             return []
 
@@ -353,6 +381,8 @@ class ValidationPackWriter:
         findings = validation_block["findings"]
         if not findings:
             return []
+
+        self._last_pack_had_findings = True
 
         send_to_ai_map = validation_block.get("send_to_ai", {})
 
@@ -1433,7 +1463,8 @@ def build_validation_pack_for_account(
     runs_root = _resolve_runs_root_from_artifacts(sid, summary_path, bureaus_path)
     writer = _get_writer(sid, runs_root)
     lines = writer.write_pack_for_account(account_id)
-    _update_manifest_for_run(sid, runs_root)
+    if writer.last_pack_was_written():
+        _update_manifest_for_run(sid, runs_root)
     return lines
 
 
@@ -1453,6 +1484,7 @@ def build_validation_packs_for_run(
     )
     writer = _get_writer(sid, runs_root_path)
     results = writer.write_all_packs()
-    _update_manifest_for_run(sid, runs_root_path)
-    _maybe_send_validation_packs(sid, runs_root_path)
+    if any(result for result in results.values()):
+        _update_manifest_for_run(sid, runs_root_path)
+        _maybe_send_validation_packs(sid, runs_root_path)
     return results

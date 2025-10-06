@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import logging
 import types
 from pathlib import Path
 from typing import Any, Mapping
@@ -149,7 +150,9 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
     assert any(line["id"] == payload["id"] for line in on_disk)
 
 
-def test_writer_skips_account_number_display(tmp_path: Path) -> None:
+def test_writer_skips_account_number_display(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     sid = "S890"
     runs_root = tmp_path / "runs"
 
@@ -191,13 +194,21 @@ def test_writer_skips_account_number_display(tmp_path: Path) -> None:
     _write_json(account_dir / "bureaus.json", bureaus_payload)
 
     writer = ValidationPackWriter(sid, runs_root=runs_root)
+    caplog.set_level(logging.INFO, logger="backend.ai.validation_builder")
     lines = writer.write_pack_for_account(5)
 
     assert lines == []
 
     pack_path = runs_root / sid / "ai_packs" / "validation" / "packs" / "val_acc_005.jsonl"
-    assert pack_path.exists()
-    assert pack_path.read_text(encoding="utf-8") == ""
+    assert not pack_path.exists()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert (
+        "validation pack skipped: no eligible lines (sid=S890 account=005)" in messages
+    )
+
+    index_path = validation_index_path(sid, runs_root=runs_root)
+    assert not index_path.exists()
 def test_writer_uses_bureau_fallback(tmp_path: Path) -> None:
     sid = "S234"
     runs_root = tmp_path / "runs"
@@ -239,7 +250,9 @@ def test_writer_uses_bureau_fallback(tmp_path: Path) -> None:
     assert on_disk[0]["finding"]["bureau_values"]["transunion"]["raw"] == "Mortgage"
 
 
-def test_writer_skips_strong_fields(tmp_path: Path) -> None:
+def test_writer_skips_strong_fields(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     sid = "S345"
     runs_root = tmp_path / "runs"
 
@@ -262,13 +275,21 @@ def test_writer_skips_strong_fields(tmp_path: Path) -> None:
     _write_json(account_dir / "summary.json", summary_payload)
 
     writer = ValidationPackWriter(sid, runs_root=runs_root)
+    caplog.set_level(logging.INFO, logger="backend.ai.validation_builder")
     lines = writer.write_pack_for_account(9)
 
     assert lines == []
 
     pack_path = runs_root / sid / "ai_packs" / "validation" / "packs" / "val_acc_009.jsonl"
-    assert pack_path.exists()
-    assert pack_path.read_text(encoding="utf-8") == ""
+    assert not pack_path.exists()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert (
+        "validation pack skipped: no eligible lines (sid=S345 account=009)" in messages
+    )
+
+    index_path = validation_index_path(sid, runs_root=runs_root)
+    assert not index_path.exists()
 
 
 def test_writer_updates_index(tmp_path: Path) -> None:

@@ -62,10 +62,21 @@ _AUTO_SEND_ENV_VARS: tuple[str, ...] = (
 _BUREAUS = ("transunion", "experian", "equifax")
 _SYSTEM_PROMPT = (
     "You are an adjudication assistant reviewing credit report discrepancies. "
-    "Evaluate the provided bureau data and decide if the consumer has a strong claim. "
+    "Evaluate the provided bureau data and decide if the consumer has a strong claim."
+)
+_USER_PROMPT = (
+    "Review the validation finding JSON for the disputed field. "
+    "Base your assessment solely on the provided information to determine whether "
+    "the consumer has a strong validation argument."
+)
+_GUIDANCE_PROMPT = (
     "Respond with a JSON object that matches the expected output schema."
 )
-_SHARED_PROMPT = " ".join(part.strip() for part in _SYSTEM_PROMPT if part)
+_SHARED_PROMPT = {
+    "system": _SYSTEM_PROMPT,
+    "user": _USER_PROMPT,
+    "guidance": _GUIDANCE_PROMPT,
+}
 _EXPECTED_OUTPUT_SCHEMA = {
     "type": "object",
     "required": ["decision", "rationale", "citations"],
@@ -1230,7 +1241,7 @@ def build_line(
         "account_id": account_id,
         "field": field_name,
         "finding": finding_payload,
-        "prompt": _SHARED_PROMPT,
+        "prompt": _json_clone(_SHARED_PROMPT),
         "expected_output": _json_clone(_EXPECTED_OUTPUT_SCHEMA),
     }
 

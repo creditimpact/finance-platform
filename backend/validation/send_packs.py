@@ -94,6 +94,9 @@ _INDEX_WAIT_DELAY = 0.5
 _INDEX_READY_ATTEMPTS = 10
 _INDEX_READY_MIN_DELAY = 0.3
 _INDEX_READY_MAX_DELAY = 0.5
+_INDEX_FILE_WAIT_ATTEMPTS = 10
+_INDEX_FILE_WAIT_DELAY = 0.4
+_INDEX_FILE_MIN_SIZE = 20
 _DEFAULT_CONFIDENCE_THRESHOLD = 0.70
 
 
@@ -569,6 +572,99 @@ def _coerce_str(value: Any, default: str = "") -> str:
     if value is None:
         return default
     return str(value)
+
+
+def _count_index_pairs(path: Path) -> int:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return 0
+
+    packs: Any = None
+    if isinstance(payload, Mapping):
+        packs = payload.get("packs")
+        if packs is None:
+            packs = payload.get("items")
+
+    if isinstance(packs, Sequence) and not isinstance(packs, (bytes, bytearray, str)):
+        return sum(1 for entry in packs if isinstance(entry, Mapping))
+    return 0
+
+
+def _infer_manifest_index_wait_info(
+    manifest: Mapping[str, Any] | ValidationIndex | Path | str,
+    *,
+    stage: str | None,
+) -> tuple[Path, str] | None:
+    if isinstance(manifest, ValidationIndex):
+        sid = manifest.sid or "<unknown>"
+        return manifest.index_path, sid
+
+    if isinstance(manifest, Mapping):
+        stage_paths = _sanitize_stage_paths(
+            extract_stage_manifest_paths(manifest, stage), stage
+        )
+        is_index_document = _document_is_index_document(manifest)
+        force_stage_only = _is_validation_stage(stage)
+        use_manifest_paths = _should_use_manifest_paths() or force_stage_only
+        try:
+            index_path = _index_path_from_mapping(
+                manifest,
+                stage_paths=stage_paths,
+                use_manifest_paths=use_manifest_paths,
+                is_index_document=is_index_document,
+                manifest_path=None,
+                force_stage_paths_only=force_stage_only,
+            )
+        except ValidationPackError:
+            return None
+        sid = _coerce_str(manifest.get("sid")) or "<unknown>"
+        return index_path, sid
+
+    manifest_path = Path(manifest)
+    try:
+        text = manifest_path.read_text(encoding="utf-8")
+        document = json.loads(text)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(document, Mapping):
+        return None
+
+    stage_paths = _sanitize_stage_paths(
+        extract_stage_manifest_paths(document, stage), stage
+    )
+    is_index_document = _document_is_index_document(document)
+    force_stage_only = _is_validation_stage(stage)
+    use_manifest_paths = _should_use_manifest_paths() or force_stage_only
+    try:
+        index_path = _index_path_from_mapping(
+            document,
+            stage_paths=stage_paths,
+            use_manifest_paths=use_manifest_paths,
+            is_index_document=is_index_document,
+            manifest_path=manifest_path,
+            force_stage_paths_only=force_stage_only,
+        )
+    except ValidationPackError:
+        return None
+
+    sid = _coerce_str(document.get("sid")) or "<unknown>"
+    return index_path, sid
+
+
+def _wait_for_index_file(index_path: Path, sid: str) -> bool:
+    for i in range(_INDEX_FILE_WAIT_ATTEMPTS):
+        try:
+            if index_path.exists() and index_path.stat().st_size > _INDEX_FILE_MIN_SIZE:
+                log.info("VALIDATION_INDEX_READY pairs=%d", _count_index_pairs(index_path))
+                return True
+        except OSError:
+            pass
+        log.info("VALIDATION_INDEX_WAIT attempt=%d", i + 1)
+        time.sleep(_INDEX_FILE_WAIT_DELAY)
+    log.warning("VALIDATION_NO_INDEX_FOUND sid=%s", sid)
+    return False
 
 
 def _is_validation_stage(stage: str | None) -> bool:
@@ -2346,8 +2442,20 @@ def send_validation_packs(
 
     resolved_stage = stage or _MANIFEST_STAGE
 
+    wait_info = _infer_manifest_index_wait_info(manifest, stage=resolved_stage)
+    sid_hint = "<unknown>"
+    if wait_info is not None:
+        index_path, sid_hint = wait_info
+        if not _wait_for_index_file(index_path, sid_hint):
+            return []
+
     preparation = _prepare_validation_index(manifest, stage=resolved_stage)
     if preparation.skip:
+        if preparation.index is not None and not preparation.index.packs:
+            log.info(
+                "VALIDATION_NO_PACKS sid=%s",
+                preparation.index.sid or sid_hint,
+            )
         return []
 
     sender = ValidationPackSender(

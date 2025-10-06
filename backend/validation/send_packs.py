@@ -393,10 +393,17 @@ class _ChatCompletionResponse:
 class _ChatCompletionClient:
     """Minimal HTTP client for the OpenAI Chat Completions API."""
 
-    def __init__(self, *, base_url: str, api_key: str, timeout: float | int):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        timeout: float | int,
+        project_id: str | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/") or "https://api.openai.com/v1"
         self.api_key = api_key
         self.timeout: float | int = timeout
+        self.project_id = project_id
 
     def create(
         self,
@@ -412,9 +419,8 @@ class _ChatCompletionClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        project_id = os.getenv("OPENAI_PROJECT_ID")
-        if project_id:
-            headers["OpenAI-Project"] = project_id
+        if self.project_id:
+            headers["OpenAI-Project"] = self.project_id
         include_beta_header = (
             isinstance(response_format, Mapping)
             and response_format.get("type") == "json_object"
@@ -2214,7 +2220,13 @@ class ValidationPackSender:
             raise ValidationPackError("OPENAI_API_KEY is required to send validation packs")
         base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
         timeout = _env_float("AI_REQUEST_TIMEOUT", _DEFAULT_TIMEOUT)
-        return _ChatCompletionClient(base_url=base_url, api_key=api_key, timeout=timeout)
+        project_id = os.getenv("OPENAI_PROJECT_ID")
+        return _ChatCompletionClient(
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            project_id=project_id,
+        )
 
     @staticmethod
     def _normalize_account_id(account_id: Any) -> int:

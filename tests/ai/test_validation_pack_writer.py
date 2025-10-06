@@ -322,7 +322,7 @@ def test_writer_updates_index(tmp_path: Path) -> None:
     assert entry["account_id"] == 1
     assert entry["pack"] == "packs/val_acc_001.jsonl"
     assert entry["result_json"] == "results/acc_001.result.json"
-    assert entry["result_jsonl"] == "results/acc_001.result.jsonl"
+    assert "result_jsonl" not in entry
     assert entry["lines"] == 2
     assert entry["weak_fields"] == ["account_type", "account_rating"]
     assert entry["status"] == "built"
@@ -513,20 +513,15 @@ def test_store_validation_result_updates_index_and_writes_file(
     stored_payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert stored_payload["sid"] == sid
     assert stored_payload["account_id"] == account_id
-    assert stored_payload["status"] == "done"
+    assert stored_payload["status"] == "ok"
     assert stored_payload["model"] == "gpt-infer"
     assert stored_payload["request_lines"] == len(lines)
     assert stored_payload["raw_response"] == {"id": "resp_123"}
     assert isinstance(stored_payload["completed_at"], str)
-    assert stored_payload["results"] == [
+    assert stored_payload["answers"] == [
         {
-            "id": "acc_004__account_rating",
-            "account_id": account_id,
             "field": "account_rating",
             "decision": "strong",
-            "rationale": "values diverge",
-            "citations": [],
-            "confidence": 0.81,
         }
     ]
 
@@ -534,8 +529,7 @@ def test_store_validation_result_updates_index_and_writes_file(
     jsonl_path = (
         results_dir / validation_result_jsonl_filename_for_account(account_id)
     )
-    jsonl_lines = _read_jsonl(jsonl_path)
-    assert jsonl_lines == stored_payload["results"]
+    assert not jsonl_path.exists()
 
 
 def test_reason_metadata_flag_is_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -580,7 +574,7 @@ def test_store_validation_result_error(tmp_path: Path) -> None:
     stored_payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert stored_payload["status"] == "error"
     assert stored_payload["error"] == "api_timeout"
-    assert stored_payload["results"] == []
+    assert stored_payload["answers"] == []
 
     index_path = validation_index_path(sid, runs_root=runs_root)
     entry = _index_entry_for_account(_read_index(index_path), account_id)
@@ -849,7 +843,6 @@ def test_rewrite_index_to_canonical_layout(tmp_path: Path) -> None:
     payload["packs_dir"] = "../cases/accounts"
     payload["results_dir"] = "../cases/accounts/results"
     entry["pack"] = "../cases/accounts/1/pack.jsonl"
-    entry["result_jsonl"] = "../cases/accounts/1/result.jsonl"
     entry["result_json"] = "../cases/accounts/1/result.json"
     _write_json(index_path, payload)
 
@@ -862,8 +855,8 @@ def test_rewrite_index_to_canonical_layout(tmp_path: Path) -> None:
 
     rewritten_entry = _index_entry_for_account(rewritten, 1)
     assert rewritten_entry["pack"] == "packs/val_acc_001.jsonl"
-    assert rewritten_entry["result_jsonl"] == "results/acc_001.result.jsonl"
     assert rewritten_entry["result_json"] == "results/acc_001.result.json"
+    assert "result_jsonl" not in rewritten_entry
 
     _, unchanged = rewrite_index_to_canonical_layout(index_path, runs_root=runs_root)
     assert unchanged is False

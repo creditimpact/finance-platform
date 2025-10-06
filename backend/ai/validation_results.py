@@ -44,6 +44,19 @@ def _reasons_enabled() -> bool:
     return False
 
 
+def _single_result_file_enabled() -> bool:
+    raw = os.getenv("VALIDATION_SINGLE_RESULT_FILE")
+    if raw is None:
+        return True
+
+    lowered = raw.strip().lower()
+    if lowered in {"1", "true", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    return True
+
+
 def _clone_jsonish(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {str(key): _clone_jsonish(val) for key, val in value.items()}
@@ -484,20 +497,63 @@ def store_validation_result(
 
     normalized_payload["results"] = result_lines
 
-    serialized_summary = json.dumps(
-        normalized_payload, ensure_ascii=False, sort_keys=True
-    )
+    if _single_result_file_enabled():
+        status_value = "ok" if normalized_status == "done" else "error"
+        answers: list[dict[str, Any]] = []
+        for line in result_lines:
+            field = line.get("field")
+            if not isinstance(field, str) or not field.strip():
+                continue
+            answers.append(
+                {
+                    "field": field,
+                    "decision": _clone_jsonish(line.get("decision")),
+                }
+            )
+
+        summary_payload: dict[str, Any] = {
+            "sid": normalized_payload.get("sid"),
+            "account_id": normalized_payload.get("account_id"),
+            "model": normalized_payload.get("model"),
+            "completed_at": normalized_payload.get("completed_at"),
+            "status": status_value,
+            "answers": answers,
+        }
+
+        if normalized_payload.get("error"):
+            summary_payload["error"] = normalized_payload["error"]
+        if "raw_response" in normalized_payload:
+            summary_payload["raw_response"] = _clone_jsonish(
+                normalized_payload["raw_response"]
+            )
+        if "request_lines" in normalized_payload:
+            summary_payload["request_lines"] = normalized_payload["request_lines"]
+
+        serialized_summary = json.dumps(
+            summary_payload, ensure_ascii=False, sort_keys=True
+        )
+    else:
+        serialized_summary = json.dumps(
+            normalized_payload, ensure_ascii=False, sort_keys=True
+        )
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(serialized_summary + "\n", encoding="utf-8")
 
-    jsonl_lines = [
-        json.dumps(line, ensure_ascii=False, sort_keys=True) for line in result_lines
-    ]
-    jsonl_contents = "\n".join(jsonl_lines)
-    if jsonl_contents:
-        jsonl_contents += "\n"
-    jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-    jsonl_path.write_text(jsonl_contents, encoding="utf-8")
+    if _single_result_file_enabled():
+        try:
+            jsonl_path.unlink()
+        except FileNotFoundError:
+            pass
+    else:
+        jsonl_lines = [
+            json.dumps(line, ensure_ascii=False, sort_keys=True)
+            for line in result_lines
+        ]
+        jsonl_contents = "\n".join(jsonl_lines)
+        if jsonl_contents:
+            jsonl_contents += "\n"
+        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        jsonl_path.write_text(jsonl_contents, encoding="utf-8")
 
     writer = _index_writer(sid, runs_root_path, validation_paths)
     writer.record_result(

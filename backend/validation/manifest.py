@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import replace
 from itertools import count
@@ -23,6 +24,19 @@ from .index_schema import (
     build_validation_index,
     load_validation_index,
 )
+
+
+def _single_result_file_enabled() -> bool:
+    raw = os.getenv("VALIDATION_SINGLE_RESULT_FILE")
+    if raw is None:
+        return True
+
+    lowered = raw.strip().lower()
+    if lowered in {"1", "true", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    return True
 
 
 def load_index_for_sid(sid: str, *, runs_root: Path | str | None = None) -> ValidationIndex:
@@ -235,28 +249,42 @@ def rewrite_index_to_canonical_layout(
         changed = True
 
     canonical_records = []
+    single_result = _single_result_file_enabled()
     for record in index.packs:
         pack_filename = validation_pack_filename_for_account(record.account_id)
-        jsonl_filename = validation_result_jsonl_filename_for_account(record.account_id)
         json_filename = validation_result_summary_filename_for_account(record.account_id)
+        jsonl_filename = (
+            validation_result_jsonl_filename_for_account(record.account_id)
+            if not single_result
+            else None
+        )
 
         expected_pack_path = validation_paths.packs_dir / pack_filename
-        expected_jsonl_path = validation_paths.results_dir / jsonl_filename
         expected_json_path = validation_paths.results_dir / json_filename
 
         if index.resolve_pack_path(record).resolve() != expected_pack_path.resolve():
             changed = True
-        if (
-            index.resolve_result_jsonl_path(record).resolve()
-            != expected_jsonl_path.resolve()
-        ):
+
+        if jsonl_filename:
+            expected_jsonl_path = validation_paths.results_dir / jsonl_filename
+            try:
+                actual_jsonl_path = index.resolve_result_jsonl_path(record).resolve()
+            except ValueError:
+                actual_jsonl_path = None
+            if actual_jsonl_path != expected_jsonl_path.resolve():
+                changed = True
+        elif record.result_jsonl:
             changed = True
+
         if index.resolve_result_json_path(record).resolve() != expected_json_path.resolve():
             changed = True
 
         pack_rel = (PurePosixPath("packs") / pack_filename).as_posix()
-        jsonl_rel = (PurePosixPath("results") / jsonl_filename).as_posix()
         json_rel = (PurePosixPath("results") / json_filename).as_posix()
+        if jsonl_filename:
+            jsonl_rel: str | None = (PurePosixPath("results") / jsonl_filename).as_posix()
+        else:
+            jsonl_rel = None
 
         canonical_records.append(
             replace(

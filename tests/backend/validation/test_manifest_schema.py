@@ -25,6 +25,11 @@ from backend.validation.send_packs import ValidationPackSender
 from backend.validation.index_schema import load_validation_index
 
 
+@pytest.fixture(autouse=True)
+def _legacy_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VALIDATION_SINGLE_RESULT_FILE", "0")
+
+
 class _StubClient:
     def create(self, *, model: str, messages, response_format):  # type: ignore[override]
         payload = {

@@ -88,6 +88,7 @@ def test_validation_sender_smoke_writes_results(
 ) -> None:
     sid, index_path, results_dir = _seed_manifest(tmp_path, [1, 2])
     monkeypatch.setenv("AI_MODEL", "stub-model")
+    monkeypatch.setenv("VALIDATION_SINGLE_RESULT_FILE", "0")
 
     payload = {
         "decision": "strong",
@@ -133,6 +134,7 @@ def test_validation_sender_invalid_response_guardrail(
     _, index_path, results_dir = _seed_manifest(tmp_path, [1], sid="GUARD001")
     monkeypatch.setenv("AI_MODEL", "stub-model")
     monkeypatch.setenv("ENABLE_OBSERVABILITY_H", "1")
+    monkeypatch.setenv("VALIDATION_SINGLE_RESULT_FILE", "0")
 
     from backend.analytics import analytics_tracker
 
@@ -168,6 +170,7 @@ def test_validation_sender_low_confidence_guardrail(
     _, index_path, results_dir = _seed_manifest(tmp_path, [1], sid="GUARD002")
     monkeypatch.setenv("AI_MODEL", "stub-model")
     monkeypatch.setenv("ENABLE_OBSERVABILITY_H", "1")
+    monkeypatch.setenv("VALIDATION_SINGLE_RESULT_FILE", "0")
 
     from backend.analytics import analytics_tracker
 

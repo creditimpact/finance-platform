@@ -15,6 +15,10 @@ from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 from jsonschema import Draft7Validator
 
+from backend.ai.manifest import (
+    StageManifestPaths,
+    extract_stage_manifest_paths,
+)
 from backend.analytics.analytics_tracker import emit_counter
 from backend.core.ai.paths import (
     validation_result_error_filename_for_account,
@@ -29,6 +33,7 @@ from backend.core.logic.validation_field_sets import (
 from backend.validation.index_schema import (
     ValidationIndex,
     ValidationPackRecord,
+    load_validation_index,
 )
 from backend.validation.redaction import sanitize_validation_log_payload
 
@@ -79,6 +84,12 @@ _RESPONSE_SCHEMA = {
 
 _RESPONSE_VALIDATOR = Draft7Validator(_RESPONSE_SCHEMA)
 _CONFIDENCE_THRESHOLD_ENV = "VALIDATION_AI_MIN_CONFIDENCE"
+_USE_MANIFEST_PATHS_ENV = "VALIDATION_USE_MANIFEST_PATHS"
+_MANIFEST_STAGE = "validation"
+_MANIFEST_RETRY_ATTEMPTS = 5
+_MANIFEST_RETRY_DELAY = 0.5
+_INDEX_WAIT_ATTEMPTS = 10
+_INDEX_WAIT_DELAY = 0.5
 _DEFAULT_CONFIDENCE_THRESHOLD = 0.70
 
 
@@ -536,7 +547,21 @@ def _coerce_str(value: Any, default: str = "") -> str:
     return str(value)
 
 
-def _index_path_from_mapping(document: Mapping[str, Any]) -> Path:
+def _index_path_from_mapping(
+    document: Mapping[str, Any],
+    *,
+    stage_paths: StageManifestPaths | None,
+    use_manifest_paths: bool,
+    is_index_document: bool,
+) -> Path:
+    if stage_paths and stage_paths.index_file:
+        return stage_paths.index_file
+
+    if use_manifest_paths and not is_index_document:
+        raise ValidationPackError(
+            "Validation manifest is missing validation stage paths",
+        )
+
     index_path_override = document.get("__index_path__")
     if index_path_override:
         return Path(str(index_path_override)).resolve()
@@ -661,9 +686,17 @@ def _to_relative(path_value: Any, base_dir: Path) -> str:
     return PurePosixPath(relative).as_posix()
 
 
-def _resolve_log_path(index_path: Path, document: Mapping[str, Any] | None) -> Path:
+def _resolve_log_path(
+    index_path: Path,
+    document: Mapping[str, Any] | None,
+    *,
+    stage_paths: StageManifestPaths | None,
+) -> Path:
     index_dir = index_path.parent.resolve()
     candidate: str | None = None
+
+    if stage_paths and stage_paths.log_file:
+        return stage_paths.log_file
 
     if document:
         logs_section = document.get("logs")
@@ -687,43 +720,127 @@ def _resolve_log_path(index_path: Path, document: Mapping[str, Any] | None) -> P
     return index_dir / "send.log"
 
 
+def _document_is_index_document(document: Mapping[str, Any]) -> bool:
+    packs = document.get("packs")
+    if isinstance(packs, Sequence) and not isinstance(packs, (str, bytes, bytearray)):
+        return True
+    items = document.get("items")
+    if isinstance(items, Sequence) and not isinstance(items, (str, bytes, bytearray)):
+        return True
+    return False
+
+
+def _should_use_manifest_paths() -> bool:
+    return _coerce_bool_flag(os.getenv(_USE_MANIFEST_PATHS_ENV))
+
+
+def _wait_for_path(path: Path, *, attempts: int, delay: float) -> bool:
+    if path.exists():
+        return True
+    for _ in range(max(0, attempts)):
+        time.sleep(max(delay, 0.0))
+        if path.exists():
+            return True
+    return False
+
+
 def _load_manifest_view(
     manifest: Mapping[str, Any] | ValidationIndex | Path | str,
 ) -> _ManifestView:
     if isinstance(manifest, ValidationIndex):
         index = manifest
-        log_path = _resolve_log_path(index.index_path, None)
+        log_path = _resolve_log_path(index.index_path, None, stage_paths=None)
         return _ManifestView(index=index, log_path=log_path)
 
     if isinstance(manifest, Mapping):
-        index_path = _index_path_from_mapping(manifest)
-        index = _index_from_document(manifest, index_path=index_path)
-        log_path = _resolve_log_path(index_path, manifest)
+        stage_paths = extract_stage_manifest_paths(manifest, _MANIFEST_STAGE)
+        is_index_document = _document_is_index_document(manifest)
+        use_manifest_paths = _should_use_manifest_paths()
+        index_path = _index_path_from_mapping(
+            manifest,
+            stage_paths=stage_paths,
+            use_manifest_paths=use_manifest_paths,
+            is_index_document=is_index_document,
+        )
+
+        if is_index_document:
+            index = _index_from_document(manifest, index_path=index_path)
+        else:
+            if not index_path.exists() and not _wait_for_path(
+                index_path,
+                attempts=_INDEX_WAIT_ATTEMPTS,
+                delay=_INDEX_WAIT_DELAY,
+            ):
+                raise ValidationPackError(
+                    f"Validation index missing: {index_path}",
+                )
+            index = load_validation_index(index_path)
+
+        log_path = _resolve_log_path(index_path, manifest, stage_paths=stage_paths)
         return _ManifestView(index=index, log_path=log_path)
 
     manifest_path = Path(manifest)
-    try:
-        text = manifest_path.read_text(encoding="utf-8")
-    except FileNotFoundError as exc:
-        raise ValidationPackError(f"Validation index missing: {manifest_path}") from exc
-    except OSError as exc:
-        raise ValidationPackError(
-            f"Unable to read validation index: {manifest_path}"
-        ) from exc
+    use_manifest_paths = _should_use_manifest_paths()
 
-    try:
-        document = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValidationPackError(
-            f"Validation index is not valid JSON: {manifest_path}"
-        ) from exc
+    for attempt in range(max(1, _MANIFEST_RETRY_ATTEMPTS)):
+        try:
+            text = manifest_path.read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            if attempt < _MANIFEST_RETRY_ATTEMPTS - 1:
+                time.sleep(_MANIFEST_RETRY_DELAY)
+                continue
+            raise ValidationPackError(
+                f"Validation index missing: {manifest_path}"
+            ) from exc
+        except OSError as exc:
+            raise ValidationPackError(
+                f"Unable to read validation index: {manifest_path}"
+            ) from exc
 
-    if not isinstance(document, Mapping):
-        raise ValidationPackError("Validation index root must be an object")
+        try:
+            document = json.loads(text)
+        except json.JSONDecodeError:
+            if attempt < _MANIFEST_RETRY_ATTEMPTS - 1:
+                time.sleep(_MANIFEST_RETRY_DELAY)
+                continue
+            raise ValidationPackError(
+                f"Validation index is not valid JSON: {manifest_path}"
+            )
 
-    index = _index_from_document(document, index_path=manifest_path)
-    log_path = _resolve_log_path(manifest_path, document)
-    return _ManifestView(index=index, log_path=log_path)
+        if not isinstance(document, Mapping):
+            raise ValidationPackError("Validation index root must be an object")
+
+        stage_paths = extract_stage_manifest_paths(document, _MANIFEST_STAGE)
+        is_index_document = _document_is_index_document(document)
+        index_path = _index_path_from_mapping(
+            document,
+            stage_paths=stage_paths,
+            use_manifest_paths=use_manifest_paths,
+            is_index_document=is_index_document,
+        )
+
+        if is_index_document:
+            index = _index_from_document(document, index_path=index_path)
+        else:
+            if not index_path.exists() and not _wait_for_path(
+                index_path,
+                attempts=_INDEX_WAIT_ATTEMPTS,
+                delay=_INDEX_WAIT_DELAY,
+            ):
+                if attempt < _MANIFEST_RETRY_ATTEMPTS - 1:
+                    time.sleep(_MANIFEST_RETRY_DELAY)
+                    continue
+                raise ValidationPackError(
+                    f"Validation index missing: {index_path}",
+                )
+            index = load_validation_index(index_path)
+
+        log_path = _resolve_log_path(index_path, document, stage_paths=stage_paths)
+        return _ManifestView(index=index, log_path=log_path)
+
+    raise ValidationPackError(
+        f"Unable to resolve validation manifest: {manifest_path}",
+    )
 
 
 class ValidationPackSender:

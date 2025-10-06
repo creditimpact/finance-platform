@@ -363,12 +363,10 @@ class _ChatCompletionResponse:
 class _ChatCompletionClient:
     """Minimal HTTP client for the OpenAI Chat Completions API."""
 
-    base_url: str
-    api_key: str
-    timeout: float | None
-
-    def __post_init__(self) -> None:
-        self.base_url = self.base_url.rstrip("/") or "https://api.openai.com/v1"
+    def __init__(self, *, base_url: str, api_key: str, timeout: float | int):
+        self.base_url = base_url.rstrip("/") or "https://api.openai.com/v1"
+        self.api_key = api_key
+        self.timeout: float | int = timeout
 
     def create(
         self,
@@ -385,7 +383,12 @@ class _ChatCompletionClient:
         project_id = os.getenv("OPENAI_PROJECT_ID")
         if project_id:
             headers["OpenAI-Project"] = project_id
-        headers["OpenAI-Beta"] = "response_format=v1"
+        include_beta_header = (
+            isinstance(response_format, Mapping)
+            and response_format.get("type") == "json_object"
+        )
+        if include_beta_header:
+            headers["OpenAI-Beta"] = "response_format=v1"
         payload = {
             "model": model,
             "messages": list(messages),

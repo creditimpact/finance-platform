@@ -136,8 +136,10 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
     assert finding.get("bureau_values", {}).get("transunion", {}).get("raw") == "1"
 
     prompt = payload["prompt"]
-    assert isinstance(prompt, str)
-    assert prompt.strip()
+    assert isinstance(prompt, dict)
+    assert prompt["system"].startswith("You are an adjudication assistant")
+    assert prompt["user"].startswith("Review the validation finding JSON")
+    assert prompt["guidance"].startswith("Respond with a JSON object")
 
     expected_output = payload["expected_output"]
     assert expected_output["properties"]["decision"]["enum"] == ["strong", "no_case"]

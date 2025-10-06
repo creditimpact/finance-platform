@@ -382,6 +382,10 @@ class _ChatCompletionClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        project_id = os.getenv("OPENAI_PROJECT_ID")
+        if project_id:
+            headers["OpenAI-Project"] = project_id
+        headers["OpenAI-Beta"] = "response_format=v1"
         payload = {
             "model": model,
             "messages": list(messages),
@@ -391,6 +395,17 @@ class _ChatCompletionClient:
         start_time = time.monotonic()
         response = request_lib.post(url, headers=headers, json=payload, timeout=self.timeout)
         latency = time.monotonic() - start_time
+        if not getattr(response, "ok", False):
+            status_code = getattr(response, "status_code", "?")
+            try:
+                body_text = response.text
+            except Exception:  # pragma: no cover - defensive logging
+                body_text = "<unavailable>"
+            log.error(
+                "VALIDATION_AI_HTTP_ERROR status=%s body=%s",
+                status_code,
+                body_text,
+            )
         response.raise_for_status()
         return _ChatCompletionResponse(
             payload=response.json(),

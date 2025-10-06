@@ -32,12 +32,21 @@ class _StubClient:
         self._payload = payload
         self.requests: list[dict[str, object]] = []
 
-    def create(self, *, model: str, messages, response_format):  # type: ignore[override]
+    def create(
+        self,
+        *,
+        model: str,
+        messages,
+        response_format,
+        pack_id=None,
+        on_error=None,
+    ):  # type: ignore[override]
         self.requests.append(
             {
                 "model": model,
                 "messages": messages,
                 "response_format": response_format,
+                "pack_id": pack_id,
             }
         )
         return {"choices": [{"message": {"content": json.dumps(self._payload)}}]}
@@ -151,6 +160,8 @@ def test_sender_accepts_valid_json_response(tmp_path: Path) -> None:
         account_label="001",
         line_number=1,
         line_id="acc_001__account_type",
+        pack_id="acc_001",
+        error_path=tmp_path / "acc_001.result.error.json",
     )
 
     assert response == payload

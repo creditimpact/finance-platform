@@ -312,3 +312,10 @@ def validation_result_filename_for_account(account_id: int | str) -> str:
 
     return validation_result_summary_filename_for_account(account_id)
 
+
+def validation_result_error_filename_for_account(account_id: int | str) -> str:
+    """Return the canonical validation error sidecar filename for ``account_id``."""
+
+    normalized = _normalize_account_id(account_id)
+    return f"acc_{normalized:03d}.result.error.json"
+

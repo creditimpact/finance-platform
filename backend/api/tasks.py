@@ -1,4 +1,5 @@
 # ruff: noqa: E402
+import ast
 import json
 import shutil
 import logging
@@ -45,6 +46,16 @@ from backend.core.utils.json_utils import _json_safe
 app = Celery("tasks")
 
 
+def _parse_task_routes(raw: str) -> object | None:
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            return ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            return None
+
+
 @signals.worker_process_init.connect
 def configure_worker(**_):
     try:
@@ -54,6 +65,22 @@ def configure_worker(**_):
             broker_url=os.getenv("CELERY_BROKER_URL", cfg.celery_broker_url),
             result_backend=os.getenv("CELERY_RESULT_BACKEND", cfg.celery_broker_url),
         )
+
+        routes_env = os.getenv("CELERY_TASK_ROUTES")
+        if routes_env:
+            parsed_routes = _parse_task_routes(routes_env)
+            if parsed_routes is not None:
+                logger.info("CELERY_TASK_ROUTES_ENV routes=%s", parsed_routes)
+            else:
+                logger.warning(
+                    "CELERY_TASK_ROUTES_ENV_PARSE_FAILED raw=%s", routes_env
+                )
+
+        configured_routes = getattr(app.conf, "task_routes", None)
+        if configured_routes:
+            logger.info("CELERY_TASK_ROUTES_ACTIVE routes=%s", configured_routes)
+        else:
+            logger.info("CELERY_TASK_ROUTES_ACTIVE routes=none")
     except EnvironmentError as exc:
         logger.warning("Starting in parser-only mode: %s", exc)
 

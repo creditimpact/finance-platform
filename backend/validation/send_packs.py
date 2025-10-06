@@ -34,6 +34,7 @@ from backend.validation.redaction import sanitize_validation_log_payload
 _DEFAULT_MODEL = "gpt-4o-mini"
 _DEFAULT_TIMEOUT = 30.0
 _THROTTLE_SECONDS = 0.05
+_DEFAULT_QUEUE_NAME = "validation"
 _VALID_DECISIONS = {"strong", "no_case"}
 _ALWAYS_INVESTIGATABLE_FIELDS = ALWAYS_INVESTIGATABLE_FIELDS
 _CONDITIONAL_FIELDS = CONDITIONAL_FIELDS
@@ -653,6 +654,51 @@ class ValidationPackSender:
         self._results_root: Path | None = None
         self._log_path = view.log_path
         self._confidence_threshold = _confidence_threshold()
+        self._default_queue = (
+            self._infer_queue_hint(self._index.packs) or _DEFAULT_QUEUE_NAME
+        )
+
+    # ------------------------------------------------------------------
+    # Queue routing helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _queue_from_record(record: ValidationPackRecord) -> str | None:
+        extra = record.extra
+        if isinstance(extra, Mapping):
+            for key in ("queue", "celery_queue", "task_queue", "target_queue"):
+                value = extra.get(key)
+                if isinstance(value, str):
+                    text = value.strip()
+                    if text:
+                        return text
+        return None
+
+    def _infer_queue_hint(
+        self, records: Sequence[ValidationPackRecord]
+    ) -> str | None:
+        counts: dict[str, int] = {}
+        for record in records:
+            queue = self._queue_from_record(record)
+            if not queue:
+                continue
+            counts[queue] = counts.get(queue, 0) + 1
+        if not counts:
+            return None
+        return max(counts.items(), key=lambda item: (item[1], item[0]))[0]
+
+    def _queue_plan(self, accounts: Sequence[_PreflightAccount]) -> dict[str, int]:
+        plan: dict[str, int] = {}
+        for account in accounts:
+            queue = self._queue_from_record(account.record) or self._default_queue
+            plan[queue] = plan.get(queue, 0) + 1
+        return plan
+
+    def _select_queue(self, plan: Mapping[str, int]) -> str:
+        if not plan:
+            return self._default_queue
+        if self._default_queue in plan:
+            return self._default_queue
+        return max(plan.items(), key=lambda item: (item[1], item[0]))[0]
 
     # ------------------------------------------------------------------
     # Pre-flight validation
@@ -777,6 +823,47 @@ class ValidationPackSender:
             len(preflight.accounts),
             preflight.missing,
             str(index.results_dir_path),
+        )
+
+        dispatchable_accounts = [
+            account for account in preflight.accounts if not account.pack_missing
+        ]
+        queue_plan = self._queue_plan(dispatchable_accounts)
+        total_enqueued = sum(queue_plan.values())
+        missing_accounts = sum(1 for account in preflight.accounts if account.pack_missing)
+        default_queue = self._select_queue(queue_plan)
+        queue_plan_display = ", ".join(
+            f"{name}:{count}" for name, count in sorted(queue_plan.items())
+        )
+        if not queue_plan_display:
+            queue_plan_display = "none"
+
+        if total_enqueued:
+            log.info(
+                "VALIDATION_SEND_QUEUE_PLAN sid=%s queue=%s routed=%s missing=%s routes=%s",
+                self.sid,
+                default_queue,
+                total_enqueued,
+                missing_accounts,
+                queue_plan_display,
+            )
+        else:
+            log.warning(
+                "VALIDATION_SEND_QUEUE_PLAN sid=%s queue=%s routed=%s missing=%s routes=%s",
+                self.sid,
+                default_queue,
+                total_enqueued,
+                missing_accounts,
+                queue_plan_display,
+            )
+
+        self._log(
+            "send_queue_plan",
+            queue=default_queue,
+            total_accounts=len(preflight.accounts),
+            missing_accounts=missing_accounts,
+            routed_accounts=total_enqueued,
+            routes=dict(queue_plan),
         )
 
         results: list[dict[str, Any]] = []
@@ -1241,16 +1328,33 @@ class ValidationPackSender:
             messages=messages,
             response_format={"type": "json_object"},
         )
-        payload = response.payload
+        if hasattr(response, "payload"):
+            payload = response.payload  # type: ignore[assignment]
+            status_code = getattr(response, "status_code", 0)
+            latency = getattr(response, "latency", 0.0)
+            retries = getattr(response, "retries", 0)
+        elif isinstance(response, Mapping):
+            payload = response
+            status_code = int(getattr(response, "status_code", 0))
+            latency_raw = getattr(response, "latency", 0.0)
+            try:
+                latency = float(latency_raw)
+            except (TypeError, ValueError):
+                latency = 0.0
+            retries = int(getattr(response, "retries", 0))
+        else:
+            raise ValidationPackError(
+                f"Model client returned unsupported response type: {type(response)!r}"
+            )
         log.info(
             "VALIDATION_SEND_MODEL_CALL sid=%s account_id=%s line_id=%s line_number=%s status=%s latency=%.3fs retries=%s",
             self.sid,
             account_label,
             line_id,
             line_number,
-            response.status_code,
-            response.latency,
-            response.retries,
+            status_code,
+            latency,
+            retries,
         )
 
         choices = payload.get("choices")

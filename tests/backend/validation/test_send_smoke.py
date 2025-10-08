@@ -1,7 +1,9 @@
 import json
+import logging
 import sys
 import types
 from pathlib import Path
+from typing import Any, Mapping
 
 import pytest
 
@@ -9,7 +11,8 @@ from backend.core.ai.paths import (
     validation_result_json_filename_for_account,
     validation_result_jsonl_filename_for_account,
 )
-from backend.validation.send_packs import ValidationPackSender
+
+from backend.validation.send_packs import ValidationPackError, ValidationPackSender
 
 
 _requests_stub = types.ModuleType("requests")
@@ -377,3 +380,95 @@ def test_validation_sender_invalid_json_fallback(
     assert result_entry["decision"] == "no_case"
     assert result_entry["rationale"] == "schema_mismatch"
     assert result_entry["citations"] == ["system:none"]
+
+
+def test_validation_sender_failure_leaves_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    sid, index_path, results_dir = _seed_manifest(tmp_path, [1], sid="FAILTMP")
+    monkeypatch.setenv("AI_MODEL", "stub-model")
+    monkeypatch.setenv("VALIDATION_SINGLE_RESULT_FILE", "0")
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise ValidationPackError("intentional failure")
+
+    monkeypatch.setattr(ValidationPackSender, "_process_account", _boom)
+
+    caplog.set_level(logging.INFO)
+
+    sender = ValidationPackSender(index_path, http_client=_FixedResponseStubClient({}))
+    results = sender.send()
+
+    assert results
+    assert results[0]["status"] == "error"
+
+    jsonl_file = results_dir / validation_result_jsonl_filename_for_account(1)
+    assert not jsonl_file.exists()
+    assert jsonl_file.with_name(jsonl_file.name + ".tmp").exists()
+
+    error_messages = {record.message for record in caplog.records if record.levelno >= logging.ERROR}
+    assert any("VALIDATION_RESULTS_MISSING" in message for message in error_messages)
+
+    summary_messages = [record.message for record in caplog.records if "VALIDATION_SEND_SUMMARY" in record.message]
+    assert summary_messages
+    assert "packs=1" in summary_messages[-1]
+    assert "results_written=0" in summary_messages[-1]
+
+
+def test_validation_sender_logs_result_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    sid, index_path, results_dir = _seed_manifest(tmp_path, [1], sid="MISMTCH")
+    monkeypatch.setenv("AI_MODEL", "stub-model")
+    monkeypatch.setenv("VALIDATION_SINGLE_RESULT_FILE", "0")
+
+    payload = {
+        "sid": sid,
+        "account_id": 1,
+        "id": "Field 1",
+        "field": "Field 1",
+        "decision": "no_case",
+        "rationale": "Deterministic outcome (FIELD_MISMATCH).",
+        "citations": ["transunion: value"],
+        "checks": {
+            "materiality": False,
+            "supports_consumer": False,
+            "doc_requirements_met": False,
+            "mismatch_code": "FIELD_MISMATCH",
+        },
+        "reason_code": "FIELD_MISMATCH",
+        "reason_label": "Field 1 mismatch",
+        "modifiers": {
+            "material_mismatch": True,
+            "time_anchor": False,
+            "doc_dependency": False,
+        },
+        "confidence": 0.5,
+    }
+
+    original_collect = ValidationPackSender._collect_expected_line_info
+
+    def _collect(self: ValidationPackSender, account_id: int, pack_lines: list[Mapping[str, Any]]) -> list[tuple[str, str]]:
+        result = list(original_collect(self, account_id, pack_lines))
+        if result:
+            last_identifier, last_field = result[-1]
+            result.append((f"{last_identifier}_extra", last_field))
+        return result
+
+    monkeypatch.setattr(ValidationPackSender, "_collect_expected_line_info", _collect)
+
+    caplog.set_level(logging.INFO)
+
+    sender = ValidationPackSender(index_path, http_client=_FixedResponseStubClient(payload))
+    results = sender.send()
+
+    assert results
+    assert results[0]["status"] == "error"
+
+    jsonl_file = results_dir / validation_result_jsonl_filename_for_account(1)
+    assert jsonl_file.exists()
+
+    mismatch_messages = [record.message for record in caplog.records if "VALIDATION_RESULT_COUNT_MISMATCH" in record.message]
+    assert mismatch_messages
+
+    summary_messages = [record.message for record in caplog.records if "VALIDATION_SEND_SUMMARY" in record.message]
+    assert summary_messages
+    assert "errors=1" in summary_messages[-1]

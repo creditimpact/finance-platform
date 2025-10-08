@@ -612,11 +612,21 @@ class ValidationPackWriter:
             summary = self._load_summary(account_id)
         source_hash = self._build_source_hash(summary, lines)
 
+        acct_str = f"{account_id:03d}"
+        results_basename = os.getenv("VALIDATION_RESULTS_BASENAME", "acc_{account}.result")
+        try:
+            results_base = results_basename.format(account=acct_str)
+        except Exception:
+            results_base = f"acc_{acct_str}.result"
+
+        result_jsonl_path = self._results_dir / f"{results_base}.jsonl"
+        result_json_path = self._results_dir / f"{results_base}.json"
+
         entry = ValidationIndexEntry(
             account_id=account_id,
             pack_path=pack_path.resolve(),
-            result_jsonl_path=None,
-            result_json_path=None,
+            result_jsonl_path=result_jsonl_path.resolve(),
+            result_json_path=result_json_path.resolve(),
             weak_fields=tuple(weak_fields),
             line_count=len(lines),
             status="built",

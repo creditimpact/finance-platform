@@ -22,19 +22,6 @@ log = logging.getLogger(__name__)
 _SCHEMA_VERSION = 2
 
 
-def _single_result_file_enabled() -> bool:
-    raw = os.getenv("VALIDATION_SINGLE_RESULT_FILE")
-    if raw is None:
-        return True
-
-    lowered = raw.strip().lower()
-    if lowered in {"1", "true", "yes", "y", "on"}:
-        return True
-    if lowered in {"0", "false", "no", "n", "off"}:
-        return False
-    return True
-
-
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
         "+00:00", "Z"
@@ -77,10 +64,7 @@ class ValidationIndexEntry:
                 self.result_json_path, index_dir
             )
 
-        if (
-            not _single_result_file_enabled()
-            and self.result_jsonl_path is not None
-        ):
+        if self.result_jsonl_path is not None:
             payload["result_jsonl"] = _relativize_path(
                 self.result_jsonl_path, index_dir
             )

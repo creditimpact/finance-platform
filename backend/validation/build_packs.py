@@ -471,6 +471,11 @@ class ValidationPackBuilder:
 
         bureau_values = self._build_bureau_values(field_name, bureaus, consistency)
 
+        reason_code = self._coerce_optional_str(requirement.get("reason_code"))
+        reason_label = self._coerce_optional_str(requirement.get("reason_label"))
+        finding_clone = self._json_clone(requirement)
+        finding_json = json.dumps(finding_clone, ensure_ascii=False, sort_keys=True)
+
         prompt_user = {
             "sid": self.paths.sid,
             "account_id": account_id,
@@ -496,6 +501,8 @@ class ValidationPackBuilder:
             "strength": strength,
             "bureaus": bureau_values,
             "context": context,
+            "finding": finding_clone,
+            "finding_json": finding_json,
             "expected_output": _EXPECTED_OUTPUT_SCHEMA,
             "prompt": {
                 "system": _SYSTEM_PROMPT,
@@ -503,6 +510,11 @@ class ValidationPackBuilder:
                 "user": prompt_user,
             },
         }
+
+        if reason_code:
+            payload["reason_code"] = reason_code
+        if reason_label:
+            payload["reason_label"] = reason_label
 
         if min_corroboration is not None:
             payload["min_corroboration"] = min_corroboration

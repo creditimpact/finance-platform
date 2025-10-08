@@ -475,9 +475,15 @@ class ValidationPackWriter:
             bureaus_payload: Mapping[str, Mapping[str, Any]] = _load_bureaus_if_needed()
 
             requirement_payload = dict(requirement)
+            existing_bureau_values = None
+            if "bureau_values" in requirement_payload:
+                existing_bureau_values = requirement_payload.get("bureau_values")
             if bureaus_payload:
                 requirement_payload["bureau_values"] = self._build_bureau_values(
-                    canonical_field, bureaus_payload, consistency_entry
+                    canonical_field,
+                    bureaus_payload,
+                    consistency_entry,
+                    existing_requirement_values=existing_bureau_values,
                 )
 
             context_payload = self._build_context(consistency_entry)
@@ -499,18 +505,7 @@ class ValidationPackWriter:
                 send_to_ai_map=send_to_ai_map,
             )
 
-            if send_flag is False:
-                line = build_line(
-                    sid=self.sid,
-                    account_id=account_id,
-                    field=canonical_field,
-                    finding=requirement_payload,
-                    fallback_bureaus_loader=_load_bureaus_if_needed,
-                )
-                if line is not None:
-                    payload = dict(line)
-                    payload["send_to_ai"] = False
-                    pack_lines.append(PackLine(payload))
+            if send_flag is not True:
                 continue
 
             if not self._should_send_to_ai(
@@ -530,8 +525,7 @@ class ValidationPackWriter:
             )
             if line is not None:
                 payload = dict(line)
-                if send_flag is True:
-                    payload["send_to_ai"] = True
+                payload["send_to_ai"] = True
                 pack_lines.append(PackLine(payload))
 
         return pack_lines
@@ -921,6 +915,8 @@ class ValidationPackWriter:
         field: str,
         bureaus_data: Mapping[str, Mapping[str, Any]],
         consistency: Mapping[str, Any] | None,
+        *,
+        existing_requirement_values: Mapping[str, Any] | None = None,
     ) -> Mapping[str, Mapping[str, Any]]:
         raw_map = {}
         normalized_map = {}
@@ -933,6 +929,11 @@ class ValidationPackWriter:
                 normalized_map = normalized_values
 
         values: dict[str, dict[str, Any]] = {}
+        existing_map = (
+            existing_requirement_values
+            if isinstance(existing_requirement_values, Mapping)
+            else {}
+        )
         for bureau in _BUREAUS:
             bureau_data = bureaus_data.get(bureau, {})
             raw_value = self._extract_value(raw_map.get(bureau))
@@ -940,6 +941,13 @@ class ValidationPackWriter:
                 raw_value = self._extract_value(bureau_data.get(field))
 
             normalized_value = self._extract_value(normalized_map.get(bureau))
+
+            existing_entry = existing_map.get(bureau)
+            if isinstance(existing_entry, Mapping):
+                if raw_value is None and "raw" in existing_entry:
+                    raw_value = existing_entry.get("raw")
+                if normalized_value is None and "normalized" in existing_entry:
+                    normalized_value = existing_entry.get("normalized")
 
             values[bureau] = {
                 "raw": raw_value,

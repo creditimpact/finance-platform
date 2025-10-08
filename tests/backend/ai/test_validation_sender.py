@@ -143,9 +143,15 @@ def test_sender_accepts_valid_json_response(tmp_path: Path) -> None:
         "account_id": 1,
         "id": "acc_001__account_type",
         "field": "account_type",
-        "decision": "strong",
+        "decision": "strong_actionable",
         "rationale": "Values diverge across bureaus (ACCOUNT_TYPE_MISMATCH).",
         "citations": ["transunion: installment"],
+        "checks": {
+            "materiality": True,
+            "supports_consumer": True,
+            "doc_requirements_met": True,
+            "mismatch_code": "ACCOUNT_TYPE_MISMATCH",
+        },
         "reason_code": "ACCOUNT_TYPE_MISMATCH",
         "reason_label": "Account type mismatch",
         "modifiers": {
@@ -161,11 +167,38 @@ def test_sender_accepts_valid_json_response(tmp_path: Path) -> None:
 
     expected_output = {
         "type": "object",
-        "required": ["decision", "rationale", "citations"],
+        "required": ["decision", "rationale", "citations", "checks"],
         "properties": {
-            "decision": {"type": "string", "enum": ["strong", "no_case"]},
-            "rationale": {"type": "string"},
-            "citations": {"type": "array", "items": {"type": "string"}},
+            "decision": {
+                "type": "string",
+                "enum": [
+                    "strong_actionable",
+                    "supportive_needs_companion",
+                    "neutral_context_only",
+                    "no_case",
+                ],
+            },
+            "rationale": {"type": "string", "maxLength": 700},
+            "citations": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+            },
+            "checks": {
+                "type": "object",
+                "required": [
+                    "materiality",
+                    "supports_consumer",
+                    "doc_requirements_met",
+                    "mismatch_code",
+                ],
+                "properties": {
+                    "materiality": {"type": "boolean"},
+                    "supports_consumer": {"type": "boolean"},
+                    "doc_requirements_met": {"type": "boolean"},
+                    "mismatch_code": {"type": "string"},
+                },
+            },
         },
     }
 

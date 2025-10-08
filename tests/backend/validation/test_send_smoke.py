@@ -28,11 +28,38 @@ class _FixedResponseStubClient:
 
 _EXPECTED_OUTPUT = {
     "type": "object",
-    "required": ["decision", "rationale", "citations"],
+    "required": ["decision", "rationale", "citations", "checks"],
     "properties": {
-        "decision": {"type": "string", "enum": ["strong", "no_case"]},
-        "rationale": {"type": "string"},
-        "citations": {"type": "array", "items": {"type": "string"}},
+        "decision": {
+            "type": "string",
+            "enum": [
+                "strong_actionable",
+                "supportive_needs_companion",
+                "neutral_context_only",
+                "no_case",
+            ],
+        },
+        "rationale": {"type": "string", "maxLength": 700},
+        "citations": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+        },
+        "checks": {
+            "type": "object",
+            "required": [
+                "materiality",
+                "supports_consumer",
+                "doc_requirements_met",
+                "mismatch_code",
+            ],
+            "properties": {
+                "materiality": {"type": "boolean"},
+                "supports_consumer": {"type": "boolean"},
+                "doc_requirements_met": {"type": "boolean"},
+                "mismatch_code": {"type": "string"},
+            },
+        },
     },
 }
 
@@ -116,9 +143,15 @@ def test_validation_sender_smoke_writes_results(
         "account_id": 1,
         "id": "Field 1",
         "field": "Field 1",
-        "decision": "strong",
+        "decision": "no_case",
         "rationale": "Deterministic outcome (FIELD_MISMATCH).",
         "citations": ["transunion: value"],
+        "checks": {
+            "materiality": False,
+            "supports_consumer": False,
+            "doc_requirements_met": False,
+            "mismatch_code": "FIELD_MISMATCH",
+        },
         "reason_code": "FIELD_MISMATCH",
         "reason_label": "Field 1 mismatch",
         "modifiers": {
@@ -144,10 +177,10 @@ def test_validation_sender_smoke_writes_results(
         lines = [line for line in jsonl_file.read_text(encoding="utf-8").splitlines() if line]
         assert lines, f"expected result lines for account {account_id}"
         entry = json.loads(lines[0])
-        assert entry["decision"] == "strong"
+        assert entry["decision"] == "no_case"
         assert entry["citations"] == ["transunion: value"]
         assert entry["confidence"] == 0.75
-        assert entry["legacy_decision"] == "strong"
+        assert entry["legacy_decision"] == "no_case"
         assert "labels" not in entry
 
 

@@ -69,40 +69,78 @@ _MERGE_INFLIGHT_LOCK_FILENAME = "merge_inflight.lock"
 
 _BUREAUS = ("transunion", "experian", "equifax")
 _SYSTEM_PROMPT = (
-    "You are an adjudication assistant reviewing credit report discrepancies. "
-    "Only use the JSON provided in this pack. Do not assume facts not present."
+    "You are a credit dispute adjudication assistant. You MUST only use the JSON provided in this pack.\n"
+    "Do NOT invent facts. If a value is missing in the pack, you must ignore it.\n\n"
+    "Decision taxonomy (choose exactly one):\n"
+    "- strong_actionable: The discrepancy is material AND supports the consumer on this single field; available/obtainable documents listed in the pack are sufficient to warrant an investigation by a bureau.\n"
+    "- supportive_needs_companion: Useful discrepancy that meaningfully helps if combined with at least one other strong field (e.g., time anchor or documentary heavy field), but not strong enough alone.\n"
+    "- neutral_context_only: Contextual/technical point; not expected to trigger an investigation by itself. May be attached as background only.\n"
+    "- no_case: Not material, not supportive, or contradicted/too ambiguous. Do not use.\n\n"
+    "Materiality guide (apply strictly to THIS field only):\n"
+    "- “Material” = changes how the tradeline would be represented or evaluated in a dispute on this field (e.g., wrong subtype that causes a different interpretation, illegal mixture of categories, date shifts that affect coverage windows, etc.), not minor wording.\n"
+    "- “Supports the consumer” = the normalized values and pack facts make the consumer’s claim more likely than the bureau’s current view.\n\n"
+    "Citations:\n"
+    "Return citations as an array of strings in the form:\n"
+    "  \"<bureau>: <normalized or raw value you relied on>\"\n"
+    "Example: \"equifax: conventional real estate mortgage\"\n"
+    "List every bureau you relied on.\n\n"
+    "Constraints:\n"
+    "- Stay within the pack’s 'finding' only. Do NOT reference payment history or other fields unless they appear inside this finding.\n"
+    "- Mention the mismatch code (e.g., C4/C5) in the rationale.\n"
+    "- Output MUST be strictly valid JSON per 'expected_output'."
 )
-_USER_PROMPT = (
-    "Given the field finding below (including raw and normalized values per bureau), "
-    "decide if the consumer has a strong validation case.\n\n"
-    "Decision policy:\n"
-    "- strong if the discrepancy is material AND supports the consumer’s position based on the normalized values and required documents.\n"
-    "- otherwise return no_case.\n\n"
-    "Return JSON only.\n\n"
-    "Field:\n"
-    "<the 'finding' blob as provided>\n\n"
-    "You must output an object matching expected_output {decision, rationale, citations}.\n"
-    "- decision ∈ {strong, no_case}\n"
-    "- rationale: ≤ 120 words, mention the mismatch code (e.g., C4/C5) and why it helps or not.\n"
-    "- citations: array of strings like \"equifax: <normalized>\" listing the values you relied on."
+
+_PROMPT_USER_TEMPLATE = (
+    "You are given a single field finding extracted from a credit report tri-bureau comparison.\n\n"
+    "Your task:\n"
+    "1) Decide one of: strong_actionable | supportive_needs_companion | neutral_context_only | no_case\n"
+    "2) Fill checks:\n"
+    "   - materiality: true/false\n"
+    "   - supports_consumer: true/false\n"
+    "   - doc_requirements_met: true/false (based ONLY on the 'documents' list in the finding; if docs are listed, assume they can be obtained. If the list is empty, this must be false.)\n"
+    "   - mismatch_code: copy from finding.reason_code (e.g., \"C4_TWO_MATCH_ONE_DIFF\")\n"
+    "3) Provide a concise rationale (≤ 120 words) explaining why the selected decision follows from the mismatch code and the specific normalized values.\n"
+    "4) Provide citations array with the exact bureau/value pairs you used.\n\n"
+    "Finding (verbatim JSON):\n"
+    "<finding blob here>\n\n"
+    "Return JSON only, matching exactly the 'expected_output' schema.\n"
+    "If you cannot produce a valid object, return:\n"
+    '{"decision":"no_case","rationale":"schema_mismatch","citations":["system:none"],"checks":{"materiality":false,"supports_consumer":false,"doc_requirements_met":false,"mismatch_code":"unknown"}}'
 )
-_GUIDANCE_PROMPT = (
-    "Respond with strictly valid JSON matching the expected_output schema."
-)
-_SHARED_PROMPT = {
-    "system": _SYSTEM_PROMPT,
-    "user": _USER_PROMPT,
-    "guidance": _GUIDANCE_PROMPT,
-}
+
 _EXPECTED_OUTPUT_SCHEMA = {
     "type": "object",
-    "required": ["decision", "rationale", "citations"],
+    "required": ["decision", "rationale", "citations", "checks"],
     "properties": {
-        "decision": {"type": "string", "enum": ["strong", "no_case"]},
-        "rationale": {"type": "string"},
+        "decision": {
+            "type": "string",
+            "enum": [
+                "strong_actionable",
+                "supportive_needs_companion",
+                "neutral_context_only",
+                "no_case",
+            ],
+        },
+        "rationale": {"type": "string", "maxLength": 700},
         "citations": {
             "type": "array",
             "items": {"type": "string"},
+            "minItems": 1,
+        },
+        "checks": {
+            "type": "object",
+            "required": [
+                "materiality",
+                "supports_consumer",
+                "doc_requirements_met",
+                "mismatch_code",
+            ],
+            "properties": {
+                "materiality": {"type": "boolean"},
+                "supports_consumer": {"type": "boolean"},
+                "doc_requirements_met": {"type": "boolean"},
+                "mismatch_code": {"type": "string"},
+            },
         },
     },
 }
@@ -658,21 +696,11 @@ class ValidationPackWriter:
             summary = self._load_summary(account_id)
         source_hash = self._build_source_hash(summary, lines)
 
-        acct_str = f"{account_id:03d}"
-        results_basename = os.getenv("VALIDATION_RESULTS_BASENAME", "acc_{account}.result")
-        try:
-            results_base = results_basename.format(account=acct_str)
-        except Exception:
-            results_base = f"acc_{acct_str}.result"
-
-        result_jsonl_path = self._results_dir / f"{results_base}.jsonl"
-        result_json_path = result_jsonl_path
-
         entry = ValidationIndexEntry(
             account_id=account_id,
             pack_path=pack_path.resolve(),
-            result_jsonl_path=result_jsonl_path.resolve(),
-            result_json_path=result_json_path.resolve(),
+            result_jsonl_path=None,
+            result_json_path=None,
             weak_fields=tuple(weak_fields),
             line_count=len(lines),
             status="built",
@@ -1402,6 +1430,8 @@ def build_line(
     field_key = ValidationPackWriter._field_key(field_name)
 
     finding_payload = _json_clone(finding)
+    finding_json = json.dumps(finding_payload, ensure_ascii=False, sort_keys=True)
+    prompt_user = _PROMPT_USER_TEMPLATE.replace("<finding blob here>", finding_json)
 
     payload: dict[str, Any] = {
         "id": f"acc_{account_key}__{field_key}",
@@ -1409,7 +1439,11 @@ def build_line(
         "account_id": account_id,
         "field": field_name,
         "finding": finding_payload,
-        "prompt": _json_clone(_SHARED_PROMPT),
+        "finding_json": finding_json,
+        "prompt": {
+            "system": _SYSTEM_PROMPT,
+            "user": prompt_user,
+        },
         "expected_output": _json_clone(_EXPECTED_OUTPUT_SCHEMA),
     }
 

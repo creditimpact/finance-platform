@@ -139,12 +139,31 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
 
     prompt = payload["prompt"]
     assert isinstance(prompt, dict)
-    assert prompt["system"].startswith("You are an adjudication assistant")
-    assert prompt["user"].startswith("Given the field finding below")
-    assert prompt["guidance"].startswith("Respond with strictly valid JSON")
+    assert prompt["system"].startswith(
+        "You are a credit dispute adjudication assistant."
+    )
+    assert prompt["user"].startswith(
+        "You are given a single field finding extracted"
+    )
+    assert "<finding blob here>" not in prompt["user"]
+    assert payload["finding_json"] in prompt["user"]
 
     expected_output = payload["expected_output"]
-    assert expected_output["properties"]["decision"]["enum"] == ["strong", "no_case"]
+    assert expected_output["properties"]["decision"]["enum"] == [
+        "strong_actionable",
+        "supportive_needs_companion",
+        "neutral_context_only",
+        "no_case",
+    ]
+    assert expected_output["properties"]["citations"]["minItems"] == 1
+    assert set(
+        expected_output["properties"]["checks"]["required"]
+    ) == {
+        "materiality",
+        "supports_consumer",
+        "doc_requirements_met",
+        "mismatch_code",
+    }
 
     pack_path = runs_root / sid / "ai_packs" / "validation" / "packs" / "val_acc_001.jsonl"
     on_disk = _read_jsonl(pack_path)

@@ -1579,6 +1579,28 @@ class ValidationPackSender:
             )
         self._write_json_envelope = validation_write_json_enabled()
 
+    def _log_run_summary(
+        self,
+        *,
+        packs: int,
+        sent: int,
+        results_written: int,
+        skipped_existing: int,
+        errors: int,
+    ) -> None:
+        """Emit a normalized summary log line for the current send run."""
+
+        log.info(
+            "VALIDATION_SEND_SUMMARY sid=%s packs=%s sent=%s results_written=%s "
+            "skipped_existing=%s errors=%s",
+            self.sid,
+            packs,
+            sent,
+            results_written,
+            skipped_existing,
+            errors,
+        )
+
     def _await_index_ready(self) -> ValidationIndex:
         index = self._load_index()
         index_path = index.index_path
@@ -1851,6 +1873,13 @@ class ValidationPackSender:
                 str(index.index_path),
                 "no model configured",
             )
+            self._log_run_summary(
+                packs=0,
+                sent=0,
+                results_written=0,
+                skipped_existing=0,
+                errors=1,
+            )
             return []
 
         if not index.packs:
@@ -1859,6 +1888,13 @@ class ValidationPackSender:
                 self.sid,
                 str(index.index_path),
                 "no eligible packs found",
+            )
+            self._log_run_summary(
+                packs=0,
+                sent=0,
+                results_written=0,
+                skipped_existing=0,
+                errors=0,
             )
             return []
 
@@ -1914,6 +1950,13 @@ class ValidationPackSender:
             routed_accounts=total_enqueued,
             routes=dict(queue_plan),
         )
+
+        packs_total = 0
+        sent_count = 0
+        results_written = 0
+        skipped_existing = 0
+        error_count = 0
+        missing_results_accounts: list[str] = []
 
         results: list[dict[str, Any]] = []
         for account in preflight.accounts:
@@ -1973,7 +2016,8 @@ class ValidationPackSender:
                 )
                 continue
 
-            if not resolved_pack.exists():
+            pack_exists = resolved_pack.exists()
+            if not pack_exists:
                 missing_display = pack_relative or self._display_path(
                     resolved_pack, base=index.index_dir
                 )
@@ -2005,7 +2049,10 @@ class ValidationPackSender:
                         account_id=f"{normalized_account:03d}",
                         error=error_message,
                     )
+                error_count += 1
                 continue
+
+            packs_total += 1
 
             if self._write_json_envelope:
                 result_display = (
@@ -2026,6 +2073,7 @@ class ValidationPackSender:
                 result_display,
             )
 
+            account_had_error = False
             try:
                 account_summary = self._process_account(
                     account_id,
@@ -2036,6 +2084,9 @@ class ValidationPackSender:
                     result_jsonl_relative,
                     result_json_path,
                     result_json_relative,
+                )
+                account_had_error = (
+                    str(account_summary.get("status") or "").lower() == "error"
                 )
             except ValidationPackError as exc:
                 failed_line_ids = getattr(exc, "line_ids", []) or []
@@ -2070,6 +2121,7 @@ class ValidationPackSender:
                     result_json_relative,
                     str(exc),
                 )
+                account_had_error = True
             except Exception as exc:  # pragma: no cover - defensive logging
                 failed_line_ids = getattr(exc, "line_ids", []) or []
                 log.error(
@@ -2109,7 +2161,56 @@ class ValidationPackSender:
                     result_json_relative,
                     str(exc),
                 )
+                account_had_error = True
             results.append(account_summary)
+
+            status = str(account_summary.get("status") or "").lower()
+            if status == "skipped":
+                skipped_existing += 1
+            else:
+                sent_count += 1
+
+            if account_had_error:
+                error_count += 1
+
+            canonical_result_path = _canonical_result_path(result_jsonl_path)
+            if canonical_result_path.is_file():
+                results_written += 1
+            else:
+                tmp_path = canonical_result_path.with_name(
+                    canonical_result_path.name + ".tmp"
+                )
+                label = (
+                    f"{normalized_account:03d}"
+                    if normalized_account is not None
+                    else str(account_id)
+                )
+                log.error(
+                    "VALIDATION_RESULTS_MISSING sid=%s account_id=%s pack=%s result=%s tmp_exists=%s",
+                    self.sid,
+                    label,
+                    str(resolved_pack),
+                    str(canonical_result_path),
+                    tmp_path.exists(),
+                )
+                missing_results_accounts.append(label)
+                if not account_had_error:
+                    error_count += 1
+
+        if missing_results_accounts:
+            log.error(
+                "VALIDATION_RESULTS_GAPS sid=%s accounts=%s",
+                self.sid,
+                ",".join(sorted(dict.fromkeys(missing_results_accounts))),
+            )
+
+        self._log_run_summary(
+            packs=packs_total,
+            sent=sent_count,
+            results_written=results_written,
+            skipped_existing=skipped_existing,
+            errors=error_count,
+        )
         return results
 
     # ------------------------------------------------------------------
@@ -2303,6 +2404,7 @@ class ValidationPackSender:
             raise
 
         expected_lines = self._collect_expected_line_info(account_int, pack_lines)
+        expected_count = len(expected_lines)
         cached_results = self._existing_results_complete(
             result_jsonl_path,
             result_target_path,
@@ -2516,6 +2618,24 @@ class ValidationPackSender:
                 setattr(exc, "line_ids", list(dict.fromkeys(failed_line_ids)))
             raise
 
+        if len(result_lines) < expected_count:
+            missing = expected_count - len(result_lines)
+            log.error(
+                "VALIDATION_RESULT_COUNT_MISMATCH sid=%s account_id=%03d expected=%s actual=%s",
+                self.sid,
+                account_int,
+                expected_count,
+                len(result_lines),
+            )
+            self._log(
+                "send_account_result_mismatch",
+                account_id=f"{account_int:03d}",
+                expected=expected_count,
+                actual=len(result_lines),
+                missing=missing,
+            )
+            errors.append("result_count_mismatch")
+
         status = "error" if errors else "done"
         error_message = "; ".join(errors) if errors else None
         metrics_payload = {
@@ -2589,6 +2709,8 @@ class ValidationPackSender:
         result_summary_path: Path,
         result_summary_display: str,
         error: str,
+        *,
+        finalize: bool = False,
     ) -> dict[str, Any]:
         if self._write_json_envelope:
             result_target_path = result_summary_path
@@ -2607,16 +2729,52 @@ class ValidationPackSender:
                 result_target_path
             )
 
-        jsonl_path, summary_path = self._write_results(
-            account_id,
-            [],
-            status="error",
-            error=error,
-            jsonl_path=result_jsonl_path,
-            jsonl_display=result_jsonl_display,
-            summary_path=result_target_path,
-            summary_display=result_target_display,
+        jsonl_path = _canonical_result_path(result_jsonl_path)
+        summary_path = _canonical_result_path(
+            result_target_path, allow_json=self._write_json_envelope
         )
+
+        summary_display_value: str
+        if finalize:
+            jsonl_path, summary_path = self._write_results(
+                account_id,
+                [],
+                status="error",
+                error=error,
+                jsonl_path=result_jsonl_path,
+                jsonl_display=result_jsonl_display,
+                summary_path=result_target_path,
+                summary_display=result_target_display,
+            )
+            summary_display_value = result_target_display or summary_path.name
+        else:
+            tmp_jsonl = self._ensure_incomplete_placeholder(jsonl_path)
+            summary_display_value = result_target_display or jsonl_path.name
+            summary_absolute: str
+            if self._write_json_envelope:
+                tmp_summary = self._ensure_incomplete_placeholder(summary_path)
+                summary_absolute = str(tmp_summary.resolve())
+            else:
+                summary_absolute = str(tmp_jsonl.resolve())
+            self._log(
+                "send_account_results",
+                account_id=f"{account_id:03d}",
+                jsonl=result_jsonl_display or jsonl_path.name,
+                jsonl_absolute=str(tmp_jsonl.resolve()),
+                summary=summary_display_value,
+                summary_absolute=summary_absolute,
+                results=0,
+                status="error",
+                incomplete=True,
+            )
+            log.error(
+                "VALIDATION_SEND_RESULTS_INCOMPLETE sid=%s account_id=%03d jsonl=%s tmp=%s",
+                self.sid,
+                account_id,
+                str(jsonl_path),
+                str(tmp_jsonl),
+            )
+
         summary_payload = {
             "sid": self.sid,
             "account_id": account_id,
@@ -3454,6 +3612,36 @@ class ValidationPackSender:
             status,
         )
         return jsonl_path, summary_target
+
+    def _ensure_incomplete_placeholder(self, target: Path) -> Path:
+        """Ensure a ``.tmp`` sentinel exists for an incomplete results file."""
+
+        target = _canonical_result_path(target, allow_json=self._write_json_envelope)
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:  # pragma: no cover - defensive logging
+            log.warning(
+                "VALIDATION_INCOMPLETE_RESULT_CLEAN_FAILED sid=%s path=%s error=%s",
+                self.sid,
+                str(target),
+                exc,
+            )
+
+        tmp_path = target.with_name(target.name + ".tmp")
+        tmp_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with tmp_path.open("w", encoding="utf-8") as handle:
+                handle.write("")
+        except OSError as exc:  # pragma: no cover - defensive logging
+            log.warning(
+                "VALIDATION_INCOMPLETE_RESULT_WRITE_FAILED sid=%s path=%s error=%s",
+                self.sid,
+                str(tmp_path),
+                exc,
+            )
+        return tmp_path
 
     def _write_error_sidecar(self, path: Path, payload: Mapping[str, Any]) -> None:
         data: dict[str, Any] = dict(payload)

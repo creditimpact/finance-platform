@@ -102,6 +102,15 @@ _EXPECTED_OUTPUT_SCHEMA = {
 }
 _BUREAUS = ("transunion", "experian", "equifax")
 
+_ELIGIBLE_FIELDS = frozenset(
+    {
+        "account_type",
+        "creditor_type",
+        "account_rating",
+        "two_year_payment_history",
+    }
+)
+
 
 _PACK_MAX_SIZE_ENV = "VALIDATION_PACK_MAX_SIZE_KB"
 
@@ -359,10 +368,7 @@ class ValidationPackBuilder:
         if not isinstance(field_consistency, Mapping):
             field_consistency = {}
 
-        send_to_ai_map = self._build_send_to_ai_map(
-            findings
-        )
-        has_enriched_findings = bool(send_to_ai_map)
+        send_to_ai_map = self._build_send_to_ai_map(findings)
 
         bureaus = self._read_json(account_dir / "bureaus.json")
         bureaus_map: Mapping[str, Mapping[str, Any]]
@@ -396,14 +402,11 @@ class ValidationPackBuilder:
             if canonical_field is None:
                 continue
 
+            if canonical_field not in _ELIGIBLE_FIELDS:
+                continue
+
             send_flag = send_to_ai_map.get(canonical_field)
-            include = self._should_include_requirement(
-                requirement,
-                normalized_strength,
-                send_flag=send_flag,
-                allow_fallback=not has_enriched_findings,
-            )
-            if not include:
+            if send_flag is not True:
                 continue
 
             field_name = str(field)
@@ -450,9 +453,9 @@ class ValidationPackBuilder:
             if not isinstance(entry, Mapping):
                 continue
             field_key = ValidationPackBuilder._canonical_field_key(entry.get("field"))
-            if field_key is None:
+            if field_key is None or field_key not in _ELIGIBLE_FIELDS:
                 continue
-            send_flag = bool(entry.get("send_to_ai"))
+            send_flag = ValidationPackBuilder._coerce_bool(entry.get("send_to_ai"))
             mapping[field_key] = send_flag
         return mapping
 
@@ -467,20 +470,6 @@ class ValidationPackBuilder:
         if not text:
             return None
         return text.lower()
-
-    def _should_include_requirement(
-        self,
-        requirement: Mapping[str, Any],
-        strength: str,
-        *,
-        send_flag: bool | None,
-        allow_fallback: bool,
-    ) -> bool:
-        if send_flag is not None:
-            return send_flag
-        if not allow_fallback:
-            return False
-        return self._coerce_bool(requirement.get("ai_needed")) or strength == "weak"
 
     def _build_line(
         self,
@@ -539,6 +528,7 @@ class ValidationPackBuilder:
                 "system": _SYSTEM_PROMPT,
                 "user": prompt_user,
             },
+            "send_to_ai": True,
         }
 
         if reason_code:

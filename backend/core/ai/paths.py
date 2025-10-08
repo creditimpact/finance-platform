@@ -286,6 +286,38 @@ def _normalize_account_id(account_id: int | str) -> int:
         raise ValueError("account_id must be coercible to an integer") from None
 
 
+_RESULTS_BASENAME_ENV = "VALIDATION_RESULTS_BASENAME"
+_DEFAULT_RESULTS_BASENAME = "acc_{account:03d}.result"
+_WRITE_JSON_ENV = "VALIDATION_WRITE_JSON"
+
+
+def _env_flag(name: str) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return False
+    text = str(raw).strip().lower()
+    return text in {"1", "true", "yes", "y", "on"}
+
+
+def validation_write_json_enabled() -> bool:
+    """Return ``True`` when optional JSON result envelopes should be written."""
+
+    return _env_flag(_WRITE_JSON_ENV)
+
+
+def _validation_results_basename(account_id: int | str) -> str:
+    normalized = _normalize_account_id(account_id)
+    template = os.getenv(_RESULTS_BASENAME_ENV) or _DEFAULT_RESULTS_BASENAME
+    try:
+        formatted = template.format(account=normalized, account_id=normalized)
+    except Exception:
+        formatted = _DEFAULT_RESULTS_BASENAME.format(account=normalized)
+    text = str(formatted).strip()
+    if not text:
+        return _DEFAULT_RESULTS_BASENAME.format(account=normalized)
+    return text
+
+
 def validation_pack_filename_for_account(account_id: int | str) -> str:
     """Return the canonical validation pack filename for ``account_id``."""
 
@@ -296,29 +328,31 @@ def validation_pack_filename_for_account(account_id: int | str) -> str:
 def validation_result_jsonl_filename_for_account(account_id: int | str) -> str:
     """Return the canonical validation result JSONL filename for ``account_id``."""
 
-    normalized = _normalize_account_id(account_id)
-    return f"acc_{normalized:03d}.result.jsonl"
+    return f"{_validation_results_basename(account_id)}.jsonl"
+
+
+def validation_result_json_filename_for_account(account_id: int | str) -> str:
+    """Return the optional validation JSON envelope filename for ``account_id``."""
+
+    return f"{_validation_results_basename(account_id)}.json"
 
 
 def validation_result_summary_filename_for_account(account_id: int | str) -> str:
     """Backward-compatible alias for the canonical validation result filename."""
 
-    # Historically we emitted both ``.result.jsonl`` and ``.result.json`` files for
-    # every account.  The validation pipeline now only produces a single JSONL
-    # artifact, so any legacy callers that still ask for the "summary" filename
-    # should resolve to the JSONL path to avoid generating duplicate files.
+    if validation_write_json_enabled():
+        return validation_result_json_filename_for_account(account_id)
     return validation_result_jsonl_filename_for_account(account_id)
 
 
 def validation_result_filename_for_account(account_id: int | str) -> str:
     """Backward-compatible alias for the summary filename."""
 
-    return validation_result_jsonl_filename_for_account(account_id)
+    return validation_result_summary_filename_for_account(account_id)
 
 
 def validation_result_error_filename_for_account(account_id: int | str) -> str:
     """Return the canonical validation error sidecar filename for ``account_id``."""
 
-    normalized = _normalize_account_id(account_id)
-    return f"acc_{normalized:03d}.result.error.json"
+    return f"{_validation_results_basename(account_id)}.error.json"
 

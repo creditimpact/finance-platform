@@ -25,8 +25,10 @@ from backend.ai.manifest import (
 from backend.analytics.analytics_tracker import emit_counter
 from backend.core.ai.paths import (
     validation_result_error_filename_for_account,
+    validation_result_json_filename_for_account,
     validation_result_jsonl_filename_for_account,
     validation_result_summary_filename_for_account,
+    validation_write_json_enabled,
 )
 from backend.core.logic.validation_field_sets import (
     ALL_VALIDATION_FIELDS,
@@ -85,22 +87,24 @@ _DEFAULT_CONFIDENCE_THRESHOLD = 0.70
 _WRITE_JSON_ENVELOPE_ENV = "VALIDATION_WRITE_JSON_ENVELOPE"
 
 
-def _canonical_result_path(path: Path) -> Path:
+def _canonical_result_path(path: Path, *, allow_json: bool = False) -> Path:
     """Normalize ``.result.json`` paths to the canonical ``.result.jsonl``."""
 
-    if path.suffix.lower() != ".json":
+    if allow_json or path.suffix.lower() != ".json":
         return path
     if not path.name.endswith(".result.json"):
         return path
     return path.with_suffix(".jsonl")
 
 
-def _canonical_result_display(display: str | None) -> str | None:
+def _canonical_result_display(display: str | None, *, allow_json: bool = False) -> str | None:
     """Normalize display paths so we never advertise ``.result.json`` outputs."""
 
     if not display:
         return display
     normalized = display.replace("\\", "/")
+    if allow_json:
+        return normalized
     if normalized.endswith(".result.json"):
         return normalized[:-5] + "jsonl"
     return normalized
@@ -159,6 +163,18 @@ def _coerce_int_value(value: Any, default: int = 1) -> int:
         return int(default)
 
 
+def _normalize_bureau_key(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        text = str(value).strip()
+    except Exception:
+        return None
+    if not text:
+        return None
+    return text.lower()
+
+
 def _resolve_request_group_size() -> int:
     raw = os.getenv(_VALIDATION_REQUEST_GROUP_SIZE_ENV)
     if raw is None:
@@ -199,11 +215,13 @@ def _extract_bureau_records(
         return {}
     records: dict[str, dict[str, Any]] = {}
     for bureau, value in bureaus.items():
-        if isinstance(value, Mapping):
-            records[str(bureau)] = {
-                "raw": value.get("raw"),
-                "normalized": value.get("normalized"),
-            }
+        key = _normalize_bureau_key(bureau)
+        if not key or not isinstance(value, Mapping):
+            continue
+        records[key] = {
+            "raw": value.get("raw"),
+            "normalized": value.get("normalized"),
+        }
     return records
 
 
@@ -1559,7 +1577,7 @@ class ValidationPackSender:
             log.info(
                 "VALIDATION_JSON_ENVELOPE_DISABLED env_flag=true -> forcing jsonl-only"
             )
-        self._write_json_envelope = False
+        self._write_json_envelope = validation_write_json_enabled()
 
     def _await_index_ready(self) -> ValidationIndex:
         index = self._load_index()
@@ -1660,11 +1678,22 @@ class ValidationPackSender:
             except ValueError as exc:
                 try:
                     normalized_account = int(record.account_id)
-                    expected_filename = f"acc_{normalized_account:03d}.result.jsonl"
+                    expected_filename = validation_result_jsonl_filename_for_account(
+                        normalized_account
+                    )
                 except (TypeError, ValueError):
                     normalized_account = record.account_id
-                    suffix = str(record.account_id).strip() if record.account_id is not None else "missing"
-                    expected_filename = f"acc_{suffix}.result.jsonl"
+                    suffix = (
+                        str(record.account_id).strip()
+                        if record.account_id is not None
+                        else "missing"
+                    )
+                    try:
+                        expected_filename = validation_result_jsonl_filename_for_account(
+                            suffix
+                        )
+                    except Exception:
+                        expected_filename = f"acc_{suffix}.result.jsonl"
 
                 expected_relative = Path(index.results_dir) / expected_filename
                 expected_absolute = (index.root_dir / expected_relative).resolve()
@@ -2789,8 +2818,10 @@ class ValidationPackSender:
                 bureau_values = finding.get("bureau_values")
                 if isinstance(bureau_values, Mapping):
                     for bureau, value in bureau_values.items():
-                        if isinstance(value, Mapping):
-                            records[str(bureau)] = {
+                        key = _normalize_bureau_key(bureau)
+                        if not key or not isinstance(value, Mapping):
+                            continue
+                        records[key] = {
                                 "raw": value.get("raw"),
                                 "normalized": value.get("normalized"),
                             }
@@ -3330,10 +3361,20 @@ class ValidationPackSender:
                 / validation_result_summary_filename_for_account(account_id)
             )
 
+        if self._write_json_envelope:
+            summary_parent = summary_path.parent if summary_path else results_root
+            summary_path = summary_parent / validation_result_json_filename_for_account(
+                account_id
+            )
+
         jsonl_path = _canonical_result_path(jsonl_path)
-        summary_path = _canonical_result_path(summary_path)
+        summary_path = _canonical_result_path(
+            summary_path, allow_json=self._write_json_envelope
+        )
         jsonl_display = _canonical_result_display(jsonl_display)
-        summary_display = _canonical_result_display(summary_display)
+        summary_display = _canonical_result_display(
+            summary_display, allow_json=self._write_json_envelope
+        )
 
         jsonl_path.parent.mkdir(parents=True, exist_ok=True)
 

@@ -13,7 +13,10 @@ from backend.core.ai.paths import (
     validation_logs_path,
     validation_pack_filename_for_account,
     validation_packs_dir,
+    validation_result_error_filename_for_account,
     validation_result_filename_for_account,
+    validation_result_json_filename_for_account,
+    validation_result_jsonl_filename_for_account,
     validation_results_dir,
 )
 from backend.core.logic import validation_ai_packs
@@ -88,6 +91,13 @@ def test_validation_path_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     )
     assert validation_result_filename_for_account(7) == "acc_007.result.jsonl"
     assert validation_result_filename_for_account("15") == "acc_015.result.jsonl"
+
+    monkeypatch.setenv("VALIDATION_RESULTS_BASENAME", "result_{account}")
+    monkeypatch.setenv("VALIDATION_WRITE_JSON", "1")
+    assert validation_result_jsonl_filename_for_account(7) == "result_7.jsonl"
+    assert validation_result_json_filename_for_account(7) == "result_7.json"
+    assert validation_result_filename_for_account(7) == "result_7.json"
+    assert validation_result_error_filename_for_account(7) == "result_7.error.json"
 
 
 def test_builder_creates_validation_structure(

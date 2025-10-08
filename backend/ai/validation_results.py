@@ -15,9 +15,12 @@ from backend.analytics.analytics_tracker import emit_counter
 from backend.core.ai.paths import (
     ensure_validation_paths,
     validation_pack_filename_for_account,
+    validation_result_json_filename_for_account,
+    validation_result_jsonl_filename_for_account,
     validation_result_summary_filename_for_account,
+    validation_write_json_enabled,
 )
-from backend.validation.io import write_jsonl
+from backend.validation.io import write_json, write_jsonl
 from backend.core.ai.eligibility_policy import (
     canonicalize_history,
     canonicalize_scalar,
@@ -466,6 +469,13 @@ def store_validation_result(
     summary_filename = validation_result_summary_filename_for_account(account_id)
     summary_path = validation_paths.results_dir / summary_filename
 
+    jsonl_filename = validation_result_jsonl_filename_for_account(account_id)
+    jsonl_path = validation_paths.results_dir / jsonl_filename
+    json_path = (
+        validation_paths.results_dir
+        / validation_result_json_filename_for_account(account_id)
+    )
+
     pack_filename = validation_pack_filename_for_account(account_id)
     pack_path = validation_paths.packs_dir / pack_filename
     pack_lookup = _load_pack_lookup(pack_path)
@@ -517,8 +527,16 @@ def store_validation_result(
     except (TypeError, ValueError):
         request_lines_count = len(decisions)
 
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    write_jsonl(summary_path, result_lines)
+    jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    write_jsonl(jsonl_path, result_lines)
+
+    if validation_write_json_enabled():
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json(json_path, normalized_payload)
+        summary_path = json_path
+    else:
+        summary_path = jsonl_path
+
     log.info(
         "VALIDATION_RESULTS_WRITTEN sid=%s account_id=%s summary=%s decisions=%s status=%s",
         sid,

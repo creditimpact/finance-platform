@@ -13,6 +13,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from backend.core.ai.paths import (
     validation_result_jsonl_filename_for_account,
     validation_result_summary_filename_for_account,
+    validation_write_json_enabled,
 )
 
 SCHEMA_VERSION = 2
@@ -79,6 +80,9 @@ def _canonicalize_result_json_path(value: str) -> str:
 
     name = candidate.name
     if not name.endswith(".result.json"):
+        return value
+
+    if validation_write_json_enabled():
         return value
 
     return candidate.with_suffix(".jsonl").as_posix()
@@ -306,7 +310,7 @@ class ValidationIndex:
 
         results_dir_relative = Path(_normalize_path_text(self.results_dir) or ".")
         result_dir = (self.root_dir / results_dir_relative).resolve()
-        filename = f"acc_{account_number:03d}.result.jsonl"
+        filename = validation_result_jsonl_filename_for_account(account_number)
         return result_dir / filename
 
     def resolve_result_json_path(self, record: ValidationPackRecord) -> Path:

@@ -1,11 +1,14 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from backend.ai.validation_builder import ValidationPackWriter
 from backend.ai.validation_results import store_validation_result
 from backend.core.ai.paths import (
     validation_pack_filename_for_account,
     validation_packs_dir,
+    validation_result_json_filename_for_account,
     validation_result_jsonl_filename_for_account,
     validation_result_summary_filename_for_account,
     validation_results_dir,
@@ -52,10 +55,12 @@ class _StubClient:
         return {"choices": [{"message": {"content": json.dumps(self._payload)}}]}
 
 
-def test_single_result_jsonl_only(tmp_path: Path) -> None:
+def test_single_result_jsonl_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sid = "SID500"
     account_id = 5
     runs_root = tmp_path / "runs"
+
+    monkeypatch.delenv("VALIDATION_WRITE_JSON", raising=False)
 
     finding = {
         "field": "account_type",
@@ -106,9 +111,11 @@ def test_single_result_jsonl_only(tmp_path: Path) -> None:
     results_dir = validation_results_dir(sid, runs_root=runs_root)
     summary_file = results_dir / validation_result_summary_filename_for_account(account_id)
     jsonl_file = results_dir / validation_result_jsonl_filename_for_account(account_id)
+    json_file = results_dir / validation_result_json_filename_for_account(account_id)
 
     assert summary_path == summary_file == jsonl_file
     assert summary_file.exists()
+    assert not json_file.exists()
 
     lines = [json.loads(line) for line in summary_file.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert lines == [
@@ -122,6 +129,76 @@ def test_single_result_jsonl_only(tmp_path: Path) -> None:
             "legacy_decision": "strong",
         }
     ]
+
+
+def test_store_validation_result_writes_json_envelope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID500J"
+    account_id = 8
+    runs_root = tmp_path / "runs"
+
+    monkeypatch.setenv("VALIDATION_WRITE_JSON", "1")
+
+    finding = {
+        "field": "account_type",
+        "is_mismatch": True,
+        "ai_needed": True,
+        "send_to_ai": True,
+        "bureau_values": {
+            "transunion": {"raw": "installment"},
+            "experian": {"raw": "installment"},
+            "equifax": {"raw": "installment"},
+        },
+    }
+
+    account_dir = runs_root / sid / "cases" / "accounts" / str(account_id)
+    _write_json(account_dir / "summary.json", _build_summary(finding))
+
+    writer = ValidationPackWriter(sid, runs_root=runs_root)
+    lines = writer.write_pack_for_account(account_id)
+    assert len(lines) == 1
+    field_id = str(lines[0].payload["id"])
+
+    response_payload = {
+        "decision_per_field": [
+            {
+                "id": field_id,
+                "decision": "strong",
+                "rationale": "Mismatch supports the consumer",
+                "citations": ["equifax: installment"],
+            }
+        ]
+    }
+
+    summary_path = store_validation_result(
+        sid,
+        account_id,
+        response_payload,
+        runs_root=runs_root,
+        status="done",
+    )
+
+    results_dir = validation_results_dir(sid, runs_root=runs_root)
+    json_file = results_dir / validation_result_json_filename_for_account(account_id)
+    jsonl_file = results_dir / validation_result_jsonl_filename_for_account(account_id)
+
+    assert summary_path == json_file
+    assert json_file.exists()
+    assert jsonl_file.exists()
+
+    payload = json.loads(json_file.read_text(encoding="utf-8"))
+    assert payload["status"] == "done"
+    assert payload["results"]
+    assert payload["results"][0]["id"] == field_id
+
+    lines = [
+        json.loads(line)
+        for line in jsonl_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(lines) == 1
+    assert lines[0]["citations"] == ["equifax: installment"]
 
 
 def test_sender_accepts_valid_json_response(tmp_path: Path) -> None:

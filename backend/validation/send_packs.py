@@ -78,6 +78,27 @@ _INDEX_FILE_WAIT_DELAY = 0.4
 _INDEX_FILE_MIN_SIZE = 20
 _DEFAULT_CONFIDENCE_THRESHOLD = 0.70
 _WRITE_JSON_ENVELOPE_ENV = "VALIDATION_WRITE_JSON_ENVELOPE"
+
+
+def _canonical_result_path(path: Path) -> Path:
+    """Normalize ``.result.json`` paths to the canonical ``.result.jsonl``."""
+
+    if path.suffix.lower() != ".json":
+        return path
+    if not path.name.endswith(".result.json"):
+        return path
+    return path.with_suffix(".jsonl")
+
+
+def _canonical_result_display(display: str | None) -> str | None:
+    """Normalize display paths so we never advertise ``.result.json`` outputs."""
+
+    if not display:
+        return display
+    normalized = display.replace("\\", "/")
+    if normalized.endswith(".result.json"):
+        return normalized[:-5] + "jsonl"
+    return normalized
 _VALIDATION_MAX_RETRIES_ENV = "VALIDATION_MAX_RETRIES"
 _DEFAULT_VALIDATION_MAX_RETRIES = 2
 _VALIDATION_REQUEST_GROUP_SIZE = 1
@@ -3122,6 +3143,11 @@ class ValidationPackSender:
                 / validation_result_summary_filename_for_account(account_id)
             )
 
+        jsonl_path = _canonical_result_path(jsonl_path)
+        summary_path = _canonical_result_path(summary_path)
+        jsonl_display = _canonical_result_display(jsonl_display)
+        summary_display = _canonical_result_display(summary_display)
+
         jsonl_path.parent.mkdir(parents=True, exist_ok=True)
 
         serialized_lines: list[dict[str, Any]] = []
@@ -3139,8 +3165,14 @@ class ValidationPackSender:
                 except Exception:
                     alias_name = None
             if alias_name and alias_name != jsonl_path.name:
-                alias_path = jsonl_path.with_name(alias_name)
-                write_jsonl(alias_path, serialized_lines)
+                alias_suffix = PurePosixPath(alias_name).suffix.lower()
+                if alias_suffix == ".jsonl":
+                    alias_path = jsonl_path.with_name(alias_name)
+                    write_jsonl(alias_path, serialized_lines)
+                else:
+                    log.debug(
+                        "VALIDATION_SKIP_RESULT_ALIAS jsonl=%s alias=%s", jsonl_path, alias_name
+                    )
         else:
             try:
                 jsonl_path.unlink()

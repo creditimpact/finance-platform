@@ -108,6 +108,7 @@ _DEFAULT_CONFIDENCE_THRESHOLD = 0.70
 _WRITE_JSON_ENVELOPE_ENV = "VALIDATION_WRITE_JSON_ENVELOPE"
 _VALIDATION_MAX_RETRIES_ENV = "VALIDATION_MAX_RETRIES"
 _DEFAULT_VALIDATION_MAX_RETRIES = 2
+_VALIDATION_REQUEST_GROUP_SIZE = 1
 
 
 log = logging.getLogger(__name__)
@@ -1381,6 +1382,7 @@ class ValidationPackSender:
         self._default_queue = (
             self._infer_queue_hint(self._index.packs) or _DEFAULT_QUEUE_NAME
         )
+        self._request_group_size = _VALIDATION_REQUEST_GROUP_SIZE
         envelope_flag = _coerce_bool_flag(os.getenv(_WRITE_JSON_ENVELOPE_ENV))
         if envelope_flag:
             log.info(
@@ -1933,6 +1935,13 @@ class ValidationPackSender:
         error_path = result_summary_path.with_name(error_filename)
         self._clear_error_sidecar(error_path, pack_id=pack_identifier)
 
+        if self._request_group_size != _VALIDATION_REQUEST_GROUP_SIZE:
+            log.warning(
+                "VALIDATION_REQUEST_GROUP_SIZE_OVERRIDE size=%s forcing=%s",
+                self._request_group_size,
+                _VALIDATION_REQUEST_GROUP_SIZE,
+            )
+
         if self._write_json_envelope:
             result_target_path = result_summary_path
             result_target_display = result_summary_display
@@ -1982,6 +1991,7 @@ class ValidationPackSender:
         failed_line_ids: list[str] = []
         current_line_id: str | None = None
         start_time = time.monotonic()
+        model_requests = 0
 
         self._log(
             "send_account_start",
@@ -2023,6 +2033,7 @@ class ValidationPackSender:
                     )
                 else:
                     try:
+                        model_requests += 1
                         response = self._call_model(
                             pack_line,
                             account_id=account_int,
@@ -2114,6 +2125,7 @@ class ValidationPackSender:
             "fields_skipped": max(total_fields - fields_sent, 0),
             "conditional_fields_sent": conditional_sent,
             "decision_counts": decision_metrics,
+            "model_requests": model_requests,
         }
         jsonl_path, summary_path = self._write_results(
             account_int,
@@ -2137,7 +2149,7 @@ class ValidationPackSender:
             "jsonl_manifest_path": result_jsonl_display,
             "status": status,
             "model": self.model,
-            "request_lines": len(pack_lines),
+            "request_lines": model_requests,
             "results": result_lines,
             "completed_at": _utc_now(),
         }
@@ -2228,6 +2240,7 @@ class ValidationPackSender:
             "fields_skipped": 0,
             "conditional_fields_sent": 0,
             "decision_counts": _empty_decision_metrics(),
+            "model_requests": 0,
         }
         summary_payload["metrics"] = metrics_payload
         self._log(

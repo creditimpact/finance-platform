@@ -95,6 +95,7 @@ $env:VALIDATION_RESULTS_BASENAME = "acc_{account}.result"  # code appends .jsonl
 # guard envelopes OFF by default
 $env:VALIDATION_WRITE_JSON_ENVELOPE = "0"
 $env:VALIDATION_MAX_RETRIES = "2"
+$env:VALIDATION_REQUEST_GROUP_SIZE = "1"
 
 # queues
 $PY = "$PWD\.venv\Scripts\python.exe"

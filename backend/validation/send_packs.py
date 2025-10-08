@@ -101,6 +101,7 @@ def _canonical_result_display(display: str | None) -> str | None:
     return normalized
 _VALIDATION_MAX_RETRIES_ENV = "VALIDATION_MAX_RETRIES"
 _DEFAULT_VALIDATION_MAX_RETRIES = 2
+_VALIDATION_REQUEST_GROUP_SIZE_ENV = "VALIDATION_REQUEST_GROUP_SIZE"
 _VALIDATION_REQUEST_GROUP_SIZE = 1
 
 
@@ -151,6 +152,38 @@ def _coerce_int_value(value: Any, default: int = 1) -> int:
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _resolve_request_group_size() -> int:
+    raw = os.getenv(_VALIDATION_REQUEST_GROUP_SIZE_ENV)
+    if raw is None:
+        return _VALIDATION_REQUEST_GROUP_SIZE
+    text = str(raw).strip()
+    if not text:
+        return _VALIDATION_REQUEST_GROUP_SIZE
+    try:
+        size = int(text)
+    except (TypeError, ValueError):
+        log.warning(
+            "VALIDATION_REQUEST_GROUP_SIZE_PARSE_FAILED value=%s forcing=%s",
+            raw,
+            _VALIDATION_REQUEST_GROUP_SIZE,
+        )
+        return _VALIDATION_REQUEST_GROUP_SIZE
+    if size < 1:
+        log.warning(
+            "VALIDATION_REQUEST_GROUP_SIZE_INVALID size=%s forcing=%s",
+            size,
+            _VALIDATION_REQUEST_GROUP_SIZE,
+        )
+        return _VALIDATION_REQUEST_GROUP_SIZE
+    if size != _VALIDATION_REQUEST_GROUP_SIZE:
+        log.warning(
+            "VALIDATION_REQUEST_GROUP_SIZE_OVERRIDE size=%s forcing=%s",
+            size,
+            _VALIDATION_REQUEST_GROUP_SIZE,
+        )
+    return _VALIDATION_REQUEST_GROUP_SIZE
 
 
 def _extract_bureau_records(
@@ -1553,7 +1586,7 @@ class ValidationPackSender:
         self._default_queue = (
             self._infer_queue_hint(self._index.packs) or _DEFAULT_QUEUE_NAME
         )
-        self._request_group_size = _VALIDATION_REQUEST_GROUP_SIZE
+        self._request_group_size = _resolve_request_group_size()
         envelope_flag = _coerce_bool_flag(os.getenv(_WRITE_JSON_ENVELOPE_ENV))
         if envelope_flag:
             log.info(
@@ -2105,13 +2138,6 @@ class ValidationPackSender:
         error_filename = validation_result_error_filename_for_account(account_int)
         error_path = result_summary_path.with_name(error_filename)
         self._clear_error_sidecar(error_path, pack_id=pack_identifier)
-
-        if self._request_group_size != _VALIDATION_REQUEST_GROUP_SIZE:
-            log.warning(
-                "VALIDATION_REQUEST_GROUP_SIZE_OVERRIDE size=%s forcing=%s",
-                self._request_group_size,
-                _VALIDATION_REQUEST_GROUP_SIZE,
-            )
 
         if self._write_json_envelope:
             result_target_path = result_summary_path

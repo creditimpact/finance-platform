@@ -6,6 +6,7 @@ import pytest
 
 from backend.pipeline.runs import _utc_now
 from backend.validation.index_schema import ValidationIndex, ValidationPackRecord
+from backend.validation.io import write_jsonl
 from backend.validation.send_packs import (
     ValidationPackError,
     ValidationPackSender,
@@ -140,6 +141,86 @@ def test_send_to_ai_false_uses_deterministic_path(
     assert not (results_dir / "acc_001.result.json").exists()
 
 
+def test_process_account_skips_when_results_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sender, packs_dir, results_dir, record = _build_sender(tmp_path, monkeypatch)
+
+    pack_path = packs_dir / "val_acc_001.jsonl"
+    pack_lines = [
+        {
+            "id": "custom-line-1",
+            "field": "account_type",
+            "sid": "S123",
+        },
+        {
+            "id": "custom-line-2",
+            "field": "balance_owed",
+            "sid": "S123",
+        },
+    ]
+    pack_payload = "\n".join(json.dumps(line) for line in pack_lines) + "\n"
+    pack_path.write_text(pack_payload, encoding="utf-8")
+
+    existing_results = [
+        {
+            "id": "custom-line-1",
+            "account_id": 1,
+            "field": "account_type",
+            "decision": "strong_actionable",
+            "rationale": "Cached strong decision",
+            "citations": ["equifax: revolving"],
+        },
+        {
+            "id": "custom-line-2",
+            "account_id": 1,
+            "field": "balance_owed",
+            "decision": "no_case",
+            "rationale": "Cached no case",
+            "citations": [],
+        },
+    ]
+
+    result_jsonl_path = results_dir / "acc_001.result.jsonl"
+    write_jsonl(result_jsonl_path, existing_results)
+
+    def _fail_call(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("model should not be invoked when results exist")
+
+    sender._call_model = _fail_call  # type: ignore[assignment]
+
+    before_stat = result_jsonl_path.stat()
+
+    summary = sender._process_account(
+        record.account_id,
+        record.account_id,
+        pack_path,
+        record.pack,
+        result_jsonl_path,
+        record.result_jsonl,
+        result_jsonl_path,
+        record.result_json,
+    )
+
+    after_stat = result_jsonl_path.stat()
+
+    assert summary["status"] == "skipped"
+    assert summary["results"] == existing_results
+    assert summary["metrics"]["fields_sent"] == 2
+    assert summary["metrics"]["fields_skipped"] == 0
+    assert summary["metrics"]["conditional_fields_sent"] == 0
+    assert summary["metrics"]["model_requests"] == 0
+    assert (
+        summary["metrics"]["decision_counts"]["strong_actionable"]["non_conditional"]
+        == 1
+    )
+    assert summary["metrics"]["decision_counts"]["no_case"]["non_conditional"] == 1
+
+    assert before_stat.st_mtime_ns == after_stat.st_mtime_ns
+    assert list(results_dir.glob("acc_001.result.jsonl"))
+    assert not list(results_dir.glob("acc_001.result.jsonl.tmp"))
+
+
 class _StubClient:
     def __init__(self, responses: list[dict[str, Any]]) -> None:
         self._responses = responses
@@ -180,6 +261,24 @@ def test_call_model_retries_with_correction_suffix(
             },
             "documents": ["statement"],
         },
+        "prompt": {
+            "system": "You are a helpful assistant.",
+            "user": "Please review the finding.",
+        },
+        "expected_output": {
+            "type": "object",
+            "properties": {
+                "decision": {"type": "string"},
+                "rationale": {"type": "string"},
+                "citations": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                },
+            },
+            "required": ["decision", "rationale", "citations"],
+            "additionalProperties": True,
+        },
     }
 
     invalid_response = {
@@ -192,7 +291,7 @@ def test_call_model_retries_with_correction_suffix(
                             "account_id": 1,
                             "id": "line-1",
                             "field": "account_type",
-                            "decision": "strong",
+                            "decision": "strong_actionable",
                             "rationale": "Account type mismatch",
                             "citations": [],
                             "reason_code": "C4_TWO_MATCH_ONE_DIFF",
@@ -220,7 +319,7 @@ def test_call_model_retries_with_correction_suffix(
                             "account_id": 1,
                             "id": "line-1",
                             "field": "account_type",
-                            "decision": "strong",
+                            "decision": "strong_actionable",
                             "rationale": "Account type mismatch (C4_TWO_MATCH_ONE_DIFF)",
                             "citations": ["equifax: revolving"],
                             "reason_code": "C4_TWO_MATCH_ONE_DIFF",
@@ -258,6 +357,6 @@ def test_call_model_retries_with_correction_suffix(
     assert "FIX:" in retry_prompt
     assert "invalid" in retry_prompt
     assert result["citations"] == ["equifax: revolving"]
-    assert result["decision"] == "strong"
+    assert result["decision"] == "strong_actionable"
 
 

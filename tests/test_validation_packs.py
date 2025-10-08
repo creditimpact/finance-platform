@@ -16,6 +16,7 @@ sys.modules.setdefault(
 
 from backend.ai.validation_builder import (
     ValidationPackWriter,
+    build_line,
     build_validation_pack_for_account,
 )
 from backend.ai.validation_index import ValidationIndexEntry, ValidationPackIndexWriter
@@ -41,6 +42,61 @@ def _read_json(path: Path) -> Mapping[str, Any]:
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def _build_generic_specific_finding(
+    *,
+    majority: str,
+    minority: str,
+) -> Mapping[str, Any]:
+    return {
+        "reason_code": "C4_TWO_MATCH_ONE_DIFF",
+        "bureau_values": {
+            "equifax": {"normalized": majority},
+            "experian": {"normalized": majority},
+            "transunion": {"normalized": minority},
+        },
+    }
+
+
+def test_build_line_appends_generic_specific_hint() -> None:
+    hint = (
+        "For account_type with C4 generic-vs-specific wording, default is not material unless category changes (e.g., revolving vs installment)."
+    )
+    finding = _build_generic_specific_finding(
+        majority="Conventional real estate mortgage",
+        minority="Real estate mortgage",
+    )
+
+    line = build_line(
+        sid="SID-HINT",
+        account_id=1,
+        field="account_type",
+        finding=finding,
+    )
+
+    assert line is not None
+    system_prompt = line["prompt"]["system"]
+    assert system_prompt.splitlines()[-1] == hint
+
+
+def test_build_line_skips_hint_for_category_change() -> None:
+    hint = "For account_type with C4 generic-vs-specific wording, default is not material unless category changes (e.g., revolving vs installment)."
+    finding = _build_generic_specific_finding(
+        majority="Revolving",
+        minority="Installment",
+    )
+
+    line = build_line(
+        sid="SID-HINT",
+        account_id=1,
+        field="account_type",
+        finding=finding,
+    )
+
+    assert line is not None
+    system_prompt = line["prompt"]["system"]
+    assert hint not in system_prompt
 
 
 def test_validation_pack_path_generation(tmp_path: Path) -> None:

@@ -37,6 +37,7 @@ from backend.validation.index_schema import (
     ValidationPackRecord,
     load_validation_index,
 )
+from backend.validation.prompt_templates import render_validation_prompt
 from backend.validation.schema import validate_llm_decision
 
 from backend.pipeline.runs import RunManifest, persist_manifest, _utc_now
@@ -2162,20 +2163,47 @@ class ValidationPackSender:
         result_path: Path,
         result_display: str,
     ) -> Mapping[str, Any]:
-        prompt = pack_line.get("prompt")
-        if not isinstance(prompt, Mapping):
-            raise ValidationPackError("Pack line missing prompt")
+        sid_value = str(pack_line.get("sid") or self.sid)
 
-        system_prompt = str(prompt.get("system") or "")
-        user_payload = prompt.get("user")
-        try:
-            user_message = json.dumps(user_payload, ensure_ascii=False, sort_keys=True)
-        except Exception as exc:
-            raise ValidationPackError(f"Unable to serialise user payload: {exc}")
+        reason_code = pack_line.get("reason_code")
+        if not isinstance(reason_code, str) or not reason_code.strip():
+            raise ValidationPackError("Pack line missing reason_code")
+
+        reason_label = pack_line.get("reason_label")
+        if not isinstance(reason_label, str):
+            reason_label = "" if reason_label is None else str(reason_label)
+
+        finding_payload: Any
+        finding_payload = pack_line.get("finding_json")
+        if not isinstance(finding_payload, str) or not finding_payload.strip():
+            fallback_finding = pack_line.get("finding")
+            if fallback_finding is None:
+                fallback_finding = {
+                    key: value
+                    for key, value in pack_line.items()
+                    if key
+                    in {
+                        "field",
+                        "bureaus",
+                        "context",
+                        "documents",
+                        "reason_code",
+                        "reason_label",
+                    }
+                }
+            finding_payload = fallback_finding
+
+        system_prompt, user_prompt = render_validation_prompt(
+            sid=sid_value,
+            reason_code=reason_code,
+            reason_label=reason_label,
+            documents=pack_line.get("documents"),
+            finding=finding_payload,
+        )
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
+            {"role": "user", "content": user_prompt},
         ]
         def _record_sidecar(status: int, body: str) -> None:
             try:

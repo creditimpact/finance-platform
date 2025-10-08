@@ -1769,17 +1769,40 @@ class ValidationPackSender:
                     account_id=f"{normalized_account:03d}",
                     error=error_message,
                 )
-                account_summary = self._record_account_failure(
-                    normalized_account,
-                    resolved_pack,
-                    pack_relative,
-                    result_jsonl_path,
-                    result_jsonl_relative,
-                    result_json_path,
-                    result_json_relative,
-                    error_message,
+                continue
+
+            if not resolved_pack.exists():
+                missing_display = pack_relative or self._display_path(
+                    resolved_pack, base=index.index_dir
                 )
-                results.append(account_summary)
+                error_message = f"Pack file missing: {missing_display}"
+                log.warning(
+                    "VALIDATION_PACK_MISSING sid=%s account_id=%s pack=%s",
+                    self.sid,
+                    account_label,
+                    missing_display,
+                )
+                log.error(
+                    "VALIDATION_SEND_ACCOUNT_FAILED sid=%s account_id=%s pack=%s exc_type=%s message=%s line_ids=%s",
+                    self.sid,
+                    account_label,
+                    str(resolved_pack),
+                    "FileNotFoundError",
+                    error_message,
+                    [],
+                )
+                if normalized_account is None:
+                    self._log(
+                        "send_account_failed",
+                        account_id=str(account_id),
+                        error=error_message,
+                    )
+                else:
+                    self._log(
+                        "send_account_failed",
+                        account_id=f"{normalized_account:03d}",
+                        error=error_message,
+                    )
                 continue
 
             if self._write_json_envelope:
@@ -2919,7 +2942,13 @@ class ValidationPackSender:
                 raise TypeError("Result line must be a mapping to serialize as JSONL")
             serialized_lines.append(dict(line))
 
-        write_jsonl(jsonl_path, serialized_lines)
+        if serialized_lines:
+            write_jsonl(jsonl_path, serialized_lines)
+        else:
+            try:
+                jsonl_path.unlink()
+            except FileNotFoundError:
+                pass
 
         summary_target = summary_path
         summary_display_value: str

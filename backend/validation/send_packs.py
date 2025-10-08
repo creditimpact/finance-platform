@@ -2180,6 +2180,8 @@ class ValidationPackSender:
             lines=len(pack_lines),
         )
 
+        structured_retry_limit = _validation_max_retries()
+
         try:
             for idx, pack_line in enumerate(pack_lines, start=1):
                 field_name = self._coerce_field_name(pack_line, idx)
@@ -2203,6 +2205,8 @@ class ValidationPackSender:
                 else:
                     send_flag = _coerce_bool_flag(raw_send_flag)
 
+                prevalidated: tuple[dict[str, Any] | None, list[str], str] | None = None
+
                 if send_flag is False:
                     response = self._build_deterministic_response(
                         pack_line,
@@ -2211,19 +2215,44 @@ class ValidationPackSender:
                         line_id=current_line_id,
                     )
                 else:
+                    validation_attempt = 0
                     try:
-                        model_requests += 1
-                        response = self._call_model(
-                            pack_line,
-                            account_id=account_int,
-                            account_label=f"{account_int:03d}",
-                            line_number=idx,
-                            line_id=current_line_id,
-                            pack_id=pack_identifier,
-                            error_path=error_path,
-                            result_path=result_target_path,
-                            result_display=result_target_display,
-                        )
+                        while True:
+                            model_requests += 1
+                            response = self._call_model(
+                                pack_line,
+                                account_id=account_int,
+                                account_label=f"{account_int:03d}",
+                                line_number=idx,
+                                line_id=current_line_id,
+                                pack_id=pack_identifier,
+                                error_path=error_path,
+                                result_path=result_target_path,
+                                result_display=result_target_display,
+                            )
+
+                            prevalidated = self._validate_response_payload(
+                                response, pack_line
+                            )
+                            normalized_response, schema_errors, schema_mode = prevalidated
+                            if (
+                                schema_mode == "structured"
+                                and normalized_response is None
+                                and schema_errors
+                                and validation_attempt < structured_retry_limit
+                            ):
+                                validation_attempt += 1
+                                log.warning(
+                                    "VALIDATION_STRUCTURED_RESPONSE_RETRY sid=%s account_id=%03d line_id=%s attempt=%s errors=%s",
+                                    self.sid,
+                                    account_int,
+                                    current_line_id,
+                                    validation_attempt,
+                                    schema_errors,
+                                )
+                                prevalidated = None
+                                continue
+                            break
                     except Exception as exc:
                         error_message = (
                             "AI request failed for acc "
@@ -2247,8 +2276,13 @@ class ValidationPackSender:
                             line_id=current_line_id,
                             line_number=idx,
                         )
+                        prevalidated = None
                 line_result, metadata = self._build_result_line(
-                    account_int, idx, pack_line, response
+                    account_int,
+                    idx,
+                    pack_line,
+                    response,
+                    prevalidated=prevalidated,
                 )
                 result_lines.append(line_result)
                 fields_sent += 1
@@ -2993,12 +3027,17 @@ class ValidationPackSender:
         line_number: int,
         pack_line: Mapping[str, Any],
         response: Mapping[str, Any],
+        *,
+        prevalidated: tuple[dict[str, Any] | None, list[str], str] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         line_id = self._coerce_identifier(account_id, line_number, pack_line.get("id"))
         field = self._coerce_field_name(pack_line, line_number)
-        normalized_response, schema_errors, schema_mode = self._validate_response_payload(
-            response, pack_line
-        )
+        if prevalidated is None:
+            normalized_response, schema_errors, schema_mode = self._validate_response_payload(
+                response, pack_line
+            )
+        else:
+            normalized_response, schema_errors, schema_mode = prevalidated
 
         guardrail_info: dict[str, Any] | None = None
         labels: list[str] = []

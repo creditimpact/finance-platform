@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.core.ai.paths import validation_result_jsonl_filename_for_account
 from backend.validation.send_packs import ValidationPackSender
 
 
@@ -25,6 +26,14 @@ class _FixedResponseStubClient:
 
     def create(self, *, model: str, messages, response_format, **_: object):  # type: ignore[override]
         return {"choices": [{"message": {"content": json.dumps(self._payload)}}]}
+
+
+class _InvalidJSONStubClient:
+    def __init__(self, content: str):
+        self._content = content
+
+    def create(self, *, model: str, messages, response_format, **_: object):  # type: ignore[override]
+        return {"choices": [{"message": {"content": self._content}}]}
 
 _EXPECTED_OUTPUT = {
     "type": "object",
@@ -170,7 +179,9 @@ def test_validation_sender_smoke_writes_results(
     assert {item["account_id"] for item in results} == {1, 2}
 
     for account_id in (1, 2):
-        jsonl_file = results_dir / f"account_{account_id:03d}.result.jsonl"
+        jsonl_file = results_dir / validation_result_jsonl_filename_for_account(
+            account_id
+        )
 
         assert jsonl_file.is_file()
 
@@ -201,7 +212,7 @@ def test_validation_sender_invalid_response_guardrail(
         "account_id": 1,
         "id": "Field 1",
         "field": "Field 1",
-        "decision": "strong",
+        "decision": "strong_actionable",
         "rationale": "Guardrail test (FIELD_MISMATCH).",
         # Missing citations to force schema validation failure
         "reason_code": "FIELD_MISMATCH",
@@ -219,18 +230,16 @@ def test_validation_sender_invalid_response_guardrail(
     )
     sender.send()
 
-    summary_path = results_dir / "account_001.result.jsonl"
+    summary_path = results_dir / validation_result_jsonl_filename_for_account(1)
     lines = [json.loads(line) for line in summary_path.read_text(encoding="utf-8").splitlines() if line]
     assert lines
     result_entry = lines[0]
 
     assert result_entry["decision"] == "no_case"
-    assert result_entry["rationale"] == (
-        "No valid model response; deterministic fallback. "
-        "[guardrail:invalid_response]"
-    )
+    assert result_entry["rationale"] == "schema_mismatch [guardrail:invalid_response]"
     assert "labels" not in result_entry
     assert result_entry["legacy_decision"] == "no_case"
+    assert result_entry.get("citations") == ["system:none"]
 
     counters = analytics_tracker.get_counters()
     assert counters.get("validation.ai.response_invalid", 0) >= 1
@@ -253,9 +262,15 @@ def test_validation_sender_low_confidence_guardrail(
         "account_id": 1,
         "id": "Field 1",
         "field": "Field 1",
-        "decision": "strong",
+        "decision": "strong_actionable",
         "rationale": "Low confidence test (FIELD_MISMATCH).",
         "citations": ["equifax: value"],
+        "checks": {
+            "materiality": True,
+            "supports_consumer": True,
+            "doc_requirements_met": True,
+            "mismatch_code": "FIELD_MISMATCH",
+        },
         "reason_code": "FIELD_MISMATCH",
         "reason_label": "Field 1 mismatch",
         "modifiers": {
@@ -272,7 +287,7 @@ def test_validation_sender_low_confidence_guardrail(
     )
     sender.send()
 
-    summary_path = results_dir / "account_001.result.jsonl"
+    summary_path = results_dir / validation_result_jsonl_filename_for_account(1)
     lines = [json.loads(line) for line in summary_path.read_text(encoding="utf-8").splitlines() if line]
     assert lines
     result_entry = lines[0]
@@ -285,3 +300,25 @@ def test_validation_sender_low_confidence_guardrail(
 
     counters = analytics_tracker.get_counters()
     assert counters.get("validation.ai.response_low_confidence", 0) >= 1
+
+
+def test_validation_sender_invalid_json_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, index_path, results_dir = _seed_manifest(tmp_path, [1], sid="BADJSON1")
+    monkeypatch.setenv("AI_MODEL", "stub-model")
+    monkeypatch.setenv("VALIDATION_SINGLE_RESULT_FILE", "0")
+
+    sender = ValidationPackSender(
+        index_path, http_client=_InvalidJSONStubClient("not valid json")
+    )
+    sender.send()
+
+    summary_path = results_dir / validation_result_jsonl_filename_for_account(1)
+    lines = [json.loads(line) for line in summary_path.read_text(encoding="utf-8").splitlines() if line]
+    assert lines
+    result_entry = lines[0]
+
+    assert result_entry["decision"] == "no_case"
+    assert result_entry["rationale"] == "schema_mismatch"
+    assert result_entry["citations"] == ["system:none"]

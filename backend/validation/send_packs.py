@@ -451,55 +451,17 @@ def validate_and_normalize(
     return normalized, []
 
 
-def make_fallback_decision(finding: Mapping[str, Any] | None) -> dict[str, Any]:
-    account_raw = None
-    if isinstance(finding, Mapping):
-        account_raw = finding.get("account_id")
-    try:
-        account_id = int(account_raw) if account_raw is not None else 0
-    except (TypeError, ValueError):
-        account_id = 0
-
-    if isinstance(finding, Mapping):
-        raw_id = finding.get("id")
-    else:
-        raw_id = None
-    decision_id = ""
-    if raw_id is not None:
-        try:
-            candidate = str(raw_id).strip()
-        except Exception:
-            candidate = ""
-        if candidate:
-            decision_id = candidate
-    if not decision_id:
-        field_name = "field"
-        if isinstance(finding, Mapping):
-            raw_field = finding.get("field")
-            if isinstance(raw_field, str) and raw_field.strip():
-                field_name = raw_field.strip()
-        slug = re.sub(r"[^a-z0-9]+", "_", field_name.lower()).strip("_") or "field"
-        if account_id:
-            decision_id = f"acc_{account_id:03d}__{slug}"
-        else:
-            decision_id = f"acc__{slug}"
-
-    if isinstance(finding, Mapping):
-        raw_field = finding.get("field")
-        if isinstance(raw_field, str) and raw_field.strip():
-            field_value = raw_field.strip()
-        else:
-            field_value = "unknown"
-    else:
-        field_value = "unknown"
-
+def make_fallback_decision(_: Mapping[str, Any] | None) -> dict[str, Any]:
     return {
-        "account_id": account_id,
-        "id": decision_id,
-        "field": field_value,
         "decision": "no_case",
-        "rationale": "No valid model response; deterministic fallback.",
-        "citations": [],
+        "rationale": "schema_mismatch",
+        "citations": ["system:none"],
+        "checks": {
+            "materiality": False,
+            "supports_consumer": False,
+            "doc_requirements_met": False,
+            "mismatch_code": "unknown",
+        },
     }
 
 
@@ -3105,11 +3067,27 @@ class ValidationPackSender:
             try:
                 parsed = json.loads(content)
             except json.JSONDecodeError as exc:
-                log.error("VALIDATION_EMPTY_RESPONSE pack=%s", pack_id)
+                log.warning(
+                    "VALIDATION_RESPONSE_PARSE_FAILED sid=%s account_id=%s line_id=%s reason=%s raw=%r",
+                    self.sid,
+                    account_label,
+                    line_id,
+                    exc,
+                    content,
+                )
                 _record_sidecar(int(status_code), content)
-                raise ValidationPackError(f"Model response is not valid JSON: {exc}")
+                return make_fallback_decision(pack_line)
             if not isinstance(parsed, Mapping):
-                raise ValidationPackError("Model response is not an object")
+                log.warning(
+                    "VALIDATION_RESPONSE_NOT_OBJECT sid=%s account_id=%s line_id=%s type=%s raw=%r",
+                    self.sid,
+                    account_label,
+                    line_id,
+                    type(parsed).__name__,
+                    content,
+                )
+                _record_sidecar(int(status_code), content)
+                return make_fallback_decision(pack_line)
 
             normalized_response, errors, _ = self._validate_response_payload(
                 parsed, pack_line
@@ -3221,10 +3199,16 @@ class ValidationPackSender:
         labels: list[str] = []
         if normalized_response is None:
             emit_counter("validation.ai.response_invalid")
+            raw_response: str
+            try:
+                raw_response = json.dumps(response, ensure_ascii=False, sort_keys=True)
+            except Exception:
+                raw_response = repr(response)
             log.warning(
-                "VALIDATION_AI_RESPONSE_INVALID field=%s errors=%s",
+                "VALIDATION_AI_RESPONSE_INVALID field=%s errors=%s raw=%s",
                 field,
                 schema_errors,
+                raw_response,
             )
             original_decision = self._normalize_decision(response.get("decision"))
             if isinstance(pack_line, Mapping):
@@ -3255,7 +3239,7 @@ class ValidationPackSender:
             labels = list(normalized_response.get("labels", []))
 
             if (
-                decision == "strong"
+                decision == "strong_actionable"
                 and confidence is not None
                 and confidence < self._confidence_threshold
             ):

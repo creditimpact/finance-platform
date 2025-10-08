@@ -6,32 +6,41 @@ import json
 from typing import Any, Sequence
 
 _VALIDATION_PROMPT_TEMPLATE = """SYSTEM:
-You are an adjudication assistant for credit-report disputes. Use ONLY the JSON pack provided.
-Do not assume facts not present. Output STRICT JSON only (one object), suitable for JSONL.
+Project: credit-analyzer
+Module: Validation / AI Adjudication
+
+The validation system detects discrepancies between credit bureaus’ reported values for each field (Equifax, Experian, TransUnion).
+It doesn’t understand language or legal reasoning — that’s why findings are sent to the AI adjudicator.
+
+Your job is to decide whether the bureau statements conflict in a way that creates usable evidence for a consumer dispute.
+You are not deciding which bureau is correct; you are determining whether the mismatch is strong enough that a bureau would be obligated or reasonably expected to investigate or correct it if disputed.
+Assume the consumer claims the most favorable version is accurate.
+The detection platform already confirmed the numbers/strings differ — focus only on linguistic and legal significance.
+Use ONLY the JSON pack provided. Output STRICT JSON only (one object) suitable for JSONL.
 
 USER:
-You must decide how actionable this field is for a consumer dispute against the bureaus.
+Evaluate the bureau statements below and determine how actionable this field is for a consumer dispute.
 
-Practical meaning of decisions:
-- "strong": This field alone provides a sufficient, material basis to open a dispute that compels a bureau reinvestigation.
-- "supportive": Not sufficient alone, but meaningfully strengthens a dispute when bundled with at least one other strong field.
-- "neutral": Low added value; may be included for context only.
-- "no_case": Do not use this field for a dispute.
+Decision outcomes:
+- "strong_actionable": Alone, this discrepancy materially alters consumer treatment (e.g., charged-off vs paid) and justifies a formal dispute.
+- "supportive_needs_companion": Meaningful difference that supports a dispute but needs another strong field to stand on.
+- "neutral_context_only": Minor or contextual wording differences that do not change the legal meaning on their own.
+- "no_case": Difference lacks dispute value or cannot be substantiated.
 
-Decision policy (apply in order):
-1) Prefer normalized values when available; otherwise use raw.
-2) Treat C5 (all different) as material unless differences are non-semantic/noisy.
-3) Treat C4 (two match, one differs) as supportive by default; upgrade to strong if the differing value meaningfully changes consumer treatment (e.g., account_type).
-4) History/timeline: If there’s a consistent span ≥ 18 months that helps anchor chronology, set modifiers.time_anchor=true (this alone does NOT make the field "strong").
-5) If specific documents are essential to make the field actionable, set modifiers.doc_dependency=true.
+Evaluation guidance:
+- Minor descriptive or redundant wording (e.g., "real estate mortgage" vs "conventional real estate mortgage") ⇒ neutral_context_only.
+- Clear categorical conflicts (e.g., "secured loan" vs "unsecured loan", "charged-off" vs "paid as agreed") ⇒ strong_actionable.
+- Same concept with different synonyms (e.g., "auto loan" vs "vehicle loan") ⇒ neutral_context_only.
+- Differences like "mortgage" vs "HELOC" can be supportive_needs_companion when they signal a shift in product type but need corroboration.
+- Prefer normalized values when available; otherwise cite raw text.
 
-You MUST output exactly one JSON object with the following shape:
+Output exactly one JSON object with the following shape:
 {
   "sid": string,
   "account_id": number,
   "id": string,
   "field": string,
-  "decision": "strong" | "supportive" | "neutral" | "no_case",
+  "decision": "strong_actionable" | "supportive_needs_companion" | "neutral_context_only" | "no_case",
   "rationale": string,   // ≤120 words and MUST include the exact reason_code
   "citations": string[], // ≥1 items, each "<bureau>: <normalized OR raw>"
   "reason_code": string,
@@ -44,6 +53,11 @@ You MUST output exactly one JSON object with the following shape:
   "confidence": number    // 0.0–1.0
 }
 
+Modifiers:
+- Set modifiers.material_mismatch=true only when the wording changes consumer obligations/rights.
+- Set modifiers.time_anchor=true if the field itself pins a ≥18 month timeline relevant to the dispute.
+- Set modifiers.doc_dependency=true only when specific documents from documents_required are essential; otherwise false.
+
 Context:
 - sid: {{sid}}
 - reason_code: {{reason_code}}
@@ -55,9 +69,9 @@ Field finding (verbatim JSON):
 
 Hard constraints:
 - Output JSON only (no prose), ONE object.
-- Rationale MUST contain {{reason_code}} literally.
-- citations MUST be non-empty and name at least one bureau you relied on, e.g. "equifax: conventional real estate mortgage".
-- If normalized is present, cite normalized; otherwise cite raw.
+- Rationale MUST contain {{reason_code}} literally and explain the legal significance (not detection mechanics).
+- Citations MUST name at least one bureau you relied on, e.g. "equifax: charged-off".
+- Assume the consumer stands by the most favorable bureau wording when assessing dispute value.
 
 Rendering details:
 

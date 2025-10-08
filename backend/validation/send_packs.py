@@ -1453,7 +1453,26 @@ class ValidationPackSender:
 
         for record in index.packs:
             pack_path = index.resolve_pack_path(record)
-            result_jsonl_path = index.resolve_result_jsonl_path(record)
+            try:
+                result_jsonl_path = index.resolve_result_jsonl_path(record)
+            except ValueError as exc:
+                try:
+                    normalized_account = int(record.account_id)
+                    expected_filename = f"acc_{normalized_account:03d}.result.jsonl"
+                except (TypeError, ValueError):
+                    normalized_account = record.account_id
+                    suffix = str(record.account_id).strip() if record.account_id is not None else "missing"
+                    expected_filename = f"acc_{suffix}.result.jsonl"
+
+                expected_relative = Path(index.results_dir) / expected_filename
+                expected_absolute = (index.root_dir / expected_relative).resolve()
+                account_display = (
+                    f"{normalized_account}" if normalized_account is not None else "<unknown>"
+                )
+                raise ValueError(
+                    "Validation preflight could not resolve .result.jsonl path for "
+                    f"account_id={account_display}: expected {expected_absolute}"
+                ) from exc
             result_json_path = index.resolve_result_json_path(record)
 
             for candidate in (result_jsonl_path.parent, result_json_path.parent):

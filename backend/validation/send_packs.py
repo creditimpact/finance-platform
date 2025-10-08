@@ -55,6 +55,42 @@ _VALID_DECISIONS = {
     "neutral_context_only",
     "no_case",
 }
+_LEGACY_DECISION_MAP = {
+    "strong": "strong_actionable",
+    "supportive": "supportive_needs_companion",
+    "neutral": "neutral_context_only",
+    "no_case": "no_case",
+    "no_claim": "no_case",
+    "no_claims": "no_case",
+}
+_REVERSE_LEGACY_DECISION_MAP = {
+    "strong_actionable": "strong",
+    "supportive_needs_companion": "supportive",
+    "neutral_context_only": "neutral",
+    "no_case": "no_case",
+}
+
+
+def _remap_legacy_decision_enum(
+    values: Sequence[Any] | None,
+) -> tuple[list[Any], bool]:
+    if values is None:
+        return [], False
+    if isinstance(values, (str, bytes, bytearray)):
+        return [values], False
+    mapped: list[Any] = []
+    changed = False
+    for entry in values:
+        if isinstance(entry, str):
+            lowered = entry.strip().lower()
+            replacement = _LEGACY_DECISION_MAP.get(lowered)
+            if replacement is not None:
+                mapped.append(replacement)
+                if replacement != lowered:
+                    changed = True
+                continue
+        mapped.append(entry)
+    return mapped, changed
 _ALWAYS_INVESTIGATABLE_FIELDS = ALWAYS_INVESTIGATABLE_FIELDS
 _CONDITIONAL_FIELDS = CONDITIONAL_FIELDS
 _ALLOWED_FIELDS = frozenset(ALL_VALIDATION_FIELDS)
@@ -347,8 +383,9 @@ def _normalize_structured_decision(value: Any) -> str | None:
         lowered = value.strip().lower()
         if lowered in _VALID_DECISIONS:
             return lowered
-        if lowered in {"no_claim", "no_claims"}:
-            return "no_case"
+        mapped = _LEGACY_DECISION_MAP.get(lowered)
+        if mapped in _VALID_DECISIONS:
+            return mapped
     return None
 
 
@@ -3464,7 +3501,8 @@ class ValidationPackSender:
         if labels:
             result["labels"] = labels
 
-        result["legacy_decision"] = "strong" if decision == "strong" else "no_case"
+        legacy_decision = _REVERSE_LEGACY_DECISION_MAP.get(decision, "no_case")
+        result["legacy_decision"] = legacy_decision
 
         metadata: dict[str, Any] = {
             "field": field,
@@ -3557,17 +3595,21 @@ class ValidationPackSender:
             except FileNotFoundError:
                 pass
 
-        if alias_name and alias_name != jsonl_path.name:
+        if alias_name:
             alias_path = jsonl_path.with_name(alias_name)
-            try:
-                alias_path.unlink()
-            except FileNotFoundError:
-                pass
-            tmp_alias = alias_path.with_name(alias_path.name + ".tmp")
-            try:
-                tmp_alias.unlink()
-            except FileNotFoundError:
-                pass
+            if alias_path != jsonl_path:
+                if serialized_lines:
+                    write_jsonl(alias_path, serialized_lines)
+                else:
+                    try:
+                        alias_path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    tmp_alias = alias_path.with_name(alias_path.name + ".tmp")
+                    try:
+                        tmp_alias.unlink()
+                    except FileNotFoundError:
+                        pass
 
         summary_target = summary_path
         summary_display_value: str
@@ -3706,8 +3748,33 @@ class ValidationPackSender:
                 raise ValidationPackError(
                     f"Pack line {idx} of {display} is not an object"
                 )
-            lines.append(payload)
+            lines.append(self._upgrade_pack_line(payload))
         return lines
+
+    def _upgrade_pack_line(
+        self, payload: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        upgraded = dict(payload)
+        expected_output = payload.get("expected_output")
+        if not isinstance(expected_output, Mapping):
+            return upgraded
+
+        expected_output_dict = dict(expected_output)
+        properties = expected_output.get("properties")
+        if isinstance(properties, Mapping):
+            properties_dict = dict(properties)
+            decision_schema = properties.get("decision")
+            if isinstance(decision_schema, Mapping):
+                decision_dict = dict(decision_schema)
+                enum_values = decision_schema.get("enum")
+                new_enum, changed = _remap_legacy_decision_enum(enum_values)
+                if changed:
+                    decision_dict["enum"] = new_enum
+                    properties_dict["decision"] = decision_dict
+                    expected_output_dict["properties"] = properties_dict
+                    upgraded["expected_output"] = expected_output_dict
+                    return upgraded
+        return upgraded
 
     def _build_client(self) -> _ChatCompletionClient:
         api_key = os.getenv("OPENAI_API_KEY")
@@ -3773,7 +3840,7 @@ class ValidationPackSender:
         fallback_account = account_id if isinstance(account_id, int) else 0
         fallback_id = line_id or f"fallback_{int(time.time())}"
 
-        rationale = f"AI error: {message} ({reason_code})"
+        rationale = f"AI error: {message} ({reason_code}); deterministic fallback"
 
         return {
             "sid": self.sid,
@@ -3787,6 +3854,12 @@ class ValidationPackSender:
             "reason_label": reason_label,
             "modifiers": modifiers,
             "confidence": 0.0,
+            "checks": {
+                "materiality": False,
+                "supports_consumer": False,
+                "doc_requirements_met": False,
+                "mismatch_code": reason_code or "unknown",
+            },
         }
 
     def _normalize_decision(self, value: Any) -> str:
@@ -3794,6 +3867,9 @@ class ValidationPackSender:
             lowered = value.strip().lower()
             if lowered in _VALID_DECISIONS:
                 return lowered
+            mapped = _LEGACY_DECISION_MAP.get(lowered)
+            if mapped in _VALID_DECISIONS:
+                return mapped
         return "no_case"
 
     def _coerce_identifier(self, account_id: int, line_number: int, candidate: Any) -> str:

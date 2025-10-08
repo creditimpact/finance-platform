@@ -12,7 +12,11 @@ from backend.core.ai.paths import (
     validation_result_jsonl_filename_for_account,
 )
 
-from backend.validation.send_packs import ValidationPackError, ValidationPackSender
+from backend.validation.send_packs import (
+    ValidationPackError,
+    ValidationPackSender,
+    _normalize_structured_decision,
+)
 
 
 _requests_stub = types.ModuleType("requests")
@@ -144,6 +148,98 @@ def _seed_manifest(
     index_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     return sid, index_path, results_dir
+
+
+def test_sender_upgrades_legacy_decision_schema(tmp_path: Path) -> None:
+    sid = "LEGACY001"
+    base_dir = tmp_path / "runs" / sid / "ai_packs" / "validation"
+    packs_dir = base_dir / "packs"
+    results_dir = base_dir / "results"
+    packs_dir.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    legacy_expected_output = {
+        "type": "object",
+        "required": ["decision", "rationale", "citations"],
+        "properties": {
+            "decision": {
+                "type": "string",
+                "enum": ["strong", "supportive", "neutral", "no_case"],
+            },
+            "rationale": {"type": "string"},
+            "citations": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+
+    pack_payload = {
+        "id": "legacy_field",
+        "field": "account_type",
+        "prompt": {"system": "system", "user": "legacy"},
+        "expected_output": legacy_expected_output,
+    }
+
+    pack_path = packs_dir / "account_001.pack.jsonl"
+    pack_path.write_text(json.dumps(pack_payload) + "\n", encoding="utf-8")
+
+    manifest = {
+        "schema_version": 2,
+        "sid": sid,
+        "root": ".",
+        "packs_dir": "packs",
+        "results_dir": "results",
+        "packs": [
+            {
+                "account_id": 1,
+                "pack": "packs/account_001.pack.jsonl",
+                "result_jsonl": "results/account_001.result.jsonl",
+                "result_json": "results/account_001.result.jsonl",
+                "lines": 1,
+                "status": "built",
+                "built_at": "2024-01-01T00:00:00Z",
+            }
+        ],
+    }
+
+    index_path = base_dir / "index.json"
+    index_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    sender = ValidationPackSender(index_path, http_client=_FixedResponseStubClient({}))
+    lines = list(sender._iter_pack_lines(pack_path))
+
+    assert len(lines) == 1
+    upgraded_enum = (
+        lines[0]
+        ["expected_output"]
+        ["properties"]
+        ["decision"]
+        ["enum"]
+    )
+    assert "strong_actionable" in upgraded_enum
+    assert "supportive_needs_companion" in upgraded_enum
+    assert "neutral_context_only" in upgraded_enum
+    assert "strong" not in upgraded_enum
+    assert "supportive" not in upgraded_enum
+    assert "neutral" not in upgraded_enum
+
+
+def test_structured_decision_normalizes_legacy_labels() -> None:
+    assert _normalize_structured_decision("strong") == "strong_actionable"
+    assert _normalize_structured_decision("supportive") == "supportive_needs_companion"
+    assert _normalize_structured_decision("neutral") == "neutral_context_only"
+    assert _normalize_structured_decision("no_case") == "no_case"
+
+
+def test_sender_normalizes_legacy_decisions(tmp_path: Path) -> None:
+    sid, index_path, _ = _seed_manifest(tmp_path, [1], sid="LEGACY002")
+    sender = ValidationPackSender(index_path, http_client=_FixedResponseStubClient({}))
+
+    assert sender._normalize_decision("strong") == "strong_actionable"
+    assert (
+        sender._normalize_decision("supportive")
+        == "supportive_needs_companion"
+    )
+    assert sender._normalize_decision("neutral") == "neutral_context_only"
+    assert sender._normalize_decision("no_case") == "no_case"
 
 
 def test_validation_sender_smoke_writes_results(

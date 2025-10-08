@@ -140,10 +140,10 @@ def test_writer_builds_pack_lines(tmp_path: Path) -> None:
     prompt = payload["prompt"]
     assert isinstance(prompt, dict)
     assert prompt["system"].startswith(
-        "You are a credit dispute adjudication assistant."
+        "You are the adjudication AI inside the Credit Analyzer system."
     )
     assert prompt["user"].startswith(
-        "You are given a single field finding extracted"
+        "You are given one field finding that contains"
     )
     assert "<finding blob here>" not in prompt["user"]
     assert payload["finding_json"] in prompt["user"]

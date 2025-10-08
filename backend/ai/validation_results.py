@@ -528,7 +528,10 @@ def store_validation_result(
         request_lines_count = len(decisions)
 
     jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-    write_jsonl(jsonl_path, result_lines)
+    if result_lines:
+        write_jsonl(jsonl_path, result_lines)
+    else:
+        jsonl_path.write_text("", encoding="utf-8")
 
     if validation_write_json_enabled():
         json_path.parent.mkdir(parents=True, exist_ok=True)

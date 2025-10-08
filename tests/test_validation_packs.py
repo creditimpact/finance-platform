@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import types
 from pathlib import Path
 from typing import Any, Mapping
+
+import pytest
 
 sys.modules.setdefault(
     "requests", types.SimpleNamespace(post=lambda *args, **kwargs: None)
@@ -233,14 +236,10 @@ def test_removed_fields_are_never_emitted(tmp_path: Path) -> None:
     pack_path = validation_packs_dir(sid, runs_root=runs_root) / validation_pack_filename_for_account(
         account_id
     )
-    on_disk = _read_jsonl(pack_path)
-    assert on_disk == []
+    assert not pack_path.exists()
 
-    index_payload = _read_json(validation_index_path(sid, runs_root=runs_root))
-    packs = index_payload.get("packs", [])
-    assert len(packs) == 1
-    assert packs[0]["weak_fields"] == []
-    assert packs[0]["lines"] == 0
+    index_path = validation_index_path(sid, runs_root=runs_root)
+    assert not index_path.exists()
 
 def test_validation_index_round_trip(tmp_path: Path) -> None:
     sid = "SID003"
@@ -256,9 +255,14 @@ def test_validation_index_round_trip(tmp_path: Path) -> None:
         results_dir=results_dir,
     )
 
+    packs_dir.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
     pack_path1 = packs_dir / validation_pack_filename_for_account(1)
     summary_path1 = results_dir / validation_result_filename_for_account(1)
     jsonl_path1 = results_dir / validation_result_jsonl_filename_for_account(1)
+    pack_path1.parent.mkdir(parents=True, exist_ok=True)
+    pack_path1.write_text("{\"field\": \"account_rating\"}\n", encoding="utf-8")
     entry1 = ValidationIndexEntry(
         account_id=1,
         pack_path=pack_path1,
@@ -271,6 +275,11 @@ def test_validation_index_round_trip(tmp_path: Path) -> None:
     pack_path2 = packs_dir / validation_pack_filename_for_account(2)
     summary_path2 = results_dir / validation_result_filename_for_account(2)
     jsonl_path2 = results_dir / validation_result_jsonl_filename_for_account(2)
+    pack_path2.parent.mkdir(parents=True, exist_ok=True)
+    pack_path2.write_text(
+        "{\"field\": \"account_type\"}\n{\"field\": \"account_rating\"}\n",
+        encoding="utf-8",
+    )
     entry2 = ValidationIndexEntry(
         account_id=2,
         pack_path=pack_path2,
@@ -290,6 +299,52 @@ def test_validation_index_round_trip(tmp_path: Path) -> None:
     assert accounts[2]["lines"] == 2
 
 
+def test_index_writer_skips_missing_pack(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    sid = "SID_MISSING"
+    runs_root = tmp_path / "runs"
+
+    packs_dir = validation_packs_dir(sid, runs_root=runs_root)
+    results_dir = validation_results_dir(sid, runs_root=runs_root)
+    index_path = validation_index_path(sid, runs_root=runs_root)
+
+    writer = ValidationPackIndexWriter(
+        sid=sid,
+        index_path=index_path,
+        packs_dir=packs_dir,
+        results_dir=results_dir,
+    )
+
+    packs_dir.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    pack_path = packs_dir / validation_pack_filename_for_account(3)
+    pack_path.write_text("{\"field\": \"account_type\"}\n", encoding="utf-8")
+
+    entry = ValidationIndexEntry(
+        account_id=3,
+        pack_path=pack_path,
+        result_jsonl_path=results_dir
+        / validation_result_jsonl_filename_for_account(3),
+        result_json_path=results_dir
+        / validation_result_filename_for_account(3),
+        weak_fields=("account_type",),
+        line_count=1,
+        status="built",
+    )
+
+    writer.bulk_upsert([entry])
+
+    pack_path.unlink()
+
+    with caplog.at_level(logging.WARNING):
+        accounts = writer.load_accounts()
+
+    assert accounts == {}
+    assert any(
+        "VALIDATION_INDEX_PACK_MISSING" in record.message for record in caplog.records
+    )
+
+
 def test_manifest_updated_after_first_pack(tmp_path: Path, monkeypatch) -> None:
     sid = "SID004"
     runs_root = tmp_path / "runs"
@@ -305,6 +360,7 @@ def test_manifest_updated_after_first_pack(tmp_path: Path, monkeypatch) -> None:
                     "strength": "weak",
                     "ai_needed": True,
                     "send_to_ai": True,
+                    "is_mismatch": True,
                 }
             ],
             "field_consistency": {},
@@ -352,12 +408,14 @@ def test_build_validation_pack_idempotent(tmp_path: Path, monkeypatch) -> None:
                     "strength": "weak",
                     "ai_needed": True,
                     "send_to_ai": True,
+                    "is_mismatch": True,
                 },
                 {
                     "field": "account_rating",
                     "strength": "weak",
                     "ai_needed": True,
                     "send_to_ai": True,
+                    "is_mismatch": True,
                 },
             ],
             "field_consistency": {},

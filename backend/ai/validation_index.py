@@ -230,8 +230,52 @@ class ValidationPackIndexWriter:
         if not new_entries:
             return
 
-        existing = self._load_entries()
+        validated_entries: list[ValidationIndexEntry] = []
         for entry in new_entries:
+            if entry.line_count <= 0:
+                log.warning(
+                    "VALIDATION_INDEX_SKIP_EMPTY_LINES sid=%s account_id=%s pack=%s",
+                    self.sid,
+                    entry.account_id,
+                    entry.pack_path,
+                )
+                continue
+
+            try:
+                exists = entry.pack_path.exists()
+            except OSError:
+                exists = False
+
+            if not exists or not entry.pack_path.is_file():
+                log.warning(
+                    "VALIDATION_INDEX_SKIP_MISSING_PACK sid=%s account_id=%s path=%s",
+                    self.sid,
+                    entry.account_id,
+                    entry.pack_path,
+                )
+                continue
+
+            try:
+                size = entry.pack_path.stat().st_size
+            except OSError:
+                size = 0
+
+            if size <= 0:
+                log.warning(
+                    "VALIDATION_INDEX_SKIP_EMPTY_PACK sid=%s account_id=%s path=%s",
+                    self.sid,
+                    entry.account_id,
+                    entry.pack_path,
+                )
+                continue
+
+            validated_entries.append(entry)
+
+        if not validated_entries:
+            return
+
+        existing = self._load_entries()
+        for entry in validated_entries:
             existing[self._entry_key(entry)] = entry
 
         write_validation_manifest_v2(
@@ -355,6 +399,36 @@ class ValidationPackIndexWriter:
         entries: dict[str, ValidationIndexEntry] = {}
         for record in index.packs:
             entry = self._entry_from_record(index, record)
+            try:
+                exists = entry.pack_path.exists()
+            except OSError:
+                exists = False
+
+            if not exists or not entry.pack_path.is_file():
+                log.warning(
+                    "VALIDATION_INDEX_PACK_MISSING sid=%s account_id=%s path=%s index=%s",
+                    self.sid,
+                    entry.account_id,
+                    entry.pack_path,
+                    self._index_path,
+                )
+                continue
+
+            try:
+                size = entry.pack_path.stat().st_size
+            except OSError:
+                size = 0
+
+            if size <= 0:
+                log.warning(
+                    "VALIDATION_INDEX_PACK_EMPTY sid=%s account_id=%s path=%s index=%s",
+                    self.sid,
+                    entry.account_id,
+                    entry.pack_path,
+                    self._index_path,
+                )
+                continue
+
             entries[self._entry_key(entry)] = entry
         return entries
 

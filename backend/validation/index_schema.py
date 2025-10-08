@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -15,6 +16,9 @@ from backend.core.ai.paths import (
 )
 
 SCHEMA_VERSION = 2
+
+
+log = logging.getLogger(__name__)
 
 
 def _utc_now() -> str:
@@ -351,7 +355,7 @@ def build_validation_index(
     packs_dir_rel = _relativize(packs_dir_resolved, root_path)
     results_dir_rel = _relativize(results_dir_resolved, root_path)
 
-    return ValidationIndex(
+    index = ValidationIndex(
         index_path=index_path,
         sid=sid,
         root=root or ".",
@@ -359,6 +363,72 @@ def build_validation_index(
         results_dir=results_dir_rel,
         packs=list(records),
     )
+
+    validated_records: list[ValidationPackRecord] = []
+    for record in index.packs:
+        if record.lines <= 0:
+            log.warning(
+                "VALIDATION_INDEX_SKIP_EMPTY_LINES sid=%s account_id=%s pack=%s",
+                sid,
+                record.account_id,
+                record.pack,
+            )
+            continue
+
+        try:
+            pack_path = index.resolve_pack_path(record)
+        except Exception:  # pragma: no cover - defensive
+            log.warning(
+                "VALIDATION_INDEX_RESOLVE_FAILED sid=%s account_id=%s pack=%s",
+                sid,
+                record.account_id,
+                record.pack,
+                exc_info=True,
+            )
+            continue
+
+        try:
+            exists = pack_path.exists()
+        except OSError:
+            exists = False
+
+        if not exists or not pack_path.is_file():
+            log.warning(
+                "VALIDATION_INDEX_PACK_MISSING sid=%s account_id=%s path=%s",
+                sid,
+                record.account_id,
+                pack_path,
+            )
+            continue
+
+        try:
+            size = pack_path.stat().st_size
+        except OSError:
+            size = 0
+
+        if size <= 0:
+            log.warning(
+                "VALIDATION_INDEX_PACK_EMPTY sid=%s account_id=%s path=%s",
+                sid,
+                record.account_id,
+                pack_path,
+            )
+            continue
+
+        validated_records.append(record)
+
+    if len(validated_records) != len(index.packs):
+        index = ValidationIndex(
+            index_path=index.index_path,
+            sid=index.sid,
+            root=index.root,
+            packs_dir=index.packs_dir,
+            results_dir=index.results_dir,
+            packs=tuple(validated_records),
+            schema_version=index.schema_version,
+        )
+
+    return index
 
 
 def load_validation_index(path: Path | str) -> ValidationIndex:

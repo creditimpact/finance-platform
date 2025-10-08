@@ -106,6 +106,8 @@ _INDEX_FILE_WAIT_DELAY = 0.4
 _INDEX_FILE_MIN_SIZE = 20
 _DEFAULT_CONFIDENCE_THRESHOLD = 0.70
 _WRITE_JSON_ENVELOPE_ENV = "VALIDATION_WRITE_JSON_ENVELOPE"
+_VALIDATION_MAX_RETRIES_ENV = "VALIDATION_MAX_RETRIES"
+_DEFAULT_VALIDATION_MAX_RETRIES = 2
 
 
 log = logging.getLogger(__name__)
@@ -290,6 +292,16 @@ def _append_guardrail_note(rationale: str, reason: str) -> str:
     return f"{rationale} {note}"
 
 
+def correction_suffix(errors: list[str]) -> str:
+    bullets = "; ".join(errors[:3])
+    return (
+        "\n\nFIX:\n"
+        f"- Your previous output was invalid: {bullets}.\n"
+        "- Output ONE JSON object only, strictly matching the schema, with non-empty 'citations', "
+        "and include the reason_code literally in 'rationale'."
+    )
+
+
 def _empty_decision_metrics() -> dict[str, dict[str, int]]:
     buckets = {"conditional": 0, "non_conditional": 0}
     return {
@@ -376,6 +388,19 @@ def _env_float(name: str, default: float) -> float:
         return float(raw)
     except (TypeError, ValueError):
         return default
+
+
+def _validation_max_retries() -> int:
+    raw = os.getenv(_VALIDATION_MAX_RETRIES_ENV)
+    if raw is None:
+        return _DEFAULT_VALIDATION_MAX_RETRIES
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return _DEFAULT_VALIDATION_MAX_RETRIES
+    if value < 0:
+        return 0
+    return value
 
 
 def _truncate_response_body(body: Any, *, limit: int = 300) -> str:
@@ -2551,10 +2576,6 @@ class ValidationPackSender:
             finding=finding_payload,
         )
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
         def _record_sidecar(status: int, body: str) -> None:
             try:
                 normalized_status = int(status)
@@ -2567,86 +2588,124 @@ class ValidationPackSender:
             }
             self._write_error_sidecar(error_path, payload)
 
-        request_payload = {
-            "model": self.model,
-            "messages": list(messages),
-            "response_format": {"type": "json_object"},
-        }
+        base_user_prompt = user_prompt
+        suffixes: list[str] = []
+        max_retries = _validation_max_retries()
+        attempt = 0
 
-        try:
-            create_params = inspect.signature(self._client.create).parameters
-        except (TypeError, ValueError):
-            create_params = {}
+        while True:
+            composed_user_prompt = base_user_prompt + "".join(suffixes)
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": composed_user_prompt},
+            ]
+            request_payload = {
+                "model": self.model,
+                "messages": list(messages),
+                "response_format": {"type": "json_object"},
+            }
 
-        if "payload" in create_params:
-            response = self._client.create(
-                request_payload,
-                pack_id=pack_id,
-                on_error=_record_sidecar,
-            )
-        else:
-            response = self._client.create(
-                **request_payload,
-                pack_id=pack_id,
-                on_error=_record_sidecar,
-            )
-
-        payload = request_payload
-        if hasattr(response, "payload"):
-            payload = response.payload  # type: ignore[assignment]
-            status_code = getattr(response, "status_code", 0)
-            latency = getattr(response, "latency", 0.0)
-            retries = getattr(response, "retries", 0)
-        elif isinstance(response, Mapping):
-            payload = response
-            status_code = int(getattr(response, "status_code", 0))
-            latency_raw = getattr(response, "latency", 0.0)
             try:
-                latency = float(latency_raw)
+                create_params = inspect.signature(self._client.create).parameters
             except (TypeError, ValueError):
-                latency = 0.0
-            retries = int(getattr(response, "retries", 0))
-        else:
-            raise ValidationPackError(
-                f"Model client returned unsupported response type: {type(response)!r}"
+                create_params = {}
+
+            if "payload" in create_params:
+                response = self._client.create(
+                    request_payload,
+                    pack_id=pack_id,
+                    on_error=_record_sidecar,
+                )
+            else:
+                response = self._client.create(
+                    **request_payload,
+                    pack_id=pack_id,
+                    on_error=_record_sidecar,
+                )
+
+            payload = request_payload
+            if hasattr(response, "payload"):
+                payload = response.payload  # type: ignore[assignment]
+                status_code = getattr(response, "status_code", 0)
+                latency = getattr(response, "latency", 0.0)
+                retries = getattr(response, "retries", 0)
+            elif isinstance(response, Mapping):
+                payload = response
+                status_code = int(getattr(response, "status_code", 0))
+                latency_raw = getattr(response, "latency", 0.0)
+                try:
+                    latency = float(latency_raw)
+                except (TypeError, ValueError):
+                    latency = 0.0
+                retries = int(getattr(response, "retries", 0))
+            else:
+                raise ValidationPackError(
+                    f"Model client returned unsupported response type: {type(response)!r}"
+                )
+            log.info(
+                "VALIDATION_SEND_MODEL_CALL sid=%s account_id=%s line_id=%s line_number=%s status=%s latency=%.3fs retries=%s attempt=%s",
+                self.sid,
+                account_label,
+                line_id,
+                line_number,
+                status_code,
+                latency,
+                retries,
+                attempt,
             )
-        log.info(
-            "VALIDATION_SEND_MODEL_CALL sid=%s account_id=%s line_id=%s line_number=%s status=%s latency=%.3fs retries=%s",
-            self.sid,
-            account_label,
-            line_id,
-            line_number,
-            status_code,
-            latency,
-            retries,
-        )
 
-        choices = payload.get("choices")
-        if not isinstance(choices, Sequence) or not choices:
-            log.error("VALIDATION_EMPTY_RESPONSE pack=%s", pack_id)
-            serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-            _record_sidecar(int(status_code), serialized)
-            raise ValidationPackError("Model response missing choices")
-        message = choices[0].get("message") if isinstance(choices[0], Mapping) else None
-        content = message.get("content") if isinstance(message, Mapping) else None
-        if not isinstance(content, str) or not content.strip():
-            log.error("VALIDATION_EMPTY_RESPONSE pack=%s", pack_id)
-            serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-            _record_sidecar(int(status_code), serialized)
-            raise ValidationPackError("Model response missing content")
+            choices = payload.get("choices")
+            if not isinstance(choices, Sequence) or not choices:
+                log.error("VALIDATION_EMPTY_RESPONSE pack=%s", pack_id)
+                serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+                _record_sidecar(int(status_code), serialized)
+                raise ValidationPackError("Model response missing choices")
+            message = choices[0].get("message") if isinstance(choices[0], Mapping) else None
+            content = message.get("content") if isinstance(message, Mapping) else None
+            if not isinstance(content, str) or not content.strip():
+                log.error("VALIDATION_EMPTY_RESPONSE pack=%s", pack_id)
+                serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+                _record_sidecar(int(status_code), serialized)
+                raise ValidationPackError("Model response missing content")
 
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError as exc:
-            log.error("VALIDATION_EMPTY_RESPONSE pack=%s", pack_id)
-            _record_sidecar(int(status_code), content)
-            raise ValidationPackError(f"Model response is not valid JSON: {exc}")
-        if not isinstance(parsed, Mapping):
-            raise ValidationPackError("Model response is not an object")
+            try:
+                parsed = json.loads(content)
+            except json.JSONDecodeError as exc:
+                log.error("VALIDATION_EMPTY_RESPONSE pack=%s", pack_id)
+                _record_sidecar(int(status_code), content)
+                raise ValidationPackError(f"Model response is not valid JSON: {exc}")
+            if not isinstance(parsed, Mapping):
+                raise ValidationPackError("Model response is not an object")
 
-        result_target = result_display or str(result_path)
-        log.info("VALIDATION_SENT_OK pack=%s -> %s", pack_id, result_target)
-        return parsed
+            ok, errors = validate_llm_decision(parsed, pack_line)
+            if ok:
+                result_target = result_display or str(result_path)
+                log.info("VALIDATION_SENT_OK pack=%s -> %s", pack_id, result_target)
+                return parsed
+
+            if attempt >= max_retries:
+                log.warning(
+                    "VALIDATION_AI_RESPONSE_INVALID_MAX_RETRIES sid=%s account_id=%s line_id=%s errors=%s",
+                    self.sid,
+                    account_label,
+                    line_id,
+                    errors,
+                )
+                result_target = result_display or str(result_path)
+                log.info("VALIDATION_SENT_OK pack=%s -> %s", pack_id, result_target)
+                return parsed
+
+            suffix = correction_suffix(errors)
+            suffixes.append(suffix)
+            attempt += 1
+            log.info(
+                "VALIDATION_AI_RESPONSE_RETRY sid=%s account_id=%s line_id=%s attempt=%s errors=%s",
+                self.sid,
+                account_label,
+                line_id,
+                attempt,
+                errors,
+            )
 
     # ------------------------------------------------------------------
     # Guardrails

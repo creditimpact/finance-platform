@@ -33,11 +33,15 @@ def _legacy_results(monkeypatch: pytest.MonkeyPatch) -> None:
 class _StubClient:
     def create(self, *, model: str, messages, response_format, **_: object):  # type: ignore[override]
         payload = {
-            "decision": "strong",
-            "justification": "auto",
-            "labels": ["semantic_review"],
-            "citations": ["experian.raw"],
-            "confidence": 0.82,
+            "decision": "strong_actionable",
+            "rationale": "auto",
+            "citations": ["experian: mortgage"],
+            "checks": {
+                "materiality": True,
+                "supports_consumer": True,
+                "doc_requirements_met": True,
+                "mismatch_code": "C1_TEST",
+            },
         }
         return {"choices": [{"message": {"content": json.dumps(payload)}}]}
 
@@ -56,12 +60,12 @@ def _build_manifest(tmp_path: Path, sid: str = "S001") -> tuple[dict[str, object
         "validation_requirements": {
             "findings": [
                 {
-                    "field": "Account Status",
+                    "field": "account_type",
                     "strength": "weak",
                     "is_mismatch": True,
                     "ai_needed": False,
                     "documents": ["statement"],
-                    "category": "identity",
+                    "category": "open_ident",
                     "send_to_ai": True,
                 }
             ],
@@ -70,8 +74,8 @@ def _build_manifest(tmp_path: Path, sid: str = "S001") -> tuple[dict[str, object
     }
     (account_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
     bureaus = {
-        "transunion": {"Account Status": {"raw": "Value"}},
-        "experian": {},
+        "transunion": {"account_type": {"raw": "Mortgage"}},
+        "experian": {"account_type": {"raw": "Installment"}},
         "equifax": {},
     }
     (account_dir / "bureaus.json").write_text(json.dumps(bureaus), encoding="utf-8")
@@ -166,6 +170,51 @@ def test_builder_respects_summary_findings(tmp_path: Path) -> None:
     ]
     assert len(payloads) == 1
     assert payloads[0]["field"] == "account_rating"
+
+
+def test_builder_skips_accounts_without_send_to_ai(tmp_path: Path) -> None:
+    manifest, runs_root = _build_manifest(tmp_path, sid="S015")
+
+    account_dir = runs_root / "S015" / "cases" / "accounts" / "1"
+    summary_path = account_dir / "summary.json"
+    bureaus_path = account_dir / "bureaus.json"
+
+    summary_payload = {
+        "validation_requirements": {
+            "findings": [
+                {
+                    "field": "account_type",
+                    "strength": "weak",
+                    "is_mismatch": True,
+                    "ai_needed": True,
+                    "send_to_ai": False,
+                },
+                {
+                    "field": "account_rating",
+                    "strength": "weak",
+                    "is_mismatch": True,
+                    "ai_needed": True,
+                    "send_to_ai": None,
+                },
+            ],
+            "field_consistency": {},
+        }
+    }
+    bureaus_payload = {
+        "transunion": {
+            "account_type": {"raw": "Mortgage"},
+            "account_rating": {"raw": "1"},
+        }
+    }
+
+    summary_path.write_text(json.dumps(summary_payload), encoding="utf-8")
+    bureaus_path.write_text(json.dumps(bureaus_payload), encoding="utf-8")
+
+    builder = ValidationPackBuilder(manifest)
+    records = builder.build()
+
+    assert records == []
+    assert list(builder.paths.packs_dir.glob("*.jsonl")) == []
 
 
 def test_builder_ignores_legacy_requirements(tmp_path: Path) -> None:
@@ -293,11 +342,7 @@ def test_sender_reports_missing_pack_with_relative_error(
     sender = ValidationPackSender(index_path, http_client=_StubClient())
     results = sender.send()
 
-    assert len(results) == 1
-    payload = results[0]
-    assert payload["status"] == "error"
-    assert "Pack file missing: " in payload["error"]
-    assert record.pack in payload["error"]
+    assert results == []
 
     output = capsys.readouterr().out
     assert "PACKS: 1, missing: 1" in output
@@ -328,7 +373,7 @@ def test_sender_includes_context_on_api_error(
     assert "AI request failed for acc 001" in payload["error"]
     assert "pack=packs/" in payload["error"]
     assert "results/" in payload["error"]
-    assert "AI request failed for acc 001" in payload["results"][0]["rationale"]
+    assert "deterministic fallback" in payload["results"][0]["rationale"]
 
     output = capsys.readouterr().out
     assert "PACKS: 1, missing: 0" in output
@@ -341,13 +386,21 @@ def test_sender_supports_v1_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyP
     packs_dir.mkdir(parents=True, exist_ok=True)
     results_dir.mkdir(parents=True, exist_ok=True)
 
+    # Reuse a modern pack payload to emulate legacy naming without altering content.
+    source_manifest, _ = _build_manifest(tmp_path, sid="S005SRC")
+    source_builder = ValidationPackBuilder(source_manifest)
+    source_builder.build()
+    source_pack = (
+        tmp_path
+        / "S005SRC"
+        / "ai_packs"
+        / "validation"
+        / "packs"
+        / "val_acc_001.jsonl"
+    )
+
     pack_path = packs_dir / "account_001.jsonl"
-    pack_payload = {
-        "id": "line-001",
-        "field": "Account Status",
-        "prompt": {"system": "test", "user": {"account": 1}},
-    }
-    pack_path.write_text(json.dumps(pack_payload) + "\n", encoding="utf-8")
+    pack_path.write_text(source_pack.read_text(encoding="utf-8"), encoding="utf-8")
 
     result_jsonl_path = results_dir / "account_001.jsonl"
     result_summary_path = results_dir / "account_001.json"
@@ -387,5 +440,5 @@ def test_sender_supports_v1_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     summary_file = results_dir / "account_001.json"
     jsonl_file = results_dir / "account_001.jsonl"
-    assert summary_file.is_file()
     assert jsonl_file.is_file()
+    assert not summary_file.exists()

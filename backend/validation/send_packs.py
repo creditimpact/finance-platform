@@ -47,7 +47,12 @@ _DEFAULT_MODEL = "gpt-4o-mini"
 _DEFAULT_TIMEOUT = 30.0
 _THROTTLE_SECONDS = 0.05
 _DEFAULT_QUEUE_NAME = "validation"
-_VALID_DECISIONS = {"strong", "supportive", "neutral", "no_case"}
+_VALID_DECISIONS = {
+    "strong_actionable",
+    "supportive_needs_companion",
+    "neutral_context_only",
+    "no_case",
+}
 _ALWAYS_INVESTIGATABLE_FIELDS = ALWAYS_INVESTIGATABLE_FIELDS
 _CONDITIONAL_FIELDS = CONDITIONAL_FIELDS
 _ALLOWED_FIELDS = frozenset(ALL_VALIDATION_FIELDS)

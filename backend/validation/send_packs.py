@@ -37,6 +37,8 @@ from backend.validation.index_schema import (
     ValidationPackRecord,
     load_validation_index,
 )
+from backend.validation.schema import validate_llm_decision
+
 from backend.pipeline.runs import RunManifest, persist_manifest, _utc_now
 from backend.validation.redaction import sanitize_validation_log_payload
 
@@ -44,7 +46,7 @@ _DEFAULT_MODEL = "gpt-4o-mini"
 _DEFAULT_TIMEOUT = 30.0
 _THROTTLE_SECONDS = 0.05
 _DEFAULT_QUEUE_NAME = "validation"
-_VALID_DECISIONS = {"strong", "no_case"}
+_VALID_DECISIONS = {"strong", "supportive", "neutral", "no_case"}
 _ALWAYS_INVESTIGATABLE_FIELDS = ALWAYS_INVESTIGATABLE_FIELDS
 _CONDITIONAL_FIELDS = CONDITIONAL_FIELDS
 _ALLOWED_FIELDS = frozenset(ALL_VALIDATION_FIELDS)
@@ -289,8 +291,10 @@ def _empty_decision_metrics() -> dict[str, dict[str, int]]:
     buckets = {"conditional": 0, "non_conditional": 0}
     return {
         "strong": dict(buckets),
-        "weak": dict(buckets),
+        "supportive": dict(buckets),
+        "neutral": dict(buckets),
         "no_case": dict(buckets),
+        "weak": dict(buckets),
     }
 
 
@@ -2270,21 +2274,29 @@ class ValidationPackSender:
     # Guardrails
     # ------------------------------------------------------------------
     def _validate_response_payload(
-        self, response: Mapping[str, Any]
-    ) -> tuple[dict[str, Any] | None, list[str]]:
+        self,
+        response: Mapping[str, Any],
+        pack_line: Mapping[str, Any],
+    ) -> tuple[dict[str, Any] | None, list[str], str]:
         if not isinstance(response, Mapping):
-            return None, ["response_not_mapping"]
+            return None, ["response_not_mapping"], "legacy"
+
+        if any(key in response for key in ("reason_code", "reason_label", "modifiers")):
+            ok, errors = validate_llm_decision(response, pack_line)
+            if not ok:
+                return None, errors, "modern"
+            return dict(response), [], "modern"
 
         errors = [error.message for error in _RESPONSE_VALIDATOR.iter_errors(response)]
         if errors:
-            return None, errors
+            return None, errors, "legacy"
 
         justification = self._normalize_justification(response.get("justification"))
         labels = self._normalize_labels(response.get("labels"))
         if not justification:
-            return None, ["empty_justification"]
+            return None, ["empty_justification"], "legacy"
         if not labels:
-            return None, ["empty_labels"]
+            return None, ["empty_labels"], "legacy"
 
         normalized = {
             "decision": self._normalize_decision(response.get("decision")),
@@ -2294,7 +2306,7 @@ class ValidationPackSender:
             "labels": labels,
         }
 
-        return normalized, []
+        return normalized, [], "legacy"
 
     # ------------------------------------------------------------------
     # Result construction & persistence
@@ -2308,7 +2320,9 @@ class ValidationPackSender:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         line_id = self._coerce_identifier(account_id, line_number, pack_line.get("id"))
         field = self._coerce_field_name(pack_line, line_number)
-        normalized_response, schema_errors = self._validate_response_payload(response)
+        normalized_response, schema_errors, schema_mode = self._validate_response_payload(
+            response, pack_line
+        )
 
         guardrail_info: dict[str, Any] | None = None
         if normalized_response is None:
@@ -2327,12 +2341,20 @@ class ValidationPackSender:
             labels: list[str] = []
             guardrail_info = {"reason": "invalid_response", "errors": schema_errors}
         else:
-            decision = normalized_response["decision"]
-            original_decision = decision
-            rationale = normalized_response["justification"]
-            citations = normalized_response["citations"]
-            confidence = normalized_response["confidence"]
-            labels = normalized_response["labels"]
+            if schema_mode == "modern":
+                decision = str(normalized_response.get("decision", "no_case"))
+                original_decision = decision
+                rationale = str(normalized_response.get("rationale", ""))
+                citations = list(normalized_response.get("citations", []))
+                confidence = normalized_response.get("confidence")
+                labels = []
+            else:
+                decision = normalized_response["decision"]
+                original_decision = decision
+                rationale = normalized_response["justification"]
+                citations = normalized_response["citations"]
+                confidence = normalized_response["confidence"]
+                labels = normalized_response["labels"]
 
             if (
                 decision == "strong"
@@ -2358,18 +2380,41 @@ class ValidationPackSender:
             field, decision, rationale, pack_line
         )
 
-        result: dict[str, Any] = {
-            "id": line_id,
-            "account_id": account_id,
-            "field": field,
-            "decision": decision,
-            "rationale": rationale,
-            "citations": citations,
-        }
-        if confidence is not None:
-            result["confidence"] = confidence
-        if normalized_response is not None and labels:
-            result["labels"] = labels
+        if schema_mode == "modern" and normalized_response is not None:
+            result = dict(normalized_response)
+            result["sid"] = str(result.get("sid") or pack_line.get("sid") or self.sid)
+            raw_account_id = result.get("account_id")
+            try:
+                account_id_value = int(raw_account_id)
+            except (TypeError, ValueError):
+                account_id_value = account_id
+            result["account_id"] = account_id_value
+            result["id"] = str(result.get("id") or line_id)
+            result["field"] = str(result.get("field") or field)
+            result["decision"] = decision
+            result["rationale"] = rationale
+            result["citations"] = citations
+            if confidence is not None:
+                result["confidence"] = confidence
+            else:
+                fallback_confidence = normalized_response.get("confidence")
+                if isinstance(fallback_confidence, (int, float)):
+                    result["confidence"] = float(fallback_confidence)
+                else:
+                    result["confidence"] = 0.0
+        else:
+            result = {
+                "id": line_id,
+                "account_id": account_id,
+                "field": field,
+                "decision": decision,
+                "rationale": rationale,
+                "citations": citations,
+            }
+            if confidence is not None:
+                result["confidence"] = confidence
+            if normalized_response is not None and labels:
+                result["labels"] = labels
 
         metadata: dict[str, Any] = {
             "field": field,

@@ -28,7 +28,7 @@ def _build_sender(
         account_id=1,
         pack="packs/val_acc_001.jsonl",
         result_jsonl="results/acc_001.result.jsonl",
-        result_json="results/acc_001.result.json",
+        result_json="results/acc_001.result.jsonl",
         lines=1,
         status="built",
         built_at=_utc_now(),
@@ -129,7 +129,7 @@ def test_send_to_ai_false_uses_deterministic_path(
         record.pack,
         results_dir / "acc_001.result.jsonl",
         record.result_jsonl,
-        results_dir / "acc_001.result.json",
+        results_dir / "acc_001.result.jsonl",
         record.result_json,
     )
 

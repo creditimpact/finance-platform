@@ -40,6 +40,7 @@ from backend.validation.index_schema import (
 )
 from backend.validation.prompt_templates import render_validation_prompt
 from backend.validation.schema import validate_llm_decision
+from .io import write_jsonl
 
 from backend.pipeline.runs import RunManifest, persist_manifest, _utc_now
 from backend.validation.redaction import sanitize_validation_log_payload
@@ -2848,13 +2849,13 @@ class ValidationPackSender:
 
         jsonl_path.parent.mkdir(parents=True, exist_ok=True)
 
-        jsonl_lines = [
-            json.dumps(line, ensure_ascii=False, sort_keys=True) for line in result_lines
-        ]
-        jsonl_payload = "\n".join(jsonl_lines)
-        if jsonl_payload:
-            jsonl_payload += "\n"
-        jsonl_path.write_text(jsonl_payload, encoding="utf-8")
+        serialized_lines: list[dict[str, Any]] = []
+        for line in result_lines:
+            if not isinstance(line, Mapping):
+                raise TypeError("Result line must be a mapping to serialize as JSONL")
+            serialized_lines.append(dict(line))
+
+        write_jsonl(jsonl_path, serialized_lines)
 
         summary_target = summary_path
         summary_display_value: str
@@ -2867,7 +2868,7 @@ class ValidationPackSender:
                 "model": self.model,
                 "request_lines": len(result_lines),
                 "completed_at": _utc_now(),
-                "results": list(result_lines),
+                "results": list(serialized_lines),
             }
             if error:
                 summary_payload["error"] = error

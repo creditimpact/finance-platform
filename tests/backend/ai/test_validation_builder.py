@@ -110,7 +110,7 @@ def test_two_year_history_toggle_enabled(tmp_path: Path, monkeypatch: pytest.Mon
         "field": "two_year_payment_history",
         "is_mismatch": True,
         "ai_needed": False,
-        "send_to_ai": False,
+        "send_to_ai": True,
     }
 
     account_dir = runs_root / sid / "cases" / "accounts" / str(account_id)
@@ -135,6 +135,29 @@ def test_two_year_history_toggle_disabled(tmp_path: Path, monkeypatch: pytest.Mo
         "is_mismatch": True,
         "ai_needed": False,
         "send_to_ai": True,
+    }
+
+    account_dir = runs_root / sid / "cases" / "accounts" / str(account_id)
+    _write_json(account_dir / "summary.json", _build_summary(finding))
+
+    writer = ValidationPackWriter(sid, runs_root=runs_root)
+    lines = writer.write_pack_for_account(account_id)
+
+    assert lines == []
+
+
+def test_two_year_history_requires_send_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sid = "SID302"
+    account_id = 32
+    runs_root = tmp_path / "runs"
+
+    monkeypatch.setenv("VALIDATION_ALLOW_HISTORY_2Y_AI", "1")
+
+    finding = {
+        "field": "two_year_payment_history",
+        "is_mismatch": True,
+        "ai_needed": False,
+        "send_to_ai": False,
     }
 
     account_dir = runs_root / sid / "cases" / "accounts" / str(account_id)

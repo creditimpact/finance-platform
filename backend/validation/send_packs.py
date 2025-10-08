@@ -10,6 +10,7 @@ import os
 import random
 import re
 import time
+from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -1934,35 +1935,57 @@ class ValidationPackSender:
                         reason="field_not_allowed",
                     )
                     continue
-                try:
-                    response = self._call_model(
+                raw_send_flag = pack_line.get("send_to_ai")
+                if isinstance(raw_send_flag, bool):
+                    send_flag = raw_send_flag
+                elif raw_send_flag is None:
+                    send_flag = None
+                else:
+                    send_flag = _coerce_bool_flag(raw_send_flag)
+
+                if send_flag is False:
+                    response = self._build_deterministic_response(
                         pack_line,
                         account_id=account_int,
-                        account_label=f"{account_int:03d}",
                         line_number=idx,
                         line_id=current_line_id,
-                        pack_id=pack_identifier,
-                        error_path=error_path,
-                        result_path=result_target_path,
-                        result_display=result_target_display,
                     )
-                except Exception as exc:
-                    error_message = (
-                        "AI request failed for acc "
-                        f"{account_int:03d} pack={pack_display} -> "
-                        f"{result_target_display}: {exc}"
-                    )
-                    errors.append(error_message)
-                    log.error(
-                        "VALIDATION_SEND_MODEL_ERROR sid=%s account_id=%03d line_id=%s "
-                        "exc_type=%s message=%s",
-                        self.sid,
-                        account_int,
-                        current_line_id,
-                        type(exc).__name__,
-                        exc,
-                    )
-                    response = self._fallback_response(error_message)
+                else:
+                    try:
+                        response = self._call_model(
+                            pack_line,
+                            account_id=account_int,
+                            account_label=f"{account_int:03d}",
+                            line_number=idx,
+                            line_id=current_line_id,
+                            pack_id=pack_identifier,
+                            error_path=error_path,
+                            result_path=result_target_path,
+                            result_display=result_target_display,
+                        )
+                    except Exception as exc:
+                        error_message = (
+                            "AI request failed for acc "
+                            f"{account_int:03d} pack={pack_display} -> "
+                            f"{result_target_display}: {exc}"
+                        )
+                        errors.append(error_message)
+                        log.error(
+                            "VALIDATION_SEND_MODEL_ERROR sid=%s account_id=%03d line_id=%s "
+                            "exc_type=%s message=%s",
+                            self.sid,
+                            account_int,
+                            current_line_id,
+                            type(exc).__name__,
+                            exc,
+                        )
+                        response = self._fallback_response(
+                            error_message,
+                            pack_line,
+                            account_id=account_int,
+                            line_id=current_line_id,
+                            line_number=idx,
+                        )
                 line_result, metadata = self._build_result_line(
                     account_int, idx, pack_line, response
                 )
@@ -2149,6 +2172,313 @@ class ValidationPackSender:
             **metrics_payload,
         )
         return summary_payload
+
+    def _build_deterministic_response(
+        self,
+        pack_line: Mapping[str, Any],
+        *,
+        account_id: int,
+        line_number: int,
+        line_id: str,
+    ) -> Mapping[str, Any]:
+        reason_code = pack_line.get("reason_code")
+        if not isinstance(reason_code, str) or not reason_code.strip():
+            raise ValidationPackError("Pack line missing reason_code")
+        reason_code = reason_code.strip()
+
+        raw_reason_label = pack_line.get("reason_label")
+        if isinstance(raw_reason_label, str):
+            reason_label = raw_reason_label.strip()
+        elif raw_reason_label is None:
+            reason_label = ""
+        else:
+            reason_label = str(raw_reason_label).strip()
+        if not reason_label:
+            reason_label = reason_code
+
+        field = self._coerce_field_name(pack_line, line_number)
+        finding = pack_line.get("finding")
+        if not isinstance(finding, Mapping):
+            finding = {}
+        is_mismatch = _coerce_bool_flag(finding.get("is_mismatch"))
+
+        (
+            decision,
+            modifiers,
+            has_long_history,
+            has_semantic_majority,
+        ) = self._deterministic_decision_logic(
+            pack_line,
+            reason_code=reason_code,
+            is_mismatch=is_mismatch,
+        )
+        rationale = self._compose_deterministic_rationale(
+            decision,
+            reason_code,
+            reason_label,
+            is_mismatch=is_mismatch,
+            long_history=has_long_history,
+            semantic_majority=has_semantic_majority,
+        )
+        citations = self._build_deterministic_citations(pack_line)
+        confidence = self._deterministic_confidence(pack_line, decision)
+
+        response = {
+            "sid": str(pack_line.get("sid") or self.sid),
+            "account_id": account_id,
+            "id": line_id,
+            "field": field,
+            "decision": decision,
+            "rationale": rationale,
+            "citations": citations,
+            "reason_code": reason_code,
+            "reason_label": reason_label,
+            "modifiers": modifiers,
+            "confidence": confidence,
+        }
+
+        self._log(
+            "send_line_deterministic",
+            account_id=f"{account_id:03d}",
+            line_number=line_number,
+            field=field,
+            reason_code=reason_code,
+            decision=decision,
+        )
+
+        return response
+
+    def _deterministic_decision_logic(
+        self,
+        pack_line: Mapping[str, Any],
+        *,
+        reason_code: str,
+        is_mismatch: bool,
+    ) -> tuple[str, dict[str, bool], bool, bool]:
+        modifiers: dict[str, bool] = {
+            "material_mismatch": bool(is_mismatch),
+            "time_anchor": False,
+            "doc_dependency": False,
+        }
+
+        long_history = self._has_long_consistent_history(pack_line)
+        semantic_majority = self._has_semantic_majority(pack_line)
+
+        decision = "neutral" if is_mismatch else "no_case"
+
+        if reason_code == "C5_ALL_DIFF":
+            modifiers["material_mismatch"] = True
+            if long_history:
+                decision = "supportive"
+                modifiers["time_anchor"] = True
+        elif reason_code == "C4_TWO_MATCH_ONE_DIFF":
+            if semantic_majority:
+                decision = "supportive"
+                modifiers["material_mismatch"] = False
+            else:
+                modifiers["material_mismatch"] = bool(is_mismatch)
+        else:
+            modifiers["material_mismatch"] = bool(is_mismatch)
+
+        return decision, modifiers, long_history, semantic_majority
+
+    def _compose_deterministic_rationale(
+        self,
+        decision: str,
+        reason_code: str,
+        reason_label: str,
+        *,
+        is_mismatch: bool,
+        long_history: bool,
+        semantic_majority: bool,
+    ) -> str:
+        base_label = reason_label or reason_code
+        if decision == "supportive" and reason_code == "C5_ALL_DIFF" and long_history:
+            return (
+                f"{base_label} shows a long, consistent history anchoring the timeline "
+                f"({reason_code})."
+            )
+        if decision == "supportive":
+            detail = "semantic alignment across bureaus" if semantic_majority else "supportive evidence"
+            return f"{base_label} provides {detail} ({reason_code})."
+        if decision == "neutral" and is_mismatch:
+            return f"{base_label} mismatch is recorded without escalation ({reason_code})."
+        return f"{base_label} does not create an actionable dispute ({reason_code})."
+
+    def _build_deterministic_citations(
+        self, pack_line: Mapping[str, Any]
+    ) -> list[str]:
+        records = list(self._iter_bureau_records_for_citations(pack_line))
+        citations: list[str] = []
+        for bureau, values in records:
+            normalized_value = values.get("normalized") if isinstance(values, Mapping) else None
+            raw_value = values.get("raw") if isinstance(values, Mapping) else None
+            text = self._stringify_citation_value(normalized_value)
+            if text is None:
+                text = self._stringify_citation_value(raw_value)
+            if text is None:
+                text = "None"
+            citations.append(f"{bureau}: {text}")
+
+        if not citations:
+            citations.append("equifax: None")
+
+        return citations
+
+    def _iter_bureau_records_for_citations(
+        self, pack_line: Mapping[str, Any]
+    ) -> list[tuple[str, Mapping[str, Any]]]:
+        records = _extract_bureau_records(pack_line)
+        if not records:
+            finding = pack_line.get("finding")
+            if isinstance(finding, Mapping):
+                bureau_values = finding.get("bureau_values")
+                if isinstance(bureau_values, Mapping):
+                    for bureau, value in bureau_values.items():
+                        if isinstance(value, Mapping):
+                            records[str(bureau)] = {
+                                "raw": value.get("raw"),
+                                "normalized": value.get("normalized"),
+                            }
+        return [(bureau, records[bureau]) for bureau in sorted(records)]
+
+    @staticmethod
+    def _stringify_citation_value(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = value.strip()
+            return text or None
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return str(value)
+        try:
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            try:
+                return str(value)
+            except Exception:
+                return None
+
+    def _has_long_consistent_history(self, pack_line: Mapping[str, Any]) -> bool:
+        context: Mapping[str, Any] | None = None
+        raw_context = pack_line.get("context")
+        if isinstance(raw_context, Mapping):
+            context = raw_context
+        if context is None:
+            finding = pack_line.get("finding")
+            if isinstance(finding, Mapping):
+                finding_context = finding.get("context")
+                if isinstance(finding_context, Mapping):
+                    context = finding_context
+        if context is None:
+            return False
+
+        history = context.get("history") if isinstance(context, Mapping) else None
+        if not isinstance(history, Mapping):
+            return False
+
+        if not self._history_has_consistent_flag(history):
+            return False
+
+        span_months = self._extract_history_span_months(history)
+        return span_months is not None and span_months >= 18
+
+    def _history_has_consistent_flag(self, history: Mapping[str, Any]) -> bool:
+        stack: list[Mapping[str, Any]] = [history]
+        while stack:
+            current = stack.pop()
+            if _coerce_bool_flag(current.get("consistent")):
+                return True
+            for key, value in current.items():
+                if isinstance(value, Mapping):
+                    stack.append(value)
+                else:
+                    key_text = str(key).lower()
+                    if _coerce_bool_flag(value) and "consistent" in key_text:
+                        return True
+                    if isinstance(value, str):
+                        lowered = value.strip().lower()
+                        if "consistent" in lowered and "inconsistent" not in lowered:
+                            return True
+        return False
+
+    def _extract_history_span_months(self, history: Mapping[str, Any]) -> int | None:
+        stack: list[Mapping[str, Any]] = [history]
+        max_span: int | None = None
+        while stack:
+            current = stack.pop()
+            for key, value in current.items():
+                if isinstance(value, Mapping):
+                    stack.append(value)
+                key_text = str(key).lower()
+                months = self._coerce_months_value(value)
+                if months is not None and any(
+                    token in key_text for token in ("month", "span", "duration", "range")
+                ):
+                    if max_span is None or months > max_span:
+                        max_span = months
+        return max_span
+
+    @staticmethod
+    def _coerce_months_value(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return int(value)
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            match = re.search(r"\d+", text)
+            if match:
+                try:
+                    return int(match.group())
+                except ValueError:
+                    return None
+        return None
+
+    def _has_semantic_majority(self, pack_line: Mapping[str, Any]) -> bool:
+        records = self._iter_bureau_records_for_citations(pack_line)
+        tokens: list[str] = []
+        for _, values in records:
+            normalized_value = None
+            if isinstance(values, Mapping):
+                normalized_value = values.get("normalized")
+            token = self._normalize_semantic_value(normalized_value)
+            if token is not None:
+                tokens.append(token)
+        if not tokens:
+            return False
+        counts = Counter(tokens)
+        return any(count >= 2 for count in counts.values())
+
+    @staticmethod
+    def _normalize_semantic_value(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = value.strip().lower()
+            return text or None
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return str(value)
+        try:
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            try:
+                return str(value)
+            except Exception:
+                return None
+
+    @staticmethod
+    def _deterministic_confidence(
+        pack_line: Mapping[str, Any], decision: str
+    ) -> float:
+        del pack_line, decision  # Deterministic heuristic placeholder
+        return 0.65
 
     def _call_model(
         self,
@@ -2644,11 +2974,61 @@ class ValidationPackSender:
         except (TypeError, ValueError) as exc:
             raise ValueError(f"account_id must be numeric: {account_id!r}") from exc
 
-    def _fallback_response(self, message: str) -> Mapping[str, Any]:
+    def _fallback_response(
+        self,
+        message: str,
+        pack_line: Mapping[str, Any] | None = None,
+        *,
+        account_id: int | None = None,
+        line_id: str | None = None,
+        line_number: int | None = None,
+    ) -> Mapping[str, Any]:
+        field = "unknown"
+        if pack_line is not None:
+            try:
+                field = self._coerce_field_name(pack_line, line_number or 1)
+            except Exception:
+                field = str(pack_line.get("field") or "unknown")
+
+        reason_code = "FALLBACK_ERROR"
+        reason_label = "AI request failed"
+        if isinstance(pack_line, Mapping):
+            raw_reason = pack_line.get("reason_code")
+            if isinstance(raw_reason, str) and raw_reason.strip():
+                reason_code = raw_reason.strip()
+            raw_label = pack_line.get("reason_label")
+            if isinstance(raw_label, str) and raw_label.strip():
+                reason_label = raw_label.strip()
+
+        citations: list[str]
+        if isinstance(pack_line, Mapping):
+            citations = self._build_deterministic_citations(pack_line)
+        else:
+            citations = ["equifax: None"]
+
+        modifiers = {
+            "material_mismatch": False,
+            "time_anchor": False,
+            "doc_dependency": False,
+        }
+
+        fallback_account = account_id if isinstance(account_id, int) else 0
+        fallback_id = line_id or f"fallback_{int(time.time())}"
+
+        rationale = f"AI error: {message} ({reason_code})"
+
         return {
+            "sid": self.sid,
+            "account_id": fallback_account,
+            "id": fallback_id,
+            "field": field,
             "decision": "no_case",
-            "rationale": f"AI error: {message}",
-            "citations": [],
+            "rationale": rationale,
+            "citations": citations,
+            "reason_code": reason_code,
+            "reason_label": reason_label,
+            "modifiers": modifiers,
+            "confidence": 0.0,
         }
 
     def _normalize_decision(self, value: Any) -> str:

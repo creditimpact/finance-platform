@@ -90,6 +90,10 @@ _SYSTEM_PROMPT = (
     "- Output MUST be strictly valid JSON per 'expected_output'."
 )
 
+_ACCOUNT_TYPE_GENERIC_HINT = (
+    "For account_type with C4 generic-vs-specific wording, default is not material unless category changes (e.g., revolving vs installment)."
+)
+
 _PROMPT_USER_TEMPLATE = (
     "You are given a single field finding extracted from a credit report tri-bureau comparison.\n\n"
     "Your task:\n"
@@ -1406,6 +1410,109 @@ class ValidationPackWriter:
         return normalized
 
 
+_ACCOUNT_TYPE_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "by",
+    "for",
+    "in",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+    "without",
+}
+
+
+def _normalize_account_type_text(value: str) -> str:
+    normalized = value.strip().lower()
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized
+
+
+def _tokenize_account_type_value(value: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", value))
+
+
+def _is_generic_vs_specific_account_type_mismatch(
+    finding: Mapping[str, Any]
+) -> bool:
+    if not isinstance(finding, Mapping):
+        return False
+
+    if finding.get("reason_code") != "C4_TWO_MATCH_ONE_DIFF":
+        return False
+
+    bureau_values = finding.get("bureau_values")
+    if not isinstance(bureau_values, Mapping):
+        return False
+
+    normalized_strings: list[str] = []
+    for entry in bureau_values.values():
+        value: Any | None = None
+        if isinstance(entry, Mapping):
+            raw_value = entry.get("normalized")
+            if not isinstance(raw_value, str) or not raw_value.strip():
+                raw_value = entry.get("raw")
+            if isinstance(raw_value, str) and raw_value.strip():
+                value = raw_value
+        elif isinstance(entry, str):  # pragma: no cover - defensive
+            value = entry
+
+        if isinstance(value, str):
+            normalized_value = _normalize_account_type_text(value)
+            if normalized_value:
+                normalized_strings.append(normalized_value)
+
+    if len(normalized_strings) < 2:
+        return False
+
+    counts = Counter(normalized_strings)
+    if not counts:
+        return False
+
+    majority_value, majority_count = counts.most_common(1)[0]
+    if majority_count < 2:
+        return False
+
+    minority_candidates = [value for value in counts if value != majority_value]
+    if len(minority_candidates) != 1:
+        return False
+
+    minority_value = minority_candidates[0]
+    if counts[minority_value] != 1:
+        return False
+
+    majority_tokens = _tokenize_account_type_value(majority_value)
+    minority_tokens = _tokenize_account_type_value(minority_value)
+    if not majority_tokens or not minority_tokens:
+        return False
+
+    common_tokens = majority_tokens & minority_tokens
+    meaningful_common = {token for token in common_tokens if token not in _ACCOUNT_TYPE_STOPWORDS}
+    if not meaningful_common:
+        return False
+
+    if majority_tokens.issubset(minority_tokens):
+        extra_tokens = minority_tokens - majority_tokens
+    elif minority_tokens.issubset(majority_tokens):
+        extra_tokens = majority_tokens - minority_tokens
+    else:
+        return False
+
+    meaningful_extra = {token for token in extra_tokens if token not in _ACCOUNT_TYPE_STOPWORDS}
+    if not meaningful_extra:
+        return False
+
+    if len(meaningful_extra) > 3:
+        return False
+
+    return True
+
+
 def build_line(
     *,
     sid: str,
@@ -1446,6 +1553,13 @@ def build_line(
         },
         "expected_output": _json_clone(_EXPECTED_OUTPUT_SCHEMA),
     }
+
+    if field_name == "account_type" and _is_generic_vs_specific_account_type_mismatch(
+        finding_payload
+    ):
+        payload["prompt"]["system"] = (
+            f"{payload['prompt']['system']}\n{_ACCOUNT_TYPE_GENERIC_HINT}"
+        )
 
     return sanitize_validation_payload(payload)
 

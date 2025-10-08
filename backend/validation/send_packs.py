@@ -38,7 +38,7 @@ from backend.validation.index_schema import (
     ValidationPackRecord,
     load_validation_index,
 )
-from .io import write_jsonl
+from .io import read_jsonl, write_json, write_jsonl
 
 from backend.pipeline.runs import RunManifest, persist_manifest, _utc_now
 from backend.validation.redaction import sanitize_validation_log_payload
@@ -2124,6 +2124,142 @@ class ValidationPackSender:
     # ------------------------------------------------------------------
     # Account processing
     # ------------------------------------------------------------------
+    def _collect_expected_line_info(
+        self,
+        account_id: int,
+        pack_lines: Sequence[Mapping[str, Any]],
+    ) -> list[tuple[str, str]]:
+        expected: list[tuple[str, str]] = []
+        for idx, pack_line in enumerate(pack_lines, start=1):
+            field_name = self._coerce_field_name(pack_line, idx)
+            if not self._is_allowed_field(field_name):
+                continue
+            identifier = self._coerce_identifier(account_id, idx, pack_line.get("id"))
+            expected.append((identifier, field_name))
+        return expected
+
+    def _load_existing_result_lines(
+        self, result_path: Path
+    ) -> list[Mapping[str, Any]] | None:
+        try:
+            if not result_path.is_file():
+                return None
+        except OSError:
+            return None
+
+        try:
+            existing_lines = read_jsonl(result_path)
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning(
+                "VALIDATION_EXISTING_RESULTS_LOAD_FAILED sid=%s path=%s error=%s",
+                self.sid,
+                str(result_path),
+                exc,
+            )
+            return None
+
+        normalized: list[Mapping[str, Any]] = []
+        for line in existing_lines:
+            if not isinstance(line, Mapping):
+                return None
+            normalized.append(dict(line))
+        return normalized
+
+    def _existing_results_complete(
+        self,
+        result_jsonl_path: Path,
+        result_summary_path: Path,
+        expected_lines: Sequence[tuple[str, str]],
+    ) -> list[Mapping[str, Any]] | None:
+        tmp_path = result_jsonl_path.with_name(result_jsonl_path.name + ".tmp")
+        if tmp_path.exists():
+            return None
+
+        if self._write_json_envelope:
+            summary_tmp = result_summary_path.with_name(
+                result_summary_path.name + ".tmp"
+            )
+            if summary_tmp.exists():
+                return None
+
+        existing = self._load_existing_result_lines(result_jsonl_path)
+        if existing is None:
+            return None
+
+        if len(existing) != len(expected_lines):
+            return None
+
+        for (expected_id, _), payload in zip(expected_lines, existing):
+            actual_id = str(payload.get("id") or "").strip()
+            if actual_id != expected_id:
+                return None
+
+        if self._write_json_envelope:
+            try:
+                if not result_summary_path.is_file():
+                    return None
+            except OSError:
+                return None
+
+        return [dict(line) for line in existing]
+
+    def _build_cached_summary(
+        self,
+        account_id: int,
+        pack_path: Path,
+        pack_display: str,
+        result_jsonl_path: Path,
+        result_jsonl_display: str,
+        result_target_path: Path,
+        result_target_display: str,
+        pack_lines: Sequence[Mapping[str, Any]],
+        expected_lines: Sequence[tuple[str, str]],
+        cached_results: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        total_fields = len(pack_lines)
+        fields_sent = len(cached_results)
+        fields_skipped = max(total_fields - fields_sent, 0)
+        conditional_sent = sum(
+            1 for _, field in expected_lines if field in _CONDITIONAL_FIELDS
+        )
+
+        decision_metrics = _empty_decision_metrics()
+        for (_, field_name), line in zip(expected_lines, cached_results):
+            bucket = "conditional" if field_name in _CONDITIONAL_FIELDS else "non_conditional"
+            decision = self._normalize_decision(line.get("decision"))
+            if decision not in decision_metrics:
+                decision_metrics[decision] = {"conditional": 0, "non_conditional": 0}
+            decision_metrics[decision][bucket] += 1
+
+        metrics_payload = {
+            "total_fields": total_fields,
+            "fields_sent": fields_sent,
+            "fields_skipped": fields_skipped,
+            "conditional_fields_sent": conditional_sent,
+            "decision_counts": decision_metrics,
+            "model_requests": 0,
+        }
+
+        cached_lines = [dict(line) for line in cached_results]
+
+        summary_payload: dict[str, Any] = {
+            "sid": self.sid,
+            "account_id": account_id,
+            "pack_path": str(pack_path),
+            "pack_manifest_path": pack_display,
+            "results_path": str(result_target_path),
+            "results_manifest_path": result_target_display,
+            "jsonl_path": str(result_jsonl_path),
+            "jsonl_manifest_path": result_jsonl_display,
+            "status": "skipped",
+            "model": self.model,
+            "request_lines": 0,
+            "results": cached_lines,
+            "completed_at": _utc_now(),
+            "metrics": metrics_payload,
+        }
+        return summary_payload
+
     def _process_account(
         self,
         account_id: Any,
@@ -2174,6 +2310,42 @@ class ValidationPackSender:
                 lines=0,
             )
             raise
+
+        expected_lines = self._collect_expected_line_info(account_int, pack_lines)
+        cached_results = self._existing_results_complete(
+            result_jsonl_path,
+            result_target_path,
+            expected_lines,
+        )
+        if cached_results is not None:
+            summary_payload = self._build_cached_summary(
+                account_int,
+                pack_path,
+                pack_display,
+                result_jsonl_path,
+                result_jsonl_display,
+                result_target_path,
+                result_target_display,
+                pack_lines,
+                expected_lines,
+                cached_results,
+            )
+            log.info(
+                "VALIDATION_SEND_ACCOUNT_SKIP sid=%s account_id=%03d pack=%s results=%s",
+                self.sid,
+                account_int,
+                str(pack_path),
+                len(cached_results),
+            )
+            self._log(
+                "send_account_skipped",
+                account_id=f"{account_int:03d}",
+                pack=pack_display,
+                pack_absolute=str(pack_path),
+                results=len(cached_results),
+                reason="existing_results",
+            )
+            return summary_payload
 
         log.info(
             "VALIDATION_SEND_ACCOUNT_START sid=%s account_id=%03d pack=%s lines=%s results=%s",
@@ -3187,26 +3359,30 @@ class ValidationPackSender:
                 raise TypeError("Result line must be a mapping to serialize as JSONL")
             serialized_lines.append(dict(line))
 
+        alias_name: str | None = None
+        if jsonl_display:
+            try:
+                alias_name = PurePosixPath(jsonl_display).name
+            except Exception:
+                alias_name = None
+
         if serialized_lines:
             write_jsonl(jsonl_path, serialized_lines)
-            alias_name: str | None = None
-            if jsonl_display:
-                try:
-                    alias_name = PurePosixPath(jsonl_display).name
-                except Exception:
-                    alias_name = None
-            if alias_name and alias_name != jsonl_path.name:
-                alias_suffix = PurePosixPath(alias_name).suffix.lower()
-                if alias_suffix == ".jsonl":
-                    alias_path = jsonl_path.with_name(alias_name)
-                    write_jsonl(alias_path, serialized_lines)
-                else:
-                    log.debug(
-                        "VALIDATION_SKIP_RESULT_ALIAS jsonl=%s alias=%s", jsonl_path, alias_name
-                    )
         else:
             try:
                 jsonl_path.unlink()
+            except FileNotFoundError:
+                pass
+
+        if alias_name and alias_name != jsonl_path.name:
+            alias_path = jsonl_path.with_name(alias_name)
+            try:
+                alias_path.unlink()
+            except FileNotFoundError:
+                pass
+            tmp_alias = alias_path.with_name(alias_path.name + ".tmp")
+            try:
+                tmp_alias.unlink()
             except FileNotFoundError:
                 pass
 
@@ -3225,11 +3401,7 @@ class ValidationPackSender:
             }
             if error:
                 summary_payload["error"] = error
-            summary_target.write_text(
-                json.dumps(summary_payload, ensure_ascii=False, sort_keys=True)
-                + "\n",
-                encoding="utf-8",
-            )
+            write_json(summary_target, summary_payload)
             summary_display_value = summary_display or summary_target.name
         else:
             summary_target = jsonl_path

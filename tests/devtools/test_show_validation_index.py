@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -40,7 +41,13 @@ def _create_index_entry(
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     jsonl_path.parent.mkdir(parents=True, exist_ok=True)
 
-    pack_path.write_text("", encoding="utf-8")
+    total_lines = lines or len(weak_fields or ()) or 1
+    payload_lines = []
+    fields = weak_fields or []
+    for idx in range(total_lines):
+        field_name = fields[idx] if idx < len(fields) else f"field_{idx}"
+        payload_lines.append(json.dumps({"field": field_name}))
+    pack_path.write_text("\n".join(payload_lines) + "\n", encoding="utf-8")
     summary_path.write_text("{}\n", encoding="utf-8")
     jsonl_path.write_text("", encoding="utf-8")
 

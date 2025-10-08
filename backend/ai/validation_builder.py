@@ -611,6 +611,34 @@ class ValidationPackWriter:
     ) -> None:
         if not lines:
             return
+
+        try:
+            exists = pack_path.exists()
+        except OSError:
+            exists = False
+
+        if not exists or not pack_path.is_file():
+            log.warning(
+                "VALIDATION_INDEX_SKIP_MISSING_PACK sid=%s account_id=%03d path=%s",
+                self.sid,
+                account_id,
+                pack_path,
+            )
+            return
+
+        try:
+            size = pack_path.stat().st_size
+        except OSError:
+            size = 0
+
+        if size <= 0:
+            log.warning(
+                "VALIDATION_INDEX_SKIP_EMPTY_PACK sid=%s account_id=%03d path=%s",
+                self.sid,
+                account_id,
+                pack_path,
+            )
+            return
         weak_fields: list[str] = []
         for line in lines:
             if not isinstance(line, PackLine):

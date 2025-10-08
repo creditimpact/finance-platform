@@ -187,6 +187,36 @@ def test_sender_uses_validation_stage_paths_from_run_manifest(
     assert sender._log_path == log_path.resolve()  # type: ignore[attr-defined]
 
 
+def test_sender_uses_relative_log_path_override(
+    tmp_path: Path, loader_client: _LoaderStubClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID559"
+    base_dir = tmp_path / "runs" / sid / "ai_packs" / "validation"
+    packs_dir = base_dir / "packs"
+    results_dir = base_dir / "results"
+    index_path = base_dir / "index.json"
+
+    packs_dir.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest = {
+        "schema_version": 2,
+        "sid": sid,
+        "root": ".",
+        "packs_dir": "packs",
+        "results_dir": "results",
+        "packs": [],
+    }
+    index_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    monkeypatch.setenv("VALIDATION_LOG_PATH_REL", "logs/custom.log")
+
+    sender = ValidationPackSender(index_path, http_client=loader_client)
+
+    expected_log_path = (index_path.parent / "logs" / "custom.log").resolve()
+    assert sender._log_path == expected_log_path  # type: ignore[attr-defined]
+
+
 def test_sender_falls_back_to_ai_validation_dir(
     tmp_path: Path, loader_client: _LoaderStubClient
 ) -> None:

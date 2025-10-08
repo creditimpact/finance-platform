@@ -568,3 +568,75 @@ def test_validation_sender_logs_result_mismatch(
     summary_messages = [record.message for record in caplog.records if "VALIDATION_SEND_SUMMARY" in record.message]
     assert summary_messages
     assert "errors=1" in summary_messages[-1]
+
+
+def test_sender_emits_per_line_debug_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    sid = "DBG001"
+    base_dir = tmp_path / "runs" / sid / "ai_packs" / "validation"
+    packs_dir = base_dir / "packs"
+    results_dir = base_dir / "results"
+    index_path = base_dir / "index.json"
+
+    pack_path = packs_dir / "val_acc_001.jsonl"
+    pack_path.parent.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    pack_payload = {
+        "id": "acc_001__account_number_display",
+        "field": "account_number_display",
+        "prompt": {"system": "system", "user": "debug"},
+        "expected_output": _EXPECTED_OUTPUT,
+    }
+    pack_path.write_text(json.dumps(pack_payload) + "\n", encoding="utf-8")
+
+    manifest = {
+        "schema_version": 2,
+        "sid": sid,
+        "root": ".",
+        "packs_dir": "packs",
+        "results_dir": "results",
+        "packs": [
+            {
+                "account_id": 1,
+                "pack": "packs/val_acc_001.jsonl",
+                "result_jsonl": "results/acc_001.result.jsonl",
+                "result_json": "results/acc_001.result.jsonl",
+                "lines": 1,
+                "status": "built",
+                "built_at": "2024-01-01T00:00:00Z",
+            }
+        ],
+    }
+    index_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    response_payload = {
+        "decision": "neutral_context_only",
+        "rationale": "Debug rationale",
+        "citations": ["equifax: 1234"],
+        "checks": {
+            "materiality": False,
+            "supports_consumer": False,
+            "doc_requirements_met": True,
+            "mismatch_code": "debug",
+        },
+    }
+
+    monkeypatch.setenv("VALIDATION_DEBUG", "1")
+
+    with caplog.at_level(logging.INFO):
+        sender = ValidationPackSender(
+            index_path, http_client=_FixedResponseStubClient(response_payload)
+        )
+        sender.send()
+
+    debug_messages = [
+        record.message for record in caplog.records if record.message.startswith("VALIDATION_LINE_SENT")
+    ]
+    assert debug_messages
+    message = debug_messages[0]
+    assert "account=001" in message
+    assert "field=account_number_display" in message
+    assert "id=acc_001__account_number_display" in message
+    assert "decision=neutral_context_only" in message

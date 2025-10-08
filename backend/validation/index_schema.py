@@ -63,6 +63,23 @@ def _normalize_path_text(value: str) -> str:
     return value.replace("\\", "/")
 
 
+def _canonicalize_result_json_path(value: str) -> str:
+    """Ensure legacy ``.result.json`` paths use the canonical ``.jsonl`` suffix."""
+
+    if not value:
+        return value
+
+    candidate = PurePosixPath(value)
+    if candidate.suffix.lower() != ".json":
+        return value
+
+    name = candidate.name
+    if not name.endswith(".result.json"):
+        return value
+
+    return candidate.with_suffix(".jsonl").as_posix()
+
+
 def _looks_like_windows_absolute(path: str) -> bool:
     if not path:
         return False
@@ -138,14 +155,17 @@ class ValidationPackRecord:
             or data.get("result_jsonl_file")
         )
         result_jsonl_raw = _normalize_path_text(result_jsonl_raw)
-        result_jsonl = result_jsonl_raw or None
+        result_jsonl_normalized = _canonicalize_result_json_path(result_jsonl_raw)
+        result_jsonl = result_jsonl_normalized or None
         result_json = _normalize_string(
             data.get("result_json")
             or data.get("result_json_path")
             or data.get("result_summary_path")
             or data.get("result_path")
         )
-        result_json = _normalize_path_text(result_json)
+        result_json = _canonicalize_result_json_path(
+            _normalize_path_text(result_json)
+        )
 
         lines = _normalize_int(data.get("lines") or data.get("line_count"))
         status = _normalize_string(data.get("status"), default="built")

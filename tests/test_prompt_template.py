@@ -22,9 +22,10 @@ def test_render_validation_prompt_includes_required_sections() -> None:
         finding=finding,
     )
 
-    assert "You are an adjudication assistant" in system_prompt
-    assert "Practical meaning of decisions:" in user_prompt
-    assert "Decision policy (apply in order):" in user_prompt
+    assert "Project: credit-analyzer" in system_prompt
+    assert "Assume the consumer claims the most favorable version is accurate" in system_prompt
+    assert "Decision outcomes:" in user_prompt
+    assert "Evaluation guidance:" in user_prompt
     assert "Hard constraints:" in user_prompt
     assert "Field finding (verbatim JSON):" in user_prompt
     assert "C4_TWO_MATCH_ONE_DIFF" in user_prompt

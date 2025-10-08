@@ -270,33 +270,20 @@ class ValidationIndex:
         return self.resolve_path(record.pack)
 
     def resolve_result_jsonl_path(self, record: ValidationPackRecord) -> Path:
-        explicit = record.result_jsonl
-        if explicit:
-            return self._resolve_from_root(explicit)
-
-        results_dir = self.results_dir_path
-        template = os.getenv(
-            "VALIDATION_RESULTS_BASENAME", "acc_{account}.result.jsonl"
-        )
-        if not template.endswith(".jsonl"):
-            template = f"{template}.jsonl"
+        """Compute the absolute path for an account's ``.result.jsonl`` file."""
 
         account_value: Any = record.account_id
-        if not account_value and "account" in record.extra:
-            account_value = record.extra["account"]
-
-        if account_value is None:
-            raise ValueError(
-                "Validation pack record missing 'account_id' for result path derivation"
-            )
-
         try:
-            account_text = f"{int(account_value):03d}"
-        except Exception:
-            account_text = str(account_value)
+            account_number = int(account_value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                "Validation pack record missing valid 'account_id' for result path"
+            ) from None
 
-        filename = template.format(account=account_text)
-        return (results_dir / PurePosixPath(_normalize_path_text(filename))).resolve()
+        results_dir_relative = Path(_normalize_path_text(self.results_dir) or ".")
+        result_dir = (self.root_dir / results_dir_relative).resolve()
+        filename = f"acc_{account_number:03d}.result.jsonl"
+        return result_dir / filename
 
     def resolve_result_json_path(self, record: ValidationPackRecord) -> Path:
         return self.resolve_path(record.result_json)
@@ -421,7 +408,6 @@ def _index_from_document(document: Mapping[str, Any], index_path: Path) -> Valid
             result_summary_path = (
                 results_dir / validation_result_summary_filename_for_account(account_id)
             )
-
             record = ValidationPackRecord(
                 account_id=account_id,
                 pack=pack_rel,

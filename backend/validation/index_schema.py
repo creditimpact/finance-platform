@@ -55,6 +55,24 @@ def _normalize_string(value: Any, *, default: str = "") -> str:
     return str(value)
 
 
+def _normalize_path_text(value: str) -> str:
+    """Normalize schema path fields to use forward slashes."""
+
+    if not value:
+        return value
+    return value.replace("\\", "/")
+
+
+def _looks_like_windows_absolute(path: str) -> bool:
+    if not path:
+        return False
+    if path.startswith("//"):
+        return True
+    if len(path) >= 3 and path[1] == ":" and path[2] == "/":
+        return True
+    return False
+
+
 def _normalize_int(value: Any, *, default: int = 0) -> int:
     try:
         return int(value)
@@ -113,11 +131,13 @@ class ValidationPackRecord:
             or data.get("pack_file")
             or data.get("pack_filename")
         )
+        pack_path = _normalize_path_text(pack_path)
         result_jsonl_raw = _normalize_string(
             data.get("result_jsonl")
             or data.get("result_jsonl_path")
             or data.get("result_jsonl_file")
         )
+        result_jsonl_raw = _normalize_path_text(result_jsonl_raw)
         result_jsonl = result_jsonl_raw or None
         result_json = _normalize_string(
             data.get("result_json")
@@ -125,6 +145,7 @@ class ValidationPackRecord:
             or data.get("result_summary_path")
             or data.get("result_path")
         )
+        result_json = _normalize_path_text(result_json)
 
         lines = _normalize_int(data.get("lines") or data.get("line_count"))
         status = _normalize_string(data.get("status"), default="built")
@@ -211,27 +232,71 @@ class ValidationIndex:
 
     @property
     def root_dir(self) -> Path:
-        return (self.index_dir / PurePosixPath(self.root)).resolve()
+        root_text = _normalize_path_text(self.root) if self.root else "."
+
+        if _looks_like_windows_absolute(root_text):
+            return Path(root_text)
+
+        posix_path = PurePosixPath(root_text)
+        if posix_path.is_absolute():
+            return Path(posix_path).resolve()
+
+        return (self.index_dir / posix_path).resolve()
 
     @property
     def packs_dir_path(self) -> Path:
-        return (self.root_dir / PurePosixPath(self.packs_dir)).resolve()
+        return self._resolve_from_root(self.packs_dir)
 
     @property
     def results_dir_path(self) -> Path:
-        return (self.root_dir / PurePosixPath(self.results_dir)).resolve()
+        return self._resolve_from_root(self.results_dir)
+
+    def _resolve_from_root(self, path_text: str) -> Path:
+        normalized = _normalize_path_text(path_text) if path_text else "."
+
+        if _looks_like_windows_absolute(normalized):
+            return Path(normalized)
+
+        posix_path = PurePosixPath(normalized)
+        if posix_path.is_absolute():
+            return Path(posix_path).resolve()
+
+        return (self.root_dir / posix_path).resolve()
 
     def resolve_path(self, relative: str) -> Path:
-        posix_path = PurePosixPath(relative)
-        return (self.index_dir / posix_path).resolve()
+        return self._resolve_from_root(relative)
 
     def resolve_pack_path(self, record: ValidationPackRecord) -> Path:
         return self.resolve_path(record.pack)
 
     def resolve_result_jsonl_path(self, record: ValidationPackRecord) -> Path:
-        if not record.result_jsonl:
-            raise ValueError("Validation pack record is missing a result_jsonl path")
-        return self.resolve_path(record.result_jsonl)
+        explicit = record.result_jsonl
+        if explicit:
+            return self._resolve_from_root(explicit)
+
+        results_dir = self.results_dir_path
+        template = os.getenv(
+            "VALIDATION_RESULTS_BASENAME", "acc_{account}.result.jsonl"
+        )
+        if not template.endswith(".jsonl"):
+            template = f"{template}.jsonl"
+
+        account_value: Any = record.account_id
+        if not account_value and "account" in record.extra:
+            account_value = record.extra["account"]
+
+        if account_value is None:
+            raise ValueError(
+                "Validation pack record missing 'account_id' for result path derivation"
+            )
+
+        try:
+            account_text = f"{int(account_value):03d}"
+        except Exception:
+            account_text = str(account_value)
+
+        filename = template.format(account=account_text)
+        return (results_dir / PurePosixPath(_normalize_path_text(filename))).resolve()
 
     def resolve_result_json_path(self, record: ValidationPackRecord) -> Path:
         return self.resolve_path(record.result_json)
@@ -303,9 +368,15 @@ def _index_from_document(document: Mapping[str, Any], index_path: Path) -> Valid
 
     if schema_version >= 2:
         sid = _normalize_string(document.get("sid"))
-        root = _normalize_string(document.get("root"), default=".")
-        packs_dir = _normalize_string(document.get("packs_dir"), default="packs")
-        results_dir = _normalize_string(document.get("results_dir"), default="results")
+        root = _normalize_path_text(
+            _normalize_string(document.get("root"), default=".")
+        )
+        packs_dir = _normalize_path_text(
+            _normalize_string(document.get("packs_dir"), default="packs")
+        )
+        results_dir = _normalize_path_text(
+            _normalize_string(document.get("results_dir"), default="results")
+        )
 
         raw_packs = document.get("packs")
         entries: list[ValidationPackRecord] = []

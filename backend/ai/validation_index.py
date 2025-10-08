@@ -232,7 +232,7 @@ class ValidationPackIndexWriter:
 
         validated_entries: list[ValidationIndexEntry] = []
         for entry in new_entries:
-            if entry.line_count <= 0:
+            if entry.line_count < 0:
                 log.warning(
                     "VALIDATION_INDEX_SKIP_EMPTY_LINES sid=%s account_id=%s pack=%s",
                     self.sid,
@@ -249,20 +249,6 @@ class ValidationPackIndexWriter:
             if not exists or not entry.pack_path.is_file():
                 log.warning(
                     "VALIDATION_INDEX_SKIP_MISSING_PACK sid=%s account_id=%s path=%s",
-                    self.sid,
-                    entry.account_id,
-                    entry.pack_path,
-                )
-                continue
-
-            try:
-                size = entry.pack_path.stat().st_size
-            except OSError:
-                size = 0
-
-            if size <= 0:
-                log.warning(
-                    "VALIDATION_INDEX_SKIP_EMPTY_PACK sid=%s account_id=%s path=%s",
                     self.sid,
                     entry.account_id,
                     entry.pack_path,

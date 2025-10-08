@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from backend.core.ai.paths import validation_result_jsonl_filename_for_account
+from backend.core.ai.paths import (
+    validation_result_json_filename_for_account,
+    validation_result_jsonl_filename_for_account,
+)
 from backend.validation.send_packs import ValidationPackSender
 
 
@@ -300,6 +303,58 @@ def test_validation_sender_low_confidence_guardrail(
 
     counters = analytics_tracker.get_counters()
     assert counters.get("validation.ai.response_low_confidence", 0) >= 1
+
+
+def test_validation_sender_json_envelope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, index_path, results_dir = _seed_manifest(tmp_path, [1], sid="JSONENV")
+    monkeypatch.setenv("AI_MODEL", "stub-model")
+    monkeypatch.setenv("VALIDATION_WRITE_JSON", "1")
+
+    payload = {
+        "sid": "JSONENV",
+        "account_id": 1,
+        "id": "Field 1",
+        "field": "Field 1",
+        "decision": "strong_actionable",
+        "rationale": "Envelope test.",
+        "citations": ["equifax: value"],
+        "checks": {
+            "materiality": True,
+            "supports_consumer": True,
+            "doc_requirements_met": True,
+            "mismatch_code": "FIELD_MISMATCH",
+        },
+        "reason_code": "FIELD_MISMATCH",
+        "reason_label": "Field 1 mismatch",
+        "modifiers": {
+            "material_mismatch": True,
+            "time_anchor": False,
+            "doc_dependency": False,
+        },
+    }
+
+    sender = ValidationPackSender(
+        index_path, http_client=_FixedResponseStubClient(payload)
+    )
+    sender.send()
+
+    json_file = results_dir / validation_result_json_filename_for_account(1)
+    jsonl_file = results_dir / validation_result_jsonl_filename_for_account(1)
+
+    assert json_file.exists()
+    assert jsonl_file.exists()
+
+    envelope = json.loads(json_file.read_text(encoding="utf-8"))
+    assert envelope["status"] == "done"
+    assert envelope["results"]
+    assert envelope["results"][0]["citations"] == ["equifax: value"]
+
+    lines = [
+        json.loads(line)
+        for line in jsonl_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert lines
 
 
 def test_validation_sender_invalid_json_fallback(

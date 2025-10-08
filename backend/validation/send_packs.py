@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import json
 import logging
 import os
@@ -99,6 +100,7 @@ _INDEX_FILE_WAIT_ATTEMPTS = 10
 _INDEX_FILE_WAIT_DELAY = 0.4
 _INDEX_FILE_MIN_SIZE = 20
 _DEFAULT_CONFIDENCE_THRESHOLD = 0.70
+_WRITE_JSON_ENVELOPE_ENV = "VALIDATION_WRITE_JSON_ENVELOPE"
 
 
 log = logging.getLogger(__name__)
@@ -1347,6 +1349,9 @@ class ValidationPackSender:
         self._default_queue = (
             self._infer_queue_hint(self._index.packs) or _DEFAULT_QUEUE_NAME
         )
+        self._write_json_envelope = _coerce_bool_flag(
+            os.getenv(_WRITE_JSON_ENVELOPE_ENV)
+        )
 
     def _await_index_ready(self) -> ValidationIndex:
         index = self._load_index()
@@ -1723,13 +1728,23 @@ class ValidationPackSender:
                 results.append(account_summary)
                 continue
 
+            if self._write_json_envelope:
+                result_display = (
+                    result_json_relative
+                    or self._display_path(result_json_path, base=index.index_dir)
+                )
+            else:
+                result_display = (
+                    result_jsonl_relative
+                    or self._display_path(result_jsonl_path, base=index.index_dir)
+                )
+
             log.info(
                 "PROCESSING account_id=%s pack=%s result_json=%s",
                 account_label,
                 pack_relative
                 or self._display_path(resolved_pack, base=index.index_dir),
-                result_json_relative
-                or self._display_path(result_json_path, base=index.index_dir),
+                result_display,
             )
 
             try:
@@ -1841,6 +1856,23 @@ class ValidationPackSender:
         error_path = result_summary_path.with_name(error_filename)
         self._clear_error_sidecar(error_path, pack_id=pack_identifier)
 
+        if self._write_json_envelope:
+            result_target_path = result_summary_path
+            result_target_display = result_summary_display
+        else:
+            result_target_path = result_jsonl_path
+            result_target_display = result_jsonl_display
+
+        if not result_target_display:
+            fallback_display = (
+                result_jsonl_display
+                if result_target_path == result_jsonl_path
+                else result_summary_display
+            )
+            result_target_display = fallback_display or self._display_path(
+                result_target_path
+            )
+
         try:
             pack_lines = list(
                 self._iter_pack_lines(pack_path, display_path=pack_display)
@@ -1861,7 +1893,7 @@ class ValidationPackSender:
             account_int,
             str(pack_path),
             len(pack_lines),
-            str(result_summary_path),
+            str(result_target_path),
         )
 
         result_lines: list[dict[str, Any]] = []
@@ -1906,14 +1938,14 @@ class ValidationPackSender:
                         line_id=current_line_id,
                         pack_id=pack_identifier,
                         error_path=error_path,
-                        result_path=result_summary_path,
-                        result_display=result_summary_display,
+                        result_path=result_target_path,
+                        result_display=result_target_display,
                     )
                 except Exception as exc:
                     error_message = (
                         "AI request failed for acc "
                         f"{account_int:03d} pack={pack_display} -> "
-                        f"{result_jsonl_display}, {result_summary_display}: {exc}"
+                        f"{result_target_display}: {exc}"
                     )
                     errors.append(error_message)
                     log.error(
@@ -1991,8 +2023,8 @@ class ValidationPackSender:
             error=error_message,
             jsonl_path=result_jsonl_path,
             jsonl_display=result_jsonl_display,
-            summary_path=result_summary_path,
-            summary_display=result_summary_display,
+            summary_path=result_target_path,
+            summary_display=result_target_display,
         )
 
         summary_payload: dict[str, Any] = {
@@ -2001,7 +2033,7 @@ class ValidationPackSender:
             "pack_path": str(pack_path),
             "pack_manifest_path": pack_display,
             "results_path": str(summary_path),
-            "results_manifest_path": result_summary_display,
+            "results_manifest_path": result_target_display,
             "jsonl_path": str(jsonl_path),
             "jsonl_manifest_path": result_jsonl_display,
             "status": status,
@@ -2048,6 +2080,23 @@ class ValidationPackSender:
         result_summary_display: str,
         error: str,
     ) -> dict[str, Any]:
+        if self._write_json_envelope:
+            result_target_path = result_summary_path
+            result_target_display = result_summary_display
+        else:
+            result_target_path = result_jsonl_path
+            result_target_display = result_jsonl_display
+
+        if not result_target_display:
+            fallback_display = (
+                result_jsonl_display
+                if result_target_path == result_jsonl_path
+                else result_summary_display
+            )
+            result_target_display = fallback_display or self._display_path(
+                result_target_path
+            )
+
         jsonl_path, summary_path = self._write_results(
             account_id,
             [],
@@ -2055,8 +2104,8 @@ class ValidationPackSender:
             error=error,
             jsonl_path=result_jsonl_path,
             jsonl_display=result_jsonl_display,
-            summary_path=result_summary_path,
-            summary_display=result_summary_display,
+            summary_path=result_target_path,
+            summary_display=result_target_display,
         )
         summary_payload = {
             "sid": self.sid,
@@ -2064,7 +2113,7 @@ class ValidationPackSender:
             "pack_path": str(pack_path),
             "pack_manifest_path": pack_display,
             "results_path": str(summary_path),
-            "results_manifest_path": result_summary_display,
+            "results_manifest_path": result_target_display,
             "jsonl_path": str(jsonl_path),
             "jsonl_manifest_path": result_jsonl_display,
             "status": "error",
@@ -2136,17 +2185,31 @@ class ValidationPackSender:
             }
             self._write_error_sidecar(error_path, payload)
 
-        payload = {
+        request_payload = {
             "model": self.model,
             "messages": list(messages),
             "response_format": {"type": "json_object"},
         }
 
-        response = self._client.create(
-            payload,
-            pack_id=pack_id,
-            on_error=_record_sidecar,
-        )
+        try:
+            create_params = inspect.signature(self._client.create).parameters
+        except (TypeError, ValueError):
+            create_params = {}
+
+        if "payload" in create_params:
+            response = self._client.create(
+                request_payload,
+                pack_id=pack_id,
+                on_error=_record_sidecar,
+            )
+        else:
+            response = self._client.create(
+                **request_payload,
+                pack_id=pack_id,
+                on_error=_record_sidecar,
+            )
+
+        payload = request_payload
         if hasattr(response, "payload"):
             payload = response.payload  # type: ignore[assignment]
             status_code = getattr(response, "status_code", 0)
@@ -2362,7 +2425,6 @@ class ValidationPackSender:
             )
 
         jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-        summary_path.parent.mkdir(parents=True, exist_ok=True)
 
         jsonl_lines = [
             json.dumps(line, ensure_ascii=False, sort_keys=True) for line in result_lines
@@ -2372,28 +2434,40 @@ class ValidationPackSender:
             jsonl_payload += "\n"
         jsonl_path.write_text(jsonl_payload, encoding="utf-8")
 
-        summary_payload: dict[str, Any] = {
-            "sid": self.sid,
-            "account_id": account_id,
-            "status": status,
-            "model": self.model,
-            "request_lines": len(result_lines),
-            "completed_at": _utc_now(),
-            "results": list(result_lines),
-        }
-        if error:
-            summary_payload["error"] = error
-        summary_path.write_text(
-            json.dumps(summary_payload, ensure_ascii=False, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        summary_target = summary_path
+        summary_display_value: str
+        if self._write_json_envelope:
+            summary_target.parent.mkdir(parents=True, exist_ok=True)
+            summary_payload: dict[str, Any] = {
+                "sid": self.sid,
+                "account_id": account_id,
+                "status": status,
+                "model": self.model,
+                "request_lines": len(result_lines),
+                "completed_at": _utc_now(),
+                "results": list(result_lines),
+            }
+            if error:
+                summary_payload["error"] = error
+            summary_target.write_text(
+                json.dumps(summary_payload, ensure_ascii=False, sort_keys=True)
+                + "\n",
+                encoding="utf-8",
+            )
+            summary_display_value = summary_display or summary_target.name
+        else:
+            summary_target = jsonl_path
+            summary_display_value = (
+                summary_display or jsonl_display or jsonl_path.name
+            )
+
         self._log(
             "send_account_results",
             account_id=f"{account_id:03d}",
             jsonl=jsonl_display or jsonl_path.name,
             jsonl_absolute=str(jsonl_path.resolve()),
-            summary=summary_display or summary_path.name,
-            summary_absolute=str(summary_path.resolve()),
+            summary=summary_display_value,
+            summary_absolute=str(summary_target.resolve()),
             results=len(result_lines),
             status=status,
         )
@@ -2402,11 +2476,11 @@ class ValidationPackSender:
             self.sid,
             account_id,
             str(jsonl_path),
-            str(summary_path),
+            str(summary_target),
             len(result_lines),
             status,
         )
-        return jsonl_path, summary_path
+        return jsonl_path, summary_target
 
     def _write_error_sidecar(self, path: Path, payload: Mapping[str, Any]) -> None:
         data: dict[str, Any] = dict(payload)

@@ -35,6 +35,16 @@ def _pack_line(field: str) -> str:
             "system": "system",
             "user": {"field": field, "context": "value"},
         },
+        "sid": "SMOKE",
+        "reason_code": "FIELD_MISMATCH",
+        "reason_label": f"{field} mismatch",
+        "finding": {
+            "is_mismatch": True,
+            "bureaus": {
+                "equifax": {"normalized": "value", "raw": "Value"},
+                "transunion": {"normalized": "value", "raw": "Value"},
+            },
+        },
     }
     return json.dumps(payload)
 
@@ -61,7 +71,7 @@ def _seed_manifest(
                 "account_id": account_id,
                 "pack": f"packs/account_{account_id:03d}.pack.jsonl",
                 "result_jsonl": f"results/account_{account_id:03d}.result.jsonl",
-                "result_json": f"results/account_{account_id:03d}.result.json",
+                "result_json": f"results/account_{account_id:03d}.result.jsonl",
                 "lines": 1,
                 "status": "built",
                 "built_at": "2024-01-01T00:00:00Z",
@@ -91,10 +101,20 @@ def test_validation_sender_smoke_writes_results(
     monkeypatch.setenv("VALIDATION_SINGLE_RESULT_FILE", "0")
 
     payload = {
+        "sid": sid,
+        "account_id": 1,
+        "id": "Field 1",
+        "field": "Field 1",
         "decision": "strong",
-        "justification": "auto",
-        "labels": ["deterministic_match"],
-        "citations": ["transunion.raw"],
+        "rationale": "Deterministic outcome (FIELD_MISMATCH).",
+        "citations": ["transunion: value"],
+        "reason_code": "FIELD_MISMATCH",
+        "reason_label": "Field 1 mismatch",
+        "modifiers": {
+            "material_mismatch": True,
+            "time_anchor": False,
+            "doc_dependency": False,
+        },
         "confidence": 0.75,
     }
 
@@ -107,10 +127,8 @@ def test_validation_sender_smoke_writes_results(
 
     for account_id in (1, 2):
         jsonl_file = results_dir / f"account_{account_id:03d}.result.jsonl"
-        summary_file = results_dir / f"account_{account_id:03d}.result.json"
 
         assert jsonl_file.is_file()
-        assert summary_file.is_file()
 
         lines = [line for line in jsonl_file.read_text(encoding="utf-8").splitlines() if line]
         assert lines, f"expected result lines for account {account_id}"
@@ -119,13 +137,7 @@ def test_validation_sender_smoke_writes_results(
         assert entry["labels"] == ["deterministic_match"]
         assert entry["citations"] == ["transunion.raw"]
         assert entry["confidence"] == 0.75
-
-        summary = json.loads(summary_file.read_text(encoding="utf-8"))
-        assert summary["status"] == "done"
-        assert summary["account_id"] == account_id
-        assert summary["results"], "summary should include results"
-        summary_entry = summary["results"][0]
-        assert summary_entry["labels"] == ["deterministic_match"]
+        assert entry["legacy_decision"] == "strong"
 
 
 def test_validation_sender_invalid_response_guardrail(
@@ -141,9 +153,20 @@ def test_validation_sender_invalid_response_guardrail(
     analytics_tracker.reset_counters()
 
     payload = {
+        "sid": "GUARD001",
+        "account_id": 1,
+        "id": "Field 1",
+        "field": "Field 1",
         "decision": "strong",
-        "justification": "auto",
-        "citations": ["transunion.raw"],
+        "rationale": "Guardrail test (FIELD_MISMATCH).",
+        "citations": ["transunion: value"],
+        "reason_code": "FIELD_MISMATCH",
+        "reason_label": "Field 1 mismatch",
+        "modifiers": {
+            "material_mismatch": True,
+            "time_anchor": False,
+            "doc_dependency": False,
+        },
         "confidence": 0.92,
     }
 
@@ -152,13 +175,15 @@ def test_validation_sender_invalid_response_guardrail(
     )
     sender.send()
 
-    summary_path = results_dir / "account_001.result.json"
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    result_entry = summary["results"][0]
+    summary_path = results_dir / "account_001.result.jsonl"
+    lines = [json.loads(line) for line in summary_path.read_text(encoding="utf-8").splitlines() if line]
+    assert lines
+    result_entry = lines[0]
 
     assert result_entry["decision"] == "no_case"
     assert result_entry["rationale"] == "[guardrail:invalid_response]"
     assert "labels" not in result_entry
+    assert result_entry["legacy_decision"] == "no_case"
 
     counters = analytics_tracker.get_counters()
     assert counters.get("validation.ai.response_invalid", 0) >= 1
@@ -177,10 +202,21 @@ def test_validation_sender_low_confidence_guardrail(
     analytics_tracker.reset_counters()
 
     payload = {
+        "sid": "GUARD002",
+        "account_id": 1,
+        "id": "Field 1",
+        "field": "Field 1",
         "decision": "strong",
-        "justification": "auto",
+        "rationale": "Low confidence test (FIELD_MISMATCH).",
+        "citations": ["equifax: value"],
+        "reason_code": "FIELD_MISMATCH",
+        "reason_label": "Field 1 mismatch",
+        "modifiers": {
+            "material_mismatch": True,
+            "time_anchor": False,
+            "doc_dependency": False,
+        },
         "labels": ["semantic_review"],
-        "citations": ["equifax.normalized"],
         "confidence": 0.25,
     }
 
@@ -189,14 +225,16 @@ def test_validation_sender_low_confidence_guardrail(
     )
     sender.send()
 
-    summary_path = results_dir / "account_001.result.json"
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    result_entry = summary["results"][0]
+    summary_path = results_dir / "account_001.result.jsonl"
+    lines = [json.loads(line) for line in summary_path.read_text(encoding="utf-8").splitlines() if line]
+    assert lines
+    result_entry = lines[0]
 
     assert result_entry["decision"] == "no_case"
     assert result_entry["rationale"].endswith("[guardrail:low_confidence]")
     assert result_entry["labels"] == ["semantic_review"]
     assert result_entry["confidence"] == 0.25
+    assert result_entry["legacy_decision"] == "no_case"
 
     counters = analytics_tracker.get_counters()
     assert counters.get("validation.ai.response_low_confidence", 0) >= 1

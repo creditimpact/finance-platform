@@ -61,7 +61,7 @@ def test_sender_loader_accepts_v2_manifest_mapping(
                 "account_id": 1,
                 "pack": "packs/account_001.pack.jsonl",
                 "result_jsonl": "results/account_001.result.jsonl",
-                "result_json": "results/account_001.result.json",
+                "result_json": "results/account_001.result.jsonl",
                 "lines": 1,
                 "status": "built",
                 "built_at": "2024-01-01T00:00:00Z",
@@ -99,7 +99,7 @@ def test_sender_loader_converts_v1_manifest_in_memory(
     )
 
     jsonl_path = results_dir / "account_002.result.jsonl"
-    summary_path = results_dir / "account_002.result.json"
+    summary_path = results_dir / "account_002.result.jsonl"
 
     manifest_v1 = {
         "__index_path__": str(index_path),
@@ -134,7 +134,7 @@ def test_sender_loader_converts_v1_manifest_in_memory(
     record = index.packs[0]
     assert record.pack == "packs/account_002.pack.jsonl"
     assert record.result_jsonl == "results/account_002.result.jsonl"
-    assert record.result_json == "results/account_002.result.json"
+    assert record.result_json == "results/account_002.result.jsonl"
     assert index.resolve_pack_path(record) == pack_file.resolve()
     assert not index_path.exists(), "conversion should not persist the manifest"
 

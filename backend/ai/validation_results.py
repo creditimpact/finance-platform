@@ -17,6 +17,7 @@ from backend.core.ai.paths import (
     validation_pack_filename_for_account,
     validation_result_summary_filename_for_account,
 )
+from backend.validation.io import write_jsonl
 from backend.core.ai.eligibility_policy import (
     canonicalize_history,
     canonicalize_scalar,
@@ -305,9 +306,9 @@ def _build_reason_from_pack(field_name: str, pack_payload: Mapping[str, Any]) ->
 
 def _normalize_decision(decision: Any) -> str:
     value = str(decision or "").strip().lower()
-    if value == "strong":
-        return "strong"
-    if value in {"no_case", "no_claim", "no_claims"}:
+    if value in {"strong", "supportive", "neutral", "no_case"}:
+        return value
+    if value in {"no_claim", "no_claims"}:
         return "no_case"
     if value in {"", "unknown"}:
         return "no_case"
@@ -424,6 +425,9 @@ def _build_result_lines(
             "rationale": rationale,
             "citations": _normalize_citations(entry.get("citations")),
         }
+        result_line["legacy_decision"] = (
+            "strong" if result_line["decision"] == "strong" else "no_case"
+        )
         confidence_value = _normalize_confidence(entry.get("confidence"))
         if confidence_value is not None:
             result_line["confidence"] = confidence_value
@@ -513,34 +517,14 @@ def store_validation_result(
     except (TypeError, ValueError):
         request_lines_count = len(decisions)
 
-    summary_payload: dict[str, Any] = {
-        "sid": normalized_payload.get("sid"),
-        "account_id": normalized_payload.get("account_id"),
-        "model": normalized_payload.get("model"),
-        "status": normalized_status,
-        "completed_at": normalized_payload.get("completed_at"),
-        "request_lines": request_lines_count,
-        "decisions": decisions,
-    }
-
-    if normalized_payload.get("error"):
-        summary_payload["error"] = normalized_payload["error"]
-    if "raw_response" in normalized_payload:
-        summary_payload["raw_response"] = _clone_jsonish(
-            normalized_payload["raw_response"]
-        )
-
-    serialized_summary = json.dumps(
-        summary_payload, ensure_ascii=False, sort_keys=True
-    )
     summary_path.parent.mkdir(parents=True, exist_ok=True)
-    summary_path.write_text(serialized_summary + "\n", encoding="utf-8")
+    write_jsonl(summary_path, result_lines)
     log.info(
         "VALIDATION_RESULTS_WRITTEN sid=%s account_id=%s summary=%s decisions=%s status=%s",
         sid,
         account_id,
         str(summary_path),
-        len(decisions),
+        len(result_lines),
         normalized_status,
     )
 

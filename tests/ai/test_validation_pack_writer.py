@@ -542,31 +542,25 @@ def test_store_validation_result_updates_index_and_writes_file(
         model="gpt-infer",
     )
 
-    stored_payload = json.loads(result_path.read_text(encoding="utf-8"))
-    assert stored_payload["sid"] == sid
-    assert stored_payload["account_id"] == account_id
-    assert stored_payload["status"] == "done"
-    assert stored_payload["model"] == "gpt-infer"
-    assert stored_payload["request_lines"] == len(lines)
-    assert stored_payload["raw_response"] == {"id": "resp_123"}
-    assert isinstance(stored_payload["completed_at"], str)
-    assert stored_payload["decisions"]
-    decision_entry = stored_payload["decisions"][0]
-    assert decision_entry["field_id"]
-    assert decision_entry["decision"] == "strong"
-    assert decision_entry["rationale"] == "values diverge"
-    assert decision_entry["citations"] == []
+    stored_lines = [json.loads(line) for line in result_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert stored_lines
+    first_line = stored_lines[0]
+    assert first_line["account_id"] == account_id
+    assert first_line["decision"] == "strong"
+    assert first_line["rationale"] == "values diverge"
+    assert first_line["citations"] == []
+    assert first_line["legacy_decision"] == "strong"
 
     results_dir = validation_results_dir(sid, runs_root=runs_root)
     jsonl_path = (
         results_dir / validation_result_jsonl_filename_for_account(account_id)
     )
-    assert not jsonl_path.exists()
+    assert jsonl_path.exists()
 
     index_path = validation_index_path(sid, runs_root=runs_root)
     index_entry = _index_entry_for_account(_read_index(index_path), account_id)
     assert index_entry["status"] == "completed"
-    assert index_entry["result_json"] == "results/acc_004.result.json"
+    assert index_entry["result_json"] == "results/acc_004.result.jsonl"
     assert index_entry["lines"] == len(lines)
     assert "error" not in index_entry
 
@@ -610,10 +604,8 @@ def test_store_validation_result_error(tmp_path: Path) -> None:
         error="api_timeout",
     )
 
-    stored_payload = json.loads(result_path.read_text(encoding="utf-8"))
-    assert stored_payload["status"] == "error"
-    assert stored_payload["error"] == "api_timeout"
-    assert stored_payload["decisions"] == []
+    stored_text = result_path.read_text(encoding="utf-8")
+    assert stored_text.strip() == ""
 
     index_path = validation_index_path(sid, runs_root=runs_root)
     entry = _index_entry_for_account(_read_index(index_path), account_id)
@@ -885,7 +877,7 @@ def test_rewrite_index_to_canonical_layout(tmp_path: Path) -> None:
     payload["packs_dir"] = "../cases/accounts"
     payload["results_dir"] = "../cases/accounts/results"
     entry["pack"] = "../cases/accounts/1/pack.jsonl"
-    entry["result_json"] = "../cases/accounts/1/result.json"
+    entry["result_json"] = "../cases/accounts/1/result.jsonl"
     _write_json(index_path, payload)
 
     _, changed = rewrite_index_to_canonical_layout(index_path, runs_root=runs_root)
@@ -897,7 +889,7 @@ def test_rewrite_index_to_canonical_layout(tmp_path: Path) -> None:
 
     rewritten_entry = _index_entry_for_account(rewritten, 1)
     assert rewritten_entry["pack"] == "packs/val_acc_001.jsonl"
-    assert rewritten_entry["result_json"] == "results/acc_001.result.json"
+    assert rewritten_entry["result_json"] == "results/acc_001.result.jsonl"
     assert "result_jsonl" not in rewritten_entry
 
     _, unchanged = rewrite_index_to_canonical_layout(index_path, runs_root=runs_root)

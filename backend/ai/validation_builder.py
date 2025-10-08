@@ -644,7 +644,7 @@ class ValidationPackWriter:
             results_base = f"acc_{acct_str}.result"
 
         result_jsonl_path = self._results_dir / f"{results_base}.jsonl"
-        result_json_path = self._results_dir / f"{results_base}.json"
+        result_json_path = result_jsonl_path
 
         entry = ValidationIndexEntry(
             account_id=account_id,

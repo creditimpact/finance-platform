@@ -52,7 +52,7 @@ class _StubClient:
         return {"choices": [{"message": {"content": json.dumps(self._payload)}}]}
 
 
-def test_single_result_summary_only(tmp_path: Path) -> None:
+def test_single_result_jsonl_only(tmp_path: Path) -> None:
     sid = "SID500"
     account_id = 5
     runs_root = tmp_path / "runs"
@@ -107,17 +107,19 @@ def test_single_result_summary_only(tmp_path: Path) -> None:
     summary_file = results_dir / validation_result_summary_filename_for_account(account_id)
     jsonl_file = results_dir / validation_result_jsonl_filename_for_account(account_id)
 
-    assert summary_path == summary_file
+    assert summary_path == summary_file == jsonl_file
     assert summary_file.exists()
-    assert not jsonl_file.exists()
 
-    summary_payload = json.loads(summary_file.read_text(encoding="utf-8"))
-    assert summary_payload["decisions"] == [
+    lines = [json.loads(line) for line in summary_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert lines == [
         {
-            "field_id": field_id,
+            "id": field_id,
+            "account_id": account_id,
+            "field": "account_type",
             "decision": "strong",
             "rationale": "Mismatch supports the consumer",
             "citations": ["equifax: installment"],
+            "legacy_decision": "strong",
         }
     ]
 
@@ -137,10 +139,20 @@ def test_sender_accepts_valid_json_response(tmp_path: Path) -> None:
     }
 
     payload = {
+        "sid": sid,
+        "account_id": 1,
+        "id": "acc_001__account_type",
+        "field": "account_type",
         "decision": "strong",
-        "justification": "Values diverge in the consumer's favor.",
-        "labels": ["policy_match"],
-        "citations": ["transunion.normalized"],
+        "rationale": "Values diverge across bureaus (ACCOUNT_TYPE_MISMATCH).",
+        "citations": ["transunion: installment"],
+        "reason_code": "ACCOUNT_TYPE_MISMATCH",
+        "reason_label": "Account type mismatch",
+        "modifiers": {
+            "material_mismatch": True,
+            "time_anchor": False,
+            "doc_dependency": False,
+        },
         "confidence": 0.82,
     }
 
@@ -151,7 +163,9 @@ def test_sender_accepts_valid_json_response(tmp_path: Path) -> None:
         "prompt": {
             "system": "system guidance",
             "user": {"field": "account_type", "context": "value"},
-        }
+        },
+        "reason_code": "ACCOUNT_TYPE_MISMATCH",
+        "reason_label": "Account type mismatch",
     }
 
     response = sender._call_model(
@@ -162,8 +176,8 @@ def test_sender_accepts_valid_json_response(tmp_path: Path) -> None:
         line_id="acc_001__account_type",
         pack_id="acc_001",
         error_path=tmp_path / "acc_001.result.error.json",
-        result_path=tmp_path / "acc_001.result.json",
-        result_display="results/acc_001.result.json",
+        result_path=tmp_path / "acc_001.result.jsonl",
+        result_display="results/acc_001.result.jsonl",
     )
 
     assert response == payload
@@ -172,5 +186,6 @@ def test_sender_accepts_valid_json_response(tmp_path: Path) -> None:
     assert last_request["response_format"] == {"type": "json_object"}
     assert last_request["model"] == sender.model
 
-    serialized_user = json.dumps(pack_line["prompt"]["user"], ensure_ascii=False, sort_keys=True)
-    assert last_request["messages"][1]["content"] == serialized_user
+    user_prompt = last_request["messages"][1]["content"]
+    assert "You must decide how actionable this field" in user_prompt
+    assert "ACCOUNT_TYPE_MISMATCH" in user_prompt

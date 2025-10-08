@@ -86,8 +86,8 @@ def test_validation_path_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert (
         validation_pack_filename_for_account("15") == "val_acc_015.jsonl"
     )
-    assert validation_result_filename_for_account(7) == "acc_007.result.json"
-    assert validation_result_filename_for_account("15") == "acc_015.result.json"
+    assert validation_result_filename_for_account(7) == "acc_007.result.jsonl"
+    assert validation_result_filename_for_account("15") == "acc_015.result.jsonl"
 
 
 def test_builder_creates_validation_structure(

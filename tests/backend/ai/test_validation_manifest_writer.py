@@ -25,7 +25,7 @@ def test_write_validation_manifest_v2_uses_relative_posix_paths(tmp_path: Path) 
     index_path = base_dir / "index.json"
 
     pack_path = packs_dir / "nested" / "pack.jsonl"
-    result_json_path = results_dir / "nested" / "account_001.result.json"
+    result_json_path = results_dir / "nested" / "account_001.result.jsonl"
 
     entry = ValidationIndexEntry(
         account_id=1,
@@ -60,7 +60,7 @@ def test_write_validation_manifest_v2_uses_relative_posix_paths(tmp_path: Path) 
 
     assert record["account_id"] == 1
     assert record["pack"] == "packs/nested/pack.jsonl"
-    assert record["result_json"] == "results/nested/account_001.result.json"
+    assert record["result_json"] == "results/nested/account_001.result.jsonl"
     assert "\\" not in record["pack"]
     assert "\\" not in record["result_json"]
 

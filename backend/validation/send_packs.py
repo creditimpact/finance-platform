@@ -1381,9 +1381,12 @@ class ValidationPackSender:
         self._default_queue = (
             self._infer_queue_hint(self._index.packs) or _DEFAULT_QUEUE_NAME
         )
-        self._write_json_envelope = _coerce_bool_flag(
-            os.getenv(_WRITE_JSON_ENVELOPE_ENV)
-        )
+        envelope_flag = _coerce_bool_flag(os.getenv(_WRITE_JSON_ENVELOPE_ENV))
+        if envelope_flag:
+            log.info(
+                "VALIDATION_JSON_ENVELOPE_DISABLED env_flag=true -> forcing jsonl-only"
+            )
+        self._write_json_envelope = False
 
     def _await_index_ready(self) -> ValidationIndex:
         index = self._load_index()
@@ -2852,6 +2855,8 @@ class ValidationPackSender:
                 result["confidence"] = confidence
             if normalized_response is not None and labels:
                 result["labels"] = labels
+
+        result["legacy_decision"] = "strong" if decision == "strong" else "no_case"
 
         metadata: dict[str, Any] = {
             "field": field,

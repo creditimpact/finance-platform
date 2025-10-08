@@ -61,7 +61,7 @@ def test_validation_pack_path_generation(tmp_path: Path) -> None:
 
     assert validation_pack_filename_for_account(3) == "val_acc_003.jsonl"
     assert validation_pack_filename_for_account("12") == "val_acc_012.jsonl"
-    assert validation_result_filename_for_account(7) == "acc_007.result.json"
+    assert validation_result_filename_for_account(7) == "acc_007.result.jsonl"
 
 
 def test_builds_pack_with_two_weak_fields(tmp_path: Path) -> None:

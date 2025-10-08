@@ -121,6 +121,9 @@ _INDEX_FILE_WAIT_DELAY = 0.4
 _INDEX_FILE_MIN_SIZE = 20
 _DEFAULT_CONFIDENCE_THRESHOLD = 0.70
 _WRITE_JSON_ENVELOPE_ENV = "VALIDATION_WRITE_JSON_ENVELOPE"
+_LOG_PATH_REL_ENV = "VALIDATION_LOG_PATH_REL"
+_DEFAULT_LOG_FILENAME = "logs.txt"
+_DEBUG_ENV = "VALIDATION_DEBUG"
 
 
 def _canonical_result_path(path: Path, *, allow_json: bool = False) -> Path:
@@ -1297,6 +1300,25 @@ def _to_relative(path_value: Any, base_dir: Path) -> str:
     return PurePosixPath(relative).as_posix()
 
 
+def _resolve_log_candidate(index_dir: Path, raw: Any) -> Path | None:
+    text = _coerce_str(raw)
+    if not text:
+        return None
+
+    candidate = Path(text)
+    if candidate.is_absolute():
+        try:
+            return candidate.resolve()
+        except OSError:
+            return candidate
+
+    relative = index_dir / PurePosixPath(text)
+    try:
+        return relative.resolve()
+    except OSError:
+        return relative
+
+
 def _resolve_log_path(
     index_path: Path,
     document: Mapping[str, Any] | None,
@@ -1304,31 +1326,37 @@ def _resolve_log_path(
     stage_paths: StageManifestPaths | None,
 ) -> Path:
     index_dir = index_path.parent.resolve()
-    candidate: str | None = None
 
     if stage_paths and stage_paths.log_file:
         return stage_paths.log_file
+
+    env_candidate = _resolve_log_candidate(index_dir, os.getenv(_LOG_PATH_REL_ENV))
 
     if document:
         logs_section = document.get("logs")
         if isinstance(logs_section, Mapping):
             for key in ("send", "sender", "log", "log_path", "path"):
                 value = logs_section.get(key)
-                if isinstance(value, str) and value.strip():
-                    candidate = value.strip()
-                    break
+                resolved = _resolve_log_candidate(index_dir, value)
+                if resolved is not None:
+                    return resolved
 
-        if candidate is None:
+        fallback_document = document if isinstance(document, Mapping) else None
+        if fallback_document:
             for key in ("log", "log_path"):
-                value = document.get(key)
-                if isinstance(value, str) and value.strip():
-                    candidate = value.strip()
-                    break
+                value = fallback_document.get(key)
+                resolved = _resolve_log_candidate(index_dir, value)
+                if resolved is not None:
+                    return resolved
 
-    if candidate:
-        return (index_dir / PurePosixPath(candidate)).resolve()
+    if env_candidate is not None:
+        return env_candidate
 
-    return index_dir / "send.log"
+    fallback = _resolve_log_candidate(index_dir, _DEFAULT_LOG_FILENAME)
+    if fallback is not None:
+        return fallback
+
+    return index_dir / _DEFAULT_LOG_FILENAME
 
 
 def _document_is_index_document(document: Mapping[str, Any]) -> bool:
@@ -1604,6 +1632,7 @@ class ValidationPackSender:
         self._throttle = _THROTTLE_SECONDS
         self._results_root: Path | None = None
         self._log_path = view.log_path
+        self._debug = _coerce_bool_flag(os.getenv(_DEBUG_ENV))
         self._confidence_threshold = _confidence_threshold()
         self._default_queue = (
             self._infer_queue_hint(self._index.packs) or _DEFAULT_QUEUE_NAME
@@ -2610,6 +2639,21 @@ class ValidationPackSender:
                     prevalidated=prevalidated,
                 )
                 result_lines.append(line_result)
+                if self._debug:
+                    field_name = str(line_result.get("field", "")).strip() or self._coerce_field_name(
+                        pack_line, idx
+                    )
+                    line_identifier = str(line_result.get("id", "")).strip()
+                    decision_value = str(line_result.get("decision", ""))
+                    rationale_text = str(line_result.get("rationale", ""))
+                    log.info(
+                        "VALIDATION_LINE_SENT account=%03d field=%s id=%s decision=%s rationale_chars=%s",
+                        account_int,
+                        field_name,
+                        line_identifier or self._coerce_identifier(account_int, idx, pack_line.get("id")),
+                        decision_value,
+                        len(rationale_text),
+                    )
                 fields_sent += 1
                 is_conditional = bool(metadata.get("conditional"))
                 bucket = "conditional" if is_conditional else "non_conditional"

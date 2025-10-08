@@ -61,6 +61,51 @@ python -m backend.validation.manifest --sid $SID --check
 python -m backend.validation.send --sid $SID
 ```
 
+### Window 1 — Celery (validation & merge queues)
+
+```powershell
+cd C:\dev\credit-analyzer
+.\.venv\Scripts\Activate.ps1
+$env:PYTHONPATH = "$PWD"
+$env:RUNS_ROOT  = "$PWD\runs"
+$env:CELERY_BROKER_URL     = "redis://localhost:6379/0"
+$env:CELERY_RESULT_BACKEND = "redis://localhost:6379/1"
+
+# OpenAI + validation
+$env:OPENAI_BASE_URL   = "https://api.openai.com/v1"
+$env:OPENAI_API_KEY    = "<redacted>"
+$env:OPENAI_PROJECT_ID = "<proj>"
+$env:VALIDATION_MODEL  = "gpt-4o-mini"
+
+# enable sender + autosend
+$env:ENABLE_VALIDATION_SENDER = "1"
+$env:VALIDATION_SENDER_ENABLED = "1"
+$env:VALIDATION_STAGE_AUTORUN  = "1"
+$env:AUTO_VALIDATION_SEND      = "1"
+$env:VALIDATION_SEND_ON_BUILD  = "1"
+
+# manifest/index paths (relative to run root)
+$env:VALIDATION_USE_MANIFEST_PATHS = "1"
+$env:VALIDATION_INDEX_PATH   = "ai_packs/validation/index.json"
+$env:VALIDATION_PACKS_DIR    = "ai_packs/validation/packs"
+$env:VALIDATION_RESULTS_DIR  = "ai_packs/validation/results"
+$env:VALIDATION_PACK_GLOB    = "val_acc_*.jsonl"
+$env:VALIDATION_RESULTS_BASENAME = "acc_{account}.result"  # code appends .jsonl
+
+# guard envelopes OFF by default
+$env:VALIDATION_WRITE_JSON_ENVELOPE = "0"
+$env:VALIDATION_MAX_RETRIES = "2"
+
+# queues
+$PY = "$PWD\.venv\Scripts\python.exe"
+& $PY -m celery -A backend.api.tasks worker `
+  --loglevel=INFO `
+  --pool=solo `
+  -Q celery,merge,validation `
+  --prefetch-multiplier=1 `
+  --max-tasks-per-child=50
+```
+
 `backend.validation.manifest` validates that every pack referenced in the
 manifest exists. `backend.validation.send` reads only the manifest, prepares the
 result directories if necessary, and writes the model responses next to the

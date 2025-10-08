@@ -38,8 +38,6 @@ from backend.validation.index_schema import (
     ValidationPackRecord,
     load_validation_index,
 )
-from backend.validation.prompt_templates import render_validation_prompt
-from backend.validation.schema import validate_llm_decision
 from .io import write_jsonl
 
 from backend.pipeline.runs import RunManifest, persist_manifest, _utc_now
@@ -65,32 +63,6 @@ _CREDITOR_REMARK_KEYWORDS = (
     "repossession",
 )
 
-_RESPONSE_SCHEMA = {
-    "type": "object",
-    "required": ["decision", "justification", "labels", "confidence"],
-    "additionalProperties": False,
-    "properties": {
-        "decision": {"type": "string", "enum": ["strong", "no_case"]},
-        "justification": {"type": "string", "minLength": 1},
-        "labels": {
-            "type": "array",
-            "minItems": 1,
-            "items": {"type": "string", "minLength": 1},
-        },
-        "citations": {
-            "type": "array",
-            "items": {"type": "string", "minLength": 1},
-            "default": [],
-        },
-        "confidence": {
-            "type": "number",
-            "minimum": 0.0,
-            "maximum": 1.0,
-        },
-    },
-}
-
-_RESPONSE_VALIDATOR = Draft7Validator(_RESPONSE_SCHEMA)
 _CONFIDENCE_THRESHOLD_ENV = "VALIDATION_AI_MIN_CONFIDENCE"
 _USE_MANIFEST_PATHS_ENV = "VALIDATION_USE_MANIFEST_PATHS"
 _MANIFEST_STAGE = "validation"
@@ -477,8 +449,7 @@ def correction_suffix(errors: list[str]) -> str:
     return (
         "\n\nFIX:\n"
         f"- Your previous output was invalid: {bullets}.\n"
-        "- Output ONE JSON object only, strictly matching the schema, with non-empty 'citations', "
-        "and include the reason_code literally in 'rationale'."
+        "- Output ONE JSON object only, strictly matching the schema with non-empty 'citations'."
     )
 
 
@@ -2790,43 +2761,22 @@ class ValidationPackSender:
         result_path: Path,
         result_display: str,
     ) -> Mapping[str, Any]:
-        sid_value = str(pack_line.get("sid") or self.sid)
+        prompt_payload = pack_line.get("prompt")
+        if not isinstance(prompt_payload, Mapping):
+            raise ValidationPackError("Pack line missing prompt payload")
 
-        reason_code = pack_line.get("reason_code")
-        if not isinstance(reason_code, str) or not reason_code.strip():
-            raise ValidationPackError("Pack line missing reason_code")
+        system_prompt = prompt_payload.get("system")
+        user_prompt = prompt_payload.get("user")
+        guidance_prompt = prompt_payload.get("guidance")
 
-        reason_label = pack_line.get("reason_label")
-        if not isinstance(reason_label, str):
-            reason_label = "" if reason_label is None else str(reason_label)
+        if not isinstance(system_prompt, str) or not system_prompt:
+            raise ValidationPackError("Pack prompt missing system message")
+        if not isinstance(user_prompt, str) or not user_prompt:
+            raise ValidationPackError("Pack prompt missing user message")
+        if guidance_prompt is not None and not isinstance(guidance_prompt, str):
+            raise ValidationPackError("Pack prompt guidance must be a string if provided")
 
-        finding_payload: Any
-        finding_payload = pack_line.get("finding_json")
-        if not isinstance(finding_payload, str) or not finding_payload.strip():
-            fallback_finding = pack_line.get("finding")
-            if fallback_finding is None:
-                fallback_finding = {
-                    key: value
-                    for key, value in pack_line.items()
-                    if key
-                    in {
-                        "field",
-                        "bureaus",
-                        "context",
-                        "documents",
-                        "reason_code",
-                        "reason_label",
-                    }
-                }
-            finding_payload = fallback_finding
-
-        system_prompt, user_prompt = render_validation_prompt(
-            sid=sid_value,
-            reason_code=reason_code,
-            reason_label=reason_label,
-            documents=pack_line.get("documents"),
-            finding=finding_payload,
-        )
+        expected_output_schema = self._extract_expected_output_schema(pack_line)
 
         def _record_sidecar(status: int, body: str) -> None:
             try:
@@ -2847,14 +2797,22 @@ class ValidationPackSender:
 
         while True:
             composed_user_prompt = base_user_prompt + "".join(suffixes)
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": composed_user_prompt},
-            ]
+            messages: list[dict[str, str]] = []
+            messages.append({"role": "system", "content": system_prompt})
+            if guidance_prompt is not None:
+                messages.append({"role": "system", "content": guidance_prompt})
+            messages.append({"role": "user", "content": composed_user_prompt})
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "validation_expected_output",
+                    "schema": expected_output_schema,
+                },
+            }
             request_payload = {
                 "model": self.model,
                 "messages": list(messages),
-                "response_format": {"type": "json_object"},
+                "response_format": response_format,
             }
 
             try:
@@ -2929,8 +2887,10 @@ class ValidationPackSender:
             if not isinstance(parsed, Mapping):
                 raise ValidationPackError("Model response is not an object")
 
-            ok, errors = validate_llm_decision(parsed, pack_line)
-            if ok:
+            normalized_response, errors, _ = self._validate_response_payload(
+                parsed, pack_line
+            )
+            if normalized_response is not None and not errors:
                 result_target = result_display or str(result_path)
                 log.info("VALIDATION_SENT_OK pack=%s -> %s", pack_id, result_target)
                 return parsed
@@ -2947,7 +2907,10 @@ class ValidationPackSender:
                 log.info("VALIDATION_SENT_OK pack=%s -> %s", pack_id, result_target)
                 return parsed
 
-            suffix = correction_suffix(errors)
+            correction_errors = errors or [
+                "response_did_not_match_expected_output"
+            ]
+            suffix = correction_suffix(correction_errors)
             suffixes.append(suffix)
             attempt += 1
             log.info(
@@ -2968,55 +2931,46 @@ class ValidationPackSender:
         pack_line: Mapping[str, Any],
     ) -> tuple[dict[str, Any] | None, list[str], str]:
         if not isinstance(response, Mapping):
-            return None, ["response_not_mapping"], "legacy"
+            return None, ["response_not_mapping"], "structured"
 
-        if isinstance(pack_line, Mapping):
-            expected_output = pack_line.get("expected_output")
-            if isinstance(expected_output, Mapping):
-                properties = expected_output.get("properties")
-                required = expected_output.get("required")
-                expects_rationale = False
-                if isinstance(properties, Mapping) and "rationale" in properties:
-                    expects_rationale = True
-                elif isinstance(required, Sequence) and not isinstance(
-                    required, (str, bytes, bytearray)
-                ):
-                    for entry in required:
-                        if isinstance(entry, str) and entry.strip() == "rationale":
-                            expects_rationale = True
-                            break
-                if expects_rationale:
-                    normalized, errors = validate_and_normalize(response, pack_line)
-                    if normalized is None:
-                        return None, errors, "structured"
-                    return normalized, [], "structured"
+        try:
+            expected_output = self._extract_expected_output_schema(pack_line)
+        except ValidationPackError as exc:
+            return None, [str(exc)], "structured"
 
-        if any(key in response for key in ("reason_code", "reason_label", "modifiers")):
-            ok, errors = validate_llm_decision(response, pack_line)
-            if not ok:
-                return None, errors, "modern"
-            return dict(response), [], "modern"
+        try:
+            validator = Draft7Validator(expected_output)
+        except Exception as exc:  # pragma: no cover - defensive
+            error_message = f"invalid_expected_output_schema: {exc}"
+            log.exception(
+                "VALIDATION_EXPECTED_OUTPUT_SCHEMA_INVALID sid=%s error=%s",
+                self.sid,
+                exc,
+            )
+            return None, [error_message], "structured"
 
-        errors = [error.message for error in _RESPONSE_VALIDATOR.iter_errors(response)]
-        if errors:
-            return None, errors, "legacy"
+        schema_errors = [error.message for error in validator.iter_errors(response)]
+        if schema_errors:
+            return None, schema_errors, "structured"
 
-        justification = self._normalize_justification(response.get("justification"))
-        labels = self._normalize_labels(response.get("labels"))
-        if not justification:
-            return None, ["empty_justification"], "legacy"
-        if not labels:
-            return None, ["empty_labels"], "legacy"
+        normalized, normalization_errors = validate_and_normalize(response, pack_line)
+        if normalized is None:
+            return None, normalization_errors, "structured"
 
-        normalized = {
-            "decision": self._normalize_decision(response.get("decision")),
-            "justification": justification,
-            "citations": self._normalize_citations(response.get("citations")),
-            "confidence": self._normalize_confidence(response.get("confidence")),
-            "labels": labels,
-        }
+        return normalized, [], "structured"
 
-        return normalized, [], "legacy"
+    @staticmethod
+    def _extract_expected_output_schema(
+        pack_line: Mapping[str, Any] | None,
+    ) -> Mapping[str, Any]:
+        if not isinstance(pack_line, Mapping):
+            raise ValidationPackError("Pack line missing expected_output schema")
+
+        expected_output = pack_line.get("expected_output")
+        if not isinstance(expected_output, Mapping):
+            raise ValidationPackError("Pack line missing expected_output schema")
+
+        return expected_output
 
     # ------------------------------------------------------------------
     # Result construction & persistence
@@ -3049,53 +3003,32 @@ class ValidationPackSender:
                 schema_errors,
             )
             original_decision = self._normalize_decision(response.get("decision"))
-            if schema_mode == "structured":
-                if isinstance(pack_line, Mapping):
-                    fallback_context = dict(pack_line)
-                else:
-                    fallback_context = {}
-                fallback_context.setdefault("account_id", account_id)
-                fallback_context.setdefault("id", line_id)
-                fallback_context.setdefault("field", field)
-                fallback_payload = make_fallback_decision(fallback_context)
-                decision = str(fallback_payload.get("decision", "no_case"))
-                rationale = str(
-                    fallback_payload.get(
-                        "rationale",
-                        "No valid model response; deterministic fallback.",
-                    )
-                )
-                citations = list(fallback_payload.get("citations", []))
-                confidence = None
+            if isinstance(pack_line, Mapping):
+                fallback_context = dict(pack_line)
             else:
-                decision = "no_case"
-                fallback_text = self._normalize_justification(response.get("rationale"))
-                rationale = _append_guardrail_note(fallback_text, "invalid_response")
-                citations = []
-                confidence = None
+                fallback_context = {}
+            fallback_context.setdefault("account_id", account_id)
+            fallback_context.setdefault("id", line_id)
+            fallback_context.setdefault("field", field)
+            fallback_payload = make_fallback_decision(fallback_context)
+            decision = str(fallback_payload.get("decision", "no_case"))
+            rationale = str(
+                fallback_payload.get(
+                    "rationale",
+                    "No valid model response; deterministic fallback.",
+                )
+            )
+            citations = list(fallback_payload.get("citations", []))
+            confidence = None
+            rationale = _append_guardrail_note(rationale, "invalid_response")
             guardrail_info = {"reason": "invalid_response", "errors": schema_errors}
         else:
-            if schema_mode == "modern":
-                decision = str(normalized_response.get("decision", "no_case"))
-                original_decision = decision
-                rationale = str(normalized_response.get("rationale", ""))
-                citations = list(normalized_response.get("citations", []))
-                confidence = normalized_response.get("confidence")
-                labels = []
-            elif schema_mode == "structured":
-                decision = normalized_response["decision"]
-                original_decision = decision
-                rationale = normalized_response["rationale"]
-                citations = list(normalized_response.get("citations", []))
-                confidence = normalized_response.get("confidence")
-                labels = list(normalized_response.get("labels", []))
-            else:
-                decision = normalized_response["decision"]
-                original_decision = decision
-                rationale = normalized_response["justification"]
-                citations = normalized_response["citations"]
-                confidence = normalized_response["confidence"]
-                labels = normalized_response["labels"]
+            decision = normalized_response["decision"]
+            original_decision = decision
+            rationale = normalized_response["rationale"]
+            citations = list(normalized_response.get("citations", []))
+            confidence = normalized_response.get("confidence")
+            labels = list(normalized_response.get("labels", []))
 
             if (
                 decision == "strong"
@@ -3121,54 +3054,18 @@ class ValidationPackSender:
             field, decision, rationale, pack_line
         )
 
-        if schema_mode == "modern" and normalized_response is not None:
-            result = dict(normalized_response)
-            result["sid"] = str(result.get("sid") or pack_line.get("sid") or self.sid)
-            raw_account_id = result.get("account_id")
-            try:
-                account_id_value = int(raw_account_id)
-            except (TypeError, ValueError):
-                account_id_value = account_id
-            result["account_id"] = account_id_value
-            result["id"] = str(result.get("id") or line_id)
-            result["field"] = str(result.get("field") or field)
-            result["decision"] = decision
-            result["rationale"] = rationale
-            result["citations"] = citations
-            if confidence is not None:
-                result["confidence"] = confidence
-            else:
-                fallback_confidence = normalized_response.get("confidence")
-                if isinstance(fallback_confidence, (int, float)):
-                    result["confidence"] = float(fallback_confidence)
-                else:
-                    result["confidence"] = 0.0
-        elif schema_mode == "structured" and normalized_response is not None:
-            result = {
-                "id": line_id,
-                "account_id": account_id,
-                "field": field,
-                "decision": decision,
-                "rationale": rationale,
-                "citations": citations,
-            }
-            if confidence is not None:
-                result["confidence"] = confidence
-            if labels:
-                result["labels"] = labels
-        else:
-            result = {
-                "id": line_id,
-                "account_id": account_id,
-                "field": field,
-                "decision": decision,
-                "rationale": rationale,
-                "citations": citations,
-            }
-            if confidence is not None:
-                result["confidence"] = confidence
-            if normalized_response is not None and labels:
-                result["labels"] = labels
+        result = {
+            "id": line_id,
+            "account_id": account_id,
+            "field": field,
+            "decision": decision,
+            "rationale": rationale,
+            "citations": citations,
+        }
+        if confidence is not None:
+            result["confidence"] = confidence
+        if labels:
+            result["labels"] = labels
 
         result["legacy_decision"] = "strong" if decision == "strong" else "no_case"
 
@@ -3179,7 +3076,7 @@ class ValidationPackSender:
             "conditional": field in _CONDITIONAL_FIELDS,
             "gate_info": gate_info,
         }
-        if normalized_response is not None and labels:
+        if labels:
             metadata["labels"] = labels
         if guardrail_info is not None:
             metadata["guardrail"] = guardrail_info
@@ -3450,48 +3347,6 @@ class ValidationPackSender:
             if lowered in _VALID_DECISIONS:
                 return lowered
         return "no_case"
-
-    @staticmethod
-    def _normalize_justification(value: Any) -> str:
-        if isinstance(value, str):
-            text = value.strip()
-            if text:
-                return text
-        return ""
-
-    @staticmethod
-    def _normalize_labels(value: Any) -> list[str]:
-        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
-            return []
-        labels: list[str] = []
-        for item in value:
-            if isinstance(item, str):
-                text = item.strip()
-                if text:
-                    labels.append(text)
-        return labels
-
-    @staticmethod
-    def _normalize_citations(value: Any) -> list[str]:
-        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
-            return []
-        citations: list[str] = []
-        for item in value:
-            if isinstance(item, str) and item.strip():
-                citations.append(item.strip())
-        return citations
-
-    @staticmethod
-    def _normalize_confidence(value: Any) -> float | None:
-        if value is None:
-            return None
-        try:
-            confidence = float(value)
-        except (TypeError, ValueError):
-            return None
-        if confidence < 0 or confidence > 1:
-            return None
-        return round(confidence, 6)
 
     def _coerce_identifier(self, account_id: int, line_number: int, candidate: Any) -> str:
         if isinstance(candidate, str) and candidate.strip():

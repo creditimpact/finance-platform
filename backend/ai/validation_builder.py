@@ -467,13 +467,6 @@ class ValidationPackWriter:
             if requirement.get("is_missing") is True:
                 continue
 
-            if not self._should_send_to_ai(
-                requirement,
-                canonical_field,
-                send_to_ai_map=send_to_ai_map,
-            ):
-                continue
-
             if isinstance(consistency_map, Mapping):
                 consistency_entry = consistency_map.get(canonical_field)
             else:
@@ -500,6 +493,34 @@ class ValidationPackWriter:
                 continue
             seen_pack_keys.add(pack_key)
 
+            send_flag = self._resolve_send_flag(
+                requirement,
+                canonical_field,
+                send_to_ai_map=send_to_ai_map,
+            )
+
+            if send_flag is False:
+                line = build_line(
+                    sid=self.sid,
+                    account_id=account_id,
+                    field=canonical_field,
+                    finding=requirement_payload,
+                    fallback_bureaus_loader=_load_bureaus_if_needed,
+                )
+                if line is not None:
+                    payload = dict(line)
+                    payload["send_to_ai"] = False
+                    pack_lines.append(PackLine(payload))
+                continue
+
+            if not self._should_send_to_ai(
+                requirement,
+                canonical_field,
+                send_flag=send_flag,
+                send_to_ai_map=send_to_ai_map,
+            ):
+                continue
+
             line = build_line(
                 sid=self.sid,
                 account_id=account_id,
@@ -508,7 +529,10 @@ class ValidationPackWriter:
                 fallback_bureaus_loader=_load_bureaus_if_needed,
             )
             if line is not None:
-                pack_lines.append(PackLine(line))
+                payload = dict(line)
+                if send_flag is True:
+                    payload["send_to_ai"] = True
+                pack_lines.append(PackLine(payload))
 
         return pack_lines
 
@@ -1059,11 +1083,42 @@ class ValidationPackWriter:
             "send_to_ai": send_to_ai_map,
         }
 
+    def _resolve_send_flag(
+        self,
+        requirement: Mapping[str, Any],
+        canonical_field: str,
+        *,
+        send_to_ai_map: Mapping[str, Any] | None = None,
+    ) -> bool | None:
+        lookup_keys: list[str] = [canonical_field]
+        raw_field = requirement.get("field")
+        if isinstance(raw_field, str):
+            alias = raw_field.strip().lower()
+        elif raw_field is not None:
+            alias = str(raw_field).strip().lower()
+        else:
+            alias = ""
+
+        if alias and alias not in lookup_keys:
+            lookup_keys.append(alias)
+
+        send_flag = _normalize_flag(requirement.get("send_to_ai"))
+
+        if send_flag is None and isinstance(send_to_ai_map, Mapping):
+            for key in lookup_keys:
+                if key in send_to_ai_map:
+                    send_flag = _normalize_flag(send_to_ai_map[key])
+                    if send_flag is not None:
+                        break
+
+        return send_flag
+
     def _should_send_to_ai(
         self,
         requirement: Mapping[str, Any],
         canonical_field: str,
         *,
+        send_flag: bool | None = None,
         send_to_ai_map: Mapping[str, Any] | None = None,
     ) -> bool:
         """Determine whether ``requirement`` should be routed to AI."""
@@ -1086,26 +1141,12 @@ class ValidationPackWriter:
         if canonical_field not in AI_FIELDS:
             return False
 
-        lookup_keys: list[str] = [canonical_field]
-        raw_field = requirement.get("field")
-        if isinstance(raw_field, str):
-            alias = raw_field.strip().lower()
-        elif raw_field is not None:
-            alias = str(raw_field).strip().lower()
-        else:
-            alias = ""
-
-        if alias and alias not in lookup_keys:
-            lookup_keys.append(alias)
-
-        send_flag = _normalize_flag(requirement.get("send_to_ai"))
-
-        if send_flag is None and isinstance(send_to_ai_map, Mapping):
-            for key in lookup_keys:
-                if key in send_to_ai_map:
-                    send_flag = _normalize_flag(send_to_ai_map[key])
-                    if send_flag is not None:
-                        break
+        if send_flag is None:
+            send_flag = self._resolve_send_flag(
+                requirement,
+                canonical_field,
+                send_to_ai_map=send_to_ai_map,
+            )
 
         if send_flag is None:
             return False

@@ -1143,12 +1143,6 @@ class ValidationPackWriter:
         if not _is_mismatch(requirement):
             return False
 
-        if canonical_field in FALLBACK_FIELDS:
-            return _history_2y_allowed()
-
-        if canonical_field not in AI_FIELDS:
-            return False
-
         if send_flag is None:
             send_flag = self._resolve_send_flag(
                 requirement,
@@ -1159,7 +1153,16 @@ class ValidationPackWriter:
         if send_flag is None:
             return False
 
-        return send_flag is True
+        if send_flag is not True:
+            return False
+
+        if canonical_field in FALLBACK_FIELDS:
+            return _history_2y_allowed()
+
+        if canonical_field not in AI_FIELDS:
+            return False
+
+        return True
 
     @staticmethod
     def _normalize_account_id(account_id: int | str) -> int:

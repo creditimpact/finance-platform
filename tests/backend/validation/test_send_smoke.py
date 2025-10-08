@@ -26,6 +26,16 @@ class _FixedResponseStubClient:
     def create(self, *, model: str, messages, response_format, **_: object):  # type: ignore[override]
         return {"choices": [{"message": {"content": json.dumps(self._payload)}}]}
 
+_EXPECTED_OUTPUT = {
+    "type": "object",
+    "required": ["decision", "rationale", "citations"],
+    "properties": {
+        "decision": {"type": "string", "enum": ["strong", "no_case"]},
+        "rationale": {"type": "string"},
+        "citations": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
 
 def _pack_line(field: str) -> str:
     payload = {
@@ -33,11 +43,12 @@ def _pack_line(field: str) -> str:
         "field": field,
         "prompt": {
             "system": "system",
-            "user": {"field": field, "context": "value"},
+            "user": f"Evaluate {field}.",
         },
         "sid": "SMOKE",
         "reason_code": "FIELD_MISMATCH",
         "reason_label": f"{field} mismatch",
+        "expected_output": _EXPECTED_OUTPUT,
         "finding": {
             "is_mismatch": True,
             "bureaus": {
@@ -134,10 +145,10 @@ def test_validation_sender_smoke_writes_results(
         assert lines, f"expected result lines for account {account_id}"
         entry = json.loads(lines[0])
         assert entry["decision"] == "strong"
-        assert entry["labels"] == ["deterministic_match"]
-        assert entry["citations"] == ["transunion.raw"]
+        assert entry["citations"] == ["transunion: value"]
         assert entry["confidence"] == 0.75
         assert entry["legacy_decision"] == "strong"
+        assert "labels" not in entry
 
 
 def test_validation_sender_invalid_response_guardrail(
@@ -159,7 +170,7 @@ def test_validation_sender_invalid_response_guardrail(
         "field": "Field 1",
         "decision": "strong",
         "rationale": "Guardrail test (FIELD_MISMATCH).",
-        "citations": ["transunion: value"],
+        # Missing citations to force schema validation failure
         "reason_code": "FIELD_MISMATCH",
         "reason_label": "Field 1 mismatch",
         "modifiers": {
@@ -181,7 +192,10 @@ def test_validation_sender_invalid_response_guardrail(
     result_entry = lines[0]
 
     assert result_entry["decision"] == "no_case"
-    assert result_entry["rationale"] == "[guardrail:invalid_response]"
+    assert result_entry["rationale"] == (
+        "No valid model response; deterministic fallback. "
+        "[guardrail:invalid_response]"
+    )
     assert "labels" not in result_entry
     assert result_entry["legacy_decision"] == "no_case"
 

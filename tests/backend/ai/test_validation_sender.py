@@ -159,11 +159,22 @@ def test_sender_accepts_valid_json_response(tmp_path: Path) -> None:
     client = _StubClient(payload)
     sender = ValidationPackSender(manifest, http_client=client)
 
+    expected_output = {
+        "type": "object",
+        "required": ["decision", "rationale", "citations"],
+        "properties": {
+            "decision": {"type": "string", "enum": ["strong", "no_case"]},
+            "rationale": {"type": "string"},
+            "citations": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+
     pack_line = {
         "prompt": {
             "system": "system guidance",
-            "user": {"field": "account_type", "context": "value"},
+            "user": "Please review the account_type finding.",
         },
+        "expected_output": expected_output,
         "reason_code": "ACCOUNT_TYPE_MISMATCH",
         "reason_label": "Account type mismatch",
     }
@@ -183,9 +194,18 @@ def test_sender_accepts_valid_json_response(tmp_path: Path) -> None:
     assert response == payload
     assert client.requests
     last_request = client.requests[-1]
-    assert last_request["response_format"] == {"type": "json_object"}
+    assert last_request["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "validation_expected_output",
+            "schema": expected_output,
+        },
+    }
     assert last_request["model"] == sender.model
-
-    user_prompt = last_request["messages"][1]["content"]
-    assert "You must decide how actionable this field" in user_prompt
-    assert "ACCOUNT_TYPE_MISMATCH" in user_prompt
+    assert last_request["messages"] == [
+        {"role": "system", "content": "system guidance"},
+        {
+            "role": "user",
+            "content": "Please review the account_type finding.",
+        },
+    ]

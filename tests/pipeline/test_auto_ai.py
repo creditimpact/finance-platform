@@ -461,6 +461,7 @@ def test_enqueue_auto_ai_chain_orders_signatures(monkeypatch) -> None:
     build_recorder = _Recorder("merge_build")
     send_recorder = _Recorder("merge_send")
     compact_recorder = _Recorder("merge_compact")
+    date_detector_recorder = _Recorder("date_detector")
     validation_build_recorder = _Recorder("validation_build")
     validation_send_recorder = _Recorder("validation_send")
     validation_compact_recorder = _Recorder("validation_compact")
@@ -473,6 +474,7 @@ def test_enqueue_auto_ai_chain_orders_signatures(monkeypatch) -> None:
     monkeypatch.setattr(auto_ai_tasks, "merge_build_packs", build_recorder)
     monkeypatch.setattr(auto_ai_tasks, "merge_send", send_recorder)
     monkeypatch.setattr(auto_ai_tasks, "merge_compact", compact_recorder)
+    monkeypatch.setattr(auto_ai_tasks, "run_date_convention_detector", date_detector_recorder)
     monkeypatch.setattr(auto_ai_tasks, "validation_build_packs", validation_build_recorder)
     monkeypatch.setattr(auto_ai_tasks, "validation_send", validation_send_recorder)
     monkeypatch.setattr(auto_ai_tasks, "validation_compact", validation_compact_recorder)
@@ -510,12 +512,13 @@ def test_enqueue_auto_ai_chain_orders_signatures(monkeypatch) -> None:
         ("merge_build", ()),
         ("merge_send", ()),
         ("merge_compact", ()),
+        ("date_detector", ()),
+        ("validation_requirements", ()),
         ("validation_build", ()),
         ("validation_send", ()),
         ("validation_compact", ()),
         ("polarity", ()),
         ("consistency", ()),
-        ("validation_requirements", ()),
         ("finalize", ()),
     )
     assert chain_calls["apply_async"] == chain_calls["steps"]

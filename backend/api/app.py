@@ -12,6 +12,29 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _sanitize_openai_env():
+    key = os.getenv("OPENAI_API_KEY", "")
+    proj = os.getenv("OPENAI_PROJECT_ID", "")
+    base = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+    key_clean = (key or "").strip()
+    proj_clean = (proj or "").strip()
+    base_clean = (base or "").strip() or "https://api.openai.com/v1"
+
+    if key and key != key_clean:
+        os.environ["OPENAI_API_KEY"] = key_clean
+    if proj and proj != proj_clean:
+        os.environ["OPENAI_PROJECT_ID"] = proj_clean
+    if base != base_clean:
+        os.environ["OPENAI_BASE_URL"] = base_clean
+
+    if key_clean.startswith("sk-proj-") and not proj_clean:
+        raise RuntimeError("OPENAI_PROJECT_ID missing for sk-proj-* key")
+
+
+_sanitize_openai_env()
+
 import json
 import logging
 import time

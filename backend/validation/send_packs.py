@@ -9,6 +9,7 @@ import logging
 import os
 import random
 import re
+import threading
 import time
 from collections import Counter
 from dataclasses import dataclass, replace
@@ -30,7 +31,7 @@ from backend.core.ai.paths import (
     validation_result_summary_filename_for_account,
     validation_write_json_enabled,
 )
-from backend.core.ai import build_openai_headers
+from backend.core.ai import auth_probe, build_openai_headers
 from backend.core.logic.validation_field_sets import (
     ALL_VALIDATION_FIELDS,
     ALWAYS_INVESTIGATABLE_FIELDS,
@@ -157,6 +158,21 @@ _VALIDATION_REQUEST_GROUP_SIZE = 1
 log = logging.getLogger(__name__)
 
 requests: Any | None = None
+
+_AUTH_READY = False
+_AUTH_LOCK = threading.Lock()
+
+
+def _key_prefix(value: str) -> str:
+    if not value:
+        return "<empty>"
+    if value.startswith("sk-proj-"):
+        return "sk-proj..."
+    if value.startswith("sk-"):
+        return "sk-..."
+    if len(value) <= 4:
+        return f"{value}..."
+    return f"{value[:4]}..."
 
 
 def _confidence_threshold() -> float:
@@ -3872,12 +3888,18 @@ class ValidationPackSender:
         base_url_clean = (base_url_raw or "").strip() or "https://api.openai.com/v1"
         timeout = _env_float("AI_REQUEST_TIMEOUT", _DEFAULT_TIMEOUT)
         project_id = (os.getenv("OPENAI_PROJECT_ID") or "").strip()
-        log.info(
-            "OPENAI_SETUP key_prefix=%s project_set=%s base_url=%s",
-            (api_key[:7] + "...") if api_key else "<empty>",
-            bool(project_id),
-            base_url_clean,
-        )
+        global _AUTH_READY
+        if not _AUTH_READY:
+            with _AUTH_LOCK:
+                if not _AUTH_READY:
+                    auth_probe()
+                    log.info(
+                        "OPENAI_AUTH ready: key_prefix=%s project_set=%s base_url=%s",
+                        _key_prefix(api_key),
+                        bool(project_id),
+                        base_url_clean,
+                    )
+                    _AUTH_READY = True
         return _ChatCompletionClient(
             base_url=base_url_clean,
             api_key=api_key,

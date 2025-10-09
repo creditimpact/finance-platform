@@ -5,15 +5,31 @@ import hashlib
 import json
 import logging
 import os
+import threading
 from collections.abc import Mapping
 from typing import Any, Dict, Iterable
 
 import httpx
 
-from backend.core.ai import build_openai_headers
+from backend.core.ai import auth_probe, build_openai_headers
 
 
 log = logging.getLogger(__name__)
+
+_AUTH_READY = False
+_AUTH_LOCK = threading.Lock()
+
+
+def _key_prefix(value: str) -> str:
+    if not value:
+        return "<empty>"
+    if value.startswith("sk-proj-"):
+        return "sk-proj..."
+    if value.startswith("sk-"):
+        return "sk-..."
+    if len(value) <= 4:
+        return f"{value}..."
+    return f"{value[:4]}..."
 
 _SYSTEM_PROMPT = """You are a meticulous adjudicator for credit-report account pairing.
 Decide if two account entries (A,B) refer to the SAME underlying account.
@@ -282,20 +298,25 @@ def decide_merge_or_different(pack: dict, *, timeout: int) -> dict:
     request_timeout = _coerce_positive_int(os.getenv("AI_REQUEST_TIMEOUT"), default=timeout)
 
     project_id = (os.getenv("OPENAI_PROJECT_ID") or "").strip()
-    log.info(
-        "OPENAI_SETUP key_prefix=%s project_set=%s base_url=%s",
-        (api_key[:7] + "...") if api_key else "<empty>",
-        bool(project_id),
-        base_url_clean,
-    )
+    global _AUTH_READY
+    if not _AUTH_READY:
+        with _AUTH_LOCK:
+            if not _AUTH_READY:
+                auth_probe()
+                log.info(
+                    "OPENAI_AUTH ready: key_prefix=%s project_set=%s base_url=%s",
+                    _key_prefix(api_key),
+                    bool(project_id),
+                    base_url_clean,
+                )
+                _AUTH_READY = True
     try:
         headers = build_openai_headers(
             api_key=api_key,
             project_id=project_id or None,
-            content_type="application/json",
         )
     except RuntimeError as exc:
-        if "OPENAI_PROJECT_ID is required for sk-proj-* keys" in str(exc):
+        if "OPENAI_PROJECT_ID missing for project-scoped API keys" in str(exc):
             raise RuntimeError(
                 "OPENAI_PROJECT_ID must be set when using project-scoped OpenAI API keys"
             ) from exc

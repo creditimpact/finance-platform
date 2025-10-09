@@ -30,6 +30,7 @@ from backend.core.ai.paths import (
     validation_result_summary_filename_for_account,
     validation_write_json_enabled,
 )
+from backend.core.ai.openai_headers import build_openai_headers
 from backend.core.logic.validation_field_sets import (
     ALL_VALIDATION_FIELDS,
     ALWAYS_INVESTIGATABLE_FIELDS,
@@ -681,12 +682,7 @@ class _ChatCompletionClient:
         on_error: Callable[[int, str], None] | None = None,
     ) -> _ChatCompletionResponse:
         url = f"{self.base_url}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        if self.project_id:
-            headers["OpenAI-Project"] = self.project_id
+        headers = build_openai_headers(api_key=self.api_key, project_id=self.project_id)
 
         response_format = {}
         if isinstance(payload, Mapping):
@@ -3869,7 +3865,7 @@ class ValidationPackSender:
         return upgraded
 
     def _build_client(self) -> _ChatCompletionClient:
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
         if not api_key:
             raise ValidationPackError("OPENAI_API_KEY is required to send validation packs")
         base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")

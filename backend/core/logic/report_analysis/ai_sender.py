@@ -12,6 +12,8 @@ from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 import httpx
 
+from backend.core.ai.openai_headers import build_openai_headers
+
 from backend.core.io.tags import read_tags, upsert_tag
 
 
@@ -119,7 +121,7 @@ def load_config_from_env() -> AISenderConfig:
     """Build :class:`AISenderConfig` from environment variables."""
 
     base_url = os.getenv("OPENAI_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is required when sending AI merge packs")
 
@@ -240,10 +242,7 @@ def send_single_attempt(
         "temperature": 0.0,
         "response_format": {"type": "json_object"},
     }
-    headers = {
-        "Authorization": f"Bearer {config.api_key}",
-        "Content-Type": "application/json",
-    }
+    headers = build_openai_headers(api_key=config.api_key)
 
     sender = request or _default_http_request
     response = sender(url, payload, headers, config.timeout)

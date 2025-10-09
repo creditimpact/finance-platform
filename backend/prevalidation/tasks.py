@@ -13,6 +13,7 @@ from backend.config import (
     DATE_CONVENTION_SCOPE,
     PREVALIDATION_DETECT_DATES,
 )
+from backend.core.manifest_utils import register_date_convention_in_manifest
 from backend.prevalidation.date_convention_detector import detect_month_language_for_run
 
 logger = logging.getLogger(__name__)
@@ -154,6 +155,39 @@ def detect_and_persist_date_convention(
             "DATE_CONVENTION_WRITE_FAILED sid=%s path=%s", sid, target_path, exc_info=True
         )
         return None
+
+    try:
+        run_root_abs = run_root.resolve()
+    except Exception:
+        run_root_abs = run_root
+
+    env_out_rel = os.getenv("PREVALIDATION_OUT_PATH_REL")
+    if env_out_rel:
+        out_path_rel_value = env_out_rel
+    elif relative_target is not None:
+        out_path_rel_value = relative_target.as_posix()
+    elif not out_path_obj.is_absolute():
+        out_path_rel_value = out_path_config
+    else:
+        out_path_rel_value = target_path.name
+
+    try:
+        register_date_convention_in_manifest(
+            sid=sid,
+            run_root=str(run_root_abs),
+            out_path_rel=out_path_rel_value,
+            detector_meta={
+                "convention": block.get("convention"),
+                "month_language": block.get("month_language"),
+                "confidence": block.get("confidence"),
+                "detector_version": block.get("detector_version"),
+            },
+        )
+    except Exception:  # pragma: no cover - defensive logging
+        manifest_path = run_root_abs / "manifest.json"
+        logger.error(
+            "DATE_CONVENTION_MANIFEST_UPDATE_FAILED sid=%s path=%s", sid, manifest_path, exc_info=True
+        )
 
     summary_path = run_root / "logs.txt"
     convention_value = block.get("convention") or "unknown"

@@ -6,7 +6,7 @@ import importlib
 from types import ModuleType
 from typing import Final
 
-from .openai_headers import build_openai_headers
+from .openai_auth import auth_probe, build_openai_headers
 
 _SUBMODULES: Final[frozenset[str]] = frozenset(
     {
@@ -23,7 +23,7 @@ _SUBMODULES: Final[frozenset[str]] = frozenset(
     }
 )
 
-__all__ = ["build_openai_headers", *sorted(_SUBMODULES)]
+__all__ = ["auth_probe", "build_openai_headers", *sorted(_SUBMODULES)]
 
 
 def __getattr__(name: str) -> ModuleType:

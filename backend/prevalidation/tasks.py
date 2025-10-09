@@ -124,6 +124,27 @@ def detect_and_persist_date_convention(
         target_path = out_path_obj
         log_out_path = str(out_path_obj)
 
+    legacy_general_info_relative = Path("traces") / "accounts_table" / "general_info_from_full.json"
+    try:
+        relative_target = target_path.relative_to(run_root)
+    except ValueError:
+        relative_target = None
+
+    is_legacy_general_info = False
+    if relative_target is not None:
+        is_legacy_general_info = relative_target == legacy_general_info_relative
+    else:
+        suffix = legacy_general_info_relative.as_posix()
+        is_legacy_general_info = str(target_path).endswith(suffix)
+
+    if is_legacy_general_info:
+        logger.error(
+            "DATE_CONVENTION_SKIP sid=%s reason=legacy_general_info_path path=%s",
+            sid,
+            target_path,
+        )
+        return None
+
     document = {"date_convention": block}
 
     try:

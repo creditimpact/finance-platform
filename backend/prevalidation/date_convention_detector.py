@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Tuple
 
 
 HEBREW_MONTHS = (
@@ -51,6 +52,8 @@ ENGLISH_MONTH_TOKENS = frozenset(
     )
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _iter_account_raw_texts(raw_lines_path: str) -> Iterable[str]:
     """Yield the text field for each entry in a raw_lines.json file."""
@@ -86,7 +89,22 @@ def _iter_account_raw_texts(raw_lines_path: str) -> Iterable[str]:
                     yield text
 
 
-def _count_english_months(text: str) -> int:
+def _analyze_text_for_months(text: str) -> Tuple[int, int, list[str], list[str]]:
+    """Return hit counts and evidence tokens for Hebrew and English months."""
+
+    he_hits = 0
+    he_samples: list[str] = []
+    for month in HEBREW_MONTHS:
+        occurrences = text.count(month)
+        if not occurrences:
+            continue
+        he_hits += occurrences
+        remaining_slots = 3 - len(he_samples)
+        if remaining_slots > 0:
+            he_samples.extend([f"token={month}"] * min(occurrences, remaining_slots))
+
+    en_hits = 0
+    en_samples: list[str] = []
     tokens: list[str] = []
     current: list[str] = []
 
@@ -100,15 +118,14 @@ def _count_english_months(text: str) -> int:
     if current:
         tokens.append("".join(current))
 
-    hits = 0
     for token in tokens:
-        if token.lower() in ENGLISH_MONTH_TOKENS:
-            hits += 1
-    return hits
+        lower = token.lower()
+        if lower in ENGLISH_MONTH_TOKENS:
+            en_hits += 1
+            if len(en_samples) < 3:
+                en_samples.append(f"token={lower}")
 
-
-def _count_hebrew_months(text: str) -> int:
-    return sum(text.count(month) for month in HEBREW_MONTHS)
+    return he_hits, en_hits, he_samples, en_samples
 
 
 def detect_month_language_for_run(run_dir: str) -> Dict[str, object]:
@@ -119,6 +136,8 @@ def detect_month_language_for_run(run_dir: str) -> Dict[str, object]:
     total_he_hits = 0
     total_en_hits = 0
     accounts_scanned = 0
+    he_evidence_samples: list[str] = []
+    en_evidence_samples: list[str] = []
 
     if os.path.isdir(accounts_dir):
         for entry in sorted(os.scandir(accounts_dir), key=lambda e: e.name):
@@ -139,8 +158,16 @@ def detect_month_language_for_run(run_dir: str) -> Dict[str, object]:
                     else:
                         continue
 
-                total_he_hits += _count_hebrew_months(text)
-                total_en_hits += _count_english_months(text)
+                he_hits, en_hits, he_samples, en_samples = _analyze_text_for_months(text)
+                total_he_hits += he_hits
+                total_en_hits += en_hits
+
+                if he_samples and len(he_evidence_samples) < 3:
+                    slots = 3 - len(he_evidence_samples)
+                    he_evidence_samples.extend(he_samples[:slots])
+                if en_samples and len(en_evidence_samples) < 3:
+                    slots = 3 - len(en_evidence_samples)
+                    en_evidence_samples.extend(en_samples[:slots])
 
     if total_he_hits > total_en_hits:
         month_language = "he"
@@ -154,6 +181,23 @@ def detect_month_language_for_run(run_dir: str) -> Dict[str, object]:
         month_language = "unknown"
         convention = None
         confidence = 0.0
+
+    log_convention = convention or "unknown"
+
+    logger.info(
+        "DATE_DETECT: accounts_scanned=%s he_hits=%s en_hits=%s lang=%s conv=%s",
+        accounts_scanned,
+        total_he_hits,
+        total_en_hits,
+        month_language,
+        log_convention,
+    )
+
+    if os.environ.get("VALIDATION_DEBUG") == "1":
+        for idx, sample in enumerate(he_evidence_samples):
+            logger.debug("DATE_DETECT evidence[he][%d]=%s", idx, sample)
+        for idx, sample in enumerate(en_evidence_samples):
+            logger.debug("DATE_DETECT evidence[en][%d]=%s", idx, sample)
 
     return {
         "date_convention": {

@@ -34,6 +34,7 @@ from backend.core.logic.consistency import compute_field_consistency
 from backend.core.logic.validation_requirements import (
     _raw_value_provider_for_account_factory,
     _should_redact_pii,
+    _clear_tolerance_state,
     apply_validation_summary,
     build_findings,
     build_summary_payload,
@@ -688,6 +689,87 @@ def test_empty_history_generates_missing_reason(monkeypatch):
     assert history_finding["is_missing"] is True
     assert history_finding["is_mismatch"] is False
     assert history_finding["send_to_ai"] is False
+
+
+def test_build_summary_payload_applies_amount_tolerance(monkeypatch, tmp_path):
+    from backend.core.logic import consistency as consistency_mod
+
+    monkeypatch.setattr(consistency_mod, "_AMOUNT_TOL_ABS", 0.0, raising=False)
+    monkeypatch.setattr(consistency_mod, "_AMOUNT_TOL_RATIO", 0.0, raising=False)
+
+    bureaus = {
+        "transunion": {"balance_owed": "110"},
+        "experian": {"balance_owed": "100"},
+        "equifax": {"balance_owed": "102"},
+    }
+
+    requirements = [
+        {
+            "field": "balance_owed",
+            "category": "activity",
+            "min_days": 8,
+            "documents": ["monthly_statement"],
+            "strength": "strong",
+            "ai_needed": False,
+            "bureaus": ["experian", "equifax", "transunion"],
+        }
+    ]
+
+    field_consistency = compute_field_consistency(dict(bureaus))
+    payload = build_summary_payload(
+        requirements,
+        field_consistency=field_consistency,
+        raw_value_provider=_raw_value_provider_for_account_factory(bureaus),
+        sid="SID123",
+        runs_root=tmp_path,
+    )
+
+    assert payload["findings"] == []
+    assert payload.get("tolerance", {}).get("suppressed_fields") == ["balance_owed"]
+
+
+def test_build_summary_payload_applies_date_tolerance(monkeypatch, tmp_path):
+    from backend.core.logic import consistency as consistency_mod
+
+    monkeypatch.setattr(consistency_mod, "_DATE_TOLERANCE_DAYS", 0, raising=False)
+    _clear_tolerance_state()
+
+    sid = "SIDDATE"
+    run_dir = tmp_path / sid
+    convention_path = run_dir / "trace" / "date_convention.json"
+    convention_path.parent.mkdir(parents=True, exist_ok=True)
+    convention_path.write_text("{\"convention\": \"MDY\"}", encoding="utf-8")
+
+    bureaus = {
+        "transunion": {"date_opened": "01/02/2023"},
+        "experian": {"date_opened": "01/03/2023"},
+        "equifax": {"date_opened": "01/04/2023"},
+    }
+
+    requirements = [
+        {
+            "field": "date_opened",
+            "category": "dates",
+            "min_days": 10,
+            "documents": [],
+            "strength": "medium",
+            "ai_needed": False,
+            "bureaus": ["equifax", "experian", "transunion"],
+        }
+    ]
+
+    field_consistency = compute_field_consistency(dict(bureaus))
+    payload = build_summary_payload(
+        requirements,
+        field_consistency=field_consistency,
+        raw_value_provider=_raw_value_provider_for_account_factory(bureaus),
+        sid=sid,
+        runs_root=tmp_path,
+    )
+
+    assert payload["findings"] == []
+    assert payload.get("tolerance", {}).get("suppressed_fields") == ["date_opened"]
+    _clear_tolerance_state()
 
 
 @pytest.mark.parametrize(

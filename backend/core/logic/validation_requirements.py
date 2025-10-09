@@ -10,7 +10,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Sequence
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 
 import yaml
 from pydantic import (
@@ -64,9 +73,60 @@ _DEFAULT_SUMMARY_POINTERS = {
     "summary": "summary.json",
 }
 
+_FALLBACK_DECISIONS: Mapping[str, str] = {
+    "C1_TWO_PRESENT_ONE_MISSING": "supportive_needs_companion",
+    "C2_ONE_MISSING": "supportive_needs_companion",
+    "C3_TWO_PRESENT_CONFLICT": "supportive_needs_companion",
+    "C4_TWO_MATCH_ONE_DIFF": "strong_actionable",
+}
+
+build_validation_pack_for_account: Callable[..., Sequence[str]] | None = None
+
 
 def _is_dry_run_enabled() -> bool:
     return bool(getattr(backend_config, "VALIDATION_DRY_RUN", False))
+
+
+@lru_cache(maxsize=1)
+def _load_tolerance_evaluator():
+    from backend.validation.tolerance import evaluate_field_with_tolerance
+
+    return evaluate_field_with_tolerance
+
+
+def _evaluate_with_tolerance(
+    sid: str | None,
+    runs_root: str | os.PathLike[str] | None,
+    field: str,
+    bureau_values: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    try:
+        evaluator = _load_tolerance_evaluator()
+    except Exception:  # pragma: no cover - defensive import guard
+        logger.debug(
+            "TOLERANCE_EVALUATOR_IMPORT_FAILED field=%s", field, exc_info=True
+        )
+        return None
+
+    try:
+        return evaluator(sid, runs_root, field, bureau_values)
+    except Exception:  # pragma: no cover - defensive evaluation guard
+        logger.exception("TOLERANCE_EVALUATION_FAILED field=%s", field)
+        return None
+
+
+def _clear_tolerance_state() -> None:
+    _load_tolerance_evaluator.cache_clear()
+    try:
+        from backend.validation.tolerance import clear_cached_conventions
+    except Exception:  # pragma: no cover - defensive import guard
+        logger.debug("TOLERANCE_CLEAR_FAILED", exc_info=True)
+        return
+
+    try:
+        clear_cached_conventions()
+    except Exception:  # pragma: no cover - defensive guard
+        logger.debug("TOLERANCE_CLEAR_EXEC_FAILED", exc_info=True)
 
 
 def _get_canary_percent() -> int:
@@ -1054,6 +1114,11 @@ def _json_default(value: Any) -> str:
     return repr(value)
 
 
+def _fallback_decision_for_reason(reason_code: str) -> str | None:
+    normalized = reason_code.strip().upper()
+    return _FALLBACK_DECISIONS.get(normalized)
+
+
 def _compute_mismatch_rate(
     details: Mapping[str, Any] | None,
     reason_details: Mapping[str, Any],
@@ -1313,6 +1378,12 @@ def _build_finding(
         str(field_name) if field_name is not None else "",
         str(reason_details.get("reason_code") or ""),
     )
+    if not default_decision:
+        fallback = _fallback_decision_for_reason(
+            str(reason_details.get("reason_code") or "")
+        )
+        if fallback:
+            default_decision = fallback
     ai_needed = bool(finding.get("ai_needed"))
     if default_decision:
         if ai_needed:
@@ -1401,12 +1472,58 @@ def build_summary_payload(
     *,
     field_consistency: Mapping[str, Any] | None = None,
     raw_value_provider: Any | None = None,
+    sid: str | None = None,
+    runs_root: Path | str | None = None,
 ) -> Dict[str, Any]:
     """Build the summary.json payload for validation requirements."""
 
-    normalized_requirements = [
-        dict(entry) for entry in requirements if isinstance(entry, Mapping)
-    ]
+    normalized_requirements: list[dict[str, Any]] = []
+    suppressed_fields: list[str] = []
+    sid_value = str(sid) if sid is not None else None
+    runs_root_value = os.fspath(runs_root) if runs_root is not None else None
+
+    for entry in requirements:
+        if not isinstance(entry, Mapping):
+            continue
+
+        normalized_entry = dict(entry)
+        field_name = normalized_entry.get("field")
+
+        if (
+            field_name
+            and isinstance(field_consistency, Mapping)
+            and sid_value
+            and runs_root_value
+        ):
+            details = _extract_field_details(field_consistency, field_name)
+            normalized_map = _coerce_normalized_map(details)
+            bureau_values = {
+                bureau: normalized_map.get(bureau)
+                for bureau in _SUMMARY_BUREAUS
+            }
+
+            if any(value is not None for value in bureau_values.values()):
+                tolerance_result = _evaluate_with_tolerance(
+                    sid_value,
+                    runs_root_value,
+                    str(field_name),
+                    bureau_values,
+                )
+
+                if (
+                    isinstance(tolerance_result, Mapping)
+                    and tolerance_result.get("tolerance_applied")
+                    and not tolerance_result.get("is_mismatch", True)
+                ):
+                    suppressed_fields.append(str(field_name))
+                    logger.debug(
+                        "VALIDATION_TOLERANCE_SUPPRESS field=%s metric=%s",
+                        field_name,
+                        tolerance_result.get("metric"),
+                    )
+                    continue
+
+        normalized_requirements.append(normalized_entry)
     reasons_enabled = _is_validation_reason_enabled()
     findings = build_findings(
         normalized_requirements,
@@ -1418,6 +1535,9 @@ def build_summary_payload(
         "schema_version": _SUMMARY_SCHEMA_VERSION,
         "findings": findings,
     }
+
+    if suppressed_fields:
+        payload.setdefault("tolerance", {})["suppressed_fields"] = suppressed_fields
 
     if summary_writer.include_legacy_requirements():
         payload["requirements"] = normalized_requirements
@@ -1802,6 +1922,8 @@ def build_validation_requirements_for_account(
         run_dir = None
 
     convention_block = None
+    sid_for_tolerance: str | None = None
+    runs_root_for_tolerance: Path | None = None
     if run_dir is not None:
         convention_block = read_date_convention(run_dir)
         if convention_block is None:
@@ -1809,6 +1931,8 @@ def build_validation_requirements_for_account(
                 "DATE_DETECT_MISSING run_dir=%s fallback=MDY/en",
                 run_dir,
             )
+        sid_for_tolerance = run_dir.name
+        runs_root_for_tolerance = run_dir.parent
     set_validation_context(convention_block)
 
     if not _account_selected_for_canary(account_path, canary_percent):
@@ -1841,6 +1965,8 @@ def build_validation_requirements_for_account(
         requirements,
         field_consistency=field_consistency_full,
         raw_value_provider=raw_provider,
+        sid=sid_for_tolerance,
+        runs_root=runs_root_for_tolerance,
     )
     if dry_run_enabled:
         summary_after = _apply_dry_run_summary(summary_path, payload)
@@ -1902,30 +2028,46 @@ def build_validation_requirements_for_account(
         account_id = None
 
     if build_pack and not dry_run_enabled and sid and account_id:
-        try:
-            # Lazy-import here to avoid circular import during module load.
-            from backend.ai.validation_builder import build_validation_pack_for_account
+        builder_func = build_validation_pack_for_account
+        if builder_func is None:
+            try:  # pragma: no cover - defensive import guard
+                from backend.ai.validation_builder import (
+                    build_validation_pack_for_account as builder_imported,
+                )
+            except Exception:
+                logger.exception(
+                    "ERROR account_id=%s sid=%s summary=%s event=VALIDATION_PACK_BUILD_FAILED",
+                    account_id,
+                    sid,
+                    summary_path,
+                )
+                builder_func = None
+            else:
+                globals()["build_validation_pack_for_account"] = builder_imported
+                builder_func = builder_imported
 
-            pack_lines = build_validation_pack_for_account(
-                sid,
-                account_id,
-                summary_path,
-                bureaus_path,
-            )
-            pack_count = len(pack_lines)
-            logger.info(
-                "PACKS_BUILT account_id=%s count=%d",
-                account_id,
-                pack_count,
-            )
-            logger.info("PACKS_SENT account_id=%s", account_id)
-        except Exception:  # pragma: no cover - defensive logging
-            logger.exception(
-                "ERROR account_id=%s sid=%s summary=%s event=VALIDATION_PACK_BUILD_FAILED",
-                account_id,
-                sid,
-                summary_path,
-            )
+        if builder_func is not None:
+            try:
+                pack_lines = builder_func(
+                    sid,
+                    account_id,
+                    summary_path,
+                    bureaus_path,
+                )
+                pack_count = len(pack_lines)
+                logger.info(
+                    "PACKS_BUILT account_id=%s count=%d",
+                    account_id,
+                    pack_count,
+                )
+                logger.info("PACKS_SENT account_id=%s", account_id)
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception(
+                    "ERROR account_id=%s sid=%s summary=%s event=VALIDATION_PACK_BUILD_FAILED",
+                    account_id,
+                    sid,
+                    summary_path,
+                )
 
     result = {
         "status": "ok",

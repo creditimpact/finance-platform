@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 import httpx
 
 import backend.config as config
+from backend.core.ai.openai_headers import build_openai_headers
 from backend.core.io.tags import upsert_tag
 
 from . import config as merge_config
@@ -307,7 +308,7 @@ def _build_request_payload(pack: dict) -> tuple[str, dict[str, Any], dict[str, s
 
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
+    if not api_key or not api_key.strip():
         raise RuntimeError("OPENAI_API_KEY is required when AI adjudication is enabled")
 
     model = merge_config.get_ai_model()
@@ -329,10 +330,8 @@ def _build_request_payload(pack: dict) -> tuple[str, dict[str, Any], dict[str, s
         "response_format": {"type": "json_object"},
     }
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    project_id = os.getenv("OPENAI_PROJECT_ID")
+    headers = build_openai_headers(api_key=api_key, project_id=project_id)
 
     metadata = {
         "model": model,

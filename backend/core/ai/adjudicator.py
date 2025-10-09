@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable
 
 import httpx
 
+from backend.core.ai.openai_headers import build_openai_headers
 
 _SYSTEM_PROMPT = """You are a meticulous adjudicator for credit-report account pairing.
 Decide if two account entries (A,B) refer to the SAME underlying account.
@@ -265,7 +266,7 @@ def decide_merge_or_different(pack: dict, *, timeout: int) -> dict:
 
     base_url = (os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
+    if not api_key or not api_key.strip():
         raise RuntimeError("OPENAI_API_KEY must be set for adjudicator calls")
 
     model = os.getenv("AI_MODEL")
@@ -274,16 +275,19 @@ def decide_merge_or_different(pack: dict, *, timeout: int) -> dict:
 
     request_timeout = _coerce_positive_int(os.getenv("AI_REQUEST_TIMEOUT"), default=timeout)
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-    }
-    project_id = (os.getenv("OPENAI_PROJECT_ID") or "").strip()
-    if api_key.startswith("sk-proj-"):
-        if not project_id:
+    project_id = os.getenv("OPENAI_PROJECT_ID")
+    try:
+        headers = build_openai_headers(
+            api_key=api_key,
+            project_id=project_id,
+            content_type="application/json",
+        )
+    except RuntimeError as exc:
+        if "OPENAI_PROJECT_ID is required for sk-proj-* keys" in str(exc):
             raise RuntimeError(
                 "OPENAI_PROJECT_ID must be set when using project-scoped OpenAI API keys"
-            )
-        headers["OpenAI-Project"] = project_id
+            ) from exc
+        raise
 
     org_id = os.getenv("OPENAI_ORG_ID")
     if org_id:

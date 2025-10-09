@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from typing import Any, Mapping
@@ -13,6 +14,8 @@ from backend.validation.utils_dates import (
     load_date_convention_for_sid,
 )
 
+_LOGGER = logging.getLogger(__name__)
+_DEBUG_ENV = "VALIDATION_DEBUG"
 _BUREAU_KEYS = ("equifax", "experian", "transunion")
 
 DATE_FIELDS = {
@@ -59,6 +62,14 @@ def _resolve_date_convention(runs_root: str | None, sid: str | None) -> str | No
         return None
 
 
+def _is_debug_enabled() -> bool:
+    value = os.getenv(_DEBUG_ENV)
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    return normalized not in {"", "0", "false", "no"}
+
+
 def evaluate_field_with_tolerance(
     sid: str | None,
     runs_root: str | os.PathLike[str] | None,
@@ -72,16 +83,26 @@ def evaluate_field_with_tolerance(
 
     result = {"is_mismatch": True, "metric": None, "tolerance_applied": False}
 
+    debug_enabled = _is_debug_enabled()
+
     if normalized_field in DATE_FIELDS:
         conv = _resolve_date_convention(
             os.fspath(runs_root) if runs_root is not None else None,
             sid,
         )
         tol_days = validation_config.get_date_tolerance_days()
-        if conv is not None:
-            within, span = are_dates_within_tolerance(values.values(), conv, tol_days)
-        else:
-            within, span = are_dates_within_tolerance(values.values(), "MDY", tol_days)
+        used_conv = conv if conv is not None else "MDY"
+        within, span = are_dates_within_tolerance(values.values(), used_conv, tol_days)
+        if debug_enabled:
+            _LOGGER.info(
+                "TOLCHECK date sid=%s field=%s conv=%s tol_days=%s span=%s within=%s",
+                sid or "",
+                normalized_field,
+                used_conv,
+                tol_days,
+                span,
+                within,
+            )
         if within:
             return {"is_mismatch": False, "metric": span, "tolerance_applied": True}
         return result
@@ -89,7 +110,20 @@ def evaluate_field_with_tolerance(
     if normalized_field in AMOUNT_FIELDS:
         abs_tol = validation_config.get_amount_tolerance_abs()
         ratio_tol = validation_config.get_amount_tolerance_ratio()
-        within, diff = are_amounts_within_tolerance(values.values(), abs_tol, ratio_tol)
+        within, diff, max_value = are_amounts_within_tolerance(
+            values.values(), abs_tol, ratio_tol
+        )
+        if debug_enabled:
+            _LOGGER.info(
+                "TOLCHECK amount sid=%s field=%s abs=%s ratio=%s diff=%s maxv=%s within=%s",
+                sid or "",
+                normalized_field,
+                abs_tol,
+                ratio_tol,
+                diff,
+                max_value,
+                within,
+            )
         if within:
             return {"is_mismatch": False, "metric": diff, "tolerance_applied": True}
         return result

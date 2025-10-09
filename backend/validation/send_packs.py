@@ -2895,6 +2895,30 @@ class ValidationPackSender:
         )
         return summary_payload
 
+    @staticmethod
+    def _extract_default_decision(pack_line: Mapping[str, Any]) -> str | None:
+        if not isinstance(pack_line, Mapping):
+            return None
+
+        candidates: list[Any] = []
+
+        direct_value = pack_line.get("default_decision")
+        if direct_value is not None:
+            candidates.append(direct_value)
+
+        finding = pack_line.get("finding")
+        if isinstance(finding, Mapping):
+            nested_value = finding.get("default_decision")
+            if nested_value is not None:
+                candidates.append(nested_value)
+
+        for candidate in candidates:
+            decision = _normalize_structured_decision(candidate)
+            if decision in _VALID_DECISIONS:
+                return decision
+
+        return None
+
     def _build_deterministic_response(
         self,
         pack_line: Mapping[str, Any],
@@ -2925,7 +2949,7 @@ class ValidationPackSender:
         is_mismatch = _coerce_bool_flag(finding.get("is_mismatch"))
 
         (
-            decision,
+            heuristic_decision,
             modifiers,
             has_long_history,
             has_semantic_majority,
@@ -2934,6 +2958,12 @@ class ValidationPackSender:
             reason_code=reason_code,
             is_mismatch=is_mismatch,
         )
+        default_decision = self._extract_default_decision(pack_line)
+        if default_decision:
+            decision = default_decision
+        else:
+            decision = _normalize_structured_decision(heuristic_decision) or "no_case"
+
         rationale = self._compose_deterministic_rationale(
             decision,
             reason_code,
@@ -3014,18 +3044,36 @@ class ValidationPackSender:
         long_history: bool,
         semantic_majority: bool,
     ) -> str:
-        base_label = reason_label or reason_code
-        if decision == "supportive" and reason_code == "C5_ALL_DIFF" and long_history:
-            return (
-                f"{base_label} shows a long, consistent history anchoring the timeline "
-                f"({reason_code})."
-            )
-        if decision == "supportive":
-            detail = "semantic alignment across bureaus" if semantic_majority else "supportive evidence"
-            return f"{base_label} provides {detail} ({reason_code})."
-        if decision == "neutral" and is_mismatch:
-            return f"{base_label} mismatch is recorded without escalation ({reason_code})."
-        return f"{base_label} does not create an actionable dispute ({reason_code})."
+        base_label = reason_label or reason_code or "This discrepancy"
+        suffix = f" ({reason_code})" if reason_code else ""
+
+        if decision == "strong_actionable":
+            if long_history:
+                return (
+                    f"{base_label} is deterministically actionable with corroborating history"
+                    f"{suffix}."
+                )
+            return f"{base_label} is deterministically actionable{suffix}."
+
+        if decision == "supportive_needs_companion":
+            if semantic_majority:
+                return (
+                    f"{base_label} aligns across bureaus and supports the dispute but needs corroboration"
+                    f"{suffix}."
+                )
+            if long_history:
+                return (
+                    f"{base_label} is backed by consistent history but still needs corroboration"
+                    f"{suffix}."
+                )
+            return f"{base_label} supports the dispute but needs corroboration{suffix}."
+
+        if decision == "neutral_context_only":
+            if is_mismatch:
+                return f"{base_label} mismatch is recorded for context only{suffix}."
+            return f"{base_label} is recorded for context only{suffix}."
+
+        return f"{base_label} does not create an actionable dispute{suffix}."
 
     def _build_deterministic_citations(
         self, pack_line: Mapping[str, Any]

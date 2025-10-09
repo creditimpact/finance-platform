@@ -194,6 +194,13 @@ def test_date_detector_writes_atomic_file(tmp_path: Path, monkeypatch: pytest.Mo
         }
     }
 
+    logs_path = run_dir / "logs.txt"
+    assert logs_path.exists()
+    assert (
+        logs_path.read_text(encoding="utf-8")
+        == "DATE_DETECT_SUMMARY: path=traces/date_convention.json conv=MDY lang=en conf=1.0\n"
+    )
+
     legacy_path = run_dir / "traces" / "accounts_table" / "general_info_from_full.json"
     assert not legacy_path.exists()
 

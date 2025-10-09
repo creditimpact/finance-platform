@@ -155,6 +155,28 @@ def detect_and_persist_date_convention(
         )
         return None
 
+    summary_path = run_root / "logs.txt"
+    convention_value = block.get("convention") or "unknown"
+    language_value = block.get("month_language") or "unknown"
+    confidence_value = block.get("confidence")
+    confidence_repr = confidence_value if confidence_value is not None else "unknown"
+    summary_line = (
+        "DATE_DETECT_SUMMARY: "
+        f"path={log_out_path} "
+        f"conv={convention_value} "
+        f"lang={language_value} "
+        f"conf={confidence_repr}\n"
+    )
+
+    try:
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        with summary_path.open("a", encoding="utf-8") as handle:
+            handle.write(summary_line)
+    except Exception:
+        logger.error(
+            "DATE_CONVENTION_LOG_WRITE_FAILED sid=%s path=%s", sid, summary_path, exc_info=True
+        )
+
     logger.info(
         "DATE_DETECT: scope=%s conv=%s lang=%s conf=%s he=%s en=%s scanned=%s out=%s",
         block.get("scope"),

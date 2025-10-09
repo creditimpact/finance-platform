@@ -28,10 +28,10 @@ from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, write_tags_atomic
 from backend.core.logic import summary_writer
 from backend.core.logic.consistency import _get_bureau_value, compute_field_consistency
-from backend.core.logic.decision_matrix import lookup_decision
 from backend.core.logic.reason_classifier import classify_reason, decide_send_to_ai
 from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.telemetry import metrics
+from backend.validation.decision_matrix import decide_default
 
 logger = logging.getLogger(__name__)
 
@@ -1306,10 +1306,18 @@ def _build_finding(
 
     finding.update(reason_details)
 
-    decision = lookup_decision(field_name, reason_details.get("reason_code"))
-    if decision:
-        finding["decision"] = decision
-        finding.setdefault("decision_source", "rules")
+    default_decision = decide_default(
+        str(field_name) if field_name is not None else "",
+        str(reason_details.get("reason_code") or ""),
+    )
+    ai_needed = bool(finding.get("ai_needed"))
+    if default_decision:
+        if ai_needed:
+            finding["default_decision_hint"] = default_decision
+        else:
+            finding["default_decision"] = default_decision
+            finding["decision"] = default_decision
+            finding.setdefault("decision_source", "rules")
 
     finding["send_to_ai"] = decide_send_to_ai(field_name, reason_details)
     finding["bureau_values"] = _build_bureau_value_snapshot(

@@ -45,6 +45,7 @@ from backend.core.telemetry import metrics
 from backend.validation.decision_matrix import decide_default
 from backend.prevalidation import read_date_convention
 
+tolerance_logger = logging.getLogger("backend.validation.tolerance")
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -94,6 +95,31 @@ def _load_tolerance_evaluator():
     return evaluate_field_with_tolerance
 
 
+def _emit_tolerance_log(payload: Mapping[str, Any]) -> None:
+    kind = str(payload.get("kind"))
+    if kind == "date":
+        tolerance_logger.info(
+            "TOLCHECK date sid=%s field=%s conv=%s tol_days=%s span=%s within=%s",
+            payload.get("sid", ""),
+            payload.get("field", ""),
+            payload.get("conv"),
+            payload.get("tol_days"),
+            payload.get("span"),
+            payload.get("within"),
+        )
+    elif kind == "amount":
+        tolerance_logger.info(
+            "TOLCHECK amount sid=%s field=%s abs=%s ratio=%s diff=%s maxv=%s within=%s",
+            payload.get("sid", ""),
+            payload.get("field", ""),
+            payload.get("abs"),
+            payload.get("ratio"),
+            payload.get("diff"),
+            payload.get("maxv"),
+            payload.get("within"),
+        )
+
+
 def _evaluate_with_tolerance(
     sid: str | None,
     runs_root: str | os.PathLike[str] | None,
@@ -109,10 +135,25 @@ def _evaluate_with_tolerance(
         return None
 
     try:
-        return evaluator(sid, runs_root, field, bureau_values)
+        result = evaluator(sid, runs_root, field, bureau_values)
     except Exception:  # pragma: no cover - defensive evaluation guard
         logger.exception("TOLERANCE_EVALUATION_FAILED field=%s", field)
         return None
+
+    if not isinstance(result, Mapping):
+        return result
+
+    log_payload = result.get("log_payload")
+    if isinstance(log_payload, Mapping) and log_payload:
+        try:
+            _emit_tolerance_log(log_payload)
+        except Exception:  # pragma: no cover - defensive logging guard
+            logger.debug("TOLERANCE_LOGGING_FAILED field=%s", field, exc_info=True)
+        sanitized = dict(result)
+        sanitized.pop("log_payload", None)
+        return sanitized
+
+    return result
 
 
 def _coerce_tolerance_note(

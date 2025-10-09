@@ -1,4 +1,5 @@
 import json
+import logging
 import sys
 import types
 from pathlib import Path
@@ -929,6 +930,86 @@ def test_history_missing_vs_present_requires_strong_documents():
     assert seven_req["ai_needed"] is True
     assert seven_req["bureaus"] == ["equifax", "experian", "transunion"]
     assert inconsistencies["seven_year_history"]["consensus"] != "unanimous"
+
+
+def test_build_validation_requirements_for_account_uses_detected_date_convention(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "runs" / "sid"
+    account_dir = run_dir / "cases" / "accounts" / "000"
+    account_dir.mkdir(parents=True)
+
+    bureaus = {
+        "transunion": {"date_opened": "15 אוג׳ 2022"},
+        "experian": {"date_opened": "15 אוג׳ 2022"},
+        "equifax": {"date_opened": "15 אוג׳ 2022"},
+    }
+
+    (account_dir / "bureaus.json").write_text(
+        json.dumps(bureaus, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (account_dir / "summary.json").write_text("{}", encoding="utf-8")
+
+    traces_dir = run_dir / "traces"
+    traces_dir.mkdir(parents=True)
+    (traces_dir / "date_convention.json").write_text(
+        json.dumps(
+            {
+                "date_convention": {
+                    "convention": "DMY",
+                    "month_language": "he",
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = build_validation_requirements_for_account(account_dir, build_pack=False)
+
+    assert result["status"] == "ok"
+    summary_after = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
+    normalized = (
+        summary_after["validation_requirements"]["field_consistency"]["date_opened"][
+            "normalized"
+        ]
+    )
+    assert normalized["transunion"] == "2022-08-15"
+
+
+def test_build_validation_requirements_for_account_logs_missing_date_convention(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    run_dir = tmp_path / "runs" / "sid"
+    account_dir = run_dir / "cases" / "accounts" / "001"
+    account_dir.mkdir(parents=True)
+
+    bureaus = {
+        "transunion": {"date_opened": "1/2/23"},
+        "experian": {"date_opened": "1/2/23"},
+        "equifax": {"date_opened": "1/2/23"},
+    }
+
+    (account_dir / "bureaus.json").write_text(
+        json.dumps(bureaus, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (account_dir / "summary.json").write_text("{}", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        result = build_validation_requirements_for_account(account_dir, build_pack=False)
+
+    assert result["status"] == "ok"
+    assert "DATE_DETECT_MISSING" in caplog.text
+
+    summary_after = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
+    normalized = (
+        summary_after["validation_requirements"]["field_consistency"]["date_opened"][
+            "normalized"
+        ]
+    )
+    assert normalized["experian"] == "2023-01-02"
 
 
 def test_build_validation_requirements_for_account_respects_summary_consensus(

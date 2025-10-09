@@ -36,7 +36,8 @@ from backend.core.merge.acctnum import acctnum_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
 from backend.core.logic.summary_compact import compact_merge_sections
-from backend.ai.validation_builder import build_validation_pack_for_account
+# NOTE: do not import validation_builder at module import-time.
+# We'll lazy-import inside the function to avoid circular imports.
 from backend.core.logic.validation_requirements import (
     _raw_value_provider_for_account_factory,
     apply_validation_summary,
@@ -2942,6 +2943,9 @@ def persist_merge_tags(
 
             bureaus_path = summary_path.parent / "bureaus.json"
             try:
+                # Lazy-import here to avoid circular import during module load.
+                from backend.ai.validation_builder import build_validation_pack_for_account
+
                 build_validation_pack_for_account(
                     sid,
                     idx,

@@ -10,6 +10,8 @@ log = logging.getLogger(__name__)
 
 _OPENAI_API_BASE = "https://api.openai.com/v1"
 _PROBE_URL = f"{_OPENAI_API_BASE}/models"
+_PROJECT_HEADER_FLAG = "OPENAI_SEND_PROJECT_HEADER"
+PROJECT_HEADER_NAME = "OpenAI-Project"
 
 
 def _clean_env(value: str | None) -> str:
@@ -23,20 +25,8 @@ def _resolved_api_key(api_key: str | None) -> str:
     return key
 
 
-def _resolved_project_id(project_id: str | None) -> str:
-    return _clean_env(project_id if project_id is not None else os.getenv("OPENAI_PROJECT_ID"))
-
-
-def _requires_project_header(key: str) -> bool:
-    return key.startswith("sk-proj-")
-
-
-def _openai_project_header(key: str, project_id: str) -> dict[str, str]:
-    if not _requires_project_header(key):
-        return {}
-    if not project_id:
-        raise RuntimeError("OPENAI_PROJECT_ID missing for project-scoped API keys")
-    return {"OpenAI-Project": project_id}
+def _project_header_enabled() -> bool:
+    return os.getenv(_PROJECT_HEADER_FLAG, "0") == "1"
 
 
 def build_openai_headers(
@@ -45,13 +35,14 @@ def build_openai_headers(
     """Construct the required headers for OpenAI API requests."""
 
     key = _resolved_api_key(api_key)
-    project = _resolved_project_id(project_id)
 
     headers: dict[str, str] = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
-    headers.update(_openai_project_header(key, project))
+    project_clean = _clean_env(project_id)
+    if _project_header_enabled() and project_clean:
+        headers[PROJECT_HEADER_NAME] = project_clean
     return headers
 
 
@@ -70,6 +61,11 @@ def auth_probe(session: requests.Session | None = None) -> None:
     sess = session or requests.Session()
     try:
         try:
+            log.debug(
+                "OPENAI_CALL endpoint=%s has_project_header=%s",
+                "/v1/models",
+                PROJECT_HEADER_NAME in headers,
+            )
             response = sess.get(_PROBE_URL, headers=headers)
         except requests.RequestException as exc:
             log.error(

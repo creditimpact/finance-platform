@@ -17,7 +17,6 @@ SID = os.environ.get("SID")
 MODEL = os.environ.get("AI_MODEL", "gpt-4o-mini")
 BASE = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 KEY = os.environ.get("OPENAI_API_KEY")
-PROJECT_ID = os.environ.get("OPENAI_PROJECT_ID")
 TIMEOUT = int(os.environ.get("AI_REQUEST_TIMEOUT", "30"))
 
 base = pathlib.Path(RUNS_ROOT) / SID
@@ -43,7 +42,7 @@ def write_tags(acc_dir: pathlib.Path, new_tag: dict):
 
 
 def chat(messages):
-    headers = build_openai_headers(api_key=KEY, project_id=PROJECT_ID)
+    headers = build_openai_headers(api_key=KEY)
     req = urllib.request.Request(
         url=f"{BASE}/chat/completions",
         headers=headers,

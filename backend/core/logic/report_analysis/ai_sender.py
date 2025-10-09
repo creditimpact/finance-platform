@@ -13,7 +13,7 @@ from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 import httpx
 
-from backend.core.ai import build_openai_headers
+from backend.core.ai import PROJECT_HEADER_NAME, build_openai_headers
 
 from backend.core.io.tags import read_tags, upsert_tag
 
@@ -131,11 +131,11 @@ def load_config_from_env() -> AISenderConfig:
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is required when sending AI merge packs")
 
-    project_id = (os.getenv("OPENAI_PROJECT_ID") or "").strip()
+    project_header_enabled = os.getenv("OPENAI_SEND_PROJECT_HEADER", "0") == "1"
     log.info(
-        "OPENAI_SETUP key_prefix=%s project_set=%s base_url=%s",
+        "OPENAI_SETUP key_prefix=%s project_header_enabled=%s base_url=%s",
         (api_key[:7] + "...") if api_key else "<empty>",
-        bool(project_id),
+        project_header_enabled,
         base_url_clean,
     )
 
@@ -155,6 +155,11 @@ def _default_http_request(
     headers: Mapping[str, str],
     timeout: float,
 ) -> httpx.Response:
+    log.debug(
+        "OPENAI_CALL endpoint=%s has_project_header=%s",
+        "/v1/chat/completions",
+        PROJECT_HEADER_NAME in headers,
+    )
     return httpx.post(url, json=dict(payload), headers=dict(headers), timeout=timeout)
 
 

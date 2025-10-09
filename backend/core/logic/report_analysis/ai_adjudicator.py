@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 import httpx
 
 import backend.config as config
-from backend.core.ai import build_openai_headers
+from backend.core.ai import PROJECT_HEADER_NAME, build_openai_headers
 from backend.core.io.tags import upsert_tag
 
 from . import config as merge_config
@@ -332,14 +332,14 @@ def _build_request_payload(pack: dict) -> tuple[str, dict[str, Any], dict[str, s
         "response_format": {"type": "json_object"},
     }
 
-    project_id = (os.getenv("OPENAI_PROJECT_ID") or "").strip()
+    project_header_enabled = os.getenv("OPENAI_SEND_PROJECT_HEADER", "0") == "1"
     logger.info(
-        "OPENAI_SETUP key_prefix=%s project_set=%s base_url=%s",
+        "OPENAI_SETUP key_prefix=%s project_header_enabled=%s base_url=%s",
         (api_key[:7] + "...") if api_key else "<empty>",
-        bool(project_id),
+        project_header_enabled,
         base_url_clean,
     )
-    headers = build_openai_headers(api_key=api_key, project_id=project_id or None)
+    headers = build_openai_headers(api_key=api_key)
 
     metadata = {
         "model": model,
@@ -396,6 +396,11 @@ def adjudicate_pair(pack: dict) -> dict[str, Any]:
 
     started = time.perf_counter()
     try:
+        logger.debug(
+            "OPENAI_CALL endpoint=%s has_project_header=%s",
+            "/v1/chat/completions",
+            PROJECT_HEADER_NAME in headers,
+        )
         response = httpx.post(url, json=payload, headers=headers, timeout=timeout_s)
         response.raise_for_status()
         data = response.json()

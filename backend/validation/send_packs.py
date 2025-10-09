@@ -31,7 +31,7 @@ from backend.core.ai.paths import (
     validation_result_summary_filename_for_account,
     validation_write_json_enabled,
 )
-from backend.core.ai import auth_probe, build_openai_headers
+from backend.core.ai import PROJECT_HEADER_NAME, auth_probe, build_openai_headers
 from backend.core.logic.validation_field_sets import (
     ALL_VALIDATION_FIELDS,
     ALWAYS_INVESTIGATABLE_FIELDS,
@@ -718,6 +718,11 @@ class _ChatCompletionClient:
 
         request_lib = _ensure_requests_module()
         start_time = time.monotonic()
+        log.debug(
+            "OPENAI_CALL endpoint=%s has_project_header=%s",
+            url,
+            PROJECT_HEADER_NAME in headers,
+        )
         response = request_lib.post(url, headers=headers, json=payload, timeout=self.timeout)
         latency = time.monotonic() - start_time
         status_code = getattr(response, "status_code", 0)
@@ -3887,16 +3892,16 @@ class ValidationPackSender:
         base_url_raw = os.getenv("OPENAI_BASE_URL")
         base_url_clean = (base_url_raw or "").strip() or "https://api.openai.com/v1"
         timeout = _env_float("AI_REQUEST_TIMEOUT", _DEFAULT_TIMEOUT)
-        project_id = (os.getenv("OPENAI_PROJECT_ID") or "").strip()
+        project_header_enabled = os.getenv("OPENAI_SEND_PROJECT_HEADER", "0") == "1"
         global _AUTH_READY
         if not _AUTH_READY:
             with _AUTH_LOCK:
                 if not _AUTH_READY:
                     auth_probe()
                     log.info(
-                        "OPENAI_AUTH ready: key_prefix=%s project_set=%s base_url=%s",
+                        "OPENAI_AUTH ready: key_prefix=%s project_header_enabled=%s base_url=%s",
                         _key_prefix(api_key),
-                        bool(project_id),
+                        project_header_enabled,
                         base_url_clean,
                     )
                     _AUTH_READY = True
@@ -3904,7 +3909,7 @@ class ValidationPackSender:
             base_url=base_url_clean,
             api_key=api_key,
             timeout=timeout,
-            project_id=project_id or None,
+            project_id=None,
         )
 
     @staticmethod

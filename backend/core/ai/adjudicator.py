@@ -11,7 +11,7 @@ from typing import Any, Dict, Iterable
 
 import httpx
 
-from backend.core.ai import auth_probe, build_openai_headers
+from backend.core.ai import PROJECT_HEADER_NAME, auth_probe, build_openai_headers
 
 
 log = logging.getLogger(__name__)
@@ -297,30 +297,20 @@ def decide_merge_or_different(pack: dict, *, timeout: int) -> dict:
 
     request_timeout = _coerce_positive_int(os.getenv("AI_REQUEST_TIMEOUT"), default=timeout)
 
-    project_id = (os.getenv("OPENAI_PROJECT_ID") or "").strip()
+    project_header_enabled = os.getenv("OPENAI_SEND_PROJECT_HEADER", "0") == "1"
     global _AUTH_READY
     if not _AUTH_READY:
         with _AUTH_LOCK:
             if not _AUTH_READY:
                 auth_probe()
                 log.info(
-                    "OPENAI_AUTH ready: key_prefix=%s project_set=%s base_url=%s",
+                    "OPENAI_AUTH ready: key_prefix=%s project_header_enabled=%s base_url=%s",
                     _key_prefix(api_key),
-                    bool(project_id),
+                    project_header_enabled,
                     base_url_clean,
                 )
                 _AUTH_READY = True
-    try:
-        headers = build_openai_headers(
-            api_key=api_key,
-            project_id=project_id or None,
-        )
-    except RuntimeError as exc:
-        if "OPENAI_PROJECT_ID missing for project-scoped API keys" in str(exc):
-            raise RuntimeError(
-                "OPENAI_PROJECT_ID must be set when using project-scoped OpenAI API keys"
-            ) from exc
-        raise
+    headers = build_openai_headers(api_key=api_key)
 
     org_id = os.getenv("OPENAI_ORG_ID")
     if org_id:
@@ -341,6 +331,11 @@ def decide_merge_or_different(pack: dict, *, timeout: int) -> dict:
         request_body[key] = value
 
     url = f"{base_url}/chat/completions"
+    log.debug(
+        "OPENAI_CALL endpoint=%s has_project_header=%s",
+        "/v1/chat/completions",
+        PROJECT_HEADER_NAME in headers,
+    )
     response = httpx.post(url, headers=headers, json=request_body, timeout=request_timeout)
     response.raise_for_status()
     data = response.json()

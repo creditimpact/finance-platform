@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from backend.core.ai import adjudicator
+from backend.core.ai import PROJECT_HEADER_NAME, adjudicator
 from backend.core.ai.paths import ensure_merge_paths, pair_result_filename
 from backend.pipeline import auto_ai, auto_ai_tasks
 from backend.pipeline.runs import RunManifest
@@ -763,8 +763,13 @@ class _FakeResponse:
         }
 
 
-def test_auto_ai_project_key_header(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in ("OPENAI_API_KEY", "AI_MODEL", "OPENAI_PROJECT_ID"):
+def test_auto_ai_project_key_omits_header_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in (
+        "OPENAI_API_KEY",
+        "AI_MODEL",
+        "OPENAI_PROJECT_ID",
+        "OPENAI_SEND_PROJECT_HEADER",
+    ):
         monkeypatch.delenv(key, raising=False)
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-proj-abc123")
@@ -781,12 +786,13 @@ def test_auto_ai_project_key_header(monkeypatch: pytest.MonkeyPatch) -> None:
         return _FakeResponse()
 
     monkeypatch.setattr(adjudicator.httpx, "post", fake_post)
+    monkeypatch.setattr(adjudicator, "auth_probe", lambda: None)
 
     result = adjudicator.decide_merge_or_different({}, timeout=7)
 
     assert result == {"decision": "merge", "reason": "test"}
     assert recorded["headers"]["Authorization"].startswith("Bearer sk-proj-abc123")
-    assert recorded["headers"]["OpenAI-Project"] == "proj-789"
+    assert PROJECT_HEADER_NAME not in recorded["headers"]
 
 
 def test_maybe_run_ai_pipeline_skips_without_candidates_logs(monkeypatch, tmp_path, caplog):

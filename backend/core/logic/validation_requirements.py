@@ -115,6 +115,28 @@ def _evaluate_with_tolerance(
         return None
 
 
+def _coerce_tolerance_note(
+    field_name: Any, note_payload: Any
+) -> dict[str, Any] | None:
+    """Normalize tolerance note payload for debug summaries."""
+
+    if not isinstance(note_payload, Mapping):
+        return None
+
+    normalized: dict[str, Any] = {
+        "field": str(field_name),
+        "status": str(note_payload.get("status") or "within"),
+    }
+
+    for key in ("span_days", "tol_days", "diff", "ceil"):
+        if key in note_payload:
+            value = note_payload.get(key)
+            if value is not None:
+                normalized[key] = value
+
+    return normalized
+
+
 def _clear_tolerance_state() -> None:
     _load_tolerance_evaluator.cache_clear()
     try:
@@ -1479,8 +1501,10 @@ def build_summary_payload(
 
     normalized_requirements: list[dict[str, Any]] = []
     suppressed_fields: list[str] = []
+    tolerance_notes: list[dict[str, Any]] = []
     sid_value = str(sid) if sid is not None else None
     runs_root_value = os.fspath(runs_root) if runs_root is not None else None
+    debug_enabled = os.getenv("VALIDATION_DEBUG") == "1"
 
     for entry in requirements:
         if not isinstance(entry, Mapping):
@@ -1516,6 +1540,13 @@ def build_summary_payload(
                     and not tolerance_result.get("is_mismatch", True)
                 ):
                     suppressed_fields.append(str(field_name))
+                    if debug_enabled:
+                        note = _coerce_tolerance_note(
+                            field_name,
+                            tolerance_result.get("note"),
+                        )
+                        if note is not None:
+                            tolerance_notes.append(note)
                     logger.debug(
                         "VALIDATION_TOLERANCE_SUPPRESS field=%s metric=%s",
                         field_name,
@@ -1538,6 +1569,9 @@ def build_summary_payload(
 
     if suppressed_fields:
         payload.setdefault("tolerance", {})["suppressed_fields"] = suppressed_fields
+
+    if tolerance_notes:
+        payload["tolerance_notes"] = tolerance_notes
 
     if summary_writer.include_legacy_requirements():
         payload["requirements"] = normalized_requirements
@@ -1712,6 +1746,8 @@ def apply_validation_summary(
     findings_count = len(findings_list)
     normalized_payload["findings"] = findings_list
     normalized_payload = summary_writer.sanitize_validation_payload(normalized_payload)
+    tolerance_notes_payload = normalized_payload.pop("tolerance_notes", None)
+
     existing_block = summary_data.get("validation_requirements")
     existing_normalized = (
         dict(existing_block) if isinstance(existing_block, Mapping) else None
@@ -1720,8 +1756,29 @@ def apply_validation_summary(
         existing_normalized = summary_writer.sanitize_validation_payload(
             existing_normalized
         )
+        existing_normalized.pop("tolerance_notes", None)
 
     needs_update = existing_normalized != normalized_payload
+
+    tolerance_notes_changed = False
+    normalized_notes: list[Mapping[str, Any]] | None = None
+    if isinstance(tolerance_notes_payload, Sequence) and not isinstance(
+        tolerance_notes_payload, (str, bytes, bytearray)
+    ):
+        normalized_notes = [
+            dict(note)
+            for note in tolerance_notes_payload
+            if isinstance(note, Mapping)
+        ]
+
+    if normalized_notes:
+        existing_notes = summary_data.get("tolerance_notes")
+        if existing_notes != normalized_notes:
+            summary_data["tolerance_notes"] = normalized_notes
+            tolerance_notes_changed = True
+    else:
+        if summary_data.pop("tolerance_notes", None) is not None:
+            tolerance_notes_changed = True
 
     if findings_count == 0 and not summary_writer.should_write_empty_requirements():
         write_required = scaffold_changed
@@ -1744,7 +1801,7 @@ def apply_validation_summary(
     if needs_update:
         summary_data["validation_requirements"] = dict(normalized_payload)
 
-    write_required = scaffold_changed or needs_update
+    write_required = scaffold_changed or needs_update or tolerance_notes_changed
 
     if summary_writer.strip_disallowed_sections(summary_data):
         write_required = True
@@ -1933,11 +1990,15 @@ def build_validation_requirements_for_account(
 
     if run_dir is None:
         try:
-            if account_path.parent.name == "accounts" and account_path.parent.parent.name == "cases":
+            if (
+                account_path.parent.name == "accounts"
+                and account_path.parent.parent.name == "cases"
+            ):
                 run_dir = account_path.parents[2]
         except IndexError:
             run_dir = None
-        else:
+
+        if run_dir is not None:
             if not sid_for_tolerance:
                 sid_for_tolerance = run_dir.name
             if runs_root_for_tolerance is None:

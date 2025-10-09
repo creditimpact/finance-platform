@@ -4,6 +4,7 @@ from backend.core.logic.consistency import (
     compute_field_consistency,
     compute_inconsistent_fields,
 )
+from backend.core.logic.context import override_validation_context
 from backend.core.logic.reason_classifier import classify_reason
 
 
@@ -145,6 +146,34 @@ def test_date_tolerance_allows_small_differences_for_last_payment() -> None:
 
     assert consistency["last_payment"]["consensus"] == "unanimous"
     assert compute_inconsistent_fields(bureaus_json) == {}
+
+
+def test_normalize_date_respects_dmy_convention() -> None:
+    bureaus_json = {
+        "transunion": {"date_opened": "1/2/23"},
+        "experian": {"date_opened": "1/2/23"},
+        "equifax": {"date_opened": "1/2/23"},
+    }
+
+    with override_validation_context({"convention": "DMY", "month_language": "en"}):
+        consistency = compute_field_consistency(bureaus_json)
+
+    normalized = consistency["date_opened"]["normalized"]
+    assert normalized["transunion"] == "2023-02-01"
+
+
+def test_normalize_date_handles_hebrew_months() -> None:
+    bureaus_json = {
+        "transunion": {"date_opened": "15 אוג׳ 2022"},
+        "experian": {"date_opened": "15 אוג׳ 2022"},
+        "equifax": {"date_opened": "15 אוג׳ 2022"},
+    }
+
+    with override_validation_context({"convention": "DMY", "month_language": "he"}):
+        consistency = compute_field_consistency(bureaus_json)
+
+    normalized = consistency["date_opened"]["normalized"]
+    assert normalized["equifax"] == "2022-08-15"
 
 
 def test_payment_frequency_is_canonicalized() -> None:

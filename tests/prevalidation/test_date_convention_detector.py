@@ -1,10 +1,12 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from backend.prevalidation.date_convention_detector import detect_month_language_for_run
 from backend.prevalidation.tasks import detect_and_persist_date_convention
+from backend.prevalidation import tasks as date_tasks
 
 
 @pytest.fixture
@@ -147,18 +149,34 @@ def test_detect_month_language_tie_or_no_hits(run_dir: Path) -> None:
     }
 
 
-def test_detect_and_persist_writes_date_convention_file(tmp_path: Path) -> None:
+def test_date_detector_writes_atomic_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runs_root = tmp_path / "runs"
     sid = "SID123"
     run_dir = runs_root / sid
     accounts_dir = run_dir / "cases" / "accounts"
     _write_raw_lines(accounts_dir / "account_1", ["Two-Year Payment History Jan Feb Mar"])
 
+    captured: dict[str, Path] = {}
+
+    original_replace = os.replace
+
+    def capture_replace(src: os.PathLike[str] | str, dst: os.PathLike[str] | str) -> None:
+        captured["src"] = Path(src)
+        captured["dst"] = Path(dst)
+        original_replace(src, dst)
+
+    monkeypatch.setattr(date_tasks.os, "replace", capture_replace)
+
     block = detect_and_persist_date_convention(sid, runs_root=runs_root)
     assert block is not None
 
     output_path = run_dir / "traces" / "date_convention.json"
     assert output_path.exists()
+
+    assert captured
+    assert captured["dst"] == output_path
+    assert captured["src"].name == "date_convention.json.tmp"
+    assert not captured["src"].exists()
 
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload == {
@@ -180,7 +198,7 @@ def test_detect_and_persist_writes_date_convention_file(tmp_path: Path) -> None:
     assert not legacy_path.exists()
 
 
-def test_detect_and_persist_is_idempotent(tmp_path: Path) -> None:
+def test_date_detector_idempotent(tmp_path: Path) -> None:
     runs_root = tmp_path / "runs"
     sid = "SID456"
     run_dir = runs_root / sid
@@ -198,6 +216,29 @@ def test_detect_and_persist_is_idempotent(tmp_path: Path) -> None:
     second_mtime = output_path.stat().st_mtime_ns
 
     assert second_mtime == first_mtime
+
+
+def test_no_overwrite_general_info(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SID789"
+    run_dir = runs_root / sid
+    accounts_dir = run_dir / "cases" / "accounts"
+    _write_raw_lines(accounts_dir / "account_1", ["Two-Year Payment History Jan Feb Mar"])
+
+    general_info = run_dir / "traces" / "accounts_table" / "general_info_from_full.json"
+    general_info.parent.mkdir(parents=True, exist_ok=True)
+    general_info.write_text("{\n  \"foo\": \"bar\"\n}\n", encoding="utf-8")
+    original = general_info.read_text(encoding="utf-8")
+    original_mtime = general_info.stat().st_mtime_ns
+
+    block = detect_and_persist_date_convention(sid, runs_root=runs_root)
+    assert block is not None
+
+    assert general_info.read_text(encoding="utf-8") == original
+    assert general_info.stat().st_mtime_ns == original_mtime
+
+    output_path = run_dir / "traces" / "date_convention.json"
+    assert output_path.exists()
 
 
 def test_detect_and_persist_preserves_general_info_mtime(tmp_path: Path) -> None:

@@ -11,6 +11,24 @@ sys.modules.setdefault(
     "requests", types.SimpleNamespace(post=lambda *args, **kwargs: None)
 )
 
+if "backend.ai.validation_builder" not in sys.modules:
+    stub_builder = types.ModuleType("backend.ai.validation_builder")
+
+    def _noop_build_validation_pack_for_account(*args: Any, **kwargs: Any) -> list[str]:
+        return []
+
+    stub_builder.build_validation_pack_for_account = _noop_build_validation_pack_for_account  # type: ignore[attr-defined]
+    sys.modules["backend.ai.validation_builder"] = stub_builder
+
+if "backend.validation.decision_matrix" not in sys.modules:
+    stub_decision_matrix = types.ModuleType("backend.validation.decision_matrix")
+
+    def _noop_decide_default(*args: Any, **kwargs: Any) -> str:
+        return ""
+
+    stub_decision_matrix.decide_default = _noop_decide_default  # type: ignore[attr-defined]
+    sys.modules["backend.validation.decision_matrix"] = stub_decision_matrix
+
 from backend.core.logic.consistency import compute_inconsistent_fields
 from backend.core.logic.consistency import compute_field_consistency
 from backend.core.logic.validation_requirements import (
@@ -932,9 +950,7 @@ def test_history_missing_vs_present_requires_strong_documents():
     assert inconsistencies["seven_year_history"]["consensus"] != "unanimous"
 
 
-def test_build_validation_requirements_for_account_uses_detected_date_convention(
-    tmp_path: Path,
-) -> None:
+def test_validation_reads_convention(tmp_path: Path) -> None:
     run_dir = tmp_path / "runs" / "sid"
     account_dir = run_dir / "cases" / "accounts" / "000"
     account_dir.mkdir(parents=True)

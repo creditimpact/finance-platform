@@ -7,6 +7,8 @@ import re
 from datetime import date, datetime
 from typing import Any, Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
 
+from backend.core.logic.context import get_validation_context
+
 __all__ = ["compute_field_consistency", "compute_inconsistent_fields"]
 
 
@@ -180,8 +182,180 @@ _ACCOUNT_NUMBER_FIELDS = {"account_number_display"}
 DATE_PATS = [
     (re.compile(r"^\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*$"), "%Y-%m-%d"),  # 2024-01-08
     (re.compile(r"^\s*(\d{1,2})\.(\d{1,2})\.(\d{4})\s*$"), "%d.%m.%Y"),  # 16.8.2022
-    (re.compile(r"^\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*$"), "%m/%d/%Y"),    # 1/8/2024
+    (re.compile(r"^\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*$"), "%m/%d/%Y"),  # 1/8/2024
 ]
+
+_EN_MONTH_MAP = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
+
+_HE_MONTH_MAP = {
+    "ינו׳": 1,
+    "פבר׳": 2,
+    "מרץ": 3,
+    "אפר׳": 4,
+    "מאי": 5,
+    "יוני": 6,
+    "יולי": 7,
+    "אוג׳": 8,
+    "ספט׳": 9,
+    "אוק׳": 10,
+    "נוב׳": 11,
+    "דצמ׳": 12,
+}
+
+_MONTH_MAPS: Dict[str, Mapping[str, int]] = {
+    "en": _EN_MONTH_MAP,
+    "he": _HE_MONTH_MAP,
+}
+
+def _normalize_year(value: int) -> int:
+    if value < 100:
+        return 2000 + value if value < 50 else 1900 + value
+    return value
+
+
+def _extract_int_token(token: str) -> Optional[int]:
+    match = re.search(r"\d+", token)
+    if not match:
+        return None
+    try:
+        return int(match.group())
+    except ValueError:
+        return None
+
+
+def _normalize_month_token(token: str, language: str) -> Optional[int]:
+    if language == "he":
+        cleaned = token.strip().strip('.,"')
+        return _HE_MONTH_MAP.get(cleaned)
+
+    cleaned = token.strip().lower().strip(".,")
+    return _EN_MONTH_MAP.get(cleaned)
+
+
+def _select_year_from_tokens(
+    tokens: Sequence[str], month_index: int
+) -> Tuple[Optional[int], Optional[int]]:
+    numeric_tokens = [
+        (idx, _extract_int_token(token)) for idx, token in enumerate(tokens)
+    ]
+    numeric_tokens = [
+        (idx, value) for idx, value in numeric_tokens if value is not None
+    ]
+    if not numeric_tokens:
+        return None, None
+
+    for idx, value in numeric_tokens:
+        if value >= 1000:
+            return _normalize_year(value), idx
+
+    after = [(idx, value) for idx, value in numeric_tokens if idx > month_index]
+    before = [(idx, value) for idx, value in numeric_tokens if idx < month_index]
+
+    candidate_pool = after or before or numeric_tokens
+    idx, value = candidate_pool[-1]
+    return _normalize_year(value), idx
+
+
+def _select_day_from_tokens(
+    tokens: Sequence[str],
+    month_index: int,
+    year_index: Optional[int],
+    prefer_dmy: bool,
+) -> Optional[int]:
+    candidate_indices = []
+    if prefer_dmy:
+        candidate_indices.extend([month_index - 1, month_index + 1])
+    else:
+        candidate_indices.extend([month_index + 1, month_index - 1])
+
+    def _value_at(index: int) -> Optional[int]:
+        if index < 0 or index >= len(tokens):
+            return None
+        if year_index is not None and index == year_index:
+            return None
+        value = _extract_int_token(tokens[index])
+        if value is None:
+            return None
+        if 1 <= value <= 31:
+            return value
+        return None
+
+    for index in candidate_indices:
+        candidate = _value_at(index)
+        if candidate is not None:
+            return candidate
+
+    for index, token in enumerate(tokens):
+        if index in {month_index, year_index}:
+            continue
+        value = _extract_int_token(token)
+        if value is not None and 1 <= value <= 31:
+            return value
+
+    return None
+
+
+def _parse_month_tokens(
+    value: str, month_language: str, prefer_dmy: bool
+) -> Optional[str]:
+    tokens = [token for token in re.split(r"\s+", value) if token]
+    if not tokens:
+        return None
+
+    month_index: Optional[int] = None
+    month_value: Optional[int] = None
+    language = month_language if month_language in _MONTH_MAPS else "en"
+
+    for idx, token in enumerate(tokens):
+        candidate = _normalize_month_token(token, language)
+        if candidate is None and language != "en":
+            candidate = _normalize_month_token(token, "en")
+        if candidate is not None:
+            month_index = idx
+            month_value = candidate
+            break
+
+    if month_index is None or month_value is None:
+        return None
+
+    year, year_index = _select_year_from_tokens(tokens, month_index)
+    if year is None:
+        return None
+
+    day = _select_day_from_tokens(tokens, month_index, year_index, prefer_dmy)
+    if day is None:
+        return None
+
+    try:
+        return datetime(year, month_value, day).strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+
 
 _NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]")
 
@@ -331,39 +505,53 @@ def normalize_date(raw: Optional[str]) -> Optional[str]:
     if s in ("", "--"):
         return None
 
+    context = get_validation_context()
+    date_convention = getattr(context, "date_convention", {})
+    convention = str(date_convention.get("convention", "MDY")).upper()
+    prefer_dmy = convention == "DMY"
+    month_language = str(date_convention.get("month_language", "en")).lower()
+
     for rx, fmt in DATE_PATS:
         if rx.match(s):
+            fmt_to_use = fmt
+            if fmt == "%m/%d/%Y" and prefer_dmy:
+                fmt_to_use = "%d/%m/%Y"
             try:
-                dt = datetime.strptime(s, fmt)
+                dt = datetime.strptime(s, fmt_to_use)
                 return dt.strftime("%Y-%m-%d")
             except Exception:
                 pass
 
     try:
         parts = [part for part in re.split(r"[.\-/]", s) if part]
-        if len(parts) == 3:
-            nums = [int(part) for part in parts]
-
-            def normalize_year(value: int) -> int:
-                if value < 100:
-                    return 2000 + value if value < 50 else 1900 + value
-                return value
-
+        if len(parts) == 3 and all(part.isdigit() for part in parts):
             first_len = len(parts[0])
             third_len = len(parts[2])
-            first, second, third = nums
+            first, second, third = (int(part) for part in parts)
 
             if first_len == 4 or first > 31:
-                y, m, d = first, second, third
-            elif third_len == 4 or third > 31:
-                d, m, y = first, second, third
+                year_source = first
+                month_value, day_value = second, third
             else:
-                m, d, y = first, second, third
+                year_source = third
+                if third_len == 4 or third > 31:
+                    year_source = third
+                if prefer_dmy:
+                    day_value, month_value = first, second
+                else:
+                    month_value, day_value = first, second
 
-            y = normalize_year(y)
-            return datetime(y, m, d).strftime("%Y-%m-%d")
+            year_value = _normalize_year(year_source)
+            return datetime(year_value, month_value, day_value).strftime("%Y-%m-%d")
     except Exception:
-        return None
+        pass
+
+    sanitized = re.sub(r"[,\-]", " ", s)
+    sanitized = re.sub(r"\s+", " ", sanitized).strip()
+    if sanitized:
+        parsed = _parse_month_tokens(sanitized, month_language, prefer_dmy)
+        if parsed is not None:
+            return parsed
 
     return None
 

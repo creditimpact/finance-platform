@@ -4,14 +4,87 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional, Tuple
 
 from .config import get_prevalidation_trace_relpath
 
 _LOGGER = logging.getLogger(__name__)
 
 _VALID_CONVENTIONS = {"DMY", "MDY", "YMD"}
+
+
+def parse_date_with_convention(s: Optional[str], conv: str) -> Optional[datetime]:
+    """Parse ``s`` according to ``conv`` returning a :class:`datetime` or ``None``.
+
+    The function first attempts to parse the string as an ISO-8601 formatted
+    date (``YYYY-MM-DD``). When that fails the supplied convention is applied
+    using the typical ``/``, ``-`` or ``.`` separators. Any invalid or empty
+    value results in ``None``.
+    """
+
+    if s is None:
+        return None
+
+    text = s.strip()
+    if not text:
+        return None
+
+    # ISO-8601 parsing
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        pass
+
+    parts = [part for part in re.split(r"[\s./-]", text) if part]
+    if len(parts) != 3:
+        return None
+
+    try:
+        if conv == "YMD":
+            year, month, day = (int(parts[0]), int(parts[1]), int(parts[2]))
+        elif conv == "DMY":
+            day, month, year = (int(parts[0]), int(parts[1]), int(parts[2]))
+        else:  # Default to MDY
+            month, day, year = (int(parts[0]), int(parts[1]), int(parts[2]))
+    except ValueError:
+        return None
+
+    try:
+        return datetime(year, month, day)
+    except ValueError:
+        return None
+
+
+def are_dates_within_tolerance(
+    values: Iterable[Optional[str]], conv: str, tol_days: int
+) -> Tuple[bool, Optional[int]]:
+    """Return whether ``values`` fall within a ``tol_days`` window.
+
+    Parameters
+    ----------
+    values:
+        Iterable of up to three date strings in EQ/EX/TU order. ``None``
+        entries are ignored when computing the span.
+    conv:
+        Date convention used for parsing non-ISO formatted values.
+    tol_days:
+        Maximum allowed span in days between the earliest and latest parsed
+        date for the values to be considered matching.
+    """
+
+    parsed = [parse_date_with_convention(value, conv) for value in values]
+    valid_values = [dt for dt in parsed if dt is not None]
+
+    if len(valid_values) < 2:
+        return True, None
+
+    min_date = min(valid_values)
+    max_date = max(valid_values)
+    span_days = (max_date - min_date).days
+    return span_days <= tol_days, span_days
 
 
 def _normalize_convention(value: Any) -> Optional[str]:
@@ -80,4 +153,8 @@ def load_date_convention_for_sid(runs_root: str, sid: str, rel_path: str | None 
     return convention
 
 
-__all__ = ["load_date_convention_for_sid"]
+__all__ = [
+    "load_date_convention_for_sid",
+    "parse_date_with_convention",
+    "are_dates_within_tolerance",
+]

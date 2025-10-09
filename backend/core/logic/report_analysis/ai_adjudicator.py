@@ -306,9 +306,11 @@ def _build_request_payload(pack: dict) -> tuple[str, dict[str, Any], dict[str, s
         {"role": "user", "content": prompt["user"]},
     ]
 
-    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key or not api_key.strip():
+    base_url_raw = os.getenv("OPENAI_BASE_URL")
+    base_url_clean = (base_url_raw or "").strip() or "https://api.openai.com/v1"
+    base_url = base_url_clean.rstrip("/") or "https://api.openai.com/v1"
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if not api_key:
         raise RuntimeError("OPENAI_API_KEY is required when AI adjudication is enabled")
 
     model = merge_config.get_ai_model()
@@ -330,8 +332,14 @@ def _build_request_payload(pack: dict) -> tuple[str, dict[str, Any], dict[str, s
         "response_format": {"type": "json_object"},
     }
 
-    project_id = os.getenv("OPENAI_PROJECT_ID")
-    headers = build_openai_headers(api_key=api_key, project_id=project_id)
+    project_id = (os.getenv("OPENAI_PROJECT_ID") or "").strip()
+    logger.info(
+        "OPENAI_SETUP key_prefix=%s project_set=%s base_url=%s",
+        (api_key[:7] + "...") if api_key else "<empty>",
+        bool(project_id),
+        base_url_clean,
+    )
+    headers = build_openai_headers(api_key=api_key, project_id=project_id or None)
 
     metadata = {
         "model": model,

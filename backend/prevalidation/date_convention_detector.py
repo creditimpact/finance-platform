@@ -55,6 +55,8 @@ ENGLISH_MONTH_TOKENS = frozenset(
 
 logger = logging.getLogger(__name__)
 
+DATE_CONVENTION_SCOPE = os.getenv("DATE_CONVENTION_SCOPE", "global")
+
 
 def _iter_account_raw_texts(raw_lines_path: str) -> Iterable[str]:
     """Yield the text field for each entry in a raw_lines.json file."""
@@ -183,17 +185,6 @@ def detect_month_language_for_run(run_dir: str) -> Dict[str, object]:
         convention = None
         confidence = 0.0
 
-    log_convention = convention or "unknown"
-
-    logger.info(
-        "DATE_DETECT: accounts_scanned=%s he_hits=%s en_hits=%s lang=%s conv=%s",
-        accounts_scanned,
-        total_he_hits,
-        total_en_hits,
-        month_language,
-        log_convention,
-    )
-
     if os.environ.get("VALIDATION_DEBUG") == "1":
         for idx, sample in enumerate(he_evidence_samples):
             logger.debug("DATE_DETECT evidence[he][%d]=%s", idx, sample)
@@ -202,7 +193,7 @@ def detect_month_language_for_run(run_dir: str) -> Dict[str, object]:
 
     return {
         "date_convention": {
-            "scope": "global",
+            "scope": DATE_CONVENTION_SCOPE,
             "convention": convention,
             "month_language": month_language,
             "confidence": confidence,
@@ -223,69 +214,37 @@ def read_date_convention(run_dir: os.PathLike[str] | str) -> Optional[dict[str, 
     if not base_dir.exists():
         return None
 
-    candidate_paths: list[Path] = []
+    scope_path = os.getenv("DATE_CONVENTION_PATH", "traces/date_convention.json")
+    target_path = base_dir / scope_path
 
-    manifest_path = base_dir / "manifest.json"
-    if manifest_path.exists():
-        try:
-            manifest_raw = manifest_path.read_text(encoding="utf-8")
-            manifest_data = json.loads(manifest_raw)
-        except (OSError, json.JSONDecodeError):
-            logger.debug(
-                "DATE_CONVENTION_MANIFEST_READ_FAILED run_dir=%s path=%s",
-                run_dir,
-                manifest_path,
-                exc_info=True,
-            )
-        else:
-            general_value = (
-                manifest_data.get("artifacts", {})
-                .get("traces", {})
-                .get("accounts_table", {})
-                .get("general_json")
-            )
-            if isinstance(general_value, str) and general_value.strip():
-                general_path = Path(general_value)
-                if general_path.exists():
-                    candidate_paths.append(general_path)
+    try:
+        raw = target_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        logger.debug(
+            "DATE_CONVENTION_READ_FAILED run_dir=%s path=%s",
+            run_dir,
+            target_path,
+            exc_info=True,
+        )
+        return None
 
-    default_path = base_dir / "traces" / "accounts_table" / "general_info_from_full.json"
-    if default_path.exists():
-        candidate_paths.append(default_path)
+    if not raw.strip():
+        return None
 
-    for path in candidate_paths:
-        try:
-            raw = path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            continue
-        except OSError:
-            logger.debug(
-                "DATE_CONVENTION_READ_FAILED run_dir=%s path=%s",
-                run_dir,
-                path,
-                exc_info=True,
-            )
-            continue
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.debug(
+            "DATE_CONVENTION_INVALID_JSON run_dir=%s path=%s",
+            run_dir,
+            target_path,
+            exc_info=True,
+        )
+        return None
 
-        if not raw.strip():
-            continue
-
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.debug(
-                "DATE_CONVENTION_INVALID_JSON run_dir=%s path=%s",
-                run_dir,
-                path,
-                exc_info=True,
-            )
-            continue
-
-        if not isinstance(payload, dict):
-            continue
-
-        block = payload.get("date_convention")
-        if isinstance(block, dict):
-            return dict(block)
-
+    block = payload.get("date_convention")
+    if isinstance(block, dict):
+        return dict(block)
     return None

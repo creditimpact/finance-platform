@@ -203,6 +203,8 @@ os.environ.setdefault("VALIDATION_MAX_RETRIES", "2")
 os.environ.setdefault("VALIDATION_WRITE_JSON_ENVELOPE", "0")
 os.environ.setdefault("VALIDATION_REQUEST_GROUP_SIZE", "1")
 os.environ.setdefault("PREVALIDATION_DETECT_DATES", "1")
+os.environ.setdefault("DATE_CONVENTION_PATH", "traces/date_convention.json")
+os.environ.setdefault("DATE_CONVENTION_SCOPE", "global")
 
 VALIDATION_ROLLBACK = _env_bool("VALIDATION_ROLLBACK", False)
 ENABLE_VALIDATION_REQUIREMENTS = (
@@ -210,6 +212,8 @@ ENABLE_VALIDATION_REQUIREMENTS = (
     and os.getenv("ENABLE_VALIDATION_REQUIREMENTS", "1") == "1"
 )
 PREVALIDATION_DETECT_DATES = _env_bool("PREVALIDATION_DETECT_DATES", True)
+DATE_CONVENTION_PATH = env_str("DATE_CONVENTION_PATH", "traces/date_convention.json")
+DATE_CONVENTION_SCOPE = env_str("DATE_CONVENTION_SCOPE", "global")
 ENABLE_VALIDATION_AI = _env_bool("ENABLE_VALIDATION_AI", False) and not VALIDATION_ROLLBACK
 VALIDATION_DEBUG = os.getenv("VALIDATION_DEBUG", "0") == "1"
 VALIDATION_MAX_RETRIES = env_int("VALIDATION_MAX_RETRIES", 2)

@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from backend.prevalidation.date_convention_detector import detect_month_language_for_run
+from backend.prevalidation.tasks import detect_and_persist_date_convention
 
 
 @pytest.fixture
@@ -144,3 +145,56 @@ def test_detect_month_language_tie_or_no_hits(run_dir: Path) -> None:
         "en_hits": 0,
         "accounts_scanned": 1,
     }
+
+
+def test_detect_and_persist_writes_date_convention_file(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SID123"
+    run_dir = runs_root / sid
+    accounts_dir = run_dir / "cases" / "accounts"
+    _write_raw_lines(accounts_dir / "account_1", ["Two-Year Payment History Jan Feb Mar"])
+
+    block = detect_and_persist_date_convention(sid, runs_root=runs_root)
+    assert block is not None
+
+    output_path = run_dir / "traces" / "date_convention.json"
+    assert output_path.exists()
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload == {
+        "date_convention": {
+            "scope": "global",
+            "convention": "MDY",
+            "month_language": "en",
+            "confidence": 1.0,
+            "evidence_counts": {
+                "he_hits": 0,
+                "en_hits": 3,
+                "accounts_scanned": 1,
+            },
+            "detector_version": "1.0",
+        }
+    }
+
+    legacy_path = run_dir / "traces" / "accounts_table" / "general_info_from_full.json"
+    assert not legacy_path.exists()
+
+
+def test_detect_and_persist_is_idempotent(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SID456"
+    run_dir = runs_root / sid
+    accounts_dir = run_dir / "cases" / "accounts"
+    _write_raw_lines(accounts_dir / "account_1", ["Two-Year Payment History Jan Feb Mar"])
+
+    first_block = detect_and_persist_date_convention(sid, runs_root=runs_root)
+    assert first_block is not None
+
+    output_path = run_dir / "traces" / "date_convention.json"
+    first_mtime = output_path.stat().st_mtime_ns
+
+    second_block = detect_and_persist_date_convention(sid, runs_root=runs_root)
+    assert second_block == first_block
+    second_mtime = output_path.stat().st_mtime_ns
+
+    assert second_mtime == first_mtime

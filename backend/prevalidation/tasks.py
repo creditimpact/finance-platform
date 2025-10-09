@@ -8,9 +8,12 @@ from typing import Mapping
 
 from celery import shared_task
 
-from backend.config import PREVALIDATION_DETECT_DATES
+from backend.config import (
+    DATE_CONVENTION_PATH,
+    DATE_CONVENTION_SCOPE,
+    PREVALIDATION_DETECT_DATES,
+)
 from backend.prevalidation.date_convention_detector import detect_month_language_for_run
-from backend.prevalidation.io_utils import atomic_merge_json
 
 logger = logging.getLogger(__name__)
 
@@ -33,65 +36,53 @@ def _resolve_runs_root(payload: Mapping[str, object], sid: str) -> Path:
     return Path("runs")
 
 
-def _resolve_general_info_path(run_root: Path) -> Path | None:
-    manifest_path = run_root / "manifest.json"
-    if manifest_path.exists():
-        try:
-            manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            logger.debug(
-                "DATE_CONVENTION_MANIFEST_READ_FAILED run_root=%s path=%s",
-                run_root,
-                manifest_path,
-                exc_info=True,
-            )
-        else:
-            general_value = (
-                manifest_data.get("artifacts", {})
-                .get("traces", {})
-                .get("accounts_table", {})
-                .get("general_json")
-            )
-            if isinstance(general_value, str) and general_value.strip():
-                general_path = Path(general_value)
-                if general_path.exists():
-                    return general_path
-
-    default_path = run_root / "traces" / "accounts_table" / "general_info_from_full.json"
-    if default_path.exists():
-        return default_path
-    return None
-
-
-def _load_general_payload(path: Path) -> dict[str, object] | None:
+def _fsync_directory(directory: Path) -> None:
     try:
-        raw = path.read_text(encoding="utf-8")
+        dir_fd = os.open(str(directory), os.O_RDONLY)
+    except (AttributeError, OSError):
+        return
+    try:
+        os.fsync(dir_fd)
     except OSError:
-        logger.warning(
-            "DATE_CONVENTION_READ_FAILED path=%s", path, exc_info=True
-        )
-        return None
+        pass
+    finally:
+        try:
+            os.close(dir_fd)
+        except OSError:
+            pass
 
-    if not raw.strip():
-        return {}
+
+def _atomic_write_json_if_changed(path: Path, document: dict[str, object]) -> bool:
+    payload = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
 
     try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning(
-            "DATE_CONVENTION_INVALID_JSON path=%s", path, exc_info=True
-        )
-        return None
+        existing = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        existing = None
+    except OSError:
+        existing = None
 
-    if not isinstance(payload, dict):
-        logger.warning(
-            "DATE_CONVENTION_INVALID_TYPE path=%s type=%s",
-            path,
-            type(payload).__name__,
-        )
-        return None
+    if existing == payload:
+        return False
 
-    return payload
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        tmp_path.unlink()
+    except FileNotFoundError:
+        pass
+
+    with tmp_path.open("w", encoding="utf-8") as handle:
+        handle.write(payload)
+        handle.flush()
+        try:
+            os.fsync(handle.fileno())
+        except OSError:
+            pass
+
+    os.replace(tmp_path, path)
+    _fsync_directory(path.parent)
+    return True
 
 
 def detect_and_persist_date_convention(
@@ -114,52 +105,47 @@ def detect_and_persist_date_convention(
         logger.info("DATE_CONVENTION_SKIP sid=%s reason=run_missing path=%s", sid, run_root)
         return None
 
-    general_info_path = _resolve_general_info_path(run_root)
-    if general_info_path is None:
-        logger.info(
-            "DATE_CONVENTION_SKIP sid=%s reason=general_info_missing run_root=%s",
-            sid,
-            run_root,
-        )
-        return None
-
-    payload = _load_general_payload(general_info_path)
-    if payload is None:
-        logger.info(
-            "DATE_CONVENTION_SKIP sid=%s reason=general_info_unreadable path=%s",
-            sid,
-            general_info_path,
-        )
-        return None
-
-    existing_block = payload.get("date_convention") if isinstance(payload, dict) else None
-    if isinstance(existing_block, dict):
-        logger.info("DATE_CONVENTION_SKIP sid=%s reason=already_present", sid)
-        return existing_block
-
     detection = detect_month_language_for_run(str(run_root))
     block = detection.get("date_convention") if isinstance(detection, dict) else None
     if not isinstance(block, dict):
         logger.info("DATE_CONVENTION_SKIP sid=%s reason=no_detection", sid)
         return None
 
+    block = dict(block)
+    block.setdefault("scope", DATE_CONVENTION_SCOPE)
+
+    evidence = block.get("evidence_counts") if isinstance(block.get("evidence_counts"), dict) else {}
+    out_path_config = DATE_CONVENTION_PATH
+    out_path_obj = Path(out_path_config)
+    if not out_path_obj.is_absolute():
+        target_path = run_root / out_path_obj
+        log_out_path = out_path_config
+    else:
+        target_path = out_path_obj
+        log_out_path = str(out_path_obj)
+
+    document = {"date_convention": block}
+
     try:
-        atomic_merge_json(str(general_info_path), "date_convention", dict(block))
+        _atomic_write_json_if_changed(target_path, document)
     except Exception:
         logger.error(
-            "DATE_CONVENTION_WRITE_FAILED sid=%s path=%s", sid, general_info_path, exc_info=True
+            "DATE_CONVENTION_WRITE_FAILED sid=%s path=%s", sid, target_path, exc_info=True
         )
         return None
 
-    evidence = block.get("evidence_counts") if isinstance(block.get("evidence_counts"), dict) else {}
     logger.info(
-        "DATE_CONVENTION_WRITTEN sid=%s language=%s he_hits=%s en_hits=%s accounts=%s",
-        sid,
+        "DATE_DETECT: scope=%s conv=%s lang=%s conf=%s he=%s en=%s scanned=%s out=%s",
+        block.get("scope"),
+        block.get("convention") or "unknown",
         block.get("month_language"),
+        block.get("confidence"),
         evidence.get("he_hits"),
         evidence.get("en_hits"),
         evidence.get("accounts_scanned"),
+        log_out_path,
     )
+
     return block
 
 

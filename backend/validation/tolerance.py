@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import os
 from functools import lru_cache
 from typing import Any, Mapping
@@ -14,7 +13,6 @@ from backend.validation.utils_dates import (
     load_date_convention_for_sid,
 )
 
-_LOGGER = logging.getLogger(__name__)
 _DEBUG_ENV = "VALIDATION_DEBUG"
 _BUREAU_KEYS = ("equifax", "experian", "transunion")
 
@@ -70,6 +68,18 @@ def _is_debug_enabled() -> bool:
     return normalized not in {"", "0", "false", "no"}
 
 
+def _with_log_payload(
+    result: Mapping[str, Any],
+    log_payload: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not log_payload:
+        return dict(result)
+
+    enriched = dict(result)
+    enriched["log_payload"] = dict(log_payload)
+    return enriched
+
+
 def evaluate_field_with_tolerance(
     sid: str | None,
     runs_root: str | os.PathLike[str] | None,
@@ -90,6 +100,8 @@ def evaluate_field_with_tolerance(
 
     debug_enabled = _is_debug_enabled()
 
+    log_payload: dict[str, Any] | None = None
+
     if normalized_field in DATE_FIELDS:
         conv = _resolve_date_convention(
             os.fspath(runs_root) if runs_root is not None else None,
@@ -99,15 +111,15 @@ def evaluate_field_with_tolerance(
         used_conv = conv if conv is not None else "MDY"
         within, span = are_dates_within_tolerance(values.values(), used_conv, tol_days)
         if debug_enabled:
-            _LOGGER.info(
-                "TOLCHECK date sid=%s field=%s conv=%s tol_days=%s span=%s within=%s",
-                sid or "",
-                normalized_field,
-                used_conv,
-                tol_days,
-                span,
-                within,
-            )
+            log_payload = {
+                "kind": "date",
+                "sid": sid or "",
+                "field": normalized_field,
+                "conv": used_conv,
+                "tol_days": tol_days,
+                "span": span,
+                "within": within,
+            }
         if within:
             note = {
                 "field": normalized_field,
@@ -116,13 +128,16 @@ def evaluate_field_with_tolerance(
             }
             if span is not None:
                 note["span_days"] = span
-            return {
-                "is_mismatch": False,
-                "metric": span,
-                "tolerance_applied": True,
-                "note": note,
-            }
-        return result
+            return _with_log_payload(
+                {
+                    "is_mismatch": False,
+                    "metric": span,
+                    "tolerance_applied": True,
+                    "note": note,
+                },
+                log_payload,
+            )
+        return _with_log_payload(result, log_payload)
 
     if normalized_field in AMOUNT_FIELDS:
         abs_tol = validation_config.get_amount_tolerance_abs()
@@ -131,16 +146,16 @@ def evaluate_field_with_tolerance(
             values.values(), abs_tol, ratio_tol
         )
         if debug_enabled:
-            _LOGGER.info(
-                "TOLCHECK amount sid=%s field=%s abs=%s ratio=%s diff=%s maxv=%s within=%s",
-                sid or "",
-                normalized_field,
-                abs_tol,
-                ratio_tol,
-                diff,
-                max_value,
-                within,
-            )
+            log_payload = {
+                "kind": "amount",
+                "sid": sid or "",
+                "field": normalized_field,
+                "abs": abs_tol,
+                "ratio": ratio_tol,
+                "diff": diff,
+                "maxv": max_value,
+                "within": within,
+            }
         if within:
             ratio_cap = abs(max_value) * ratio_tol if max_value is not None else 0.0
             threshold = max(abs_tol, ratio_cap)
@@ -151,15 +166,18 @@ def evaluate_field_with_tolerance(
             }
             if diff is not None:
                 note["diff"] = diff
-            return {
-                "is_mismatch": False,
-                "metric": diff,
-                "tolerance_applied": True,
-                "note": note,
-            }
-        return result
+            return _with_log_payload(
+                {
+                    "is_mismatch": False,
+                    "metric": diff,
+                    "tolerance_applied": True,
+                    "note": note,
+                },
+                log_payload,
+            )
+        return _with_log_payload(result, log_payload)
 
-    return result
+    return dict(result)
 
 
 def clear_cached_conventions() -> None:

@@ -672,37 +672,42 @@ def test_empty_history_generates_missing_reason(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "field, values, expected_code, expected_ai",
+    "field, values, expected_code, expected_ai, expected_decision",
     [
         (
             "balance_owed",
             {"experian": "200", "equifax": "200", "transunion": None},
             "C1_TWO_PRESENT_ONE_MISSING",
             False,
+            "supportive_needs_companion",
         ),
         (
             "balance_owed",
             {"experian": "open", "equifax": None, "transunion": "--"},
             "C2_ONE_MISSING",
             False,
+            "supportive_needs_companion",
         ),
         (
             "account_type",
             {"experian": "revolving", "equifax": "installment", "transunion": None},
             "C3_TWO_PRESENT_CONFLICT",
             True,
+            "supportive_needs_companion",
         ),
         (
             "account_rating",
             {"experian": "1", "equifax": "1", "transunion": "2"},
             "C4_TWO_MATCH_ONE_DIFF",
             True,
+            "strong_actionable",
         ),
         (
             "account_status",
             {"experian": None, "equifax": "", "transunion": "--"},
             "C6_ALL_MISSING",
             False,
+            None,
         ),
     ],
 )
@@ -711,6 +716,7 @@ def test_build_summary_payload_reason_codes_send_to_ai(
     values: dict[str, object],
     expected_code: str,
     expected_ai: bool,
+    expected_decision: str | None,
 ) -> None:
     requirements = [
         {
@@ -735,6 +741,7 @@ def test_build_summary_payload_reason_codes_send_to_ai(
     assert finding["field"] == field
     assert finding["reason_code"] == expected_code
     assert finding["send_to_ai"] is expected_ai
+    assert finding.get("decision") == expected_decision
 
     bureau_values = finding["bureau_values"]
     assert set(bureau_values.keys()) == {"equifax", "experian", "transunion"}

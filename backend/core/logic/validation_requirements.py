@@ -1862,6 +1862,8 @@ def build_validation_requirements_for_account(
     account_dir: str | Path,
     *,
     build_pack: bool = True,
+    sid: str | None = None,
+    runs_root: Path | str | None = None,
 ) -> Dict[str, Any]:
     """Compute and persist validation requirements for ``account_dir``.
 
@@ -1874,6 +1876,14 @@ def build_validation_requirements_for_account(
         after the summary has been written.  The pipeline orchestrator can pass
         ``False`` to defer pack generation until it explicitly decides the
         account should be queued for AI review.
+    sid:
+        Optional run identifier. When provided alongside ``runs_root`` the
+        tolerance layer can resolve native trace files without inferring from
+        ``account_dir``.
+    runs_root:
+        Optional base directory containing run artifacts. Used in combination
+        with ``sid`` to locate tolerance dependencies such as date
+        conventions.
     """
 
     account_path = Path(account_dir)
@@ -1915,15 +1925,25 @@ def build_validation_requirements_for_account(
         return {"status": "invalid_bureaus_json"}
 
     run_dir: Path | None = None
-    try:
-        if account_path.parent.name == "accounts" and account_path.parent.parent.name == "cases":
-            run_dir = account_path.parents[2]
-    except IndexError:
-        run_dir = None
+    sid_for_tolerance = str(sid) if sid is not None else None
+    runs_root_for_tolerance = Path(runs_root) if runs_root is not None else None
+
+    if sid_for_tolerance and runs_root_for_tolerance is not None:
+        run_dir = runs_root_for_tolerance / sid_for_tolerance
+
+    if run_dir is None:
+        try:
+            if account_path.parent.name == "accounts" and account_path.parent.parent.name == "cases":
+                run_dir = account_path.parents[2]
+        except IndexError:
+            run_dir = None
+        else:
+            if not sid_for_tolerance:
+                sid_for_tolerance = run_dir.name
+            if runs_root_for_tolerance is None:
+                runs_root_for_tolerance = run_dir.parent
 
     convention_block = None
-    sid_for_tolerance: str | None = None
-    runs_root_for_tolerance: Path | None = None
     if run_dir is not None:
         convention_block = read_date_convention(run_dir)
         if convention_block is None:
@@ -1931,8 +1951,6 @@ def build_validation_requirements_for_account(
                 "DATE_DETECT_MISSING run_dir=%s fallback=MDY/en",
                 run_dir,
             )
-        sid_for_tolerance = run_dir.name
-        runs_root_for_tolerance = run_dir.parent
     set_validation_context(convention_block)
 
     if not _account_selected_for_canary(account_path, canary_percent):

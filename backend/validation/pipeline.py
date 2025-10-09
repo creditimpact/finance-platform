@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from dataclasses import dataclass, field
@@ -38,7 +39,7 @@ class AccountContext:
     cached_findings: list[Mapping[str, Any]] | None = field(default=None)
 
 
-SummaryBuilder = Callable[[str | Path], Mapping[str, Any]]
+SummaryBuilder = Callable[..., Mapping[str, Any]]
 PackBuilder = Callable[[str, int | str, Path, Path], Sequence[Any]]
 SendCallback = Callable[[AccountContext, Sequence[Mapping[str, Any]], Sequence[Any] | None], None]
 
@@ -77,7 +78,7 @@ def write_summary_for_account(
     config = cfg or ValidationPipelineConfig()
     builder = config.summary_builder or _default_summary_builder
 
-    raw_result = builder(acc_ctx.account_dir)
+    raw_result = _invoke_summary_builder(builder, acc_ctx)
 
     if isinstance(raw_result, Mapping):
         result: dict[str, Any] = dict(raw_result)
@@ -110,6 +111,36 @@ def write_summary_for_account(
     acc_ctx.cached_findings = findings
 
     return result
+
+
+def _invoke_summary_builder(
+    builder: SummaryBuilder,
+    acc_ctx: AccountContext,
+) -> Mapping[str, Any]:
+    """Invoke ``builder`` with ``acc_ctx`` using optional context hints."""
+
+    try:
+        signature = inspect.signature(builder)
+    except (TypeError, ValueError):
+        signature = None
+
+    if signature is None:
+        return builder(acc_ctx.account_dir)
+
+    accepts_var_kw = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+
+    kwargs: dict[str, Any] = {}
+
+    if accepts_var_kw or "sid" in signature.parameters:
+        kwargs["sid"] = acc_ctx.sid
+
+    if accepts_var_kw or "runs_root" in signature.parameters:
+        kwargs["runs_root"] = acc_ctx.runs_root
+
+    return builder(acc_ctx.account_dir, **kwargs)
 
 
 def load_findings_from_summary(
@@ -328,8 +359,18 @@ def _infer_runs_root(accounts_dir: Path, sid: str) -> Path:
         return resolved.parent.resolve()
 
 
-def _default_summary_builder(account_dir: str | Path) -> Mapping[str, Any]:
-    return build_validation_requirements_for_account(account_dir, build_pack=False)
+def _default_summary_builder(
+    account_dir: str | Path,
+    *,
+    sid: str | None = None,
+    runs_root: Path | str | None = None,
+) -> Mapping[str, Any]:
+    return build_validation_requirements_for_account(
+        account_dir,
+        build_pack=False,
+        sid=sid,
+        runs_root=runs_root,
+    )
 
 
 def _default_pack_builder(

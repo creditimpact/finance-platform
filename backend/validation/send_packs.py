@@ -30,7 +30,7 @@ from backend.core.ai.paths import (
     validation_result_summary_filename_for_account,
     validation_write_json_enabled,
 )
-from backend.core.ai.openai_headers import build_openai_headers
+from backend.core.ai import build_openai_headers
 from backend.core.logic.validation_field_sets import (
     ALL_VALIDATION_FIELDS,
     ALWAYS_INVESTIGATABLE_FIELDS,

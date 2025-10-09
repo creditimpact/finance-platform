@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 import httpx
 
 import backend.config as config
-from backend.core.ai.openai_headers import build_openai_headers
+from backend.core.ai import build_openai_headers
 from backend.core.io.tags import upsert_tag
 
 from . import config as merge_config

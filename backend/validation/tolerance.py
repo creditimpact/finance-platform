@@ -81,7 +81,12 @@ def evaluate_field_with_tolerance(
     normalized_field = _normalized_field(field)
     values = _extract_bureau_values(bureau_values)
 
-    result = {"is_mismatch": True, "metric": None, "tolerance_applied": False}
+    result = {
+        "is_mismatch": True,
+        "metric": None,
+        "tolerance_applied": False,
+        "note": None,
+    }
 
     debug_enabled = _is_debug_enabled()
 
@@ -104,7 +109,19 @@ def evaluate_field_with_tolerance(
                 within,
             )
         if within:
-            return {"is_mismatch": False, "metric": span, "tolerance_applied": True}
+            note = {
+                "field": normalized_field,
+                "status": "within",
+                "tol_days": tol_days,
+            }
+            if span is not None:
+                note["span_days"] = span
+            return {
+                "is_mismatch": False,
+                "metric": span,
+                "tolerance_applied": True,
+                "note": note,
+            }
         return result
 
     if normalized_field in AMOUNT_FIELDS:
@@ -125,7 +142,21 @@ def evaluate_field_with_tolerance(
                 within,
             )
         if within:
-            return {"is_mismatch": False, "metric": diff, "tolerance_applied": True}
+            ratio_cap = abs(max_value) * ratio_tol if max_value is not None else 0.0
+            threshold = max(abs_tol, ratio_cap)
+            note = {
+                "field": normalized_field,
+                "status": "within",
+                "ceil": threshold,
+            }
+            if diff is not None:
+                note["diff"] = diff
+            return {
+                "is_mismatch": False,
+                "metric": diff,
+                "tolerance_applied": True,
+                "note": note,
+            }
         return result
 
     return result

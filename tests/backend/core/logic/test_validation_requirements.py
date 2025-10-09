@@ -726,6 +726,7 @@ def test_build_summary_payload_applies_amount_tolerance(monkeypatch, tmp_path):
 
     assert payload["findings"] == []
     assert payload.get("tolerance", {}).get("suppressed_fields") == ["balance_owed"]
+    assert "tolerance_notes" not in payload
 
 
 def test_build_summary_payload_applies_date_tolerance(monkeypatch, tmp_path):
@@ -769,7 +770,50 @@ def test_build_summary_payload_applies_date_tolerance(monkeypatch, tmp_path):
 
     assert payload["findings"] == []
     assert payload.get("tolerance", {}).get("suppressed_fields") == ["date_opened"]
+    assert "tolerance_notes" not in payload
     _clear_tolerance_state()
+
+
+def test_build_summary_payload_records_tolerance_notes_when_debug(monkeypatch, tmp_path):
+    from backend.core.logic import consistency as consistency_mod
+
+    monkeypatch.setattr(consistency_mod, "_AMOUNT_TOL_ABS", 0.0, raising=False)
+    monkeypatch.setattr(consistency_mod, "_AMOUNT_TOL_RATIO", 0.0, raising=False)
+    monkeypatch.setenv("VALIDATION_DEBUG", "1")
+
+    bureaus = {
+        "transunion": {"balance_owed": "110"},
+        "experian": {"balance_owed": "100"},
+        "equifax": {"balance_owed": "102"},
+    }
+
+    requirements = [
+        {
+            "field": "balance_owed",
+            "category": "activity",
+            "min_days": 8,
+            "documents": ["monthly_statement"],
+            "strength": "strong",
+            "ai_needed": False,
+            "bureaus": ["experian", "equifax", "transunion"],
+        }
+    ]
+
+    field_consistency = compute_field_consistency(dict(bureaus))
+    payload = build_summary_payload(
+        requirements,
+        field_consistency=field_consistency,
+        raw_value_provider=_raw_value_provider_for_account_factory(bureaus),
+        sid="SID123",
+        runs_root=tmp_path,
+    )
+
+    notes = payload.get("tolerance_notes")
+    assert isinstance(notes, list) and len(notes) == 1
+    assert notes[0]["field"] == "balance_owed"
+    assert notes[0]["status"] == "within"
+    assert notes[0]["diff"] == 10.0
+    assert notes[0]["ceil"] == 50.0
 
 
 @pytest.mark.parametrize(
@@ -1642,6 +1686,17 @@ def _write_basic_bureaus(account_dir: Path) -> None:
     )
 
 
+def _write_tolerance_bureaus(account_dir: Path) -> None:
+    bureaus = {
+        "transunion": {"balance_owed": "110"},
+        "experian": {"balance_owed": "100"},
+        "equifax": {"balance_owed": "102"},
+    }
+    (account_dir / "bureaus.json").write_text(
+        json.dumps(bureaus, ensure_ascii=False), encoding="utf-8"
+    )
+
+
 def test_validation_debug_excluded_when_flag_off(tmp_path, monkeypatch):
     account_dir = tmp_path / "A1"
     account_dir.mkdir()
@@ -1668,3 +1723,49 @@ def test_validation_debug_included_when_flag_on(tmp_path, monkeypatch):
 
     summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
     assert "validation_debug" in summary
+
+
+def test_tolerance_notes_absent_when_debug_off(tmp_path, monkeypatch):
+    from backend.core.logic import consistency as consistency_mod
+
+    monkeypatch.setattr(consistency_mod, "_AMOUNT_TOL_ABS", 0.0, raising=False)
+    monkeypatch.setattr(consistency_mod, "_AMOUNT_TOL_RATIO", 0.0, raising=False)
+
+    run_dir = tmp_path / "SID-NODEBUG"
+    account_dir = run_dir / "cases" / "accounts" / "1"
+    account_dir.mkdir(parents=True)
+    _write_tolerance_bureaus(account_dir)
+    (account_dir / "tags.json").write_text("[]", encoding="utf-8")
+    monkeypatch.delenv("VALIDATION_DEBUG", raising=False)
+
+    result = build_validation_requirements_for_account(account_dir)
+    assert result["status"] == "ok"
+
+    summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
+    assert "tolerance_notes" not in summary
+
+
+def test_tolerance_notes_present_when_debug_on(tmp_path, monkeypatch):
+    from backend.core.logic import consistency as consistency_mod
+
+    monkeypatch.setattr(consistency_mod, "_AMOUNT_TOL_ABS", 0.0, raising=False)
+    monkeypatch.setattr(consistency_mod, "_AMOUNT_TOL_RATIO", 0.0, raising=False)
+
+    run_dir = tmp_path / "SID-DEBUG"
+    account_dir = run_dir / "cases" / "accounts" / "1"
+    account_dir.mkdir(parents=True)
+    _write_tolerance_bureaus(account_dir)
+    (account_dir / "tags.json").write_text("[]", encoding="utf-8")
+    monkeypatch.setenv("VALIDATION_DEBUG", "1")
+
+    result = build_validation_requirements_for_account(account_dir)
+    assert result["status"] == "ok"
+
+    summary = json.loads((account_dir / "summary.json").read_text(encoding="utf-8"))
+    notes = summary.get("tolerance_notes")
+    assert isinstance(notes, list) and len(notes) == 1
+    note = notes[0]
+    assert note["field"] == "balance_owed"
+    assert note["status"] == "within"
+    assert note["diff"] == 10.0
+    assert note["ceil"] == 50.0

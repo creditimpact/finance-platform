@@ -28,6 +28,7 @@ from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, write_tags_atomic
 from backend.core.logic import summary_writer
 from backend.core.logic.consistency import _get_bureau_value, compute_field_consistency
+from backend.core.logic.decision_matrix import lookup_decision
 from backend.core.logic.reason_classifier import classify_reason, decide_send_to_ai
 from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.telemetry import metrics
@@ -1304,6 +1305,12 @@ def _build_finding(
     reason_details = classify_reason(dict(normalized_map))
 
     finding.update(reason_details)
+
+    decision = lookup_decision(field_name, reason_details.get("reason_code"))
+    if decision:
+        finding["decision"] = decision
+        finding.setdefault("decision_source", "rules")
+
     finding["send_to_ai"] = decide_send_to_ai(field_name, reason_details)
     finding["bureau_values"] = _build_bureau_value_snapshot(
         field_name,

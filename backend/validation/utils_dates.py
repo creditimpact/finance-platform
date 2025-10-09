@@ -111,6 +111,76 @@ def _extract_convention(payload: Any) -> Optional[str]:
     return None
 
 
+def _normalize_rel_path(value: Any) -> Optional[str]:
+    """Return a normalised relative path string if ``value`` is usable."""
+
+    if isinstance(value, str):
+        text = value.strip()
+        if text:
+            return text.replace("\\", "/")
+    return None
+
+
+def _extract_rel_path_from_manifest(manifest: Mapping[str, Any]) -> Optional[str]:
+    """Return the date convention relative path from ``manifest`` if present."""
+
+    artifacts = manifest.get("artifacts")
+    if isinstance(artifacts, Mapping):
+        traces = artifacts.get("traces")
+        if isinstance(traces, Mapping):
+            rel_candidate = _normalize_rel_path(traces.get("date_convention_rel"))
+            if rel_candidate:
+                return rel_candidate
+
+    prevalidation = manifest.get("prevalidation")
+    if isinstance(prevalidation, Mapping):
+        block = prevalidation.get("date_convention")
+        if isinstance(block, Mapping):
+            for key in ("file_rel", "relative_path", "path"):
+                rel_candidate = _normalize_rel_path(block.get(key))
+                if rel_candidate:
+                    return rel_candidate
+
+    return None
+
+
+def _manifest_rel_path(runs_root: Path, sid: str) -> Optional[str]:
+    """Return the relative path recorded in the manifest for ``sid`` if any."""
+
+    manifest_path = runs_root / sid / "manifest.json"
+    try:
+        raw_text = manifest_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        _LOGGER.debug(
+            "Failed to read manifest for date convention path at %s: %s",
+            manifest_path,
+            exc,
+        )
+        return None
+
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        _LOGGER.debug(
+            "Manifest JSON invalid while resolving date convention path at %s: %s",
+            manifest_path,
+            exc,
+        )
+        return None
+
+    if not isinstance(payload, Mapping):
+        return None
+
+    rel_path = _extract_rel_path_from_manifest(payload)
+    if rel_path:
+        _LOGGER.debug("Using manifest date convention path for sid=%s: %s", sid, rel_path)
+        return rel_path
+
+    return None
+
+
 def load_date_convention_for_sid(runs_root: str, sid: str, rel_path: str | None = None) -> str:
     """Load the date parsing convention for a given run.
 
@@ -133,8 +203,25 @@ def load_date_convention_for_sid(runs_root: str, sid: str, rel_path: str | None 
         returned.
     """
 
-    resolved_rel_path = rel_path or get_prevalidation_trace_relpath()
-    convention_path = Path(runs_root) / sid / resolved_rel_path
+    runs_root_path = Path(runs_root)
+    sid_root = runs_root_path / sid
+
+    resolved_rel_path = rel_path
+    if resolved_rel_path is None:
+        manifest_rel = _manifest_rel_path(runs_root_path, sid)
+        if manifest_rel is not None:
+            resolved_rel_path = manifest_rel
+
+    if resolved_rel_path is None:
+        resolved_rel_path = get_prevalidation_trace_relpath()
+
+    normalized_rel = _normalize_rel_path(resolved_rel_path) or get_prevalidation_trace_relpath()
+
+    rel_path_obj = Path(normalized_rel)
+    if rel_path_obj.is_absolute():
+        convention_path = rel_path_obj
+    else:
+        convention_path = sid_root / rel_path_obj
 
     try:
         data = json.loads(convention_path.read_text(encoding="utf-8"))

@@ -39,7 +39,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from celery import Celery, shared_task, signals
 
-from backend.api.app import _sanitize_openai_env
+from backend.api.env_sanitize import sanitize_openai_env as _sanitize_openai_env
 
 from backend.api.config import get_app_config
 from backend.core.models import ClientInfo, ProofDocuments

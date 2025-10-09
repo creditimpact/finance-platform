@@ -27,11 +27,13 @@ from backend.ai.validation_builder import build_validation_pack_for_account
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, write_tags_atomic
 from backend.core.logic import summary_writer
+from backend.core.logic.context import set_validation_context
 from backend.core.logic.consistency import _get_bureau_value, compute_field_consistency
 from backend.core.logic.reason_classifier import classify_reason, decide_send_to_ai
 from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.telemetry import metrics
 from backend.validation.decision_matrix import decide_default
+from backend.prevalidation import read_date_convention
 
 logger = logging.getLogger(__name__)
 
@@ -1790,6 +1792,23 @@ def build_validation_requirements_for_account(
             type(bureaus_raw).__name__,
         )
         return {"status": "invalid_bureaus_json"}
+
+    run_dir: Path | None = None
+    try:
+        if account_path.parent.name == "accounts" and account_path.parent.parent.name == "cases":
+            run_dir = account_path.parents[2]
+    except IndexError:
+        run_dir = None
+
+    convention_block = None
+    if run_dir is not None:
+        convention_block = read_date_convention(run_dir)
+        if convention_block is None:
+            logger.warning(
+                "DATE_DETECT_MISSING run_dir=%s fallback=MDY/en",
+                run_dir,
+            )
+    set_validation_context(convention_block)
 
     if not _account_selected_for_canary(account_path, canary_percent):
         logger.info(

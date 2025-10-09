@@ -2915,6 +2915,8 @@ def persist_merge_tags(
                     requirements,
                     field_consistency=field_consistency,
                     raw_value_provider=raw_provider,
+                    sid=sid,
+                    runs_root=runs_root,
                 )
                 summary_after = apply_validation_summary(summary_path, summary_payload)
             except Exception:
@@ -2929,8 +2931,11 @@ def persist_merge_tags(
             tag_path = tag_paths.get(idx)
             if tag_path is not None:
                 try:
+                    findings_block = summary_payload.get("findings")
                     fields_for_tag = [
-                        str(entry["field"]) for entry in requirements if entry.get("field")
+                        str(entry.get("field"))
+                        for entry in findings_block
+                        if isinstance(entry, Mapping) and entry.get("field")
                     ]
                     sync_validation_tag(tag_path, fields_for_tag, emit=emit_validation_tag)
                 except Exception:

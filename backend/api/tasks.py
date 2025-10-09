@@ -39,10 +39,14 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from celery import Celery, shared_task, signals
 
+from backend.api.app import _sanitize_openai_env
+
 from backend.api.config import get_app_config
 from backend.core.models import ClientInfo, ProofDocuments
 from backend.core.orchestrators import run_credit_repair_process
 from backend.core.utils.json_utils import _json_safe
+
+_sanitize_openai_env()
 
 app = Celery("tasks")
 

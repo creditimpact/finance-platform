@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from backend.config import ENABLE_VALIDATION_AI
+from backend.config import ENABLE_VALIDATION_AI, PREVALIDATION_DETECT_DATES
 
 from .build_packs import resolve_manifest_paths
+from .pipeline import _infer_runs_root
+from .preflight import detect_dates_for_sid
 from .send_packs import send_validation_packs
+
+log = logging.getLogger(__name__)
 
 
 def _read_manifest(manifest_path: Path | str) -> Mapping[str, Any]:
@@ -37,6 +42,17 @@ def run_case(manifest_path: Path | str) -> Mapping[str, Any]:
 
     manifest = _read_manifest(manifest_path)
     paths = resolve_manifest_paths(manifest)
+    runs_root = _infer_runs_root(paths.accounts_dir, paths.sid)
+
+    if PREVALIDATION_DETECT_DATES:
+        try:
+            detect_dates_for_sid(paths.sid, runs_root=runs_root)
+        except Exception:  # pragma: no cover - defensive logging
+            log.exception(
+                "VALIDATION_DATE_DETECT_FAILED sid=%s runs_root=%s",
+                paths.sid,
+                runs_root,
+            )
 
     if not ENABLE_VALIDATION_AI:
         _append_log(paths.log_path, "validation_ai_skipped", reason="disabled")

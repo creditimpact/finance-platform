@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Dict, Iterable, Tuple
+from pathlib import Path
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 
 HEBREW_MONTHS = (
@@ -213,3 +214,78 @@ def detect_month_language_for_run(run_dir: str) -> Dict[str, object]:
             "detector_version": "1.0",
         }
     }
+
+
+def read_date_convention(run_dir: os.PathLike[str] | str) -> Optional[dict[str, Any]]:
+    """Return the persisted ``date_convention`` block for ``run_dir`` if present."""
+
+    base_dir = Path(run_dir)
+    if not base_dir.exists():
+        return None
+
+    candidate_paths: list[Path] = []
+
+    manifest_path = base_dir / "manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest_raw = manifest_path.read_text(encoding="utf-8")
+            manifest_data = json.loads(manifest_raw)
+        except (OSError, json.JSONDecodeError):
+            logger.debug(
+                "DATE_CONVENTION_MANIFEST_READ_FAILED run_dir=%s path=%s",
+                run_dir,
+                manifest_path,
+                exc_info=True,
+            )
+        else:
+            general_value = (
+                manifest_data.get("artifacts", {})
+                .get("traces", {})
+                .get("accounts_table", {})
+                .get("general_json")
+            )
+            if isinstance(general_value, str) and general_value.strip():
+                general_path = Path(general_value)
+                if general_path.exists():
+                    candidate_paths.append(general_path)
+
+    default_path = base_dir / "traces" / "accounts_table" / "general_info_from_full.json"
+    if default_path.exists():
+        candidate_paths.append(default_path)
+
+    for path in candidate_paths:
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+        except OSError:
+            logger.debug(
+                "DATE_CONVENTION_READ_FAILED run_dir=%s path=%s",
+                run_dir,
+                path,
+                exc_info=True,
+            )
+            continue
+
+        if not raw.strip():
+            continue
+
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.debug(
+                "DATE_CONVENTION_INVALID_JSON run_dir=%s path=%s",
+                run_dir,
+                path,
+                exc_info=True,
+            )
+            continue
+
+        if not isinstance(payload, dict):
+            continue
+
+        block = payload.get("date_convention")
+        if isinstance(block, dict):
+            return dict(block)
+
+    return None

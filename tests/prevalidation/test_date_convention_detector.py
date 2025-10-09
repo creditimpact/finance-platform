@@ -198,3 +198,26 @@ def test_detect_and_persist_is_idempotent(tmp_path: Path) -> None:
     second_mtime = output_path.stat().st_mtime_ns
 
     assert second_mtime == first_mtime
+
+
+def test_detect_and_persist_preserves_general_info_mtime(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SID789"
+    run_dir = runs_root / sid
+    accounts_dir = run_dir / "cases" / "accounts"
+    _write_raw_lines(accounts_dir / "account_1", ["Two-Year Payment History Jan Feb Mar"])
+
+    legacy_dir = run_dir / "traces" / "accounts_table"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    legacy_path = legacy_dir / "general_info_from_full.json"
+    legacy_path.write_text("{\n  \"foo\": \"bar\"\n}\n", encoding="utf-8")
+
+    before_mtime = legacy_path.stat().st_mtime_ns
+
+    detect_and_persist_date_convention(sid, runs_root=runs_root)
+    after_first_run = legacy_path.stat().st_mtime_ns
+    assert after_first_run == before_mtime
+
+    detect_and_persist_date_convention(sid, runs_root=runs_root)
+    after_second_run = legacy_path.stat().st_mtime_ns
+    assert after_second_run == before_mtime

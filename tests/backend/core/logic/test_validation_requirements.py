@@ -3,7 +3,7 @@ import logging
 import sys
 import types
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import pytest
 
@@ -1108,6 +1108,66 @@ def test_build_validation_requirements_for_account_logs_missing_date_convention(
         ]
     )
     assert normalized["experian"] == "2023-01-02"
+
+
+def test_build_validation_requirements_for_account_accepts_explicit_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs_root = tmp_path / "runs_root"
+    sid = "SID123"
+    run_dir = runs_root / sid
+    (run_dir / "traces").mkdir(parents=True)
+    (run_dir / "traces" / "date_convention.json").write_text(
+        json.dumps({"date_convention": {"convention": "MDY"}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    account_dir = tmp_path / "isolated_account"
+    account_dir.mkdir()
+    (account_dir / "bureaus.json").write_text("{}", encoding="utf-8")
+    (account_dir / "summary.json").write_text("{}", encoding="utf-8")
+
+    captured: dict[str, Path] = {}
+
+    def fake_read_date_convention(path: Path) -> dict[str, str]:
+        captured["run_dir"] = Path(path)
+        return {"convention": "MDY"}
+
+    monkeypatch.setattr(
+        "backend.core.logic.validation_requirements.read_date_convention",
+        fake_read_date_convention,
+    )
+
+    monkeypatch.setattr(
+        "backend.core.logic.validation_requirements.build_validation_requirements",
+        lambda bureaus, field_consistency=None: ([], {}, {}),
+    )
+    monkeypatch.setattr(
+        "backend.core.logic.validation_requirements._raw_value_provider_for_account_factory",
+        lambda bureaus: None,
+    )
+
+    applied: dict[str, Mapping[str, Any]] = {}
+
+    def fake_apply(summary_path: Path, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        applied["payload"] = dict(payload)
+        return dict(payload)
+
+    monkeypatch.setattr(
+        "backend.core.logic.validation_requirements.apply_validation_summary",
+        fake_apply,
+    )
+
+    result = build_validation_requirements_for_account(
+        account_dir,
+        build_pack=False,
+        sid=sid,
+        runs_root=runs_root,
+    )
+
+    assert result["status"] == "ok"
+    assert captured["run_dir"] == run_dir
+    assert "schema_version" in applied["payload"]
 
 
 def test_build_validation_requirements_for_account_respects_summary_consensus(

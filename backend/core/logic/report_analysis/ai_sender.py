@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -15,6 +16,9 @@ import httpx
 from backend.core.ai import build_openai_headers
 
 from backend.core.io.tags import read_tags, upsert_tag
+
+
+log = logging.getLogger(__name__)
 
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -120,10 +124,20 @@ def _coerce_positive_float(raw: str | None, default: float) -> float:
 def load_config_from_env() -> AISenderConfig:
     """Build :class:`AISenderConfig` from environment variables."""
 
-    base_url = os.getenv("OPENAI_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
+    base_url_raw = os.getenv("OPENAI_BASE_URL")
+    base_url_clean = (base_url_raw or "").strip() or DEFAULT_BASE_URL
+    base_url = base_url_clean.rstrip("/") or DEFAULT_BASE_URL
     api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is required when sending AI merge packs")
+
+    project_id = (os.getenv("OPENAI_PROJECT_ID") or "").strip()
+    log.info(
+        "OPENAI_SETUP key_prefix=%s project_set=%s base_url=%s",
+        (api_key[:7] + "...") if api_key else "<empty>",
+        bool(project_id),
+        base_url_clean,
+    )
 
     model = os.getenv("AI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
     timeout = _coerce_positive_float(os.getenv("AI_REQUEST_TIMEOUT"), DEFAULT_TIMEOUT)

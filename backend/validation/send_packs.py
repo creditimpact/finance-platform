@@ -3868,14 +3868,21 @@ class ValidationPackSender:
         api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
         if not api_key:
             raise ValidationPackError("OPENAI_API_KEY is required to send validation packs")
-        base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        base_url_raw = os.getenv("OPENAI_BASE_URL")
+        base_url_clean = (base_url_raw or "").strip() or "https://api.openai.com/v1"
         timeout = _env_float("AI_REQUEST_TIMEOUT", _DEFAULT_TIMEOUT)
-        project_id = os.getenv("OPENAI_PROJECT_ID")
+        project_id = (os.getenv("OPENAI_PROJECT_ID") or "").strip()
+        log.info(
+            "OPENAI_SETUP key_prefix=%s project_set=%s base_url=%s",
+            (api_key[:7] + "...") if api_key else "<empty>",
+            bool(project_id),
+            base_url_clean,
+        )
         return _ChatCompletionClient(
-            base_url=base_url,
+            base_url=base_url_clean,
             api_key=api_key,
             timeout=timeout,
-            project_id=project_id,
+            project_id=project_id or None,
         )
 
     @staticmethod

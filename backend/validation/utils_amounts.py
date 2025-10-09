@@ -25,7 +25,7 @@ def are_amounts_within_tolerance(
     values: Iterable[object],
     abs_tol: float,
     ratio_tol: float,
-) -> Tuple[bool, Optional[float]]:
+) -> Tuple[bool, Optional[float], Optional[float]]:
     """
     Determine whether the numeric values provided stay within the configured tolerance.
 
@@ -40,15 +40,16 @@ def are_amounts_within_tolerance(
 
     Returns
     -------
-    Tuple[bool, Optional[float]]
-        ``True``/``False`` for whether the values are within tolerance, and the
-        computed absolute difference if at least two numeric values were provided.
+    Tuple[bool, Optional[float], Optional[float]]
+        ``True``/``False`` for whether the values are within tolerance, the
+        computed absolute difference if at least two numeric values were
+        provided, and the maximum numeric value encountered.
     """
 
     numeric_values = [value for value in (_to_float(v) for v in values) if value is not None]
 
     if len(numeric_values) < 2:
-        return True, None
+        return True, None, None
 
     maximum = max(numeric_values)
     minimum = min(numeric_values)
@@ -57,4 +58,4 @@ def are_amounts_within_tolerance(
     ratio_cap = abs(maximum) * ratio_tol
     threshold = max(abs_tol, ratio_cap)
 
-    return diff <= threshold, diff
+    return diff <= threshold, diff, maximum

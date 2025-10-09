@@ -1,0 +1,557 @@
+{
+  "total_fields": 21,
+  "fields": [
+    {
+      "field": "account_number_display",
+      "category": "open_ident",
+      "ai_needed_default": true,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 2,
+      "min_corroboration": 2,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "account_opening_contract",
+        "monthly_statement",
+        "collection_report"
+      ],
+      "normalization": "account_number_display_mask_last4",
+      "smartcredit_source": "account_number_display",
+      "gating_rule": "Upgrades to strong only when multiple bureaus report different last4 values; otherwise remains soft and AI-deferred per _determine_account_number_strength."
+    },
+    {
+      "field": "date_opened",
+      "category": "open_ident",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 3,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "account_opening_contract",
+        "application_form",
+        "system_audit_log"
+      ],
+      "normalization": "date_iso_tolerance_5d",
+      "smartcredit_source": "date_opened"
+    },
+    {
+      "field": "closed_date",
+      "category": "open_ident",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 6,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "closure_letter",
+        "internal_closure_report"
+      ],
+      "normalization": "date_iso_tolerance_5d",
+      "smartcredit_source": "closed_date"
+    },
+    {
+      "field": "account_type",
+      "category": "open_ident",
+      "ai_needed_default": true,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 2,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "account_opening_contract",
+        "application_form",
+        "monthly_statement"
+      ],
+      "normalization": "enum_account_type_alias",
+      "smartcredit_source": "account_type",
+      "gating_rule": "Always routed to AI for semantic comparison per _SEMANTIC_FIELDS logic; deterministic only when AI overruled."
+    },
+    {
+      "field": "creditor_type",
+      "category": "open_ident",
+      "ai_needed_default": true,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 6,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "account_opening_contract",
+        "lender_agreement",
+        "cra_report"
+      ],
+      "normalization": "enum_creditor_type_alias",
+      "smartcredit_source": "creditor_type",
+      "gating_rule": "Always routed to AI for semantic comparison per _SEMANTIC_FIELDS logic."
+    },
+    {
+      "field": "high_balance",
+      "category": "terms",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 8,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "loan_agreement",
+        "monthly_statement",
+        "internal_balance_report"
+      ],
+      "normalization": "amount_usd_tol_$50_or_1pct",
+      "smartcredit_source": "high_balance"
+    },
+    {
+      "field": "credit_limit",
+      "category": "terms",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 8,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "credit_line_agreement",
+        "limit_change_record",
+        "monthly_statement"
+      ],
+      "normalization": "amount_usd_tol_$50_or_1pct",
+      "smartcredit_source": "credit_limit"
+    },
+    {
+      "field": "term_length",
+      "category": "terms",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 3,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "loan_agreement",
+        "terms_sheet"
+      ],
+      "normalization": "term_length_months",
+      "smartcredit_source": "term_length"
+    },
+    {
+      "field": "payment_amount",
+      "category": "terms",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 5,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "loan_agreement",
+        "amortization_schedule",
+        "monthly_statement"
+      ],
+      "normalization": "amount_usd_tol_$50_or_1pct",
+      "smartcredit_source": "payment_amount"
+    },
+    {
+      "field": "payment_frequency",
+      "category": "terms",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 3,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "loan_agreement",
+        "terms_sheet",
+        "monthly_statement"
+      ],
+      "normalization": "payment_frequency_canonical",
+      "smartcredit_source": "payment_frequency"
+    },
+    {
+      "field": "balance_owed",
+      "category": "activity",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 8,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "monthly_statement",
+        "balance_report",
+        "collection_report"
+      ],
+      "normalization": "amount_usd_tol_$50_or_1pct",
+      "smartcredit_source": "balance_owed"
+    },
+    {
+      "field": "last_payment",
+      "category": "activity",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 3,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "monthly_statement",
+        "payment_receipt",
+        "internal_payment_log"
+      ],
+      "normalization": "date_iso_tolerance_5d",
+      "smartcredit_source": "last_payment"
+    },
+    {
+      "field": "past_due_amount",
+      "category": "activity",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 8,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "monthly_statement",
+        "collection_report",
+        "delinquency_notice"
+      ],
+      "normalization": "amount_usd_tol_$50_or_1pct",
+      "smartcredit_source": "past_due_amount"
+    },
+    {
+      "field": "date_of_last_activity",
+      "category": "activity",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 12,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "monthly_statement",
+        "system_activity_log",
+        "internal_report"
+      ],
+      "normalization": "date_iso_tolerance_5d",
+      "smartcredit_source": "date_of_last_activity"
+    },
+    {
+      "field": "account_status",
+      "category": "status",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 12,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "monthly_statement",
+        "cra_report",
+        "cra_audit_log"
+      ],
+      "normalization": "enum_account_status_alias",
+      "smartcredit_source": "account_status"
+    },
+    {
+      "field": "payment_status",
+      "category": "status",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 25,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "collection_notes",
+        "chargeoff_statement",
+        "monthly_statement"
+      ],
+      "normalization": "enum_payment_status_alias",
+      "smartcredit_source": "payment_status"
+    },
+    {
+      "field": "account_rating",
+      "category": "status",
+      "ai_needed_default": true,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 18,
+      "min_corroboration": 2,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "cra_report",
+        "cra_audit_log"
+      ],
+      "normalization": "lowercase_text_normalized",
+      "smartcredit_source": "account_rating",
+      "gating_rule": "Semantic field with conditional_gate=true; requires conflicting bureau content and routes to AI when disagreement exists."
+    },
+    {
+      "field": "last_verified",
+      "category": "status",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 6,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "cra_report",
+        "cra_reporting_log",
+        "monthly_statement"
+      ],
+      "normalization": "date_iso_strict",
+      "smartcredit_source": "last_verified"
+    },
+    {
+      "field": "date_reported",
+      "category": "status",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 3,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "cra_reporting_log",
+        "cra_report"
+      ],
+      "normalization": "date_iso_tolerance_5d",
+      "smartcredit_source": "date_reported"
+    },
+    {
+      "field": "two_year_payment_history",
+      "category": "history",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 18,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "monthly_statements_2y",
+        "internal_payment_history"
+      ],
+      "normalization": "history_tokens_and_counts",
+      "smartcredit_source": "two_year_payment_history",
+      "gating_rule": "Strength downgrades to soft/AI when bureaus are missing/unstructured or only cosmetic token differences; stays strong when delinquency tokens/counts disagree."
+    },
+    {
+      "field": "seven_year_history",
+      "category": "history",
+      "ai_needed_default": false,
+      "c_codes": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ],
+      "min_days": 25,
+      "min_corroboration": 1,
+      "bureaus": [
+        "equifax",
+        "experian",
+        "transunion"
+      ],
+      "documents": [
+        "cra_report_7y",
+        "cra_audit_logs",
+        "collection_history"
+      ],
+      "normalization": "history_counts_7y",
+      "smartcredit_source": "seven_year_history",
+      "gating_rule": "Strength downgrades to soft/AI when bureaus missing or counts lack structure; strong only when delinquency counts differ."
+    }
+  ],
+  "notes": [
+    "last_verified is treated as actionable in config despite documentation listing it as informational-only.",
+    "account_type, creditor_type, and account_rating default to AI review via semantic gating."
+  ],
+  "account_ownership_present": false
+}

@@ -1,0 +1,23 @@
+| Field | Category | AI default | C-codes | min_days | min_corroboration | Bureaus | Documents | Normalization | Gating |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| account_number_display | open_ident | true | C1,C2,C3,C4,C5 | 2 | 2 | equifax,experian,transunion | account_opening_contract,monthly_statement,collection_report | account_number_display_mask_last4 | Upgrades to strong only when multiple bureaus report different last4 values; otherwise remains soft and AI-deferred per _determine_account_number_strength. |
+| date_opened | open_ident | false | C1,C2,C3,C4,C5 | 3 | 1 | equifax,experian,transunion | account_opening_contract,application_form,system_audit_log | date_iso_tolerance_5d |  |
+| closed_date | open_ident | false | C1,C2,C3,C4,C5 | 6 | 1 | equifax,experian,transunion | closure_letter,internal_closure_report | date_iso_tolerance_5d |  |
+| account_type | open_ident | true | C1,C2,C3,C4,C5 | 2 | 1 | equifax,experian,transunion | account_opening_contract,application_form,monthly_statement | enum_account_type_alias | Always routed to AI for semantic comparison per _SEMANTIC_FIELDS logic; deterministic only when AI overruled. |
+| creditor_type | open_ident | true | C1,C2,C3,C4,C5 | 6 | 1 | equifax,experian,transunion | account_opening_contract,lender_agreement,cra_report | enum_creditor_type_alias | Always routed to AI for semantic comparison per _SEMANTIC_FIELDS logic. |
+| high_balance | terms | false | C1,C2,C3,C4,C5 | 8 | 1 | equifax,experian,transunion | loan_agreement,monthly_statement,internal_balance_report | amount_usd_tol_$50_or_1pct |  |
+| credit_limit | terms | false | C1,C2,C3,C4,C5 | 8 | 1 | equifax,experian,transunion | credit_line_agreement,limit_change_record,monthly_statement | amount_usd_tol_$50_or_1pct |  |
+| term_length | terms | false | C1,C2,C3,C4,C5 | 3 | 1 | equifax,experian,transunion | loan_agreement,terms_sheet | term_length_months |  |
+| payment_amount | terms | false | C1,C2,C3,C4,C5 | 5 | 1 | equifax,experian,transunion | loan_agreement,amortization_schedule,monthly_statement | amount_usd_tol_$50_or_1pct |  |
+| payment_frequency | terms | false | C1,C2,C3,C4,C5 | 3 | 1 | equifax,experian,transunion | loan_agreement,terms_sheet,monthly_statement | payment_frequency_canonical |  |
+| balance_owed | activity | false | C1,C2,C3,C4,C5 | 8 | 1 | equifax,experian,transunion | monthly_statement,balance_report,collection_report | amount_usd_tol_$50_or_1pct |  |
+| last_payment | activity | false | C1,C2,C3,C4,C5 | 3 | 1 | equifax,experian,transunion | monthly_statement,payment_receipt,internal_payment_log | date_iso_tolerance_5d |  |
+| past_due_amount | activity | false | C1,C2,C3,C4,C5 | 8 | 1 | equifax,experian,transunion | monthly_statement,collection_report,delinquency_notice | amount_usd_tol_$50_or_1pct |  |
+| date_of_last_activity | activity | false | C1,C2,C3,C4,C5 | 12 | 1 | equifax,experian,transunion | monthly_statement,system_activity_log,internal_report | date_iso_tolerance_5d |  |
+| account_status | status | false | C1,C2,C3,C4,C5 | 12 | 1 | equifax,experian,transunion | monthly_statement,cra_report,cra_audit_log | enum_account_status_alias |  |
+| payment_status | status | false | C1,C2,C3,C4,C5 | 25 | 1 | equifax,experian,transunion | collection_notes,chargeoff_statement,monthly_statement | enum_payment_status_alias |  |
+| account_rating | status | true | C1,C2,C3,C4,C5 | 18 | 2 | equifax,experian,transunion | cra_report,cra_audit_log | lowercase_text_normalized | Semantic field with conditional_gate=true; requires conflicting bureau content and routes to AI when disagreement exists. |
+| last_verified | status | false | C1,C2,C3,C4,C5 | 6 | 1 | equifax,experian,transunion | cra_report,cra_reporting_log,monthly_statement | date_iso_strict |  |
+| date_reported | status | false | C1,C2,C3,C4,C5 | 3 | 1 | equifax,experian,transunion | cra_reporting_log,cra_report | date_iso_tolerance_5d |  |
+| two_year_payment_history | history | false | C1,C2,C3,C4,C5 | 18 | 1 | equifax,experian,transunion | monthly_statements_2y,internal_payment_history | history_tokens_and_counts | Strength downgrades to soft/AI when bureaus are missing/unstructured or only cosmetic token differences; stays strong when delinquency tokens/counts disagree. |
+| seven_year_history | history | false | C1,C2,C3,C4,C5 | 25 | 1 | equifax,experian,transunion | cra_report_7y,cra_audit_logs,collection_history | history_counts_7y | Strength downgrades to soft/AI when bureaus missing or counts lack structure; strong only when delinquency counts differ. |

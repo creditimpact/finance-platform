@@ -967,6 +967,7 @@ class ValidationPackWriter:
 
         history = consistency.get("history")
         if isinstance(history, Mapping):
+            # TODO: If present, prefer convention from date_convention.
             context["history"] = self._normalize_history(history)
 
         return context

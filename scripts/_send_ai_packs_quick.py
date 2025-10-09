@@ -10,7 +10,7 @@ try:  # pragma: no cover - convenience bootstrap for direct execution
 except Exception:  # pragma: no cover - fallback when bootstrap is unavailable
     pass
 
-from backend.core.ai.openai_headers import build_openai_headers
+from backend.core.ai import build_openai_headers
 
 RUNS_ROOT = os.environ.get("RUNS_ROOT", "runs")
 SID = os.environ.get("SID")

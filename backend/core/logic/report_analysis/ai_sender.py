@@ -12,7 +12,7 @@ from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 import httpx
 
-from backend.core.ai.openai_headers import build_openai_headers
+from backend.core.ai import build_openai_headers
 
 from backend.core.io.tags import read_tags, upsert_tag
 

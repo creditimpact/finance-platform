@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable
 
 import httpx
 
-from backend.core.ai.openai_headers import build_openai_headers
+from backend.core.ai import build_openai_headers
 
 _SYSTEM_PROMPT = """You are a meticulous adjudicator for credit-report account pairing.
 Decide if two account entries (A,B) refer to the SAME underlying account.

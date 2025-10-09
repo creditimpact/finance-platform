@@ -105,6 +105,15 @@ def test_send_to_ai_false_uses_deterministic_path(
             "experian": {"normalized": "revolving", "raw": "Revolving"},
             "transunion": {"normalized": "installment", "raw": "Installment"},
         },
+        "expected_output": {
+            "type": "object",
+            "required": ["decision", "rationale", "citations"],
+            "properties": {
+                "decision": {"type": "string"},
+                "rationale": {"type": "string"},
+                "citations": {"type": "array", "items": {"type": "string"}},
+            },
+        },
         "finding": {
             "is_mismatch": True,
             "bureaus": {
@@ -136,8 +145,75 @@ def test_send_to_ai_false_uses_deterministic_path(
 
     assert result["results"]
     decision = result["results"][0]
-    assert decision["decision"] in {"supportive", "neutral", "no_case", "strong"}
+    assert decision["decision"] in {
+        "strong_actionable",
+        "supportive_needs_companion",
+        "neutral_context_only",
+        "no_case",
+    }
     assert "citations" in decision
+    assert not (results_dir / "acc_001.result.json").exists()
+
+
+def test_send_to_ai_false_respects_default_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sender, packs_dir, results_dir, record = _build_sender(tmp_path, monkeypatch)
+
+    pack_line = {
+        "id": "line-1",
+        "field": "account_type",
+        "sid": "S123",
+        "reason_code": "C4_TWO_MATCH_ONE_DIFF",
+        "reason_label": "Account type mismatch",
+        "send_to_ai": False,
+        "bureaus": {
+            "equifax": {"normalized": "revolving", "raw": "Revolving"},
+            "experian": {"normalized": "revolving", "raw": "Revolving"},
+            "transunion": {"normalized": "installment", "raw": "Installment"},
+        },
+        "expected_output": {
+            "type": "object",
+            "required": ["decision", "rationale", "citations"],
+            "properties": {
+                "decision": {"type": "string"},
+                "rationale": {"type": "string"},
+                "citations": {"type": "array", "items": {"type": "string"}},
+            },
+        },
+        "finding": {
+            "is_mismatch": True,
+            "default_decision": "neutral_context_only",
+            "bureaus": {
+                "equifax": {"normalized": "revolving", "raw": "Revolving"},
+                "experian": {"normalized": "revolving", "raw": "Revolving"},
+                "transunion": {"normalized": "installment", "raw": "Installment"},
+            },
+            "documents": ["statement"],
+        },
+    }
+    pack_path = packs_dir / "val_acc_001.jsonl"
+    _write_pack_line(pack_path, pack_line)
+
+    def _fail_call(*_args: Any, **_kwargs: Any) -> None:
+        raise ValidationPackError("model should not be called")
+
+    sender._call_model = _fail_call  # type: ignore[assignment]
+
+    result = sender._process_account(
+        record.account_id,
+        record.account_id,
+        pack_path,
+        record.pack,
+        results_dir / "acc_001.result.jsonl",
+        record.result_jsonl,
+        results_dir / "acc_001.result.jsonl",
+        record.result_json,
+    )
+
+    assert result["results"]
+    decision = result["results"][0]
+    assert decision["decision"] == "neutral_context_only"
     assert not (results_dir / "acc_001.result.json").exists()
 
 

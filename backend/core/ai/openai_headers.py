@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from .openai_auth import build_openai_headers
+from .openai_auth import PROJECT_HEADER_NAME, build_openai_headers
 
-__all__ = ["build_openai_headers"]
+__all__ = ["PROJECT_HEADER_NAME", "build_openai_headers"]

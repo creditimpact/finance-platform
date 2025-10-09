@@ -31,6 +31,7 @@ from backend.core.logic.tags.compact import (
     compact_tags_for_sid,
 )
 from backend.pipeline.runs import RUNS_ROOT, RunManifest, persist_manifest
+from backend.prevalidation import detect_and_persist_date_convention
 from backend.pipeline.steps.validation_requirements_step import (
     run as validation_requirements_step,
 )
@@ -937,14 +938,10 @@ def _run_auto_ai_pipeline(sid: str):
     persist_manifest(manifest)
     logger.info("AUTO_AI_SENT sid=%s dir=%s", sid, packs_source_dir)
 
-    build_validation_packs_for_run(sid, runs_root=RUNS_ROOT)
-    _maybe_send_validation_packs(sid, RUNS_ROOT, stage="validation")
-
-    # === 4) compact tags (keep only tags; push explanations to summary.json)
-    compact_tags_for_sid(sid)
-    manifest.set_ai_compacted()
-    persist_manifest(manifest)
-    logger.info("AUTO_AI_COMPACTED sid=%s", sid)
+    try:
+        detect_and_persist_date_convention(sid, runs_root=RUNS_ROOT)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.error("AUTO_AI_DATE_CONVENTION_FAILED sid=%s", sid, exc_info=True)
 
     if ENABLE_VALIDATION_REQUIREMENTS:
         accounts_root = RUNS_ROOT / sid / "cases" / "accounts"
@@ -968,6 +965,15 @@ def _run_auto_ai_pipeline(sid: str):
                     "validation_requirements",
                     extra={"account_dir": str(account_path), "res": vr_res},
                 )
+
+    build_validation_packs_for_run(sid, runs_root=RUNS_ROOT)
+    _maybe_send_validation_packs(sid, RUNS_ROOT, stage="validation")
+
+    # === 4) compact tags (keep only tags; push explanations to summary.json)
+    compact_tags_for_sid(sid)
+    manifest.set_ai_compacted()
+    persist_manifest(manifest)
+    logger.info("AUTO_AI_COMPACTED sid=%s", sid)
 
     logger.info("AUTO_AI_DONE sid=%s", sid)
     return {"sid": sid, "ok": True}

@@ -33,6 +33,10 @@ from backend.pipeline.auto_ai import (
     run_consistency_writeback_for_all_accounts,
     run_validation_requirements_for_all_accounts,
 )
+from backend.prevalidation.tasks import (
+    detect_and_persist_date_convention,
+    run_date_convention_detector,
+)
 from backend.core.ai.validators import validate_ai_result
 from backend.core.io.tags import read_tags, upsert_tag
 from backend.validation.manifest import rewrite_index_to_canonical_layout
@@ -533,6 +537,12 @@ def ai_validation_requirements_step(
 
     logger.info("AI_VALIDATION_REQUIREMENTS_START sid=%s", sid)
 
+    detection_block: dict[str, object] | None = None
+    try:
+        detection_block = detect_and_persist_date_convention(sid, runs_root=runs_root_path)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.error("AI_DATE_CONVENTION_FAILED sid=%s", sid, exc_info=True)
+
     try:
         stats = run_validation_requirements_for_all_accounts(
             sid, runs_root=runs_root_path
@@ -545,6 +555,8 @@ def ai_validation_requirements_step(
         raise
 
     payload["validation_requirements"] = stats
+    if isinstance(detection_block, dict):
+        payload["date_convention"] = dict(detection_block)
 
     logger.info(
         "AI_VALIDATION_REQUIREMENTS_END sid=%s processed=%d findings=%d",
@@ -914,12 +926,13 @@ def enqueue_auto_ai_chain(sid: str, runs_root: Path | str | None = None) -> str:
         merge_build_packs.s(),
         merge_send.s(),
         merge_compact.s(),
+        run_date_convention_detector.s(),
+        ai_validation_requirements_step.s(),
         validation_build_packs.s(),
         validation_send.s(),
         validation_compact.s(),
         ai_polarity_check_step.s(),
         ai_consistency_step.s(),
-        ai_validation_requirements_step.s(),
         pipeline_finalize.s(),
     )
 

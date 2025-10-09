@@ -29,6 +29,7 @@ from backend.core.logic.report_analysis.text_provider import (
 from backend.core.logic.report_analysis.trace_cleanup import purge_after_export
 from backend.core.config import ENABLE_VALIDATION_REQUIREMENTS
 from backend.settings import PROJECT_ROOT
+from backend.prevalidation.tasks import detect_and_persist_date_convention
 
 # Ensure the project root is always on sys.path so local modules can be
 # imported even when the worker is launched from outside the repository
@@ -257,6 +258,11 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
         cases_info.get("count"),
         cases_info.get("dir"),
     )
+
+    try:
+        detect_and_persist_date_convention(sid)
+    except Exception:  # pragma: no cover - defensive logging
+        log.error("DATE_CONVENTION_PIPELINE_FAILED sid=%s", sid, exc_info=True)
 
     if ENABLE_VALIDATION_REQUIREMENTS:
         try:

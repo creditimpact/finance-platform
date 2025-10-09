@@ -58,6 +58,9 @@ def parse_date_with_convention(s: Optional[str], conv: str) -> Optional[datetime
         return None
 
 
+DEFAULT_DATE_TOLERANCE_DAYS = 5
+
+
 def are_dates_within_tolerance(
     values: Iterable[Optional[str]], conv: str, tol_days: int
 ) -> Tuple[bool, Optional[int]]:
@@ -75,6 +78,14 @@ def are_dates_within_tolerance(
         date for the values to be considered matching.
     """
 
+    try:
+        effective_tol = int(tol_days)
+    except (TypeError, ValueError):
+        effective_tol = DEFAULT_DATE_TOLERANCE_DAYS
+    else:
+        if effective_tol < 0:
+            effective_tol = DEFAULT_DATE_TOLERANCE_DAYS
+
     parsed = [parse_date_with_convention(value, conv) for value in values]
     valid_values = [dt for dt in parsed if dt is not None]
 
@@ -84,7 +95,7 @@ def are_dates_within_tolerance(
     min_date = min(valid_values)
     max_date = max(valid_values)
     span_days = (max_date - min_date).days
-    return span_days <= tol_days, span_days
+    return span_days <= effective_tol, span_days
 
 
 def _normalize_convention(value: Any) -> Optional[str]:

@@ -23,7 +23,8 @@ from pydantic import (
 )
 
 from backend import config as backend_config
-from backend.ai.validation_builder import build_validation_pack_for_account
+# NOTE: do not import validation_builder at module import-time.
+# We'll lazy-import inside the function to avoid circular imports.
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, write_tags_atomic
 from backend.core.logic import summary_writer
@@ -1902,6 +1903,9 @@ def build_validation_requirements_for_account(
 
     if build_pack and not dry_run_enabled and sid and account_id:
         try:
+            # Lazy-import here to avoid circular import during module load.
+            from backend.ai.validation_builder import build_validation_pack_for_account
+
             pack_lines = build_validation_pack_for_account(
                 sid,
                 account_id,

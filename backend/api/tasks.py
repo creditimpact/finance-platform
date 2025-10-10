@@ -327,8 +327,9 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
             )
 
             decision = decide_next(sid, runs_root=runs_root)
+            next_action = decision.get("next")
 
-            if decision.get("next") == "gen_frontend_packs":
+            if next_action in {"gen_frontend_packs", "complete_no_action"}:
                 try:
                     fe_result = generate_frontend_packs_for_run(
                         sid, runs_root=runs_root
@@ -345,28 +346,44 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
                         runs_root=runs_root,
                     )
                     decision = decide_next(sid, runs_root=runs_root)
+                    next_action = decision.get("next")
                 else:
                     packs_count = int(fe_result.get("packs_count", 0) or 0)
+                    frontend_status_value = str(fe_result.get("status") or "success")
+                    frontend_stage_status: StageStatus = (
+                        "success" if frontend_status_value != "error" else "error"
+                    )
+                    notes_override = (
+                        frontend_status_value
+                        if frontend_status_value not in {"", "success"}
+                        else None
+                    )
+
                     record_stage(
                         sid,
                         "frontend",
-                        status="success",
+                        status=frontend_stage_status,
                         counts={"packs_count": packs_count},
                         empty_ok=packs_count == 0,
+                        notes=notes_override,
                         runs_root=runs_root,
                     )
-                    manifest = update_manifest_frontend(
-                        sid,
-                        packs_dir=fe_result.get("packs_dir"),
-                        packs_count=packs_count,
-                        built=bool(fe_result.get("built", False)),
-                        last_built_at=fe_result.get("last_built_at"),
-                        manifest=manifest,
-                        runs_root=runs_root,
-                    )
-                    decision = decide_next(sid, runs_root=runs_root)
 
-            next_action = decision.get("next")
+                    if frontend_stage_status == "success":
+                        manifest = update_manifest_frontend(
+                            sid,
+                            packs_dir=fe_result.get("packs_dir"),
+                            packs_count=packs_count,
+                            built=bool(fe_result.get("built", False)),
+                            last_built_at=fe_result.get("last_built_at"),
+                            manifest=manifest,
+                            runs_root=runs_root,
+                        )
+
+                    decision = decide_next(sid, runs_root=runs_root)
+                    next_action = decision.get("next")
+
+            next_action = decision.get("next") if next_action is None else next_action
             if next_action == "await_input":
                 manifest = update_manifest_state(
                     sid,

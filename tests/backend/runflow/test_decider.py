@@ -98,6 +98,48 @@ def test_decide_next_runs_frontend_then_moves_to_await_input(tmp_path):
     assert data["run_state"] == "AWAITING_CUSTOMER_INPUT"
 
 
+def test_decide_next_frontend_zero_packs_marks_complete(tmp_path):
+    runs_root = tmp_path / "runs"
+    sid = "S-frontend-empty"
+
+    record_stage(
+        sid,
+        "merge",
+        status="success",
+        counts={"count": 2},
+        empty_ok=False,
+        runs_root=runs_root,
+    )
+    record_stage(
+        sid,
+        "validation",
+        status="success",
+        counts={"findings_count": 3},
+        empty_ok=False,
+        runs_root=runs_root,
+    )
+
+    initial = decide_next(sid, runs_root=runs_root)
+    assert initial["next"] == "gen_frontend_packs"
+
+    record_stage(
+        sid,
+        "frontend",
+        status="success",
+        counts={"packs_count": 0},
+        empty_ok=True,
+        runs_root=runs_root,
+    )
+
+    follow_up = decide_next(sid, runs_root=runs_root)
+    assert follow_up == {
+        "next": "complete_no_action",
+        "reason": "frontend_no_packs",
+    }
+    data = _load_runflow(runs_root, sid)
+    assert data["run_state"] == "COMPLETE_NO_ACTION"
+
+
 def test_decide_next_stops_on_error(tmp_path):
     runs_root = tmp_path / "runs"
     sid = "S-error"

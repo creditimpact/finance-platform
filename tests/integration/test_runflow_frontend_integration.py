@@ -39,6 +39,25 @@ def test_runflow_completes_when_validation_has_no_findings(tmp_path):
     result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
     assert result["packs_count"] == 0
 
+    record_stage(
+        sid,
+        "frontend",
+        status="success",
+        counts={"packs_count": result["packs_count"]},
+        empty_ok=True,
+        runs_root=runs_root,
+    )
+
+    follow_up = decide_next(sid, runs_root=runs_root)
+    assert follow_up["next"] == "complete_no_action"
+    assert follow_up["reason"] in {"validation_no_findings", "frontend_no_packs"}
+
+    runflow_data = json.loads(
+        (runs_root / sid / "runflow.json").read_text(encoding="utf-8")
+    )
+    assert runflow_data["run_state"] == "COMPLETE_NO_ACTION"
+    assert runflow_data["stages"]["frontend"]["packs_count"] == 0
+
     index_path = runs_root / sid / "frontend" / "index.json"
     assert index_path.exists()
     payload = json.loads(index_path.read_text(encoding="utf-8"))

@@ -16,6 +16,9 @@ def test_runflow_steps_and_events(tmp_path, monkeypatch):
     stage = "merge"
 
     monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+    monkeypatch.setenv("RUNFLOW_EVENTS", "1")
+    monkeypatch.setenv("RUNFLOW_STEP_LOG_EVERY", "1")
     _reload_runflow()
 
     try:
@@ -67,7 +70,13 @@ def test_runflow_steps_and_events(tmp_path, monkeypatch):
         assert "ended_at" in merge_stage
         assert merge_stage["summary"]["accounts_seen"] == 4
 
-        steps = merge_stage["steps"]
+        substages = merge_stage["substages"]
+        assert set(substages.keys()) == {"default"}
+
+        default_substage = substages["default"]
+        assert default_substage["status"] == "success"
+        assert "started_at" in default_substage
+        steps = default_substage["steps"]
         assert len(steps) == 2
 
         load_cases_entry = next(item for item in steps if item["name"] == "load_cases")
@@ -94,6 +103,52 @@ def test_runflow_steps_and_events(tmp_path, monkeypatch):
         # load_cases is emitted twice, once per update
         assert len(step_events) == 2
         assert step_events[-1]["metrics"] == {"accounts": 4}
+        assert step_events[-1]["substage"] == "default"
     finally:
         monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)
+        monkeypatch.delenv("RUNFLOW_EVENTS", raising=False)
+        monkeypatch.delenv("RUNFLOW_STEP_LOG_EVERY", raising=False)
+        _reload_runflow()
+
+
+def test_runflow_step_sampling(tmp_path, monkeypatch):
+    sid = "SID-SAMPLE"
+    stage = "validation"
+
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+    monkeypatch.setenv("RUNFLOW_EVENTS", "1")
+    monkeypatch.setenv("RUNFLOW_STEP_LOG_EVERY", "3")
+    _reload_runflow()
+
+    try:
+        runflow.runflow_start_stage(sid, stage)
+        for idx in range(5):
+            runflow.runflow_step(
+                sid,
+                stage,
+                "evaluate",
+                metrics={"iteration": idx},
+            )
+
+        steps_path = Path(tmp_path, sid, "runflow_steps.json")
+        events_path = Path(tmp_path, sid, "runflow_events.jsonl")
+
+        steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
+        default_substage = steps_payload["stages"][stage]["substages"]["default"]
+        steps = default_substage["steps"]
+        assert len(steps) == 1
+        assert steps[0]["metrics"] == {"iteration": 2}
+
+        events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+        evaluate_events = [event for event in events if event.get("step") == "evaluate"]
+        assert len(evaluate_events) == 2
+        assert evaluate_events[-1]["metrics"] == {"iteration": 2}
+        assert all(event["substage"] == "default" for event in evaluate_events)
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)
+        monkeypatch.delenv("RUNFLOW_EVENTS", raising=False)
+        monkeypatch.delenv("RUNFLOW_STEP_LOG_EVERY", raising=False)
         _reload_runflow()

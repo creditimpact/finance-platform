@@ -226,28 +226,20 @@ def generate_frontend_packs_for_run(
 
     runflow_start_stage(sid, "frontend")
 
-    def _log_step(
-        status: str = "success",
-        *,
-        metrics: Mapping[str, Any] | None = None,
-        out: Mapping[str, Any] | None = None,
-    ) -> None:
-        runflow_step(
-            sid,
-            "frontend",
-            "generate",
-            status=status,
-            metrics=dict(metrics) if metrics else None,
-            out=dict(out) if out else None,
-        )
-
     try:
         if not _frontend_packs_enabled():
             log.info("PACKGEN_FRONTEND_SKIP sid=%s", sid)
-            _log_step(
-                "skipped",
-                metrics={"packs": 0},
-                out={"reason": "disabled"},
+            runflow_step(
+                sid,
+                "frontend",
+                "scan_accounts",
+                metrics={"accounts": 0},
+            )
+            runflow_end_stage(
+                sid,
+                "frontend",
+                status="skipped",
+                summary={"packs_count": 0, "reason": "disabled"},
             )
             return {
                 "status": "skipped",
@@ -261,7 +253,22 @@ def generate_frontend_packs_for_run(
         accounts_output_dir.mkdir(parents=True, exist_ok=True)
         responses_dir.mkdir(parents=True, exist_ok=True)
 
-        if not accounts_dir.is_dir():
+        account_dirs = (
+            sorted(
+                [path for path in accounts_dir.iterdir() if path.is_dir()],
+                key=_account_sort_key,
+            )
+            if accounts_dir.is_dir()
+            else []
+        )
+        runflow_step(
+            sid,
+            "frontend",
+            "scan_accounts",
+            metrics={"accounts": len(account_dirs)},
+        )
+
+        if not account_dirs:
             generated_at = _now_iso()
             payload = {
                 "sid": sid,
@@ -271,10 +278,24 @@ def generate_frontend_packs_for_run(
                 "questions": _QUESTION_SET,
             }
             _atomic_write_json(index_path, payload)
-            _log_step(
-                metrics={"packs": 0},
-                out={"reason": "no_accounts"},
+            runflow_step(
+                sid,
+                "frontend",
+                "build_pack_docs",
+                metrics={"built": 0, "skipped_missing": 0},
             )
+            try:
+                index_out = index_path.relative_to(run_dir).as_posix()
+            except ValueError:
+                index_out = str(index_path)
+            runflow_step(
+                sid,
+                "frontend",
+                "write_index",
+                metrics={"packs": 0},
+                out={"path": index_out},
+            )
+            runflow_end_stage(sid, "frontend", summary={"packs_count": 0})
             return {
                 "status": "success",
                 "packs_count": 0,
@@ -297,9 +318,28 @@ def generate_frontend_packs_for_run(
                 )
                 generated_at = existing.get("generated_at")
                 last_built = str(generated_at) if isinstance(generated_at, str) else None
-                _log_step(
-                    metrics={"packs": packs_count},
+                runflow_step(
+                    sid,
+                    "frontend",
+                    "build_pack_docs",
+                    metrics={"built": packs_count, "skipped_missing": 0},
                     out={"cache_hit": True},
+                )
+                try:
+                    index_out = index_path.relative_to(run_dir).as_posix()
+                except ValueError:
+                    index_out = str(index_path)
+                runflow_step(
+                    sid,
+                    "frontend",
+                    "write_index",
+                    metrics={"packs": packs_count},
+                    out={"path": index_out},
+                )
+                runflow_end_stage(
+                    sid,
+                    "frontend",
+                    summary={"packs_count": packs_count, "cache_hit": True},
                 )
                 return {
                     "status": "success",
@@ -310,16 +350,29 @@ def generate_frontend_packs_for_run(
                     "last_built_at": last_built,
                 }
 
-        account_dirs = [path for path in accounts_dir.iterdir() if path.is_dir()]
-
         packs: list[dict[str, Any]] = []
-        pack_count = 0
+        built_docs = 0
+        skipped_missing = 0
 
-        for account_dir in sorted(account_dirs, key=_account_sort_key):
+        for account_dir in account_dirs:
             summary = _load_json(account_dir / "summary.json")
             bureaus_payload = _load_json(account_dir / "bureaus.json")
+            account_label = account_dir.name
 
             if not summary or not bureaus_payload:
+                skipped_missing += 1
+                runflow_step(
+                    sid,
+                    "frontend",
+                    "build_pack_docs",
+                    status="skipped",
+                    account=account_label,
+                    metrics={
+                        "built": built_docs,
+                        "skipped_missing": skipped_missing,
+                    },
+                    out={"reason": "missing_inputs"},
+                )
                 continue
 
             bureaus: dict[str, Mapping[str, Any]] = {
@@ -328,6 +381,19 @@ def generate_frontend_packs_for_run(
                 if isinstance(payload, Mapping)
             }
             if not bureaus:
+                skipped_missing += 1
+                runflow_step(
+                    sid,
+                    "frontend",
+                    "build_pack_docs",
+                    status="skipped",
+                    account=account_label,
+                    metrics={
+                        "built": built_docs,
+                        "skipped_missing": skipped_missing,
+                    },
+                    out={"reason": "no_bureaus"},
+                )
                 continue
 
             account_id = str(summary.get("account_id") or account_dir.name)
@@ -351,25 +417,50 @@ def generate_frontend_packs_for_run(
                 "questions": _QUESTION_SET,
             }
 
+            built_docs += 1
+            runflow_step(
+                sid,
+                "frontend",
+                "build_pack_docs",
+                account=account_id,
+                metrics={
+                    "built": built_docs,
+                    "skipped_missing": skipped_missing,
+                },
+            )
+
             account_dirname = _safe_account_dirname(account_id, account_dir.name)
             pack_dir = accounts_output_dir / account_dirname
             pack_dir.mkdir(parents=True, exist_ok=True)
             pack_path = pack_dir / "pack.json"
             _atomic_write_json(pack_path, pack_payload)
 
+            try:
+                relative_pack = pack_path.relative_to(run_dir).as_posix()
+            except ValueError:
+                relative_pack = str(pack_path)
+
+            runflow_step(
+                sid,
+                "frontend",
+                "write_pack",
+                account=account_id,
+                out={"path": relative_pack},
+            )
+
             packs.append(
                 {
                     "account_id": account_id,
-                    "pack_path": str(pack_path.relative_to(run_dir)),
+                    "pack_path": relative_pack,
                     "creditor_name": pack_payload["creditor_name"],
                     "account_type": pack_payload["account_type"],
                     "status": pack_payload["status"],
                     "bureau_badges": pack_payload["bureau_badges"],
                 }
             )
-            pack_count += 1
 
         generated_at = _now_iso()
+        pack_count = built_docs
         index_payload = {
             "sid": sid,
             "generated_at": generated_at,
@@ -387,7 +478,20 @@ def generate_frontend_packs_for_run(
             index_path,
         )
 
-        _log_step(metrics={"packs": pack_count})
+        try:
+            index_out = index_path.relative_to(run_dir).as_posix()
+        except ValueError:
+            index_out = str(index_path)
+
+        runflow_step(
+            sid,
+            "frontend",
+            "write_index",
+            metrics={"packs": pack_count},
+            out={"path": index_out},
+        )
+
+        runflow_end_stage(sid, "frontend", summary={"packs_count": pack_count})
 
         return {
             "status": "success",
@@ -398,8 +502,11 @@ def generate_frontend_packs_for_run(
             "last_built_at": generated_at,
         }
     except Exception as exc:
-        _log_step(
-            "error",
+        runflow_step(
+            sid,
+            "frontend",
+            "build_pack_docs",
+            status="error",
             out={"error": exc.__class__.__name__, "msg": str(exc)},
         )
         runflow_end_stage(

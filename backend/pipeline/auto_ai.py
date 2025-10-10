@@ -7,7 +7,7 @@ import logging
 import os
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, Mapping, MutableMapping, Sequence
@@ -21,7 +21,14 @@ from backend.ai.validation_builder import (
 from backend.core.ai.paths import ensure_merge_paths, probe_legacy_ai_packs
 from backend.core.config import ENABLE_VALIDATION_REQUIREMENTS
 from backend.core.io.json_io import update_json_in_place
-from backend.core.logic.consistency import compute_field_consistency
+from backend.core.logic.consistency import (
+    compute_field_consistency,
+    _AMOUNT_TOL_ABS,
+    _AMOUNT_TOL_RATIO,
+    _DATE_TOLERANCE_DAYS,
+    _DATE_TOLERANT_FIELDS,
+    _TOLERANT_AMOUNT_FIELDS,
+)
 from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.logic.validation_requirements import (
     build_validation_requirements_for_account,
@@ -74,6 +81,62 @@ def _clone_without_raw(value: Any) -> Any:
         return [_clone_without_raw(item) for item in value]
 
     return value
+
+
+def _count_tolerance_hits(details: Mapping[str, Any]) -> tuple[int, int]:
+    date_hits = 0
+    amount_hits = 0
+
+    for field, info in details.items():
+        if not isinstance(info, Mapping):
+            continue
+
+        normalized_map = info.get("normalized")
+        if not isinstance(normalized_map, Mapping):
+            continue
+
+        values = [value for value in normalized_map.values() if value not in (None, "")]
+        if not values:
+            continue
+
+        if field in _DATE_TOLERANT_FIELDS:
+            parsed_dates: list[date] = []
+            unique_values: set[str] = set()
+            for candidate in values:
+                if not isinstance(candidate, str):
+                    continue
+                try:
+                    parsed = datetime.strptime(candidate, "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+                parsed_dates.append(parsed)
+                unique_values.add(candidate)
+            if len(unique_values) > 1 and parsed_dates:
+                span = (max(parsed_dates) - min(parsed_dates)).days
+                if span <= _DATE_TOLERANCE_DAYS:
+                    date_hits += 1
+
+        if field in _TOLERANT_AMOUNT_FIELDS:
+            numeric_values: list[float] = []
+            for candidate in values:
+                if isinstance(candidate, (int, float)):
+                    numeric_values.append(float(candidate))
+                elif isinstance(candidate, str):
+                    try:
+                        numeric_values.append(float(candidate))
+                    except ValueError:
+                        continue
+            if len(numeric_values) > 1:
+                maximum = max(numeric_values)
+                minimum = min(numeric_values)
+                if maximum != minimum:
+                    diff = abs(maximum - minimum)
+                    scale = max(abs(maximum), abs(minimum))
+                    tolerance = max(_AMOUNT_TOL_ABS, _AMOUNT_TOL_RATIO * scale)
+                    if diff <= tolerance:
+                        amount_hits += 1
+
+    return date_hits, amount_hits
 
 
 def _normalize_consistency_without_raw(
@@ -277,6 +340,7 @@ def run_consistency_writeback_for_all_accounts(
             )
             continue
 
+        date_hits, amount_hits = _count_tolerance_hits(field_consistency)
         normalized_consistency = _normalize_consistency_without_raw(field_consistency)
 
         def _update_summary(summary_data: MutableMapping[str, object]) -> MutableMapping[str, object]:
@@ -312,6 +376,18 @@ def run_consistency_writeback_for_all_accounts(
 
         stats["processed_accounts"] += 1
         stats["fields"] += len(normalized_consistency)
+
+        runflow_step(
+            sid,
+            "validation",
+            "compute_field_consistency",
+            account=account_path.name,
+            metrics={
+                "fields": len(normalized_consistency),
+                "date_tolerance_hits": date_hits,
+                "amount_tolerance_hits": amount_hits,
+            },
+        )
 
         logger.info(
             "AI_CONSISTENCY_WRITEBACK sid=%s account=%s fields=%d",

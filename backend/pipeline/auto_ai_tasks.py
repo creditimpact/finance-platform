@@ -891,6 +891,17 @@ def _finalize_stage(payload: dict[str, object]) -> dict[str, object]:
         payload.get("polarity_processed"),
     )
 
+    packs_value = int(payload.get("packs", 0) or 0)
+    pairs_value = int(payload.get("pairs", 0) or 0)
+    skip_reason = payload.get("skip_reason")
+    summary_payload: dict[str, Any] = {"packs": packs_value, "pairs": pairs_value}
+    status_value = "success"
+    if isinstance(skip_reason, str) and skip_reason:
+        summary_payload["skip_reason"] = skip_reason
+        status_value = "skipped"
+
+    runflow_end_stage(sid, "merge", status=status_value, summary=summary_payload)
+
     return payload
 
 

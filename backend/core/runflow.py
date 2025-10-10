@@ -117,21 +117,20 @@ def _ensure_stage_container(
     summary: Mapping[str, Any] | None = None
     steps: list[dict[str, Any]] | None = None
     if isinstance(existing, Mapping):
-        summary = existing.get("summary") if isinstance(existing.get("summary"), Mapping) else None
+        summary = (
+            existing.get("summary") if isinstance(existing.get("summary"), Mapping) else None
+        )
         steps_raw = existing.get("steps")
         if isinstance(steps_raw, list):
             steps = [dict(entry) for entry in steps_raw if isinstance(entry, Mapping)]
-        status = str(existing.get("status") or "")
-        if status == "running" and steps is not None:
-            stage_payload = dict(existing)
-            started_value = stage_payload.get("started_at")
-            stage_payload["status"] = "running"
-            stage_payload["started_at"] = (
-                str(started_value) if isinstance(started_value, str) else started_at
-            )
-            stage_payload["steps"] = steps
-            stages[stage] = stage_payload
-            return stage_payload, False
+        stage_payload = dict(existing)
+        started_value = stage_payload.get("started_at")
+        stage_payload["started_at"] = (
+            str(started_value) if isinstance(started_value, str) else started_at
+        )
+        stage_payload["steps"] = steps or []
+        stages[stage] = stage_payload
+        return stage_payload, False
 
     stage_payload: dict[str, Any] = {"status": "running", "started_at": started_at, "steps": []}
     if summary:

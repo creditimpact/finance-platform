@@ -14,6 +14,7 @@ from backend.config import (
     PREVALIDATION_DETECT_DATES,
 )
 from backend.core.manifest_utils import register_date_convention_in_manifest
+from backend.core.runflow import runflow_step
 from backend.prevalidation.date_convention_detector import detect_month_language_for_run
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,34 @@ def detect_and_persist_date_convention(
             "DATE_CONVENTION_WRITE_FAILED sid=%s path=%s", sid, target_path, exc_info=True
         )
         return None
+
+    metrics: dict[str, object] = {}
+    confidence_value = block.get("confidence")
+    try:
+        if confidence_value is not None:
+            metrics["confidence"] = float(confidence_value)
+    except (TypeError, ValueError):
+        pass
+
+    accounts_scanned = evidence.get("accounts_scanned")
+    try:
+        metrics["accounts_scanned"] = int(accounts_scanned)
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        relative_out = target_path.relative_to(run_root)
+        out_path = relative_out.as_posix()
+    except ValueError:
+        out_path = str(target_path)
+
+    runflow_step(
+        sid,
+        "validation",
+        "detect_date_convention",
+        metrics=metrics or None,
+        out={"path": out_path},
+    )
 
     try:
         run_root_abs = run_root.resolve()

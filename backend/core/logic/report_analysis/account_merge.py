@@ -36,6 +36,7 @@ from backend.core.merge.acctnum import acctnum_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
 from backend.core.logic.summary_compact import compact_merge_sections
+from backend.core.runflow import runflow_step
 # NOTE: do not import validation_builder at module import-time.
 # We'll lazy-import inside the function to avoid circular imports.
 from backend.core.logic.validation_requirements import (
@@ -1401,6 +1402,7 @@ def score_all_pairs_0_100(
     logger.debug("MERGE_PAIR_OVERVIEW %s", json.dumps(overview_log, sort_keys=True))
 
     bureaus_by_idx: Dict[int, Dict[str, Dict[str, Any]]] = {}
+    normalized_accounts = 0
     for idx in indices:
         try:
             bureaus = load_bureaus(sid, idx, runs_root=runs_root)
@@ -1415,10 +1417,21 @@ def score_all_pairs_0_100(
             )
             bureaus = {}
         bureaus_by_idx[idx] = bureaus
+        for branch in bureaus.values():
+            normalized = _normalize_account_display(branch)
+            if normalized.has_digits or normalized.canon_mask:
+                normalized_accounts += 1
 
     scores: Dict[int, Dict[int, Dict[str, Any]]] = {idx: {} for idx in indices}
 
     logger.info("CANDIDATE_LOOP_START sid=%s total_accounts=%s", sid, total_accounts)
+
+    runflow_step(
+        sid,
+        "merge",
+        "acctnum_normalize",
+        metrics={"normalized": normalized_accounts},
+    )
 
     pair_counter = 0
     built_pairs = 0
@@ -1501,6 +1514,37 @@ def score_all_pairs_0_100(
             short_debug,
             long_debug,
             why_debug,
+        )
+
+        debug_reason = why_debug
+        if not debug_reason and isinstance(gate_detail, Mapping):
+            debug_reason = str(gate_detail.get("why", ""))
+        digit_conflict = 1 if debug_reason in {"digit_conflict", "visible_digits_conflict"} else 0
+        alnum_conflict = 1 if debug_reason == "alnum_conflict" else 0
+
+        runflow_step(
+            sid,
+            "merge",
+            "acctnum_match_level",
+            account=str(left),
+            metrics={
+                "level": level_value,
+                "digit_conflicts": digit_conflict,
+                "alnum_conflicts": alnum_conflict,
+            },
+            out={"other": str(right)},
+        )
+        runflow_step(
+            sid,
+            "merge",
+            "acctnum_match_level",
+            account=str(right),
+            metrics={
+                "level": level_value,
+                "digit_conflicts": digit_conflict,
+                "alnum_conflicts": alnum_conflict,
+            },
+            out={"other": str(left)},
         )
 
         score_log = {

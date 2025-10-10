@@ -19,6 +19,9 @@ from backend.pipeline.auto_ai import (
     maybe_run_ai_pipeline_task,
     run_validation_requirements_for_all_accounts,
 )
+from backend.runflow.decider import StageStatus, decide_next, record_stage
+from backend.frontend.packs.generator import generate_frontend_packs_for_run
+from backend.runflow.manifest import update_manifest_state
 from backend.pipeline.runs import RunManifest, persist_manifest
 from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
 from backend.core.logic.report_analysis.problem_extractor import detect_problem_accounts
@@ -254,6 +257,8 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
     else:
         candidates = detect_problem_accounts(sid)
 
+    manifest: RunManifest | None = None
+
     summary = build_problem_cases(sid, candidates=candidates)
     cases_info = summary.get("cases", {}) if isinstance(summary, dict) else {}
     log.info(
@@ -287,13 +292,99 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
                 stats.get("findings", 0),
             )
 
+            runs_root: Path | None = None
+
+            if manifest is None:
+                try:
+                    manifest = RunManifest.for_sid(sid)
+                except Exception:  # pragma: no cover - defensive logging
+                    log.error(
+                        "MANIFEST_LOAD_FOR_RUNFLOW_FAILED sid=%s", sid, exc_info=True
+                    )
+                else:
+                    runs_root = manifest.path.parent.parent
+            else:
+                runs_root = manifest.path.parent.parent
+
+            stage_status: StageStatus = (
+                "success" if stats.get("ok", True) else "error"
+            )
+            findings_count = int(stats.get("findings_count", stats.get("findings", 0)) or 0)
+            empty_ok = bool((stats.get("processed_accounts") or 0) == 0)
+            notes_value = stats.get("notes")
+
+            record_stage(
+                sid,
+                "validation",
+                status=stage_status,
+                counts={"findings_count": findings_count},
+                empty_ok=empty_ok,
+                notes=notes_value,
+                runs_root=runs_root,
+            )
+
+            decision = decide_next(sid, runs_root=runs_root)
+
+            if decision.get("next") == "gen_frontend_packs":
+                try:
+                    fe_result = generate_frontend_packs_for_run(
+                        sid, runs_root=runs_root
+                    )
+                except Exception:  # pragma: no cover - defensive logging
+                    log.error("FRONTEND_PACKS_TASK_FAILED sid=%s", sid, exc_info=True)
+                    record_stage(
+                        sid,
+                        "frontend",
+                        status="error",
+                        counts={"packs_count": 0},
+                        empty_ok=True,
+                        notes="generation_failed",
+                        runs_root=runs_root,
+                    )
+                    decision = decide_next(sid, runs_root=runs_root)
+                else:
+                    packs_count = int(fe_result.get("packs_count", 0) or 0)
+                    record_stage(
+                        sid,
+                        "frontend",
+                        status="success",
+                        counts={"packs_count": packs_count},
+                        empty_ok=packs_count == 0,
+                        runs_root=runs_root,
+                    )
+                    decision = decide_next(sid, runs_root=runs_root)
+
+            next_action = decision.get("next")
+            if next_action == "await_input":
+                manifest = update_manifest_state(
+                    sid,
+                    "AWAITING_CUSTOMER_INPUT",
+                    manifest=manifest,
+                    runs_root=runs_root,
+                )
+            elif next_action == "complete_no_action":
+                manifest = update_manifest_state(
+                    sid,
+                    "COMPLETE_NO_ACTION",
+                    manifest=manifest,
+                    runs_root=runs_root,
+                )
+            elif next_action == "stop_error":
+                manifest = update_manifest_state(
+                    sid,
+                    "ERROR",
+                    manifest=manifest,
+                    runs_root=runs_root,
+                )
+
     if os.environ.get("ENABLE_AUTO_AI_PIPELINE", "1") in ("1", "true", "True"):
         if has_ai_merge_best_tags(sid):
             if sid in _AUTO_AI_PIPELINE_ENQUEUED:
                 log.info("AUTO_AI_ALREADY_ENQUEUED sid=%s", sid)
             else:
                 try:
-                    manifest = RunManifest.for_sid(sid)
+                    if manifest is None:
+                        manifest = RunManifest.for_sid(sid)
                 except Exception:
                     log.error("AUTO_AI_ENQUEUE_MANIFEST_FAILED sid=%s", sid, exc_info=True)
                 else:

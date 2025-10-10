@@ -33,6 +33,9 @@ from backend.pipeline.auto_ai import (
     run_consistency_writeback_for_all_accounts,
     run_validation_requirements_for_all_accounts,
 )
+from backend.runflow.decider import StageStatus, decide_next, record_stage
+from backend.frontend.packs.generator import generate_frontend_packs_for_run
+from backend.runflow.manifest import update_manifest_state
 from backend.prevalidation.tasks import (
     detect_and_persist_date_convention,
     run_date_convention_detector,
@@ -564,6 +567,72 @@ def ai_validation_requirements_step(
         stats.get("processed_accounts", 0),
         stats.get("findings", 0),
     )
+
+    stage_status: StageStatus = "success" if stats.get("ok", True) else "error"
+    findings_count = int(stats.get("findings_count", stats.get("findings", 0)) or 0)
+    empty_ok = bool((stats.get("processed_accounts") or 0) == 0)
+    notes_value = stats.get("notes")
+
+    record_stage(
+        sid,
+        "validation",
+        status=stage_status,
+        counts={"findings_count": findings_count},
+        empty_ok=empty_ok,
+        notes=notes_value,
+        runs_root=runs_root_path,
+    )
+
+    decision = decide_next(sid, runs_root=runs_root_path)
+
+    if decision.get("next") == "gen_frontend_packs":
+        try:
+            fe_result = generate_frontend_packs_for_run(
+                sid, runs_root=runs_root_path
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            logger.error("AUTO_AI_FRONTEND_PACKS_FAILED sid=%s", sid, exc_info=True)
+            record_stage(
+                sid,
+                "frontend",
+                status="error",
+                counts={"packs_count": 0},
+                empty_ok=True,
+                notes="generation_failed",
+                runs_root=runs_root_path,
+            )
+            decision = decide_next(sid, runs_root=runs_root_path)
+        else:
+            packs_count = int(fe_result.get("packs_count", 0) or 0)
+            record_stage(
+                sid,
+                "frontend",
+                status="success",
+                counts={"packs_count": packs_count},
+                empty_ok=packs_count == 0,
+                runs_root=runs_root_path,
+            )
+            decision = decide_next(sid, runs_root=runs_root_path)
+
+    final_next = decision.get("next")
+    if final_next == "await_input":
+        update_manifest_state(
+            sid,
+            "AWAITING_CUSTOMER_INPUT",
+            runs_root=runs_root_path,
+        )
+    elif final_next == "complete_no_action":
+        update_manifest_state(
+            sid,
+            "COMPLETE_NO_ACTION",
+            runs_root=runs_root_path,
+        )
+    elif final_next == "stop_error":
+        update_manifest_state(
+            sid,
+            "ERROR",
+            runs_root=runs_root_path,
+        )
 
     return payload
 

@@ -31,8 +31,6 @@ from backend.core.logic.tags.compact import (
     compact_tags_for_sid,
 )
 from backend.pipeline.runs import RUNS_ROOT, RunManifest, persist_manifest
-from backend.runflow.decider import StageStatus, decide_next, record_stage
-from backend.frontend.packs.generator import generate_frontend_packs_for_run
 from backend.prevalidation import detect_and_persist_date_convention
 from backend.pipeline.steps.validation_requirements_step import (
     run as validation_requirements_step,
@@ -164,57 +162,12 @@ def run_validation_requirements_for_all_accounts(
         stats["errors"],
     )
 
-    stage_status: StageStatus = "success"
-    notes: str | None = None
+    stats["ok"] = stats["errors"] == 0
+    stats["findings_count"] = stats["findings"]
     if stats["errors"]:
-        notes = f"errors={stats['errors']}"
-
-    counts_payload = {"findings_count": stats["findings"]}
-
-    record_stage(
-        sid,
-        "validation",
-        status=stage_status,
-        counts=counts_payload,
-        empty_ok=stats["processed_accounts"] == 0,
-        notes=notes,
-        runs_root=base_root,
-    )
-
-    decision = decide_next(sid, runs_root=base_root)
-    if decision.get("next") == "gen_frontend_packs":
-        try:
-            frontend_result = generate_frontend_packs_for_run(
-                sid, runs_root=base_root
-            )
-        except Exception:  # pragma: no cover - defensive logging
-            logger.exception("FRONTEND_PACKS_FAILED sid=%s", sid)
-            record_stage(
-                sid,
-                "frontend",
-                status="error",
-                counts={"packs_count": 0},
-                empty_ok=True,
-                notes="generation_failed",
-                runs_root=base_root,
-            )
-            decide_next(sid, runs_root=base_root)
-        else:
-            packs_count = int(frontend_result.get("packs_count", 0) or 0)
-            record_stage(
-                sid,
-                "frontend",
-                status="success",
-                counts={"packs_count": packs_count},
-                empty_ok=bool(frontend_result.get("empty_ok")),
-                runs_root=base_root,
-            )
-            decide_next(sid, runs_root=base_root)
-    elif decision.get("next") == "stop_error":
-        logger.info("VALIDATION_DECISION_STOP sid=%s reason=%s", sid, decision.get("reason"))
+        stats["notes"] = f"errors={stats['errors']}"
     else:
-        # Ensure the run state reflects the latest decision even if no action is taken.
-        decide_next(sid, runs_root=base_root)
+        stats["notes"] = None
 
     return stats
 

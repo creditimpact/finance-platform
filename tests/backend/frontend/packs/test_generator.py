@@ -88,3 +88,15 @@ def test_generate_frontend_packs_handles_missing_accounts(tmp_path):
     payload = json.loads(index_path.read_text(encoding="utf-8"))
     assert payload["accounts"] == []
     assert result == {"status": "success", "packs_count": 0, "empty_ok": True}
+
+
+def test_generate_frontend_packs_respects_feature_flag(tmp_path, monkeypatch):
+    runs_root = tmp_path / "runs"
+    sid = "S-disabled"
+
+    monkeypatch.setenv("ENABLE_FRONTEND_PACKS", "0")
+
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    assert result == {"status": "skipped", "packs_count": 0, "empty_ok": True}
+    assert not (runs_root / sid).exists()

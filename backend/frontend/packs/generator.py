@@ -43,6 +43,11 @@ def _resolve_runs_root(runs_root: Path | str | None) -> Path:
     return Path(runs_root)
 
 
+def _frontend_packs_enabled() -> bool:
+    value = os.getenv("ENABLE_FRONTEND_PACKS", "1")
+    return value not in {"0", "false", "False"}
+
+
 def _account_sort_key(path: Path) -> tuple[int, Any]:
     name = path.name
     if name.isdigit():
@@ -208,6 +213,10 @@ def generate_frontend_packs_for_run(
     force: bool = False,
 ) -> dict[str, Any]:
     """Build customer-facing account packs for ``sid``."""
+
+    if not _frontend_packs_enabled():
+        log.info("PACKGEN_FRONTEND_SKIP sid=%s", sid)
+        return {"status": "skipped", "packs_count": 0, "empty_ok": True}
 
     base_root = _resolve_runs_root(runs_root)
     run_dir = base_root / sid

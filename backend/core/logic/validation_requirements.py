@@ -37,6 +37,7 @@ from backend import config as backend_config
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, write_tags_atomic
 from backend.core.logic import summary_writer
+from backend.core.runflow import runflow_step
 from backend.core.logic.context import set_validation_context
 from backend.core.logic.consistency import _get_bureau_value, compute_field_consistency
 from backend.core.logic.reason_classifier import classify_reason, decide_send_to_ai
@@ -146,6 +147,41 @@ def _emit_tolerance_log(payload: Mapping[str, Any]) -> None:
             payload.get("maxv"),
             payload.get("within"),
         )
+
+    if os.getenv("VALIDATION_DEBUG") == "1":
+        sid_value = str(payload.get("sid") or "")
+        if sid_value:
+            step_name = f"TOLCHECK_{kind}" if kind else "TOLCHECK_unknown"
+            metrics: dict[str, Any] = {}
+            if kind == "date":
+                span = payload.get("span")
+                tol_days = payload.get("tol_days")
+                try:
+                    metrics["span"] = int(span)
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    metrics["tol_days"] = int(tol_days)
+                except (TypeError, ValueError):
+                    pass
+            elif kind == "amount":
+                for key, target in (("diff", "diff"), ("abs", "abs_tol"), ("ratio", "ratio_tol")):
+                    value = payload.get(key)
+                    try:
+                        metrics[target] = float(value)
+                    except (TypeError, ValueError):
+                        continue
+            within = payload.get("within")
+            if isinstance(within, bool):
+                metrics["within"] = within
+
+            runflow_step(
+                sid_value,
+                "validation",
+                step_name,
+                metrics=metrics or None,
+                out={"field": str(payload.get("field") or "")},
+            )
 
 
 def _evaluate_with_tolerance(
@@ -1709,6 +1745,38 @@ def build_summary_payload(
                 raw_map,
             )
 
+        if field_name == "account_number_display" and sid_value:
+            digit_conflicts = 0
+            alnum_conflicts = 0
+            aggregate_level = "none"
+            for _label, left_key, right_key in _ACCOUNT_NUMBER_PAIR_ORDER:
+                left_value = raw_map.get(left_key)
+                right_value = raw_map.get(right_key)
+                level, debug = acctnum_match_level(
+                    str(left_value or ""), str(right_value or "")
+                )
+                if aggregate_level == "none" and level:
+                    aggregate_level = level
+                reason = ""
+                if isinstance(debug, Mapping):
+                    reason = str(debug.get("why") or "")
+                if reason in {"digit_conflict", "visible_digits_conflict"}:
+                    digit_conflicts += 1
+                elif reason == "alnum_conflict":
+                    alnum_conflicts += 1
+
+            runflow_step(
+                sid_value,
+                "validation",
+                "acctnum_compare_merge_semantics",
+                metrics={
+                    "level": aggregate_level,
+                    "digit_conflicts": digit_conflicts,
+                    "alnum_conflicts": alnum_conflicts,
+                },
+                out={"field": "account_number_display"},
+            )
+
         if (
             field_name
             and isinstance(field_consistency, Mapping)
@@ -1779,6 +1847,17 @@ def build_summary_payload(
             cloned_consistency = _clone_field_consistency(field_consistency)
             if cloned_consistency:
                 payload["field_consistency"] = cloned_consistency
+
+    if sid_value:
+        runflow_step(
+            sid_value,
+            "validation",
+            "build_summary_payload",
+            metrics={
+                "requirements": len(normalized_requirements),
+                "suppressed": len(suppressed_fields),
+            },
+        )
 
     return summary_writer.sanitize_validation_payload(payload)
 

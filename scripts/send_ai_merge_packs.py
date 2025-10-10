@@ -32,7 +32,10 @@ from backend.core.ai.adjudicator import (
     _normalize_and_validate_decision,
     decide_merge_or_different,
 )
-from backend.core.ai.merge_validation import apply_same_account_guardrail
+from backend.core.ai.merge_validation import (
+    ACCOUNT_STEM_GUARDRAIL_REASON,
+    apply_same_account_guardrail,
+)
 from backend.core.ai.paths import (
     MergePaths,
     ensure_merge_paths,
@@ -52,6 +55,7 @@ from backend.core.logic.report_analysis.account_merge import (
 )
 from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.merge.acctnum import normalize_level
+from backend.core.runflow import runflow_step
 from backend.pipeline.runs import RunManifest, persist_manifest
 
 log = logging.getLogger(__name__)
@@ -1282,6 +1286,27 @@ def main(argv: Sequence[str] | None = None) -> None:
                         a_idx,
                         b_idx,
                         guardrail_reason,
+                    )
+                    metrics_reason = (
+                        "stems_conflict"
+                        if guardrail_reason == ACCOUNT_STEM_GUARDRAIL_REASON
+                        else guardrail_reason
+                    )
+                    runflow_step(
+                        sid,
+                        "merge",
+                        "acct_guardrail",
+                        account=str(a_idx),
+                        metrics={"reason": metrics_reason},
+                        out={"pair": f"{a_idx}-{b_idx}"},
+                    )
+                    runflow_step(
+                        sid,
+                        "merge",
+                        "acct_guardrail",
+                        account=str(b_idx),
+                        metrics={"reason": metrics_reason},
+                        out={"pair": f"{a_idx}-{b_idx}"},
                     )
                     pack_log(
                         "GUARDRAIL_OVERRIDE",

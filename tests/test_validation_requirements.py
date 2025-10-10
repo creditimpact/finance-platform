@@ -147,17 +147,29 @@ def test_account_number_masking_needs_soft_review(account_number_masking_only):
     assert "account_number_display" in requirements
     rule = requirements["account_number_display"]
     assert rule["strength"] == "soft"
-    assert rule["ai_needed"] is True
+    assert rule["ai_needed"] is False
     assert rule["bureaus"] == ["equifax", "experian", "transunion"]
     assert rule["min_corroboration"] == 2
     assert rule["conditional_gate"] is True
 
     field_consistency = compute_field_consistency(account_number_masking_only)
-    assert field_consistency["account_number_display"]["consensus"] == "majority"
+    assert field_consistency["account_number_display"]["consensus"] == "split"
     normalized = inconsistencies["account_number_display"]["normalized"]
     assert normalized["transunion"]["last4"] == "4567"
     assert normalized["experian"]["last4"] == "4567"
-    assert normalized["equifax"]["last4"] is None
+    assert normalized["equifax"] is None
+
+
+def test_account_number_masking_ai_flag_can_be_restored(
+    monkeypatch, account_number_masking_only
+):
+    monkeypatch.setenv("VALIDATION_ACCOUNT_NUMBER_DISPLAY_DETERMINISTIC", "0")
+
+    requirements, _ = _requirements_by_field(account_number_masking_only)
+
+    rule = requirements["account_number_display"]
+    assert rule["strength"] == "soft"
+    assert rule["ai_needed"] is True
 
 
 def test_soft_semantics_require_ai(account_soft_semantics):

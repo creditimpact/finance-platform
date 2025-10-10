@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Tuple
 
 import functools
 import json
@@ -105,7 +105,9 @@ def _append_event(sid: str, row: Mapping[str, Any]) -> None:
     _append_jsonl(_events_path(sid), row)
 
 
-def _ensure_stage_container(data: dict[str, Any], stage: str, started_at: str) -> dict[str, Any]:
+def _ensure_stage_container(
+    data: dict[str, Any], stage: str, started_at: str
+) -> Tuple[dict[str, Any], bool]:
     stages = data.setdefault("stages", {})
     if not isinstance(stages, dict):
         stages = {}
@@ -122,37 +124,51 @@ def _ensure_stage_container(data: dict[str, Any], stage: str, started_at: str) -
         status = str(existing.get("status") or "")
         if status == "running" and steps is not None:
             stage_payload = dict(existing)
+            started_value = stage_payload.get("started_at")
             stage_payload["status"] = "running"
-            stage_payload.setdefault("started_at", existing.get("started_at") or started_at)
+            stage_payload["started_at"] = (
+                str(started_value) if isinstance(started_value, str) else started_at
+            )
             stage_payload["steps"] = steps
-            return stage_payload
+            stages[stage] = stage_payload
+            return stage_payload, False
 
     stage_payload: dict[str, Any] = {"status": "running", "started_at": started_at, "steps": []}
     if summary:
         stage_payload["summary"] = dict(summary)
     stages[stage] = stage_payload
-    return stage_payload
+    return stage_payload, True
 
 
 def runflow_start_stage(
     sid: str, stage: str, extra: Optional[Mapping[str, Any]] = None
 ) -> None:
-    if _disabled() or not _ENABLE_STEPS:
+    if _disabled():
+        return
+
+    steps_enabled = _ENABLE_STEPS
+    events_enabled = _ENABLE_EVENTS
+    if not (steps_enabled or events_enabled):
         return
 
     ts = _utcnow_iso()
-    data = _load_steps_payload(sid)
-    stage_payload = _ensure_stage_container(data, stage, ts)
-    stage_payload["status"] = "running"
-    stage_payload["started_at"] = ts
-    stage_payload["steps"] = []
-    if extra:
-        for key, value in extra.items():
-            stage_payload[str(key)] = value
-    data["updated_at"] = ts
-    data.setdefault("stages", {})[stage] = stage_payload
-    _dump_steps_payload(sid, data)
-    _append_event(sid, {"ts": ts, "stage": stage, "event": "start"})
+    created = True
+    if steps_enabled:
+        data = _load_steps_payload(sid)
+        stage_payload, created = _ensure_stage_container(data, stage, ts)
+        stage_payload["status"] = "running"
+        stage_payload.setdefault("started_at", ts)
+        if not isinstance(stage_payload.get("steps"), list):
+            stage_payload["steps"] = []
+        if extra:
+            for key, value in extra.items():
+                stage_payload[str(key)] = value
+        data["updated_at"] = ts
+        data.setdefault("stages", {})[stage] = stage_payload
+        _dump_steps_payload(sid, data)
+
+    if events_enabled and created:
+        _append_event(sid, {"ts": ts, "stage": stage, "event": "start"})
 
 
 def runflow_end_stage(
@@ -162,30 +178,37 @@ def runflow_end_stage(
     status: str = "success",
     summary: Optional[Mapping[str, Any]] = None,
 ) -> None:
-    if _disabled() or not _ENABLE_STEPS:
+    if _disabled():
+        return
+
+    steps_enabled = _ENABLE_STEPS
+    events_enabled = _ENABLE_EVENTS
+    if not (steps_enabled or events_enabled):
         return
 
     ts = _utcnow_iso()
-    data = _load_steps_payload(sid)
-    stage_payload = _ensure_stage_container(data, stage, ts)
-    stage_payload["status"] = status
-    stage_payload["ended_at"] = ts
-    if summary:
-        existing_summary = stage_payload.get("summary")
-        if isinstance(existing_summary, Mapping):
-            merged = dict(existing_summary)
-            merged.update({str(k): v for k, v in summary.items()})
-        else:
-            merged = {str(k): v for k, v in summary.items()}
-        stage_payload["summary"] = merged
-    data["updated_at"] = ts
-    data.setdefault("stages", {})[stage] = stage_payload
-    _dump_steps_payload(sid, data)
+    if steps_enabled:
+        data = _load_steps_payload(sid)
+        stage_payload, _ = _ensure_stage_container(data, stage, ts)
+        stage_payload["status"] = status
+        stage_payload["ended_at"] = ts
+        if summary:
+            existing_summary = stage_payload.get("summary")
+            if isinstance(existing_summary, Mapping):
+                merged = dict(existing_summary)
+                merged.update({str(k): v for k, v in summary.items()})
+            else:
+                merged = {str(k): v for k, v in summary.items()}
+            stage_payload["summary"] = merged
+        data["updated_at"] = ts
+        data.setdefault("stages", {})[stage] = stage_payload
+        _dump_steps_payload(sid, data)
 
-    event: dict[str, Any] = {"ts": ts, "stage": stage, "event": "end", "status": status}
-    if summary:
-        event["summary"] = {str(k): v for k, v in summary.items()}
-    _append_event(sid, event)
+    if events_enabled:
+        event: dict[str, Any] = {"ts": ts, "stage": stage, "event": "end", "status": status}
+        if summary:
+            event["summary"] = {str(k): v for k, v in summary.items()}
+        _append_event(sid, event)
 
 
 def runflow_step(
@@ -198,54 +221,58 @@ def runflow_step(
     metrics: Optional[Mapping[str, Any]] = None,
     out: Optional[Mapping[str, Any]] = None,
 ) -> None:
-    if _disabled() or not (_ENABLE_STEPS or _ENABLE_EVENTS):
+    steps_enabled = _ENABLE_STEPS
+    events_enabled = _ENABLE_EVENTS
+
+    if _disabled() or not (steps_enabled or events_enabled):
         return
 
     ts = _utcnow_iso()
-    data = _load_steps_payload(sid)
-    stage_payload = _ensure_stage_container(data, stage, ts)
+    if steps_enabled:
+        data = _load_steps_payload(sid)
+        stage_payload, _ = _ensure_stage_container(data, stage, ts)
 
-    steps = stage_payload.setdefault("steps", [])
-    if not isinstance(steps, list):
-        steps = []
-        stage_payload["steps"] = steps
+        steps_list = stage_payload.setdefault("steps", [])
+        if not isinstance(steps_list, list):
+            steps_list = []
+            stage_payload["steps"] = steps_list
 
-    entry: dict[str, Any] = {"name": step, "status": status, "t": ts}
-    if account is not None:
-        entry["account"] = account
-    if metrics:
-        entry["metrics"] = {str(k): v for k, v in metrics.items()}
-    if out:
-        entry["out"] = {str(k): v for k, v in out.items()}
+        entry: dict[str, Any] = {"name": step, "status": status, "t": ts}
+        if account is not None:
+            entry["account"] = account
+        if metrics:
+            entry["metrics"] = {str(k): v for k, v in metrics.items()}
+        if out:
+            entry["out"] = {str(k): v for k, v in out.items()}
 
-    updated = False
-    for existing in steps:
-        if isinstance(existing, Mapping) and existing.get("name") == step:
-            existing.clear()
-            existing.update(entry)
-            updated = True
-            break
-    if not updated:
-        steps.append(entry)
+        updated = False
+        for existing in steps_list:
+            if isinstance(existing, Mapping) and existing.get("name") == step:
+                existing.clear()
+                existing.update(entry)
+                updated = True
+                break
+        if not updated:
+            steps_list.append(entry)
 
-    data["updated_at"] = ts
-    data.setdefault("stages", {})[stage] = stage_payload
-    if _ENABLE_STEPS:
+        data["updated_at"] = ts
+        data.setdefault("stages", {})[stage] = stage_payload
         _dump_steps_payload(sid, data)
 
-    event: dict[str, Any] = {
-        "ts": ts,
-        "stage": stage,
-        "step": step,
-        "status": status,
-    }
-    if account is not None:
-        event["account"] = account
-    if metrics:
-        event["metrics"] = {str(k): v for k, v in metrics.items()}
-    if out:
-        event["out"] = {str(k): v for k, v in out.items()}
-    _append_event(sid, event)
+    if events_enabled:
+        event: dict[str, Any] = {
+            "ts": ts,
+            "stage": stage,
+            "step": step,
+            "status": status,
+        }
+        if account is not None:
+            event["account"] = account
+        if metrics:
+            event["metrics"] = {str(k): v for k, v in metrics.items()}
+        if out:
+            event["out"] = {str(k): v for k, v in out.items()}
+        _append_event(sid, event)
 
 
 def runflow_step_dec(stage: str, step: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:

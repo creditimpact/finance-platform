@@ -16,6 +16,26 @@ any escalation decisions are made.
   are reconciled with pure code. Normalisation includes tolerance windows (see
   below) so that equivalent reporting formats do not escalate.
 
+### Date conventions & tolerance
+
+- The tolerance layer resolves each run's date formatting rules by loading
+  `trace/date_convention.json` through
+  `backend.validation.utils_dates.load_date_convention_for_sid`. The
+  manifest is treated purely as a locator for that trace file when run
+  directories move between machines; the tolerance check never copies date
+  settings from the manifest itself.
+- All reporting dates (`date_opened`, `closed_date`, `date_reported`,
+  `date_of_last_activity`, `last_payment`, and `last_verified`) share the same
+  ±5 day tolerance. Differences inside that window are considered matches and
+  are suppressed before they can raise C4/C5 mismatches.
+
+### Account rating alias map
+
+`account_rating` normalisation applies a curated alias map (see
+`backend/core/logic/consistency.py`) so that high-signal synonyms coalesce to a
+stable set of canonical ratings. Keep the mapping intentionally small to avoid
+unexpected merges; new entries should come with concrete report examples.
+
 ## AI escalation
 
 Only three semantic fields may route to AI: `account_type`, `creditor_type` and

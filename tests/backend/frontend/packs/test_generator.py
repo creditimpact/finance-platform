@@ -74,7 +74,12 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert responses_dir.is_dir()
     assert not any(responses_dir.iterdir())
 
-    assert result == {"status": "success", "packs_count": 1, "empty_ok": False}
+    assert result["status"] == "success"
+    assert result["packs_count"] == 1
+    assert result["empty_ok"] is False
+    assert result["built"] is True
+    assert result["packs_dir"] == str((runs_root / sid / "frontend").absolute())
+    assert isinstance(result["last_built_at"], str)
 
 
 def test_generate_frontend_packs_handles_missing_accounts(tmp_path):
@@ -87,7 +92,12 @@ def test_generate_frontend_packs_handles_missing_accounts(tmp_path):
     assert index_path.exists()
     payload = json.loads(index_path.read_text(encoding="utf-8"))
     assert payload["accounts"] == []
-    assert result == {"status": "success", "packs_count": 0, "empty_ok": True}
+    assert result["status"] == "success"
+    assert result["packs_count"] == 0
+    assert result["empty_ok"] is True
+    assert result["built"] is True
+    assert result["packs_dir"] == str((runs_root / sid / "frontend").absolute())
+    assert isinstance(result["last_built_at"], str)
 
 
 def test_generate_frontend_packs_respects_feature_flag(tmp_path, monkeypatch):
@@ -98,5 +108,12 @@ def test_generate_frontend_packs_respects_feature_flag(tmp_path, monkeypatch):
 
     result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
-    assert result == {"status": "skipped", "packs_count": 0, "empty_ok": True}
+    assert result == {
+        "status": "skipped",
+        "packs_count": 0,
+        "empty_ok": True,
+        "built": False,
+        "packs_dir": str((runs_root / sid / "frontend").absolute()),
+        "last_built_at": None,
+    }
     assert not (runs_root / sid).exists()

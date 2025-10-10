@@ -31,6 +31,7 @@ from backend.core.logic.tags.compact import (
     compact_tags_for_sid,
 )
 from backend.pipeline.runs import RUNS_ROOT, RunManifest, persist_manifest
+from backend.core.runflow import runflow_start_stage, runflow_step
 from backend.prevalidation import detect_and_persist_date_convention
 from backend.pipeline.steps.validation_requirements_step import (
     run as validation_requirements_step,
@@ -118,7 +119,23 @@ def run_validation_requirements_for_all_accounts(
         "errors": 0,
     }
 
+    runflow_start_stage(sid, "validation")
+
     if not accounts_root.exists():
+        runflow_step(
+            sid,
+            "validation",
+            "requirements",
+            status="success",
+            metrics={
+                "total_accounts": stats["total_accounts"],
+                "processed_accounts": stats["processed_accounts"],
+                "findings": stats["findings"],
+                "missing_bureaus": stats["missing_bureaus"],
+                "errors": stats["errors"],
+            },
+            out={"reason": "no_accounts"},
+        )
         return stats
 
     account_paths = [path for path in accounts_root.iterdir() if path.is_dir()]
@@ -168,6 +185,26 @@ def run_validation_requirements_for_all_accounts(
         stats["notes"] = f"errors={stats['errors']}"
     else:
         stats["notes"] = None
+
+    metrics = {
+        "total_accounts": stats["total_accounts"],
+        "processed_accounts": stats["processed_accounts"],
+        "findings": stats["findings"],
+        "missing_bureaus": stats["missing_bureaus"],
+        "errors": stats["errors"],
+    }
+    out_payload = {}
+    if stats.get("notes"):
+        out_payload["notes"] = stats["notes"]
+    status = "success" if stats["errors"] == 0 else "error"
+    runflow_step(
+        sid,
+        "validation",
+        "requirements",
+        status=status,
+        metrics=metrics,
+        out=out_payload or None,
+    )
 
     return stats
 

@@ -33,6 +33,7 @@ from backend.pipeline.auto_ai import (
     run_consistency_writeback_for_all_accounts,
     run_validation_requirements_for_all_accounts,
 )
+from backend.core.runflow import runflow_end_stage, runflow_start_stage, runflow_step
 from backend.runflow.decider import StageStatus, decide_next, record_stage
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
 from backend.runflow.manifest import (
@@ -453,19 +454,42 @@ def _merge_build_stage(payload: dict[str, object]) -> dict[str, object]:
 
     logger.info("AI_BUILD_START sid=%s", sid)
 
+    runflow_start_stage(sid, "merge")
+
     if not has_ai_merge_best_pairs(sid, runs_root):
         logger.info("AUTO_AI_SKIP_NO_CANDIDATES sid=%s", sid)
         logger.info("AUTO_AI_BUILDER_BYPASSED_ZERO_DEBT sid=%s", sid)
         logger.info("AUTO_AI_SKIPPED sid=%s reason=no_candidates", sid)
         payload["ai_index"] = []
         payload["skip_reason"] = "no_candidates"
+        runflow_step(
+            sid,
+            "merge",
+            "build",
+            status="skipped",
+            metrics={"packs": 0},
+            out={"reason": "no_candidates"},
+        )
         return payload
 
     try:
         _build_ai_packs(sid, runs_root)
-    except Exception:  # pragma: no cover - defensive logging
+    except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("AUTO_AI_BUILD_FAILED sid=%s", sid, exc_info=True)
         _cleanup_lock(payload, reason="build_failed")
+        runflow_step(
+            sid,
+            "merge",
+            "build",
+            status="error",
+            out={"error": exc.__class__.__name__, "msg": str(exc)},
+        )
+        runflow_end_stage(
+            sid,
+            "merge",
+            status="error",
+            summary={"error": exc.__class__.__name__, "phase": "build"},
+        )
         raise
 
     merge_paths = ensure_merge_paths(runs_root, sid, create=True)
@@ -478,11 +502,24 @@ def _merge_build_stage(payload: dict[str, object]) -> dict[str, object]:
                 index_path = legacy_index
     try:
         index_entries = _load_ai_index(index_path)
-    except Exception:  # pragma: no cover - defensive logging
+    except Exception as exc:  # pragma: no cover - defensive logging
         logger.error(
             "AUTO_AI_BUILD_INVALID_INDEX sid=%s path=%s", sid, index_path, exc_info=True
         )
         _cleanup_lock(payload, reason="build_invalid_index")
+        runflow_step(
+            sid,
+            "merge",
+            "build",
+            status="error",
+            out={"error": exc.__class__.__name__, "msg": str(exc)},
+        )
+        runflow_end_stage(
+            sid,
+            "merge",
+            status="error",
+            summary={"error": exc.__class__.__name__, "phase": "build"},
+        )
         raise
 
     payload["ai_index"] = index_entries
@@ -493,6 +530,16 @@ def _merge_build_stage(payload: dict[str, object]) -> dict[str, object]:
 
     logger.info("AI_PACKS_INDEX sid=%s path=%s count=%d", sid, index_path, len(index_entries))
     logger.info("AI_BUILD_END sid=%s packs=%d", sid, len(index_entries))
+
+    runflow_step(
+        sid,
+        "merge",
+        "build",
+        metrics={
+            "packs": len(index_entries),
+            "touched_accounts": len(touched),
+        },
+    )
     return payload
 
 
@@ -511,16 +558,42 @@ def _merge_send_stage(payload: dict[str, object]) -> dict[str, object]:
     if not index_entries:
         reason = str(payload.get("skip_reason") or "no_packs")
         logger.info("AI_SEND_SKIP sid=%s reason=%s", sid, reason)
+        runflow_step(
+            sid,
+            "merge",
+            "send",
+            status="skipped",
+            out={"reason": reason},
+        )
         return payload
 
     try:
         _send_ai_packs(sid, runs_root=runs_root)
-    except Exception:  # pragma: no cover - defensive logging
+    except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("AUTO_AI_SEND_FAILED sid=%s", sid, exc_info=True)
         _cleanup_lock(payload, reason="send_failed")
+        runflow_step(
+            sid,
+            "merge",
+            "send",
+            status="error",
+            out={"error": exc.__class__.__name__, "msg": str(exc)},
+        )
+        runflow_end_stage(
+            sid,
+            "merge",
+            status="error",
+            summary={"error": exc.__class__.__name__, "phase": "send"},
+        )
         raise
 
     logger.info("AI_SEND_END sid=%s", sid)
+    runflow_step(
+        sid,
+        "merge",
+        "send",
+        metrics={"packs": len(index_entries)},
+    )
     return payload
 
 
@@ -553,11 +626,24 @@ def ai_validation_requirements_step(
         stats = run_validation_requirements_for_all_accounts(
             sid, runs_root=runs_root_path
         )
-    except Exception:  # pragma: no cover - defensive logging
+    except Exception as exc:  # pragma: no cover - defensive logging
         logger.error(
             "AI_VALIDATION_REQUIREMENTS_FAILED sid=%s", sid, exc_info=True
         )
         _cleanup_lock(payload, reason="validation_requirements_failed")
+        runflow_step(
+            sid,
+            "validation",
+            "requirements",
+            status="error",
+            out={"error": exc.__class__.__name__, "msg": str(exc)},
+        )
+        runflow_end_stage(
+            sid,
+            "validation",
+            status="error",
+            summary={"error": exc.__class__.__name__, "phase": "requirements"},
+        )
         raise
 
     payload["validation_requirements"] = stats
@@ -707,11 +793,25 @@ def _merge_compact_stage(payload: dict[str, object]) -> dict[str, object]:
     if accounts_dir and accounts_dir.exists() and indices:
         try:
             _compact_accounts(accounts_dir, indices)
-        except Exception:  # pragma: no cover - defensive logging
+        except Exception as exc:  # pragma: no cover - defensive logging
             logger.error(
                 "AUTO_AI_COMPACT_FAILED sid=%s dir=%s", sid, accounts_dir, exc_info=True
             )
             _cleanup_lock(payload, reason="compact_failed")
+            runflow_step(
+                sid,
+                "merge",
+                "compact",
+                status="error",
+                metrics={"accounts": len(indices)},
+                out={"error": exc.__class__.__name__, "msg": str(exc)},
+            )
+            runflow_end_stage(
+                sid,
+                "merge",
+                status="error",
+                summary={"error": exc.__class__.__name__, "phase": "compact"},
+            )
             raise
 
     logger.info("AI_COMPACT_END sid=%s", sid)
@@ -722,6 +822,12 @@ def _merge_compact_stage(payload: dict[str, object]) -> dict[str, object]:
     payload["pairs"] = pairs_count
 
     logger.info("MERGE_STAGE_DONE sid=%s", sid)
+    runflow_step(
+        sid,
+        "merge",
+        "compact",
+        metrics={"packs": packs_count, "pairs": pairs_count},
+    )
     return payload
 
 
@@ -830,13 +936,32 @@ def validation_build_packs(
 
     try:
         results = build_validation_packs_for_run(sid, runs_root=runs_root)
-    except Exception:  # pragma: no cover - defensive logging
+    except Exception as exc:  # pragma: no cover - defensive logging
         logger.error("VALIDATION_BUILD_FAILED sid=%s", sid, exc_info=True)
+        runflow_step(
+            sid,
+            "validation",
+            "build",
+            status="error",
+            out={"error": exc.__class__.__name__, "msg": str(exc)},
+        )
+        runflow_end_stage(
+            sid,
+            "validation",
+            status="error",
+            summary={"error": exc.__class__.__name__, "phase": "build"},
+        )
         raise
 
     packs_written = sum(len(entries or []) for entries in results.values())
     payload["validation_packs"] = packs_written
     logger.info("VALIDATION_BUILD_DONE sid=%s packs=%d", sid, packs_written)
+    runflow_step(
+        sid,
+        "validation",
+        "build",
+        metrics={"packs": packs_written},
+    )
     return payload
 
 
@@ -856,6 +981,13 @@ def validation_send(self, prev: Mapping[str, object] | None) -> dict[str, object
         logger.info(
             "VALIDATION_SEND_SKIP sid=%s reason=index_missing path=%s", sid, index_path
         )
+        runflow_step(
+            sid,
+            "validation",
+            "send",
+            status="skipped",
+            out={"reason": "index_missing"},
+        )
         return payload
 
     logger.info("VALIDATION_SEND_START sid=%s path=%s", sid, index_path)
@@ -867,11 +999,48 @@ def validation_send(self, prev: Mapping[str, object] | None) -> dict[str, object
             logger.error(
                 "VALIDATION_SEND_FAILED sid=%s path=%s", sid, index_path, exc_info=True
             )
+            runflow_step(
+                sid,
+                "validation",
+                "send",
+                status="error",
+                out={"error": exc.__class__.__name__, "msg": str(exc)},
+            )
+            runflow_end_stage(
+                sid,
+                "validation",
+                status="error",
+                summary={"error": exc.__class__.__name__, "phase": "send"},
+            )
             raise
         send_validation_packs(index_path)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error(
+            "VALIDATION_SEND_FAILED sid=%s path=%s", sid, index_path, exc_info=True
+        )
+        runflow_step(
+            sid,
+            "validation",
+            "send",
+            status="error",
+            out={"error": exc.__class__.__name__, "msg": str(exc)},
+        )
+        runflow_end_stage(
+            sid,
+            "validation",
+            status="error",
+            summary={"error": exc.__class__.__name__, "phase": "send"},
+        )
+        raise
 
     payload["validation_sent"] = True
     logger.info("VALIDATION_SEND_DONE sid=%s", sid)
+    runflow_step(
+        sid,
+        "validation",
+        "send",
+        metrics={"packs": int(payload.get("validation_packs", 0) or 0)},
+    )
     return payload
 
 
@@ -891,20 +1060,46 @@ def validation_compact(self, prev: Mapping[str, object] | None) -> dict[str, obj
         logger.info(
             "VALIDATION_COMPACT_SKIP sid=%s reason=index_missing path=%s", sid, index_path
         )
+        runflow_step(
+            sid,
+            "validation",
+            "compact",
+            status="skipped",
+            out={"reason": "index_missing"},
+        )
         return payload
 
     logger.info("VALIDATION_COMPACT_START sid=%s", sid)
 
     try:
         rewrite_index_to_canonical_layout(index_path, runs_root=runs_root)
-    except Exception:  # pragma: no cover - defensive logging
+    except Exception as exc:  # pragma: no cover - defensive logging
         logger.error(
             "VALIDATION_COMPACT_FAILED sid=%s path=%s", sid, index_path, exc_info=True
+        )
+        runflow_step(
+            sid,
+            "validation",
+            "compact",
+            status="error",
+            out={"error": exc.__class__.__name__, "msg": str(exc)},
+        )
+        runflow_end_stage(
+            sid,
+            "validation",
+            status="error",
+            summary={"error": exc.__class__.__name__, "phase": "compact"},
         )
         raise
 
     payload["validation_compacted"] = True
     logger.info("VALIDATION_COMPACT_DONE sid=%s", sid)
+    runflow_step(
+        sid,
+        "validation",
+        "compact",
+        metrics={"compacted": True},
+    )
     return payload
 
 

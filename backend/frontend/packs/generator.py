@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from backend.core.io.json_io import _atomic_write_json
+from backend.core.runflow import runflow_end_stage, runflow_start_stage, runflow_step
 
 log = logging.getLogger(__name__)
 
@@ -223,146 +224,191 @@ def generate_frontend_packs_for_run(
     index_path = frontend_dir / "index.json"
     packs_dir_str = str(frontend_dir.absolute())
 
-    if not _frontend_packs_enabled():
-        log.info("PACKGEN_FRONTEND_SKIP sid=%s", sid)
-        return {
-            "status": "skipped",
-            "packs_count": 0,
-            "empty_ok": True,
-            "built": False,
-            "packs_dir": packs_dir_str,
-            "last_built_at": None,
-        }
+    runflow_start_stage(sid, "frontend")
 
-    accounts_output_dir.mkdir(parents=True, exist_ok=True)
-    responses_dir.mkdir(parents=True, exist_ok=True)
+    def _log_step(
+        status: str = "success",
+        *,
+        metrics: Mapping[str, Any] | None = None,
+        out: Mapping[str, Any] | None = None,
+    ) -> None:
+        runflow_step(
+            sid,
+            "frontend",
+            "generate",
+            status=status,
+            metrics=dict(metrics) if metrics else None,
+            out=dict(out) if out else None,
+        )
 
-    if not accounts_dir.is_dir():
+    try:
+        if not _frontend_packs_enabled():
+            log.info("PACKGEN_FRONTEND_SKIP sid=%s", sid)
+            _log_step(
+                "skipped",
+                metrics={"packs": 0},
+                out={"reason": "disabled"},
+            )
+            return {
+                "status": "skipped",
+                "packs_count": 0,
+                "empty_ok": True,
+                "built": False,
+                "packs_dir": packs_dir_str,
+                "last_built_at": None,
+            }
+
+        accounts_output_dir.mkdir(parents=True, exist_ok=True)
+        responses_dir.mkdir(parents=True, exist_ok=True)
+
+        if not accounts_dir.is_dir():
+            generated_at = _now_iso()
+            payload = {
+                "sid": sid,
+                "generated_at": generated_at,
+                "accounts": [],
+                "packs_count": 0,
+                "questions": _QUESTION_SET,
+            }
+            _atomic_write_json(index_path, payload)
+            _log_step(
+                metrics={"packs": 0},
+                out={"reason": "no_accounts"},
+            )
+            return {
+                "status": "success",
+                "packs_count": 0,
+                "empty_ok": True,
+                "built": True,
+                "packs_dir": packs_dir_str,
+                "last_built_at": generated_at,
+            }
+
+        if not force and index_path.exists():
+            existing = _load_json(index_path)
+            if existing:
+                packs_count = int(existing.get("packs_count", 0) or 0)
+                if not packs_count:
+                    accounts = existing.get("accounts")
+                    if isinstance(accounts, list):
+                        packs_count = len(accounts)
+                log.info(
+                    "FRONTEND_PACKS_EXISTS sid=%s path=%s", sid, index_path
+                )
+                generated_at = existing.get("generated_at")
+                last_built = str(generated_at) if isinstance(generated_at, str) else None
+                _log_step(
+                    metrics={"packs": packs_count},
+                    out={"cache_hit": True},
+                )
+                return {
+                    "status": "success",
+                    "packs_count": packs_count,
+                    "empty_ok": packs_count == 0,
+                    "built": True,
+                    "packs_dir": packs_dir_str,
+                    "last_built_at": last_built,
+                }
+
+        account_dirs = [path for path in accounts_dir.iterdir() if path.is_dir()]
+
+        packs: list[dict[str, Any]] = []
+        pack_count = 0
+
+        for account_dir in sorted(account_dirs, key=_account_sort_key):
+            summary = _load_json(account_dir / "summary.json")
+            bureaus_payload = _load_json(account_dir / "bureaus.json")
+
+            if not summary or not bureaus_payload:
+                continue
+
+            bureaus: dict[str, Mapping[str, Any]] = {
+                bureau: payload
+                for bureau, payload in bureaus_payload.items()
+                if isinstance(payload, Mapping)
+            }
+            if not bureaus:
+                continue
+
+            account_id = str(summary.get("account_id") or account_dir.name)
+            labels = _extract_summary_labels(summary)
+            bureau_summary = _prepare_bureau_payload(bureaus)
+            first_bureau = next(iter(bureaus.values()), {})
+
+            pack_payload = {
+                "sid": sid,
+                "account_id": account_id,
+                "creditor_name": labels.get("creditor_name")
+                or _extract_text(first_bureau.get("creditor_name")),
+                "account_type": labels.get("account_type")
+                or _extract_text(first_bureau.get("account_type")),
+                "status": labels.get("status")
+                or _extract_text(first_bureau.get("account_status")),
+                "last4": bureau_summary["last4"],
+                "balance_owed": bureau_summary["balance_owed"],
+                "dates": bureau_summary["dates"],
+                "bureau_badges": bureau_summary["bureau_badges"],
+                "questions": _QUESTION_SET,
+            }
+
+            account_dirname = _safe_account_dirname(account_id, account_dir.name)
+            pack_dir = accounts_output_dir / account_dirname
+            pack_dir.mkdir(parents=True, exist_ok=True)
+            pack_path = pack_dir / "pack.json"
+            _atomic_write_json(pack_path, pack_payload)
+
+            packs.append(
+                {
+                    "account_id": account_id,
+                    "pack_path": str(pack_path.relative_to(run_dir)),
+                    "creditor_name": pack_payload["creditor_name"],
+                    "account_type": pack_payload["account_type"],
+                    "status": pack_payload["status"],
+                    "bureau_badges": pack_payload["bureau_badges"],
+                }
+            )
+            pack_count += 1
+
         generated_at = _now_iso()
-        payload = {
+        index_payload = {
             "sid": sid,
             "generated_at": generated_at,
-            "accounts": [],
-            "packs_count": 0,
+            "accounts": packs,
+            "packs_count": pack_count,
             "questions": _QUESTION_SET,
         }
-        _atomic_write_json(index_path, payload)
+
+        _atomic_write_json(index_path, index_payload)
+
+        log.info(
+            "FRONTEND_PACKS_GENERATED sid=%s packs=%d path=%s",
+            sid,
+            pack_count,
+            index_path,
+        )
+
+        _log_step(metrics={"packs": pack_count})
+
         return {
             "status": "success",
-            "packs_count": 0,
-            "empty_ok": True,
+            "packs_count": pack_count,
+            "empty_ok": pack_count == 0,
             "built": True,
             "packs_dir": packs_dir_str,
             "last_built_at": generated_at,
         }
-
-    if not force and index_path.exists():
-        existing = _load_json(index_path)
-        if existing:
-            packs_count = int(existing.get("packs_count", 0) or 0)
-            if not packs_count:
-                accounts = existing.get("accounts")
-                if isinstance(accounts, list):
-                    packs_count = len(accounts)
-            log.info(
-                "FRONTEND_PACKS_EXISTS sid=%s path=%s", sid, index_path
-            )
-            generated_at = existing.get("generated_at")
-            last_built = str(generated_at) if isinstance(generated_at, str) else None
-            return {
-                "status": "success",
-                "packs_count": packs_count,
-                "empty_ok": packs_count == 0,
-                "built": True,
-                "packs_dir": packs_dir_str,
-                "last_built_at": last_built,
-            }
-
-    account_dirs = [path for path in accounts_dir.iterdir() if path.is_dir()]
-
-    packs: list[dict[str, Any]] = []
-    pack_count = 0
-
-    for account_dir in sorted(account_dirs, key=_account_sort_key):
-        summary = _load_json(account_dir / "summary.json")
-        bureaus_payload = _load_json(account_dir / "bureaus.json")
-
-        if not summary or not bureaus_payload:
-            continue
-
-        bureaus: dict[str, Mapping[str, Any]] = {
-            bureau: payload
-            for bureau, payload in bureaus_payload.items()
-            if isinstance(payload, Mapping)
-        }
-        if not bureaus:
-            continue
-
-        account_id = str(summary.get("account_id") or account_dir.name)
-        labels = _extract_summary_labels(summary)
-        bureau_summary = _prepare_bureau_payload(bureaus)
-        first_bureau = next(iter(bureaus.values()), {})
-
-        pack_payload = {
-            "sid": sid,
-            "account_id": account_id,
-            "creditor_name": labels.get("creditor_name")
-            or _extract_text(first_bureau.get("creditor_name")),
-            "account_type": labels.get("account_type")
-            or _extract_text(first_bureau.get("account_type")),
-            "status": labels.get("status")
-            or _extract_text(first_bureau.get("account_status")),
-            "last4": bureau_summary["last4"],
-            "balance_owed": bureau_summary["balance_owed"],
-            "dates": bureau_summary["dates"],
-            "bureau_badges": bureau_summary["bureau_badges"],
-            "questions": _QUESTION_SET,
-        }
-
-        account_dirname = _safe_account_dirname(account_id, account_dir.name)
-        pack_dir = accounts_output_dir / account_dirname
-        pack_dir.mkdir(parents=True, exist_ok=True)
-        pack_path = pack_dir / "pack.json"
-        _atomic_write_json(pack_path, pack_payload)
-
-        packs.append(
-            {
-                "account_id": account_id,
-                "pack_path": str(pack_path.relative_to(run_dir)),
-                "creditor_name": pack_payload["creditor_name"],
-                "account_type": pack_payload["account_type"],
-                "status": pack_payload["status"],
-                "bureau_badges": pack_payload["bureau_badges"],
-            }
+    except Exception as exc:
+        _log_step(
+            "error",
+            out={"error": exc.__class__.__name__, "msg": str(exc)},
         )
-        pack_count += 1
-
-    generated_at = _now_iso()
-    index_payload = {
-        "sid": sid,
-        "generated_at": generated_at,
-        "accounts": packs,
-        "packs_count": pack_count,
-        "questions": _QUESTION_SET,
-    }
-
-    _atomic_write_json(index_path, index_payload)
-
-    log.info(
-        "FRONTEND_PACKS_GENERATED sid=%s packs=%d path=%s",
-        sid,
-        pack_count,
-        index_path,
-    )
-
-    return {
-        "status": "success",
-        "packs_count": pack_count,
-        "empty_ok": pack_count == 0,
-        "built": True,
-        "packs_dir": packs_dir_str,
-        "last_built_at": generated_at,
-    }
+        runflow_end_stage(
+            sid,
+            "frontend",
+            status="error",
+            summary={"error": exc.__class__.__name__, "phase": "generate"},
+        )
+        raise
 
 
 __all__ = ["generate_frontend_packs_for_run"]

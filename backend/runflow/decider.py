@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Literal, Mapping, Optional
 
 from backend.core.io.json_io import _atomic_write_json
+from backend.core.runflow import runflow_end_stage
 
 StageStatus = Literal["success", "error"]
 RunState = Literal[
@@ -158,6 +159,18 @@ def record_stage(
         status,
         dict(counts or {}),
         empty_ok,
+    )
+
+    summary_payload: dict[str, Any] = {str(key): value for key, value in (counts or {}).items()}
+    summary_payload["empty_ok"] = bool(empty_ok)
+    if notes:
+        summary_payload["notes"] = str(notes)
+
+    runflow_end_stage(
+        sid,
+        stage,
+        status=status,
+        summary=summary_payload if summary_payload else None,
     )
 
     _atomic_write_json(path, data)

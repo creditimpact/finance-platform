@@ -866,6 +866,103 @@ def test_build_summary_payload_flags_last_verified_outside_tolerance(monkeypatch
     _clear_tolerance_state()
 
 
+def _write_date_convention(runs_root: Path, sid: str, convention: str = "MDY") -> None:
+    trace_dir = runs_root / sid / "trace"
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    (trace_dir / "date_convention.json").write_text(
+        json.dumps({"convention": convention}),
+        encoding="utf-8",
+    )
+
+
+def test_integration_last_verified_within_tolerance_has_no_finding(tmp_path: Path) -> None:
+    _clear_tolerance_state()
+    try:
+        sid = "SID_LV_INTEGRATION_WITHIN"
+        _write_date_convention(tmp_path, sid)
+
+        bureaus = {
+            "transunion": {"last_verified": "2024-03-01"},
+            "experian": {"last_verified": "03/04/2024"},
+            "equifax": {"last_verified": "2024-03-04"},
+        }
+
+        requirements, _, field_consistency = build_validation_requirements(bureaus)
+        assert requirements == []
+
+        payload = build_summary_payload(
+            requirements,
+            field_consistency=field_consistency,
+            raw_value_provider=_raw_value_provider_for_account_factory(bureaus),
+            sid=sid,
+            runs_root=tmp_path,
+        )
+
+        assert payload["findings"] == []
+        assert payload.get("tolerance", {}) == {}
+    finally:
+        _clear_tolerance_state()
+
+
+def test_integration_last_verified_outside_tolerance_raises_finding(tmp_path: Path) -> None:
+    _clear_tolerance_state()
+    try:
+        sid = "SID_LV_INTEGRATION_MISMATCH"
+        _write_date_convention(tmp_path, sid)
+
+        bureaus = {
+            "transunion": {"last_verified": "2024-03-01"},
+            "experian": {"last_verified": "03/09/2024"},
+            "equifax": {"last_verified": "2024-03-01"},
+        }
+
+        requirements, _, field_consistency = build_validation_requirements(bureaus)
+        assert [entry["field"] for entry in requirements] == ["last_verified"]
+
+        payload = build_summary_payload(
+            requirements,
+            field_consistency=field_consistency,
+            raw_value_provider=_raw_value_provider_for_account_factory(bureaus),
+            sid=sid,
+            runs_root=tmp_path,
+        )
+
+        assert len(payload["findings"]) == 1
+        finding = payload["findings"][0]
+        assert finding["field"] == "last_verified"
+        assert finding["reason_code"] == "C4_TWO_MATCH_ONE_DIFF"
+    finally:
+        _clear_tolerance_state()
+
+
+def test_integration_account_rating_synonyms_produce_no_finding(tmp_path: Path) -> None:
+    _clear_tolerance_state()
+    try:
+        sid = "SID_RATING_INTEGRATION"
+        _write_date_convention(tmp_path, sid)
+
+        bureaus = {
+            "transunion": {"account_rating": "Paid as agreed"},
+            "experian": {"account_rating": "current"},
+            "equifax": {"account_rating": "PAID ON TIME"},
+        }
+
+        requirements, _, field_consistency = build_validation_requirements(bureaus)
+        assert requirements == []
+
+        payload = build_summary_payload(
+            requirements,
+            field_consistency=field_consistency,
+            raw_value_provider=_raw_value_provider_for_account_factory(bureaus),
+            sid=sid,
+            runs_root=tmp_path,
+        )
+
+        assert payload["findings"] == []
+    finally:
+        _clear_tolerance_state()
+
+
 def test_build_summary_payload_records_tolerance_notes_when_debug(monkeypatch, tmp_path):
     from backend.core.logic import consistency as consistency_mod
 

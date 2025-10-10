@@ -173,68 +173,60 @@ def decide_next(sid: str, runs_root: Optional[str | Path] = None) -> dict[str, s
 
     next_action = "run_validation"
     reason = "validation_pending"
-    new_state: RunState = data.get("run_state", "INIT")  # type: ignore[assignment]
+    new_state: RunState = "VALIDATING"
+
+    def _set(next_value: str, reason_value: str, state_value: RunState) -> None:
+        nonlocal next_action, reason, new_state
+        next_action = next_value
+        reason = reason_value
+        new_state = state_value
 
     for stage_name, stage_info in stages.items():
+        if not isinstance(stage_info, Mapping):
+            continue
         status = str(stage_info.get("status") or "")
         if status == "error":
-            next_action = "stop_error"
-            reason = f"{stage_name}_error"
-            new_state = "ERROR"
+            _set("stop_error", f"{stage_name}_error", "ERROR")
             break
     else:
         merge_stage = stages.get("merge")
-        total_accounts = _coerce_int(merge_stage.get("count")) if isinstance(merge_stage, Mapping) else None
-        if total_accounts == 0:
-            next_action = "complete_no_action"
-            reason = "no_accounts"
-            new_state = "COMPLETE_NO_ACTION"
+        accounts_count: Optional[int] = None
+        if isinstance(merge_stage, Mapping):
+            for key in ("count", "accounts_count", "total_accounts"):
+                accounts_count = _coerce_int(merge_stage.get(key))
+                if accounts_count is not None:
+                    break
+
+        if accounts_count == 0:
+            _set("complete_no_action", "no_accounts", "COMPLETE_NO_ACTION")
         else:
             validation_stage = stages.get("validation")
-            validation_status = ""
-            findings_count: Optional[int] = None
-            empty_ok = False
-            if isinstance(validation_stage, Mapping):
+            if not isinstance(validation_stage, Mapping):
+                _set("run_validation", "validation_pending", "VALIDATING")
+            else:
                 validation_status = str(validation_stage.get("status") or "")
                 findings_count = _coerce_int(validation_stage.get("findings_count"))
-                if findings_count is None and "findings_count" in validation_stage:
+                if findings_count is None:
                     findings_count = 0
-                empty_ok = bool(validation_stage.get("empty_ok"))
 
-            frontend_stage = stages.get("frontend")
-            frontend_status = ""
-            if isinstance(frontend_stage, Mapping):
-                frontend_status = str(frontend_stage.get("status") or "")
-
-            if findings_count is not None and findings_count > 0:
-                if frontend_status == "success":
-                    next_action = "await_input"
-                    reason = "frontend_completed"
-                    new_state = "AWAITING_CUSTOMER_INPUT"
-                else:
-                    next_action = "gen_frontend_packs"
-                    reason = "validation_has_findings"
-                    new_state = "VALIDATING"
-            elif validation_status != "success":
-                next_action = "run_validation"
                 if validation_status == "error":
-                    next_action = "stop_error"
-                    reason = "validation_error"
-                    new_state = "ERROR"
+                    _set("stop_error", "validation_error", "ERROR")
+                elif validation_status != "success":
+                    _set("run_validation", "validation_pending", "VALIDATING")
+                elif findings_count <= 0:
+                    _set("complete_no_action", "validation_no_findings", "COMPLETE_NO_ACTION")
                 else:
-                    reason = "validation_pending"
-                    new_state = "VALIDATING"
-            elif (findings_count in (0, None)) and empty_ok:
-                next_action = "complete_no_action"
-                reason = "validation_empty_ok"
-                new_state = "COMPLETE_NO_ACTION"
-            else:
-                if frontend_status == "success":
-                    reason = "frontend_completed"
-                else:
-                    reason = "validation_complete"
-                next_action = "await_input"
-                new_state = "AWAITING_CUSTOMER_INPUT"
+                    frontend_stage = stages.get("frontend")
+                    if not isinstance(frontend_stage, Mapping):
+                        _set("gen_frontend_packs", "validation_has_findings", "VALIDATING")
+                    else:
+                        frontend_status = str(frontend_stage.get("status") or "")
+                        if frontend_status == "error":
+                            _set("stop_error", "frontend_error", "ERROR")
+                        elif frontend_status == "success":
+                            _set("await_input", "frontend_completed", "AWAITING_CUSTOMER_INPUT")
+                        else:
+                            _set("gen_frontend_packs", "validation_has_findings", "VALIDATING")
 
     if data.get("run_state") != new_state:
         data["run_state"] = new_state

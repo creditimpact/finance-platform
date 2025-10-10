@@ -11,55 +11,9 @@ def _load_runflow(tmp_root: Path, sid: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_decide_next_requests_validation_when_pending(tmp_path):
+def test_decide_next_completes_when_no_accounts(tmp_path):
     runs_root = tmp_path / "runs"
-    sid = "S1"
-
-    record_stage(
-        sid,
-        "merge",
-        status="success",
-        counts={"count": 2},
-        empty_ok=False,
-        runs_root=runs_root,
-    )
-
-    decision = decide_next(sid, runs_root=runs_root)
-    assert decision["next"] == "run_validation"
-    data = _load_runflow(runs_root, sid)
-    assert data["run_state"] == "VALIDATING"
-
-
-def test_decide_next_triggers_frontend_when_findings(tmp_path):
-    runs_root = tmp_path / "runs"
-    sid = "S2"
-
-    record_stage(
-        sid,
-        "merge",
-        status="success",
-        counts={"count": 1},
-        empty_ok=False,
-        runs_root=runs_root,
-    )
-    record_stage(
-        sid,
-        "validation",
-        status="success",
-        counts={"findings_count": 3},
-        empty_ok=False,
-        runs_root=runs_root,
-    )
-
-    decision = decide_next(sid, runs_root=runs_root)
-    assert decision["next"] == "gen_frontend_packs"
-    data = _load_runflow(runs_root, sid)
-    assert data["run_state"] == "VALIDATING"
-
-
-def test_decide_next_completes_when_empty_ok(tmp_path):
-    runs_root = tmp_path / "runs"
-    sid = "S3"
+    sid = "S-no-accounts"
 
     record_stage(
         sid,
@@ -76,15 +30,15 @@ def test_decide_next_completes_when_empty_ok(tmp_path):
     assert data["run_state"] == "COMPLETE_NO_ACTION"
 
 
-def test_decide_next_moves_to_await_after_frontend_success(tmp_path):
+def test_decide_next_completes_when_validation_has_no_findings(tmp_path):
     runs_root = tmp_path / "runs"
-    sid = "S4"
+    sid = "S-no-findings"
 
     record_stage(
         sid,
         "merge",
         status="success",
-        counts={"count": 1},
+        counts={"count": 2},
         empty_ok=False,
         runs_root=runs_root,
     )
@@ -92,20 +46,72 @@ def test_decide_next_moves_to_await_after_frontend_success(tmp_path):
         sid,
         "validation",
         status="success",
-        counts={"findings_count": 2},
-        empty_ok=False,
-        runs_root=runs_root,
-    )
-    record_stage(
-        sid,
-        "frontend",
-        status="success",
-        counts={"packs_count": 1},
+        counts={"findings_count": 0},
         empty_ok=False,
         runs_root=runs_root,
     )
 
     decision = decide_next(sid, runs_root=runs_root)
-    assert decision["next"] == "await_input"
+    assert decision["next"] == "complete_no_action"
+    data = _load_runflow(runs_root, sid)
+    assert data["run_state"] == "COMPLETE_NO_ACTION"
+
+
+def test_decide_next_runs_frontend_then_moves_to_await_input(tmp_path):
+    runs_root = tmp_path / "runs"
+    sid = "S-with-findings"
+
+    record_stage(
+        sid,
+        "merge",
+        status="success",
+        counts={"count": 2},
+        empty_ok=False,
+        runs_root=runs_root,
+    )
+    record_stage(
+        sid,
+        "validation",
+        status="success",
+        counts={"findings_count": 5},
+        empty_ok=False,
+        runs_root=runs_root,
+    )
+
+    decision = decide_next(sid, runs_root=runs_root)
+    assert decision["next"] == "gen_frontend_packs"
+    data = _load_runflow(runs_root, sid)
+    assert data["run_state"] == "VALIDATING"
+
+    record_stage(
+        sid,
+        "frontend",
+        status="success",
+        counts={"packs_count": 2},
+        empty_ok=False,
+        runs_root=runs_root,
+    )
+
+    follow_up = decide_next(sid, runs_root=runs_root)
+    assert follow_up["next"] == "await_input"
     data = _load_runflow(runs_root, sid)
     assert data["run_state"] == "AWAITING_CUSTOMER_INPUT"
+
+
+def test_decide_next_stops_on_error(tmp_path):
+    runs_root = tmp_path / "runs"
+    sid = "S-error"
+
+    record_stage(
+        sid,
+        "validation",
+        status="error",
+        counts={"findings_count": 1},
+        empty_ok=False,
+        runs_root=runs_root,
+    )
+
+    decision = decide_next(sid, runs_root=runs_root)
+    assert decision["next"] == "stop_error"
+    data = _load_runflow(runs_root, sid)
+    assert data["run_state"] == "ERROR"

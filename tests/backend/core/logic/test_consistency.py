@@ -148,6 +148,57 @@ def test_date_tolerance_allows_small_differences_for_last_payment() -> None:
     assert compute_inconsistent_fields(bureaus_json) == {}
 
 
+def test_last_verified_within_tolerance_is_unanimous() -> None:
+    bureaus_json = {
+        "transunion": {"last_verified": "2024-03-01"},
+        "experian": {"last_verified": "03/04/2024"},
+        "equifax": {"last_verified": "2024-03-06"},
+    }
+
+    consistency = compute_field_consistency(bureaus_json)
+
+    assert consistency["last_verified"]["consensus"] == "unanimous"
+    assert compute_inconsistent_fields(bureaus_json) == {}
+
+
+def test_last_verified_beyond_tolerance_detected_as_mismatch() -> None:
+    bureaus_json = {
+        "transunion": {"last_verified": "2024-03-01"},
+        "experian": {"last_verified": "03/08/2024"},
+        "equifax": {"last_verified": "2024-03-01"},
+    }
+
+    consistency = compute_field_consistency(bureaus_json)
+
+    assert consistency["last_verified"]["consensus"] == "majority"
+    inconsistencies = compute_inconsistent_fields(bureaus_json)
+    assert "last_verified" in inconsistencies
+
+
+def test_last_verified_normalizes_with_mdy_convention() -> None:
+    bureaus_json = {
+        "transunion": {"last_verified": "04/05/2024"},
+    }
+
+    with override_validation_context({"convention": "MDY", "month_language": "en"}):
+        consistency = compute_field_consistency(bureaus_json)
+
+    normalized = consistency["last_verified"]["normalized"]
+    assert normalized["transunion"] == "2024-04-05"
+
+
+def test_last_verified_normalizes_with_dmy_convention() -> None:
+    bureaus_json = {
+        "transunion": {"last_verified": "04/05/2024"},
+    }
+
+    with override_validation_context({"convention": "DMY", "month_language": "en"}):
+        consistency = compute_field_consistency(bureaus_json)
+
+    normalized = consistency["last_verified"]["normalized"]
+    assert normalized["transunion"] == "2024-05-04"
+
+
 def test_normalize_date_respects_dmy_convention() -> None:
     bureaus_json = {
         "transunion": {"date_opened": "1/2/23"},

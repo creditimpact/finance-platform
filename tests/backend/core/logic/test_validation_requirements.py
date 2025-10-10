@@ -774,6 +774,98 @@ def test_build_summary_payload_applies_date_tolerance(monkeypatch, tmp_path):
     _clear_tolerance_state()
 
 
+def test_build_summary_payload_applies_last_verified_tolerance(monkeypatch, tmp_path):
+    from backend.core.logic import consistency as consistency_mod
+
+    monkeypatch.setattr(consistency_mod, "_DATE_TOLERANCE_DAYS", 0, raising=False)
+    _clear_tolerance_state()
+
+    sid = "SIDLASTVERIFIED"
+    run_dir = tmp_path / sid
+    convention_path = run_dir / "trace" / "date_convention.json"
+    convention_path.parent.mkdir(parents=True, exist_ok=True)
+    convention_path.write_text("{\"convention\": \"MDY\"}", encoding="utf-8")
+
+    bureaus = {
+        "transunion": {"last_verified": "2024-03-01"},
+        "experian": {"last_verified": "03/04/2024"},
+        "equifax": {"last_verified": "2024-03-02"},
+    }
+
+    requirements = [
+        {
+            "field": "last_verified",
+            "category": "dates",
+            "min_days": 10,
+            "documents": [],
+            "strength": "medium",
+            "ai_needed": False,
+            "bureaus": ["equifax", "experian", "transunion"],
+        }
+    ]
+
+    field_consistency = compute_field_consistency(dict(bureaus))
+    payload = build_summary_payload(
+        requirements,
+        field_consistency=field_consistency,
+        raw_value_provider=_raw_value_provider_for_account_factory(bureaus),
+        sid=sid,
+        runs_root=tmp_path,
+    )
+
+    assert payload["findings"] == []
+    assert payload.get("tolerance", {}).get("suppressed_fields") == ["last_verified"]
+    assert "tolerance_notes" not in payload
+    _clear_tolerance_state()
+
+
+def test_build_summary_payload_flags_last_verified_outside_tolerance(monkeypatch, tmp_path):
+    from backend.core.logic import consistency as consistency_mod
+
+    monkeypatch.setattr(consistency_mod, "_DATE_TOLERANCE_DAYS", 0, raising=False)
+    _clear_tolerance_state()
+
+    sid = "SIDLASTVERIFIEDMISS"
+    run_dir = tmp_path / sid
+    convention_path = run_dir / "trace" / "date_convention.json"
+    convention_path.parent.mkdir(parents=True, exist_ok=True)
+    convention_path.write_text("{\"convention\": \"MDY\"}", encoding="utf-8")
+
+    bureaus = {
+        "transunion": {"last_verified": "2024-03-01"},
+        "experian": {"last_verified": "03/09/2024"},
+        "equifax": {"last_verified": "2024-03-01"},
+    }
+
+    requirements = [
+        {
+            "field": "last_verified",
+            "category": "dates",
+            "min_days": 10,
+            "documents": [],
+            "strength": "medium",
+            "ai_needed": False,
+            "bureaus": ["equifax", "experian", "transunion"],
+        }
+    ]
+
+    field_consistency = compute_field_consistency(dict(bureaus))
+    payload = build_summary_payload(
+        requirements,
+        field_consistency=field_consistency,
+        raw_value_provider=_raw_value_provider_for_account_factory(bureaus),
+        sid=sid,
+        runs_root=tmp_path,
+    )
+
+    assert payload.get("tolerance", {}) == {}
+    assert len(payload["findings"]) == 1
+    finding = payload["findings"][0]
+    assert finding["field"] == "last_verified"
+    assert finding["reason_code"] == "C4_TWO_MATCH_ONE_DIFF"
+    _clear_tolerance_state()
+
+
 def test_build_summary_payload_records_tolerance_notes_when_debug(monkeypatch, tmp_path):
     from backend.core.logic import consistency as consistency_mod
 

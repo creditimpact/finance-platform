@@ -419,6 +419,7 @@ _DATE_TOLERANT_FIELDS = {
     "date_of_last_activity",
     "date_reported",
     "last_payment",
+    "last_verified",
 }
 
 

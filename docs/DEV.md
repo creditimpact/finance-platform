@@ -112,6 +112,21 @@ manifest exists. `backend.validation.send` reads only the manifest, prepares the
 result directories if necessary, and writes the model responses next to the
 referenced result paths.
 
+## Account number validation (deterministic comparator)
+
+The validation pipeline now routes `account_number_display` comparisons through
+the same merge comparator that powers adjudication. This keeps validation and
+merge aligned without inventing a separate tolerance layer. The comparator’s
+`match_level` drives deterministic outcomes — masked pairs such as
+`****1234` vs `1234` resolve cleanly, while two distinct full numbers that only
+share the last four digits are marked mismatched.
+
+- **No tolerance window.** Account numbers are treated as pure strings; the
+  comparator alone decides whether they agree or conflict.
+- **Rollback lever.** `VALIDATION_USE_LEGACY_ACCOUNT_NUMBER_COMPARE` (default
+  `0`) keeps the new path enabled. Temporarily flip it to `1` if we need to
+  revert to the legacy behavior during rollout.
+
 ### Expected command output
 
 Successful manifest check:

@@ -43,6 +43,7 @@ from backend.core.logic.reason_classifier import classify_reason, decide_send_to
 from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.telemetry import metrics
 from backend.validation.decision_matrix import decide_default
+from backend.core.merge.acctnum import acctnum_level, acctnum_match_level
 from backend.prevalidation import read_date_convention
 
 tolerance_logger = logging.getLogger("backend.validation.tolerance")
@@ -82,6 +83,18 @@ _FALLBACK_DECISIONS: Mapping[str, str] = {
 }
 
 build_validation_pack_for_account: Callable[..., Sequence[str]] | None = None
+
+_ACCTCHECK_ENV_FLAG = "VALIDATION_ACCTCHECK_LOG"
+_ACCOUNT_NUMBER_PAIR_ORDER: tuple[tuple[str, str, str], ...] = (
+    ("Eq-Ex", "equifax", "experian"),
+    ("Eq-Tu", "equifax", "transunion"),
+    ("Ex-Tu", "experian", "transunion"),
+)
+_ACCOUNT_NUMBER_BUREAU_LABELS: Mapping[str, str] = {
+    "equifax": "Eq",
+    "experian": "Ex",
+    "transunion": "Tu",
+}
 
 
 def _is_dry_run_enabled() -> bool:
@@ -1332,6 +1345,115 @@ def _value_is_missing(value: Any) -> bool:
     return False
 
 
+def _account_number_letters(value: Any) -> str:
+    if value is None:
+        return ""
+    return "".join(ch for ch in str(value) if ch.isalpha()).upper()
+
+
+def _account_number_pair_metrics(a_raw: Any, b_raw: Any) -> tuple[str, str]:
+    left = "" if _value_is_missing(a_raw) else str(a_raw or "")
+    right = "" if _value_is_missing(b_raw) else str(b_raw or "")
+
+    visible_level, visible_debug = acctnum_match_level(left, right)
+    if visible_level == "exact_or_known_match":
+        return visible_level, "match"
+
+    if (visible_debug or {}).get("why") == "visible_digits_conflict":
+        strict_level, strict_debug = acctnum_level(left, right)
+        strict_reason = (strict_debug or {}).get("why", "")
+        if strict_reason:
+            if strict_reason in {"digit_conflict", "alnum_conflict"}:
+                return strict_level, "conflict"
+        return strict_level, "conflict"
+
+    strict_level, strict_debug = acctnum_level(left, right)
+    if strict_level == "exact_or_known_match":
+        return strict_level, "match"
+
+    strict_reason = (strict_debug or {}).get("why", "")
+    if strict_reason in {"digit_conflict", "alnum_conflict"}:
+        return strict_level, "conflict"
+
+    if strict_reason == "empty":
+        letters_left = _account_number_letters(left)
+        letters_right = _account_number_letters(right)
+        if letters_left and letters_right and letters_left != letters_right:
+            return strict_level, "conflict"
+
+    return strict_level, "insufficient"
+
+
+def _sanitize_account_number_value(value: Any) -> str | None:
+    if isinstance(value, Mapping):
+        mask_class = value.get("mask_class")
+        last4 = value.get("last4")
+        parts: list[str] = []
+        if mask_class:
+            parts.append(str(mask_class))
+        if last4:
+            digits = str(last4)
+            if digits:
+                parts.append(digits[-4:])
+        if parts:
+            return "/".join(parts)
+    return None
+
+
+def _account_number_log_enabled() -> bool:
+    return os.getenv(_ACCTCHECK_ENV_FLAG, "1") != "0"
+
+
+def _emit_account_number_check_log(
+    sid: str | None,
+    normalized_map: Mapping[str, Any],
+    raw_map: Mapping[str, Any],
+) -> None:
+    sid_value = sid or ""
+    pairs: list[str] = []
+    relations: list[str] = []
+    decisions: list[str] = []
+
+    for label, left_key, right_key in _ACCOUNT_NUMBER_PAIR_ORDER:
+        level, relation = _account_number_pair_metrics(
+            raw_map.get(left_key), raw_map.get(right_key)
+        )
+        pairs.append(f"{label}:{level}")
+        relations.append(f"{label}:{relation}")
+        decisions.append(relation)
+
+    if any(state == "conflict" for state in decisions):
+        decision = "different"
+    elif any(state == "match" for state in decisions):
+        decision = "same"
+    else:
+        decision = "unknown"
+
+    fragments: list[str] = []
+    for bureau in _SUMMARY_BUREAUS:
+        normalized_value = normalized_map.get(bureau)
+        sanitized = _sanitize_account_number_value(normalized_value)
+        if sanitized:
+            label = _ACCOUNT_NUMBER_BUREAU_LABELS.get(bureau, bureau[:2].title())
+            fragments.append(f"{label}:{sanitized}")
+
+    message_parts = [
+        "ACCTCHECK",
+        f"sid={sid_value}",
+        "field=account_number_display",
+        f"pairs=<{', '.join(pairs)}>",
+        f"decision={decision}",
+    ]
+
+    if relations:
+        message_parts.append(f"relations=<{', '.join(relations)}>")
+
+    if fragments:
+        message_parts.append(f"fragments=<{', '.join(fragments)}>")
+
+    logger.info(" ".join(message_parts))
+
+
 def _raw_value_provider_for_account_factory(
     bureaus_dict: Mapping[str, Mapping[str, Any]] | None,
 ):
@@ -1554,14 +1676,28 @@ def build_summary_payload(
         normalized_entry = dict(entry)
         field_name = normalized_entry.get("field")
 
+        details = _extract_field_details(field_consistency, field_name)
+        normalized_map = _coerce_normalized_map(details)
+        raw_map = _coerce_raw_map(details)
+
+        if (
+            debug_enabled
+            and _account_number_log_enabled()
+            and field_name == "account_number_display"
+            and details is not None
+        ):
+            _emit_account_number_check_log(
+                sid_value,
+                normalized_map,
+                raw_map,
+            )
+
         if (
             field_name
             and isinstance(field_consistency, Mapping)
             and sid_value
             and runs_root_value
         ):
-            details = _extract_field_details(field_consistency, field_name)
-            normalized_map = _coerce_normalized_map(details)
             bureau_values = {
                 bureau: normalized_map.get(bureau)
                 for bureau in _SUMMARY_BUREAUS

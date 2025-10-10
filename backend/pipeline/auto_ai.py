@@ -206,7 +206,7 @@ def run_validation_requirements_for_all_accounts(
                 "frontend",
                 status="success",
                 counts={"packs_count": packs_count},
-                empty_ok=packs_count == 0,
+                empty_ok=bool(frontend_result.get("empty_ok")),
                 runs_root=base_root,
             )
             decide_next(sid, runs_root=base_root)

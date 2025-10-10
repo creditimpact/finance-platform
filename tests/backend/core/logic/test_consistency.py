@@ -1,5 +1,6 @@
 """Tests for field consistency logic."""
 
+import backend.core.logic.consistency as consistency_mod
 import pytest
 
 from backend.core.logic.consistency import (
@@ -64,6 +65,31 @@ def test_account_rating_synonyms_produce_unanimous_consensus() -> None:
     assert normalized["experian"] == "current"
     assert normalized["equifax"] == "current"
     assert consistency["account_rating"]["consensus"] == "unanimous"
+
+
+def test_account_rating_alias_table_matches_expected_values() -> None:
+    assert consistency_mod._ACCOUNT_RATING_ALIASES == {
+        "paid as agreed": "current",
+        "pays as agreed": "current",
+        "in good standing": "current",
+        "up to date": "current",
+        "paid on time": "current",
+        "charged off": "charge off",
+        "chg off": "charge off",
+        "chargeoff": "charge off",
+        "in collections": "collections",
+        "sent to collections": "collections",
+        "collection": "collections",
+        "30 day late": "30 days late",
+        "30d late": "30 days late",
+        "late 30": "30 days late",
+        "60 day late": "60 days late",
+        "60d late": "60 days late",
+        "late 60": "60 days late",
+        "90 day late": "90 days late",
+        "90d late": "90 days late",
+        "late 90": "90 days late",
+    }
 
 
 def test_history_values_capture_raw_and_missing_bureau_listed() -> None:

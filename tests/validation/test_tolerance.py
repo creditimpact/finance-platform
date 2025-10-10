@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from backend.validation.tolerance import clear_cached_conventions
+from backend.validation.tolerance import (
+    clear_cached_conventions,
+    evaluate_field_with_tolerance,
+)
 from backend.validation.utils_amounts import are_amounts_within_tolerance
 from backend.validation.utils_dates import (
     are_dates_within_tolerance,
@@ -112,6 +115,7 @@ class TestLoadDateConvention:
 
         assert convention == "DMY"
 
+
     def test_loads_mdy_convention_from_trace_short_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("PREVALIDATION_OUT_PATH_REL", raising=False)
         runs_root = tmp_path
@@ -121,3 +125,92 @@ class TestLoadDateConvention:
         convention = load_date_convention_for_sid(str(runs_root), sid)
 
         assert convention == "MDY"
+
+
+class TestEvaluateFieldWithToleranceLastVerified:
+    def _write_convention(self, runs_root: Path, sid: str, convention: str) -> None:
+        trace_dir = runs_root / sid / "trace"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        (trace_dir / "date_convention.json").write_text(
+            json.dumps({"convention": convention}),
+            encoding="utf-8",
+        )
+
+    def test_ambiguous_date_respects_mdy_convention(
+        self, tmp_path: Path
+    ) -> None:
+        sid = "SID_LV_MDY"
+        self._write_convention(tmp_path, sid, "MDY")
+
+        result = evaluate_field_with_tolerance(
+            sid,
+            tmp_path,
+            "last_verified",
+            {
+                "equifax": "04/05/2024",
+                "experian": "2024-04-05",
+                "transunion": None,
+            },
+        )
+
+        assert result["is_mismatch"] is False
+        assert result["tolerance_applied"] is True
+        assert result["note"]["span_days"] == 0
+
+    def test_ambiguous_date_respects_dmy_convention(
+        self, tmp_path: Path
+    ) -> None:
+        sid = "SID_LV_DMY"
+        self._write_convention(tmp_path, sid, "DMY")
+
+        result = evaluate_field_with_tolerance(
+            sid,
+            tmp_path,
+            "last_verified",
+            {
+                "equifax": "04/05/2024",
+                "experian": "2024-05-04",
+                "transunion": None,
+            },
+        )
+
+        assert result["is_mismatch"] is False
+        assert result["tolerance_applied"] is True
+        assert result["note"]["span_days"] == 0
+
+    def test_five_day_span_is_within_tolerance(self, tmp_path: Path) -> None:
+        sid = "SID_LV_WITHIN"
+        self._write_convention(tmp_path, sid, "MDY")
+
+        result = evaluate_field_with_tolerance(
+            sid,
+            tmp_path,
+            "last_verified",
+            {
+                "equifax": "2024-03-01",
+                "experian": "03/04/2024",
+                "transunion": "2024-03-06",
+            },
+        )
+
+        assert result["is_mismatch"] is False
+        assert result["tolerance_applied"] is True
+        assert result["note"]["span_days"] == 5
+
+    def test_eight_day_span_exceeds_tolerance(self, tmp_path: Path) -> None:
+        sid = "SID_LV_MISMATCH"
+        self._write_convention(tmp_path, sid, "MDY")
+
+        result = evaluate_field_with_tolerance(
+            sid,
+            tmp_path,
+            "last_verified",
+            {
+                "equifax": "2024-03-01",
+                "experian": "03/09/2024",
+                "transunion": "2024-03-01",
+            },
+        )
+
+        assert result["is_mismatch"] is True
+        assert result["tolerance_applied"] is False

@@ -224,7 +224,19 @@ def decide_next(sid: str, runs_root: Optional[str | Path] = None) -> dict[str, s
                         if frontend_status == "error":
                             _set("stop_error", "frontend_error", "ERROR")
                         elif frontend_status == "success":
-                            _set("await_input", "frontend_completed", "AWAITING_CUSTOMER_INPUT")
+                            packs_count = _coerce_int(frontend_stage.get("packs_count")) or 0
+                            if packs_count <= 0:
+                                _set(
+                                    "complete_no_action",
+                                    "frontend_no_packs",
+                                    "COMPLETE_NO_ACTION",
+                                )
+                            else:
+                                _set(
+                                    "await_input",
+                                    "frontend_completed",
+                                    "AWAITING_CUSTOMER_INPUT",
+                                )
                         else:
                             _set("gen_frontend_packs", "validation_has_findings", "VALIDATING")
 

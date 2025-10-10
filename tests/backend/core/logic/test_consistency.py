@@ -172,6 +172,48 @@ def test_account_number_display_groups_by_last4_and_mask() -> None:
     assert mask_classes == {"masked_last4"}
 
 
+def test_account_number_display_full_number_matches_masked() -> None:
+    bureaus_json = {
+        "transunion": {"account_number_display": "123456781234"},
+        "experian": {"account_number_display": "****1234"},
+        "equifax": {},
+    }
+
+    consistency = compute_field_consistency(bureaus_json)
+    account_display = consistency["account_number_display"]
+
+    assert account_display["consensus"] == "majority"
+    assert account_display["disagreeing_bureaus"] == ["equifax"]
+
+
+def test_account_number_display_detects_digit_conflict() -> None:
+    bureaus_json = {
+        "transunion": {"account_number_display": "1111222233334444"},
+        "experian": {"account_number_display": "0000222233334444"},
+        "equifax": {},
+    }
+
+    consistency = compute_field_consistency(bureaus_json)
+    account_display = consistency["account_number_display"]
+
+    assert account_display["consensus"] == "split"
+    assert {"experian", "transunion"}.issubset(set(account_display["disagreeing_bureaus"]))
+
+
+def test_account_number_display_detects_alphabetic_conflict() -> None:
+    bureaus_json = {
+        "transunion": {"account_number_display": "ACCOUNT ABC"},
+        "experian": {"account_number_display": "ACCOUNT XYZ"},
+        "equifax": {},
+    }
+
+    consistency = compute_field_consistency(bureaus_json)
+    account_display = consistency["account_number_display"]
+
+    assert account_display["consensus"] == "split"
+    assert {"experian", "transunion"}.issubset(set(account_display["disagreeing_bureaus"]))
+
+
 def test_empty_seven_year_history_entries_are_missing() -> None:
     bureaus_json = {
         "transunion": {"seven_year_history": {}},

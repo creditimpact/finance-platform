@@ -8,6 +8,7 @@ from datetime import date, datetime
 from typing import Any, Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from backend.core.logic.context import get_validation_context
+from backend.core.merge.acctnum import acctnum_level, acctnum_match_level
 
 __all__ = ["compute_field_consistency", "compute_inconsistent_fields"]
 
@@ -954,9 +955,6 @@ def _normalize_field(field: str, value: Any) -> Any:
 def _freeze_value(field: str, value: Any) -> Any:
     if value is None:
         return None
-    if field == "account_number_display":
-        if isinstance(value, Mapping):
-            return (value.get("last4"), value.get("mask_class"))
     if field == "two_year_payment_history":
         if isinstance(value, Mapping):
             counts = value.get("counts", {})
@@ -1041,6 +1039,75 @@ def _select_date_group_key(groups: Mapping[Any, Sequence[str]], value: date) -> 
     return value
 
 
+def _account_number_letters(value: Any) -> str:
+    if value is None:
+        return ""
+    return "".join(ch for ch in str(value) if ch.isalpha()).upper()
+
+
+def _account_number_relation(a: Any, b: Any) -> str:
+    level, debug = acctnum_match_level(str(a or ""), str(b or ""))
+    if level == "exact_or_known_match":
+        return "match"
+
+    reason = (debug or {}).get("why", "")
+    if reason == "visible_digits_conflict":
+        return "conflict"
+
+    strict_level, strict_debug = acctnum_level(a, b)
+    if strict_level == "exact_or_known_match":
+        return "match"
+
+    strict_reason = (strict_debug or {}).get("why", "")
+    if strict_reason in {"digit_conflict", "alnum_conflict"}:
+        return "conflict"
+
+    if strict_reason == "empty":
+        letters_a = _account_number_letters(a)
+        letters_b = _account_number_letters(b)
+        if letters_a and letters_b and letters_a != letters_b:
+            return "conflict"
+
+    return "insufficient"
+
+
+def _populate_account_number_groups(
+    groups: MutableMapping[Any, list[str]],
+    bureaus: Sequence[str],
+    values: Mapping[str, Any],
+) -> None:
+    account_groups: list[Dict[str, Any]] = []
+
+    for bureau in bureaus:
+        value = values.get(bureau)
+        best_group: Optional[Dict[str, Any]] = None
+        best_priority = -1
+
+        for group in account_groups:
+            members: list[str] = group["members"]
+            statuses = [
+                _account_number_relation(value, values.get(other))
+                for other in members
+            ]
+
+            if any(status == "conflict" for status in statuses):
+                continue
+
+            priority = 1 if any(status == "match" for status in statuses) else 0
+            if priority > best_priority:
+                best_priority = priority
+                best_group = group
+
+        if best_group is None:
+            best_group = {"key": object(), "members": []}
+            account_groups.append(best_group)
+
+        best_group["members"].append(bureau)
+
+    for group in account_groups:
+        groups.setdefault(group["key"], []).extend(group["members"])
+
+
 def compute_field_consistency(bureaus_json: Dict[str, Any]) -> Dict[str, Any]:
     """Compute normalized values and consensus for every field across bureaus."""
 
@@ -1059,6 +1126,8 @@ def compute_field_consistency(bureaus_json: Dict[str, Any]) -> Dict[str, Any]:
         groups: Dict[Any, list[str]] = {}
         missing_bureaus: list[str] = []
         present_bureaus: list[str] = []
+        account_number_present: list[str] = []
+        account_number_values: Dict[str, Any] = {}
 
         for bureau in _BUREAU_KEYS:
             value = _get_bureau_value(bureaus_json, field, bureau)
@@ -1075,8 +1144,13 @@ def compute_field_consistency(bureaus_json: Dict[str, Any]) -> Dict[str, Any]:
             if is_missing:
                 missing_bureaus.append(bureau)
                 key = ("__missing__",)
+                groups.setdefault(key, []).append(bureau)
             else:
                 present_bureaus.append(bureau)
+                if field == "account_number_display":
+                    account_number_present.append(bureau)
+                    account_number_values[bureau] = value
+                    continue
                 frozen = _freeze_value(field, norm_value)
                 date_key = None
                 if field in _DATE_TOLERANT_FIELDS:
@@ -1090,7 +1164,10 @@ def compute_field_consistency(bureaus_json: Dict[str, Any]) -> Dict[str, Any]:
                     key = _select_amount_group_key(groups, float(frozen))
                 else:
                     key = frozen
-            groups.setdefault(key, []).append(bureau)
+                groups.setdefault(key, []).append(bureau)
+
+        if field == "account_number_display" and account_number_present:
+            _populate_account_number_groups(groups, account_number_present, account_number_values)
 
         if all(norm is None for norm in normalized.values()):
             continue

@@ -74,3 +74,38 @@ def test_decide_next_completes_when_empty_ok(tmp_path):
     assert decision["next"] == "complete_no_action"
     data = _load_runflow(runs_root, sid)
     assert data["run_state"] == "COMPLETE_NO_ACTION"
+
+
+def test_decide_next_moves_to_await_after_frontend_success(tmp_path):
+    runs_root = tmp_path / "runs"
+    sid = "S4"
+
+    record_stage(
+        sid,
+        "merge",
+        status="success",
+        counts={"count": 1},
+        empty_ok=False,
+        runs_root=runs_root,
+    )
+    record_stage(
+        sid,
+        "validation",
+        status="success",
+        counts={"findings_count": 2},
+        empty_ok=False,
+        runs_root=runs_root,
+    )
+    record_stage(
+        sid,
+        "frontend",
+        status="success",
+        counts={"packs_count": 1},
+        empty_ok=False,
+        runs_root=runs_root,
+    )
+
+    decision = decide_next(sid, runs_root=runs_root)
+    assert decision["next"] == "await_input"
+    data = _load_runflow(runs_root, sid)
+    assert data["run_state"] == "AWAITING_CUSTOMER_INPUT"

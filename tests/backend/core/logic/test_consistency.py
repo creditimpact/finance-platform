@@ -1,5 +1,7 @@
 """Tests for field consistency logic."""
 
+import pytest
+
 from backend.core.logic.consistency import (
     compute_field_consistency,
     compute_inconsistent_fields,
@@ -21,6 +23,47 @@ def test_missing_bureau_is_recorded_and_breaks_unanimous_consensus() -> None:
     assert account_status["missing_bureaus"] == ["experian"]
     assert account_status["consensus"] == "majority"
     assert account_status["disagreeing_bureaus"] == ["experian"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Paid-as-Agreed", "current"),
+        ("Paid on time", "current"),
+        ("CHG OFF", "charge off"),
+        ("charged off", "charge off"),
+        ("chargeoff", "charge off"),
+        ("in collections", "collections"),
+        ("collection", "collections"),
+        ("30-day late", "30 days late"),
+        ("30d late", "30 days late"),
+        ("late 60", "60 days late"),
+        ("90d late", "90 days late"),
+    ],
+)
+def test_account_rating_aliases(raw: str, expected: str) -> None:
+    bureaus_json = {"transunion": {"account_rating": raw}}
+
+    consistency = compute_field_consistency(bureaus_json)
+    normalized = consistency["account_rating"]["normalized"]["transunion"]
+
+    assert normalized == expected
+
+
+def test_account_rating_synonyms_produce_unanimous_consensus() -> None:
+    bureaus_json = {
+        "transunion": {"account_rating": "Paid as agreed"},
+        "experian": {"account_rating": "CURRENT"},
+        "equifax": {"account_rating": "paid on time"},
+    }
+
+    consistency = compute_field_consistency(bureaus_json)
+    normalized = consistency["account_rating"]["normalized"]
+
+    assert normalized["transunion"] == "current"
+    assert normalized["experian"] == "current"
+    assert normalized["equifax"] == "current"
+    assert consistency["account_rating"]["consensus"] == "unanimous"
 
 
 def test_history_values_capture_raw_and_missing_bureau_listed() -> None:

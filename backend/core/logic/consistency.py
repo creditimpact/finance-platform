@@ -130,6 +130,45 @@ _ENUM_DOMAINS: Dict[str, Dict[str, str]] = {
     },
 }
 
+
+def _normalize_alias_key(text: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", " ", text.lower())
+    return " ".join(cleaned.split())
+
+
+_ACCOUNT_RATING_ALIASES: Dict[str, str] = {}
+
+for alias in (
+    "paid as agreed",
+    "pays as agreed",
+    "in good standing",
+    "up to date",
+    "paid on time",
+):
+    _ACCOUNT_RATING_ALIASES[_normalize_alias_key(alias)] = "current"
+
+for alias in (
+    "charged off",
+    "chg off",
+    "chargeoff",
+):
+    _ACCOUNT_RATING_ALIASES[_normalize_alias_key(alias)] = "charge off"
+
+for alias in (
+    "in collections",
+    "sent to collections",
+    "collection",
+):
+    _ACCOUNT_RATING_ALIASES[_normalize_alias_key(alias)] = "collections"
+
+for days, canonical in (("30", "30 days late"), ("60", "60 days late"), ("90", "90 days late")):
+    for alias in (
+        f"{days} day late",
+        f"{days}d late",
+        f"late {days}",
+    ):
+        _ACCOUNT_RATING_ALIASES[_normalize_alias_key(alias)] = canonical
+
 _HISTORY_FIELDS = {"two_year_payment_history", "seven_year_history"}
 
 _SEVEN_YEAR_KEY_ALIASES = {
@@ -687,6 +726,16 @@ def _normalize_text(raw: Any) -> Optional[str]:
     return collapsed or None
 
 
+def _apply_account_rating_alias(value: Any) -> Any:
+    if _is_missing(value):
+        return None
+    key = _normalize_alias_key(str(value))
+    canonical = _ACCOUNT_RATING_ALIASES.get(key)
+    if canonical:
+        return canonical
+    return value
+
+
 def normalize_enum(field: str, raw: Optional[str]) -> Optional[str]:
     """Normalize enums using domain-specific alias tables."""
 
@@ -886,6 +935,9 @@ def _normalize_field(field: str, value: Any) -> Any:
         return normalize_account_number_display(value)
     if field in _ENUM_DOMAINS:
         return normalize_enum(field, value)
+    if field == "account_rating":
+        aliased = _apply_account_rating_alias(value)
+        return _normalize_text(aliased)
     if field == "term_length":
         return normalize_term_length(value)
     if field == "payment_frequency":

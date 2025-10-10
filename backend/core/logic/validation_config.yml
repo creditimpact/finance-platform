@@ -29,7 +29,7 @@ fields:
     points: 3
     documents: [account_opening_contract, monthly_statement, collection_report]
     strength: soft
-    ai_needed: true         # masking vs true mismatch
+    ai_needed: false        # deterministic comparison handles mismatches
     min_corroboration: 2
     conditional_gate: true
 

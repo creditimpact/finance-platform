@@ -95,6 +95,21 @@ _ACCOUNT_NUMBER_BUREAU_LABELS: Mapping[str, str] = {
     "experian": "Ex",
     "transunion": "Tu",
 }
+_ACCOUNT_NUMBER_DETERMINISTIC_FLAG = "VALIDATION_ACCOUNT_NUMBER_DISPLAY_DETERMINISTIC"
+
+_FALSE_FLAG_VALUES = {"0", "false", "off", "no"}
+
+
+def _use_deterministic_account_number_policy() -> bool:
+    override = os.getenv(_ACCOUNT_NUMBER_DETERMINISTIC_FLAG)
+    if override is None:
+        return True
+
+    lowered = override.strip().lower()
+    if lowered in _FALSE_FLAG_VALUES:
+        return False
+
+    return True
 
 
 def _is_dry_run_enabled() -> bool:
@@ -963,6 +978,8 @@ def _determine_account_number_strength(normalized: Mapping[str, Any]) -> tuple[s
             last4_values.add(str(last4))
     if len(last4_values) > 1:
         return "strong", False
+    if _use_deterministic_account_number_policy():
+        return "soft", False
     return "soft", True
 
 

@@ -35,7 +35,10 @@ from backend.pipeline.auto_ai import (
 )
 from backend.runflow.decider import StageStatus, decide_next, record_stage
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
-from backend.runflow.manifest import update_manifest_state
+from backend.runflow.manifest import (
+    update_manifest_frontend,
+    update_manifest_state,
+)
 from backend.prevalidation.tasks import (
     detect_and_persist_date_convention,
     run_date_convention_detector,
@@ -610,6 +613,14 @@ def ai_validation_requirements_step(
                 status="success",
                 counts={"packs_count": packs_count},
                 empty_ok=packs_count == 0,
+                runs_root=runs_root_path,
+            )
+            update_manifest_frontend(
+                sid,
+                packs_dir=fe_result.get("packs_dir"),
+                packs_count=packs_count,
+                built=bool(fe_result.get("built", False)),
+                last_built_at=fe_result.get("last_built_at"),
                 runs_root=runs_root_path,
             )
             decision = decide_next(sid, runs_root=runs_root_path)

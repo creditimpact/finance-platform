@@ -214,10 +214,6 @@ def generate_frontend_packs_for_run(
 ) -> dict[str, Any]:
     """Build customer-facing account packs for ``sid``."""
 
-    if not _frontend_packs_enabled():
-        log.info("PACKGEN_FRONTEND_SKIP sid=%s", sid)
-        return {"status": "skipped", "packs_count": 0, "empty_ok": True}
-
     base_root = _resolve_runs_root(runs_root)
     run_dir = base_root / sid
     accounts_dir = run_dir / "cases" / "accounts"
@@ -225,20 +221,40 @@ def generate_frontend_packs_for_run(
     accounts_output_dir = frontend_dir / "accounts"
     responses_dir = frontend_dir / "responses"
     index_path = frontend_dir / "index.json"
+    packs_dir_str = str(frontend_dir.absolute())
+
+    if not _frontend_packs_enabled():
+        log.info("PACKGEN_FRONTEND_SKIP sid=%s", sid)
+        return {
+            "status": "skipped",
+            "packs_count": 0,
+            "empty_ok": True,
+            "built": False,
+            "packs_dir": packs_dir_str,
+            "last_built_at": None,
+        }
 
     accounts_output_dir.mkdir(parents=True, exist_ok=True)
     responses_dir.mkdir(parents=True, exist_ok=True)
 
     if not accounts_dir.is_dir():
+        generated_at = _now_iso()
         payload = {
             "sid": sid,
-            "generated_at": _now_iso(),
+            "generated_at": generated_at,
             "accounts": [],
             "packs_count": 0,
             "questions": _QUESTION_SET,
         }
         _atomic_write_json(index_path, payload)
-        return {"status": "success", "packs_count": 0, "empty_ok": True}
+        return {
+            "status": "success",
+            "packs_count": 0,
+            "empty_ok": True,
+            "built": True,
+            "packs_dir": packs_dir_str,
+            "last_built_at": generated_at,
+        }
 
     if not force and index_path.exists():
         existing = _load_json(index_path)
@@ -251,10 +267,15 @@ def generate_frontend_packs_for_run(
             log.info(
                 "FRONTEND_PACKS_EXISTS sid=%s path=%s", sid, index_path
             )
+            generated_at = existing.get("generated_at")
+            last_built = str(generated_at) if isinstance(generated_at, str) else None
             return {
                 "status": "success",
                 "packs_count": packs_count,
                 "empty_ok": packs_count == 0,
+                "built": True,
+                "packs_dir": packs_dir_str,
+                "last_built_at": last_built,
             }
 
     account_dirs = [path for path in accounts_dir.iterdir() if path.is_dir()]
@@ -316,9 +337,10 @@ def generate_frontend_packs_for_run(
         )
         pack_count += 1
 
+    generated_at = _now_iso()
     index_payload = {
         "sid": sid,
-        "generated_at": _now_iso(),
+        "generated_at": generated_at,
         "accounts": packs,
         "packs_count": pack_count,
         "questions": _QUESTION_SET,
@@ -337,6 +359,9 @@ def generate_frontend_packs_for_run(
         "status": "success",
         "packs_count": pack_count,
         "empty_ok": pack_count == 0,
+        "built": True,
+        "packs_dir": packs_dir_str,
+        "last_built_at": generated_at,
     }
 
 

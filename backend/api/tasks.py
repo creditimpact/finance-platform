@@ -21,7 +21,10 @@ from backend.pipeline.auto_ai import (
 )
 from backend.runflow.decider import StageStatus, decide_next, record_stage
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
-from backend.runflow.manifest import update_manifest_state
+from backend.runflow.manifest import (
+    update_manifest_frontend,
+    update_manifest_state,
+)
 from backend.pipeline.runs import RunManifest, persist_manifest
 from backend.core.logic.report_analysis.problem_case_builder import build_problem_cases
 from backend.core.logic.report_analysis.problem_extractor import detect_problem_accounts
@@ -350,6 +353,15 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
                         status="success",
                         counts={"packs_count": packs_count},
                         empty_ok=packs_count == 0,
+                        runs_root=runs_root,
+                    )
+                    manifest = update_manifest_frontend(
+                        sid,
+                        packs_dir=fe_result.get("packs_dir"),
+                        packs_count=packs_count,
+                        built=bool(fe_result.get("built", False)),
+                        last_built_at=fe_result.get("last_built_at"),
+                        manifest=manifest,
                         runs_root=runs_root,
                     )
                     decision = decide_next(sid, runs_root=runs_root)

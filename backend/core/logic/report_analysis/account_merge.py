@@ -36,6 +36,7 @@ from backend.core.merge.acctnum import acctnum_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
 from backend.core.logic.summary_compact import compact_merge_sections
+from backend.core.runflow import runflow_event, runflow_step, steps_pair_topn
 from backend.core.runflow_spans import end_span, span_step, start_span
 # NOTE: do not import validation_builder at module import-time.
 # We'll lazy-import inside the function to avoid circular imports.
@@ -235,6 +236,18 @@ def _sanitize_acct_level(v: object) -> str:
 
 
 AI_PACK_SCORE_THRESHOLD = 27
+
+
+_ACCT_LEVEL_PRIORITY = {
+    "exact_or_known_match": 4,
+    "masked_match": 3,
+    "partial": 2,
+    "unknown": 1,
+    "none": 0,
+}
+
+_STRONG_MATCH_LEVELS = {"exact_or_known_match"}
+_WEAK_MATCH_LEVELS = {"masked_match", "partial"}
 
 
 def is_missing(value: Any) -> bool:
@@ -1336,6 +1349,7 @@ def score_all_pairs_0_100(
     merge_paths = get_merge_paths(runs_root, sid, create=True)
     packs_dir = merge_paths.packs_dir
     log_file = merge_paths.log_file
+    pairs_index_path = merge_paths.base / "pairs_index.json"
     cfg = get_merge_cfg()
     ai_threshold = AI_PACK_SCORE_THRESHOLD
     requested_raw = list(idx_list) if idx_list is not None else []
@@ -1443,8 +1457,15 @@ def score_all_pairs_0_100(
 
     pair_counter = 0
     built_pairs = 0
+    matches_strong = 0
+    matches_weak = 0
+    conflict_pairs = 0
+    skipped_pairs = 0
+    pair_summaries: List[Dict[str, Any]] = []
+    pair_topn_limit = steps_pair_topn()
+
     def score_and_maybe_build_pack(left_pos: int, right_pos: int) -> None:
-        nonlocal pair_counter, built_pairs
+        nonlocal pair_counter, built_pairs, matches_strong, matches_weak, conflict_pairs, skipped_pairs
 
         left = indices[left_pos]
         right = indices[right_pos]
@@ -1530,7 +1551,7 @@ def score_all_pairs_0_100(
         digit_conflict = 1 if debug_reason in {"digit_conflict", "visible_digits_conflict"} else 0
         alnum_conflict = 1 if debug_reason == "alnum_conflict" else 0
 
-        runflow_step(
+        runflow_event(
             sid,
             "merge",
             "acctnum_match_level",
@@ -1542,7 +1563,7 @@ def score_all_pairs_0_100(
             },
             out={"other": str(right)},
         )
-        runflow_step(
+        runflow_event(
             sid,
             "merge",
             "acctnum_match_level",
@@ -1606,6 +1627,34 @@ def score_all_pairs_0_100(
         level_value = _sanitize_acct_level(level_value)
 
         allowed = total_score >= ai_threshold
+
+        if level_value in _STRONG_MATCH_LEVELS:
+            matches_strong += 1
+        elif level_value in _WEAK_MATCH_LEVELS:
+            matches_weak += 1
+        if digit_conflict or alnum_conflict:
+            conflict_pairs += 1
+        if not allowed:
+            skipped_pairs += 1
+
+        pair_summaries.append(
+            {
+                "left": int(left),
+                "right": int(right),
+                "account": f"{left}-{right}",
+                "level": level_value,
+                "score": total_score,
+                "digit_conflicts": digit_conflict,
+                "alnum_conflicts": alnum_conflict,
+                "allowed": allowed,
+                "decision": str(result.get("decision", "different")),
+                "debug": {
+                    "short": short_debug,
+                    "long": long_debug,
+                    "why": why_debug,
+                },
+            }
+        )
 
         scores[left][right] = deepcopy(result)
         scores[right][left] = deepcopy(result)
@@ -1679,6 +1728,98 @@ def score_all_pairs_0_100(
     for left_pos in range(total_accounts - 1):
         for right_pos in range(left_pos + 1, total_accounts):
             score_and_maybe_build_pack(left_pos, right_pos)
+
+    def _pair_sort_key(item: Dict[str, Any]) -> Tuple[int, int, int, int, int, int]:
+        conflict_flag = 1 if item.get("digit_conflicts") or item.get("alnum_conflicts") else 0
+        allowed_flag = 1 if item.get("allowed") else 0
+        level_rank = _ACCT_LEVEL_PRIORITY.get(str(item.get("level")), 0)
+        score_value = int(item.get("score", 0) or 0)
+        left_idx = int(item.get("left", 0) or 0)
+        right_idx = int(item.get("right", 0) or 0)
+        return (conflict_flag, allowed_flag, level_rank, score_value, left_idx * -1, right_idx * -1)
+
+    ranked_pairs = sorted(pair_summaries, key=_pair_sort_key, reverse=True)
+    topn_pairs = ranked_pairs[:pair_topn_limit] if pair_topn_limit > 0 else []
+
+    for rank, entry in enumerate(topn_pairs, start=1):
+        account_label = entry.get("account", f"{entry.get('left')}-{entry.get('right')}")
+        metrics = {
+            "level": entry.get("level", "none"),
+            "digit_conflicts": int(entry.get("digit_conflicts", 0) or 0),
+            "alnum_conflicts": int(entry.get("alnum_conflicts", 0) or 0),
+            "score": int(entry.get("score", 0) or 0),
+            "rank": rank,
+            "allowed": 1 if entry.get("allowed") else 0,
+        }
+        out_payload: Dict[str, Any] = {
+            "left": str(entry.get("left")),
+            "right": str(entry.get("right")),
+            "decision": entry.get("decision"),
+        }
+        debug_payload = entry.get("debug")
+        if isinstance(debug_payload, Mapping):
+            out_payload["debug"] = {
+                "short": str(debug_payload.get("short", "")),
+                "long": str(debug_payload.get("long", "")),
+                "why": str(debug_payload.get("why", "")),
+            }
+
+        runflow_step(
+            sid,
+            "merge",
+            "acctnum_match_level",
+            account=str(account_label),
+            metrics=metrics,
+            out=out_payload,
+        )
+
+    totals_metrics = {
+        "scored_pairs": pair_counter,
+        "matches_strong": matches_strong,
+        "matches_weak": matches_weak,
+        "conflicts": conflict_pairs,
+        "skipped": skipped_pairs,
+        "packs_built": built_pairs,
+        "topn_limit": pair_topn_limit,
+    }
+
+    ranked_for_index: List[Dict[str, Any]] = []
+    for rank, entry in enumerate(ranked_pairs, start=1):
+        record = {
+            "rank": rank,
+            "left": entry.get("left"),
+            "right": entry.get("right"),
+            "score": entry.get("score"),
+            "level": entry.get("level"),
+            "digit_conflicts": entry.get("digit_conflicts"),
+            "alnum_conflicts": entry.get("alnum_conflicts"),
+            "allowed": bool(entry.get("allowed")),
+            "decision": entry.get("decision"),
+        }
+        if entry.get("debug"):
+            record["debug"] = entry.get("debug")
+        ranked_for_index.append(record)
+
+    index_payload = {
+        "sid": sid,
+        "totals": totals_metrics,
+        "pairs": ranked_for_index,
+    }
+
+    try:
+        _atomic_write_json(pairs_index_path, index_payload)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.exception(
+            "MERGE_PAIR_INDEX_WRITE_FAILED sid=%s path=%s", sid, pairs_index_path
+        )
+
+    runflow_step(
+        sid,
+        "merge",
+        "acctnum_pairs_summary",
+        metrics=totals_metrics,
+        out={"pairs_index": str(pairs_index_path)},
+    )
 
     end_span(
         merge_scoring_span,

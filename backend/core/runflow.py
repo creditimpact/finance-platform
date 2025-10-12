@@ -38,10 +38,10 @@ def _events_path(sid: str) -> Path:
     return RUNS_ROOT / sid / "runflow_events.jsonl"
 
 
-def _env_enabled(name: str) -> bool:
+def _env_enabled(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
-        return False
+        return default
     return raw.strip().lower() not in {"", "0", "false", "no", "off"}
 
 
@@ -60,6 +60,7 @@ _ENABLE_STEPS = _env_enabled("RUNFLOW_VERBOSE")
 _ENABLE_EVENTS = _env_enabled("RUNFLOW_EVENTS")
 _STEP_SAMPLE_EVERY = max(_env_int("RUNFLOW_STEP_LOG_EVERY", 1), 1)
 _PAIR_TOPN = max(_env_int("RUNFLOW_STEPS_PAIR_TOPN", 5), 0)
+_ENABLE_SPANS = _env_enabled("RUNFLOW_STEPS_ENABLE_SPANS", True)
 
 
 _STEP_CALL_COUNTS: dict[tuple[str, str, str, str], int] = defaultdict(int)
@@ -260,6 +261,8 @@ def runflow_step(
         _STEP_CALL_COUNTS[(sid, stage, substage_name, step)] += 1
 
     if steps_enabled:
+        step_span_id = span_id if _ENABLE_SPANS else None
+        step_parent_span_id = parent_span_id if _ENABLE_SPANS else None
         steps_append(
             sid,
             stage,
@@ -270,8 +273,8 @@ def runflow_step(
             metrics=metrics,
             out=out,
             reason=reason,
-            span_id=span_id,
-            parent_span_id=parent_span_id,
+            span_id=step_span_id,
+            parent_span_id=step_parent_span_id,
             error=error,
         )
 

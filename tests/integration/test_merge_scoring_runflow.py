@@ -96,6 +96,7 @@ def test_merge_scoring_runflow_handles_masked_accounts(tmp_path, monkeypatch):
     steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
     merge_stage = steps_payload["stages"]["merge"]
     stage_steps = merge_stage["steps"]
+    assert all(entry.get("name") != "pack_skip" for entry in stage_steps)
     pair_steps = [entry for entry in stage_steps if entry.get("name") == "acctnum_match_level"]
     assert len(pair_steps) == 3
     summary_entry = next(

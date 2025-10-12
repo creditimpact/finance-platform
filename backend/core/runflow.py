@@ -443,12 +443,6 @@ def runflow_step_dec(stage: str, step: str) -> Callable[[Callable[..., Any]], Ca
                         status="error",
                         out={"error": exc.__class__.__name__, "msg": str(exc)},
                     )
-                    runflow_end_stage(
-                        sid,
-                        stage,
-                        status="error",
-                        summary={"error": exc.__class__.__name__},
-                    )
                 raise
 
             if sid:

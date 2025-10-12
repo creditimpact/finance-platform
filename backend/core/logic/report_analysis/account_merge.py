@@ -1650,10 +1650,29 @@ def score_all_pairs_0_100(
                 right,
                 highlights,
             )
+            pack_account = f"{left}-{right}"
+            pack_out: dict[str, object] | None = None
+            if pack_path is not None:
+                pack_out = {"path": str(pack_path)}
+            runflow_step(
+                sid,
+                "merge",
+                "pack_create",
+                account=pack_account,
+                out=pack_out,
+            )
         else:
             pack_skipped_message = f"PACK_SKIPPED {left}-{right}"
             logger.info(pack_skipped_message)
             _candidate_logger.info(pack_skipped_message)
+
+            runflow_step(
+                sid,
+                "merge",
+                "pack_skip",
+                account=f"{left}-{right}",
+                out={"reason": "no_candidates"},
+            )
 
     for left_pos in range(total_accounts - 1):
         for right_pos in range(left_pos + 1, total_accounts):

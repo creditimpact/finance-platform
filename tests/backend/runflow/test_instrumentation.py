@@ -208,3 +208,82 @@ def test_runflow_step_dec_error_records_and_reraises(tmp_path, monkeypatch):
         monkeypatch.delenv("RUNFLOW_EVENTS", raising=False)
         monkeypatch.delenv("RUNFLOW_STEP_LOG_EVERY", raising=False)
         _reload_runflow()
+
+
+def test_runflow_atomic_writes_and_event_appends(tmp_path, monkeypatch):
+    sid = "SID-ATOMIC"
+    stage = "merge"
+
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+    monkeypatch.setenv("RUNFLOW_EVENTS", "1")
+    monkeypatch.setenv("RUNFLOW_STEP_LOG_EVERY", "1")
+    _reload_runflow()
+
+    try:
+        original_atomic = runflow._atomic_write_json
+        calls: list[Path] = []
+
+        def _tracking_atomic(path: Path, payload):
+            calls.append(Path(path))
+            original_atomic(path, payload)
+
+        monkeypatch.setattr(runflow, "_atomic_write_json", _tracking_atomic)
+
+        uuid_values = iter(["aa", "bb", "cc"])
+
+        class _FakeUUID:
+            def __init__(self, hex_value: str) -> None:
+                self.hex = hex_value
+
+        monkeypatch.setattr(
+            runflow.uuid,
+            "uuid4",
+            lambda: _FakeUUID(next(uuid_values)),
+        )
+
+        run_dir = Path(tmp_path, sid)
+        steps_path = run_dir / "runflow_steps.json"
+        tmp_paths = [
+            steps_path.with_suffix(steps_path.suffix + ".tmp.aa"),
+            steps_path.with_suffix(steps_path.suffix + ".tmp.bb"),
+            steps_path.with_suffix(steps_path.suffix + ".tmp.cc"),
+        ]
+
+        runflow.runflow_start_stage(sid, stage)
+        runflow.runflow_step(sid, stage, "load_cases", metrics={"accounts": 1})
+        runflow.runflow_end_stage(sid, stage, summary={"accounts_seen": 1})
+
+        # Ensure atomic writes were triggered for start, step, and end operations.
+        assert calls == [steps_path, steps_path, steps_path]
+
+        for path in tmp_paths:
+            assert not path.exists()
+
+        events_path = run_dir / "runflow_events.jsonl"
+        assert steps_path.exists()
+        assert events_path.exists()
+
+        lines = events_path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 3
+
+        first_event = json.loads(lines[0])
+        assert first_event["event"] == "start"
+        assert first_event["stage"] == stage
+        assert set(first_event) == {"ts", "stage", "event"}
+
+        step_event = json.loads(lines[1])
+        assert step_event["step"] == "load_cases"
+        assert step_event["metrics"] == {"accounts": 1}
+        assert step_event["substage"] == "default"
+
+        end_event = json.loads(lines[2])
+        assert end_event["event"] == "end"
+        assert end_event["summary"] == {"accounts_seen": 1}
+        assert end_event["status"] == "success"
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)
+        monkeypatch.delenv("RUNFLOW_EVENTS", raising=False)
+        monkeypatch.delenv("RUNFLOW_STEP_LOG_EVERY", raising=False)
+        _reload_runflow()

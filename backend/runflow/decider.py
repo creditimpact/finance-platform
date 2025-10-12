@@ -11,6 +11,7 @@ from typing import Any, Dict, Literal, Mapping, Optional
 
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.runflow import runflow_end_stage
+from backend.runflow.counters import stage_counts as _stage_counts_from_disk
 
 StageStatus = Literal["success", "error"]
 RunState = Literal[
@@ -124,6 +125,7 @@ def record_stage(
     """Persist ``stage`` information under ``runs/<sid>/runflow.json``."""
 
     path = _runflow_path(sid, runs_root)
+    base_dir = path.parent
     data = _load_runflow(path, sid)
 
     stage_payload: dict[str, Any] = {
@@ -132,9 +134,18 @@ def record_stage(
         "last_at": _now_iso(),
     }
 
+    normalized_counts: dict[str, int] = {}
     for key, value in (counts or {}).items():
         coerced = _coerce_int(value)
-        stage_payload[str(key)] = coerced if coerced is not None else value
+        if coerced is not None:
+            normalized_counts[str(key)] = coerced
+
+    disk_counts = _stage_counts_from_disk(stage, base_dir)
+    for key, value in disk_counts.items():
+        normalized_counts[str(key)] = int(value)
+
+    for key, value in normalized_counts.items():
+        stage_payload[key] = value
 
     if notes:
         stage_payload["notes"] = str(notes)
@@ -157,11 +168,11 @@ def record_stage(
         sid,
         stage,
         status,
-        dict(counts or {}),
+        dict(normalized_counts),
         empty_ok,
     )
 
-    summary_payload: dict[str, Any] = {str(key): value for key, value in (counts or {}).items()}
+    summary_payload: dict[str, Any] = {str(key): value for key, value in normalized_counts.items()}
     summary_payload["empty_ok"] = bool(empty_ok)
     if notes:
         summary_payload["notes"] = str(notes)
@@ -170,7 +181,7 @@ def record_stage(
     if stage == "frontend" and status != "error":
         packs_value: Optional[int] = None
         for key in ("packs_count", "packs"):
-            packs_value = _coerce_int(counts.get(key))
+            packs_value = normalized_counts.get(key)
             if packs_value is not None:
                 break
         if packs_value == 0:

@@ -156,6 +156,10 @@ def runflow_step(
     metrics: Optional[Mapping[str, Any]] = None,
     out: Optional[Mapping[str, Any]] = None,
     substage: Optional[str] = None,
+    reason: Optional[str] = None,
+    span_id: Optional[str] = None,
+    parent_span_id: Optional[str] = None,
+    error: Optional[Mapping[str, Any]] = None,
 ) -> None:
     steps_enabled = _ENABLE_STEPS
     events_enabled = _ENABLE_EVENTS
@@ -184,6 +188,10 @@ def runflow_step(
             account=account,
             metrics=metrics,
             out=out,
+            reason=reason,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
+            error=error,
         )
 
     if events_enabled:
@@ -200,6 +208,14 @@ def runflow_step(
             event["metrics"] = {str(k): v for k, v in metrics.items()}
         if out:
             event["out"] = {str(k): v for k, v in out.items()}
+        if reason is not None:
+            event["reason"] = reason
+        if span_id is not None:
+            event["span_id"] = span_id
+        if parent_span_id is not None:
+            event["parent_span_id"] = parent_span_id
+        if error:
+            event["error"] = {str(k): v for k, v in error.items()}
         _append_event(sid, event)
 
 

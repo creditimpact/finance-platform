@@ -165,3 +165,139 @@ def test_merge_scoring_runflow_handles_masked_accounts(tmp_path, monkeypatch):
     if scored_pairs_summary is not None:
         assert scored_pairs_summary == index_payload["totals"]["scored_pairs"]
     assert len(index_payload["pairs"]) == 3
+
+
+def test_merge_runflow_steps_single_pack(tmp_path, monkeypatch):
+    runs_root = tmp_path / "runs"
+    sid = "SID-merge-single-pack"
+
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("RUNFLOW_EVENTS", "1")
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+
+    fake_requests = types.ModuleType("requests")
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    import backend.core.runflow as runflow
+    import backend.core.logic.report_analysis.account_merge as account_merge
+
+    importlib.reload(runflow)
+    importlib.reload(account_merge)
+
+    _write_bureaus(runs_root, sid, 0, {"transunion": {"account_number_display": "1111"}})
+    _write_bureaus(runs_root, sid, 1, {"experian": {"account_number_display": "1111"}})
+
+    call_counter = {"count": 0}
+
+    def fake_score_pair(_left, _right, _cfg):
+        call_counter["count"] += 1
+        return {
+            "total": 99,
+            "parts": {"balance_owed": 99},
+            "aux": {
+                "acctnum_level": "strong",
+                "account_number": {
+                    "raw_values": {"a": "1111", "b": "1111"},
+                    "acctnum_debug": {"short": "match", "long": "match", "why": "strong"},
+                },
+            },
+            "triggers": ["strong:acctnum"],
+            "trigger_events": [],
+            "conflicts": [],
+            "decision": "ai",
+        }
+
+    def fake_build_ai_pack_for_pair(sid_arg, runs_root_arg, left, right, highlights):
+        merge_paths = account_merge.get_merge_paths(Path(runs_root_arg), sid_arg, create=True)
+        pack_path = account_merge.pair_pack_path(merge_paths, left, right)
+        pack_path.parent.mkdir(parents=True, exist_ok=True)
+        pack_path.write_text("{}\n", encoding="utf-8")
+        return {"pair": {"a": left, "b": right}, "highlights": highlights}
+
+    monkeypatch.setattr(account_merge, "score_pair_0_100", fake_score_pair)
+    monkeypatch.setattr(account_merge, "build_ai_pack_for_pair", fake_build_ai_pack_for_pair)
+
+    account_merge.score_all_pairs_0_100(sid, [0, 1], runs_root=runs_root)
+
+    assert call_counter["count"] == 1
+
+    steps_path = runs_root / sid / "runflow_steps.json"
+    steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
+    merge_stage = steps_payload["stages"]["merge"]
+    stage_steps = merge_stage["steps"]
+
+    pack_entries = [entry for entry in stage_steps if entry.get("name") == "pack_create"]
+    skip_entries = [entry for entry in stage_steps if entry.get("name") == "pack_skip"]
+
+    assert len(pack_entries) == 1
+    assert not skip_entries
+    pack_out = pack_entries[0].get("out", {})
+    assert pack_out.get("path")
+
+
+def test_merge_runflow_steps_no_packs(tmp_path, monkeypatch):
+    runs_root = tmp_path / "runs"
+    sid = "SID-merge-no-packs"
+
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("RUNFLOW_EVENTS", "1")
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+
+    fake_requests = types.ModuleType("requests")
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    import backend.core.runflow as runflow
+    import backend.core.logic.report_analysis.account_merge as account_merge
+
+    importlib.reload(runflow)
+    importlib.reload(account_merge)
+
+    _write_bureaus(runs_root, sid, 0, {"transunion": {"account_number_display": "2222"}})
+    _write_bureaus(runs_root, sid, 1, {"experian": {"account_number_display": "3333"}})
+
+    def fake_score_pair(_left, _right, _cfg):
+        return {
+            "total": 0,
+            "parts": {"balance_owed": 0},
+            "aux": {
+                "acctnum_level": "none",
+                "account_number": {
+                    "raw_values": {"a": "2222", "b": "3333"},
+                    "acctnum_debug": {"short": "", "long": "", "why": "different"},
+                },
+            },
+            "triggers": [],
+            "trigger_events": [],
+            "conflicts": [],
+            "decision": "different",
+        }
+
+    monkeypatch.setattr(account_merge, "score_pair_0_100", fake_score_pair)
+
+    account_merge.score_all_pairs_0_100(sid, [0, 1], runs_root=runs_root)
+
+    runflow.runflow_end_stage(
+        sid,
+        "merge",
+        status="success",
+        summary={"created_packs": 0, "scored_pairs": 1, "empty_ok": True},
+        stage_status="empty",
+        empty_ok=True,
+    )
+
+    steps_path = runs_root / sid / "runflow_steps.json"
+    steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
+    merge_stage = steps_payload["stages"]["merge"]
+    stage_steps = merge_stage["steps"]
+
+    pack_entries = [entry for entry in stage_steps if entry.get("name") == "pack_create"]
+    no_merge_entries = [entry for entry in stage_steps if entry.get("name") == "no_merge_candidates"]
+
+    assert not pack_entries
+    assert len(no_merge_entries) == 1
+    assert stage_steps[-1].get("name") == "no_merge_candidates"
+
+    summary = merge_stage.get("summary", {})
+    assert summary.get("created_packs") == 0
+    assert summary.get("empty_ok") is True
+    assert merge_stage.get("empty_ok") is True

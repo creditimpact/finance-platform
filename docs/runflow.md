@@ -228,7 +228,6 @@ These environment variables control instrumentation behaviour:
 | `RUNFLOW_STEPS_SCHEMA_VERSION` | Override the schema version string (for forward compat testing). | `2.1` |
 | `RUNFLOW_STEPS_VERIFY` | Validate stage summaries against disk counters. | `1` (enabled) |
 | `RUNFLOW_STEPS_ENABLE_SPANS` | Include span identifiers in step entries. | `1` (enabled) |
-| `RUNFLOW_STEPS_LOG_SKIPS` | Record `merge.pack_skip` steps for debugging. | `0` (disabled) |
 | `RUNFLOW_STEP_LOG_EVERY` | Sample frequency for success steps (1 = log everything). | `1` |
 | `RUNFLOW_STEPS_PAIR_TOPN` | Number of merge pairs to keep inline before aggregating into the summary. | `5` |
 

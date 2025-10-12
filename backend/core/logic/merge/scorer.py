@@ -92,7 +92,8 @@ def _normalize_account_numbers(
         display = ""
         branch = payload.get(bureau)
         if isinstance(branch, Mapping):
-            display = str(branch.get("account_number_display") or "")
+            raw_display = branch.get("account_number_display")
+            display = "" if raw_display is None else str(raw_display)
         normalized[bureau] = acctnum.normalize_display(display)
     return normalized
 

@@ -114,7 +114,7 @@ _EMPTY_NORMALIZED = NormalizedAccountNumber("", "")
 def normalize_display(display: str | None) -> NormalizedAccountNumber:
     """Normalize an ``account_number_display`` value to digits only."""
 
-    raw = str(display or "")
+    raw = "" if display is None else str(display)
     digits = re.sub(r"\D", "", raw)
     return NormalizedAccountNumber(raw, digits)
 

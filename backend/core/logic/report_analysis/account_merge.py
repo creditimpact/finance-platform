@@ -36,7 +36,7 @@ from backend.core.merge.acctnum import acctnum_level
 from backend.core.logic.report_analysis.ai_pack import build_ai_pack_for_pair
 from backend.core.logic.report_analysis import config as merge_config
 from backend.core.logic.summary_compact import compact_merge_sections
-from backend.core.runflow import runflow_step
+from backend.core.runflow_spans import end_span, span_step, start_span
 # NOTE: do not import validation_builder at module import-time.
 # We'll lazy-import inside the function to avoid circular imports.
 from backend.core.logic.validation_requirements import (
@@ -1393,12 +1393,11 @@ def score_all_pairs_0_100(
     total_accounts = len(indices)
     expected_pairs = total_accounts * (total_accounts - 1) // 2
 
-    runflow_step(
+    merge_scoring_span = start_span(
         sid,
         "merge",
-        "merge_scoring_start",
-        status="start",
-        metrics={"accounts": total_accounts},
+        "merge_scoring",
+        ctx={"accounts": total_accounts},
     )
 
     overview_log = {
@@ -1434,10 +1433,11 @@ def score_all_pairs_0_100(
 
     logger.info("CANDIDATE_LOOP_START sid=%s total_accounts=%s", sid, total_accounts)
 
-    runflow_step(
+    span_step(
         sid,
         "merge",
         "acctnum_normalize",
+        parent_span_id=merge_scoring_span,
         metrics={"normalized": normalized_accounts},
     )
 
@@ -1654,10 +1654,11 @@ def score_all_pairs_0_100(
             pack_out: dict[str, object] | None = None
             if pack_path is not None:
                 pack_out = {"path": str(pack_path)}
-            runflow_step(
+            span_step(
                 sid,
                 "merge",
                 "pack_create",
+                parent_span_id=merge_scoring_span,
                 account=pack_account,
                 out=pack_out,
             )
@@ -1666,10 +1667,11 @@ def score_all_pairs_0_100(
             logger.info(pack_skipped_message)
             _candidate_logger.info(pack_skipped_message)
 
-            runflow_step(
+            span_step(
                 sid,
                 "merge",
                 "pack_skip",
+                parent_span_id=merge_scoring_span,
                 account=f"{left}-{right}",
                 out={"reason": "no_candidates"},
             )
@@ -1678,10 +1680,8 @@ def score_all_pairs_0_100(
         for right_pos in range(left_pos + 1, total_accounts):
             score_and_maybe_build_pack(left_pos, right_pos)
 
-    runflow_step(
-        sid,
-        "merge",
-        "merge_scoring_finish",
+    end_span(
+        merge_scoring_span,
         metrics={
             "scored_pairs": pair_counter,
             "normalized_accounts": normalized_accounts,

@@ -271,6 +271,32 @@ def _normalise_stage(stage: str, payload: Mapping[str, Any], now: str) -> dict[s
     return stage_payload
 
 
+def _derive_summary_error(stage_payload: Mapping[str, Any]) -> str:
+    steps = stage_payload.get("steps")
+    if isinstance(steps, list):
+        for entry in reversed(steps):
+            if not isinstance(entry, Mapping):
+                continue
+            if str(entry.get("status")) != "error":
+                continue
+            error_payload = entry.get("error")
+            if isinstance(error_payload, Mapping):
+                message = error_payload.get("message")
+                error_type = error_payload.get("type")
+                if isinstance(message, str) and message:
+                    if isinstance(error_type, str) and error_type:
+                        return f"{error_type}: {message}"
+                    return message
+            reason = entry.get("reason")
+            if isinstance(reason, str) and reason:
+                return reason
+            name = entry.get("name")
+            if isinstance(name, str) and name:
+                return f"{name} failed"
+            break
+    return "stage failed"
+
+
 def _load_steps_payload(sid: str, schema_version: str) -> dict[str, Any]:
     path = _steps_path(sid)
     now = _utcnow_iso()
@@ -461,8 +487,19 @@ def steps_stage_finish(
             stage_payload["summary"] = merged
         else:
             stage_payload["summary"] = {str(k): v for k, v in summary.items()}
+    elif status == "error":
+        stage_payload["summary"] = {}
     if empty_ok:
         stage_payload["empty_ok"] = True
+
+    if status == "error":
+        summary_payload = stage_payload.get("summary")
+        if isinstance(summary_payload, Mapping):
+            summary_dict = dict(summary_payload)
+        else:
+            summary_dict = {}
+        summary_dict.setdefault("error", _derive_summary_error(stage_payload))
+        stage_payload["summary"] = summary_dict
 
     _verify_stage_summary(sid, stage, stage_payload)
 

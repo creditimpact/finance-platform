@@ -102,6 +102,24 @@ def _should_record_step(
     return count == 1 or count % _STEP_SAMPLE_EVERY == 0
 
 
+def _shorten_message(message: str, *, limit: int = 200) -> str:
+    compact = " ".join(message.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1] + "\u2026"
+
+
+def _format_error_payload(exc: Exception, where: str) -> dict[str, str]:
+    message = str(exc) or exc.__class__.__name__
+    short = _shorten_message(message)
+    return {
+        "type": exc.__class__.__name__,
+        "message": short,
+        "where": where,
+        "hint": "see runflow_events.jsonl",
+    }
+
+
 def runflow_start_stage(
     sid: str, stage: str, extra: Optional[Mapping[str, Any]] = None
 ) -> None:
@@ -303,16 +321,19 @@ def runflow_step_dec(stage: str, step: str) -> Callable[[Callable[..., Any]], Ca
                     if isinstance(sid_value, str):
                         sid = sid_value
 
+            where = f"{fn.__module__}:{getattr(fn, '__qualname__', fn.__name__)}"
+
             try:
                 result = fn(*args, **kwargs)
             except Exception as exc:
                 if sid:
+                    error_payload = _format_error_payload(exc, where)
                     runflow_step(
                         sid,
                         stage,
                         step,
                         status="error",
-                        out={"error": exc.__class__.__name__, "msg": str(exc)},
+                        error=error_payload,
                     )
                 raise
 

@@ -28,8 +28,14 @@ def _atomic_write_json(path: Path, obj: Mapping[str, Any]) -> None:
 
 def _append_jsonl(path: Path, row: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    payload = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+    mode = 0o644
+    fd = os.open(path, flags, mode)
+    try:
+        os.write(fd, payload)
+    finally:
+        os.close(fd)
 
 
 def _steps_path(sid: str) -> Path:

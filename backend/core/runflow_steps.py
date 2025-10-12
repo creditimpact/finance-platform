@@ -58,14 +58,16 @@ class _RunsRootProxy:
 RUNS_ROOT = _RunsRootProxy()
 
 
-def _env_enabled(name: str) -> bool:
+def _env_enabled(name: str, *, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
-        return False
+        return default
     return raw.strip().lower() not in {"", "0", "false", "no", "off"}
 
 
-_VERIFY_STEPS = _env_enabled("RUNFLOW_STEPS_VERIFY")
+_SCHEMA_VERSION = os.getenv("RUNFLOW_STEPS_SCHEMA_VERSION") or "2.1"
+_VERIFY_STEPS = _env_enabled("RUNFLOW_STEPS_VERIFY", default=True)
+_ENABLE_SPANS = _env_enabled("RUNFLOW_STEPS_ENABLE_SPANS", default=True)
 
 
 def _steps_path(sid: str) -> Path:
@@ -403,8 +405,9 @@ def _verify_stage_summary(
     stage_payload["error"] = error_payload
 
 
-def steps_init(sid: str, schema_version: str = "2.1") -> None:
-    payload = _load_steps_payload(sid, schema_version)
+def steps_init(sid: str, schema_version: str | None = None) -> None:
+    schema = schema_version or _SCHEMA_VERSION
+    payload = _load_steps_payload(sid, schema)
     _update_updated_at(payload)
     _dump_steps_payload(sid, payload)
 
@@ -444,7 +447,7 @@ def steps_stage_start(
     started_at: Optional[str] = None,
     extra: Optional[Mapping[str, Any]] = None,
 ) -> bool:
-    payload = _load_steps_payload(sid, "2.1")
+    payload = _load_steps_payload(sid, _SCHEMA_VERSION)
     stage_payload, created = _ensure_stage(payload, stage, started_at)
     ts = started_at or stage_payload.get("started_at") or _utcnow_iso()
 
@@ -473,7 +476,7 @@ def steps_stage_finish(
     *,
     empty_ok: bool = False,
 ) -> None:
-    payload = _load_steps_payload(sid, "2.1")
+    payload = _load_steps_payload(sid, _SCHEMA_VERSION)
     stage_payload, _ = _ensure_stage(payload, stage, ended_at)
     ts = ended_at or _utcnow_iso()
 
@@ -565,9 +568,9 @@ def _prepare_step_entry(
         entry["out"] = {str(k): v for k, v in out.items()}
     if reason is not None:
         entry["reason"] = reason
-    if span_id is not None:
+    if _ENABLE_SPANS and span_id is not None:
         entry["span_id"] = span_id
-    if parent_span_id is not None:
+    if _ENABLE_SPANS and parent_span_id is not None:
         entry["parent_span_id"] = parent_span_id
     if error is not None:
         entry["error"] = dict(error)
@@ -593,7 +596,7 @@ def steps_append(
     parent_span_id: Optional[str] = None,
     error: Optional[Mapping[str, Any]] = None,
 ) -> None:
-    payload = _load_steps_payload(sid, "2.1")
+    payload = _load_steps_payload(sid, _SCHEMA_VERSION)
     stage_payload, _ = _ensure_stage(payload, stage, t)
     ts = t or _utcnow_iso()
 

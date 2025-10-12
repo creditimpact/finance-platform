@@ -182,6 +182,61 @@ def test_merge_stage_records_only_pack_create_steps(tmp_path, monkeypatch):
         _reload_runflow()
 
 
+def test_merge_stage_can_opt_in_to_pack_skip_steps(tmp_path, monkeypatch):
+    sid = "SID-MERGE-SKIPS"
+    stage = "merge"
+
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+    monkeypatch.setenv("RUNFLOW_EVENTS", "1")
+    monkeypatch.setenv("RUNFLOW_STEP_LOG_EVERY", "1")
+    monkeypatch.setenv("RUNFLOW_STEPS_LOG_SKIPS", "1")
+    _reload_runflow()
+
+    try:
+        runflow.runflow_start_stage(sid, stage)
+        runflow.runflow_step(
+            sid,
+            stage,
+            "pack_skip",
+            account="0-1",
+            out={"reason": "no_candidates"},
+        )
+        runflow.runflow_step(
+            sid,
+            stage,
+            "pack_create",
+            account="0-1",
+            out={"path": "ai_packs/merge/packs/0-1.json"},
+        )
+        runflow.runflow_end_stage(
+            sid,
+            stage,
+            summary={"packs": 1},
+        )
+
+        steps_path = Path(tmp_path, sid, "runflow_steps.json")
+        steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
+        stage_payload = steps_payload["stages"][stage]
+        stage_steps = stage_payload["steps"]
+
+        assert [entry["name"] for entry in stage_steps] == [
+            "pack_skip",
+            "pack_create",
+        ]
+        skip_entry = stage_steps[0]
+        assert skip_entry["status"] == "success"
+        assert skip_entry.get("account") == "0-1"
+        assert skip_entry.get("out", {}).get("reason") == "no_candidates"
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)
+        monkeypatch.delenv("RUNFLOW_EVENTS", raising=False)
+        monkeypatch.delenv("RUNFLOW_STEP_LOG_EVERY", raising=False)
+        monkeypatch.delenv("RUNFLOW_STEPS_LOG_SKIPS", raising=False)
+        _reload_runflow()
+
+
 def test_runflow_step_sampling(tmp_path, monkeypatch):
     sid = "SID-SAMPLE"
     stage = "validation"

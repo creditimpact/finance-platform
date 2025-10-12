@@ -49,6 +49,17 @@ def _frontend_packs_enabled() -> bool:
     return value not in {"0", "false", "False"}
 
 
+def _frontend_packs_topn() -> int:
+    raw_value = os.getenv("RUNFLOW_STEPS_FRONTEND_PACKS_TOPN")
+    if raw_value is None:
+        return 0
+    try:
+        value = int(raw_value.strip())
+    except (TypeError, ValueError):
+        return 0
+    return max(value, 0)
+
+
 def _account_sort_key(path: Path) -> tuple[int, Any]:
     name = path.name
     if name.isdigit():
@@ -225,6 +236,7 @@ def generate_frontend_packs_for_run(
     packs_dir_str = str(frontend_dir.absolute())
 
     runflow_start_stage(sid, "frontend")
+    packs_topn = _frontend_packs_topn()
 
     try:
         if not _frontend_packs_enabled():
@@ -235,11 +247,21 @@ def generate_frontend_packs_for_run(
                 "scan_accounts",
                 metrics={"accounts": 0},
             )
+            runflow_step(
+                sid,
+                "frontend",
+                "build_pack_docs",
+                status="skipped",
+                metrics={"built": 0, "skipped_missing": 0},
+                out={"reason": "disabled"},
+            )
             runflow_end_stage(
                 sid,
                 "frontend",
                 status="skipped",
-                summary={"packs_count": 0, "reason": "disabled"},
+                summary={"packs_count": 0, "reason": "disabled", "empty_ok": True},
+                stage_status="empty",
+                empty_ok=True,
             )
             return {
                 "status": "skipped",
@@ -283,6 +305,7 @@ def generate_frontend_packs_for_run(
                 "frontend",
                 "build_pack_docs",
                 metrics={"built": 0, "skipped_missing": 0},
+                out={"reason": "no_accounts"},
             )
             try:
                 index_out = index_path.relative_to(run_dir).as_posix()
@@ -298,7 +321,7 @@ def generate_frontend_packs_for_run(
             runflow_end_stage(
                 sid,
                 "frontend",
-                summary={"packs_count": 0},
+                summary={"packs_count": 0, "empty_ok": True},
                 stage_status="empty",
                 empty_ok=True,
             )
@@ -345,7 +368,11 @@ def generate_frontend_packs_for_run(
                 runflow_end_stage(
                     sid,
                     "frontend",
-                    summary={"packs_count": packs_count, "cache_hit": True},
+                    summary={
+                        "packs_count": packs_count,
+                        "cache_hit": True,
+                        "empty_ok": packs_count == 0,
+                    },
                     stage_status="empty" if packs_count == 0 else None,
                     empty_ok=packs_count == 0,
                 )
@@ -361,26 +388,15 @@ def generate_frontend_packs_for_run(
         packs: list[dict[str, Any]] = []
         built_docs = 0
         skipped_missing = 0
+        skip_reasons = {"missing_inputs": 0, "no_bureaus": 0}
+        sampled_write_packs = 0
 
         for account_dir in account_dirs:
             summary = _load_json(account_dir / "summary.json")
             bureaus_payload = _load_json(account_dir / "bureaus.json")
-            account_label = account_dir.name
-
             if not summary or not bureaus_payload:
                 skipped_missing += 1
-                runflow_step(
-                    sid,
-                    "frontend",
-                    "build_pack_docs",
-                    status="skipped",
-                    account=account_label,
-                    metrics={
-                        "built": built_docs,
-                        "skipped_missing": skipped_missing,
-                    },
-                    out={"reason": "missing_inputs"},
-                )
+                skip_reasons["missing_inputs"] += 1
                 continue
 
             bureaus: dict[str, Mapping[str, Any]] = {
@@ -390,18 +406,7 @@ def generate_frontend_packs_for_run(
             }
             if not bureaus:
                 skipped_missing += 1
-                runflow_step(
-                    sid,
-                    "frontend",
-                    "build_pack_docs",
-                    status="skipped",
-                    account=account_label,
-                    metrics={
-                        "built": built_docs,
-                        "skipped_missing": skipped_missing,
-                    },
-                    out={"reason": "no_bureaus"},
-                )
+                skip_reasons["no_bureaus"] += 1
                 continue
 
             account_id = str(summary.get("account_id") or account_dir.name)
@@ -426,16 +431,6 @@ def generate_frontend_packs_for_run(
             }
 
             built_docs += 1
-            runflow_step(
-                sid,
-                "frontend",
-                "build_pack_docs",
-                account=account_id,
-                metrics={
-                    "built": built_docs,
-                    "skipped_missing": skipped_missing,
-                },
-            )
 
             account_dirname = _safe_account_dirname(account_id, account_dir.name)
             pack_dir = accounts_output_dir / account_dirname
@@ -448,13 +443,15 @@ def generate_frontend_packs_for_run(
             except ValueError:
                 relative_pack = str(pack_path)
 
-            runflow_step(
-                sid,
-                "frontend",
-                "write_pack",
-                account=account_id,
-                out={"path": relative_pack},
-            )
+            if sampled_write_packs < packs_topn:
+                runflow_step(
+                    sid,
+                    "frontend",
+                    "write_pack",
+                    account=account_id,
+                    out={"path": relative_pack},
+                )
+                sampled_write_packs += 1
 
             packs.append(
                 {
@@ -466,6 +463,19 @@ def generate_frontend_packs_for_run(
                     "bureau_badges": pack_payload["bureau_badges"],
                 }
             )
+
+        build_metrics = {"built": built_docs, "skipped_missing": skipped_missing}
+        build_out: dict[str, Any] = {}
+        skip_summary = {key: value for key, value in skip_reasons.items() if value}
+        if skip_summary:
+            build_out["skip_reasons"] = skip_summary
+        runflow_step(
+            sid,
+            "frontend",
+            "build_pack_docs",
+            metrics=build_metrics,
+            out=build_out or None,
+        )
 
         generated_at = _now_iso()
         pack_count = built_docs
@@ -502,7 +512,7 @@ def generate_frontend_packs_for_run(
         runflow_end_stage(
             sid,
             "frontend",
-            summary={"packs_count": pack_count},
+            summary={"packs_count": pack_count, "empty_ok": pack_count == 0},
             stage_status="empty" if pack_count == 0 else None,
             empty_ok=pack_count == 0,
         )

@@ -113,11 +113,21 @@ def test_merge_scoring_runflow_handles_masked_accounts(tmp_path, monkeypatch):
         entry for entry in stage_steps if entry.get("name") == "no_merge_candidates"
     ]
 
-    created_packs = summary.get("created_packs")
-    if not isinstance(created_packs, int):
-        created_packs = summary.get("packs")
+    assert isinstance(summary, dict)
+    summary_present = bool(summary)
+    if summary_present:
+        assert set(summary) >= {"created_packs", "scored_pairs", "empty_ok"}
+        assert "packs" not in summary
+        assert "pairs" not in summary
+        created_packs = int(summary.get("created_packs", 0) or 0)
+        scored_pairs_summary = int(summary.get("scored_pairs", 0) or 0)
+        summary_empty_ok = summary.get("empty_ok")
+    else:
+        created_packs = len(pack_entries)
+        scored_pairs_summary = None
+        summary_empty_ok = None
 
-    if (created_packs or 0) == 0:
+    if created_packs == 0:
         assert not pack_entries
         assert no_merge_entries, "expected no_merge_candidates entry when no packs built"
         last_entry = stage_steps[-1] if stage_steps else {}
@@ -125,15 +135,20 @@ def test_merge_scoring_runflow_handles_masked_accounts(tmp_path, monkeypatch):
         metrics = last_entry.get("metrics", {})
         assert metrics.get("scored_pairs") == 3
         stage_empty_ok = merge_stage.get("empty_ok")
-        summary_empty_ok = summary.get("empty_ok") if isinstance(summary, dict) else None
-        if stage_empty_ok is not None or summary_empty_ok is not None:
-            assert stage_empty_ok is True or summary_empty_ok is True
+        if summary_empty_ok is not None:
+            assert summary_empty_ok is True
+        if stage_empty_ok is not None:
+            assert stage_empty_ok is True
     else:
         assert pack_entries
         assert all(entry.get("status") == "success" for entry in pack_entries)
         assert all(entry.get("out", {}).get("path") for entry in pack_entries)
-        if isinstance(created_packs, int):
-            assert len(pack_entries) == created_packs
+        assert len(pack_entries) == created_packs
+        if summary_empty_ok is not None:
+            assert summary_empty_ok is False
+        stage_empty_ok = merge_stage.get("empty_ok")
+        if stage_empty_ok is not None:
+            assert stage_empty_ok is False
 
     if acctnum_entries:
         assert all(entry.get("status") == "success" for entry in acctnum_entries)
@@ -147,4 +162,6 @@ def test_merge_scoring_runflow_handles_masked_accounts(tmp_path, monkeypatch):
     summary_metrics = summary_entry.get("metrics", {})
     assert summary_metrics.get("scored_pairs") == index_payload["totals"]["scored_pairs"]
     assert summary_metrics.get("topn_limit") == index_payload["totals"]["topn_limit"]
+    if scored_pairs_summary is not None:
+        assert scored_pairs_summary == index_payload["totals"]["scored_pairs"]
     assert len(index_payload["pairs"]) == 3

@@ -873,6 +873,7 @@ def _finalize_stage(payload: dict[str, object]) -> dict[str, object]:
                 exc_info=True,
             )
 
+    runs_root_path: Path | None = None
     runs_root_value = payload.get("runs_root")
     if runs_root_value:
         try:
@@ -905,22 +906,35 @@ def _finalize_stage(payload: dict[str, object]) -> dict[str, object]:
         payload.get("polarity_processed"),
     )
 
-    created_packs_value = int(
-        payload.get("created_packs", payload.get("packs", 0)) or 0
+    disk_created_packs: int | None = None
+    if runs_root_path is not None:
+        try:
+            merge_paths = ensure_merge_paths(runs_root_path, sid, create=False)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.debug(
+                "AUTO_AI_PACK_COUNT_FAILED sid=%s runs_root=%s",
+                sid,
+                runs_root_path,
+                exc_info=True,
+            )
+        else:
+            packs_dir = merge_paths.packs_dir
+            if packs_dir.is_dir():
+                disk_created_packs = sum(
+                    1 for entry in packs_dir.glob("*.jsonl") if entry.is_file()
+                )
+            else:
+                disk_created_packs = 0
+
+    created_packs_value = (
+        disk_created_packs
+        if disk_created_packs is not None
+        else int(payload.get("created_packs", payload.get("packs", 0)) or 0)
     )
-    packs_value = int(payload.get("packs", created_packs_value) or 0)
-    pairs_value = int(payload.get("pairs", 0) or 0)
     skip_reason = payload.get("skip_reason")
     scored_pairs_value = int(payload.get("merge_scored_pairs", 0) or 0)
-    summary_payload: dict[str, Any] = {
-        "created_packs": created_packs_value,
-        "packs": packs_value,
-        "pairs": pairs_value,
-        "scored_pairs": scored_pairs_value,
-    }
     status_value = "success"
     if isinstance(skip_reason, str) and skip_reason:
-        summary_payload["skip_reason"] = skip_reason
         status_value = "skipped"
 
     stage_status_value = None
@@ -929,13 +943,15 @@ def _finalize_stage(payload: dict[str, object]) -> dict[str, object]:
         if created_packs_value == 0:
             stage_status_value = "empty"
             empty_ok = True
-            summary_payload.setdefault("message", "no merge candidates")
         elif scored_pairs_value == 0:
             stage_status_value = "empty"
             empty_ok = True
 
-    if empty_ok:
-        summary_payload["empty_ok"] = True
+    summary_payload: dict[str, Any] = {
+        "created_packs": created_packs_value,
+        "scored_pairs": scored_pairs_value,
+        "empty_ok": bool(empty_ok),
+    }
 
     runflow_end_stage(
         sid,

@@ -1393,6 +1393,14 @@ def score_all_pairs_0_100(
     total_accounts = len(indices)
     expected_pairs = total_accounts * (total_accounts - 1) // 2
 
+    runflow_step(
+        sid,
+        "merge",
+        "merge_scoring_start",
+        status="start",
+        metrics={"accounts": total_accounts},
+    )
+
     overview_log = {
         "sid": sid,
         "indices": indices,
@@ -1650,6 +1658,16 @@ def score_all_pairs_0_100(
     for left_pos in range(total_accounts - 1):
         for right_pos in range(left_pos + 1, total_accounts):
             score_and_maybe_build_pack(left_pos, right_pos)
+
+    runflow_step(
+        sid,
+        "merge",
+        "merge_scoring_finish",
+        metrics={
+            "scored_pairs": pair_counter,
+            "normalized_accounts": normalized_accounts,
+        },
+    )
 
     summary_log = {
         "sid": sid,

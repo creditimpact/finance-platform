@@ -814,6 +814,7 @@ def _merge_compact_stage(payload: dict[str, object]) -> dict[str, object]:
     packs_count = len(payload.get("ai_index", []) or [])
     pairs_count = len(indices)
     payload["packs"] = packs_count
+    payload["created_packs"] = packs_count
     payload["pairs"] = pairs_count
 
     logger.info("MERGE_STAGE_DONE sid=%s", sid)
@@ -904,11 +905,15 @@ def _finalize_stage(payload: dict[str, object]) -> dict[str, object]:
         payload.get("polarity_processed"),
     )
 
-    packs_value = int(payload.get("packs", 0) or 0)
+    created_packs_value = int(
+        payload.get("created_packs", payload.get("packs", 0)) or 0
+    )
+    packs_value = int(payload.get("packs", created_packs_value) or 0)
     pairs_value = int(payload.get("pairs", 0) or 0)
     skip_reason = payload.get("skip_reason")
     scored_pairs_value = int(payload.get("merge_scored_pairs", 0) or 0)
     summary_payload: dict[str, Any] = {
+        "created_packs": created_packs_value,
         "packs": packs_value,
         "pairs": pairs_value,
         "scored_pairs": scored_pairs_value,
@@ -921,13 +926,16 @@ def _finalize_stage(payload: dict[str, object]) -> dict[str, object]:
     stage_status_value = None
     empty_ok = False
     if status_value != "error":
-        if packs_value == 0:
+        if created_packs_value == 0:
             stage_status_value = "empty"
             empty_ok = True
             summary_payload.setdefault("message", "no merge candidates")
         elif scored_pairs_value == 0:
             stage_status_value = "empty"
             empty_ok = True
+
+    if empty_ok:
+        summary_payload["empty_ok"] = True
 
     runflow_end_stage(
         sid,

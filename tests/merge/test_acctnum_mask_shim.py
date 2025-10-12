@@ -31,6 +31,7 @@ def test_masked_displays_collapse_to_star_prefixed_last4(raw: str, expected: dic
     assert normalized.has_mask is expected["has_mask"]
     assert normalized.visible_digits == expected["visible_digits"]
     assert normalized.canon_mask == expected["canon_mask"]
+    assert normalized.mask_debug == expected
 
 
 @pytest.mark.parametrize(
@@ -93,3 +94,4 @@ def test_non_masked_text_preserves_digits_without_flagging_mask(
     assert normalized.has_mask is expected["has_mask"]
     assert normalized.visible_digits == expected["visible_digits"]
     assert normalized.canon_mask == expected["canon_mask"]
+    assert normalized.mask_debug == expected

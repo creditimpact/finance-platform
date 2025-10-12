@@ -103,6 +103,18 @@ class NormalizedAccountNumber:
         _, _, visible_digits = self._mask_metadata()
         return visible_digits
 
+    @property
+    def mask_debug(self) -> Dict[str, object]:
+        """Expose legacy mask metadata for compatibility with debug tooling."""
+
+        canon_mask, has_mask, visible_digits = self._mask_metadata()
+        return {
+            "canon_mask": canon_mask,
+            "has_mask": has_mask,
+            "visible_digits": visible_digits,
+            "digits": self.digits,
+        }
+
     def to_debug_dict(self) -> Dict[str, str]:
         return {
             "raw": self.raw,

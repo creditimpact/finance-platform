@@ -1716,7 +1716,7 @@ def score_all_pairs_0_100(
             logger.info(pack_skipped_message)
             _candidate_logger.info(pack_skipped_message)
 
-            span_step(
+            runflow_event(
                 sid,
                 "merge",
                 "pack_skip",

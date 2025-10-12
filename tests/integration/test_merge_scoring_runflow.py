@@ -6,6 +6,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 
 def _write_bureaus(runs_root: Path, sid: str, idx: int, payload: dict[str, object]) -> None:
     account_dir = runs_root / sid / "cases" / "accounts" / str(idx)
@@ -96,16 +98,28 @@ def test_merge_scoring_runflow_handles_masked_accounts(tmp_path, monkeypatch):
     steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
     merge_stage = steps_payload["stages"]["merge"]
     stage_steps = merge_stage["steps"]
-    if stage_steps:
+    summary = merge_stage.get("summary", {})
+    step_names = [entry.get("name") for entry in stage_steps]
+    if step_names == ["no_merge_candidates"]:
+        metrics = stage_steps[0].get("metrics", {}) if stage_steps else {}
+        assert metrics.get("scored_pairs") == 3
+        if summary:
+            assert summary.get("created_packs") in (0, None)
+            assert summary.get("empty_ok") is True
+    else:
+        assert stage_steps
+        created_packs = summary.get("created_packs")
+        if created_packs == 0:
+            pytest.fail("expected no_merge_candidates step when created_packs == 0")
         assert all(entry.get("name") == "pack_create" for entry in stage_steps)
         assert all(entry.get("status") == "success" for entry in stage_steps)
         assert all(entry.get("out", {}).get("path") for entry in stage_steps)
 
-        packs_recorded = merge_stage.get("summary", {}).get("packs")
+        packs_recorded = summary.get("created_packs")
+        if not isinstance(packs_recorded, int):
+            packs_recorded = summary.get("packs")
         if isinstance(packs_recorded, int):
             assert len(stage_steps) == packs_recorded
-    else:
-        assert stage_steps == []
 
     pairs_index_path = runs_root / sid / "ai_packs" / "merge" / "pairs_index.json"
     index_payload = json.loads(pairs_index_path.read_text(encoding="utf-8"))

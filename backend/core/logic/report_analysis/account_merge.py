@@ -1456,7 +1456,7 @@ def score_all_pairs_0_100(
     )
 
     pair_counter = 0
-    built_pairs = 0
+    created_packs = 0
     matches_strong = 0
     matches_weak = 0
     conflict_pairs = 0
@@ -1465,7 +1465,7 @@ def score_all_pairs_0_100(
     pair_topn_limit = steps_pair_topn()
 
     def score_and_maybe_build_pack(left_pos: int, right_pos: int) -> None:
-        nonlocal pair_counter, built_pairs, matches_strong, matches_weak, conflict_pairs, skipped_pairs
+        nonlocal pair_counter, created_packs, matches_strong, matches_weak, conflict_pairs, skipped_pairs
 
         left = indices[left_pos]
         right = indices[right_pos]
@@ -1663,7 +1663,7 @@ def score_all_pairs_0_100(
             pack_built_message = f"PACK_BUILT {left}-{right}"
             logger.info(pack_built_message)
             _candidate_logger.info(pack_built_message)
-            built_pairs += 1
+            created_packs += 1
 
             highlights = _build_ai_highlights(result)
             highlights.update(
@@ -1729,6 +1729,15 @@ def score_all_pairs_0_100(
         for right_pos in range(left_pos + 1, total_accounts):
             score_and_maybe_build_pack(left_pos, right_pos)
 
+    if created_packs == 0:
+        span_step(
+            sid,
+            "merge",
+            "no_merge_candidates",
+            parent_span_id=merge_scoring_span,
+            metrics={"scored_pairs": pair_counter},
+        )
+
     def _pair_sort_key(item: Dict[str, Any]) -> Tuple[int, int, int, int, int, int]:
         conflict_flag = 1 if item.get("digit_conflicts") or item.get("alnum_conflicts") else 0
         allowed_flag = 1 if item.get("allowed") else 0
@@ -1780,7 +1789,8 @@ def score_all_pairs_0_100(
         "matches_weak": matches_weak,
         "conflicts": conflict_pairs,
         "skipped": skipped_pairs,
-        "packs_built": built_pairs,
+        "packs_built": created_packs,
+        "created_packs": created_packs,
         "topn_limit": pair_topn_limit,
     }
 
@@ -1836,12 +1846,12 @@ def score_all_pairs_0_100(
         "total_accounts": total_accounts,
         "expected_pairs": expected_pairs,
         "pairs_scored": pair_counter,
-        "pairs_allowed": built_pairs,
-        "pairs_built": built_pairs,
+        "pairs_allowed": created_packs,
+        "pairs_built": created_packs,
     }
     logger.debug("MERGE_PAIR_SUMMARY %s", json.dumps(summary_log, sort_keys=True))
 
-    logger.info("CANDIDATE_LOOP_END sid=%s built_pairs=%s", sid, built_pairs)
+    logger.info("CANDIDATE_LOOP_END sid=%s created_packs=%s", sid, created_packs)
 
     return scores
 

@@ -59,6 +59,7 @@ def _env_int(name: str, default: int) -> int:
 _ENABLE_STEPS = _env_enabled("RUNFLOW_VERBOSE")
 _ENABLE_EVENTS = _env_enabled("RUNFLOW_EVENTS")
 _STEP_SAMPLE_EVERY = max(_env_int("RUNFLOW_STEP_LOG_EVERY", 1), 1)
+_PAIR_TOPN = max(_env_int("RUNFLOW_STEPS_PAIR_TOPN", 5), 0)
 
 
 _STEP_CALL_COUNTS: dict[tuple[str, str, str, str], int] = defaultdict(int)
@@ -69,6 +70,12 @@ def _append_event(sid: str, row: Mapping[str, Any]) -> None:
     if not _ENABLE_EVENTS:
         return
     _append_jsonl(_events_path(sid), row)
+
+
+def steps_pair_topn() -> int:
+    """Return the configured Top-N threshold for merge pair steps."""
+
+    return _PAIR_TOPN
 
 
 def _reset_step_counters(sid: str, stage: str) -> None:
@@ -144,6 +151,52 @@ def runflow_end_stage(
 
     _STARTED_STAGES.discard((sid, stage))
     _reset_step_counters(sid, stage)
+
+
+def runflow_event(
+    sid: str,
+    stage: str,
+    step: str,
+    *,
+    status: str = "success",
+    account: Optional[str] = None,
+    metrics: Optional[Mapping[str, Any]] = None,
+    out: Optional[Mapping[str, Any]] = None,
+    substage: Optional[str] = None,
+    reason: Optional[str] = None,
+    span_id: Optional[str] = None,
+    parent_span_id: Optional[str] = None,
+    error: Optional[Mapping[str, Any]] = None,
+) -> None:
+    """Emit a runflow event without recording a step entry."""
+
+    if not _ENABLE_EVENTS:
+        return
+
+    ts = _utcnow_iso()
+    substage_name = substage or "default"
+    event: dict[str, Any] = {
+        "ts": ts,
+        "stage": stage,
+        "step": step,
+        "status": status,
+        "substage": substage_name,
+    }
+    if account is not None:
+        event["account"] = account
+    if metrics:
+        event["metrics"] = {str(k): v for k, v in metrics.items()}
+    if out:
+        event["out"] = {str(k): v for k, v in out.items()}
+    if reason is not None:
+        event["reason"] = reason
+    if span_id is not None:
+        event["span_id"] = span_id
+    if parent_span_id is not None:
+        event["parent_span_id"] = parent_span_id
+    if error:
+        event["error"] = {str(k): v for k, v in error.items()}
+    _append_event(sid, event)
 
 
 def runflow_step(
@@ -265,6 +318,8 @@ def runflow_step_dec(stage: str, step: str) -> Callable[[Callable[..., Any]], Ca
 __all__ = [
     "runflow_start_stage",
     "runflow_end_stage",
+    "runflow_event",
     "runflow_step",
     "runflow_step_dec",
+    "steps_pair_topn",
 ]

@@ -38,15 +38,16 @@ _ENDING_IN_PATTERN = re.compile(r"(?i)\bending[\s\-]*in\b")
 _HYPHEN_CHARACTERS = frozenset("-‐‑‒–—―−")
 
 
-def _derive_mask_metadata(raw: str, digits: str) -> tuple[str | None, bool, int]:
-    """Return mask metadata derived from the raw display value."""
+def _derive_mask_metadata(raw: str, digits: str) -> tuple[str, bool, int]:
+    """Return canonical mask metadata derived from the raw display value."""
 
     if not raw:
-        return None, False, 0
+        return "", False, 0
 
     cleaned = _ENDING_IN_PATTERN.sub(" ", raw)
     mask_found = False
     canonical_chars: list[str] = []
+    visible_digits = 0
 
     for char in cleaned:
         if char in _MASK_CHARACTERS:
@@ -54,23 +55,24 @@ def _derive_mask_metadata(raw: str, digits: str) -> tuple[str | None, bool, int]
             mask_found = True
         elif char.isdigit():
             canonical_chars.append(char)
+            visible_digits += 1
         elif char.isspace() or char in _HYPHEN_CHARACTERS:
             continue
         else:
-            canonical_chars.append(" ")
+            canonical_chars.append(char.upper())
 
     if canonical_chars:
         canonical = "".join(canonical_chars)
         canonical = re.sub(r"\s+", " ", canonical).strip()
         canonical = canonical.replace(" ", "")
+        canonical = re.sub(r"\*+", "*", canonical)
     else:
         canonical = ""
 
-    canon_mask = canonical if mask_found and "*" in canonical else None
+    if digits:
+        visible_digits = len(digits)
 
-    visible_digits = len(digits) if digits else sum(ch.isdigit() for ch in raw)
-
-    return canon_mask, mask_found, visible_digits
+    return canonical, mask_found, visible_digits
 
 
 @dataclass(frozen=True)
@@ -85,7 +87,7 @@ class NormalizedAccountNumber:
         return bool(self.digits)
 
     @property
-    def canon_mask(self) -> str | None:
+    def canon_mask(self) -> str:
         canon_mask, _, _ = _derive_mask_metadata(self.raw, self.digits)
         return canon_mask
 

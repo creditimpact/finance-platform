@@ -265,10 +265,16 @@ def runflow_step(
         step_parent_span_id = parent_span_id if _ENABLE_SPANS else None
         should_write_step = True
         if stage == "merge":
-            should_write_step = (
-                (step == "pack_create" and status == "success")
-                or (step == "no_merge_candidates" and status == "success")
-            )
+            allowed_success_steps = {
+                "pack_create",
+                "acctnum_match_level",
+                "acctnum_pairs_summary",
+                "no_merge_candidates",
+            }
+            if status == "success":
+                should_write_step = step in allowed_success_steps
+            else:
+                should_write_step = False
         if should_write_step:
             steps_append(
                 sid,

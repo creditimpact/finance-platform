@@ -8,6 +8,8 @@ import json
 import os
 import uuid
 
+from backend.runflow.counters import stage_counts as _stage_counts_from_disk
+
 
 def _utcnow_iso() -> str:
     """Return the current UTC timestamp encoded as an ISO string."""
@@ -30,7 +32,40 @@ def _iso_from_datetime(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-RUNS_ROOT = Path(os.getenv("RUNS_ROOT", "runs"))
+class _RunsRootProxy:
+    def _path(self) -> Path:
+        return Path(os.getenv("RUNS_ROOT", "runs"))
+
+    def __truediv__(self, other: object) -> Path:
+        return self._path() / other
+
+    def __rtruediv__(self, other: object) -> Path:
+        return Path(other) / self._path()
+
+    def __fspath__(self) -> str:
+        return os.fspath(self._path())
+
+    def __str__(self) -> str:
+        return str(self._path())
+
+    def __repr__(self) -> str:
+        return f"RunsRootProxy({self._path()!r})"
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._path(), name)
+
+
+RUNS_ROOT = _RunsRootProxy()
+
+
+def _env_enabled(name: str) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return False
+    return raw.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+_VERIFY_STEPS = _env_enabled("RUNFLOW_STEPS_VERIFY")
 
 
 def _steps_path(sid: str) -> Path:
@@ -305,6 +340,43 @@ def _dump_steps_payload(sid: str, payload: Mapping[str, Any]) -> None:
     _atomic_write_json(_steps_path(sid), payload)
 
 
+def _verify_stage_summary(
+    sid: str, stage: str, stage_payload: MutableMapping[str, Any]
+) -> None:
+    if not _VERIFY_STEPS:
+        return
+
+    summary = stage_payload.get("summary")
+    if not isinstance(summary, Mapping):
+        return
+
+    disk_counts = _stage_counts_from_disk(stage, RUNS_ROOT / sid)
+    if not disk_counts:
+        return
+
+    mismatches: list[str] = []
+    for key, expected in disk_counts.items():
+        actual = summary.get(key)
+        try:
+            actual_int = int(actual) if actual is not None else None
+        except (TypeError, ValueError):
+            actual_int = None
+        if actual_int != expected:
+            mismatches.append(f"{key} expected={expected} actual={actual!r}")
+
+    if not mismatches:
+        return
+
+    existing_error = stage_payload.get("error")
+    if isinstance(existing_error, Mapping):
+        error_payload = dict(existing_error)
+    else:
+        error_payload = {}
+
+    error_payload["hint"] = "steps_verify: " + "; ".join(mismatches)
+    stage_payload["error"] = error_payload
+
+
 def steps_init(sid: str, schema_version: str = "2.1") -> None:
     payload = _load_steps_payload(sid, schema_version)
     _update_updated_at(payload)
@@ -391,6 +463,8 @@ def steps_stage_finish(
             stage_payload["summary"] = {str(k): v for k, v in summary.items()}
     if empty_ok:
         stage_payload["empty_ok"] = True
+
+    _verify_stage_summary(sid, stage, stage_payload)
 
     stages = payload.setdefault("stages", {})
     stages[stage] = stage_payload

@@ -1,0 +1,567 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Mapping, MutableMapping, Optional
+
+import json
+import os
+import uuid
+
+
+def _utcnow_iso() -> str:
+    """Return the current UTC timestamp encoded as an ISO string."""
+
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_iso(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    try:
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _iso_from_datetime(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+RUNS_ROOT = Path(os.getenv("RUNS_ROOT", "runs"))
+
+
+def _steps_path(sid: str) -> Path:
+    return RUNS_ROOT / sid / "runflow_steps.json"
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + f".tmp.{uuid.uuid4().hex}")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _normalise_steps(entries: Any, default_t: str) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    max_seq = 0
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            data = {str(k): v for k, v in dict(entry).items()}
+            name = data.get("name")
+            status = data.get("status")
+            if not isinstance(name, str):
+                continue
+            if not isinstance(status, str):
+                status = "unknown"
+            seq_raw = data.get("seq")
+            try:
+                seq_val = int(seq_raw)
+            except (TypeError, ValueError):
+                seq_val = 0
+            if seq_val <= 0:
+                seq_val = max_seq + 1
+            max_seq = max(max_seq, seq_val)
+            t_value = data.get("t")
+            if not isinstance(t_value, str):
+                t_value = default_t
+            record: dict[str, Any] = {
+                "seq": seq_val,
+                "name": name,
+                "status": status,
+                "t": t_value,
+            }
+            for field in (
+                "account",
+                "metrics",
+                "out",
+                "reason",
+                "span_id",
+                "parent_span_id",
+                "error",
+            ):
+                if field in data:
+                    record[field] = data[field]
+            result.append(record)
+
+    result.sort(key=lambda item: item["seq"])
+    return result
+
+
+def _legacy_substage_steps(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not entries:
+        return []
+    latest: dict[str, dict[str, Any]] = {}
+    for item in entries:
+        name = item.get("name")
+        if not isinstance(name, str):
+            continue
+        prev = latest.get(name)
+        if prev is None or int(item.get("seq", 0)) >= int(prev.get("seq", 0)):
+            legacy_entry = {
+                key: value
+                for key, value in item.items()
+                if key in {"name", "status", "t", "account", "metrics", "out", "reason", "span_id", "parent_span_id", "error", "seq"}
+            }
+            latest[name] = legacy_entry
+    ordered = sorted(latest.values(), key=lambda entry: int(entry.get("seq", 0)))
+    return ordered
+
+
+def _normalise_stage(stage: str, payload: Mapping[str, Any], now: str) -> dict[str, Any]:
+    data = {str(k): v for k, v in dict(payload).items()}
+    status = data.get("status")
+    if not isinstance(status, str):
+        status = "running"
+
+    started_at = data.get("started_at")
+    if not isinstance(started_at, str):
+        started_at = now
+
+    ended_at = data.get("ended_at")
+    if isinstance(ended_at, str):
+        ended_val: Optional[str] = ended_at
+    else:
+        ended_val = None
+
+    summary = data.get("summary")
+    if isinstance(summary, Mapping):
+        summary_payload = {str(k): v for k, v in dict(summary).items()}
+    else:
+        summary_payload = None
+
+    empty_ok = bool(data.get("empty_ok")) if data.get("empty_ok") is not None else False
+
+    steps_raw = data.get("steps")
+    steps_list = _normalise_steps(steps_raw, started_at)
+
+    if not steps_list:
+        substages = data.get("substages")
+        if isinstance(substages, Mapping):
+            extracted: list[dict[str, Any]] = []
+            seq = 0
+            for substage_payload in substages.values():
+                if not isinstance(substage_payload, Mapping):
+                    continue
+                steps = substage_payload.get("steps")
+                if not isinstance(steps, list):
+                    continue
+                for entry in steps:
+                    if not isinstance(entry, Mapping):
+                        continue
+                    name = entry.get("name")
+                    if not isinstance(name, str):
+                        continue
+                    seq += 1
+                    merged = {
+                        "seq": seq,
+                        "name": name,
+                        "status": str(entry.get("status") or "unknown"),
+                        "t": str(entry.get("t") or started_at),
+                    }
+                    for field in (
+                        "account",
+                        "metrics",
+                        "out",
+                        "reason",
+                        "span_id",
+                        "parent_span_id",
+                        "error",
+                    ):
+                        if field in entry:
+                            merged[field] = entry[field]
+                    extracted.append(merged)
+            steps_list = extracted
+
+    steps_list.sort(key=lambda entry: entry["seq"])
+    next_seq = steps_list[-1]["seq"] + 1 if steps_list else 1
+
+    substages_raw = data.get("substages")
+    substages: dict[str, Any]
+    if isinstance(substages_raw, Mapping):
+        substages = {str(k): dict(v) for k, v in substages_raw.items() if isinstance(v, Mapping)}
+    else:
+        substages = {}
+
+    default_substage = substages.get("default")
+    if isinstance(default_substage, Mapping):
+        default_substage = dict(default_substage)
+    else:
+        default_substage = {}
+
+    default_substage.setdefault("started_at", started_at)
+    legacy_steps = _legacy_substage_steps(steps_list)
+    if legacy_steps:
+        default_substage["steps"] = legacy_steps
+        default_substage["status"] = legacy_steps[-1].get("status", "running")
+    else:
+        default_substage.setdefault("steps", [])
+        default_substage.setdefault("status", "running")
+
+    substages["default"] = default_substage
+
+    stage_payload: dict[str, Any] = {
+        k: v
+        for k, v in data.items()
+        if k
+        not in {
+            "steps",
+            "next_seq",
+            "substages",
+            "summary",
+            "status",
+            "started_at",
+            "ended_at",
+            "empty_ok",
+        }
+    }
+
+    stage_payload["status"] = status
+    stage_payload["started_at"] = started_at
+    if ended_val is not None:
+        stage_payload["ended_at"] = ended_val
+    if summary_payload is not None:
+        stage_payload["summary"] = summary_payload
+    if empty_ok:
+        stage_payload["empty_ok"] = True
+
+    stage_payload["steps"] = steps_list
+    stage_payload["next_seq"] = next_seq
+    stage_payload["substages"] = substages
+
+    return stage_payload
+
+
+def _load_steps_payload(sid: str, schema_version: str) -> dict[str, Any]:
+    path = _steps_path(sid)
+    now = _utcnow_iso()
+    try:
+        raw = path.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        payload = {}
+
+    if not isinstance(payload, Mapping):
+        payload = {}
+
+    stages_raw = payload.get("stages")
+    stages: dict[str, Any]
+    if isinstance(stages_raw, Mapping):
+        stages = {
+            str(stage): _normalise_stage(stage, value, now)
+            for stage, value in stages_raw.items()
+            if isinstance(value, Mapping)
+        }
+    else:
+        stages = {}
+
+    result: dict[str, Any] = {
+        "sid": str(payload.get("sid") or sid),
+        "schema_version": schema_version,
+        "stages": stages,
+        "updated_at": str(payload.get("updated_at") or now),
+    }
+
+    _update_updated_at(result)
+    return result
+
+
+def _update_updated_at(payload: MutableMapping[str, Any], *candidates: str) -> None:
+    timestamps = []
+    for value in candidates:
+        parsed = _parse_iso(value)
+        if parsed is not None:
+            timestamps.append(parsed)
+
+    existing = _parse_iso(payload.get("updated_at"))
+    if existing is not None:
+        timestamps.append(existing)
+
+    for stage_payload in payload.get("stages", {}).values():
+        if not isinstance(stage_payload, Mapping):
+            continue
+        for field in ("started_at", "ended_at"):
+            parsed = _parse_iso(stage_payload.get(field))
+            if parsed is not None:
+                timestamps.append(parsed)
+        steps = stage_payload.get("steps")
+        if isinstance(steps, list):
+            for entry in steps:
+                if not isinstance(entry, Mapping):
+                    continue
+                parsed = _parse_iso(entry.get("t"))
+                if parsed is not None:
+                    timestamps.append(parsed)
+
+    timestamps.append(datetime.now(timezone.utc))
+    payload["updated_at"] = _iso_from_datetime(max(timestamps))
+
+
+def _dump_steps_payload(sid: str, payload: Mapping[str, Any]) -> None:
+    _atomic_write_json(_steps_path(sid), payload)
+
+
+def steps_init(sid: str, schema_version: str = "2.1") -> None:
+    payload = _load_steps_payload(sid, schema_version)
+    _update_updated_at(payload)
+    _dump_steps_payload(sid, payload)
+
+
+def _ensure_stage(
+    payload: MutableMapping[str, Any], stage: str, started_at: Optional[str]
+) -> tuple[dict[str, Any], bool]:
+    stages = payload.setdefault("stages", {})
+    if not isinstance(stages, dict):
+        stages = {}
+        payload["stages"] = stages
+
+    stage_payload = stages.get(stage)
+    created = False
+    if not isinstance(stage_payload, Mapping):
+        created = True
+        ts = started_at or _utcnow_iso()
+        stage_payload = {
+            "status": "running",
+            "started_at": ts,
+            "steps": [],
+            "next_seq": 1,
+            "substages": {
+                "default": {"status": "running", "started_at": ts, "steps": []}
+            },
+        }
+    else:
+        stage_payload = _normalise_stage(stage, stage_payload, started_at or _utcnow_iso())
+
+    stages[stage] = stage_payload
+    return stage_payload, created
+
+
+def steps_stage_start(
+    sid: str,
+    stage: str,
+    started_at: Optional[str] = None,
+    extra: Optional[Mapping[str, Any]] = None,
+) -> bool:
+    payload = _load_steps_payload(sid, "2.1")
+    stage_payload, created = _ensure_stage(payload, stage, started_at)
+    ts = started_at or stage_payload.get("started_at") or _utcnow_iso()
+
+    stage_payload["status"] = "running"
+    stage_payload.setdefault("started_at", ts)
+    stage_payload.setdefault("substages", {}).setdefault(
+        "default", {"status": "running", "started_at": ts, "steps": []}
+    )
+
+    if extra:
+        for key, value in extra.items():
+            stage_payload[str(key)] = value
+
+    payload.setdefault("stages", {})[stage] = stage_payload
+    _update_updated_at(payload, ts)
+    _dump_steps_payload(sid, payload)
+    return created
+
+
+def steps_stage_finish(
+    sid: str,
+    stage: str,
+    status: str,
+    summary: Optional[Mapping[str, Any]],
+    ended_at: Optional[str] = None,
+    *,
+    empty_ok: bool = False,
+) -> None:
+    payload = _load_steps_payload(sid, "2.1")
+    stage_payload, _ = _ensure_stage(payload, stage, ended_at)
+    ts = ended_at or _utcnow_iso()
+
+    stage_payload["status"] = status
+    stage_payload["ended_at"] = ts
+    if summary:
+        existing_summary = stage_payload.get("summary")
+        if isinstance(existing_summary, Mapping):
+            merged = dict(existing_summary)
+            merged.update({str(k): v for k, v in summary.items()})
+            stage_payload["summary"] = merged
+        else:
+            stage_payload["summary"] = {str(k): v for k, v in summary.items()}
+    if empty_ok:
+        stage_payload["empty_ok"] = True
+
+    stages = payload.setdefault("stages", {})
+    stages[stage] = stage_payload
+    _update_updated_at(payload, ts)
+    _dump_steps_payload(sid, payload)
+
+
+def _prepare_step_entry(
+    stage_payload: MutableMapping[str, Any],
+    name: str,
+    status: str,
+    t_value: str,
+    seq: Optional[int],
+    account: Optional[str],
+    metrics: Optional[Mapping[str, Any]],
+    out: Optional[Mapping[str, Any]],
+    reason: Optional[str],
+    span_id: Optional[str],
+    parent_span_id: Optional[str],
+    error: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    steps = stage_payload.setdefault("steps", [])
+    if not isinstance(steps, list):
+        steps = []
+        stage_payload["steps"] = steps
+
+    next_seq = stage_payload.get("next_seq")
+    try:
+        next_seq_int = int(next_seq)
+    except (TypeError, ValueError):
+        next_seq_int = 1
+
+    if seq is None or seq < next_seq_int:
+        seq_value = next_seq_int
+    else:
+        seq_value = seq
+
+    for existing in steps:
+        if isinstance(existing, Mapping):
+            try:
+                existing_seq = int(existing.get("seq"))
+            except (TypeError, ValueError):
+                continue
+            if existing_seq >= seq_value:
+                seq_value = existing_seq + 1
+
+    stage_payload["next_seq"] = seq_value + 1
+
+    entry: dict[str, Any] = {
+        "seq": seq_value,
+        "name": name,
+        "status": status,
+        "t": t_value,
+    }
+
+    if account is not None:
+        entry["account"] = account
+    if metrics:
+        entry["metrics"] = {str(k): v for k, v in metrics.items()}
+    if out:
+        entry["out"] = {str(k): v for k, v in out.items()}
+    if reason is not None:
+        entry["reason"] = reason
+    if span_id is not None:
+        entry["span_id"] = span_id
+    if parent_span_id is not None:
+        entry["parent_span_id"] = parent_span_id
+    if error is not None:
+        entry["error"] = dict(error)
+
+    steps.append(entry)
+    steps.sort(key=lambda item: item["seq"])
+    return entry
+
+
+def steps_append(
+    sid: str,
+    stage: str,
+    name: str,
+    status: str,
+    *,
+    t: Optional[str] = None,
+    seq: Optional[int] = None,
+    account: Optional[str] = None,
+    metrics: Optional[Mapping[str, Any]] = None,
+    out: Optional[Mapping[str, Any]] = None,
+    reason: Optional[str] = None,
+    span_id: Optional[str] = None,
+    parent_span_id: Optional[str] = None,
+    error: Optional[Mapping[str, Any]] = None,
+) -> None:
+    payload = _load_steps_payload(sid, "2.1")
+    stage_payload, _ = _ensure_stage(payload, stage, t)
+    ts = t or _utcnow_iso()
+
+    entry = _prepare_step_entry(
+        stage_payload,
+        name,
+        status,
+        ts,
+        seq,
+        account,
+        metrics,
+        out,
+        reason,
+        span_id,
+        parent_span_id,
+        error,
+    )
+
+    substages = stage_payload.setdefault("substages", {})
+    if not isinstance(substages, dict):
+        substages = {}
+        stage_payload["substages"] = substages
+
+    default_substage = substages.get("default")
+    if isinstance(default_substage, Mapping):
+        default_substage = dict(default_substage)
+    else:
+        default_substage = {}
+
+    default_substage.setdefault("started_at", stage_payload.get("started_at") or ts)
+    default_substage["status"] = status
+    steps_list = default_substage.setdefault("steps", [])
+    if not isinstance(steps_list, list):
+        steps_list = []
+        default_substage["steps"] = steps_list
+
+    legacy_entry = {
+        key: value
+        for key, value in entry.items()
+        if key
+        in {
+            "seq",
+            "name",
+            "status",
+            "t",
+            "account",
+            "metrics",
+            "out",
+            "reason",
+            "span_id",
+            "parent_span_id",
+            "error",
+        }
+    }
+
+    replaced = False
+    for existing in steps_list:
+        if isinstance(existing, Mapping) and existing.get("name") == name:
+            existing.clear()
+            existing.update(legacy_entry)
+            replaced = True
+            break
+    if not replaced:
+        steps_list.append(legacy_entry)
+    steps_list.sort(key=lambda item: int(item.get("seq", 0)))
+
+    substages["default"] = default_substage
+    stage_payload["substages"] = substages
+
+    payload.setdefault("stages", {})[stage] = stage_payload
+    _update_updated_at(payload, ts)
+    _dump_steps_payload(sid, payload)
+
+
+__all__ = [
+    "RUNS_ROOT",
+    "steps_init",
+    "steps_stage_start",
+    "steps_stage_finish",
+    "steps_append",
+]
+

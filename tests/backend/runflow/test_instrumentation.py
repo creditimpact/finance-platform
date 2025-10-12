@@ -7,9 +7,11 @@ from pathlib import Path
 import pytest
 
 import backend.core.runflow as runflow
+import backend.core.runflow_steps as runflow_steps
 
 
 def _reload_runflow() -> None:
+    importlib.reload(runflow_steps)
     importlib.reload(runflow)
 
 
@@ -64,13 +66,23 @@ def test_runflow_steps_and_events(tmp_path, monkeypatch):
 
         steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
         assert steps_payload["sid"] == sid
-        assert steps_payload["schema_version"] == "2.0"
+        assert steps_payload["schema_version"] == "2.1"
 
         merge_stage = steps_payload["stages"][stage]
         assert merge_stage["status"] == "success"
         assert "started_at" in merge_stage
         assert "ended_at" in merge_stage
         assert merge_stage["summary"]["accounts_seen"] == 4
+
+        stage_steps = merge_stage["steps"]
+        assert [entry["name"] for entry in stage_steps] == [
+            "load_cases",
+            "load_cases",
+            "score_pairs",
+        ]
+        assert [entry["seq"] for entry in stage_steps] == [1, 2, 3]
+        assert merge_stage["next_seq"] == 4
+        assert stage_steps[1]["metrics"] == {"accounts": 4}
 
         substages = merge_stage["substages"]
         assert set(substages.keys()) == {"default"}
@@ -84,11 +96,13 @@ def test_runflow_steps_and_events(tmp_path, monkeypatch):
         load_cases_entry = next(item for item in steps if item["name"] == "load_cases")
         assert load_cases_entry["status"] == "success"
         assert load_cases_entry["metrics"] == {"accounts": 4}
+        assert load_cases_entry["seq"] == 2
 
         score_entry = next(item for item in steps if item["name"] == "score_pairs")
         assert score_entry["account"] == "acct-1"
         assert score_entry["metrics"] == {"pairs": 10}
         assert score_entry["out"] == {"path": "merge/score.json"}
+        assert score_entry["seq"] == 3
 
         # Events log should include one start, per-step events, and the end event.
         events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
@@ -138,7 +152,14 @@ def test_runflow_step_sampling(tmp_path, monkeypatch):
         events_path = Path(tmp_path, sid, "runflow_events.jsonl")
 
         steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
-        default_substage = steps_payload["stages"][stage]["substages"]["default"]
+        stage_payload = steps_payload["stages"][stage]
+        stage_steps = stage_payload["steps"]
+        assert [entry["metrics"] for entry in stage_steps] == [
+            {"iteration": 0},
+            {"iteration": 2},
+        ]
+
+        default_substage = stage_payload["substages"]["default"]
         steps = default_substage["steps"]
         assert len(steps) == 1
         assert steps[0]["metrics"] == {"iteration": 2}
@@ -194,6 +215,10 @@ def test_runflow_step_dec_error_records_and_reraises(tmp_path, monkeypatch):
         assert entry["status"] == "error"
         assert entry["out"] == {"error": "RuntimeError", "msg": "boom"}
 
+        stage_steps = stage_payload["steps"]
+        assert len(stage_steps) == 1
+        assert stage_steps[0]["status"] == "error"
+
         events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
         end_events = [event for event in events if event.get("event") == "end"]
         assert not end_events
@@ -221,23 +246,23 @@ def test_runflow_atomic_writes_and_event_appends(tmp_path, monkeypatch):
     _reload_runflow()
 
     try:
-        original_atomic = runflow._atomic_write_json
+        original_atomic = runflow_steps._atomic_write_json
         calls: list[Path] = []
 
         def _tracking_atomic(path: Path, payload):
             calls.append(Path(path))
             original_atomic(path, payload)
 
-        monkeypatch.setattr(runflow, "_atomic_write_json", _tracking_atomic)
+        monkeypatch.setattr(runflow_steps, "_atomic_write_json", _tracking_atomic)
 
-        uuid_values = iter(["aa", "bb", "cc"])
+        uuid_values = iter(["aa", "bb", "cc", "dd"])
 
         class _FakeUUID:
             def __init__(self, hex_value: str) -> None:
                 self.hex = hex_value
 
         monkeypatch.setattr(
-            runflow.uuid,
+            runflow_steps.uuid,
             "uuid4",
             lambda: _FakeUUID(next(uuid_values)),
         )
@@ -248,14 +273,15 @@ def test_runflow_atomic_writes_and_event_appends(tmp_path, monkeypatch):
             steps_path.with_suffix(steps_path.suffix + ".tmp.aa"),
             steps_path.with_suffix(steps_path.suffix + ".tmp.bb"),
             steps_path.with_suffix(steps_path.suffix + ".tmp.cc"),
+            steps_path.with_suffix(steps_path.suffix + ".tmp.dd"),
         ]
 
         runflow.runflow_start_stage(sid, stage)
         runflow.runflow_step(sid, stage, "load_cases", metrics={"accounts": 1})
         runflow.runflow_end_stage(sid, stage, summary={"accounts_seen": 1})
 
-        # Ensure atomic writes were triggered for start, step, and end operations.
-        assert calls == [steps_path, steps_path, steps_path]
+        # Ensure atomic writes were triggered for init, start, step, and end operations.
+        assert calls == [steps_path, steps_path, steps_path, steps_path]
 
         for path in tmp_paths:
             assert not path.exists()

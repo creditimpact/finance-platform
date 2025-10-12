@@ -47,7 +47,7 @@ def test_decide_next_completes_when_validation_has_no_findings(tmp_path):
         "validation",
         status="success",
         counts={"findings_count": 0},
-        empty_ok=False,
+        empty_ok=True,
         runs_root=runs_root,
     )
 

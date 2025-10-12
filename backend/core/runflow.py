@@ -133,6 +133,8 @@ def runflow_end_stage(
     *,
     status: str = "success",
     summary: Optional[Mapping[str, Any]] = None,
+    stage_status: Optional[str] = None,
+    empty_ok: bool = False,
 ) -> None:
     steps_enabled = _ENABLE_STEPS
     events_enabled = _ENABLE_EVENTS
@@ -141,7 +143,15 @@ def runflow_end_stage(
 
     ts = _utcnow_iso()
     if steps_enabled:
-        steps_stage_finish(sid, stage, status, summary, ended_at=ts)
+        status_for_steps = stage_status or status
+        steps_stage_finish(
+            sid,
+            stage,
+            status_for_steps,
+            summary,
+            ended_at=ts,
+            empty_ok=empty_ok,
+        )
 
     if events_enabled:
         event: dict[str, Any] = {"ts": ts, "stage": stage, "event": "end", "status": status}

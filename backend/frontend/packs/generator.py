@@ -295,7 +295,13 @@ def generate_frontend_packs_for_run(
                 metrics={"packs": 0},
                 out={"path": index_out},
             )
-            runflow_end_stage(sid, "frontend", summary={"packs_count": 0})
+            runflow_end_stage(
+                sid,
+                "frontend",
+                summary={"packs_count": 0},
+                stage_status="empty",
+                empty_ok=True,
+            )
             return {
                 "status": "success",
                 "packs_count": 0,
@@ -340,6 +346,8 @@ def generate_frontend_packs_for_run(
                     sid,
                     "frontend",
                     summary={"packs_count": packs_count, "cache_hit": True},
+                    stage_status="empty" if packs_count == 0 else None,
+                    empty_ok=packs_count == 0,
                 )
                 return {
                     "status": "success",
@@ -491,7 +499,13 @@ def generate_frontend_packs_for_run(
             out={"path": index_out},
         )
 
-        runflow_end_stage(sid, "frontend", summary={"packs_count": pack_count})
+        runflow_end_stage(
+            sid,
+            "frontend",
+            summary={"packs_count": pack_count},
+            stage_status="empty" if pack_count == 0 else None,
+            empty_ok=pack_count == 0,
+        )
 
         return {
             "status": "success",

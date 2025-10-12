@@ -235,6 +235,35 @@ def test_runflow_step_dec_error_records_and_reraises(tmp_path, monkeypatch):
         _reload_runflow()
 
 
+def test_runflow_end_stage_records_empty_status(tmp_path, monkeypatch):
+    sid = "SID-empty"
+    stage = "frontend"
+
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+    _reload_runflow()
+
+    try:
+        runflow.runflow_start_stage(sid, stage)
+        runflow.runflow_end_stage(
+            sid,
+            stage,
+            summary={"packs_count": 0},
+            stage_status="empty",
+            empty_ok=True,
+        )
+
+        steps_path = Path(tmp_path, sid, "runflow_steps.json")
+        steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
+        stage_payload = steps_payload["stages"][stage]
+        assert stage_payload["status"] == "empty"
+        assert stage_payload.get("empty_ok") is True
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)
+        _reload_runflow()
+
+
 def test_runflow_atomic_writes_and_event_appends(tmp_path, monkeypatch):
     sid = "SID-ATOMIC"
     stage = "merge"

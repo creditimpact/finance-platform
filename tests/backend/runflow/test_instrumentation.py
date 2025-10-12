@@ -4,6 +4,8 @@ import importlib
 import json
 from pathlib import Path
 
+import pytest
+
 import backend.core.runflow as runflow
 
 
@@ -146,6 +148,60 @@ def test_runflow_step_sampling(tmp_path, monkeypatch):
         assert len(evaluate_events) == 2
         assert evaluate_events[-1]["metrics"] == {"iteration": 2}
         assert all(event["substage"] == "default" for event in evaluate_events)
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)
+        monkeypatch.delenv("RUNFLOW_EVENTS", raising=False)
+        monkeypatch.delenv("RUNFLOW_STEP_LOG_EVERY", raising=False)
+        _reload_runflow()
+
+
+def test_runflow_step_dec_error_records_and_reraises(tmp_path, monkeypatch):
+    sid = "SID-DECORATOR"
+    stage = "merge"
+
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+    monkeypatch.setenv("RUNFLOW_EVENTS", "1")
+    monkeypatch.setenv("RUNFLOW_STEP_LOG_EVERY", "1")
+    _reload_runflow()
+
+    try:
+        runflow.runflow_start_stage(sid, stage)
+
+        @runflow.runflow_step_dec(stage, "decorated_step")
+        def _boom(payload):
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            _boom({"sid": sid})
+
+        steps_path = Path(tmp_path, sid, "runflow_steps.json")
+        events_path = Path(tmp_path, sid, "runflow_events.jsonl")
+
+        steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
+        stage_payload = steps_payload["stages"][stage]
+        assert stage_payload["status"] == "running"
+        assert "ended_at" not in stage_payload
+
+        default_substage = stage_payload["substages"]["default"]
+        assert default_substage["status"] == "error"
+        step_entries = default_substage["steps"]
+        assert len(step_entries) == 1
+
+        entry = step_entries[0]
+        assert entry["name"] == "decorated_step"
+        assert entry["status"] == "error"
+        assert entry["out"] == {"error": "RuntimeError", "msg": "boom"}
+
+        events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+        end_events = [event for event in events if event.get("event") == "end"]
+        assert not end_events
+
+        step_events = [event for event in events if event.get("step") == "decorated_step"]
+        assert len(step_events) == 1
+        assert step_events[0]["status"] == "error"
+        assert step_events[0]["out"] == {"error": "RuntimeError", "msg": "boom"}
     finally:
         monkeypatch.delenv("RUNS_ROOT", raising=False)
         monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)

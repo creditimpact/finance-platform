@@ -638,12 +638,6 @@ def ai_validation_requirements_step(
             status="error",
             out={"error": exc.__class__.__name__, "msg": str(exc)},
         )
-        runflow_end_stage(
-            sid,
-            "validation",
-            status="error",
-            summary={"error": exc.__class__.__name__, "phase": "requirements"},
-        )
         raise
 
     payload["validation_requirements"] = stats

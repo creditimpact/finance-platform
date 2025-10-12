@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, Mapping
+from typing import Dict, Mapping, cast
 
 _MATCH_LEVEL = "exact_or_known_match"
 _NONE_LEVEL = "none"
@@ -51,7 +51,8 @@ def _derive_mask_metadata(raw: str, digits: str) -> tuple[str, bool, int]:
 
     for char in cleaned:
         if char in _MASK_CHARACTERS:
-            canonical_chars.append("*")
+            if not canonical_chars or canonical_chars[-1] != "*":
+                canonical_chars.append("*")
             mask_found = True
         elif char.isdigit():
             canonical_chars.append(char)
@@ -61,13 +62,7 @@ def _derive_mask_metadata(raw: str, digits: str) -> tuple[str, bool, int]:
         else:
             canonical_chars.append(char.upper())
 
-    if canonical_chars:
-        canonical = "".join(canonical_chars)
-        canonical = re.sub(r"\s+", " ", canonical).strip()
-        canonical = canonical.replace(" ", "")
-        canonical = re.sub(r"\*+", "*", canonical)
-    else:
-        canonical = ""
+    canonical = "".join(canonical_chars)
 
     if digits:
         visible_digits = len(digits)
@@ -82,23 +77,30 @@ class NormalizedAccountNumber:
     raw: str
     digits: str
 
+    def _mask_metadata(self) -> tuple[str, bool, int]:
+        cached = cast("tuple[str, bool, int] | None", getattr(self, "_mask_metadata_cache", None))
+        if cached is None:
+            cached = _derive_mask_metadata(self.raw, self.digits)
+            object.__setattr__(self, "_mask_metadata_cache", cached)
+        return cached
+
     @property
     def has_digits(self) -> bool:
         return bool(self.digits)
 
     @property
     def canon_mask(self) -> str:
-        canon_mask, _, _ = _derive_mask_metadata(self.raw, self.digits)
+        canon_mask, _, _ = self._mask_metadata()
         return canon_mask
 
     @property
     def has_mask(self) -> bool:
-        _, has_mask, _ = _derive_mask_metadata(self.raw, self.digits)
+        _, has_mask, _ = self._mask_metadata()
         return has_mask
 
     @property
     def visible_digits(self) -> int:
-        _, _, visible_digits = _derive_mask_metadata(self.raw, self.digits)
+        _, _, visible_digits = self._mask_metadata()
         return visible_digits
 
     def to_debug_dict(self) -> Dict[str, str]:
@@ -138,7 +140,7 @@ class AccountNumberMatch:
     b_bureau: str
     a: NormalizedAccountNumber
     b: NormalizedAccountNumber
-    debug: Dict[str, str]
+    debug: Dict[str, dict[str, str] | str]
 
     @property
     def points(self) -> int:

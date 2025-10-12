@@ -17,6 +17,10 @@ from backend.core.merge import acctnum
             "XX-XX-4321",
             {"has_mask": True, "visible_digits": 4, "canon_mask": "*4321", "digits": "4321"},
         ),
+        (
+            "*_*-*  6543",
+            {"has_mask": True, "visible_digits": 4, "canon_mask": "*6543", "digits": "6543"},
+        ),
     ],
 )
 def test_masked_displays_collapse_to_star_prefixed_last4(raw: str, expected: dict[str, object]) -> None:

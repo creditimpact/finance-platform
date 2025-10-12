@@ -920,9 +920,14 @@ def _finalize_stage(payload: dict[str, object]) -> dict[str, object]:
 
     stage_status_value = None
     empty_ok = False
-    if scored_pairs_value == 0 and status_value != "error":
-        stage_status_value = "empty"
-        empty_ok = True
+    if status_value != "error":
+        if packs_value == 0:
+            stage_status_value = "empty"
+            empty_ok = True
+            summary_payload.setdefault("message", "no merge candidates")
+        elif scored_pairs_value == 0:
+            stage_status_value = "empty"
+            empty_ok = True
 
     runflow_end_stage(
         sid,

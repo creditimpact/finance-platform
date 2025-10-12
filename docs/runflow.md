@@ -104,26 +104,60 @@ Stages are added lazily. If a stage never ran there will be no entry in the map.
 
 ## Examples
 
+### Merge stage with pack creations only
+
+`runflow_steps.json` keeps the merge story concise by recording the successful
+pack creations and omitting the skipped attempts that still appear in
+`runflow_events.jsonl`. A typical snippet looks like this:
+
+```json
+"merge": {
+  "status": "success",
+  "started_at": "2024-05-01T12:00:00Z",
+  "ended_at": "2024-05-01T12:01:12Z",
+  "summary": {"created_packs": 2, "scored_pairs": 5, "empty_ok": false},
+  "empty_ok": false,
+  "steps": [
+    {"seq": 7, "name": "pack_create", "status": "success", "t": "2024-05-01T12:00:46Z", "out": {"path": "runs/SID/ai_packs/merge/pack_000.json"}},
+    {"seq": 8, "name": "pack_create", "status": "success", "t": "2024-05-01T12:01:05Z", "out": {"path": "runs/SID/ai_packs/merge/pack_001.json"}}
+  ]
+}
+```
+
+Only the `pack_create` entries survive here; all of the skipped attempts remain
+discoverable in the events firehose.
+
 ### Merge stage with no candidates
 
-When merge completes without scoring any pairs we still persist the stage, mark
+When merge completes without creating any packs we still persist the stage, mark
 it as `empty`, and set `empty_ok: true` to communicate that the result is
-expected. The summary counters echo the fact that zero work was produced.
+expected. The steps list finishes with a single `no_merge_candidates` footprint
+so readers know why no packs were produced.
 
 ```json
 "merge": {
   "status": "empty",
   "started_at": "2024-05-01T12:00:00Z",
   "ended_at": "2024-05-01T12:00:01Z",
-  "summary": {"scored_pairs": 0},
+  "summary": {"scored_pairs": 0, "created_packs": 0, "empty_ok": true},
   "empty_ok": true,
-  "steps": [],
-  "next_seq": 1,
+  "steps": [
+    {
+      "seq": 4,
+      "name": "no_merge_candidates",
+      "status": "success",
+      "t": "2024-05-01T12:00:01Z",
+      "metrics": {"scored_pairs": 0}
+    }
+  ],
+  "next_seq": 5,
   "substages": {
     "default": {
       "status": "running",
       "started_at": "2024-05-01T12:00:00Z",
-      "steps": []
+      "steps": [
+        {"seq": 4, "name": "no_merge_candidates", "status": "success", "t": "2024-05-01T12:00:01Z"}
+      ]
     }
   }
 }

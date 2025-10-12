@@ -33,6 +33,45 @@ _LEVEL_RANK: Dict[str, int] = {
     _MATCH_LEVEL: 1,
 }
 
+_MASK_CHARACTERS = frozenset({"*", "X", "x", "•", "#", "∙", "·", "●", "_"})
+_ENDING_IN_PATTERN = re.compile(r"(?i)\bending[\s\-]*in\b")
+_HYPHEN_CHARACTERS = frozenset("-‐‑‒–—―−")
+
+
+def _derive_mask_metadata(raw: str, digits: str) -> tuple[str | None, bool, int]:
+    """Return mask metadata derived from the raw display value."""
+
+    if not raw:
+        return None, False, 0
+
+    cleaned = _ENDING_IN_PATTERN.sub(" ", raw)
+    mask_found = False
+    canonical_chars: list[str] = []
+
+    for char in cleaned:
+        if char in _MASK_CHARACTERS:
+            canonical_chars.append("*")
+            mask_found = True
+        elif char.isdigit():
+            canonical_chars.append(char)
+        elif char.isspace() or char in _HYPHEN_CHARACTERS:
+            continue
+        else:
+            canonical_chars.append(" ")
+
+    if canonical_chars:
+        canonical = "".join(canonical_chars)
+        canonical = re.sub(r"\s+", " ", canonical).strip()
+        canonical = canonical.replace(" ", "")
+    else:
+        canonical = ""
+
+    canon_mask = canonical if mask_found and "*" in canonical else None
+
+    visible_digits = len(digits) if digits else sum(ch.isdigit() for ch in raw)
+
+    return canon_mask, mask_found, visible_digits
+
 
 @dataclass(frozen=True)
 class NormalizedAccountNumber:
@@ -44,6 +83,21 @@ class NormalizedAccountNumber:
     @property
     def has_digits(self) -> bool:
         return bool(self.digits)
+
+    @property
+    def canon_mask(self) -> str | None:
+        canon_mask, _, _ = _derive_mask_metadata(self.raw, self.digits)
+        return canon_mask
+
+    @property
+    def has_mask(self) -> bool:
+        _, has_mask, _ = _derive_mask_metadata(self.raw, self.digits)
+        return has_mask
+
+    @property
+    def visible_digits(self) -> int:
+        _, _, visible_digits = _derive_mask_metadata(self.raw, self.digits)
+        return visible_digits
 
     def to_debug_dict(self) -> Dict[str, str]:
         return {

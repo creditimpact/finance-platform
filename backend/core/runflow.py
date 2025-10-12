@@ -61,6 +61,7 @@ _ENABLE_EVENTS = _env_enabled("RUNFLOW_EVENTS")
 _STEP_SAMPLE_EVERY = max(_env_int("RUNFLOW_STEP_LOG_EVERY", 1), 1)
 _PAIR_TOPN = max(_env_int("RUNFLOW_STEPS_PAIR_TOPN", 5), 0)
 _ENABLE_SPANS = _env_enabled("RUNFLOW_STEPS_ENABLE_SPANS", True)
+_LOG_SKIP_STEPS = _env_enabled("RUNFLOW_STEPS_LOG_SKIPS")
 
 
 _STEP_CALL_COUNTS: dict[tuple[str, str, str, str], int] = defaultdict(int)
@@ -271,6 +272,8 @@ def runflow_step(
                 "acctnum_pairs_summary",
                 "no_merge_candidates",
             }
+            if _LOG_SKIP_STEPS:
+                allowed_success_steps.add("pack_skip")
             if status == "success":
                 should_write_step = step in allowed_success_steps
             else:

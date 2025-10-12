@@ -166,11 +166,23 @@ def record_stage(
     if notes:
         summary_payload["notes"] = str(notes)
 
+    stage_status_override: Optional[str] = None
+    if stage == "frontend" and status != "error":
+        packs_value: Optional[int] = None
+        for key in ("packs_count", "packs"):
+            packs_value = _coerce_int(counts.get(key))
+            if packs_value is not None:
+                break
+        if packs_value == 0:
+            stage_status_override = "empty"
+
     runflow_end_stage(
         sid,
         stage,
         status=status,
         summary=summary_payload if summary_payload else None,
+        stage_status=stage_status_override,
+        empty_ok=empty_ok,
     )
 
     _atomic_write_json(path, data)

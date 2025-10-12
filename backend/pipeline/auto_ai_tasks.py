@@ -659,7 +659,7 @@ def ai_validation_requirements_step(
 
     stage_status: StageStatus = "success" if stats.get("ok", True) else "error"
     findings_count = int(stats.get("findings_count", stats.get("findings", 0)) or 0)
-    empty_ok = bool((stats.get("processed_accounts") or 0) == 0)
+    empty_ok = findings_count == 0
     notes_value = stats.get("notes")
 
     record_stage(
@@ -765,6 +765,7 @@ def _merge_compact_stage(payload: dict[str, object]) -> dict[str, object]:
     indices_set: set[int] = set(_normalize_indices(payload.get("touched_accounts", [])))
 
     result_pairs: list[tuple[int, int, dict[str, object]]] = []
+    merge_paths = None
     if runs_root is not None:
         try:
             merge_paths = ensure_merge_paths(runs_root, sid, create=True)
@@ -828,6 +829,24 @@ def _merge_compact_stage(payload: dict[str, object]) -> dict[str, object]:
         "compact",
         metrics={"packs": packs_count, "pairs": pairs_count},
     )
+
+    scored_pairs_value = 0
+    if merge_paths is not None:
+        try:
+            pairs_index_payload = json.loads(
+                (merge_paths.base / "pairs_index.json").read_text(encoding="utf-8")
+            )
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            scored_pairs_value = 0
+        else:
+            totals = pairs_index_payload.get("totals") if isinstance(pairs_index_payload, Mapping) else None
+            if isinstance(totals, Mapping):
+                try:
+                    scored_pairs_value = int(totals.get("scored_pairs", 0) or 0)
+                except (TypeError, ValueError):
+                    scored_pairs_value = 0
+
+    payload["merge_scored_pairs"] = scored_pairs_value
     return payload
 
 
@@ -894,13 +913,31 @@ def _finalize_stage(payload: dict[str, object]) -> dict[str, object]:
     packs_value = int(payload.get("packs", 0) or 0)
     pairs_value = int(payload.get("pairs", 0) or 0)
     skip_reason = payload.get("skip_reason")
-    summary_payload: dict[str, Any] = {"packs": packs_value, "pairs": pairs_value}
+    scored_pairs_value = int(payload.get("merge_scored_pairs", 0) or 0)
+    summary_payload: dict[str, Any] = {
+        "packs": packs_value,
+        "pairs": pairs_value,
+        "scored_pairs": scored_pairs_value,
+    }
     status_value = "success"
     if isinstance(skip_reason, str) and skip_reason:
         summary_payload["skip_reason"] = skip_reason
         status_value = "skipped"
 
-    runflow_end_stage(sid, "merge", status=status_value, summary=summary_payload)
+    stage_status_value = None
+    empty_ok = False
+    if scored_pairs_value == 0 and status_value != "error":
+        stage_status_value = "empty"
+        empty_ok = True
+
+    runflow_end_stage(
+        sid,
+        "merge",
+        status=status_value,
+        summary=summary_payload,
+        stage_status=stage_status_value,
+        empty_ok=empty_ok,
+    )
 
     return payload
 

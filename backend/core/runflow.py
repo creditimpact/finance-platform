@@ -263,20 +263,26 @@ def runflow_step(
     if steps_enabled:
         step_span_id = span_id if _ENABLE_SPANS else None
         step_parent_span_id = parent_span_id if _ENABLE_SPANS else None
-        steps_append(
-            sid,
-            stage,
-            step,
-            status,
-            t=ts,
-            account=account,
-            metrics=metrics,
-            out=out,
-            reason=reason,
-            span_id=step_span_id,
-            parent_span_id=step_parent_span_id,
-            error=error,
-        )
+        should_write_step = True
+        if stage == "merge":
+            should_write_step = step == "pack_create" and status == "success"
+        if should_write_step:
+            steps_append(
+                sid,
+                stage,
+                step,
+                status,
+                t=ts,
+                account=account,
+                metrics=metrics,
+                out=out,
+                reason=reason,
+                span_id=step_span_id,
+                parent_span_id=step_parent_span_id,
+                error=error,
+            )
+        elif stage == "merge":
+            steps_stage_start(sid, stage, started_at=ts)
 
     if events_enabled:
         event: dict[str, Any] = {

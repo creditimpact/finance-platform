@@ -68,3 +68,37 @@ def test_ai_send_packs_step_skips_when_no_packs(monkeypatch, tmp_path: Path) -> 
     assert result["skip_reason"] == "no_candidates"
     assert send_calls == []
 
+
+def test_finalize_stage_marks_no_candidates(monkeypatch, tmp_path: Path) -> None:
+    sid = "finalize"
+    recorded: dict[str, object] = {}
+
+    def _fake_end_stage(sid_value: str, stage_value: str, **kwargs: object) -> None:
+        recorded["sid"] = sid_value
+        recorded["stage"] = stage_value
+        recorded["kwargs"] = kwargs
+
+    monkeypatch.setattr(auto_ai_tasks, "runflow_end_stage", _fake_end_stage)
+    monkeypatch.setattr(auto_ai_tasks, "_cleanup_lock", lambda payload, reason: False)
+    monkeypatch.setattr(auto_ai_tasks, "_append_run_log_entry", lambda **_: None)
+
+    payload = {
+        "sid": sid,
+        "runs_root": str(tmp_path / "runs"),
+        "packs": 0,
+        "pairs": 0,
+        "merge_scored_pairs": 3,
+    }
+
+    result = auto_ai_tasks._finalize_stage(dict(payload))
+
+    assert result["packs"] == 0
+    assert recorded["sid"] == sid
+    assert recorded["stage"] == "merge"
+    kwargs = recorded["kwargs"]
+    assert kwargs["empty_ok"] is True
+    assert kwargs["stage_status"] == "empty"
+    summary = kwargs["summary"]
+    assert summary["packs"] == 0
+    assert summary["message"] == "no merge candidates"
+

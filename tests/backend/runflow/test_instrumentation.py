@@ -17,7 +17,7 @@ def _reload_runflow() -> None:
 
 def test_runflow_steps_and_events(tmp_path, monkeypatch):
     sid = "SID123"
-    stage = "merge"
+    stage = "validation"
 
     monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
     monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
@@ -128,6 +128,60 @@ def test_runflow_steps_and_events(tmp_path, monkeypatch):
         _reload_runflow()
 
 
+def test_merge_stage_records_only_pack_create_steps(tmp_path, monkeypatch):
+    sid = "SID-MERGE-FILTER"
+    stage = "merge"
+
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+    monkeypatch.setenv("RUNFLOW_EVENTS", "1")
+    monkeypatch.setenv("RUNFLOW_STEP_LOG_EVERY", "1")
+    _reload_runflow()
+
+    try:
+        runflow.runflow_start_stage(sid, stage)
+        runflow.runflow_step(
+            sid,
+            stage,
+            "load_cases",
+            metrics={"accounts": 2},
+        )
+        runflow.runflow_step(
+            sid,
+            stage,
+            "pack_create",
+            account="0-1",
+            out={"path": "ai_packs/merge/packs/0-1.json"},
+        )
+        runflow.runflow_end_stage(
+            sid,
+            stage,
+            summary={"packs": 1},
+        )
+
+        steps_path = Path(tmp_path, sid, "runflow_steps.json")
+        events_path = Path(tmp_path, sid, "runflow_events.jsonl")
+
+        steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
+        stage_payload = steps_payload["stages"][stage]
+        stage_steps = stage_payload["steps"]
+
+        assert [entry["name"] for entry in stage_steps] == ["pack_create"]
+        pack_entry = stage_steps[0]
+        assert pack_entry["status"] == "success"
+        assert pack_entry.get("out", {}).get("path") == "ai_packs/merge/packs/0-1.json"
+
+        events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+        assert any(event.get("step") == "load_cases" for event in events)
+        assert any(event.get("step") == "pack_create" for event in events)
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)
+        monkeypatch.delenv("RUNFLOW_EVENTS", raising=False)
+        monkeypatch.delenv("RUNFLOW_STEP_LOG_EVERY", raising=False)
+        _reload_runflow()
+
+
 def test_runflow_step_sampling(tmp_path, monkeypatch):
     sid = "SID-SAMPLE"
     stage = "validation"
@@ -179,7 +233,7 @@ def test_runflow_step_sampling(tmp_path, monkeypatch):
 
 def test_runflow_step_dec_error_records_and_reraises(tmp_path, monkeypatch):
     sid = "SID-DECORATOR"
-    stage = "merge"
+    stage = "validation"
 
     monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
     monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
@@ -248,7 +302,7 @@ def test_runflow_step_dec_error_records_and_reraises(tmp_path, monkeypatch):
 
 def test_stage_error_summary_is_compact(tmp_path, monkeypatch):
     sid = "SID-ERROR-SUMMARY"
-    stage = "merge"
+    stage = "validation"
 
     monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
     monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
@@ -313,7 +367,7 @@ def test_runflow_end_stage_records_empty_status(tmp_path, monkeypatch):
 
 def test_runflow_atomic_writes_and_event_appends(tmp_path, monkeypatch):
     sid = "SID-ATOMIC"
-    stage = "merge"
+    stage = "validation"
 
     monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
     monkeypatch.setenv("RUNFLOW_VERBOSE", "1")

@@ -100,6 +100,7 @@ def test_finalize_stage_marks_no_candidates(monkeypatch, tmp_path: Path) -> None
     assert kwargs["stage_status"] == "empty"
     summary = kwargs["summary"]
     assert summary["created_packs"] == 0
+    assert summary["scored_pairs"] == 3
     assert summary["empty_ok"] is True
-    assert summary["message"] == "no merge candidates"
+    assert set(summary) == {"created_packs", "scored_pairs", "empty_ok"}
 

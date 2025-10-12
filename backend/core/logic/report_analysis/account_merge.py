@@ -1729,15 +1729,6 @@ def score_all_pairs_0_100(
         for right_pos in range(left_pos + 1, total_accounts):
             score_and_maybe_build_pack(left_pos, right_pos)
 
-    if created_packs == 0:
-        span_step(
-            sid,
-            "merge",
-            "no_merge_candidates",
-            parent_span_id=merge_scoring_span,
-            metrics={"scored_pairs": pair_counter},
-        )
-
     def _pair_sort_key(item: Dict[str, Any]) -> Tuple[int, int, int, int, int, int]:
         conflict_flag = 1 if item.get("digit_conflicts") or item.get("alnum_conflicts") else 0
         allowed_flag = 1 if item.get("allowed") else 0
@@ -1832,6 +1823,15 @@ def score_all_pairs_0_100(
         metrics=totals_metrics,
         out={"pairs_index": str(pairs_index_path)},
     )
+
+    if created_packs == 0:
+        span_step(
+            sid,
+            "merge",
+            "no_merge_candidates",
+            parent_span_id=merge_scoring_span,
+            metrics={"scored_pairs": pair_counter},
+        )
 
     end_span(
         merge_scoring_span,

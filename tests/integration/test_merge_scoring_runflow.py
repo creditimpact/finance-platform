@@ -100,28 +100,51 @@ def test_merge_scoring_runflow_handles_masked_accounts(tmp_path, monkeypatch):
     stage_steps = merge_stage["steps"]
     summary = merge_stage.get("summary", {})
     step_names = [entry.get("name") for entry in stage_steps]
-    if step_names == ["no_merge_candidates"]:
-        metrics = stage_steps[0].get("metrics", {}) if stage_steps else {}
-        assert metrics.get("scored_pairs") == 3
-        if summary:
-            assert summary.get("created_packs") in (0, None)
-            assert summary.get("empty_ok") is True
-    else:
-        assert stage_steps
-        created_packs = summary.get("created_packs")
-        if created_packs == 0:
-            pytest.fail("expected no_merge_candidates step when created_packs == 0")
-        assert all(entry.get("name") == "pack_create" for entry in stage_steps)
-        assert all(entry.get("status") == "success" for entry in stage_steps)
-        assert all(entry.get("out", {}).get("path") for entry in stage_steps)
+    assert "pack_skip" not in step_names
 
-        packs_recorded = summary.get("created_packs")
-        if not isinstance(packs_recorded, int):
-            packs_recorded = summary.get("packs")
-        if isinstance(packs_recorded, int):
-            assert len(stage_steps) == packs_recorded
+    pack_entries = [entry for entry in stage_steps if entry.get("name") == "pack_create"]
+    acctnum_entries = [
+        entry for entry in stage_steps if entry.get("name") == "acctnum_match_level"
+    ]
+    summary_entries = [
+        entry for entry in stage_steps if entry.get("name") == "acctnum_pairs_summary"
+    ]
+    no_merge_entries = [
+        entry for entry in stage_steps if entry.get("name") == "no_merge_candidates"
+    ]
+
+    created_packs = summary.get("created_packs")
+    if not isinstance(created_packs, int):
+        created_packs = summary.get("packs")
+
+    if (created_packs or 0) == 0:
+        assert not pack_entries
+        assert no_merge_entries, "expected no_merge_candidates entry when no packs built"
+        last_entry = stage_steps[-1] if stage_steps else {}
+        assert last_entry.get("name") == "no_merge_candidates"
+        metrics = last_entry.get("metrics", {})
+        assert metrics.get("scored_pairs") == 3
+        stage_empty_ok = merge_stage.get("empty_ok")
+        summary_empty_ok = summary.get("empty_ok") if isinstance(summary, dict) else None
+        if stage_empty_ok is not None or summary_empty_ok is not None:
+            assert stage_empty_ok is True or summary_empty_ok is True
+    else:
+        assert pack_entries
+        assert all(entry.get("status") == "success" for entry in pack_entries)
+        assert all(entry.get("out", {}).get("path") for entry in pack_entries)
+        if isinstance(created_packs, int):
+            assert len(pack_entries) == created_packs
+
+    if acctnum_entries:
+        assert all(entry.get("status") == "success" for entry in acctnum_entries)
+
+    assert summary_entries, "expected acctnum_pairs_summary entry"
+    assert len(summary_entries) == 1
+    summary_entry = summary_entries[0]
 
     pairs_index_path = runs_root / sid / "ai_packs" / "merge" / "pairs_index.json"
     index_payload = json.loads(pairs_index_path.read_text(encoding="utf-8"))
-    assert index_payload["totals"]["scored_pairs"] == 3
+    summary_metrics = summary_entry.get("metrics", {})
+    assert summary_metrics.get("scored_pairs") == index_payload["totals"]["scored_pairs"]
+    assert summary_metrics.get("topn_limit") == index_payload["totals"]["topn_limit"]
     assert len(index_payload["pairs"]) == 3

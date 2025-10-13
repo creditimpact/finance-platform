@@ -214,4 +214,11 @@ def test_frontend_error_records_runflow_stage_error(
     summary = frontend_stage["summary"]
     assert "error" in summary
     assert summary["error"]["type"] == "RuntimeError"
+    error_steps = [
+        step for step in frontend_stage["steps"] if step.get("name") == "frontend_error"
+    ]
+    assert error_steps, "frontend_error step should be recorded"
+    error_entry = error_steps[0]
+    assert error_entry.get("out", {}).get("account_id") == "ERR-1"
+    assert error_entry.get("out", {}).get("error_class") == "RuntimeError"
 

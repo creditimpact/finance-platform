@@ -117,9 +117,18 @@ export function summarizeField(
   const uniqueValues = new Set(normalizedEntries.map(([, value]) => value));
 
   if (uniqueValues.size === 1) {
+    const summaryValue = normalizedEntries[0][1];
+    if (normalizedEntries.length === BUREAU_ORDER.length) {
+      return {
+        summary: summaryValue,
+        agreement: 'all',
+        values: normalizedValues,
+      };
+    }
+
     return {
-      summary: normalizedEntries[0][1],
-      agreement: 'all',
+      summary: summaryValue,
+      agreement: normalizedEntries.length > 1 ? 'majority' : 'mixed',
       values: normalizedValues,
     };
   }

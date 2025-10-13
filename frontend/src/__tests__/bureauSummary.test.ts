@@ -80,6 +80,25 @@ describe('summarizeField', () => {
     });
   });
 
+  it('treats shared values with a missing bureau as a majority agreement', () => {
+    const triple: BureauTriple = {
+      transunion: 'Closed',
+      experian: 'Closed',
+      equifax: '--',
+    };
+
+    const result = summarize(triple);
+
+    expect(result).toEqual({
+      summary: 'Closed',
+      agreement: 'majority' satisfies Agreement,
+      values: {
+        transunion: 'Closed',
+        experian: 'Closed',
+      },
+    });
+  });
+
   it('selects the most informative masked value for account numbers when mixed', () => {
     const triple: BureauTriple = {
       transunion: '***1234',

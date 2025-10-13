@@ -26,7 +26,7 @@ type AccountDisplay = {
   questions?: QuestionBlock;
 };
 
-type AccountPack = {
+export type AccountPack = {
   holder_name?: string | null;
   primary_issue?: string | null;
   display?: AccountDisplay | null;

@@ -435,6 +435,7 @@ def generate_frontend_packs_for_run(
         skipped_missing = 0
         skip_reasons = {"missing_inputs": 0, "no_bureaus": 0}
         sampled_write_packs = 0
+        write_errors: list[tuple[str, Exception]] = []
 
         for account_dir in account_dirs:
             summary = _load_json(account_dir / "summary.json")
@@ -475,13 +476,24 @@ def generate_frontend_packs_for_run(
                 "questions": _QUESTION_SET,
             }
 
-            built_docs += 1
-
             account_dirname = _safe_account_dirname(account_id, account_dir.name)
             pack_dir = accounts_output_dir / account_dirname
-            pack_dir.mkdir(parents=True, exist_ok=True)
             pack_path = pack_dir / "pack.json"
-            _atomic_write_json(pack_path, pack_payload)
+
+            try:
+                pack_dir.mkdir(parents=True, exist_ok=True)
+                _atomic_write_json(pack_path, pack_payload)
+            except Exception as exc:
+                log.exception(
+                    "FRONTEND_PACK_WRITE_FAILED sid=%s account=%s path=%s",
+                    sid,
+                    account_id,
+                    pack_path,
+                )
+                write_errors.append((account_id, exc))
+                continue
+
+            built_docs += 1
 
             try:
                 relative_pack = pack_path.relative_to(run_dir).as_posix()
@@ -514,12 +526,26 @@ def generate_frontend_packs_for_run(
         skip_summary = {key: value for key, value in skip_reasons.items() if value}
         if skip_summary:
             build_out["skip_reasons"] = skip_summary
+        if write_errors:
+            build_out["write_failures"] = len(write_errors)
+            build_out["failed_accounts"] = [acct for acct, _ in write_errors[:5]]
+
+        build_status = "error" if write_errors else "success"
+        error_payload = None
+        if write_errors:
+            error_payload = {
+                "type": "PackWriteError",
+                "message": f"{len(write_errors)} pack writes failed",
+            }
+
         runflow_step(
             sid,
             "frontend",
             "build_pack_docs",
+            status=build_status,
             metrics=build_metrics,
             out=build_out or None,
+            error=error_payload,
         )
 
         generated_at = _now_iso()
@@ -559,7 +585,10 @@ def generate_frontend_packs_for_run(
             "packs_count": pack_count,
             "responses_received": responses_count,
             "empty_ok": pack_count == 0,
+            "skipped_missing": skipped_missing,
         }
+        if write_errors:
+            summary["write_failures"] = len(write_errors)
         runflow_stage_end(
             "frontend",
             sid=sid,

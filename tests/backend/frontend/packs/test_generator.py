@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import backend.frontend.packs.generator as generator_module
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
 
 
@@ -145,3 +146,60 @@ def test_generate_frontend_packs_task_exposed(tmp_path, monkeypatch):
 
     index_path = runs_root / sid / "frontend" / "index.json"
     assert index_path.exists()
+
+
+def test_generate_frontend_packs_continues_on_pack_write_failure(tmp_path, monkeypatch):
+    runs_root = tmp_path / "runs"
+    sid = "S-partial"
+
+    account1_dir = runs_root / sid / "cases" / "accounts" / "1"
+    account2_dir = runs_root / sid / "cases" / "accounts" / "2"
+
+    shared_summary = {
+        "account_id": "acct-success",
+        "labels": {"creditor": "Cred", "account_type": "Loan", "status": "Open"},
+    }
+    shared_bureaus = {
+        "transunion": {
+            "account_number_display": "****9999",
+            "balance_owed": "$50",
+            "date_opened": "2023-01-01",
+            "date_reported": "2023-02-01",
+            "account_status": "Open",
+            "account_type": "Loan",
+        }
+    }
+
+    _write_json(account1_dir / "summary.json", {**shared_summary, "account_id": "acct-fail"})
+    _write_json(account1_dir / "bureaus.json", shared_bureaus)
+
+    _write_json(account2_dir / "summary.json", shared_summary)
+    _write_json(account2_dir / "bureaus.json", shared_bureaus)
+
+    original_write = generator_module._atomic_write_json
+
+    def flaky_atomic_write(path, payload):
+        if "acct-fail" in str(path):
+            raise OSError("disk full")
+        return original_write(path, payload)
+
+    monkeypatch.setattr(generator_module, "_atomic_write_json", flaky_atomic_write)
+
+    result = generator_module.generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    failing_pack = runs_root / sid / "frontend" / "accounts" / "acct-fail" / "pack.json"
+    successful_pack = (
+        runs_root / sid / "frontend" / "accounts" / "acct-success" / "pack.json"
+    )
+
+    assert not failing_pack.exists()
+    assert successful_pack.exists()
+
+    index_path = runs_root / sid / "frontend" / "index.json"
+    index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+
+    assert index_payload["packs_count"] == 1
+    assert index_payload["accounts"][0]["account_id"] == "acct-success"
+
+    assert result["status"] == "success"
+    assert result["packs_count"] == 1

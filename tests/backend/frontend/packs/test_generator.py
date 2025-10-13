@@ -12,6 +12,22 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def test_holder_name_from_raw_lines_prefers_spaced_candidate() -> None:
+    raw_lines = ["UNRELATED", "JANE SAMPLE", "ACCOUNT # 123"]
+
+    result = generator_module.holder_name_from_raw_lines(raw_lines)
+
+    assert result == "JANE SAMPLE"
+
+
+def test_holder_name_from_raw_lines_handles_missing_candidates() -> None:
+    raw_lines = ["account # 123", "", "12345"]
+
+    result = generator_module.holder_name_from_raw_lines(raw_lines)
+
+    assert result is None
+
+
 def test_generate_frontend_packs_builds_account_pack(tmp_path):
     runs_root = tmp_path / "runs"
     sid = "S100"

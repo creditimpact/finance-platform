@@ -135,6 +135,24 @@ def _load_json_payload(path: Path) -> Any:
         return None
 
 
+def _write_json_if_changed(path: Path, payload: Any) -> bool:
+    current = _load_json_payload(path)
+    if current == payload:
+        return False
+
+    _atomic_write_json(path, payload)
+    return True
+
+
+def _log_done(sid: str, packs: int, **extras: Any) -> None:
+    details = [f"sid={sid}", f"packs={packs}"]
+    for key, value in sorted(extras.items()):
+        if value is None:
+            continue
+        details.append(f"{key}={value}")
+    log.info("PACKGEN_FRONTEND_DONE %s", " ".join(details))
+
+
 def _extract_text(value: Any) -> str | None:
     if isinstance(value, str):
         trimmed = value.strip()
@@ -467,7 +485,6 @@ def generate_frontend_packs_for_run(
 
     try:
         if not _frontend_packs_enabled():
-            log.info("PACKGEN_FRONTEND_SKIP sid=%s", sid)
             runflow_step(
                 sid,
                 "frontend",
@@ -496,6 +513,7 @@ def generate_frontend_packs_for_run(
                 summary=summary,
                 empty_ok=True,
             )
+            _log_done(sid, 0, status="skipped", reason="disabled")
             return {
                 "status": "skipped",
                 "packs_count": 0,
@@ -532,7 +550,7 @@ def generate_frontend_packs_for_run(
                 "packs_count": 0,
                 "questions": _QUESTION_SET,
             }
-            _atomic_write_json(index_path, payload)
+            _write_json_if_changed(index_path, payload)
             runflow_step(
                 sid,
                 "frontend",
@@ -563,6 +581,7 @@ def generate_frontend_packs_for_run(
                 summary=summary,
                 empty_ok=True,
             )
+            _log_done(sid, 0, status="success")
             return {
                 "status": "success",
                 "packs_count": 0,
@@ -580,7 +599,7 @@ def generate_frontend_packs_for_run(
                     accounts = existing.get("accounts")
                     if isinstance(accounts, list):
                         packs_count = len(accounts)
-                log.info(
+                log.debug(
                     "FRONTEND_PACKS_EXISTS sid=%s path=%s", sid, index_path
                 )
                 generated_at = existing.get("generated_at")
@@ -616,6 +635,7 @@ def generate_frontend_packs_for_run(
                     summary=summary,
                     empty_ok=packs_count == 0,
                 )
+                _log_done(sid, packs_count, status="success", cache_hit=True)
                 return {
                     "status": "success",
                     "packs_count": packs_count,
@@ -627,6 +647,7 @@ def generate_frontend_packs_for_run(
 
         packs: list[dict[str, Any]] = []
         built_docs = 0
+        unchanged_docs = 0
         skipped_missing = 0
         skip_reasons = {"missing_inputs": 0, "no_bureaus": 0}
         sampled_write_packs = 0
@@ -690,7 +711,7 @@ def generate_frontend_packs_for_run(
                 "holder_name": holder_name,
                 "primary_issue": primary_issue,
                 "pointers": pointers,
-                "questions": _QUESTION_SET,
+                "questions": list(_QUESTION_SET),
             }
             if issues:
                 pack_payload["issues"] = issues
@@ -701,7 +722,7 @@ def generate_frontend_packs_for_run(
 
             try:
                 pack_dir.mkdir(parents=True, exist_ok=True)
-                _atomic_write_json(pack_path, pack_payload)
+                changed = _write_json_if_changed(pack_path, pack_payload)
             except Exception as exc:
                 log.exception(
                     "FRONTEND_PACK_WRITE_FAILED sid=%s account=%s path=%s",
@@ -712,14 +733,17 @@ def generate_frontend_packs_for_run(
                 write_errors.append((account_id, exc))
                 continue
 
-            built_docs += 1
+            if changed:
+                built_docs += 1
+            else:
+                unchanged_docs += 1
 
             try:
                 relative_pack = pack_path.relative_to(run_dir).as_posix()
             except ValueError:
                 relative_pack = str(pack_path)
 
-            if sampled_write_packs < packs_topn:
+            if changed and sampled_write_packs < packs_topn:
                 runflow_step(
                     sid,
                     "frontend",
@@ -743,7 +767,11 @@ def generate_frontend_packs_for_run(
                 }
             )
 
-        build_metrics = {"built": built_docs, "skipped_missing": skipped_missing}
+        build_metrics = {
+            "built": built_docs,
+            "skipped_missing": skipped_missing,
+            "unchanged": unchanged_docs,
+        }
         build_out: dict[str, Any] = {}
         skip_summary = {key: value for key, value in skip_reasons.items() if value}
         if skip_summary:
@@ -771,23 +799,33 @@ def generate_frontend_packs_for_run(
         )
 
         generated_at = _now_iso()
-        pack_count = built_docs
-        index_payload = {
+        pack_count = len(packs)
+        index_payload_base = {
             "sid": sid,
-            "generated_at": generated_at,
             "accounts": packs,
             "packs_count": pack_count,
-            "questions": _QUESTION_SET,
+            "questions": list(_QUESTION_SET),
         }
 
-        _atomic_write_json(index_path, index_payload)
+        existing_index = _load_json_payload(index_path)
+        if isinstance(existing_index, Mapping):
+            existing_base = {
+                "sid": existing_index.get("sid"),
+                "accounts": existing_index.get("accounts"),
+                "packs_count": existing_index.get("packs_count"),
+                "questions": existing_index.get("questions"),
+            }
+            if existing_base == index_payload_base:
+                prior_generated = existing_index.get("generated_at")
+                if isinstance(prior_generated, str):
+                    generated_at = prior_generated
 
-        log.info(
-            "FRONTEND_PACKS_GENERATED sid=%s packs=%d path=%s",
-            sid,
-            pack_count,
-            index_path,
-        )
+        index_payload = {**index_payload_base, "generated_at": generated_at}
+
+        _write_json_if_changed(index_path, index_payload)
+
+        done_status = "error" if write_errors else "success"
+        _log_done(sid, pack_count, status=done_status)
 
         try:
             index_out = index_path.relative_to(run_dir).as_posix()
@@ -809,6 +847,10 @@ def generate_frontend_packs_for_run(
             "empty_ok": pack_count == 0,
             "skipped_missing": skipped_missing,
         }
+        if built_docs:
+            summary["built"] = built_docs
+        if unchanged_docs:
+            summary["unchanged"] = unchanged_docs
         if write_errors:
             summary["write_failures"] = len(write_errors)
         runflow_stage_end(

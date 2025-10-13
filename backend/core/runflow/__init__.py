@@ -252,37 +252,54 @@ def runflow_step(
     ts = _utcnow_iso()
     substage_name = substage or "default"
 
-    if status == "success":
-        should_record = _should_record_step(sid, stage, substage_name, step, status)
-        if not should_record:
-            return
-    else:
-        # Ensure counters stay up to date even when not sampling success entries.
-        _STEP_CALL_COUNTS[(sid, stage, substage_name, step)] += 1
+    event_step = step
+    event_status = status
 
-    if steps_enabled:
+    step_for_steps: Optional[str] = step
+    status_for_steps = status
+
+    if stage == "merge":
+        if event_step == "merge_scoring":
+            if event_status == "start":
+                step_for_steps = "merge_scoring_start"
+                status_for_steps = "success"
+            else:
+                step_for_steps = "merge_scoring_finish"
+                status_for_steps = event_status
+        elif event_step == "pack_skip" and event_status == "success":
+            step_for_steps = None
+
+    record_step_success = True
+    if step_for_steps is not None and status_for_steps == "success":
+        record_step_success = _should_record_step(
+            sid, stage, substage_name, step_for_steps, status_for_steps
+        )
+        if not record_step_success:
+            return
+    elif step_for_steps is not None and status_for_steps != "success":
+        _STEP_CALL_COUNTS[(sid, stage, substage_name, step_for_steps)] += 1
+
+    if steps_enabled and step_for_steps is not None and record_step_success:
         step_span_id = span_id if _ENABLE_SPANS else None
         step_parent_span_id = parent_span_id if _ENABLE_SPANS else None
         should_write_step = True
         if stage == "merge":
             allowed_success_steps = {
+                "merge_scoring_start",
+                "acctnum_normalize",
                 "pack_create",
-                "acctnum_match_level",
-                "acctnum_pairs_summary",
-                "no_merge_candidates",
-                "load_cases",
-                "score_pairs",
+                "merge_scoring_finish",
             }
-            if status == "success":
-                should_write_step = step in allowed_success_steps
+            if status_for_steps == "success":
+                should_write_step = step_for_steps in allowed_success_steps
             else:
-                should_write_step = False
+                should_write_step = step_for_steps == "merge_scoring_finish"
         if should_write_step:
             steps_append(
                 sid,
                 stage,
-                step,
-                status,
+                step_for_steps,
+                status_for_steps,
                 t=ts,
                 account=account,
                 metrics=metrics,
@@ -299,8 +316,8 @@ def runflow_step(
         event: dict[str, Any] = {
             "ts": ts,
             "stage": stage,
-            "step": step,
-            "status": status,
+            "step": event_step,
+            "status": event_status,
             "substage": substage_name,
         }
         if account is not None:

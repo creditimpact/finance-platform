@@ -632,7 +632,6 @@ def build_lean_pack_doc(
             "primary_issue": display_payload["primary_issue"],
             "account_type": display_payload["account_type"],
             "status": display_payload["status"],
-            "display_version": _DISPLAY_SCHEMA_VERSION,
             "balance_owed": {"per_bureau": dict(display_payload["balance_owed"]["per_bureau"])},
             "date_opened": dict(display_payload["date_opened"]),
             "closed_date": dict(display_payload["closed_date"]),
@@ -882,6 +881,8 @@ def generate_frontend_packs_for_run(
             tags_path = account_dir / "tags.json"
             holder_name = _derive_holder_name(meta_payload, raw_path)
             primary_issue, issues = _extract_issue_tags(tags_path)
+            if not primary_issue:
+                primary_issue = "unknown"
 
             display_holder_name = _coerce_display_text(holder_name)
             display_primary_issue = _coerce_display_text(primary_issue)

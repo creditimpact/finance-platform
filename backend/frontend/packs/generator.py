@@ -291,6 +291,20 @@ def _derive_masked_display(last4_payload: Mapping[str, Any] | None) -> str:
     return "****"
 
 
+def _coerce_display_text(value: Any) -> str:
+    """Normalize optional display text into a stable string value."""
+
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned if cleaned else ""
+
+    if value is None:
+        return ""
+
+    cleaned = str(value).strip()
+    return cleaned if cleaned else ""
+
+
 def _collect_field_per_bureau(
     bureaus: Mapping[str, Mapping[str, Any]], field: str
 ) -> tuple[dict[str, str], str | None]:
@@ -750,6 +764,9 @@ def generate_frontend_packs_for_run(
             holder_name = _derive_holder_name(meta_payload, raw_path)
             primary_issue, issues = _extract_issue_tags(tags_path)
 
+            display_holder_name = _coerce_display_text(holder_name)
+            display_primary_issue = _coerce_display_text(primary_issue)
+            
             creditor_name_value = labels.get("creditor_name") or _extract_text(
                 first_bureau.get("creditor_name")
             )
@@ -759,6 +776,9 @@ def generate_frontend_packs_for_run(
             status_value = labels.get("status") or _extract_text(
                 first_bureau.get("account_status")
             )
+
+            display_account_type = _coerce_display_text(account_type_value)
+            display_status = _coerce_display_text(status_value)
 
             last4_payload = bureau_summary.get("last4")
             if not isinstance(last4_payload, Mapping):
@@ -796,11 +816,11 @@ def generate_frontend_packs_for_run(
             closed_date_per_bureau = _normalize_per_bureau(closed_date_source)
 
             display_payload = {
-                "holder_name": holder_name,
+                "holder_name": display_holder_name,
                 "display": last4_display,
-                "primary_issue": primary_issue,
-                "account_type": account_type_value,
-                "status": status_value,
+                "primary_issue": display_primary_issue,
+                "account_type": display_account_type,
+                "status": display_status,
                 "balance_owed": {"per_bureau": balance_per_bureau},
                 "date_opened": date_opened_per_bureau,
                 "closed_date": closed_date_per_bureau,

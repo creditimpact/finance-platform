@@ -1,6 +1,6 @@
 {
   "transunion": {
-    "account_number_display": "--",
+    "account_number_display": "440066**********",
     "high_balance": "--",
     "last_verified": "--",
     "date_of_last_activity": "--",
@@ -12,19 +12,19 @@
     "account_description": "--",
     "dispute_status": "--",
     "creditor_type": "--",
-    "account_status": "--",
+    "account_status": "Closed",
     "payment_status": "--",
     "creditor_remarks": "--",
     "payment_amount": "--",
     "last_payment": "--",
     "term_length": "--",
     "past_due_amount": "--",
-    "account_type": "--",
+    "account_type": "Credit Card",
     "payment_frequency": "--",
     "credit_limit": "--"
   },
   "experian": {
-    "account_number_display": "--",
+    "account_number_display": "440066**********",
     "high_balance": "$0",
     "last_verified": "--",
     "date_of_last_activity": "1.5.2025",
@@ -48,7 +48,7 @@
     "credit_limit": "$11,000"
   },
   "equifax": {
-    "account_number_display": "--",
+    "account_number_display": "440066**********",
     "high_balance": "--",
     "last_verified": "--",
     "date_of_last_activity": "--",
@@ -60,14 +60,14 @@
     "account_description": "--",
     "dispute_status": "--",
     "creditor_type": "--",
-    "account_status": "--",
+    "account_status": "Closed",
     "payment_status": "--",
     "creditor_remarks": "--",
     "payment_amount": "--",
     "last_payment": "--",
     "term_length": "--",
     "past_due_amount": "--",
-    "account_type": "--",
+    "account_type": "Credit Card",
     "payment_frequency": "--",
     "credit_limit": "--"
   },

@@ -1,4 +1,6 @@
 import json
+import shutil
+from pathlib import Path
 
 from backend.frontend.packs import generator
 
@@ -119,3 +121,55 @@ def test_lean_pack_preserves_consensus_defaults() -> None:
     assert display["account_number"]["consensus"] == "--"
     assert display["account_type"]["consensus"] == "--"
     assert display["status"]["consensus"] == "--"
+
+
+def test_example_account_16_pack_contains_per_bureau(tmp_path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    sample_account_dir = (
+        repo_root
+        / "runs"
+        / "a09686e7-11b9-47a8-a5a0-0fdabc20e220"
+        / "cases"
+        / "accounts"
+        / "16"
+    )
+
+    destination_account_dir = (
+        tmp_path
+        / "runs"
+        / "sample-sid"
+        / "cases"
+        / "accounts"
+        / "16"
+    )
+    destination_account_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(sample_account_dir, destination_account_dir)
+
+    result = generator.generate_frontend_packs_for_run(
+        "sample-sid", runs_root=tmp_path / "runs"
+    )
+    assert result["packs_count"] == 1
+
+    pack_path = (
+        tmp_path
+        / "runs"
+        / "sample-sid"
+        / "frontend"
+        / "accounts"
+        / "idx-016"
+        / "pack.json"
+    )
+    pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
+    display_payload = pack_payload["display"]
+
+    assert (
+        display_payload["account_number"]["per_bureau"]["equifax"]
+        == "440066**********"
+    )
+    assert display_payload["account_number"]["consensus"] == "440066**********"
+    assert (
+        display_payload["account_type"]["per_bureau"]["transunion"] == "Credit Card"
+    )
+    assert display_payload["account_type"]["consensus"] == "Credit Card"
+    assert display_payload["status"]["per_bureau"]["transunion"] == "Closed"
+    assert display_payload["status"]["consensus"] == "Closed"

@@ -24,6 +24,7 @@ from backend.ai.manifest import (
     extract_stage_manifest_paths,
 )
 from backend.analytics.analytics_tracker import emit_counter
+from backend.core.runflow import runflow_step
 from backend.core.ai.paths import (
     validation_result_error_filename_for_account,
     validation_result_json_filename_for_account,
@@ -2293,6 +2294,12 @@ class ValidationPackSender:
             results_written=results_written,
             skipped_existing=skipped_existing,
             errors=error_count,
+        )
+        runflow_step(
+            self.sid,
+            self._stage,
+            "ai_results",
+            metrics={"received": results_written, "total": packs_total},
         )
         return results
 

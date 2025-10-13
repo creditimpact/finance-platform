@@ -92,8 +92,7 @@ def test_validation_zero_findings_still_runs_frontend(tmp_path, monkeypatch):
     assert frontend_stage["summary"]["packs_count"] == 0
 
     step_names = [entry["name"] for entry in frontend_stage["steps"]]
-    assert step_names[:3] == [
-        "scan_accounts",
+    assert step_names[:2] == [
         "build_pack_docs",
         "write_index",
     ]

@@ -56,17 +56,6 @@ def _frontend_packs_enabled() -> bool:
     return value not in {"0", "false", "False"}
 
 
-def _frontend_packs_topn() -> int:
-    raw_value = os.getenv("RUNFLOW_STEPS_FRONTEND_PACKS_TOPN")
-    if raw_value is None:
-        return 0
-    try:
-        value = int(raw_value.strip())
-    except (TypeError, ValueError):
-        return 0
-    return max(value, 0)
-
-
 def _count_frontend_responses(responses_dir: Path) -> int:
     if not responses_dir.is_dir():
         return 0
@@ -81,15 +70,8 @@ def _count_frontend_responses(responses_dir: Path) -> int:
     return total
 
 
-def _emit_responses_scan(sid: str, responses_dir: Path) -> int:
-    count = _count_frontend_responses(responses_dir)
-    runflow_step(
-        sid,
-        "frontend",
-        "responses_scan",
-        metrics={"received": count},
-    )
-    return count
+def _emit_responses_scan(_sid: str, responses_dir: Path) -> int:
+    return _count_frontend_responses(responses_dir)
 
 
 def _account_sort_key(path: Path) -> tuple[int, Any]:
@@ -481,22 +463,14 @@ def generate_frontend_packs_for_run(
     packs_dir_str = str(frontend_dir.absolute())
 
     runflow_stage_start("frontend", sid=sid)
-    packs_topn = _frontend_packs_topn()
-
     try:
         if not _frontend_packs_enabled():
             runflow_step(
                 sid,
                 "frontend",
-                "scan_accounts",
-                metrics={"accounts": 0},
-            )
-            runflow_step(
-                sid,
-                "frontend",
                 "build_pack_docs",
                 status="skipped",
-                metrics={"built": 0, "skipped_missing": 0},
+                metrics={"accounts": 0, "built": 0, "skipped_missing": 0},
                 out={"reason": "disabled"},
             )
             responses_count = _emit_responses_scan(sid, responses_dir)
@@ -534,12 +508,7 @@ def generate_frontend_packs_for_run(
             if accounts_dir.is_dir()
             else []
         )
-        runflow_step(
-            sid,
-            "frontend",
-            "scan_accounts",
-            metrics={"accounts": len(account_dirs)},
-        )
+        total_accounts = len(account_dirs)
 
         if not account_dirs:
             generated_at = _now_iso()
@@ -555,7 +524,7 @@ def generate_frontend_packs_for_run(
                 sid,
                 "frontend",
                 "build_pack_docs",
-                metrics={"built": 0, "skipped_missing": 0},
+                metrics={"accounts": total_accounts, "built": 0, "skipped_missing": 0},
                 out={"reason": "no_accounts"},
             )
             try:
@@ -608,7 +577,7 @@ def generate_frontend_packs_for_run(
                     sid,
                     "frontend",
                     "build_pack_docs",
-                    metrics={"built": packs_count, "skipped_missing": 0},
+                    metrics={"accounts": total_accounts, "built": packs_count, "skipped_missing": 0},
                     out={"cache_hit": True},
                 )
                 try:
@@ -650,7 +619,6 @@ def generate_frontend_packs_for_run(
         unchanged_docs = 0
         skipped_missing = 0
         skip_reasons = {"missing_inputs": 0, "no_bureaus": 0}
-        sampled_write_packs = 0
         write_errors: list[tuple[str, Exception]] = []
 
         for account_dir in account_dirs:
@@ -731,6 +699,17 @@ def generate_frontend_packs_for_run(
                     pack_path,
                 )
                 write_errors.append((account_id, exc))
+                runflow_step(
+                    sid,
+                    "frontend",
+                    "frontend_error",
+                    status="error",
+                    out={
+                        "account_id": account_id,
+                        "error_class": exc.__class__.__name__,
+                        "message": str(exc),
+                    },
+                )
                 continue
 
             if changed:
@@ -742,16 +721,6 @@ def generate_frontend_packs_for_run(
                 relative_pack = pack_path.relative_to(run_dir).as_posix()
             except ValueError:
                 relative_pack = str(pack_path)
-
-            if changed and sampled_write_packs < packs_topn:
-                runflow_step(
-                    sid,
-                    "frontend",
-                    "write_pack",
-                    account=account_id,
-                    out={"path": relative_pack},
-                )
-                sampled_write_packs += 1
 
             packs.append(
                 {
@@ -768,6 +737,7 @@ def generate_frontend_packs_for_run(
             )
 
         build_metrics = {
+            "accounts": total_accounts,
             "built": built_docs,
             "skipped_missing": skipped_missing,
             "unchanged": unchanged_docs,

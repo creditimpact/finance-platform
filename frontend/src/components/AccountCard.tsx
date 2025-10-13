@@ -6,6 +6,7 @@ import FieldSummary from './FieldSummary';
 import BureauGrid from './BureauGrid';
 import { AgreementLevel, BUREAUS, BureauKey, MISSING_VALUE } from './accountFieldTypes';
 import { summarizeField as summarizeBureauField, type BureauTriple } from '../utils/bureauSummary';
+import { QUESTION_COPY, type AccountQuestionKey } from './questionCopy';
 
 type PerBureauBlock = {
   per_bureau?: Partial<Record<BureauKey, string | null | undefined>>;
@@ -13,7 +14,7 @@ type PerBureauBlock = {
 
 type DateBlock = Partial<Record<BureauKey, string | null | undefined>>;
 
-type QuestionBlock = Partial<Record<'ownership' | 'recognize' | 'explanation' | 'identity_theft', string | null | undefined>>;
+type QuestionBlock = Partial<Record<AccountQuestionKey, string | null | undefined>>;
 
 type AccountDisplay = {
   account_number?: PerBureauBlock;
@@ -49,25 +50,6 @@ const SUMMARY_FIELDS: SummaryFieldConfig[] = [
   { key: 'date_opened', label: 'Date opened' },
   { key: 'closed_date', label: 'Closed date' }
 ];
-
-const QUESTION_COPY: Record<keyof NonNullable<QuestionBlock>, { title: string; helper: string }> = {
-  ownership: {
-    title: 'Do you own this account?',
-    helper: 'Tell us if the account belongs to you or a shared account.'
-  },
-  recognize: {
-    title: 'Do you recognize this account?',
-    helper: 'Let us know if the account looks familiar or if it is unexpected.'
-  },
-  explanation: {
-    title: 'Anything else we should know?',
-    helper: 'Add a quick note that might help us understand the situation.'
-  },
-  identity_theft: {
-    title: 'Could this be identity theft?',
-    helper: 'Share if you suspect this account is the result of identity theft.'
-  }
-};
 
 function toBureauTriple(field: PerBureauBlock | DateBlock | undefined): BureauTriple {
   if (!field) {

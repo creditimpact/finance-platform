@@ -84,17 +84,9 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert pack_path.exists()
 
     pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
-    assert pack_payload["creditor_name"] == "Sample Creditor"
-    assert pack_payload["account_type"] == "Credit Card"
-    assert pack_payload["status"] == "Closed"
-    assert pack_payload["last4"]["last4"] == "1234"
-    assert pack_payload["balance_owed"]["consensus"] == "$100"
-    assert set(pack_payload["balance_owed"]["per_bureau"].keys()) == {"transunion", "experian"}
-    assert pack_payload["questions"][0]["id"] == "ownership"
-    assert len(pack_payload["bureau_badges"]) == 2
+    assert list(pack_payload.keys()) == ["holder_name", "primary_issue", "display"]
     assert pack_payload["holder_name"] == "John Doe"
     assert pack_payload["primary_issue"] == "wrong_account"
-    assert pack_payload["issues"] == ["wrong_account", "late_payment"]
 
     display_block = pack_payload["display"]
     assert list(display_block.keys()) == [
@@ -128,14 +120,6 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
         "transunion": "2023-02-01",
         "experian": "--",
         "equifax": "--",
-    }
-    assert pack_payload["pointers"] == {
-        "meta": "cases/accounts/1/meta.json",
-        "tags": "cases/accounts/1/tags.json",
-        "raw": "cases/accounts/1/raw_lines.json",
-        "bureaus": "cases/accounts/1/bureaus.json",
-        "flat": "cases/accounts/1/fields_flat.json",
-        "summary": "cases/accounts/1/summary.json",
     }
 
     index_path = runs_root / sid / "frontend" / "index.json"
@@ -227,9 +211,10 @@ def test_generate_frontend_packs_meta_heading_and_primary_issue(tmp_path):
     pack_path = runs_root / sid / "frontend" / "accounts" / "acct-meta" / "pack.json"
     payload = json.loads(pack_path.read_text(encoding="utf-8"))
 
+    assert list(payload.keys()) == ["holder_name", "primary_issue", "display"]
     assert payload["holder_name"] == "SPS"
     assert payload["primary_issue"] == "delinquency"
-    assert payload["issues"] == ["delinquency"]
+    assert "issues" not in payload
 
     assert result["packs_count"] == 1
 
@@ -251,17 +236,20 @@ def test_generate_frontend_packs_holder_name_from_raw_when_meta_missing(tmp_path
     pack_path = runs_root / sid / "frontend" / "accounts" / "acct-raw" / "pack.json"
     payload = json.loads(pack_path.read_text(encoding="utf-8"))
 
+    assert list(payload.keys()) == ["holder_name", "primary_issue", "display"]
     assert payload["holder_name"] == "ACME BANK"
     assert payload["primary_issue"] == "ownership"
-    assert payload["issues"] == ["ownership"]
+    assert "issues" not in payload
 
     assert result["packs_count"] == 1
 
 
-def test_generate_frontend_packs_backfills_missing_pointers(tmp_path):
+def test_generate_frontend_packs_backfills_missing_pointers(tmp_path, monkeypatch):
     runs_root = tmp_path / "runs"
     sid = "S-backfill"
     account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    monkeypatch.setenv("FRONTEND_PACKS_LEAN", "0")
 
     _write_minimal_account(
         account_dir,
@@ -341,8 +329,9 @@ def test_generate_frontend_packs_multiple_issues_first_primary(tmp_path):
     pack_path = runs_root / sid / "frontend" / "accounts" / "acct-issues" / "pack.json"
     payload = json.loads(pack_path.read_text(encoding="utf-8"))
 
+    assert list(payload.keys()) == ["holder_name", "primary_issue", "display"]
     assert payload["primary_issue"] == "collection"
-    assert payload["issues"] == ["collection", "late_history"]
+    assert "issues" not in payload
 
     assert result["packs_count"] == 1
 
@@ -376,8 +365,10 @@ def test_generate_frontend_packs_holder_name_fallback(tmp_path):
     pack_path = runs_root / sid / "frontend" / "accounts" / "acct-2" / "pack.json"
     pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
 
+    assert list(pack_payload.keys()) == ["holder_name", "primary_issue", "display"]
     assert pack_payload["holder_name"] == "JANE SAMPLE"
     assert pack_payload["primary_issue"] == "identity_theft"
+    assert "issues" not in pack_payload
 
     index_path = runs_root / sid / "frontend" / "index.json"
     index_payload = json.loads(index_path.read_text(encoding="utf-8"))
@@ -520,7 +511,7 @@ def test_generate_frontend_packs_continues_on_pack_write_failure(tmp_path, monke
     assert index_payload["packs_count"] == 1
     index_entry = index_payload["accounts"][0]
     assert index_entry["account_id"] == "acct-success"
-    assert index_entry["holder_name"] is None
+    assert index_entry["holder_name"] == ""
     assert index_entry["display"] == "****9999"
     assert index_entry["primary_issue"] == "late_payment"
     assert index_entry["balance_owed"] == {

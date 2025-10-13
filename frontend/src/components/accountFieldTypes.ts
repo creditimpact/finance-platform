@@ -8,6 +8,6 @@ export const BUREAU_LABELS: Record<BureauKey, string> = {
   equifax: 'EF'
 };
 
-export type AgreementLevel = 'all' | 'two' | 'mixed' | 'none';
+export type AgreementLevel = 'all' | 'majority' | 'mixed' | 'none';
 
 export const MISSING_VALUE = '—';

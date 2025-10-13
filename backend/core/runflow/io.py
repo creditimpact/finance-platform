@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Mapping, MutableMapping, Optional
 
 from backend.core.runflow import runflow_end_stage, runflow_start_stage
+from backend.core.runflow.env_snapshot import log_stage_env_snapshot
 
 
 def _normalize_summary(summary: Optional[Mapping[str, object]]) -> dict[str, object]:
@@ -104,6 +105,8 @@ def runflow_stage_start(stage: str, *, sid: str, substage: str = "default") -> N
 
     extra: Optional[MutableMapping[str, object]]
     substage_name = substage.strip()
+    if substage_name == "default":
+        log_stage_env_snapshot(stage, sid=sid)
     if substage_name:
         extra = {"substage": substage_name}
     else:

@@ -632,35 +632,49 @@ def _normalize_per_bureau(source: Mapping[str, Any] | None) -> dict[str, str]:
     return normalized
 
 
+def _normalize_consensus_text(value: Any) -> str:
+    if isinstance(value, str):
+        trimmed = value.strip()
+    elif value is None:
+        trimmed = ""
+    else:
+        trimmed = str(value).strip()
+    return trimmed if trimmed else "--"
+
+
 def build_display_payload(
     *,
     holder_name: str,
     primary_issue: str,
     account_number_per_bureau: Mapping[str, str],
-    account_number_consensus: str,
+    account_number_consensus: str | None,
     account_type_per_bureau: Mapping[str, str],
-    account_type_consensus: str,
+    account_type_consensus: str | None,
     status_per_bureau: Mapping[str, str],
-    status_consensus: str,
+    status_consensus: str | None,
     balance_per_bureau: Mapping[str, str],
     date_opened_per_bureau: Mapping[str, str],
     closed_date_per_bureau: Mapping[str, str],
 ) -> dict[str, Any]:
+    account_number_consensus_text = _normalize_consensus_text(account_number_consensus)
+    account_type_consensus_text = _normalize_consensus_text(account_type_consensus)
+    status_consensus_text = _normalize_consensus_text(status_consensus)
+
     return {
         "display_version": _DISPLAY_SCHEMA_VERSION,
         "holder_name": holder_name,
         "primary_issue": primary_issue,
         "account_number": {
             "per_bureau": dict(account_number_per_bureau),
-            "consensus": account_number_consensus,
+            "consensus": account_number_consensus_text,
         },
         "account_type": {
             "per_bureau": dict(account_type_per_bureau),
-            "consensus": account_type_consensus,
+            "consensus": account_type_consensus_text,
         },
         "status": {
             "per_bureau": dict(status_per_bureau),
-            "consensus": status_consensus,
+            "consensus": status_consensus_text,
         },
         "balance_owed": {"per_bureau": dict(balance_per_bureau)},
         "date_opened": dict(date_opened_per_bureau),
@@ -719,12 +733,8 @@ def build_lean_pack_doc(
         payload: dict[str, Any] = {
             "per_bureau": dict(per_bureau) if isinstance(per_bureau, Mapping) else {},
         }
-        if isinstance(consensus, str):
-            trimmed = consensus.strip()
-            if trimmed and trimmed != "--":
-                payload["consensus"] = trimmed
-        elif consensus is not None:
-            payload["consensus"] = consensus
+        if consensus is not None:
+            payload["consensus"] = _normalize_consensus_text(consensus)
         return payload
 
     def _per_bureau_dates(source: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -1082,8 +1092,8 @@ def generate_frontend_packs_for_run(
 
             if lean_enabled:
                 pack_payload = build_lean_pack_doc(
-                    holder_name=holder_name,
-                    primary_issue=primary_issue,
+                    holder_name=display_holder_name,
+                    primary_issue=display_primary_issue,
                     display_payload=display_payload,
                 )
             else:

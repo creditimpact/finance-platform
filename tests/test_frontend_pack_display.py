@@ -96,3 +96,26 @@ def test_display_defaults_and_idempotent(tmp_path) -> None:
 
     assert pack_path.read_text(encoding="utf-8") == original_pack
     assert index_path.read_text(encoding="utf-8") == original_index
+
+
+def test_lean_pack_preserves_consensus_defaults() -> None:
+    per_bureau = {"transunion": "--", "experian": "--", "equifax": "--"}
+    display_payload = {
+        "account_number": {"per_bureau": per_bureau, "consensus": "--"},
+        "account_type": {"per_bureau": per_bureau, "consensus": "--"},
+        "status": {"per_bureau": per_bureau, "consensus": "--"},
+        "balance_owed": {"per_bureau": per_bureau},
+        "date_opened": per_bureau,
+        "closed_date": per_bureau,
+    }
+
+    lean_payload = generator.build_lean_pack_doc(
+        holder_name="",
+        primary_issue="",
+        display_payload=display_payload,
+    )
+
+    display = lean_payload["display"]
+    assert display["account_number"]["consensus"] == "--"
+    assert display["account_type"]["consensus"] == "--"
+    assert display["status"]["consensus"] == "--"

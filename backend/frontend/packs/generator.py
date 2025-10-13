@@ -708,28 +708,40 @@ def build_lean_pack_doc(
     primary_issue: str | None,
     display_payload: Mapping[str, Any],
 ) -> dict[str, Any]:
+    def _per_bureau_field(source: Mapping[str, Any] | None) -> dict[str, Any]:
+        per_bureau: Mapping[str, Any] | None = None
+        consensus: Any | None = None
+        if isinstance(source, Mapping):
+            per_bureau = source.get("per_bureau")
+            consensus = source.get("consensus")
+
+        payload: dict[str, Any] = {
+            "per_bureau": dict(per_bureau) if isinstance(per_bureau, Mapping) else {},
+        }
+        if isinstance(consensus, str):
+            trimmed = consensus.strip()
+            if trimmed and trimmed != "--":
+                payload["consensus"] = trimmed
+        elif consensus is not None:
+            payload["consensus"] = consensus
+        return payload
+
+    def _per_bureau_dates(source: Mapping[str, Any] | None) -> dict[str, Any]:
+        return dict(source) if isinstance(source, Mapping) else {}
+
+    display: dict[str, Any] = {}
+    display["holder_name"] = holder_name
+    display["account_number"] = _per_bureau_field(display_payload.get("account_number"))
+    display["primary_issue"] = primary_issue
+    display["account_type"] = _per_bureau_field(display_payload.get("account_type"))
+    display["status"] = _per_bureau_field(display_payload.get("status"))
+    display["balance_owed"] = _per_bureau_field(display_payload.get("balance_owed"))
+    display["date_opened"] = _per_bureau_dates(display_payload.get("date_opened"))
+    display["closed_date"] = _per_bureau_dates(display_payload.get("closed_date"))
     return {
         "holder_name": holder_name,
         "primary_issue": primary_issue,
-        "display": {
-            "holder_name": display_payload["holder_name"],
-            "primary_issue": display_payload["primary_issue"],
-            "account_number": {
-                "per_bureau": dict(display_payload["account_number"]["per_bureau"]),
-                "consensus": display_payload["account_number"]["consensus"],
-            },
-            "account_type": {
-                "per_bureau": dict(display_payload["account_type"]["per_bureau"]),
-                "consensus": display_payload["account_type"]["consensus"],
-            },
-            "status": {
-                "per_bureau": dict(display_payload["status"]["per_bureau"]),
-                "consensus": display_payload["status"]["consensus"],
-            },
-            "balance_owed": {"per_bureau": dict(display_payload["balance_owed"]["per_bureau"])},
-            "date_opened": dict(display_payload["date_opened"]),
-            "closed_date": dict(display_payload["closed_date"]),
-        },
+        "display": display,
     }
 
 

@@ -50,10 +50,19 @@ def test_display_defaults_and_idempotent(tmp_path) -> None:
     expected_per_bureau = {"transunion": "--", "experian": "--", "equifax": "--"}
 
     assert display_payload["holder_name"] == ""
-    assert display_payload["display"] == "****"
-    assert display_payload["primary_issue"] == ""
-    assert display_payload["account_type"] == ""
-    assert display_payload["status"] == ""
+    assert display_payload["primary_issue"] == "unknown"
+    assert display_payload["account_number"] == {
+        "per_bureau": expected_per_bureau,
+        "consensus": "--",
+    }
+    assert display_payload["account_type"] == {
+        "per_bureau": expected_per_bureau,
+        "consensus": "--",
+    }
+    assert display_payload["status"] == {
+        "per_bureau": expected_per_bureau,
+        "consensus": "--",
+    }
     assert display_payload["balance_owed"]["per_bureau"] == expected_per_bureau
     assert display_payload["date_opened"] == expected_per_bureau
     assert display_payload["closed_date"] == expected_per_bureau
@@ -63,10 +72,19 @@ def test_display_defaults_and_idempotent(tmp_path) -> None:
     assert index_payload["packs_count"] == 1
     account_entry = index_payload["accounts"][0]
     assert account_entry["holder_name"] == ""
-    assert account_entry["display"] == "****"
-    assert account_entry["primary_issue"] == ""
-    assert account_entry["account_type"] == ""
-    assert account_entry["status"] == ""
+    assert account_entry["primary_issue"] == "unknown"
+    assert account_entry["account_number"] == {
+        "per_bureau": expected_per_bureau,
+        "consensus": "--",
+    }
+    assert account_entry["account_type"] == {
+        "per_bureau": expected_per_bureau,
+        "consensus": "--",
+    }
+    assert account_entry["status"] == {
+        "per_bureau": expected_per_bureau,
+        "consensus": "--",
+    }
     assert account_entry["balance_owed"]["per_bureau"] == expected_per_bureau
     assert account_entry["date_opened"] == expected_per_bureau
     assert account_entry["closed_date"] == expected_per_bureau

@@ -92,8 +92,8 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     display_block = pack_payload["display"]
     assert list(display_block.keys()) == [
         "holder_name",
-        "display",
         "primary_issue",
+        "account_number",
         "account_type",
         "status",
         "balance_owed",
@@ -101,10 +101,31 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
         "closed_date",
     ]
     assert display_block["holder_name"] == "John Doe"
-    assert display_block["display"] == "****1234"
     assert display_block["primary_issue"] == "wrong_account"
-    assert display_block["account_type"] == "Credit Card"
-    assert display_block["status"] == "Closed"
+    assert display_block["account_number"] == {
+        "per_bureau": {
+            "transunion": "****1234",
+            "experian": "XXXX1234",
+            "equifax": "--",
+        },
+        "consensus": "****1234",
+    }
+    assert display_block["account_type"] == {
+        "per_bureau": {
+            "transunion": "Credit Card",
+            "experian": "Credit Card",
+            "equifax": "--",
+        },
+        "consensus": "Credit Card",
+    }
+    assert display_block["status"] == {
+        "per_bureau": {
+            "transunion": "Closed",
+            "experian": "Closed",
+            "equifax": "--",
+        },
+        "consensus": "Closed",
+    }
     assert display_block["balance_owed"] == {
         "per_bureau": {
             "transunion": "$100",
@@ -132,8 +153,8 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert list(index_entry.keys()) == [
         "account_id",
         "holder_name",
-        "display",
         "primary_issue",
+        "account_number",
         "account_type",
         "status",
         "balance_owed",
@@ -143,10 +164,10 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     ]
     assert index_entry["pack_path"] == "frontend/accounts/acct-1/pack.json"
     assert index_entry["holder_name"] == "John Doe"
-    assert index_entry["display"] == "****1234"
     assert index_entry["primary_issue"] == "wrong_account"
-    assert index_entry["account_type"] == "Credit Card"
-    assert index_entry["status"] == "Closed"
+    assert index_entry["account_number"] == display_block["account_number"]
+    assert index_entry["account_type"] == display_block["account_type"]
+    assert index_entry["status"] == display_block["status"]
     assert index_entry["balance_owed"] == display_block["balance_owed"]
     assert index_entry["date_opened"] == display_block["date_opened"]
     assert index_entry["closed_date"] == display_block["closed_date"]
@@ -232,8 +253,8 @@ def test_frontend_runflow_steps_are_condensed(tmp_path, monkeypatch):
         display_block = pack_payload["display"]
         assert list(display_block.keys()) == [
             "holder_name",
-            "display",
             "primary_issue",
+            "account_number",
             "account_type",
             "status",
             "balance_owed",
@@ -588,8 +609,15 @@ def test_generate_frontend_packs_holder_name_fallback(tmp_path):
     index_entry = index_payload["accounts"][0]
 
     assert index_entry["holder_name"] == "JANE SAMPLE"
-    assert index_entry["display"] == "****5678"
     assert index_entry["primary_issue"] == "identity_theft"
+    assert index_entry["account_number"] == {
+        "per_bureau": {
+            "transunion": "--",
+            "experian": "--",
+            "equifax": "****5678",
+        },
+        "consensus": "****5678",
+    }
     assert index_entry["balance_owed"] == {
         "per_bureau": {
             "transunion": "--",
@@ -724,8 +752,15 @@ def test_generate_frontend_packs_continues_on_pack_write_failure(tmp_path, monke
     index_entry = index_payload["accounts"][0]
     assert index_entry["account_id"] == "acct-success"
     assert index_entry["holder_name"] == ""
-    assert index_entry["display"] == "****9999"
     assert index_entry["primary_issue"] == "late_payment"
+    assert index_entry["account_number"] == {
+        "per_bureau": {
+            "transunion": "****9999",
+            "experian": "--",
+            "equifax": "--",
+        },
+        "consensus": "****9999",
+    }
     assert index_entry["balance_owed"] == {
         "per_bureau": {
             "transunion": "$50",

@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import re
-import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -14,6 +13,8 @@ from typing import Any, Iterable, Mapping
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.runflow import runflow_step
 from backend.core.runflow.io import (
+    compose_hint,
+    format_exception_tail,
     runflow_stage_end,
     runflow_stage_error,
     runflow_stage_start,
@@ -587,8 +588,8 @@ def generate_frontend_packs_for_run(
             sid=sid,
             error_type=exc.__class__.__name__,
             message=str(exc),
-            traceback_tail=traceback.format_exc(),
-            hint="frontend pack generation",
+            traceback_tail=format_exception_tail(exc),
+            hint=compose_hint("frontend pack generation", exc),
         )
         raise
 

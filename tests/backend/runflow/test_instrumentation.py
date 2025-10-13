@@ -8,6 +8,7 @@ import pytest
 
 import backend.core.runflow as runflow
 import backend.core.runflow_steps as runflow_steps
+from backend.core.runflow.io import compose_hint, runflow_stage_error
 
 
 def _reload_runflow() -> None:
@@ -299,6 +300,46 @@ def test_runflow_step_dec_error_records_and_reraises(tmp_path, monkeypatch):
         monkeypatch.delenv("RUNFLOW_EVENTS", raising=False)
         monkeypatch.delenv("RUNFLOW_STEP_LOG_EVERY", raising=False)
         _reload_runflow()
+
+
+def test_stage_error_traceback_tail_is_trimmed(tmp_path, monkeypatch):
+    sid = "SID-TRACE"
+    stage = "merge"
+
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+    _reload_runflow()
+
+    try:
+        runflow.runflow_start_stage(sid, stage)
+        long_trace = "\n".join(f"line {index}" for index in range(60))
+        runflow_stage_error(
+            stage,
+            sid=sid,
+            error_type="ValueError",
+            message="boom",
+            traceback_tail=long_trace,
+        )
+
+        steps_path = Path(tmp_path, sid, "runflow_steps.json")
+        steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
+        stage_payload = steps_payload["stages"][stage]
+        error_payload = stage_payload["summary"]["error"]
+
+        tail = error_payload["traceback_tail"]
+        assert tail.endswith("line 59")
+        assert len(tail.splitlines()) <= 30
+        assert len(tail) <= 500
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)
+        _reload_runflow()
+
+
+def test_compose_hint_appends_specific_error():
+    exc = FileNotFoundError(2, "No such file or directory", "/tmp/bureaus.json")
+    hint = compose_hint("merge build", exc)
+    assert hint == "merge build: missing bureaus.json"
 
 
 def test_stage_error_summary_is_compact(tmp_path, monkeypatch):

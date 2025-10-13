@@ -29,6 +29,7 @@ _BUREAU_BADGES: Mapping[str, Mapping[str, str]] = {
 }
 
 _FRONTEND_INDEX_SCHEMA_VERSION = 2
+_DISPLAY_SCHEMA_VERSION = "1.1"
 
 
 _QUESTION_SET = [
@@ -631,6 +632,7 @@ def build_lean_pack_doc(
             "primary_issue": display_payload["primary_issue"],
             "account_type": display_payload["account_type"],
             "status": display_payload["status"],
+            "display_version": _DISPLAY_SCHEMA_VERSION,
             "balance_owed": {"per_bureau": dict(display_payload["balance_owed"]["per_bureau"])},
             "date_opened": dict(display_payload["date_opened"]),
             "closed_date": dict(display_payload["closed_date"]),
@@ -702,6 +704,8 @@ def generate_frontend_packs_for_run(
         accounts_output_dir.mkdir(parents=True, exist_ok=True)
         responses_dir.mkdir(parents=True, exist_ok=True)
 
+        lean_enabled = _frontend_packs_lean_enabled()
+
         account_dirs = (
             sorted(
                 [path for path in accounts_dir.iterdir() if path.is_dir()],
@@ -741,6 +745,13 @@ def generate_frontend_packs_for_run(
                 metrics={"packs": 0},
                 out={"path": index_out},
             )
+            if lean_enabled:
+                runflow_step(
+                    sid,
+                    "frontend",
+                    "frontend_minify",
+                    metrics={"packs": 0, "lean": True},
+                )
             responses_count = _emit_responses_scan(sid, responses_dir)
             summary = {
                 "packs_count": 0,
@@ -806,6 +817,13 @@ def generate_frontend_packs_for_run(
                         metrics={"packs": packs_count},
                         out={"path": index_out},
                     )
+                    if lean_enabled:
+                        runflow_step(
+                            sid,
+                            "frontend",
+                            "frontend_minify",
+                            metrics={"packs": packs_count, "lean": True},
+                        )
                     responses_count = _emit_responses_scan(sid, responses_dir)
                     summary = {
                         "packs_count": packs_count,
@@ -926,7 +944,7 @@ def generate_frontend_packs_for_run(
                 "summary": f"{relative_account_dir}/summary.json",
             }
 
-            if _frontend_packs_lean_enabled():
+            if lean_enabled:
                 pack_payload = build_lean_pack_doc(
                     holder_name=holder_name,
                     primary_issue=primary_issue,
@@ -1050,6 +1068,14 @@ def generate_frontend_packs_for_run(
         index_payload = {**index_payload_base, "generated_at": generated_at}
 
         _write_json_if_changed(index_path, index_payload)
+
+        if lean_enabled:
+            runflow_step(
+                sid,
+                "frontend",
+                "frontend_minify",
+                metrics={"packs": pack_count, "lean": True},
+            )
 
         done_status = "error" if write_errors else "success"
         _log_done(sid, pack_count, status=done_status)

@@ -127,6 +127,109 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert isinstance(result["last_built_at"], str)
 
 
+def _write_minimal_account(
+    account_dir: Path,
+    *,
+    account_id: str,
+    meta_payload: dict | None = None,
+    raw_lines_payload: list | None = None,
+    tags_payload: list | None = None,
+) -> None:
+    summary_payload = {"account_id": account_id}
+    bureaus_payload = {
+        "transunion": {
+            "account_number_display": "****4321",
+            "balance_owed": "$123",
+            "date_opened": "2023-01-01",
+            "date_reported": "2023-02-01",
+            "account_status": "Open",
+            "account_type": "Loan",
+        }
+    }
+
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+    if meta_payload is not None:
+        _write_json(account_dir / "meta.json", meta_payload)
+    if raw_lines_payload is not None:
+        _write_json(account_dir / "raw_lines.json", raw_lines_payload)
+    if tags_payload is not None:
+        _write_json(account_dir / "tags.json", tags_payload)
+
+
+def test_generate_frontend_packs_meta_heading_and_primary_issue(tmp_path):
+    runs_root = tmp_path / "runs"
+    sid = "S-meta"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    _write_minimal_account(
+        account_dir,
+        account_id="acct-meta",
+        meta_payload={"heading_guess": "SPS"},
+        raw_lines_payload=[{"text": "SPS"}],
+        tags_payload=[{"kind": "issue", "type": "delinquency"}],
+    )
+
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    pack_path = runs_root / sid / "frontend" / "accounts" / "acct-meta" / "pack.json"
+    payload = json.loads(pack_path.read_text(encoding="utf-8"))
+
+    assert payload["holder_name"] == "SPS"
+    assert payload["primary_issue"] == "delinquency"
+    assert payload["issues"] == ["delinquency"]
+
+    assert result["packs_count"] == 1
+
+
+def test_generate_frontend_packs_holder_name_from_raw_when_meta_missing(tmp_path):
+    runs_root = tmp_path / "runs"
+    sid = "S-raw"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    _write_minimal_account(
+        account_dir,
+        account_id="acct-raw",
+        raw_lines_payload=[{"text": "ACME BANK"}, {"text": "ACCOUNT #123"}],
+        tags_payload=[{"kind": "issue", "type": "ownership"}],
+    )
+
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    pack_path = runs_root / sid / "frontend" / "accounts" / "acct-raw" / "pack.json"
+    payload = json.loads(pack_path.read_text(encoding="utf-8"))
+
+    assert payload["holder_name"] == "ACME BANK"
+    assert payload["primary_issue"] == "ownership"
+    assert payload["issues"] == ["ownership"]
+
+    assert result["packs_count"] == 1
+
+
+def test_generate_frontend_packs_multiple_issues_first_primary(tmp_path):
+    runs_root = tmp_path / "runs"
+    sid = "S-issues"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    _write_minimal_account(
+        account_dir,
+        account_id="acct-issues",
+        tags_payload=[
+            {"kind": "issue", "type": "collection"},
+            {"kind": "issue", "type": "late_history"},
+        ],
+    )
+
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    pack_path = runs_root / sid / "frontend" / "accounts" / "acct-issues" / "pack.json"
+    payload = json.loads(pack_path.read_text(encoding="utf-8"))
+
+    assert payload["primary_issue"] == "collection"
+    assert payload["issues"] == ["collection", "late_history"]
+
+    assert result["packs_count"] == 1
+
 def test_generate_frontend_packs_holder_name_fallback(tmp_path):
     runs_root = tmp_path / "runs"
     sid = "S101"

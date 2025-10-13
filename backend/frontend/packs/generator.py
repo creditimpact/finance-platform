@@ -80,6 +80,17 @@ def _count_frontend_responses(responses_dir: Path) -> int:
     return total
 
 
+def _emit_responses_scan(sid: str, responses_dir: Path) -> int:
+    count = _count_frontend_responses(responses_dir)
+    runflow_step(
+        sid,
+        "frontend",
+        "responses_scan",
+        metrics={"received": count},
+    )
+    return count
+
+
 def _account_sort_key(path: Path) -> tuple[int, Any]:
     name = path.name
     if name.isdigit():
@@ -275,7 +286,7 @@ def generate_frontend_packs_for_run(
                 metrics={"built": 0, "skipped_missing": 0},
                 out={"reason": "disabled"},
             )
-            responses_count = _count_frontend_responses(responses_dir)
+            responses_count = _emit_responses_scan(sid, responses_dir)
             summary = {
                 "packs_count": 0,
                 "responses_received": responses_count,
@@ -344,7 +355,7 @@ def generate_frontend_packs_for_run(
                 metrics={"packs": 0},
                 out={"path": index_out},
             )
-            responses_count = _count_frontend_responses(responses_dir)
+            responses_count = _emit_responses_scan(sid, responses_dir)
             summary = {
                 "packs_count": 0,
                 "responses_received": responses_count,
@@ -396,7 +407,7 @@ def generate_frontend_packs_for_run(
                     metrics={"packs": packs_count},
                     out={"path": index_out},
                 )
-                responses_count = _count_frontend_responses(responses_dir)
+                responses_count = _emit_responses_scan(sid, responses_dir)
                 summary = {
                     "packs_count": packs_count,
                     "responses_received": responses_count,
@@ -542,7 +553,7 @@ def generate_frontend_packs_for_run(
             out={"path": index_out},
         )
 
-        responses_count = _count_frontend_responses(responses_dir)
+        responses_count = _emit_responses_scan(sid, responses_dir)
         summary = {
             "packs_count": pack_count,
             "responses_received": responses_count,

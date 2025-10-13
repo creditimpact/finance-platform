@@ -1,3 +1,4 @@
+import importlib
 import json
 import logging
 import sys
@@ -6,6 +7,17 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import pytest
+
+_requests_stub = types.ModuleType("requests")
+
+
+def _post_stub(*args, **kwargs):  # pragma: no cover - safety net
+    raise AssertionError("requests.post should not be invoked in tests")
+
+
+_requests_stub.post = _post_stub
+sys.modules.setdefault("requests", _requests_stub)
+
 
 from backend.core.ai.paths import (
     validation_result_json_filename_for_account,
@@ -17,17 +29,6 @@ from backend.validation.send_packs import (
     ValidationPackSender,
     _normalize_structured_decision,
 )
-
-
-_requests_stub = types.ModuleType("requests")
-
-
-def _post_stub(*args, **kwargs):  # pragma: no cover - safety net
-    raise AssertionError("requests.post should not be invoked in tests")
-
-
-_requests_stub.post = _post_stub
-sys.modules.setdefault("requests", _requests_stub)
 
 
 class _FixedResponseStubClient:
@@ -295,6 +296,69 @@ def test_validation_sender_smoke_writes_results(
         assert entry["confidence"] == 0.75
         assert entry["legacy_decision"] == "no_case"
         assert "labels" not in entry
+
+
+def test_validation_sender_emits_ai_results_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs_root = tmp_path / "runs"
+    sid, index_path, _ = _seed_manifest(tmp_path, [1], sid="RUNFLOW001")
+
+    monkeypatch.setenv("AI_MODEL", "stub-model")
+    monkeypatch.setenv("VALIDATION_SINGLE_RESULT_FILE", "0")
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+    monkeypatch.setenv("RUNFLOW_STEP_LOG_EVERY", "1")
+
+    import backend.core.runflow as runflow_module
+    import backend.validation.send_packs as send_packs_module
+
+    runflow_module = importlib.reload(runflow_module)
+    send_packs_module = importlib.reload(send_packs_module)
+
+    payload = {
+        "sid": sid,
+        "account_id": 1,
+        "id": "Field 1",
+        "field": "Field 1",
+        "decision": "no_case",
+        "rationale": "Deterministic outcome (FIELD_MISMATCH).",
+        "citations": ["transunion: value"],
+        "checks": {
+            "materiality": False,
+            "supports_consumer": False,
+            "doc_requirements_met": False,
+            "mismatch_code": "FIELD_MISMATCH",
+        },
+        "reason_code": "FIELD_MISMATCH",
+        "reason_label": "Field 1 mismatch",
+        "modifiers": {
+            "material_mismatch": True,
+            "time_anchor": False,
+            "doc_dependency": False,
+        },
+        "confidence": 0.75,
+    }
+
+    runflow_module.runflow_start_stage(sid, "validation")
+
+    sender = send_packs_module.ValidationPackSender(
+        index_path, http_client=_FixedResponseStubClient(payload)
+    )
+    sender.send()
+
+    runflow_module.runflow_end_stage(
+        sid,
+        "validation",
+        summary={"packs": 1, "empty_ok": False},
+    )
+
+    steps_payload = json.loads(
+        (runs_root / sid / "runflow_steps.json").read_text(encoding="utf-8")
+    )
+    validation_steps = steps_payload["stages"]["validation"]["substages"]["default"]["steps"]
+    ai_step = next(entry for entry in validation_steps if entry["name"] == "ai_results")
+    assert ai_step["metrics"] == {"received": 1, "total": 1}
 
 
 def test_validation_sender_invalid_response_guardrail(

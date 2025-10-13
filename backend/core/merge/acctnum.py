@@ -89,7 +89,7 @@ class NormalizedAccountNumber:
         return bool(self.digits)
 
     @property
-    def canon_mask(self) -> str:
+    def canon_mask(self) -> str | None:
         canon_mask, _, _ = self._mask_metadata()
         return canon_mask
 

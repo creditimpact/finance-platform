@@ -1,10 +1,7 @@
-:root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-body {
-  margin: 0;
-  background-color: #f5f5f5;
-  color: #213547;
+:root {
+  color-scheme: light;
 }

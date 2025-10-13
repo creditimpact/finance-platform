@@ -45,9 +45,22 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
             "account_type": "Credit Card",
         },
     }
+    meta_payload = {"heading_guess": "John Doe"}
+    raw_lines_payload = [
+        {"text": "JOHN DOE"},
+        {"text": "Account # 1234"},
+    ]
+    tags_payload = [
+        {"kind": "issue", "type": "wrong_account"},
+        {"kind": "note", "type": "internal"},
+        {"kind": "issue", "type": "late_payment"},
+    ]
 
     _write_json(account_dir / "summary.json", summary_payload)
     _write_json(account_dir / "bureaus.json", bureaus_payload)
+    _write_json(account_dir / "meta.json", meta_payload)
+    _write_json(account_dir / "raw_lines.json", raw_lines_payload)
+    _write_json(account_dir / "tags.json", tags_payload)
 
     result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
@@ -63,6 +76,17 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert set(pack_payload["balance_owed"]["per_bureau"].keys()) == {"transunion", "experian"}
     assert pack_payload["questions"][0]["id"] == "ownership"
     assert len(pack_payload["bureau_badges"]) == 2
+    assert pack_payload["holder_name"] == "John Doe"
+    assert pack_payload["primary_issue"] == "wrong_account"
+    assert pack_payload["issues"] == ["wrong_account", "late_payment"]
+    assert pack_payload["pointers"] == {
+        "meta": "cases/accounts/1/meta.json",
+        "tags": "cases/accounts/1/tags.json",
+        "raw": "cases/accounts/1/raw_lines.json",
+        "bureaus": "cases/accounts/1/bureaus.json",
+        "flat": "cases/accounts/1/fields_flat.json",
+        "summary": "cases/accounts/1/summary.json",
+    }
 
     index_path = runs_root / sid / "frontend" / "index.json"
     assert index_path.exists()
@@ -172,9 +196,11 @@ def test_generate_frontend_packs_continues_on_pack_write_failure(tmp_path, monke
 
     _write_json(account1_dir / "summary.json", {**shared_summary, "account_id": "acct-fail"})
     _write_json(account1_dir / "bureaus.json", shared_bureaus)
+    _write_json(account1_dir / "tags.json", [{"kind": "issue", "type": "late_payment"}])
 
     _write_json(account2_dir / "summary.json", shared_summary)
     _write_json(account2_dir / "bureaus.json", shared_bureaus)
+    _write_json(account2_dir / "tags.json", [{"kind": "issue", "type": "late_payment"}])
 
     original_write = generator_module._atomic_write_json
 

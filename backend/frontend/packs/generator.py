@@ -69,6 +69,11 @@ def _frontend_packs_enabled() -> bool:
     return value not in {"0", "false", "False"}
 
 
+def _frontend_packs_lean_enabled() -> bool:
+    value = os.getenv("FRONTEND_PACKS_LEAN", "1")
+    return value not in {"0", "false", "False"}
+
+
 def _count_frontend_responses(responses_dir: Path) -> int:
     if not responses_dir.is_dir():
         return 0
@@ -840,24 +845,31 @@ def generate_frontend_packs_for_run(
                 "summary": f"{relative_account_dir}/summary.json",
             }
 
-            pack_payload = {
-                "sid": sid,
-                "account_id": account_id,
-                "creditor_name": creditor_name_value,
-                "account_type": account_type_value,
-                "status": status_value,
-                "last4": bureau_summary["last4"],
-                "balance_owed": bureau_summary["balance_owed"],
-                "dates": bureau_summary["dates"],
-                "bureau_badges": bureau_summary["bureau_badges"],
-                "holder_name": holder_name,
-                "primary_issue": primary_issue,
-                "display": display_payload,
-                "pointers": pointers,
-                "questions": list(_QUESTION_SET),
-            }
-            if issues:
-                pack_payload["issues"] = issues
+            if _frontend_packs_lean_enabled():
+                pack_payload = {
+                    "holder_name": holder_name,
+                    "primary_issue": primary_issue,
+                    "display": display_payload,
+                }
+            else:
+                pack_payload = {
+                    "sid": sid,
+                    "account_id": account_id,
+                    "creditor_name": creditor_name_value,
+                    "account_type": account_type_value,
+                    "status": status_value,
+                    "last4": bureau_summary["last4"],
+                    "balance_owed": bureau_summary["balance_owed"],
+                    "dates": bureau_summary["dates"],
+                    "bureau_badges": bureau_summary["bureau_badges"],
+                    "holder_name": holder_name,
+                    "primary_issue": primary_issue,
+                    "display": display_payload,
+                    "pointers": pointers,
+                    "questions": list(_QUESTION_SET),
+                }
+                if issues:
+                    pack_payload["issues"] = issues
 
             account_dirname = _safe_account_dirname(account_id, account_dir.name)
             pack_dir = accounts_output_dir / account_dirname

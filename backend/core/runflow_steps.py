@@ -65,7 +65,7 @@ def _env_enabled(name: str, *, default: bool = False) -> bool:
     return raw.strip().lower() not in {"", "0", "false", "no", "off"}
 
 
-_SCHEMA_VERSION = os.getenv("RUNFLOW_STEPS_SCHEMA_VERSION") or "2.1"
+_SCHEMA_VERSION = os.getenv("RUNFLOW_STEPS_SCHEMA_VERSION") or "2.2"
 _VERIFY_STEPS = _env_enabled("RUNFLOW_STEPS_VERIFY", default=True)
 _ENABLE_SPANS = _env_enabled("RUNFLOW_STEPS_ENABLE_SPANS", default=True)
 

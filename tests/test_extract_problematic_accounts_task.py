@@ -1,10 +1,15 @@
 import json
 import logging
+import sys
+import types
 from pathlib import Path
+
+sys.modules.setdefault("requests", types.ModuleType("requests"))
 
 import backend.api.tasks as task_module
 from backend.api.tasks import extract_problematic_accounts
 from backend.core.logic.report_analysis import problem_case_builder, problem_extractor
+from backend.runflow import manifest as runflow_manifest
 from backend import settings
 
 
@@ -124,3 +129,84 @@ def test_extract_problematic_accounts_task_no_candidates(tmp_path, monkeypatch, 
     assert any(f"PROBLEMATIC start sid={sid}" in m for m in caplog.messages)
     assert any(f"PROBLEMATIC done sid={sid} found=0" in m for m in caplog.messages)
     assert ai_calls == []
+
+
+def test_build_problem_cases_runs_frontend_even_when_not_requested(tmp_path, monkeypatch):
+    sid = "S-frontend"
+    runs_root = tmp_path / "runs"
+
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("ENABLE_AUTO_AI_PIPELINE", "0")
+    monkeypatch.setattr(task_module, "ENABLE_VALIDATION_REQUIREMENTS", True)
+    task_module._AUTO_AI_PIPELINE_ENQUEUED.clear()
+
+    monkeypatch.setattr(settings, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(problem_case_builder, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(problem_extractor, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(task_module, "PROJECT_ROOT", tmp_path, raising=False)
+
+    accounts_dir = runs_root / sid / "cases" / "accounts"
+    accounts_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(task_module, "detect_problem_accounts", lambda _: [])
+
+    def _fake_build_cases(sid_value: str, candidates: list[object]):
+        (accounts_dir / "index.json").write_text("{}", encoding="utf-8")
+        return {"cases": {"count": len(candidates), "dir": str(accounts_dir.parent)}}
+
+    monkeypatch.setattr(task_module, "build_problem_cases", _fake_build_cases)
+    monkeypatch.setattr(task_module, "detect_and_persist_date_convention", lambda *_: {})
+    monkeypatch.setattr(
+        task_module,
+        "run_validation_requirements_for_all_accounts",
+        lambda *_, **__: {"ok": True, "processed_accounts": 0, "findings_count": 0},
+    )
+
+    stage_calls: list[tuple[str, str, dict]] = []
+
+    def _record_stage(sid_value: str, stage: str, **kwargs):
+        stage_calls.append((sid_value, stage, kwargs))
+        return {}
+
+    monkeypatch.setattr(task_module, "record_stage", _record_stage)
+    monkeypatch.setattr(
+        task_module, "decide_next", lambda *_, **__: {"next": "stop_error"}
+    )
+
+    frontend_calls: list[tuple[str, object, bool]] = []
+
+    def _fake_generate_frontend_packs(
+        sid_value: str,
+        *,
+        runs_root: object | None = None,
+        force: bool = False,
+    ) -> dict:
+        frontend_calls.append((sid_value, runs_root, force))
+        packs_base = Path(runs_root) if runs_root else runs_root
+        packs_dir = packs_base / sid_value / "frontend" if isinstance(packs_base, Path) else runs_root
+        return {
+            "status": "success",
+            "packs_count": 0,
+            "empty_ok": True,
+            "built": True,
+            "packs_dir": str(packs_dir) if packs_dir else None,
+            "last_built_at": "now",
+        }
+
+    monkeypatch.setattr(task_module, "generate_frontend_packs_for_run", _fake_generate_frontend_packs)
+
+    manifest_calls: list[tuple[tuple, dict]] = []
+
+    def _record_manifest_update(*args, **kwargs):
+        manifest_calls.append((args, kwargs))
+        return runflow_manifest.update_manifest_frontend(*args, **kwargs)
+
+    monkeypatch.setattr(task_module, "update_manifest_frontend", _record_manifest_update)
+
+    task_module.build_problem_cases_task(prev={"sid": sid, "found": []}, sid=sid)
+
+    assert frontend_calls, "frontend packs generator was not invoked"
+    frontend_stage_entries = [entry for entry in stage_calls if entry[1] == "frontend"]
+    assert frontend_stage_entries, "frontend stage was not recorded"
+    assert frontend_stage_entries[0][2]["empty_ok"] is True
+    assert manifest_calls, "frontend manifest update was not attempted"

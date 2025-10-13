@@ -681,59 +681,54 @@ def ai_validation_requirements_step(
         runs_root=runs_root_path,
     )
 
+    try:
+        fe_result = generate_frontend_packs_for_run(
+            sid, runs_root=runs_root_path
+        )
+    except Exception:  # pragma: no cover - defensive logging
+        logger.error("AUTO_AI_FRONTEND_PACKS_FAILED sid=%s", sid, exc_info=True)
+        record_stage(
+            sid,
+            "frontend",
+            status="error",
+            counts={"packs_count": 0},
+            empty_ok=True,
+            notes="generation_failed",
+            runs_root=runs_root_path,
+        )
+    else:
+        packs_count = int(fe_result.get("packs_count", 0) or 0)
+        frontend_status_value = str(fe_result.get("status") or "success")
+        frontend_stage_status: StageStatus = (
+            "success" if frontend_status_value != "error" else "error"
+        )
+        notes_override = (
+            frontend_status_value if frontend_status_value not in {"", "success"} else None
+        )
+        empty_ok_frontend = bool(fe_result.get("empty_ok", packs_count == 0))
+
+        record_stage(
+            sid,
+            "frontend",
+            status=frontend_stage_status,
+            counts={"packs_count": packs_count},
+            empty_ok=empty_ok_frontend,
+            notes=notes_override,
+            runs_root=runs_root_path,
+        )
+
+        if frontend_stage_status == "success":
+            update_manifest_frontend(
+                sid,
+                packs_dir=fe_result.get("packs_dir"),
+                packs_count=packs_count,
+                built=bool(fe_result.get("built", False)),
+                last_built_at=fe_result.get("last_built_at"),
+                runs_root=runs_root_path,
+            )
+
     decision = decide_next(sid, runs_root=runs_root_path)
     next_action = decision.get("next")
-
-    if next_action in {"gen_frontend_packs", "complete_no_action"}:
-        try:
-            fe_result = generate_frontend_packs_for_run(
-                sid, runs_root=runs_root_path
-            )
-        except Exception:  # pragma: no cover - defensive logging
-            logger.error("AUTO_AI_FRONTEND_PACKS_FAILED sid=%s", sid, exc_info=True)
-            record_stage(
-                sid,
-                "frontend",
-                status="error",
-                counts={"packs_count": 0},
-                empty_ok=True,
-                notes="generation_failed",
-                runs_root=runs_root_path,
-            )
-            decision = decide_next(sid, runs_root=runs_root_path)
-            next_action = decision.get("next")
-        else:
-            packs_count = int(fe_result.get("packs_count", 0) or 0)
-            frontend_status_value = str(fe_result.get("status") or "success")
-            frontend_stage_status: StageStatus = (
-                "success" if frontend_status_value != "error" else "error"
-            )
-            notes_override = (
-                frontend_status_value if frontend_status_value not in {"", "success"} else None
-            )
-
-            record_stage(
-                sid,
-                "frontend",
-                status=frontend_stage_status,
-                counts={"packs_count": packs_count},
-                empty_ok=packs_count == 0,
-                notes=notes_override,
-                runs_root=runs_root_path,
-            )
-
-            if frontend_stage_status == "success":
-                update_manifest_frontend(
-                    sid,
-                    packs_dir=fe_result.get("packs_dir"),
-                    packs_count=packs_count,
-                    built=bool(fe_result.get("built", False)),
-                    last_built_at=fe_result.get("last_built_at"),
-                    runs_root=runs_root_path,
-                )
-
-            decision = decide_next(sid, runs_root=runs_root_path)
-            next_action = decision.get("next")
 
     final_next = decision.get("next") if next_action is None else next_action
     if final_next == "await_input":

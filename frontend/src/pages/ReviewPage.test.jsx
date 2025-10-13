@@ -227,8 +227,8 @@ test('renders evidence drawer when debug flag enabled', async () => {
     </MemoryRouter>
   );
   const expander = await screen.findByText('View evidence');
-  const content = screen.getByText(/payment_status/i);
-  const raw = screen.getByText(/<script>alert\(1\)<\/script>/);
+  const [content] = screen.getAllByText(/payment_status/i);
+  const [raw] = screen.getAllByText(/<script>alert\(1\)<\/script>/);
   expect(content).not.toBeVisible();
   expect(raw).not.toBeVisible();
   fireEvent.click(expander);

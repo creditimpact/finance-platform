@@ -5,14 +5,14 @@ import { cn } from '../lib/utils';
 
 const LABELS: Record<AgreementLevel, string> = {
   all: 'All agree',
-  two: '2 of 3',
+  majority: '2 of 3',
   mixed: 'Mixed',
   none: '—'
 };
 
 const TONE_STYLES: Record<AgreementLevel, string> = {
   all: 'border-transparent bg-slate-200 text-slate-700',
-  two: 'border-transparent bg-sky-100 text-sky-800',
+  majority: 'border-transparent bg-sky-100 text-sky-800',
   mixed: 'border-transparent bg-amber-100 text-amber-900',
   none: 'border-transparent bg-slate-100 text-slate-500'
 };

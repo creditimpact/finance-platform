@@ -5,7 +5,7 @@ import { AgreementLevel, BUREAUS, BUREAU_LABELS, BureauKey, MISSING_VALUE } from
 export interface BureauGridField {
   fieldKey: string;
   label: string;
-  values: Record<BureauKey, string>;
+  values: Partial<Record<BureauKey, string>>;
   agreement: AgreementLevel;
 }
 
@@ -27,7 +27,7 @@ export function BureauGrid({ fields, className }: BureauGridProps) {
       </div>
       <div className="divide-y divide-slate-200 text-sm">
         {fields.map((field) => {
-          const highlight = field.agreement === 'two' || field.agreement === 'mixed';
+          const highlight = field.agreement === 'majority' || field.agreement === 'mixed';
 
           return (
             <div

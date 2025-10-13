@@ -4,7 +4,8 @@ import { Badge } from './ui/badge';
 import { cn } from '../lib/utils';
 import FieldSummary from './FieldSummary';
 import BureauGrid from './BureauGrid';
-import { AgreementLevel, BUREAUS, BUREAU_LABELS, BureauKey, MISSING_VALUE } from './accountFieldTypes';
+import { AgreementLevel, BUREAUS, BureauKey, MISSING_VALUE } from './accountFieldTypes';
+import { summarizeField as summarizeBureauField, type BureauTriple } from '../utils/bureauSummary';
 
 type PerBureauBlock = {
   per_bureau?: Partial<Record<BureauKey, string | null | undefined>>;
@@ -35,10 +36,10 @@ type SummaryFieldConfig = {
   label: string;
 };
 
-type FieldSummary = SummaryFieldConfig & {
+type FieldSummaryEntry = SummaryFieldConfig & {
   summaryValue: string;
   agreement: AgreementLevel;
-  values: Record<BureauKey, string>;
+  values: Partial<Record<BureauKey, string>>;
 };
 
 const SUMMARY_FIELDS: SummaryFieldConfig[] = [
@@ -68,83 +69,45 @@ const QUESTION_COPY: Record<keyof NonNullable<QuestionBlock>, { title: string; h
   }
 };
 
-function normalizeValue(value: string | null | undefined): string {
-  if (!value || value.trim() === '' || value === '--' || value === MISSING_VALUE) {
-    return MISSING_VALUE;
-  }
-  return value;
-}
-
-function extractPerBureauValues(field: PerBureauBlock | DateBlock | undefined): Record<BureauKey, string> {
-  const defaults: Record<BureauKey, string> = {
-    transunion: MISSING_VALUE,
-    experian: MISSING_VALUE,
-    equifax: MISSING_VALUE
-  };
-
+function toBureauTriple(field: PerBureauBlock | DateBlock | undefined): BureauTriple {
   if (!field) {
-    return defaults;
+    return {};
   }
+
+  const triple: BureauTriple = {};
 
   if ('per_bureau' in field) {
     const perBureau = field.per_bureau ?? {};
-    return {
-      transunion: normalizeValue(perBureau.transunion ?? MISSING_VALUE),
-      experian: normalizeValue(perBureau.experian ?? MISSING_VALUE),
-      equifax: normalizeValue(perBureau.equifax ?? MISSING_VALUE)
-    };
+    for (const bureau of BUREAUS) {
+      const value = perBureau[bureau];
+      if (value != null) {
+        triple[bureau] = value;
+      }
+    }
+    return triple;
   }
 
-  const dateField = field as DateBlock;
-  return {
-    transunion: normalizeValue(dateField.transunion ?? MISSING_VALUE),
-    experian: normalizeValue(dateField.experian ?? MISSING_VALUE),
-    equifax: normalizeValue(dateField.equifax ?? MISSING_VALUE)
-  };
+  for (const bureau of BUREAUS) {
+    const value = (field as DateBlock)[bureau];
+    if (value != null) {
+      triple[bureau] = value;
+    }
+  }
+
+  return triple;
 }
 
-function computeAgreement(values: Record<BureauKey, string>): { value: string; agreement: AgreementLevel } {
-  const entries = BUREAUS.map((bureau) => normalizeValue(values[bureau]));
-  const nonEmpty = entries.filter((value) => value !== MISSING_VALUE);
-
-  if (nonEmpty.length === 0) {
-    return { value: MISSING_VALUE, agreement: 'none' };
-  }
-
-  const counts = new Map<string, number>();
-  nonEmpty.forEach((value) => {
-    counts.set(value, (counts.get(value) ?? 0) + 1);
-  });
-
-  const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
-  const [topValue, topCount] = sorted[0];
-
-  if (counts.size === 1) {
-    if (nonEmpty.length === BUREAUS.length) {
-      return { value: topValue, agreement: 'all' };
-    }
-    if (nonEmpty.length >= 2) {
-      return { value: topValue, agreement: 'two' };
-    }
-    return { value: topValue, agreement: 'none' };
-  }
-
-  if (topCount >= 2) {
-    return { value: topValue, agreement: 'two' };
-  }
-
-  return { value: topValue, agreement: 'mixed' };
-}
-
-function summarizeField(field: PerBureauBlock | DateBlock | undefined, config: SummaryFieldConfig): FieldSummary {
-  const values = extractPerBureauValues(field);
-  const { value, agreement } = computeAgreement(values);
+function buildFieldSummary(
+  field: PerBureauBlock | DateBlock | undefined,
+  config: SummaryFieldConfig
+): FieldSummaryEntry {
+  const summary = summarizeBureauField(toBureauTriple(field));
 
   return {
     ...config,
-    summaryValue: value,
-    agreement,
-    values
+    summaryValue: summary.summary,
+    agreement: summary.agreement as AgreementLevel,
+    values: summary.values
   };
 }
 
@@ -177,15 +140,15 @@ export interface AccountCardProps {
 export function AccountCard({ pack }: AccountCardProps) {
   const display = pack.display ?? ({} as AccountDisplay);
 
-  const fieldSummaries = React.useMemo<FieldSummary[]>(
-    () =>
-      SUMMARY_FIELDS.map((field) =>
-        summarizeField(display[field.key] as PerBureauBlock | DateBlock | undefined, field)
-      ),
-    [display]
-  );
+  const fieldSummaries = React.useMemo<FieldSummaryEntry[]>(() => {
+    return SUMMARY_FIELDS.map((field) =>
+      buildFieldSummary(display[field.key] as PerBureauBlock | DateBlock | undefined, field)
+    );
+  }, [display]);
 
-  const hasDisagreement = fieldSummaries.some((field) => field.agreement === 'two' || field.agreement === 'mixed');
+  const hasDisagreement = fieldSummaries.some(
+    (field) => field.agreement === 'majority' || field.agreement === 'mixed'
+  );
 
   const [expanded, setExpanded] = React.useState(hasDisagreement);
 
@@ -194,8 +157,10 @@ export function AccountCard({ pack }: AccountCardProps) {
   }, [hasDisagreement]);
 
   const accountNumberSummary = React.useMemo(() => {
-    const accountNumberValues = extractPerBureauValues(display.account_number);
-    return computeAgreement(accountNumberValues).value;
+    const result = summarizeBureauField(toBureauTriple(display.account_number), {
+      kind: 'account_number'
+    });
+    return result.summary;
   }, [display.account_number]);
 
   const questions: QuestionBlock = display.questions ?? {};

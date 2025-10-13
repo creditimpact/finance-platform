@@ -388,6 +388,7 @@ def test_generate_frontend_packs_meta_heading_and_primary_issue(tmp_path):
     assert payload["holder_name"] == "SPS"
     assert payload["primary_issue"] == "delinquency"
     assert "issues" not in payload
+    assert not (pack_path.parent / "pack.full.json").exists()
 
     assert result["packs_count"] == 1
 
@@ -413,6 +414,7 @@ def test_generate_frontend_packs_holder_name_from_raw_when_meta_missing(tmp_path
     assert payload["holder_name"] == "ACME BANK"
     assert payload["primary_issue"] == "ownership"
     assert "issues" not in payload
+    assert not (pack_path.parent / "pack.full.json").exists()
 
     assert result["packs_count"] == 1
 
@@ -482,6 +484,43 @@ def test_generate_frontend_packs_backfills_missing_pointers(tmp_path, monkeypatc
         "summary": "cases/accounts/1/summary.json",
     }
     assert result["packs_count"] == 1
+
+
+def test_generate_frontend_packs_debug_mirror_toggle(tmp_path, monkeypatch):
+    runs_root = tmp_path / "runs"
+    sid = "S-debug"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    _write_minimal_account(
+        account_dir,
+        account_id="acct-debug",
+        meta_payload={"heading_guess": "Debug Holder"},
+        tags_payload=[{"kind": "issue", "type": "collection"}],
+    )
+
+    monkeypatch.setenv("FRONTEND_PACKS_DEBUG_MIRROR", "1")
+
+    generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    pack_dir = runs_root / sid / "frontend" / "accounts" / "acct-debug"
+    pack_path = pack_dir / "pack.json"
+    pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
+    mirror_path = pack_dir / "pack.full.json"
+
+    assert mirror_path.exists()
+    mirror_payload = json.loads(mirror_path.read_text(encoding="utf-8"))
+
+    assert list(pack_payload.keys()) == ["holder_name", "primary_issue", "display"]
+    assert mirror_payload["sid"] == sid
+    assert mirror_payload["account_id"] == "acct-debug"
+    assert mirror_payload["holder_name"] == "Debug Holder"
+    assert mirror_payload["questions"] == list(generator_module._QUESTION_SET)
+
+    monkeypatch.setenv("FRONTEND_PACKS_DEBUG_MIRROR", "0")
+
+    generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    assert not mirror_path.exists()
 
 def test_generate_frontend_packs_multiple_issues_first_primary(tmp_path):
     runs_root = tmp_path / "runs"

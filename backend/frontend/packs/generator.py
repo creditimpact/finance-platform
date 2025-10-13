@@ -75,6 +75,11 @@ def _frontend_packs_lean_enabled() -> bool:
     return value not in {"0", "false", "False"}
 
 
+def _frontend_packs_debug_mirror_enabled() -> bool:
+    value = os.getenv("FRONTEND_PACKS_DEBUG_MIRROR", "0")
+    return value not in {"0", "false", "False"}
+
+
 def _count_frontend_responses(responses_dir: Path) -> int:
     if not responses_dir.is_dir():
         return 0
@@ -704,6 +709,7 @@ def generate_frontend_packs_for_run(
         responses_dir.mkdir(parents=True, exist_ok=True)
 
         lean_enabled = _frontend_packs_lean_enabled()
+        debug_mirror_enabled = _frontend_packs_debug_mirror_enabled()
 
         account_dirs = (
             sorted(
@@ -945,14 +951,9 @@ def generate_frontend_packs_for_run(
                 "summary": f"{relative_account_dir}/summary.json",
             }
 
-            if lean_enabled:
-                pack_payload = build_lean_pack_doc(
-                    holder_name=holder_name,
-                    primary_issue=primary_issue,
-                    display_payload=display_payload,
-                )
-            else:
-                pack_payload = build_pack_doc(
+            full_pack_payload: dict[str, Any] | None = None
+            if debug_mirror_enabled or not lean_enabled:
+                full_pack_payload = build_pack_doc(
                     sid=sid,
                     account_id=account_id,
                     creditor_name=creditor_name_value,
@@ -966,6 +967,29 @@ def generate_frontend_packs_for_run(
                     issues=issues if issues else None,
                 )
 
+            if lean_enabled:
+                pack_payload = build_lean_pack_doc(
+                    holder_name=holder_name,
+                    primary_issue=primary_issue,
+                    display_payload=display_payload,
+                )
+            else:
+                if full_pack_payload is None:
+                    full_pack_payload = build_pack_doc(
+                        sid=sid,
+                        account_id=account_id,
+                        creditor_name=creditor_name_value,
+                        account_type=account_type_value,
+                        status=status_value,
+                        bureau_summary=bureau_summary,
+                        holder_name=holder_name,
+                        primary_issue=primary_issue,
+                        display_payload=display_payload,
+                        pointers=pointers,
+                        issues=issues if issues else None,
+                    )
+                pack_payload = full_pack_payload
+
             account_dirname = _safe_account_dirname(account_id, account_dir.name)
             pack_dir = accounts_output_dir / account_dirname
             pack_path = pack_dir / "pack.json"
@@ -973,6 +997,21 @@ def generate_frontend_packs_for_run(
             try:
                 pack_dir.mkdir(parents=True, exist_ok=True)
                 changed = _write_json_if_changed(pack_path, pack_payload)
+                if debug_mirror_enabled and full_pack_payload is not None:
+                    mirror_path = pack_dir / "pack.full.json"
+                    _write_json_if_changed(mirror_path, full_pack_payload)
+                elif not debug_mirror_enabled:
+                    mirror_path = pack_dir / "pack.full.json"
+                    try:
+                        mirror_path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    except OSError:  # pragma: no cover - defensive logging
+                        log.warning(
+                            "FRONTEND_PACK_DEBUG_MIRROR_UNLINK_FAILED path=%s",
+                            mirror_path,
+                            exc_info=True,
+                        )
             except Exception as exc:
                 log.exception(
                     "FRONTEND_PACK_WRITE_FAILED sid=%s account=%s path=%s",

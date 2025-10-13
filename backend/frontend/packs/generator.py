@@ -242,6 +242,54 @@ def _load_raw_lines(path: Path) -> Sequence[str]:
     return []
 
 
+def holder_name_from_raw_lines(raw_lines: list[str]) -> str | None:
+    preferred: list[str] = []
+    fallback: list[str] = []
+    for candidate in raw_lines:
+        if not isinstance(candidate, str):
+            continue
+        stripped = candidate.strip()
+        if not stripped:
+            continue
+        if not _looks_like_holder_heading(stripped):
+            continue
+
+        if re.search(r"[ /]", stripped):
+            preferred.append(stripped)
+        else:
+            fallback.append(stripped)
+
+    if preferred:
+        return preferred[0]
+    if fallback:
+        return fallback[0]
+    return None
+
+
+def _looks_like_holder_heading(text: str) -> bool:
+    if not text:
+        return False
+
+    if text != text.upper():
+        return False
+
+    letters = sum(1 for char in text if char.isalpha())
+    if letters < 2:
+        return False
+
+    digits = sum(1 for char in text if char.isdigit())
+    if digits > max(2, len(text) // 5):
+        return False
+
+    if re.search(r"\b(ACCOUNT|BALANCE|PAYMENT|VERIFIED|OPENED|REPORTED)\b", text):
+        return False
+
+    if not re.fullmatch(r"[A-Z0-9 &'./-]+", text):
+        return False
+
+    return True
+
+
 def _derive_holder_name(meta: Mapping[str, Any] | None, raw_lines_path: Path) -> str | None:
     meta_heading = None
     if isinstance(meta, Mapping):
@@ -249,28 +297,71 @@ def _derive_holder_name(meta: Mapping[str, Any] | None, raw_lines_path: Path) ->
         if meta_heading:
             return meta_heading
 
-    uppercase_candidates: list[str] = []
-    spaced_candidates: list[str] = []
-    for text in _load_raw_lines(raw_lines_path):
-        if not isinstance(text, str):
-            continue
-        candidate = text.strip()
-        if not candidate:
-            continue
-        alpha_count = sum(1 for char in candidate if char.isalpha())
-        if alpha_count < 2:
-            continue
-        if candidate.upper() != candidate:
-            continue
-        uppercase_candidates.append(candidate)
-        if " " in candidate:
-            spaced_candidates.append(candidate)
+    raw_payload = _load_json_payload(raw_lines_path)
+    ordered_lines: list[str] = []
+    if isinstance(raw_payload, Sequence) and not isinstance(raw_payload, (str, bytes, bytearray)):
+        page_start = None
+        line_start = None
+        if isinstance(meta, Mapping):
+            page_value = meta.get("page_start")
+            if isinstance(page_value, int):
+                page_start = page_value
+            line_value = meta.get("line_start")
+            if isinstance(line_value, int):
+                line_start = line_value
 
-    if spaced_candidates:
-        return spaced_candidates[0]
-    if uppercase_candidates:
-        return uppercase_candidates[0]
-    return None
+        entries: list[tuple[int, str, int | None, int | None]] = []
+        for index, entry in enumerate(raw_payload):
+            text_value: str | None = None
+            page_value: int | None = None
+            line_value: int | None = None
+            if isinstance(entry, Mapping):
+                raw_text = entry.get("text")
+                if isinstance(raw_text, str):
+                    text_value = raw_text.strip()
+                raw_page = entry.get("page")
+                if isinstance(raw_page, int):
+                    page_value = raw_page
+                raw_line = entry.get("line")
+                if isinstance(raw_line, int):
+                    line_value = raw_line
+            elif isinstance(entry, str):
+                text_value = entry.strip()
+
+            if not text_value:
+                continue
+            entries.append((index, text_value, page_value, line_value))
+
+        if entries:
+            def sort_key(item: tuple[int, str, int | None, int | None]) -> tuple[int, int]:
+                index, _text, page_value, line_value = item
+                if page_start is None and line_start is None:
+                    return (0, index)
+
+                penalty = 0
+                if page_start is not None:
+                    if page_value is None:
+                        penalty += 500
+                    else:
+                        penalty += abs(page_value - page_start) * 100
+                if line_start is not None:
+                    if line_value is None:
+                        penalty += 25
+                    else:
+                        penalty += abs(line_value - line_start)
+                return (penalty, index)
+
+            entries.sort(key=sort_key)
+            ordered_lines = [item[1] for item in entries]
+
+    if not ordered_lines:
+        ordered_lines = [
+            candidate.strip()
+            for candidate in _load_raw_lines(raw_lines_path)
+            if isinstance(candidate, str) and candidate.strip()
+        ]
+
+    return holder_name_from_raw_lines(ordered_lines)
 
 
 def _extract_issue_tags(tags_path: Path) -> tuple[str | None, list[str]]:

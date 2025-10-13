@@ -163,6 +163,77 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert isinstance(result["last_built_at"], str)
 
 
+def test_generate_frontend_packs_falls_back_to_raw_holder_name(tmp_path):
+    runs_root = tmp_path / "runs"
+    sid = "S101"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    summary_payload = {"account_id": "acct-raw"}
+    bureaus_payload = {
+        "transunion": {
+            "account_number_display": "****9876",
+            "balance_owed": "$200",
+            "date_opened": "2023-04-01",
+            "closed_date": "--",
+            "account_status": "Open",
+            "account_type": "Mortgage",
+        }
+    }
+    raw_lines_payload = [
+        {"text": "UNRELATED"},
+        {"text": "JANE SAMPLE"},
+    ]
+    tags_payload = [{"kind": "issue", "type": "late_payment"}]
+
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+    _write_json(account_dir / "meta.json", {})
+    _write_json(account_dir / "raw_lines.json", raw_lines_payload)
+    _write_json(account_dir / "tags.json", tags_payload)
+
+    generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    pack_path = runs_root / sid / "frontend" / "accounts" / "acct-raw" / "pack.json"
+    pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
+
+    assert pack_payload["holder_name"] == "JANE SAMPLE"
+    assert pack_payload["display"]["holder_name"] == "JANE SAMPLE"
+
+
+def test_generate_frontend_packs_defaults_unknown_issue(tmp_path):
+    runs_root = tmp_path / "runs"
+    sid = "S102"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    summary_payload = {"account_id": "acct-issue"}
+    bureaus_payload = {
+        "transunion": {
+            "account_number_display": "****1357",
+            "balance_owed": "$500",
+            "date_opened": "2022-12-01",
+            "closed_date": "--",
+            "account_status": "Open",
+            "account_type": "Loan",
+        }
+    }
+    meta_payload = {"heading_guess": "ACME BANK"}
+    raw_lines_payload = [{"text": "ACME BANK"}]
+
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+    _write_json(account_dir / "meta.json", meta_payload)
+    _write_json(account_dir / "raw_lines.json", raw_lines_payload)
+    _write_json(account_dir / "tags.json", [])
+
+    generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    pack_path = runs_root / sid / "frontend" / "accounts" / "acct-issue" / "pack.json"
+    pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
+
+    assert pack_payload["primary_issue"] == "unknown"
+    assert pack_payload["display"]["primary_issue"] == "unknown"
+
+
 def _write_minimal_account(
     account_dir: Path,
     *,

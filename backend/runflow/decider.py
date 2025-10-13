@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Literal, Mapping, Optional
 
 from backend.core.io.json_io import _atomic_write_json
-from backend.core.runflow import runflow_end_stage
+from backend.core.runflow import runflow_decide_step, runflow_end_stage
 from backend.runflow.counters import stage_counts as _stage_counts_from_disk
 
 StageStatus = Literal["success", "error"]
@@ -200,6 +200,67 @@ def record_stage(
     return data
 
 
+def _parse_timestamp(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    try:
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _latest_stage_name(stages: Mapping[str, Mapping[str, Any]]) -> Optional[str]:
+    stage_order = {"merge": 0, "validation": 1, "frontend": 2}
+    best_name: Optional[str] = None
+    best_ts: Optional[datetime] = None
+
+    for name, info in stages.items():
+        if not isinstance(info, Mapping):
+            continue
+
+        ts = (
+            _parse_timestamp(info.get("last_at"))
+            or _parse_timestamp(info.get("ended_at"))
+            or _parse_timestamp(info.get("started_at"))
+        )
+
+        if ts is None:
+            continue
+
+        if best_ts is None or ts > best_ts or (
+            ts == best_ts
+            and stage_order.get(str(name), -1) >= stage_order.get(best_name or "", -1)
+        ):
+            best_name = str(name)
+            best_ts = ts
+
+    if best_name is not None:
+        return best_name
+
+    for candidate in ("frontend", "validation", "merge"):
+        if candidate in stages:
+            return candidate
+
+    for name in stages:
+        if isinstance(name, str):
+            return name
+
+    return None
+
+
+def _decision_next_label(next_action: str) -> str:
+    mapping = {
+        "run_validation": "continue",
+        "gen_frontend_packs": "run_frontend",
+        "await_input": "await_input",
+        "complete_no_action": "done",
+        "stop_error": "done",
+    }
+    return mapping.get(next_action, "continue")
+
+
 def decide_next(sid: str, runs_root: Optional[str | Path] = None) -> dict[str, str]:
     """Return the next pipeline action for ``sid`` based on recorded stages."""
 
@@ -288,6 +349,25 @@ def decide_next(sid: str, runs_root: Optional[str | Path] = None) -> dict[str, s
         reason,
         new_state,
     )
+
+    stage_for_step = _latest_stage_name(stages)
+    if stage_for_step and isinstance(stages.get(stage_for_step), Mapping):
+        try:
+            runflow_decide_step(
+                sid,
+                stage_for_step,
+                next_action=_decision_next_label(next_action),
+                reason=reason,
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "RUNFLOW_DECIDE_STEP_FAILED sid=%s stage=%s next=%s reason=%s",
+                sid,
+                stage_for_step,
+                next_action,
+                reason,
+                exc_info=True,
+            )
 
     return {"next": next_action, "reason": reason}
 

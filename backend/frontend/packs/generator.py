@@ -36,6 +36,16 @@ _QUESTION_SET = [
 ]
 
 
+_POINTER_KEYS: tuple[str, ...] = (
+    "meta",
+    "tags",
+    "raw",
+    "bureaus",
+    "flat",
+    "summary",
+)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -124,6 +134,49 @@ def _write_json_if_changed(path: Path, payload: Any) -> bool:
 
     _atomic_write_json(path, payload)
     return True
+
+
+def _resolve_pack_output_path(pack_path: str, run_dir: Path) -> Path:
+    candidate = Path(pack_path)
+    if not candidate.is_absolute():
+        candidate = run_dir / candidate
+    return candidate
+
+
+def _pack_requires_pointer_backfill(payload: Mapping[str, Any]) -> bool:
+    pointers = payload.get("pointers") if isinstance(payload, Mapping) else None
+    if not isinstance(pointers, Mapping):
+        return True
+
+    for key in _POINTER_KEYS:
+        value = pointers.get(key)
+        if not isinstance(value, str) or not value:
+            return True
+
+    return False
+
+
+def _index_requires_pointer_backfill(
+    index_payload: Mapping[str, Any], run_dir: Path
+) -> bool:
+    accounts = index_payload.get("accounts")
+    if not isinstance(accounts, Sequence):
+        return False
+
+    for entry in accounts:
+        if not isinstance(entry, Mapping):
+            continue
+        pack_path_value = entry.get("pack_path")
+        if not isinstance(pack_path_value, str):
+            continue
+        pack_path = _resolve_pack_output_path(pack_path_value, run_dir)
+        pack_payload = _load_json_payload(pack_path)
+        if not isinstance(pack_payload, Mapping):
+            return True
+        if _pack_requires_pointer_backfill(pack_payload):
+            return True
+
+    return False
 
 
 def _log_done(sid: str, packs: int, **extras: Any) -> None:
@@ -563,56 +616,68 @@ def generate_frontend_packs_for_run(
         if not force and index_path.exists():
             existing = _load_json(index_path)
             if existing:
-                packs_count = int(existing.get("packs_count", 0) or 0)
-                if not packs_count:
-                    accounts = existing.get("accounts")
-                    if isinstance(accounts, list):
-                        packs_count = len(accounts)
-                log.debug(
-                    "FRONTEND_PACKS_EXISTS sid=%s path=%s", sid, index_path
+                pointer_backfill_required = _index_requires_pointer_backfill(
+                    existing, run_dir
                 )
-                generated_at = existing.get("generated_at")
-                last_built = str(generated_at) if isinstance(generated_at, str) else None
-                runflow_step(
-                    sid,
-                    "frontend",
-                    "build_pack_docs",
-                    metrics={"accounts": total_accounts, "built": packs_count, "skipped_missing": 0},
-                    out={"cache_hit": True},
-                )
-                try:
-                    index_out = index_path.relative_to(run_dir).as_posix()
-                except ValueError:
-                    index_out = str(index_path)
-                runflow_step(
-                    sid,
-                    "frontend",
-                    "write_index",
-                    metrics={"packs": packs_count},
-                    out={"path": index_out},
-                )
-                responses_count = _emit_responses_scan(sid, responses_dir)
-                summary = {
-                    "packs_count": packs_count,
-                    "responses_received": responses_count,
-                    "empty_ok": packs_count == 0,
-                    "cache_hit": True,
-                }
-                runflow_stage_end(
-                    "frontend",
-                    sid=sid,
-                    summary=summary,
-                    empty_ok=packs_count == 0,
-                )
-                _log_done(sid, packs_count, status="success", cache_hit=True)
-                return {
-                    "status": "success",
-                    "packs_count": packs_count,
-                    "empty_ok": packs_count == 0,
-                    "built": True,
-                    "packs_dir": packs_dir_str,
-                    "last_built_at": last_built,
-                }
+                if pointer_backfill_required:
+                    log.info("FRONTEND_PACK_POINTER_BACKFILL sid=%s", sid)
+                else:
+                    packs_count = int(existing.get("packs_count", 0) or 0)
+                    if not packs_count:
+                        accounts = existing.get("accounts")
+                        if isinstance(accounts, list):
+                            packs_count = len(accounts)
+                    log.debug(
+                        "FRONTEND_PACKS_EXISTS sid=%s path=%s", sid, index_path
+                    )
+                    generated_at = existing.get("generated_at")
+                    last_built = (
+                        str(generated_at) if isinstance(generated_at, str) else None
+                    )
+                    runflow_step(
+                        sid,
+                        "frontend",
+                        "build_pack_docs",
+                        metrics={
+                            "accounts": total_accounts,
+                            "built": packs_count,
+                            "skipped_missing": 0,
+                        },
+                        out={"cache_hit": True},
+                    )
+                    try:
+                        index_out = index_path.relative_to(run_dir).as_posix()
+                    except ValueError:
+                        index_out = str(index_path)
+                    runflow_step(
+                        sid,
+                        "frontend",
+                        "write_index",
+                        metrics={"packs": packs_count},
+                        out={"path": index_out},
+                    )
+                    responses_count = _emit_responses_scan(sid, responses_dir)
+                    summary = {
+                        "packs_count": packs_count,
+                        "responses_received": responses_count,
+                        "empty_ok": packs_count == 0,
+                        "cache_hit": True,
+                    }
+                    runflow_stage_end(
+                        "frontend",
+                        sid=sid,
+                        summary=summary,
+                        empty_ok=packs_count == 0,
+                    )
+                    _log_done(sid, packs_count, status="success", cache_hit=True)
+                    return {
+                        "status": "success",
+                        "packs_count": packs_count,
+                        "empty_ok": packs_count == 0,
+                        "built": True,
+                        "packs_dir": packs_dir_str,
+                        "last_built_at": last_built,
+                    }
 
         packs: list[dict[str, Any]] = []
         built_docs = 0

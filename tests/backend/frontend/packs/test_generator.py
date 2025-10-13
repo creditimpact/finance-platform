@@ -206,6 +206,70 @@ def test_generate_frontend_packs_holder_name_from_raw_when_meta_missing(tmp_path
     assert result["packs_count"] == 1
 
 
+def test_generate_frontend_packs_backfills_missing_pointers(tmp_path):
+    runs_root = tmp_path / "runs"
+    sid = "S-backfill"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    _write_minimal_account(
+        account_dir,
+        account_id="acct-legacy",
+        tags_payload=[{"kind": "issue", "type": "collection"}],
+    )
+
+    legacy_pack_dir = runs_root / sid / "frontend" / "accounts" / "acct-legacy"
+    legacy_pack_payload = {
+        "sid": sid,
+        "account_id": "acct-legacy",
+        "creditor_name": "Legacy Creditor",
+        "account_type": "Loan",
+        "status": "Open",
+        "last4": {"display": "****4321", "last4": "4321"},
+        "balance_owed": {"consensus": "$123", "per_bureau": {"transunion": "$123"}},
+        "dates": {},
+        "bureau_badges": [],
+        "holder_name": "Legacy Creditor",
+        "primary_issue": "collection",
+        "questions": generator_module._QUESTION_SET,
+    }
+    _write_json(legacy_pack_dir / "pack.json", legacy_pack_payload)
+
+    legacy_index_payload = {
+        "sid": sid,
+        "accounts": [
+            {
+                "account_id": "acct-legacy",
+                "pack_path": "frontend/accounts/acct-legacy/pack.json",
+                "creditor_name": "Legacy Creditor",
+                "account_type": "Loan",
+                "status": "Open",
+                "holder_name": "Legacy Creditor",
+                "primary_issue": "collection",
+                "balance_owed": "$123",
+                "bureau_badges": [],
+            }
+        ],
+        "packs_count": 1,
+        "questions": generator_module._QUESTION_SET,
+        "generated_at": "2023-01-01T00:00:00Z",
+    }
+    _write_json(runs_root / sid / "frontend" / "index.json", legacy_index_payload)
+
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    pack_path = runs_root / sid / "frontend" / "accounts" / "acct-legacy" / "pack.json"
+    payload = json.loads(pack_path.read_text(encoding="utf-8"))
+
+    assert payload["pointers"] == {
+        "meta": "cases/accounts/1/meta.json",
+        "tags": "cases/accounts/1/tags.json",
+        "raw": "cases/accounts/1/raw_lines.json",
+        "bureaus": "cases/accounts/1/bureaus.json",
+        "flat": "cases/accounts/1/fields_flat.json",
+        "summary": "cases/accounts/1/summary.json",
+    }
+    assert result["packs_count"] == 1
+
 def test_generate_frontend_packs_multiple_issues_first_primary(tmp_path):
     runs_root = tmp_path / "runs"
     sid = "S-issues"

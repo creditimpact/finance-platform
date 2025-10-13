@@ -1,7 +1,70 @@
+function getImportMetaEnv() {
+  try {
+    return new Function('return (typeof import !== "undefined" && import.meta && import.meta.env) || {};')();
+  } catch (err) {
+    return {};
+  }
+}
+
+const metaEnv = getImportMetaEnv();
+
 const API =
-  import.meta.env.VITE_API_URL ||
-  import.meta.env.VITE_API_BASE_URL ||
+  metaEnv.VITE_API_URL ||
+  metaEnv.VITE_API_BASE_URL ||
+  (typeof process !== 'undefined'
+    ? process.env?.VITE_API_URL || process.env?.VITE_API_BASE_URL
+    : undefined) ||
   'http://localhost:5000';
+
+function encodePathSegments(path = '') {
+  return path
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+}
+
+function buildRunAssetUrl(sessionId, relativePath) {
+  const base = `${API}/runs/${encodeURIComponent(sessionId)}`;
+  if (!relativePath) {
+    return base;
+  }
+  return `${base}/${encodePathSegments(relativePath)}`;
+}
+
+async function fetchJson(url, init) {
+  const response = await fetch(url, init);
+  let data = null;
+  let parseError = null;
+  try {
+    data = await response.json();
+  } catch (err) {
+    parseError = err;
+  }
+
+  if (!response.ok) {
+    const detail = (data && (data.message || data.error)) || response.statusText;
+    const suffix = detail ? `: ${detail}` : '';
+    throw new Error(`Request failed (${response.status})${suffix}`);
+  }
+
+  if (data === null && parseError) {
+    throw new Error('Failed to parse response');
+  }
+
+  return data;
+}
+
+export async function fetchRunFrontendIndex(sessionId, init) {
+  return fetchJson(buildRunAssetUrl(sessionId, 'frontend/index.json'), init);
+}
+
+export async function fetchRunAccountPack(sessionId, packPath, init) {
+  if (!packPath) {
+    throw new Error('Missing pack path');
+  }
+  return fetchJson(buildRunAssetUrl(sessionId, packPath), init);
+}
 
 export async function startProcess(email, file) {
   const formData = new FormData();

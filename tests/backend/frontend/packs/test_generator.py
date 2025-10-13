@@ -95,6 +95,40 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert pack_payload["holder_name"] == "John Doe"
     assert pack_payload["primary_issue"] == "wrong_account"
     assert pack_payload["issues"] == ["wrong_account", "late_payment"]
+
+    display_block = pack_payload["display"]
+    assert list(display_block.keys()) == [
+        "holder_name",
+        "display",
+        "primary_issue",
+        "account_type",
+        "status",
+        "balance_owed",
+        "date_opened",
+        "closed_date",
+    ]
+    assert display_block["holder_name"] == "John Doe"
+    assert display_block["display"] == "****1234"
+    assert display_block["primary_issue"] == "wrong_account"
+    assert display_block["account_type"] == "Credit Card"
+    assert display_block["status"] == "Closed"
+    assert display_block["balance_owed"] == {
+        "per_bureau": {
+            "transunion": "$100",
+            "experian": "$100",
+            "equifax": "--",
+        }
+    }
+    assert display_block["date_opened"] == {
+        "transunion": "2023-01-01",
+        "experian": "2023-01-02",
+        "equifax": "--",
+    }
+    assert display_block["closed_date"] == {
+        "transunion": "2023-02-01",
+        "experian": "--",
+        "equifax": "--",
+    }
     assert pack_payload["pointers"] == {
         "meta": "cases/accounts/1/meta.json",
         "tags": "cases/accounts/1/tags.json",
@@ -107,12 +141,30 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     index_path = runs_root / sid / "frontend" / "index.json"
     assert index_path.exists()
     index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+    assert index_payload["schema_version"] == generator_module._FRONTEND_INDEX_SCHEMA_VERSION
     assert index_payload["packs_count"] == 1
     index_entry = index_payload["accounts"][0]
+    assert list(index_entry.keys()) == [
+        "account_id",
+        "holder_name",
+        "display",
+        "primary_issue",
+        "account_type",
+        "status",
+        "balance_owed",
+        "date_opened",
+        "closed_date",
+        "pack_path",
+    ]
     assert index_entry["pack_path"] == "frontend/accounts/acct-1/pack.json"
     assert index_entry["holder_name"] == "John Doe"
+    assert index_entry["display"] == "****1234"
     assert index_entry["primary_issue"] == "wrong_account"
-    assert index_entry["balance_owed"] == "$100"
+    assert index_entry["account_type"] == "Credit Card"
+    assert index_entry["status"] == "Closed"
+    assert index_entry["balance_owed"] == display_block["balance_owed"]
+    assert index_entry["date_opened"] == display_block["date_opened"]
+    assert index_entry["closed_date"] == display_block["closed_date"]
     assert index_payload["questions"][1]["id"] == "recognize"
 
     responses_dir = runs_root / sid / "frontend" / "responses"
@@ -329,10 +381,19 @@ def test_generate_frontend_packs_holder_name_fallback(tmp_path):
 
     index_path = runs_root / sid / "frontend" / "index.json"
     index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+    assert index_payload["schema_version"] == generator_module._FRONTEND_INDEX_SCHEMA_VERSION
     index_entry = index_payload["accounts"][0]
 
     assert index_entry["holder_name"] == "JANE SAMPLE"
+    assert index_entry["display"] == "****5678"
     assert index_entry["primary_issue"] == "identity_theft"
+    assert index_entry["balance_owed"] == {
+        "per_bureau": {
+            "transunion": "--",
+            "experian": "--",
+            "equifax": "$75",
+        }
+    }
 
     assert result["packs_count"] == 1
 
@@ -346,6 +407,7 @@ def test_generate_frontend_packs_handles_missing_accounts(tmp_path):
     index_path = runs_root / sid / "frontend" / "index.json"
     assert index_path.exists()
     payload = json.loads(index_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == generator_module._FRONTEND_INDEX_SCHEMA_VERSION
     assert payload["accounts"] == []
     assert result["status"] == "success"
     assert result["packs_count"] == 0
@@ -454,12 +516,20 @@ def test_generate_frontend_packs_continues_on_pack_write_failure(tmp_path, monke
     index_path = runs_root / sid / "frontend" / "index.json"
     index_payload = json.loads(index_path.read_text(encoding="utf-8"))
 
+    assert index_payload["schema_version"] == generator_module._FRONTEND_INDEX_SCHEMA_VERSION
     assert index_payload["packs_count"] == 1
     index_entry = index_payload["accounts"][0]
     assert index_entry["account_id"] == "acct-success"
     assert index_entry["holder_name"] is None
+    assert index_entry["display"] == "****9999"
     assert index_entry["primary_issue"] == "late_payment"
-    assert index_entry["balance_owed"] == "$50"
+    assert index_entry["balance_owed"] == {
+        "per_bureau": {
+            "transunion": "$50",
+            "experian": "--",
+            "equifax": "--",
+        }
+    }
 
     assert result["status"] == "success"
     assert result["packs_count"] == 1

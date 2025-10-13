@@ -28,6 +28,9 @@ _BUREAU_BADGES: Mapping[str, Mapping[str, str]] = {
     "experian": {"id": "experian", "label": "Experian", "short_label": "EX"},
 }
 
+_FRONTEND_INDEX_SCHEMA_VERSION = 2
+
+
 _QUESTION_SET = [
     {"id": "ownership", "prompt": "Do you own this account?"},
     {"id": "recognize", "prompt": "Do you recognize this account on your report?"},
@@ -566,6 +569,7 @@ def generate_frontend_packs_for_run(
         if not account_dirs:
             generated_at = _now_iso()
             payload = {
+                "schema_version": _FRONTEND_INDEX_SCHEMA_VERSION,
                 "sid": sid,
                 "generated_at": generated_at,
                 "accounts": [],
@@ -848,14 +852,17 @@ def generate_frontend_packs_for_run(
             packs.append(
                 {
                     "account_id": account_id,
+                    "holder_name": display_payload.get("holder_name"),
+                    "display": display_payload.get("display"),
+                    "primary_issue": display_payload.get("primary_issue"),
+                    "account_type": display_payload.get("account_type"),
+                    "status": display_payload.get("status"),
+                    "balance_owed": {
+                        "per_bureau": display_payload["balance_owed"]["per_bureau"],
+                    },
+                    "date_opened": display_payload["date_opened"],
+                    "closed_date": display_payload["closed_date"],
                     "pack_path": relative_pack,
-                    "creditor_name": pack_payload["creditor_name"],
-                    "account_type": pack_payload["account_type"],
-                    "status": pack_payload["status"],
-                    "holder_name": holder_name,
-                    "primary_issue": primary_issue,
-                    "balance_owed": _summarize_balance(pack_payload.get("balance_owed")),
-                    "bureau_badges": pack_payload["bureau_badges"],
                 }
             )
 
@@ -894,6 +901,7 @@ def generate_frontend_packs_for_run(
         generated_at = _now_iso()
         pack_count = len(packs)
         index_payload_base = {
+            "schema_version": _FRONTEND_INDEX_SCHEMA_VERSION,
             "sid": sid,
             "accounts": packs,
             "packs_count": pack_count,
@@ -903,6 +911,7 @@ def generate_frontend_packs_for_run(
         existing_index = _load_json_payload(index_path)
         if isinstance(existing_index, Mapping):
             existing_base = {
+                "schema_version": existing_index.get("schema_version"),
                 "sid": existing_index.get("sid"),
                 "accounts": existing_index.get("accounts"),
                 "packs_count": existing_index.get("packs_count"),

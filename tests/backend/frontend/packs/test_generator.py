@@ -117,3 +117,31 @@ def test_generate_frontend_packs_respects_feature_flag(tmp_path, monkeypatch):
         "last_built_at": None,
     }
     assert not (runs_root / sid).exists()
+
+
+def test_generate_frontend_packs_task_exposed(tmp_path, monkeypatch):
+    runs_root = tmp_path / "runs"
+    sid = "S-task"
+
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+
+    import importlib
+    import sys
+    import types
+
+    fake_requests = types.ModuleType("requests")
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    module_name = "backend.api.tasks"
+    if module_name in sys.modules:
+        api_tasks = importlib.reload(sys.modules[module_name])
+    else:
+        api_tasks = importlib.import_module(module_name)
+
+    result = api_tasks.generate_frontend_packs_task.run(sid)
+
+    assert result["packs_count"] == 0
+    assert result["empty_ok"] is True
+
+    index_path = runs_root / sid / "frontend" / "index.json"
+    assert index_path.exists()

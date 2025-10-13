@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import time
-import traceback
 from contextlib import contextmanager
 from datetime import datetime, timezone, date
 from pathlib import Path
@@ -41,6 +40,8 @@ from backend.core.logic.tags.compact import (
 from backend.pipeline.runs import RUNS_ROOT, RunManifest, persist_manifest
 from backend.core.runflow import runflow_step
 from backend.core.runflow.io import (
+    compose_hint,
+    format_exception_tail,
     runflow_stage_end,
     runflow_stage_error,
     runflow_stage_start,
@@ -371,8 +372,8 @@ def run_validation_requirements_for_all_accounts(
             sid=sid,
             error_type=exc.__class__.__name__,
             message=str(exc),
-            traceback_tail=traceback.format_exc(),
-            hint="validation requirements",
+            traceback_tail=format_exception_tail(exc),
+            hint=compose_hint("validation requirements", exc),
             summary=summary,
         )
         raise

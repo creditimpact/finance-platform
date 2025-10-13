@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import re
-import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, MutableMapping
@@ -36,6 +35,8 @@ from backend.pipeline.auto_ai import (
 )
 from backend.core.runflow import runflow_step
 from backend.core.runflow.io import (
+    compose_hint,
+    format_exception_tail,
     runflow_stage_end,
     runflow_stage_error,
     runflow_stage_start,
@@ -495,8 +496,8 @@ def _merge_build_stage(payload: dict[str, object]) -> dict[str, object]:
             sid=sid,
             error_type=exc.__class__.__name__,
             message=str(exc),
-            traceback_tail=traceback.format_exc(),
-            hint="merge build",
+            traceback_tail=format_exception_tail(exc),
+            hint=compose_hint("merge build", exc),
             summary={"phase": "build"},
         )
         raise
@@ -528,8 +529,8 @@ def _merge_build_stage(payload: dict[str, object]) -> dict[str, object]:
             sid=sid,
             error_type=exc.__class__.__name__,
             message=str(exc),
-            traceback_tail=traceback.format_exc(),
-            hint="merge build",
+            traceback_tail=format_exception_tail(exc),
+            hint=compose_hint("merge build", exc),
             summary={"phase": "build"},
         )
         raise
@@ -596,8 +597,8 @@ def _merge_send_stage(payload: dict[str, object]) -> dict[str, object]:
             sid=sid,
             error_type=exc.__class__.__name__,
             message=str(exc),
-            traceback_tail=traceback.format_exc(),
-            hint="merge send",
+            traceback_tail=format_exception_tail(exc),
+            hint=compose_hint("merge send", exc),
             summary={"phase": "send"},
         )
         raise
@@ -816,8 +817,8 @@ def _merge_compact_stage(payload: dict[str, object]) -> dict[str, object]:
                 sid=sid,
                 error_type=exc.__class__.__name__,
                 message=str(exc),
-                traceback_tail=traceback.format_exc(),
-                hint="merge compact",
+                traceback_tail=format_exception_tail(exc),
+                hint=compose_hint("merge compact", exc),
                 summary={"phase": "compact"},
             )
             raise
@@ -1030,8 +1031,8 @@ def validation_build_packs(
             sid=sid,
             error_type=exc.__class__.__name__,
             message=str(exc),
-            traceback_tail=traceback.format_exc(),
-            hint="validation build",
+            traceback_tail=format_exception_tail(exc),
+            hint=compose_hint("validation build", exc),
             summary={"phase": "build"},
         )
         raise
@@ -1094,8 +1095,8 @@ def validation_send(self, prev: Mapping[str, object] | None) -> dict[str, object
                 sid=sid,
                 error_type=exc.__class__.__name__,
                 message=str(exc),
-                traceback_tail=traceback.format_exc(),
-                hint="validation send",
+                traceback_tail=format_exception_tail(exc),
+                hint=compose_hint("validation send", exc),
                 summary={"phase": "send"},
             )
             raise
@@ -1116,8 +1117,8 @@ def validation_send(self, prev: Mapping[str, object] | None) -> dict[str, object
             sid=sid,
             error_type=exc.__class__.__name__,
             message=str(exc),
-            traceback_tail=traceback.format_exc(),
-            hint="validation send",
+            traceback_tail=format_exception_tail(exc),
+            hint=compose_hint("validation send", exc),
             summary={"phase": "send"},
         )
         raise
@@ -1178,8 +1179,8 @@ def validation_compact(self, prev: Mapping[str, object] | None) -> dict[str, obj
             sid=sid,
             error_type=exc.__class__.__name__,
             message=str(exc),
-            traceback_tail=traceback.format_exc(),
-            hint="validation compact",
+            traceback_tail=format_exception_tail(exc),
+            hint=compose_hint("validation compact", exc),
             summary={"phase": "compact"},
         )
         raise

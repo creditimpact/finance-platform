@@ -549,6 +549,7 @@ def generate_frontend_packs_for_run(
     packs_dir_str = str(frontend_dir.absolute())
 
     runflow_stage_start("frontend", sid=sid)
+    current_account_id: str | None = None
     try:
         if not _frontend_packs_enabled():
             runflow_step(
@@ -739,6 +740,7 @@ def generate_frontend_packs_for_run(
                 continue
 
             account_id = str(summary.get("account_id") or account_dir.name)
+            current_account_id = account_id
             labels = _extract_summary_labels(summary)
             bureau_summary = _prepare_bureau_payload(bureaus)
             first_bureau = next(iter(bureaus.values()), {})
@@ -852,17 +854,6 @@ def generate_frontend_packs_for_run(
                     pack_path,
                 )
                 write_errors.append((account_id, exc))
-                runflow_step(
-                    sid,
-                    "frontend",
-                    "frontend_error",
-                    status="error",
-                    out={
-                        "account_id": account_id,
-                        "error_class": exc.__class__.__name__,
-                        "message": str(exc),
-                    },
-                )
                 continue
 
             if changed:
@@ -997,6 +988,17 @@ def generate_frontend_packs_for_run(
             "last_built_at": generated_at,
         }
     except Exception as exc:
+        runflow_step(
+            sid,
+            "frontend",
+            "frontend_error",
+            status="error",
+            out={
+                "account_id": current_account_id,
+                "error_class": exc.__class__.__name__,
+                "message": str(exc),
+            },
+        )
         runflow_step(
             sid,
             "frontend",

@@ -228,6 +228,47 @@ def runflow_event(
     _append_event(sid, event)
 
 
+def runflow_decide_step(
+    sid: str,
+    stage: str,
+    *,
+    next_action: str,
+    reason: str,
+) -> None:
+    """Record a compact decision step for ``stage`` if runflow is enabled."""
+
+    steps_enabled = _ENABLE_STEPS
+    events_enabled = _ENABLE_EVENTS
+
+    if not (steps_enabled or events_enabled):
+        return
+
+    ts = _utcnow_iso()
+    stage_name = str(stage)
+
+    decision_out = {"next": str(next_action), "reason": str(reason)}
+
+    if steps_enabled:
+        steps_append(
+            sid,
+            stage_name,
+            "runflow_decide",
+            "success",
+            t=ts,
+            out=decision_out,
+        )
+
+    if events_enabled:
+        event: dict[str, Any] = {
+            "ts": ts,
+            "stage": stage_name,
+            "event": "decide",
+            "next": str(next_action),
+            "reason": str(reason),
+        }
+        _append_event(sid, event)
+
+
 def runflow_step(
     sid: str,
     stage: str,
@@ -386,6 +427,7 @@ def runflow_step_dec(stage: str, step: str) -> Callable[[Callable[..., Any]], Ca
 __all__ = [
     "runflow_start_stage",
     "runflow_end_stage",
+    "runflow_decide_step",
     "runflow_event",
     "runflow_step",
     "runflow_step_dec",

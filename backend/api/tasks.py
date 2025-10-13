@@ -36,6 +36,7 @@ from backend.core.logic.report_analysis.trace_cleanup import purge_after_export
 from backend.core.config import ENABLE_VALIDATION_REQUIREMENTS
 from backend.settings import PROJECT_ROOT
 from backend.prevalidation.tasks import detect_and_persist_date_convention
+from backend.core.runflow.env_snapshot import log_worker_env_snapshot
 
 # Ensure the project root is always on sys.path so local modules can be
 # imported even when the worker is launched from outside the repository
@@ -69,6 +70,7 @@ def _parse_task_routes(raw: str) -> object | None:
 
 @signals.worker_process_init.connect
 def configure_worker(**_):
+    log_worker_env_snapshot("celery_worker_init")
     try:
         cfg = get_app_config()
         os.environ.setdefault("OPENAI_API_KEY", cfg.ai.api_key)

@@ -714,6 +714,66 @@ def generate_frontend_packs_for_run(
             holder_name = _derive_holder_name(meta_payload, raw_path)
             primary_issue, issues = _extract_issue_tags(tags_path)
 
+            creditor_name_value = labels.get("creditor_name") or _extract_text(
+                first_bureau.get("creditor_name")
+            )
+            account_type_value = labels.get("account_type") or _extract_text(
+                first_bureau.get("account_type")
+            )
+            status_value = labels.get("status") or _extract_text(
+                first_bureau.get("account_status")
+            )
+
+            last4_payload = bureau_summary.get("last4")
+            last4_display = None
+            if isinstance(last4_payload, Mapping):
+                display_value = last4_payload.get("display")
+                if isinstance(display_value, str):
+                    last4_display = display_value
+                elif display_value is not None:
+                    last4_display = str(display_value)
+
+            def _normalize_per_bureau(source: Mapping[str, Any] | None) -> dict[str, str | None]:
+                normalized: dict[str, str | None] = {}
+                for bureau in ("transunion", "experian", "equifax"):
+                    raw_value: Any | None = None
+                    if isinstance(source, Mapping):
+                        raw_value = source.get(bureau)
+                    if isinstance(raw_value, str):
+                        value = raw_value.strip() or None
+                    elif raw_value is not None:
+                        value = str(raw_value).strip() or None
+                    else:
+                        value = None
+                    normalized[bureau] = value if value else "--"
+                return normalized
+
+            balance_payload = bureau_summary.get("balance_owed")
+            per_bureau_balance_source = None
+            if isinstance(balance_payload, Mapping):
+                per_bureau_balance_source = balance_payload.get("per_bureau")
+            balance_per_bureau = _normalize_per_bureau(per_bureau_balance_source)
+
+            dates_payload = bureau_summary.get("dates")
+            date_opened_source = None
+            closed_date_source = None
+            if isinstance(dates_payload, Mapping):
+                date_opened_source = dates_payload.get("date_opened")
+                closed_date_source = dates_payload.get("closed_date")
+            date_opened_per_bureau = _normalize_per_bureau(date_opened_source)
+            closed_date_per_bureau = _normalize_per_bureau(closed_date_source)
+
+            display_payload = {
+                "holder_name": holder_name,
+                "display": last4_display,
+                "primary_issue": primary_issue,
+                "account_type": account_type_value,
+                "status": status_value,
+                "balance_owed": {"per_bureau": balance_per_bureau},
+                "date_opened": date_opened_per_bureau,
+                "closed_date": closed_date_per_bureau,
+            }
+
             try:
                 relative_account_dir = account_dir.relative_to(run_dir).as_posix()
             except ValueError:
@@ -731,18 +791,16 @@ def generate_frontend_packs_for_run(
             pack_payload = {
                 "sid": sid,
                 "account_id": account_id,
-                "creditor_name": labels.get("creditor_name")
-                or _extract_text(first_bureau.get("creditor_name")),
-                "account_type": labels.get("account_type")
-                or _extract_text(first_bureau.get("account_type")),
-                "status": labels.get("status")
-                or _extract_text(first_bureau.get("account_status")),
+                "creditor_name": creditor_name_value,
+                "account_type": account_type_value,
+                "status": status_value,
                 "last4": bureau_summary["last4"],
                 "balance_owed": bureau_summary["balance_owed"],
                 "dates": bureau_summary["dates"],
                 "bureau_badges": bureau_summary["bureau_badges"],
                 "holder_name": holder_name,
                 "primary_issue": primary_issue,
+                "display": display_payload,
                 "pointers": pointers,
                 "questions": list(_QUESTION_SET),
             }

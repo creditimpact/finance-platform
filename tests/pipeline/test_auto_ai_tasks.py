@@ -73,12 +73,12 @@ def test_finalize_stage_marks_no_candidates(monkeypatch, tmp_path: Path) -> None
     sid = "finalize"
     recorded: dict[str, object] = {}
 
-    def _fake_end_stage(sid_value: str, stage_value: str, **kwargs: object) -> None:
-        recorded["sid"] = sid_value
+    def _fake_end_stage(stage_value: str, *, sid: str, **kwargs: object) -> None:
+        recorded["sid"] = sid
         recorded["stage"] = stage_value
         recorded["kwargs"] = kwargs
 
-    monkeypatch.setattr(auto_ai_tasks, "runflow_end_stage", _fake_end_stage)
+    monkeypatch.setattr(auto_ai_tasks, "runflow_stage_end", _fake_end_stage)
     monkeypatch.setattr(auto_ai_tasks, "_cleanup_lock", lambda payload, reason: False)
     monkeypatch.setattr(auto_ai_tasks, "_append_run_log_entry", lambda **_: None)
 
@@ -97,10 +97,10 @@ def test_finalize_stage_marks_no_candidates(monkeypatch, tmp_path: Path) -> None
     assert recorded["stage"] == "merge"
     kwargs = recorded["kwargs"]
     assert kwargs["empty_ok"] is True
-    assert kwargs["stage_status"] == "empty"
+    assert kwargs["status"] == "success"
     summary = kwargs["summary"]
-    assert summary["created_packs"] == 0
-    assert summary["scored_pairs"] == 3
+    assert summary["packs_created"] == 0
+    assert summary["pairs_scored"] == 3
     assert summary["empty_ok"] is True
-    assert set(summary) == {"created_packs", "scored_pairs", "empty_ok"}
+    assert set(summary) == {"packs_created", "pairs_scored", "empty_ok"}
 

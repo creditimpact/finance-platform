@@ -119,26 +119,18 @@ def test_merge_scoring_runflow_handles_masked_accounts(tmp_path, monkeypatch):
     assert isinstance(summary, dict)
     summary_present = bool(summary)
     if summary_present:
-        expected_keys = {"created_packs", "scored_pairs", "empty_ok"}
-        if "packs_created" in summary:
-            expected_keys.add("packs_created")
+        expected_keys = {"pairs_scored", "packs_created", "empty_ok"}
         assert expected_keys.issubset(set(summary))
-        created_packs = int(summary.get("created_packs", len(pack_entries)) or 0)
-        packs_created_raw = summary.get("packs_created")
-        if packs_created_raw is not None:
-            packs_created = int(packs_created_raw or 0)
-            assert packs_created == len(pack_entries)
-        else:
-            packs_created = created_packs
-        scored_pairs_summary = int(summary.get("scored_pairs", 0) or 0)
+        packs_created = int(summary.get("packs_created", len(pack_entries)) or 0)
+        assert packs_created == len(pack_entries)
+        scored_pairs_summary = int(summary.get("pairs_scored", 0) or 0)
         summary_empty_ok = summary.get("empty_ok")
     else:
-        created_packs = len(pack_entries)
-        packs_created = created_packs
+        packs_created = len(pack_entries)
         scored_pairs_summary = None
         summary_empty_ok = None
 
-    if created_packs == 0:
+    if packs_created == 0:
         assert not pack_entries
         stage_empty_ok = merge_stage.get("empty_ok")
         if summary_empty_ok is not None:
@@ -242,9 +234,6 @@ def test_merge_runflow_steps_single_pack(tmp_path, monkeypatch):
     packs_created_summary = summary.get("packs_created")
     if packs_created_summary is not None:
         assert int(packs_created_summary or 0) == len(pack_entries)
-    created_packs_summary = summary.get("created_packs")
-    if created_packs_summary is not None:
-        assert int(created_packs_summary or 0) == len(pack_entries)
 
 
 def test_merge_runflow_steps_no_packs(tmp_path, monkeypatch):
@@ -292,7 +281,11 @@ def test_merge_runflow_steps_no_packs(tmp_path, monkeypatch):
         sid,
         "merge",
         status="success",
-        summary={"created_packs": 0, "packs_created": 0, "scored_pairs": 1, "empty_ok": True},
+        summary={
+            "pairs_scored": 1,
+            "packs_created": 0,
+            "empty_ok": True,
+        },
         stage_status="empty",
         empty_ok=True,
     )
@@ -314,7 +307,7 @@ def test_merge_runflow_steps_no_packs(tmp_path, monkeypatch):
     )
 
     summary = merge_stage.get("summary", {})
-    assert summary.get("created_packs") == 0
+    assert summary.get("pairs_scored") == 1
     assert summary.get("packs_created") == 0
     assert summary.get("empty_ok") is True
     assert merge_stage.get("empty_ok") is True

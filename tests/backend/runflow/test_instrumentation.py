@@ -350,7 +350,11 @@ def test_runflow_end_stage_records_empty_status(tmp_path, monkeypatch):
         runflow.runflow_end_stage(
             sid,
             stage,
-            summary={"packs_count": 0},
+            summary={
+                "packs_count": 0,
+                "responses_received": 0,
+                "empty_ok": True,
+            },
             stage_status="empty",
             empty_ok=True,
         )

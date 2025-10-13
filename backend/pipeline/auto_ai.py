@@ -171,6 +171,49 @@ def _account_sort_key(path: Path) -> tuple[int, object]:
     return (1, name)
 
 
+def _count_validation_ai_packs(base_root: Path, sid: str) -> int:
+    base_dir = base_root / sid / "ai_packs" / "validation" / "packs"
+    if not base_dir.is_dir():
+        return 0
+
+    total = 0
+    for entry in base_dir.iterdir():
+        if not entry.is_file():
+            continue
+        name = entry.name
+        if name.endswith(".tmp"):
+            continue
+        if entry.suffix.lower() != ".jsonl":
+            continue
+        total += 1
+    return total
+
+
+def _count_validation_ai_results(base_root: Path, sid: str) -> int:
+    base_dir = base_root / sid / "ai_packs" / "validation" / "results"
+    if not base_dir.is_dir():
+        return 0
+
+    seen: set[str] = set()
+    for entry in base_dir.iterdir():
+        if not entry.is_file():
+            continue
+        name = entry.name
+        if name.endswith(".tmp"):
+            continue
+        if name.endswith(".error.json"):
+            continue
+        if name.endswith(".jsonl"):
+            stem = name[: -len(".jsonl")]
+        elif name.endswith(".json"):
+            stem = name[: -len(".json")]
+        else:
+            continue
+        seen.add(stem)
+
+    return len(seen)
+
+
 def run_validation_requirements_for_all_accounts(
     sid: str, *, runs_root: Path | str | None = None
 ) -> dict[str, object]:
@@ -198,11 +241,9 @@ def run_validation_requirements_for_all_accounts(
     ) -> dict[str, object]:
         summary: dict[str, object] = {
             "findings_count": int(stats.get("findings", 0) or 0),
-            "missing_bureaus": int(stats.get("missing_bureaus", 0) or 0),
-            "errors": int(stats.get("errors", 0) or 0),
+            "ai_packs_built": _count_validation_ai_packs(base_root, sid),
+            "ai_results_received": _count_validation_ai_results(base_root, sid),
             "empty_ok": bool(empty_ok),
-            "total_accounts": int(stats.get("total_accounts", 0) or 0),
-            "processed_accounts": int(stats.get("processed_accounts", 0) or 0),
         }
         if reason:
             summary["reason"] = reason

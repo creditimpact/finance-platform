@@ -66,6 +66,20 @@ def _frontend_packs_topn() -> int:
     return max(value, 0)
 
 
+def _count_frontend_responses(responses_dir: Path) -> int:
+    if not responses_dir.is_dir():
+        return 0
+
+    total = 0
+    for entry in responses_dir.iterdir():
+        if not entry.is_file():
+            continue
+        if entry.name.endswith(".tmp"):
+            continue
+        total += 1
+    return total
+
+
 def _account_sort_key(path: Path) -> tuple[int, Any]:
     name = path.name
     if name.isdigit():
@@ -261,11 +275,18 @@ def generate_frontend_packs_for_run(
                 metrics={"built": 0, "skipped_missing": 0},
                 out={"reason": "disabled"},
             )
+            responses_count = _count_frontend_responses(responses_dir)
+            summary = {
+                "packs_count": 0,
+                "responses_received": responses_count,
+                "empty_ok": True,
+                "reason": "disabled",
+            }
             runflow_stage_end(
                 "frontend",
                 sid=sid,
                 status="skipped",
-                summary={"packs_count": 0, "reason": "disabled", "empty_ok": True},
+                summary=summary,
                 empty_ok=True,
             )
             return {
@@ -323,10 +344,16 @@ def generate_frontend_packs_for_run(
                 metrics={"packs": 0},
                 out={"path": index_out},
             )
+            responses_count = _count_frontend_responses(responses_dir)
+            summary = {
+                "packs_count": 0,
+                "responses_received": responses_count,
+                "empty_ok": True,
+            }
             runflow_stage_end(
                 "frontend",
                 sid=sid,
-                summary={"packs_count": 0, "empty_ok": True},
+                summary=summary,
                 empty_ok=True,
             )
             return {
@@ -369,14 +396,17 @@ def generate_frontend_packs_for_run(
                     metrics={"packs": packs_count},
                     out={"path": index_out},
                 )
+                responses_count = _count_frontend_responses(responses_dir)
+                summary = {
+                    "packs_count": packs_count,
+                    "responses_received": responses_count,
+                    "empty_ok": packs_count == 0,
+                    "cache_hit": True,
+                }
                 runflow_stage_end(
                     "frontend",
                     sid=sid,
-                    summary={
-                        "packs_count": packs_count,
-                        "cache_hit": True,
-                        "empty_ok": packs_count == 0,
-                    },
+                    summary=summary,
                     empty_ok=packs_count == 0,
                 )
                 return {
@@ -512,10 +542,16 @@ def generate_frontend_packs_for_run(
             out={"path": index_out},
         )
 
+        responses_count = _count_frontend_responses(responses_dir)
+        summary = {
+            "packs_count": pack_count,
+            "responses_received": responses_count,
+            "empty_ok": pack_count == 0,
+        }
         runflow_stage_end(
             "frontend",
             sid=sid,
-            summary={"packs_count": pack_count, "empty_ok": pack_count == 0},
+            summary=summary,
             empty_ok=pack_count == 0,
         )
 

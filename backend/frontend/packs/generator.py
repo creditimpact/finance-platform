@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -27,6 +28,8 @@ _BUREAU_BADGES: Mapping[str, Mapping[str, str]] = {
     "equifax": {"id": "equifax", "label": "Equifax", "short_label": "EF"},
     "experian": {"id": "experian", "label": "Experian", "short_label": "EX"},
 }
+
+_BUREAU_ORDER: tuple[str, ...] = ("transunion", "experian", "equifax")
 
 _FRONTEND_INDEX_SCHEMA_VERSION = 2
 _DISPLAY_SCHEMA_VERSION = "1.1"
@@ -338,6 +341,71 @@ def _collect_field_per_bureau(
     return values, consensus
 
 
+def _collect_field_text_values(
+    bureaus: Mapping[str, Mapping[str, Any]], field: str
+) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for bureau in _BUREAU_ORDER:
+        payload = bureaus.get(bureau)
+        if not isinstance(payload, Mapping):
+            continue
+        raw_value = payload.get(field)
+        if isinstance(raw_value, str):
+            cleaned = raw_value.strip()
+        elif raw_value is not None:
+            cleaned = str(raw_value).strip()
+        else:
+            cleaned = ""
+        if cleaned:
+            values[bureau] = cleaned
+    return values
+
+
+def _resolve_account_number_consensus(per_bureau: Mapping[str, str]) -> str:
+    duplicates = set()
+    ordered_values: list[str] = []
+    for bureau in _BUREAU_ORDER:
+        value = per_bureau.get(bureau)
+        if value and value != "--":
+            ordered_values.append(value)
+    if not ordered_values:
+        return "--"
+    counts = Counter(ordered_values)
+    duplicates = {value for value, count in counts.items() if count >= 2}
+    if duplicates:
+        for bureau in _BUREAU_ORDER:
+            value = per_bureau.get(bureau)
+            if value in duplicates:
+                return value
+    for bureau in _BUREAU_ORDER:
+        value = per_bureau.get(bureau)
+        if value and value != "--":
+            return value
+    return "--"
+
+
+def _resolve_majority_consensus(per_bureau: Mapping[str, str]) -> str:
+    values: list[str] = []
+    for bureau in _BUREAU_ORDER:
+        value = per_bureau.get(bureau)
+        if value and value != "--":
+            values.append(value)
+    if not values:
+        return "--"
+    counts = Counter(values)
+    majority_values = {value for value, count in counts.items() if count >= 2}
+    if majority_values:
+        for bureau in _BUREAU_ORDER:
+            value = per_bureau.get(bureau)
+            if value in majority_values:
+                return value
+    for bureau in _BUREAU_ORDER:
+        value = per_bureau.get(bureau)
+        if value and value != "--":
+            return value
+    return "--"
+
+
 def _load_raw_lines(path: Path) -> Sequence[str]:
     payload = _load_json_payload(path)
     if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
@@ -550,7 +618,7 @@ def _prepare_bureau_payload(bureaus: Mapping[str, Mapping[str, Any]]) -> dict[st
 
 def _normalize_per_bureau(source: Mapping[str, Any] | None) -> dict[str, str]:
     normalized: dict[str, str] = {}
-    for bureau in ("transunion", "experian", "equifax"):
+    for bureau in _BUREAU_ORDER:
         raw_value: Any | None = None
         if isinstance(source, Mapping):
             raw_value = source.get(bureau)
@@ -567,20 +635,32 @@ def _normalize_per_bureau(source: Mapping[str, Any] | None) -> dict[str, str]:
 def build_display_payload(
     *,
     holder_name: str,
-    display_value: str,
     primary_issue: str,
-    account_type: str,
-    status: str,
+    account_number_per_bureau: Mapping[str, str],
+    account_number_consensus: str,
+    account_type_per_bureau: Mapping[str, str],
+    account_type_consensus: str,
+    status_per_bureau: Mapping[str, str],
+    status_consensus: str,
     balance_per_bureau: Mapping[str, str],
     date_opened_per_bureau: Mapping[str, str],
     closed_date_per_bureau: Mapping[str, str],
 ) -> dict[str, Any]:
     return {
         "holder_name": holder_name,
-        "display": display_value,
         "primary_issue": primary_issue,
-        "account_type": account_type,
-        "status": status,
+        "account_number": {
+            "per_bureau": dict(account_number_per_bureau),
+            "consensus": account_number_consensus,
+        },
+        "account_type": {
+            "per_bureau": dict(account_type_per_bureau),
+            "consensus": account_type_consensus,
+        },
+        "status": {
+            "per_bureau": dict(status_per_bureau),
+            "consensus": status_consensus,
+        },
         "balance_owed": {"per_bureau": dict(balance_per_bureau)},
         "date_opened": dict(date_opened_per_bureau),
         "closed_date": dict(closed_date_per_bureau),
@@ -633,10 +713,19 @@ def build_lean_pack_doc(
         "primary_issue": primary_issue,
         "display": {
             "holder_name": display_payload["holder_name"],
-            "display": display_payload["display"],
             "primary_issue": display_payload["primary_issue"],
-            "account_type": display_payload["account_type"],
-            "status": display_payload["status"],
+            "account_number": {
+                "per_bureau": dict(display_payload["account_number"]["per_bureau"]),
+                "consensus": display_payload["account_number"]["consensus"],
+            },
+            "account_type": {
+                "per_bureau": dict(display_payload["account_type"]["per_bureau"]),
+                "consensus": display_payload["account_type"]["consensus"],
+            },
+            "status": {
+                "per_bureau": dict(display_payload["status"]["per_bureau"]),
+                "consensus": display_payload["status"]["consensus"],
+            },
             "balance_owed": {"per_bureau": dict(display_payload["balance_owed"]["per_bureau"])},
             "date_opened": dict(display_payload["date_opened"]),
             "closed_date": dict(display_payload["closed_date"]),
@@ -903,19 +992,27 @@ def generate_frontend_packs_for_run(
                 first_bureau.get("account_status")
             )
 
-            display_account_type = _coerce_display_text(account_type_value)
-            display_status = _coerce_display_text(status_value)
-
-            last4_payload = bureau_summary.get("last4")
-            if not isinstance(last4_payload, Mapping):
-                last4_payload = None
-            last4_display = _derive_masked_display(last4_payload)
-
             balance_payload = bureau_summary.get("balance_owed")
             per_bureau_balance_source = None
             if isinstance(balance_payload, Mapping):
                 per_bureau_balance_source = balance_payload.get("per_bureau")
             balance_per_bureau = _normalize_per_bureau(per_bureau_balance_source)
+
+            account_number_values = _collect_field_text_values(
+                bureaus, "account_number_display"
+            )
+            account_number_per_bureau = _normalize_per_bureau(account_number_values)
+            account_number_consensus = _resolve_account_number_consensus(
+                account_number_per_bureau
+            )
+
+            account_type_values = _collect_field_text_values(bureaus, "account_type")
+            account_type_per_bureau = _normalize_per_bureau(account_type_values)
+            account_type_consensus = _resolve_majority_consensus(account_type_per_bureau)
+
+            status_values = _collect_field_text_values(bureaus, "account_status")
+            status_per_bureau = _normalize_per_bureau(status_values)
+            status_consensus = _resolve_majority_consensus(status_per_bureau)
 
             dates_payload = bureau_summary.get("dates")
             date_opened_source = None
@@ -928,10 +1025,13 @@ def generate_frontend_packs_for_run(
 
             display_payload = build_display_payload(
                 holder_name=display_holder_name,
-                display_value=last4_display,
                 primary_issue=display_primary_issue,
-                account_type=display_account_type,
-                status=display_status,
+                account_number_per_bureau=account_number_per_bureau,
+                account_number_consensus=account_number_consensus,
+                account_type_per_bureau=account_type_per_bureau,
+                account_type_consensus=account_type_consensus,
+                status_per_bureau=status_per_bureau,
+                status_consensus=status_consensus,
                 balance_per_bureau=balance_per_bureau,
                 date_opened_per_bureau=date_opened_per_bureau,
                 closed_date_per_bureau=closed_date_per_bureau,
@@ -1036,8 +1136,8 @@ def generate_frontend_packs_for_run(
                 {
                     "account_id": account_id,
                     "holder_name": display_payload.get("holder_name"),
-                    "display": display_payload.get("display"),
                     "primary_issue": display_payload.get("primary_issue"),
+                    "account_number": display_payload.get("account_number"),
                     "account_type": display_payload.get("account_type"),
                     "status": display_payload.get("status"),
                     "balance_owed": {

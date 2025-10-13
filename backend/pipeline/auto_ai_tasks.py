@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, MutableMapping
@@ -33,7 +34,12 @@ from backend.pipeline.auto_ai import (
     run_consistency_writeback_for_all_accounts,
     run_validation_requirements_for_all_accounts,
 )
-from backend.core.runflow import runflow_end_stage, runflow_start_stage, runflow_step
+from backend.core.runflow import runflow_step
+from backend.core.runflow.io import (
+    runflow_stage_end,
+    runflow_stage_error,
+    runflow_stage_start,
+)
 from backend.runflow.decider import StageStatus, decide_next, record_stage
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
 from backend.runflow.manifest import (
@@ -454,7 +460,7 @@ def _merge_build_stage(payload: dict[str, object]) -> dict[str, object]:
 
     logger.info("AI_BUILD_START sid=%s", sid)
 
-    runflow_start_stage(sid, "merge")
+    runflow_stage_start("merge", sid=sid)
 
     if not has_ai_merge_best_pairs(sid, runs_root):
         logger.info("AUTO_AI_SKIP_NO_CANDIDATES sid=%s", sid)
@@ -484,11 +490,14 @@ def _merge_build_stage(payload: dict[str, object]) -> dict[str, object]:
             status="error",
             out={"error": exc.__class__.__name__, "msg": str(exc)},
         )
-        runflow_end_stage(
-            sid,
+        runflow_stage_error(
             "merge",
-            status="error",
-            summary={"error": exc.__class__.__name__, "phase": "build"},
+            sid=sid,
+            error_type=exc.__class__.__name__,
+            message=str(exc),
+            traceback_tail=traceback.format_exc(),
+            hint="merge build",
+            summary={"phase": "build"},
         )
         raise
 
@@ -514,11 +523,14 @@ def _merge_build_stage(payload: dict[str, object]) -> dict[str, object]:
             status="error",
             out={"error": exc.__class__.__name__, "msg": str(exc)},
         )
-        runflow_end_stage(
-            sid,
+        runflow_stage_error(
             "merge",
-            status="error",
-            summary={"error": exc.__class__.__name__, "phase": "build"},
+            sid=sid,
+            error_type=exc.__class__.__name__,
+            message=str(exc),
+            traceback_tail=traceback.format_exc(),
+            hint="merge build",
+            summary={"phase": "build"},
         )
         raise
 
@@ -579,11 +591,14 @@ def _merge_send_stage(payload: dict[str, object]) -> dict[str, object]:
             status="error",
             out={"error": exc.__class__.__name__, "msg": str(exc)},
         )
-        runflow_end_stage(
-            sid,
+        runflow_stage_error(
             "merge",
-            status="error",
-            summary={"error": exc.__class__.__name__, "phase": "send"},
+            sid=sid,
+            error_type=exc.__class__.__name__,
+            message=str(exc),
+            traceback_tail=traceback.format_exc(),
+            hint="merge send",
+            summary={"phase": "send"},
         )
         raise
 
@@ -801,11 +816,14 @@ def _merge_compact_stage(payload: dict[str, object]) -> dict[str, object]:
                 metrics={"accounts": len(indices)},
                 out={"error": exc.__class__.__name__, "msg": str(exc)},
             )
-            runflow_end_stage(
-                sid,
+            runflow_stage_error(
                 "merge",
-                status="error",
-                summary={"error": exc.__class__.__name__, "phase": "compact"},
+                sid=sid,
+                error_type=exc.__class__.__name__,
+                message=str(exc),
+                traceback_tail=traceback.format_exc(),
+                hint="merge compact",
+                summary={"phase": "compact"},
             )
             raise
 
@@ -937,14 +955,11 @@ def _finalize_stage(payload: dict[str, object]) -> dict[str, object]:
     if isinstance(skip_reason, str) and skip_reason:
         status_value = "skipped"
 
-    stage_status_value = None
     empty_ok = False
     if status_value != "error":
         if created_packs_value == 0:
-            stage_status_value = "empty"
             empty_ok = True
         elif scored_pairs_value == 0:
-            stage_status_value = "empty"
             empty_ok = True
 
     summary_payload: dict[str, Any] = {
@@ -953,12 +968,11 @@ def _finalize_stage(payload: dict[str, object]) -> dict[str, object]:
         "empty_ok": bool(empty_ok),
     }
 
-    runflow_end_stage(
-        sid,
+    runflow_stage_end(
         "merge",
+        sid=sid,
         status=status_value,
         summary=summary_payload,
-        stage_status=stage_status_value,
         empty_ok=empty_ok,
     )
 
@@ -1016,11 +1030,14 @@ def validation_build_packs(
             status="error",
             out={"error": exc.__class__.__name__, "msg": str(exc)},
         )
-        runflow_end_stage(
-            sid,
+        runflow_stage_error(
             "validation",
-            status="error",
-            summary={"error": exc.__class__.__name__, "phase": "build"},
+            sid=sid,
+            error_type=exc.__class__.__name__,
+            message=str(exc),
+            traceback_tail=traceback.format_exc(),
+            hint="validation build",
+            summary={"phase": "build"},
         )
         raise
 
@@ -1077,11 +1094,14 @@ def validation_send(self, prev: Mapping[str, object] | None) -> dict[str, object
                 status="error",
                 out={"error": exc.__class__.__name__, "msg": str(exc)},
             )
-            runflow_end_stage(
-                sid,
+            runflow_stage_error(
                 "validation",
-                status="error",
-                summary={"error": exc.__class__.__name__, "phase": "send"},
+                sid=sid,
+                error_type=exc.__class__.__name__,
+                message=str(exc),
+                traceback_tail=traceback.format_exc(),
+                hint="validation send",
+                summary={"phase": "send"},
             )
             raise
         send_validation_packs(index_path)
@@ -1096,11 +1116,14 @@ def validation_send(self, prev: Mapping[str, object] | None) -> dict[str, object
             status="error",
             out={"error": exc.__class__.__name__, "msg": str(exc)},
         )
-        runflow_end_stage(
-            sid,
+        runflow_stage_error(
             "validation",
-            status="error",
-            summary={"error": exc.__class__.__name__, "phase": "send"},
+            sid=sid,
+            error_type=exc.__class__.__name__,
+            message=str(exc),
+            traceback_tail=traceback.format_exc(),
+            hint="validation send",
+            summary={"phase": "send"},
         )
         raise
 
@@ -1155,11 +1178,14 @@ def validation_compact(self, prev: Mapping[str, object] | None) -> dict[str, obj
             status="error",
             out={"error": exc.__class__.__name__, "msg": str(exc)},
         )
-        runflow_end_stage(
-            sid,
+        runflow_stage_error(
             "validation",
-            status="error",
-            summary={"error": exc.__class__.__name__, "phase": "compact"},
+            sid=sid,
+            error_type=exc.__class__.__name__,
+            message=str(exc),
+            traceback_tail=traceback.format_exc(),
+            hint="validation compact",
+            summary={"phase": "compact"},
         )
         raise
 

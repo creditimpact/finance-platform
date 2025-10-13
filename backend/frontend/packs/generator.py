@@ -6,12 +6,18 @@ import json
 import logging
 import os
 import re
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from backend.core.io.json_io import _atomic_write_json
-from backend.core.runflow import runflow_end_stage, runflow_start_stage, runflow_step
+from backend.core.runflow import runflow_step
+from backend.core.runflow.io import (
+    runflow_stage_end,
+    runflow_stage_error,
+    runflow_stage_start,
+)
 
 log = logging.getLogger(__name__)
 
@@ -235,7 +241,7 @@ def generate_frontend_packs_for_run(
     index_path = frontend_dir / "index.json"
     packs_dir_str = str(frontend_dir.absolute())
 
-    runflow_start_stage(sid, "frontend")
+    runflow_stage_start("frontend", sid=sid)
     packs_topn = _frontend_packs_topn()
 
     try:
@@ -255,12 +261,11 @@ def generate_frontend_packs_for_run(
                 metrics={"built": 0, "skipped_missing": 0},
                 out={"reason": "disabled"},
             )
-            runflow_end_stage(
-                sid,
+            runflow_stage_end(
                 "frontend",
+                sid=sid,
                 status="skipped",
                 summary={"packs_count": 0, "reason": "disabled", "empty_ok": True},
-                stage_status="empty",
                 empty_ok=True,
             )
             return {
@@ -318,11 +323,10 @@ def generate_frontend_packs_for_run(
                 metrics={"packs": 0},
                 out={"path": index_out},
             )
-            runflow_end_stage(
-                sid,
+            runflow_stage_end(
                 "frontend",
+                sid=sid,
                 summary={"packs_count": 0, "empty_ok": True},
-                stage_status="empty",
                 empty_ok=True,
             )
             return {
@@ -365,15 +369,14 @@ def generate_frontend_packs_for_run(
                     metrics={"packs": packs_count},
                     out={"path": index_out},
                 )
-                runflow_end_stage(
-                    sid,
+                runflow_stage_end(
                     "frontend",
+                    sid=sid,
                     summary={
                         "packs_count": packs_count,
                         "cache_hit": True,
                         "empty_ok": packs_count == 0,
                     },
-                    stage_status="empty" if packs_count == 0 else None,
                     empty_ok=packs_count == 0,
                 )
                 return {
@@ -509,11 +512,10 @@ def generate_frontend_packs_for_run(
             out={"path": index_out},
         )
 
-        runflow_end_stage(
-            sid,
+        runflow_stage_end(
             "frontend",
+            sid=sid,
             summary={"packs_count": pack_count, "empty_ok": pack_count == 0},
-            stage_status="empty" if pack_count == 0 else None,
             empty_ok=pack_count == 0,
         )
 
@@ -533,11 +535,13 @@ def generate_frontend_packs_for_run(
             status="error",
             out={"error": exc.__class__.__name__, "msg": str(exc)},
         )
-        runflow_end_stage(
-            sid,
+        runflow_stage_error(
             "frontend",
-            status="error",
-            summary={"error": exc.__class__.__name__, "phase": "generate"},
+            sid=sid,
+            error_type=exc.__class__.__name__,
+            message=str(exc),
+            traceback_tail=traceback.format_exc(),
+            hint="frontend pack generation",
         )
         raise
 

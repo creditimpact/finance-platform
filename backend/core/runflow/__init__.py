@@ -270,6 +270,8 @@ def runflow_step(
                 "acctnum_match_level",
                 "acctnum_pairs_summary",
                 "no_merge_candidates",
+                "load_cases",
+                "score_pairs",
             }
             if status == "success":
                 should_write_step = step in allowed_success_steps

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+import traceback
 from contextlib import contextmanager
 from datetime import datetime, timezone, date
 from pathlib import Path
@@ -38,7 +39,12 @@ from backend.core.logic.tags.compact import (
     compact_tags_for_sid,
 )
 from backend.pipeline.runs import RUNS_ROOT, RunManifest, persist_manifest
-from backend.core.runflow import runflow_start_stage, runflow_step
+from backend.core.runflow import runflow_step
+from backend.core.runflow.io import (
+    runflow_stage_end,
+    runflow_stage_error,
+    runflow_stage_start,
+)
 from backend.prevalidation import detect_and_persist_date_convention
 from backend.pipeline.steps.validation_requirements_step import (
     run as validation_requirements_step,
@@ -182,44 +188,27 @@ def run_validation_requirements_for_all_accounts(
         "errors": 0,
     }
 
-    runflow_start_stage(sid, "validation")
+    runflow_stage_start("validation", sid=sid)
 
-    stage_finished = False
-
-    def _finalize_stage(
+    def _build_summary(
         *,
         empty_ok: bool,
         reason: str | None = None,
-        status: str | None = None,
         extra: Mapping[str, object] | None = None,
-    ) -> None:
-        nonlocal stage_finished
-        if stage_finished:
-            return
-
+    ) -> dict[str, object]:
         summary: dict[str, object] = {
             "findings_count": int(stats.get("findings", 0) or 0),
             "missing_bureaus": int(stats.get("missing_bureaus", 0) or 0),
             "errors": int(stats.get("errors", 0) or 0),
             "empty_ok": bool(empty_ok),
+            "total_accounts": int(stats.get("total_accounts", 0) or 0),
+            "processed_accounts": int(stats.get("processed_accounts", 0) or 0),
         }
-        summary["total_accounts"] = int(stats.get("total_accounts", 0) or 0)
-        summary["processed_accounts"] = int(stats.get("processed_accounts", 0) or 0)
         if reason:
             summary["reason"] = reason
         if extra:
             summary.update({str(key): value for key, value in extra.items()})
-
-        stage_status = status or ("error" if stats.get("errors") else "success")
-        runflow_end_stage(
-            sid,
-            "validation",
-            status=stage_status,
-            summary=summary,
-            stage_status="empty" if empty_ok else None,
-            empty_ok=empty_ok,
-        )
-        stage_finished = True
+        return summary
 
     try:
         if not accounts_root.exists():
@@ -239,7 +228,13 @@ def run_validation_requirements_for_all_accounts(
             )
             stats["findings_count"] = stats["findings"]
             stats["empty_ok"] = True
-            _finalize_stage(empty_ok=True, reason="no_accounts")
+            summary = _build_summary(empty_ok=True, reason="no_accounts")
+            runflow_stage_end(
+                "validation",
+                sid=sid,
+                summary=summary,
+                empty_ok=True,
+            )
             return stats
 
         account_paths = [path for path in accounts_root.iterdir() if path.is_dir()]
@@ -312,14 +307,32 @@ def run_validation_requirements_for_all_accounts(
 
         empty_ok = stats["total_accounts"] == 0
         stats["empty_ok"] = empty_ok
-        _finalize_stage(empty_ok=empty_ok)
+        summary = _build_summary(empty_ok=empty_ok)
+        if stats.get("notes"):
+            summary["notes"] = stats["notes"]
+        stage_status = "success" if stats["errors"] == 0 else "error"
+        runflow_stage_end(
+            "validation",
+            sid=sid,
+            status=stage_status,
+            summary=summary,
+            empty_ok=empty_ok,
+        )
 
         return stats
     except Exception as exc:
-        _finalize_stage(
+        summary = _build_summary(
             empty_ok=False,
-            status="error",
             extra={"error": exc.__class__.__name__},
+        )
+        runflow_stage_error(
+            "validation",
+            sid=sid,
+            error_type=exc.__class__.__name__,
+            message=str(exc),
+            traceback_tail=traceback.format_exc(),
+            hint="validation requirements",
+            summary=summary,
         )
         raise
 

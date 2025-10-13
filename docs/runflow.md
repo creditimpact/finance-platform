@@ -115,7 +115,7 @@ pack creations and omitting the skipped attempts that still appear in
   "status": "success",
   "started_at": "2024-05-01T12:00:00Z",
   "ended_at": "2024-05-01T12:01:12Z",
-  "summary": {"created_packs": 2, "scored_pairs": 5, "empty_ok": false},
+  "summary": {"pairs_scored": 5, "packs_created": 2, "empty_ok": false},
   "empty_ok": false,
   "steps": [
     {"seq": 7, "name": "pack_create", "status": "success", "t": "2024-05-01T12:00:46Z", "out": {"path": "runs/SID/ai_packs/merge/pack_000.json"}},
@@ -139,7 +139,7 @@ so readers know why no packs were produced.
   "status": "empty",
   "started_at": "2024-05-01T12:00:00Z",
   "ended_at": "2024-05-01T12:00:01Z",
-  "summary": {"scored_pairs": 0, "created_packs": 0, "empty_ok": true},
+  "summary": {"pairs_scored": 0, "packs_created": 0, "empty_ok": true},
   "empty_ok": true,
   "steps": [
     {

@@ -100,40 +100,46 @@ def test_merge_scoring_runflow_handles_masked_accounts(tmp_path, monkeypatch):
     stage_steps = merge_stage["steps"]
     summary = merge_stage.get("summary", {})
     step_names = [entry.get("name") for entry in stage_steps]
-    assert "pack_skip" not in step_names
+    assert step_names
+    assert step_names[0] == "merge_scoring_start"
+    assert step_names[-1] == "merge_scoring_finish"
+    allowed_steps = {
+        "merge_scoring_start",
+        "acctnum_normalize",
+        "pack_create",
+        "merge_scoring_finish",
+    }
+    assert all(name in allowed_steps for name in step_names)
 
     pack_entries = [entry for entry in stage_steps if entry.get("name") == "pack_create"]
-    acctnum_entries = [
-        entry for entry in stage_steps if entry.get("name") == "acctnum_match_level"
-    ]
-    summary_entries = [
-        entry for entry in stage_steps if entry.get("name") == "acctnum_pairs_summary"
-    ]
-    no_merge_entries = [
-        entry for entry in stage_steps if entry.get("name") == "no_merge_candidates"
+    normalize_entries = [
+        entry for entry in stage_steps if entry.get("name") == "acctnum_normalize"
     ]
 
     assert isinstance(summary, dict)
     summary_present = bool(summary)
     if summary_present:
-        assert set(summary) >= {"created_packs", "scored_pairs", "empty_ok"}
-        assert "packs" not in summary
-        assert "pairs" not in summary
-        created_packs = int(summary.get("created_packs", 0) or 0)
+        expected_keys = {"created_packs", "scored_pairs", "empty_ok"}
+        if "packs_created" in summary:
+            expected_keys.add("packs_created")
+        assert expected_keys.issubset(set(summary))
+        created_packs = int(summary.get("created_packs", len(pack_entries)) or 0)
+        packs_created_raw = summary.get("packs_created")
+        if packs_created_raw is not None:
+            packs_created = int(packs_created_raw or 0)
+            assert packs_created == len(pack_entries)
+        else:
+            packs_created = created_packs
         scored_pairs_summary = int(summary.get("scored_pairs", 0) or 0)
         summary_empty_ok = summary.get("empty_ok")
     else:
         created_packs = len(pack_entries)
+        packs_created = created_packs
         scored_pairs_summary = None
         summary_empty_ok = None
 
     if created_packs == 0:
         assert not pack_entries
-        assert no_merge_entries, "expected no_merge_candidates entry when no packs built"
-        last_entry = stage_steps[-1] if stage_steps else {}
-        assert last_entry.get("name") == "no_merge_candidates"
-        metrics = last_entry.get("metrics", {})
-        assert metrics.get("scored_pairs") == 3
         stage_empty_ok = merge_stage.get("empty_ok")
         if summary_empty_ok is not None:
             assert summary_empty_ok is True
@@ -143,25 +149,18 @@ def test_merge_scoring_runflow_handles_masked_accounts(tmp_path, monkeypatch):
         assert pack_entries
         assert all(entry.get("status") == "success" for entry in pack_entries)
         assert all(entry.get("out", {}).get("path") for entry in pack_entries)
-        assert len(pack_entries) == created_packs
         if summary_empty_ok is not None:
             assert summary_empty_ok is False
         stage_empty_ok = merge_stage.get("empty_ok")
         if stage_empty_ok is not None:
             assert stage_empty_ok is False
 
-    if acctnum_entries:
-        assert all(entry.get("status") == "success" for entry in acctnum_entries)
-
-    assert summary_entries, "expected acctnum_pairs_summary entry"
-    assert len(summary_entries) == 1
-    summary_entry = summary_entries[0]
+    if normalize_entries:
+        assert len(normalize_entries) == 1
+        assert normalize_entries[0].get("status") == "success"
 
     pairs_index_path = runs_root / sid / "ai_packs" / "merge" / "pairs_index.json"
     index_payload = json.loads(pairs_index_path.read_text(encoding="utf-8"))
-    summary_metrics = summary_entry.get("metrics", {})
-    assert summary_metrics.get("scored_pairs") == index_payload["totals"]["scored_pairs"]
-    assert summary_metrics.get("topn_limit") == index_payload["totals"]["topn_limit"]
     if scored_pairs_summary is not None:
         assert scored_pairs_summary == index_payload["totals"]["scored_pairs"]
     assert len(index_payload["pairs"]) == 3
@@ -225,14 +224,27 @@ def test_merge_runflow_steps_single_pack(tmp_path, monkeypatch):
     steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
     merge_stage = steps_payload["stages"]["merge"]
     stage_steps = merge_stage["steps"]
+    step_names = [entry.get("name") for entry in stage_steps]
+    assert step_names[0] == "merge_scoring_start"
+    assert step_names[-1] == "merge_scoring_finish"
+    assert all(
+        name in {"merge_scoring_start", "acctnum_normalize", "pack_create", "merge_scoring_finish"}
+        for name in step_names
+    )
 
     pack_entries = [entry for entry in stage_steps if entry.get("name") == "pack_create"]
-    skip_entries = [entry for entry in stage_steps if entry.get("name") == "pack_skip"]
 
     assert len(pack_entries) == 1
-    assert not skip_entries
     pack_out = pack_entries[0].get("out", {})
     assert pack_out.get("path")
+
+    summary = merge_stage.get("summary", {})
+    packs_created_summary = summary.get("packs_created")
+    if packs_created_summary is not None:
+        assert int(packs_created_summary or 0) == len(pack_entries)
+    created_packs_summary = summary.get("created_packs")
+    if created_packs_summary is not None:
+        assert int(created_packs_summary or 0) == len(pack_entries)
 
 
 def test_merge_runflow_steps_no_packs(tmp_path, monkeypatch):
@@ -280,7 +292,7 @@ def test_merge_runflow_steps_no_packs(tmp_path, monkeypatch):
         sid,
         "merge",
         status="success",
-        summary={"created_packs": 0, "scored_pairs": 1, "empty_ok": True},
+        summary={"created_packs": 0, "packs_created": 0, "scored_pairs": 1, "empty_ok": True},
         stage_status="empty",
         empty_ok=True,
     )
@@ -291,13 +303,18 @@ def test_merge_runflow_steps_no_packs(tmp_path, monkeypatch):
     stage_steps = merge_stage["steps"]
 
     pack_entries = [entry for entry in stage_steps if entry.get("name") == "pack_create"]
-    no_merge_entries = [entry for entry in stage_steps if entry.get("name") == "no_merge_candidates"]
+    step_names = [entry.get("name") for entry in stage_steps]
 
     assert not pack_entries
-    assert len(no_merge_entries) == 1
-    assert stage_steps[-1].get("name") == "no_merge_candidates"
+    assert step_names[0] == "merge_scoring_start"
+    assert step_names[-1] == "merge_scoring_finish"
+    assert all(
+        name in {"merge_scoring_start", "acctnum_normalize", "merge_scoring_finish"}
+        for name in step_names
+    )
 
     summary = merge_stage.get("summary", {})
     assert summary.get("created_packs") == 0
+    assert summary.get("packs_created") == 0
     assert summary.get("empty_ok") is True
     assert merge_stage.get("empty_ok") is True

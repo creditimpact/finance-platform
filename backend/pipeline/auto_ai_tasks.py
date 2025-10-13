@@ -964,6 +964,7 @@ def _finalize_stage(payload: dict[str, object]) -> dict[str, object]:
 
     summary_payload: dict[str, Any] = {
         "created_packs": created_packs_value,
+        "packs_created": created_packs_value,
         "scored_pairs": scored_pairs_value,
         "empty_ok": bool(empty_ok),
     }

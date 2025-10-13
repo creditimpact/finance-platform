@@ -67,7 +67,7 @@ def test_runflow_steps_and_events(tmp_path, monkeypatch):
 
         steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
         assert steps_payload["sid"] == sid
-        assert steps_payload["schema_version"] == "2.1"
+        assert steps_payload["schema_version"] == "2.2"
 
         merge_stage = steps_payload["stages"][stage]
         assert merge_stage["status"] == "success"

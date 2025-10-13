@@ -30,7 +30,7 @@ Use the firehose when you need to reconstruct debug details or investigate why a
 span emitted a certain payload. Nothing in this file is deduplicated or ordered
 beyond wall clock time.
 
-## `runflow_steps.json` schema (v2.1)
+## `runflow_steps.json` schema (v2.2)
 
 The steps file provides the compact, monotonic timeline. The top-level payload
 looks like this:
@@ -38,7 +38,7 @@ looks like this:
 ```json
 {
   "sid": "SID-123",
-  "schema_version": "2.1",
+  "schema_version": "2.2",
   "updated_at": "2024-05-01T12:05:00Z",
   "stages": {
     "merge": {

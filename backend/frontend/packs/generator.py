@@ -32,7 +32,7 @@ _BUREAU_BADGES: Mapping[str, Mapping[str, str]] = {
 _BUREAU_ORDER: tuple[str, ...] = ("transunion", "experian", "equifax")
 
 _FRONTEND_INDEX_SCHEMA_VERSION = 2
-_DISPLAY_SCHEMA_VERSION = "1.1"
+_DISPLAY_SCHEMA_VERSION = "1.2"
 
 
 _QUESTION_SET = [
@@ -647,6 +647,7 @@ def build_display_payload(
     closed_date_per_bureau: Mapping[str, str],
 ) -> dict[str, Any]:
     return {
+        "display_version": _DISPLAY_SCHEMA_VERSION,
         "holder_name": holder_name,
         "primary_issue": primary_issue,
         "account_number": {
@@ -729,10 +730,10 @@ def build_lean_pack_doc(
     def _per_bureau_dates(source: Mapping[str, Any] | None) -> dict[str, Any]:
         return dict(source) if isinstance(source, Mapping) else {}
 
-    display: dict[str, Any] = {}
+    display: dict[str, Any] = {"display_version": _DISPLAY_SCHEMA_VERSION}
     display["holder_name"] = holder_name
-    display["account_number"] = _per_bureau_field(display_payload.get("account_number"))
     display["primary_issue"] = primary_issue
+    display["account_number"] = _per_bureau_field(display_payload.get("account_number"))
     display["account_type"] = _per_bureau_field(display_payload.get("account_type"))
     display["status"] = _per_bureau_field(display_payload.get("status"))
     display["balance_owed"] = _per_bureau_field(display_payload.get("balance_owed"))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
 
@@ -161,6 +162,107 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert result["built"] is True
     assert result["packs_dir"] == str((runs_root / sid / "frontend").absolute())
     assert isinstance(result["last_built_at"], str)
+
+
+def test_frontend_runflow_steps_are_condensed(tmp_path, monkeypatch):
+    runs_root = tmp_path / "runs"
+    sid = "S200"
+
+    monkeypatch.setenv("RUNFLOW_VERBOSE", "1")
+    monkeypatch.setenv("RUNS_ROOT", str(runs_root))
+
+    import backend.core.runflow as runflow_module
+
+    runflow_module = importlib.reload(runflow_module)
+    generator = importlib.reload(generator_module)
+
+    try:
+        account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+        summary_payload = {
+            "account_id": "acct-1",
+            "labels": {
+                "account_type": {"normalized": "Conventional real estate mortgage"},
+                "status": {"normalized": "Open"},
+            },
+        }
+        bureaus_payload = {
+            "transunion": {
+                "account_number_display": "277003*******",
+                "balance_owed": "$1,155,606",
+                "date_opened": "22.2.2022",
+                "closed_date": "--",
+                "account_status": "Open",
+                "account_type": "Conventional real estate mortgage",
+            },
+            "experian": {
+                "account_number_display": "277003*******",
+                "balance_owed": "$1,155,606",
+                "date_opened": "1.2.2022",
+                "closed_date": "--",
+                "account_status": "Open",
+                "account_type": "Conventional real estate mortgage",
+            },
+            "equifax": {
+                "account_number_display": "277003*******",
+                "balance_owed": "$1,155,606",
+                "date_opened": "1.2.2022",
+                "closed_date": "--",
+                "account_status": "Open",
+                "account_type": "Conventional real estate mortgage",
+            },
+        }
+        meta_payload = {"heading_guess": "SPS"}
+        raw_lines_payload = [{"text": "SPS"}]
+        tags_payload = [{"kind": "issue", "type": "delinquency"}]
+
+        _write_json(account_dir / "summary.json", summary_payload)
+        _write_json(account_dir / "bureaus.json", bureaus_payload)
+        _write_json(account_dir / "meta.json", meta_payload)
+        _write_json(account_dir / "raw_lines.json", raw_lines_payload)
+        _write_json(account_dir / "tags.json", tags_payload)
+
+        result = generator.generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+        pack_path = runs_root / sid / "frontend" / "accounts" / "acct-1" / "pack.json"
+        assert pack_path.exists()
+
+        pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
+        assert list(pack_payload.keys()) == ["holder_name", "primary_issue", "display"]
+        display_block = pack_payload["display"]
+        assert list(display_block.keys()) == [
+            "holder_name",
+            "display",
+            "primary_issue",
+            "account_type",
+            "status",
+            "balance_owed",
+            "date_opened",
+            "closed_date",
+        ]
+
+        index_path = runs_root / sid / "frontend" / "index.json"
+        assert index_path.exists()
+        index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+        assert index_payload["packs_count"] == 1
+        index_entry = index_payload["accounts"][0]
+        assert index_entry["pack_path"] == "frontend/accounts/acct-1/pack.json"
+
+        steps_path = runs_root / sid / "runflow_steps.json"
+        assert steps_path.exists()
+        steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
+        frontend_steps = steps_payload["stages"]["frontend"]["substages"]["default"]["steps"]
+        step_names = [step["name"] for step in frontend_steps]
+        assert step_names == ["build_pack_docs", "frontend_minify", "write_index"]
+        assert all("account" not in step for step in frontend_steps)
+
+        assert result["status"] == "success"
+        assert result["packs_count"] == 1
+    finally:
+        monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        importlib.reload(runflow_module)
+        importlib.reload(generator_module)
 
 
 def test_generate_frontend_packs_falls_back_to_raw_holder_name(tmp_path):

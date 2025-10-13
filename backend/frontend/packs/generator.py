@@ -542,6 +542,102 @@ def _prepare_bureau_payload(bureaus: Mapping[str, Mapping[str, Any]]) -> dict[st
     }
 
 
+def _normalize_per_bureau(source: Mapping[str, Any] | None) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for bureau in ("transunion", "experian", "equifax"):
+        raw_value: Any | None = None
+        if isinstance(source, Mapping):
+            raw_value = source.get(bureau)
+        if isinstance(raw_value, str):
+            value = raw_value.strip() or None
+        elif raw_value is not None:
+            value = str(raw_value).strip() or None
+        else:
+            value = None
+        normalized[bureau] = value if value else "--"
+    return normalized
+
+
+def build_display_payload(
+    *,
+    holder_name: str,
+    display_value: str,
+    primary_issue: str,
+    account_type: str,
+    status: str,
+    balance_per_bureau: Mapping[str, str],
+    date_opened_per_bureau: Mapping[str, str],
+    closed_date_per_bureau: Mapping[str, str],
+) -> dict[str, Any]:
+    return {
+        "holder_name": holder_name,
+        "display": display_value,
+        "primary_issue": primary_issue,
+        "account_type": account_type,
+        "status": status,
+        "balance_owed": {"per_bureau": dict(balance_per_bureau)},
+        "date_opened": dict(date_opened_per_bureau),
+        "closed_date": dict(closed_date_per_bureau),
+    }
+
+
+def build_pack_doc(
+    *,
+    sid: str,
+    account_id: str,
+    creditor_name: str | None,
+    account_type: str | None,
+    status: str | None,
+    bureau_summary: Mapping[str, Any],
+    holder_name: str | None,
+    primary_issue: str | None,
+    display_payload: Mapping[str, Any],
+    pointers: Mapping[str, str],
+    issues: Sequence[str] | None,
+) -> dict[str, Any]:
+    payload = {
+        "sid": sid,
+        "account_id": account_id,
+        "creditor_name": creditor_name,
+        "account_type": account_type,
+        "status": status,
+        "last4": bureau_summary["last4"],
+        "balance_owed": bureau_summary["balance_owed"],
+        "dates": bureau_summary["dates"],
+        "bureau_badges": bureau_summary["bureau_badges"],
+        "holder_name": holder_name,
+        "primary_issue": primary_issue,
+        "display": dict(display_payload),
+        "pointers": dict(pointers),
+        "questions": list(_QUESTION_SET),
+    }
+    if issues:
+        payload["issues"] = list(issues)
+    return payload
+
+
+def build_lean_pack_doc(
+    *,
+    holder_name: str | None,
+    primary_issue: str | None,
+    display_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "holder_name": holder_name,
+        "primary_issue": primary_issue,
+        "display": {
+            "holder_name": display_payload["holder_name"],
+            "display": display_payload["display"],
+            "primary_issue": display_payload["primary_issue"],
+            "account_type": display_payload["account_type"],
+            "status": display_payload["status"],
+            "balance_owed": {"per_bureau": dict(display_payload["balance_owed"]["per_bureau"])},
+            "date_opened": dict(display_payload["date_opened"]),
+            "closed_date": dict(display_payload["closed_date"]),
+        },
+    }
+
+
 def _safe_account_dirname(account_id: str, fallback: str) -> str:
     account_id = account_id.strip()
     if not account_id:
@@ -790,21 +886,6 @@ def generate_frontend_packs_for_run(
                 last4_payload = None
             last4_display = _derive_masked_display(last4_payload)
 
-            def _normalize_per_bureau(source: Mapping[str, Any] | None) -> dict[str, str | None]:
-                normalized: dict[str, str | None] = {}
-                for bureau in ("transunion", "experian", "equifax"):
-                    raw_value: Any | None = None
-                    if isinstance(source, Mapping):
-                        raw_value = source.get(bureau)
-                    if isinstance(raw_value, str):
-                        value = raw_value.strip() or None
-                    elif raw_value is not None:
-                        value = str(raw_value).strip() or None
-                    else:
-                        value = None
-                    normalized[bureau] = value if value else "--"
-                return normalized
-
             balance_payload = bureau_summary.get("balance_owed")
             per_bureau_balance_source = None
             if isinstance(balance_payload, Mapping):
@@ -820,16 +901,16 @@ def generate_frontend_packs_for_run(
             date_opened_per_bureau = _normalize_per_bureau(date_opened_source)
             closed_date_per_bureau = _normalize_per_bureau(closed_date_source)
 
-            display_payload = {
-                "holder_name": display_holder_name,
-                "display": last4_display,
-                "primary_issue": display_primary_issue,
-                "account_type": display_account_type,
-                "status": display_status,
-                "balance_owed": {"per_bureau": balance_per_bureau},
-                "date_opened": date_opened_per_bureau,
-                "closed_date": closed_date_per_bureau,
-            }
+            display_payload = build_display_payload(
+                holder_name=display_holder_name,
+                display_value=last4_display,
+                primary_issue=display_primary_issue,
+                account_type=display_account_type,
+                status=display_status,
+                balance_per_bureau=balance_per_bureau,
+                date_opened_per_bureau=date_opened_per_bureau,
+                closed_date_per_bureau=closed_date_per_bureau,
+            )
 
             try:
                 relative_account_dir = account_dir.relative_to(run_dir).as_posix()
@@ -846,30 +927,25 @@ def generate_frontend_packs_for_run(
             }
 
             if _frontend_packs_lean_enabled():
-                pack_payload = {
-                    "holder_name": holder_name,
-                    "primary_issue": primary_issue,
-                    "display": display_payload,
-                }
+                pack_payload = build_lean_pack_doc(
+                    holder_name=holder_name,
+                    primary_issue=primary_issue,
+                    display_payload=display_payload,
+                )
             else:
-                pack_payload = {
-                    "sid": sid,
-                    "account_id": account_id,
-                    "creditor_name": creditor_name_value,
-                    "account_type": account_type_value,
-                    "status": status_value,
-                    "last4": bureau_summary["last4"],
-                    "balance_owed": bureau_summary["balance_owed"],
-                    "dates": bureau_summary["dates"],
-                    "bureau_badges": bureau_summary["bureau_badges"],
-                    "holder_name": holder_name,
-                    "primary_issue": primary_issue,
-                    "display": display_payload,
-                    "pointers": pointers,
-                    "questions": list(_QUESTION_SET),
-                }
-                if issues:
-                    pack_payload["issues"] = issues
+                pack_payload = build_pack_doc(
+                    sid=sid,
+                    account_id=account_id,
+                    creditor_name=creditor_name_value,
+                    account_type=account_type_value,
+                    status=status_value,
+                    bureau_summary=bureau_summary,
+                    holder_name=holder_name,
+                    primary_issue=primary_issue,
+                    display_payload=display_payload,
+                    pointers=pointers,
+                    issues=issues if issues else None,
+                )
 
             account_dirname = _safe_account_dirname(account_id, account_dir.name)
             pack_dir = accounts_output_dir / account_dirname

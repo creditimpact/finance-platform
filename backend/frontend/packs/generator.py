@@ -261,6 +261,36 @@ def _extract_last4(displays: Iterable[str]) -> Mapping[str, str | None]:
     return {"display": cleaned_display, "last4": last4_value}
 
 
+def _derive_masked_display(last4_payload: Mapping[str, Any] | None) -> str:
+    """Return a masked display string derived from the last-4 payload."""
+
+    display_value: str | None = None
+    last4_digits: str | None = None
+
+    if isinstance(last4_payload, Mapping):
+        raw_display = last4_payload.get("display")
+        if isinstance(raw_display, str):
+            display_value = raw_display.strip() or None
+        elif raw_display is not None:
+            display_value = str(raw_display).strip() or None
+
+        raw_last4 = last4_payload.get("last4")
+        if isinstance(raw_last4, str):
+            cleaned = re.sub(r"\D", "", raw_last4)
+            last4_digits = cleaned[-4:] if cleaned else None
+        elif raw_last4 is not None:
+            cleaned = re.sub(r"\D", "", str(raw_last4))
+            last4_digits = cleaned[-4:] if cleaned else None
+
+    if display_value:
+        return display_value
+
+    if last4_digits:
+        return f"****{last4_digits}"
+
+    return "****"
+
+
 def _collect_field_per_bureau(
     bureaus: Mapping[str, Mapping[str, Any]], field: str
 ) -> tuple[dict[str, str], str | None]:
@@ -729,13 +759,9 @@ def generate_frontend_packs_for_run(
             )
 
             last4_payload = bureau_summary.get("last4")
-            last4_display = None
-            if isinstance(last4_payload, Mapping):
-                display_value = last4_payload.get("display")
-                if isinstance(display_value, str):
-                    last4_display = display_value
-                elif display_value is not None:
-                    last4_display = str(display_value)
+            if not isinstance(last4_payload, Mapping):
+                last4_payload = None
+            last4_display = _derive_masked_display(last4_payload)
 
             def _normalize_per_bureau(source: Mapping[str, Any] | None) -> dict[str, str | None]:
                 normalized: dict[str, str | None] = {}

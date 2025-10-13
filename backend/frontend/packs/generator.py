@@ -249,6 +249,8 @@ def _derive_holder_name(meta: Mapping[str, Any] | None, raw_lines_path: Path) ->
         if meta_heading:
             return meta_heading
 
+    uppercase_candidates: list[str] = []
+    spaced_candidates: list[str] = []
     for text in _load_raw_lines(raw_lines_path):
         if not isinstance(text, str):
             continue
@@ -258,8 +260,16 @@ def _derive_holder_name(meta: Mapping[str, Any] | None, raw_lines_path: Path) ->
         alpha_count = sum(1 for char in candidate if char.isalpha())
         if alpha_count < 2:
             continue
-        if candidate.upper() == candidate:
-            return candidate
+        if candidate.upper() != candidate:
+            continue
+        uppercase_candidates.append(candidate)
+        if " " in candidate:
+            spaced_candidates.append(candidate)
+
+    if spaced_candidates:
+        return spaced_candidates[0]
+    if uppercase_candidates:
+        return uppercase_candidates[0]
     return None
 
 
@@ -286,6 +296,23 @@ def _extract_issue_tags(tags_path: Path) -> tuple[str | None, list[str]]:
 
     primary = issues[0] if issues else None
     return primary, issues
+
+
+def _summarize_balance(balance_payload: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(balance_payload, Mapping):
+        return None
+
+    consensus = balance_payload.get("consensus")
+    if isinstance(consensus, str) and consensus.strip():
+        return consensus.strip()
+
+    per_bureau = balance_payload.get("per_bureau")
+    if isinstance(per_bureau, Mapping):
+        for value in per_bureau.values():
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    return None
 
 
 def _prepare_bureau_payload(bureaus: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
@@ -570,7 +597,7 @@ def generate_frontend_packs_for_run(
                 "dates": bureau_summary["dates"],
                 "bureau_badges": bureau_summary["bureau_badges"],
                 "holder_name": holder_name,
-                "primary_issue": primary_issue or "unknown",
+                "primary_issue": primary_issue,
                 "pointers": pointers,
                 "questions": _QUESTION_SET,
             }
@@ -618,6 +645,9 @@ def generate_frontend_packs_for_run(
                     "creditor_name": pack_payload["creditor_name"],
                     "account_type": pack_payload["account_type"],
                     "status": pack_payload["status"],
+                    "holder_name": holder_name,
+                    "primary_issue": primary_issue,
+                    "balance_owed": _summarize_balance(pack_payload.get("balance_owed")),
                     "bureau_badges": pack_payload["bureau_badges"],
                 }
             )

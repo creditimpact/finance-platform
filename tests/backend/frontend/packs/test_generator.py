@@ -92,7 +92,11 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert index_path.exists()
     index_payload = json.loads(index_path.read_text(encoding="utf-8"))
     assert index_payload["packs_count"] == 1
-    assert index_payload["accounts"][0]["pack_path"] == "frontend/accounts/acct-1/pack.json"
+    index_entry = index_payload["accounts"][0]
+    assert index_entry["pack_path"] == "frontend/accounts/acct-1/pack.json"
+    assert index_entry["holder_name"] == "John Doe"
+    assert index_entry["primary_issue"] == "wrong_account"
+    assert index_entry["balance_owed"] == "$100"
     assert index_payload["questions"][1]["id"] == "recognize"
 
     responses_dir = runs_root / sid / "frontend" / "responses"
@@ -105,6 +109,49 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert result["built"] is True
     assert result["packs_dir"] == str((runs_root / sid / "frontend").absolute())
     assert isinstance(result["last_built_at"], str)
+
+
+def test_generate_frontend_packs_holder_name_fallback(tmp_path):
+    runs_root = tmp_path / "runs"
+    sid = "S101"
+    account_dir = runs_root / sid / "cases" / "accounts" / "2"
+
+    summary_payload = {"account_id": "acct-2"}
+    bureaus_payload = {
+        "equifax": {
+            "account_number_display": "****5678",
+            "balance_owed": "$75",
+            "account_status": "Open",
+            "account_type": "Loan",
+        }
+    }
+    raw_lines_payload = [
+        "UNRELATED",
+        {"text": "JANE SAMPLE"},
+    ]
+    tags_payload = [{"kind": "issue", "type": "identity_theft"}]
+
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+    _write_json(account_dir / "raw_lines.json", raw_lines_payload)
+    _write_json(account_dir / "tags.json", tags_payload)
+
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    pack_path = runs_root / sid / "frontend" / "accounts" / "acct-2" / "pack.json"
+    pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
+
+    assert pack_payload["holder_name"] == "JANE SAMPLE"
+    assert pack_payload["primary_issue"] == "identity_theft"
+
+    index_path = runs_root / sid / "frontend" / "index.json"
+    index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+    index_entry = index_payload["accounts"][0]
+
+    assert index_entry["holder_name"] == "JANE SAMPLE"
+    assert index_entry["primary_issue"] == "identity_theft"
+
+    assert result["packs_count"] == 1
 
 
 def test_generate_frontend_packs_handles_missing_accounts(tmp_path):
@@ -225,7 +272,11 @@ def test_generate_frontend_packs_continues_on_pack_write_failure(tmp_path, monke
     index_payload = json.loads(index_path.read_text(encoding="utf-8"))
 
     assert index_payload["packs_count"] == 1
-    assert index_payload["accounts"][0]["account_id"] == "acct-success"
+    index_entry = index_payload["accounts"][0]
+    assert index_entry["account_id"] == "acct-success"
+    assert index_entry["holder_name"] is None
+    assert index_entry["primary_issue"] == "late_payment"
+    assert index_entry["balance_owed"] == "$50"
 
     assert result["status"] == "success"
     assert result["packs_count"] == 1

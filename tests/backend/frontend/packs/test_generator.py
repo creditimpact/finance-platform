@@ -91,6 +91,7 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
 
     display_block = pack_payload["display"]
     assert list(display_block.keys()) == [
+        "display_version",
         "holder_name",
         "primary_issue",
         "account_number",
@@ -100,6 +101,7 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
         "date_opened",
         "closed_date",
     ]
+    assert display_block["display_version"] == generator_module._DISPLAY_SCHEMA_VERSION
     assert display_block["holder_name"] == "John Doe"
     assert display_block["primary_issue"] == "wrong_account"
     assert display_block["account_number"] == {
@@ -252,6 +254,7 @@ def test_frontend_runflow_steps_are_condensed(tmp_path, monkeypatch):
         assert list(pack_payload.keys()) == ["holder_name", "primary_issue", "display"]
         display_block = pack_payload["display"]
         assert list(display_block.keys()) == [
+            "display_version",
             "holder_name",
             "primary_issue",
             "account_number",
@@ -261,6 +264,7 @@ def test_frontend_runflow_steps_are_condensed(tmp_path, monkeypatch):
             "date_opened",
             "closed_date",
         ]
+        assert display_block["display_version"] == generator_module._DISPLAY_SCHEMA_VERSION
 
         index_path = runs_root / sid / "frontend" / "index.json"
         assert index_path.exists()

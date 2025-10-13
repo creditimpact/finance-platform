@@ -8,7 +8,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.runflow import runflow_step
@@ -119,6 +119,22 @@ def _load_json(path: Path) -> Mapping[str, Any] | None:
     return payload
 
 
+def _load_json_payload(path: Path) -> Any:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:  # pragma: no cover - defensive logging
+        log.warning("FRONTEND_PACK_READ_FAILED path=%s", path, exc_info=True)
+        return None
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        log.warning("FRONTEND_PACK_PARSE_FAILED path=%s", path, exc_info=True)
+        return None
+
+
 def _extract_text(value: Any) -> str | None:
     if isinstance(value, str):
         trimmed = value.strip()
@@ -209,6 +225,67 @@ def _collect_field_per_bureau(
 
     consensus = unique.pop() if len(unique) == 1 else None
     return values, consensus
+
+
+def _load_raw_lines(path: Path) -> Sequence[str]:
+    payload = _load_json_payload(path)
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
+        lines: list[str] = []
+        for entry in payload:
+            if isinstance(entry, Mapping):
+                text = entry.get("text")
+                if isinstance(text, str):
+                    lines.append(text)
+            elif isinstance(entry, str):
+                lines.append(entry)
+        return lines
+    return []
+
+
+def _derive_holder_name(meta: Mapping[str, Any] | None, raw_lines_path: Path) -> str | None:
+    meta_heading = None
+    if isinstance(meta, Mapping):
+        meta_heading = _extract_text(meta.get("heading_guess"))
+        if meta_heading:
+            return meta_heading
+
+    for text in _load_raw_lines(raw_lines_path):
+        if not isinstance(text, str):
+            continue
+        candidate = text.strip()
+        if not candidate:
+            continue
+        alpha_count = sum(1 for char in candidate if char.isalpha())
+        if alpha_count < 2:
+            continue
+        if candidate.upper() == candidate:
+            return candidate
+    return None
+
+
+def _extract_issue_tags(tags_path: Path) -> tuple[str | None, list[str]]:
+    payload = _load_json_payload(tags_path)
+    issues: list[str] = []
+    seen: set[str] = set()
+    if isinstance(payload, Sequence):
+        for entry in payload:
+            if not isinstance(entry, Mapping):
+                continue
+            if entry.get("kind") != "issue":
+                continue
+            issue_type = entry.get("type")
+            if not isinstance(issue_type, str):
+                continue
+            trimmed = issue_type.strip()
+            if not trimmed:
+                continue
+            if trimmed in seen:
+                continue
+            issues.append(trimmed)
+            seen.add(trimmed)
+
+    primary = issues[0] if issues else None
+    return primary, issues
 
 
 def _prepare_bureau_payload(bureaus: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
@@ -459,6 +536,25 @@ def generate_frontend_packs_for_run(
             labels = _extract_summary_labels(summary)
             bureau_summary = _prepare_bureau_payload(bureaus)
             first_bureau = next(iter(bureaus.values()), {})
+            meta_payload = _load_json(account_dir / "meta.json")
+            raw_path = account_dir / "raw_lines.json"
+            tags_path = account_dir / "tags.json"
+            holder_name = _derive_holder_name(meta_payload, raw_path)
+            primary_issue, issues = _extract_issue_tags(tags_path)
+
+            try:
+                relative_account_dir = account_dir.relative_to(run_dir).as_posix()
+            except ValueError:
+                relative_account_dir = account_dir.as_posix()
+
+            pointers = {
+                "meta": f"{relative_account_dir}/meta.json",
+                "tags": f"{relative_account_dir}/tags.json",
+                "raw": f"{relative_account_dir}/raw_lines.json",
+                "bureaus": f"{relative_account_dir}/bureaus.json",
+                "flat": f"{relative_account_dir}/fields_flat.json",
+                "summary": f"{relative_account_dir}/summary.json",
+            }
 
             pack_payload = {
                 "sid": sid,
@@ -473,8 +569,13 @@ def generate_frontend_packs_for_run(
                 "balance_owed": bureau_summary["balance_owed"],
                 "dates": bureau_summary["dates"],
                 "bureau_badges": bureau_summary["bureau_badges"],
+                "holder_name": holder_name,
+                "primary_issue": primary_issue or "unknown",
+                "pointers": pointers,
                 "questions": _QUESTION_SET,
             }
+            if issues:
+                pack_payload["issues"] = issues
 
             account_dirname = _safe_account_dirname(account_id, account_dir.name)
             pack_dir = accounts_output_dir / account_dirname

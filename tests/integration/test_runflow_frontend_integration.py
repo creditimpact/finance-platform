@@ -62,10 +62,10 @@ def test_runflow_completes_when_validation_has_no_findings(tmp_path):
     assert runflow_data["run_state"] == "COMPLETE_NO_ACTION"
     assert runflow_data["stages"]["frontend"]["packs_count"] == 0
 
-    index_path = runs_root / sid / "frontend" / "index.json"
+    index_path = runs_root / sid / "frontend" / "review" / "index.json"
     assert index_path.exists()
     payload = json.loads(index_path.read_text(encoding="utf-8"))
-    assert payload["accounts"] == []
+    assert payload["packs"] == []
 
 
 def test_runflow_generates_frontend_and_moves_to_await(tmp_path):
@@ -130,10 +130,10 @@ def test_runflow_generates_frontend_and_moves_to_await(tmp_path):
     follow_up = runflow_decider.decide_next(sid, runs_root=runs_root)
     assert follow_up == {"next": "await_input", "reason": "frontend_completed"}
 
-    index_path = runs_root / sid / "frontend" / "index.json"
+    index_path = runs_root / sid / "frontend" / "review" / "index.json"
     assert index_path.exists()
     payload = json.loads(index_path.read_text(encoding="utf-8"))
-    assert len(payload["accounts"]) == 2
+    assert len(payload["packs"]) == 2
 
 
 def test_runflow_instrumentation_smoke(tmp_path, monkeypatch):
@@ -284,12 +284,17 @@ def test_runflow_instrumentation_smoke(tmp_path, monkeypatch):
         assert len(validation_steps) == 1
         assert validation_steps[0]["metrics"] == {"findings": 1}
 
-        frontend_steps = steps_payload["stages"]["frontend"]["substages"]["default"]["steps"]
-        assert len(frontend_steps) >= 2
-        responses_entry = next(
-            entry for entry in frontend_steps if entry["name"] == "responses_scan"
-        )
-        assert responses_entry["metrics"] == {"received": 0}
+        frontend_steps = steps_payload["stages"]["frontend"]["steps"]
+        assert len(frontend_steps) >= 3
+        step_names = [entry["name"] for entry in frontend_steps]
+        assert step_names[0] == "frontend_review_start"
+        assert step_names[-1] == "frontend_review_finish"
+        pack_created_entries = [
+            entry for entry in frontend_steps if entry["name"] == "frontend_review_pack_created"
+        ]
+        assert len(pack_created_entries) == frontend_result["packs_count"]
+        for entry in pack_created_entries:
+            assert entry["out"]["path"].startswith("frontend/review/packs/")
 
         assert len(events_lines) >= 6
 

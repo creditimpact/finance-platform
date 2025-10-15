@@ -14,7 +14,7 @@ The frontend stage builds lightweight account packs that power customer-facing e
 
 ## Idempotency & Runflow Signals
 - The generator only reads previously materialised case artifacts, so rerunning the stage reuses the same inputs and produces identical pack files and index counts.
-- Runflow records the count of `runs/<SID>/frontend/accounts/*/pack.json` files and any creation errors. No entries are emitted when the stage simply revalidates existing packs.
+- Runflow records the count of `runs/<SID>/frontend/review/packs/*.json` files and any creation errors. No entries are emitted when the stage simply revalidates existing packs.
 - Because the stage is decoupled from merge/validation, operators can rebuild the frontend packs independently after correcting case artifacts.
 
 ## Frontend Review Stage quick reference

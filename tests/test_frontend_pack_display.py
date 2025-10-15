@@ -45,7 +45,8 @@ def test_display_defaults_and_idempotent(tmp_path) -> None:
     result = generator.generate_frontend_packs_for_run(sid, runs_root=runs_root)
     assert result["packs_count"] == 1
 
-    pack_path = runs_root / sid / "frontend" / "accounts" / "001" / "pack.json"
+    stage_dir = runs_root / sid / "frontend" / "review"
+    pack_path = stage_dir / "packs" / "001.json"
     pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
     display_payload = pack_payload["display"]
 
@@ -63,27 +64,27 @@ def test_display_defaults_and_idempotent(tmp_path) -> None:
     assert display_payload["date_opened"] == expected_per_bureau
     assert display_payload["closed_date"] == expected_per_bureau
 
-    index_path = runs_root / sid / "frontend" / "index.json"
+    index_path = stage_dir / "index.json"
     index_payload = json.loads(index_path.read_text(encoding="utf-8"))
     assert index_payload["packs_count"] == 1
-    account_entry = index_payload["accounts"][0]
-    assert account_entry["holder_name"] == ""
-    assert account_entry["primary_issue"] == "unknown"
-    assert account_entry["account_number"] == {
-        "per_bureau": expected_per_bureau,
-        "consensus": "--",
+    manifest_entry = index_payload["packs"][0]
+    assert manifest_entry["holder_name"] is None
+    assert manifest_entry["primary_issue"] == "unknown"
+    assert manifest_entry["path"] == "frontend/review/packs/001.json"
+    assert manifest_entry["pack_path"] == "frontend/review/packs/001.json"
+    manifest_display = manifest_entry["display"]
+    assert manifest_display["holder_name"] == ""
+    assert manifest_display["primary_issue"] == "unknown"
+    assert manifest_display["account_number"] == {
+        "per_bureau": expected_per_bureau
     }
-    assert account_entry["account_type"] == {
-        "per_bureau": expected_per_bureau,
-        "consensus": "--",
+    assert manifest_display["account_type"] == {
+        "per_bureau": expected_per_bureau
     }
-    assert account_entry["status"] == {
-        "per_bureau": expected_per_bureau,
-        "consensus": "--",
-    }
-    assert account_entry["balance_owed"]["per_bureau"] == expected_per_bureau
-    assert account_entry["date_opened"] == expected_per_bureau
-    assert account_entry["closed_date"] == expected_per_bureau
+    assert manifest_display["status"] == {"per_bureau": expected_per_bureau}
+    assert manifest_display["balance_owed"]["per_bureau"] == expected_per_bureau
+    assert manifest_display["date_opened"] == expected_per_bureau
+    assert manifest_display["closed_date"] == expected_per_bureau
 
     original_pack = pack_path.read_text(encoding="utf-8")
     original_index = index_path.read_text(encoding="utf-8")
@@ -151,9 +152,9 @@ def test_example_account_16_pack_contains_per_bureau(tmp_path) -> None:
         / "runs"
         / "sample-sid"
         / "frontend"
-        / "accounts"
-        / "idx-016"
-        / "pack.json"
+        / "review"
+        / "packs"
+        / "idx-016.json"
     )
     pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
     display_payload = pack_payload["display"]

@@ -7,6 +7,8 @@ from typing import Any, Mapping, Optional, Sequence
 
 import json
 
+from backend.frontend.packs.config import load_frontend_stage_config
+
 
 def _coerce_int(value: Any) -> Optional[int]:
     try:
@@ -83,21 +85,22 @@ def validation_findings_count(base_dir: Path) -> Optional[int]:
 
 
 def frontend_packs_count(base_dir: Path) -> Optional[int]:
-    """Return the number of frontend packs written for ``sid``."""
+    """Return the number of frontend review packs written for ``sid``."""
 
-    accounts_dir = base_dir / "frontend" / "accounts"
-    if not accounts_dir.exists():
+    config = load_frontend_stage_config(base_dir)
+    packs_dir = config.packs_dir
+
+    if not packs_dir.exists() or not packs_dir.is_dir():
         return None
 
-    total = 0
-    for entry in accounts_dir.iterdir():
-        if not entry.is_dir():
-            continue
-        pack_file = entry / "pack.json"
-        if pack_file.is_file():
-            total += 1
-
-    return total
+    try:
+        return sum(
+            1
+            for entry in packs_dir.iterdir()
+            if entry.is_file() and entry.suffix == ".json"
+        )
+    except OSError:
+        return None
 
 
 def merge_scored_pairs_count(base_dir: Path) -> Optional[int]:

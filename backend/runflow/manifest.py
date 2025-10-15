@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import glob
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from backend.core.paths.frontend_review import ensure_frontend_review_dirs
 from backend.pipeline.runs import RunManifest, persist_manifest
 
 
@@ -71,19 +75,47 @@ def update_manifest_frontend(
         sid, manifest=manifest, runs_root=runs_root
     )
 
-    frontend_section = target_manifest.data.get("frontend")
-    if not isinstance(frontend_section, dict):
-        frontend_section = {}
-        target_manifest.data["frontend"] = frontend_section
+    run_dir = target_manifest.path.parent
+    canonical_paths = ensure_frontend_review_dirs(str(run_dir))
 
-    frontend_section.update(
-        {
-            "packs_dir": str(packs_dir) if packs_dir else None,
-            "built": bool(built),
-            "packs_count": int(packs_count),
-            "last_built_at": str(last_built_at) if last_built_at else None,
-        }
-    )
+    packs_dir_path = canonical_paths["packs_dir"]
+    responses_dir_path = canonical_paths["responses_dir"]
+    review_dir_path = canonical_paths["review_dir"]
+    frontend_base = canonical_paths["frontend_base"]
+    index_path = canonical_paths["index"]
+
+    packs_count_glob = len(glob.glob(os.path.join(packs_dir_path, "idx-*.json")))
+    packs_count_param = int(packs_count or 0)
+    packs_count_value = max(packs_count_glob, packs_count_param)
+
+    responses_count = len(glob.glob(os.path.join(responses_dir_path, "*.json")))
+    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    last_built_value: str | None
+    if built:
+        last_built_value = (
+            str(last_built_at) if last_built_at else now_iso
+        )
+    else:
+        last_built_value = str(last_built_at) if last_built_at else None
+
+    target_manifest.data["frontend"] = {
+        "base": frontend_base,
+        "dir": review_dir_path,
+        "packs": packs_dir_path,
+        "packs_dir": packs_dir_path,
+        "results": responses_dir_path,
+        "results_dir": responses_dir_path,
+        "index": index_path,
+        "built": bool(built),
+        "packs_count": packs_count_value,
+        "counts": {
+            "packs": packs_count_value,
+            "responses": responses_count,
+        },
+        "last_built_at": last_built_value,
+        "last_responses_at": now_iso,
+    }
 
     persist_manifest(target_manifest)
     return target_manifest

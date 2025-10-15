@@ -75,6 +75,9 @@ with open(SCHEMA_DIR / "problem_account.json") as _f:
     _problem_account_validator = Draft7Validator(json.load(_f))
 
 
+FRONTEND_ACCOUNT_ID_PATTERN = re.compile(r"^idx-\d{3}$")
+
+
 _request_counts: dict[str, list[float]] = defaultdict(list)
 
 
@@ -131,15 +134,8 @@ def _frontend_stage_packs_dir(run_dir: Path) -> Path:
     return _frontend_stage_dir(run_dir) / "packs"
 
 
-def _candidate_account_keys(account_id: str) -> list[str]:
-    trimmed = (account_id or "").strip()
-    candidates: list[str] = []
-    if trimmed:
-        candidates.append(trimmed)
-    sanitized = re.sub(r"[^A-Za-z0-9_.-]", "_", trimmed)
-    if sanitized and sanitized not in candidates:
-        candidates.append(sanitized)
-    return candidates
+def _is_valid_frontend_account_id(account_id: str) -> bool:
+    return bool(FRONTEND_ACCOUNT_ID_PATTERN.fullmatch((account_id or "").strip()))
 
 
 def _safe_relative_path(run_dir: Path, relative_path: str) -> Path:
@@ -288,20 +284,38 @@ def api_frontend_review_index(sid: str):
 
 
 def _stage_pack_path_for_account(run_dir: Path, account_id: str) -> Path | None:
+    if not _is_valid_frontend_account_id(account_id):
+        return None
+
     stage_dir = _frontend_stage_packs_dir(run_dir)
-    for key in _candidate_account_keys(account_id):
-        candidate = stage_dir / f"{key}.json"
-        if candidate.is_file():
-            return candidate
-    return None
+    candidate = stage_dir / f"{account_id}.json"
+    if candidate.is_file():
+        return candidate
 
+    manifest_info = _load_frontend_stage_manifest(run_dir)
+    if manifest_info is None:
+        return None
 
-def _legacy_pack_path_for_account(run_dir: Path, account_id: str) -> Path | None:
-    base = run_dir / "frontend" / "accounts"
-    for key in _candidate_account_keys(account_id):
-        candidate = base / key / "pack.json"
-        if candidate.is_file():
-            return candidate
+    _, manifest_payload = manifest_info
+    packs = manifest_payload.get("packs") if isinstance(manifest_payload, Mapping) else None
+    if not isinstance(packs, list):
+        return None
+
+    for pack_meta in packs:
+        if not isinstance(pack_meta, Mapping):
+            continue
+        if pack_meta.get("account_id") != account_id:
+            continue
+        path_value = pack_meta.get("path")
+        if not isinstance(path_value, str):
+            continue
+        try:
+            manifest_candidate = _safe_relative_path(run_dir, path_value)
+        except ValueError:
+            continue
+        if manifest_candidate.is_file():
+            return manifest_candidate
+
     return None
 
 
@@ -313,30 +327,6 @@ def api_frontend_review_pack(sid: str, account_id: str):
         return jsonify({"error": "invalid_sid"}), 400
 
     stage_pack = _stage_pack_path_for_account(run_dir, account_id)
-    if stage_pack is None:
-        manifest_info = _load_frontend_stage_manifest(run_dir)
-        if manifest_info:
-            _, manifest_payload = manifest_info
-            packs = manifest_payload.get("packs") if isinstance(manifest_payload, Mapping) else None
-            if isinstance(packs, list):
-                account_keys = set(_candidate_account_keys(account_id))
-                for pack_meta in packs:
-                    if not isinstance(pack_meta, Mapping):
-                        continue
-                    meta_account_id = pack_meta.get("account_id")
-                    if isinstance(meta_account_id, str) and meta_account_id in account_keys:
-                        path_value = pack_meta.get("path")
-                        if isinstance(path_value, str):
-                            try:
-                                candidate = _safe_relative_path(run_dir, path_value)
-                            except ValueError:
-                                continue
-                            if candidate.is_file():
-                                stage_pack = candidate
-                                break
-
-    if stage_pack is None:
-        stage_pack = _legacy_pack_path_for_account(run_dir, account_id)
 
     if stage_pack is None or not stage_pack.is_file():
         return jsonify({"error": "pack_not_found"}), 404

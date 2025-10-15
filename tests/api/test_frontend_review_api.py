@@ -72,9 +72,9 @@ def test_frontend_review_pack_returns_stage_pack(api_client):
     client, runs_root = api_client
     sid = "S222"
     run_dir = runs_root / sid
-    pack_path = run_dir / "frontend" / "review" / "packs" / "acct-1.json"
+    pack_path = run_dir / "frontend" / "review" / "packs" / "idx-001.json"
     pack_payload = {
-        "account_id": "acct-1",
+        "account_id": "idx-001",
         "holder_name": "Jane",
         "primary_issue": "",
         "display": {"display_version": 1},
@@ -82,24 +82,25 @@ def test_frontend_review_pack_returns_stage_pack(api_client):
     _write_json(pack_path, pack_payload)
 
     response = client.get(
-        f"/api/runs/{sid}/frontend/review/accounts/acct-1",
+        f"/api/runs/{sid}/frontend/review/accounts/idx-001",
     )
     assert response.status_code == 200
     assert response.get_json() == pack_payload
 
 
-def test_frontend_review_pack_uses_manifest_path(api_client):
+def test_frontend_review_pack_uses_manifest_path(api_client, monkeypatch):
     client, runs_root = api_client
     sid = "S333"
     run_dir = runs_root / sid
+    monkeypatch.setenv("FRONTEND_PACKS_DIR", "frontend/review/custom")
     manifest_path = run_dir / "frontend" / "review" / "index.json"
-    pack_rel_path = "frontend/accounts/acct-1/pack.json"
+    pack_rel_path = "frontend/review/packs/idx-001.json"
     manifest_payload = {
         "sid": sid,
         "stage": "review",
         "packs": [
             {
-                "account_id": "acct-1",
+                "account_id": "idx-001",
                 "path": pack_rel_path,
                 "holder_name": "Client",
                 "primary_issue": "",
@@ -111,11 +112,16 @@ def test_frontend_review_pack_uses_manifest_path(api_client):
     _write_json(manifest_path, manifest_payload)
 
     legacy_pack_path = run_dir / pack_rel_path
-    pack_payload = {"holder_name": "Client", "questions": []}
+    pack_payload = {
+        "account_id": "idx-001",
+        "holder_name": "Client",
+        "primary_issue": "",
+        "display": {"display_version": 1},
+    }
     _write_json(legacy_pack_path, pack_payload)
 
     response = client.get(
-        f"/api/runs/{sid}/frontend/review/accounts/acct-1",
+        f"/api/runs/{sid}/frontend/review/accounts/idx-001",
     )
     assert response.status_code == 200
     assert response.get_json() == pack_payload
@@ -127,7 +133,18 @@ def test_frontend_review_pack_missing_returns_404(api_client):
     runs_root.joinpath(sid).mkdir(parents=True, exist_ok=True)
 
     response = client.get(
-        f"/api/runs/{sid}/frontend/review/accounts/missing",
+        f"/api/runs/{sid}/frontend/review/accounts/idx-999",
+    )
+    assert response.status_code == 404
+
+
+def test_frontend_review_pack_invalid_account_id_returns_404(api_client):
+    client, runs_root = api_client
+    sid = "S405"
+    runs_root.joinpath(sid).mkdir(parents=True, exist_ok=True)
+
+    response = client.get(
+        f"/api/runs/{sid}/frontend/review/accounts/acct-1",
     )
     assert response.status_code == 404
 

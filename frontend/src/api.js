@@ -55,15 +55,39 @@ async function fetchJson(url, init) {
   return data;
 }
 
-export async function fetchRunFrontendIndex(sessionId, init) {
-  return fetchJson(buildRunAssetUrl(sessionId, 'frontend/index.json'), init);
+function buildFrontendReviewIndexUrl(sessionId) {
+  return `${API}/api/runs/${encodeURIComponent(sessionId)}/frontend/review/index`;
 }
 
-export async function fetchRunAccountPack(sessionId, packPath, init) {
-  if (!packPath) {
-    throw new Error('Missing pack path');
+function buildFrontendReviewAccountUrl(sessionId, accountId) {
+  return `${API}/api/runs/${encodeURIComponent(sessionId)}/frontend/review/accounts/${encodeURIComponent(accountId)}`;
+}
+
+export async function fetchFrontendReviewManifest(sessionId, init) {
+  return fetchJson(buildFrontendReviewIndexUrl(sessionId), init);
+}
+
+export async function fetchFrontendReviewAccount(sessionId, accountId, init) {
+  if (!accountId) {
+    throw new Error('Missing account id');
   }
-  return fetchJson(buildRunAssetUrl(sessionId, packPath), init);
+  return fetchJson(buildFrontendReviewAccountUrl(sessionId, accountId), init);
+}
+
+export async function submitFrontendReviewAnswers(sessionId, accountId, answers, init) {
+  if (!accountId) {
+    throw new Error('Missing account id');
+  }
+  const payload = {
+    answers,
+    client_ts: new Date().toISOString(),
+  };
+  return fetchJson(`${buildFrontendReviewAccountUrl(sessionId, accountId)}/answer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    ...init,
+  });
 }
 
 export async function startProcess(email, file) {

@@ -149,10 +149,10 @@ def test_frontend_review_pack_invalid_account_id_returns_404(api_client):
     assert response.status_code == 404
 
 
-def test_frontend_review_submit_appends_response(api_client):
+def test_frontend_review_submit_writes_response_file(api_client):
     client, runs_root = api_client
     sid = "S555"
-    account_id = "acct-5"
+    account_id = "idx-005"
     run_dir = runs_root / sid
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -168,23 +168,14 @@ def test_frontend_review_submit_appends_response(api_client):
     assert response.status_code == 200
     assert response.get_json() == {"ok": True}
 
-    stage_path = (
-        runs_root
-        / sid
-        / "frontend"
-        / "review"
-        / "responses"
-        / f"{account_id}.jsonl"
-    )
-    legacy_path = (
-        runs_root / sid / "frontend" / "responses" / f"{account_id}.jsonl"
-    )
+    responses_dir = runs_root / sid / "frontend" / "review" / "responses"
+    target_file = responses_dir / "idx-005.result.json"
+    assert target_file.is_file()
 
-    for path in (stage_path, legacy_path):
-        assert path.is_file()
-        lines = path.read_text(encoding="utf-8").splitlines()
-        assert len(lines) == 1
-        record = json.loads(lines[0])
-        assert record["answers"] == payload["answers"]
-        assert record["client_ts"] == payload["client_ts"]
-        assert record["account_id"] == account_id
+    record = json.loads(target_file.read_text(encoding="utf-8"))
+    assert record["answers"] == payload["answers"]
+    assert record["client_ts"] == payload["client_ts"]
+    assert record["account_id"] == account_id
+
+    legacy_dir = runs_root / sid / "frontend" / "responses"
+    assert not legacy_dir.exists()

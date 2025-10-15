@@ -47,8 +47,10 @@ from backend.api.session_manager import (
 from backend.api.tasks import run_credit_repair_process  # noqa: F401
 from backend.api.tasks import app as celery_app, smoke_task
 from backend.pipeline.runs import RunManifest, persist_manifest
-from backend.core.paths.frontend_review import get_frontend_review_paths
-from backend.frontend.packs.responses import append_frontend_response
+from backend.core.paths.frontend_review import (
+    ensure_frontend_review_dirs,
+    get_frontend_review_paths,
+)
 from backend.api.routes_smoke import bp as smoke_bp
 from backend.api.ui_events import ui_event_bp
 from backend.core import orchestrators as orch
@@ -172,6 +174,25 @@ def _load_json_file(path: Path) -> Any:
 
 def _now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _response_filename_for_account(account_id: str) -> str:
+    trimmed = (account_id or "").strip()
+    match = re.fullmatch(r"idx-(\d+)", trimmed)
+    number: int | None = None
+    if match:
+        number = int(match.group(1))
+    else:
+        try:
+            number = int(trimmed)
+        except ValueError:
+            number = None
+
+    if number is not None:
+        return f"idx-{number:03d}.result.json"
+
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]", "_", trimmed) or "account"
+    return f"{sanitized}.result.json"
 
 
 def _merge_collectors(
@@ -383,7 +404,13 @@ def api_frontend_review_answer(sid: str, account_id: str):
     if client_ts is not None:
         record["client_ts"] = client_ts
 
-    append_frontend_response(run_dir, account_id, record)
+    canonical_paths = ensure_frontend_review_dirs(str(run_dir))
+    responses_dir = Path(canonical_paths["responses_dir"])
+    responses_dir.mkdir(parents=True, exist_ok=True)
+    filename = _response_filename_for_account(account_id)
+    resp_path = responses_dir / filename
+    with resp_path.open("w", encoding="utf-8") as handle:
+        json.dump(record, handle, ensure_ascii=False, indent=2)
 
     return jsonify({"ok": True})
 

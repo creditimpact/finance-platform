@@ -19,12 +19,14 @@ def get_frontend_review_paths(run_dir: str) -> Dict[str, str]:
     review_dir = os.path.join(frontend_base, "review")
     packs_dir = os.path.join(review_dir, "packs")
     responses_dir = os.path.join(review_dir, "responses")
-    index_path = os.path.join(frontend_base, "index.json")  # keep index at frontend root
+    index_path = os.path.join(review_dir, "index.json")
+    legacy_index = os.path.join(frontend_base, "index.json")
     return {
         "frontend_base": frontend_base,
         "review_dir": review_dir,
         "packs_dir": packs_dir,
         "responses_dir": responses_dir,
+        "legacy_index": legacy_index,
         "index": index_path,
     }
 

@@ -53,18 +53,12 @@ def test_display_defaults_and_idempotent(tmp_path) -> None:
 
     assert display_payload["holder_name"] == ""
     assert display_payload["primary_issue"] == "unknown"
-    assert display_payload["account_number"] == {
-        "per_bureau": expected_per_bureau,
-        "consensus": "--",
-    }
-    assert display_payload["account_type"] == {
-        "per_bureau": expected_per_bureau,
-        "consensus": "--",
-    }
-    assert display_payload["status"] == {
-        "per_bureau": expected_per_bureau,
-        "consensus": "--",
-    }
+    assert display_payload["account_number"] == {"per_bureau": expected_per_bureau}
+    assert "consensus" not in display_payload["account_number"]
+    assert display_payload["account_type"] == {"per_bureau": expected_per_bureau}
+    assert "consensus" not in display_payload["account_type"]
+    assert display_payload["status"] == {"per_bureau": expected_per_bureau}
+    assert "consensus" not in display_payload["status"]
     assert display_payload["balance_owed"]["per_bureau"] == expected_per_bureau
     assert display_payload["date_opened"] == expected_per_bureau
     assert display_payload["closed_date"] == expected_per_bureau
@@ -100,7 +94,7 @@ def test_display_defaults_and_idempotent(tmp_path) -> None:
     assert index_path.read_text(encoding="utf-8") == original_index
 
 
-def test_lean_pack_preserves_consensus_defaults() -> None:
+def test_lean_pack_drops_consensus_defaults() -> None:
     per_bureau = {"transunion": "--", "experian": "--", "equifax": "--"}
     display_payload = {
         "account_number": {"per_bureau": per_bureau, "consensus": "--"},
@@ -115,12 +109,14 @@ def test_lean_pack_preserves_consensus_defaults() -> None:
         holder_name="",
         primary_issue="",
         display_payload=display_payload,
+        pointers={},
+        questions=[],
     )
 
     display = lean_payload["display"]
-    assert display["account_number"]["consensus"] == "--"
-    assert display["account_type"]["consensus"] == "--"
-    assert display["status"]["consensus"] == "--"
+    assert display["account_number"] == {"per_bureau": per_bureau}
+    assert display["account_type"] == {"per_bureau": per_bureau}
+    assert display["status"] == {"per_bureau": per_bureau}
 
 
 def test_example_account_16_pack_contains_per_bureau(tmp_path) -> None:
@@ -166,10 +162,10 @@ def test_example_account_16_pack_contains_per_bureau(tmp_path) -> None:
         display_payload["account_number"]["per_bureau"]["equifax"]
         == "440066**********"
     )
-    assert display_payload["account_number"]["consensus"] == "440066**********"
+    assert "consensus" not in display_payload["account_number"]
     assert (
         display_payload["account_type"]["per_bureau"]["transunion"] == "Credit Card"
     )
-    assert display_payload["account_type"]["consensus"] == "Credit Card"
+    assert "consensus" not in display_payload["account_type"]
     assert display_payload["status"]["per_bureau"]["transunion"] == "Closed"
-    assert display_payload["status"]["consensus"] == "Closed"
+    assert "consensus" not in display_payload["status"]

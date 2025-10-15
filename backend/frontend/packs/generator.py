@@ -749,37 +749,43 @@ def build_lean_pack_doc(
     holder_name: str | None,
     primary_issue: str | None,
     display_payload: Mapping[str, Any],
+    pointers: Mapping[str, str],
+    questions: Sequence[Any],
 ) -> dict[str, Any]:
-    def _per_bureau_field(source: Mapping[str, Any] | None) -> dict[str, Any]:
+    def _per_bureau_only(source: Mapping[str, Any] | None) -> dict[str, Any]:
         per_bureau: Mapping[str, Any] | None = None
-        consensus: Any | None = None
         if isinstance(source, Mapping):
             per_bureau = source.get("per_bureau")
-            consensus = source.get("consensus")
+        if isinstance(per_bureau, Mapping):
+            return {"per_bureau": dict(per_bureau)}
+        return {"per_bureau": {}}
 
-        payload: dict[str, Any] = {
-            "per_bureau": dict(per_bureau) if isinstance(per_bureau, Mapping) else {},
-        }
-        if consensus is not None:
-            payload["consensus"] = _normalize_consensus_text(consensus)
-        return payload
-
-    def _per_bureau_dates(source: Mapping[str, Any] | None) -> dict[str, Any]:
+    def _bureau_dates(source: Mapping[str, Any] | None) -> dict[str, Any]:
         return dict(source) if isinstance(source, Mapping) else {}
 
-    display: dict[str, Any] = {"display_version": _DISPLAY_SCHEMA_VERSION}
-    display["holder_name"] = holder_name
-    display["primary_issue"] = primary_issue
-    display["account_number"] = _per_bureau_field(display_payload.get("account_number"))
-    display["account_type"] = _per_bureau_field(display_payload.get("account_type"))
-    display["status"] = _per_bureau_field(display_payload.get("status"))
-    display["balance_owed"] = _per_bureau_field(display_payload.get("balance_owed"))
-    display["date_opened"] = _per_bureau_dates(display_payload.get("date_opened"))
-    display["closed_date"] = _per_bureau_dates(display_payload.get("closed_date"))
+    display: dict[str, Any] = {
+        "display_version": display_payload.get("display_version", _DISPLAY_SCHEMA_VERSION),
+        "holder_name": holder_name,
+        "primary_issue": primary_issue,
+        "account_number": _per_bureau_only(display_payload.get("account_number")),
+        "account_type": _per_bureau_only(display_payload.get("account_type")),
+        "status": _per_bureau_only(display_payload.get("status")),
+        "balance_owed": _per_bureau_only(display_payload.get("balance_owed")),
+        "date_opened": _bureau_dates(display_payload.get("date_opened")),
+        "closed_date": _bureau_dates(display_payload.get("closed_date")),
+    }
+
+    questions_payload = []
+    for question in questions:
+        if isinstance(question, Mapping):
+            questions_payload.append(dict(question))
+
     return {
         "holder_name": holder_name,
         "primary_issue": primary_issue,
         "display": display,
+        "questions": questions_payload,
+        "pointers": dict(pointers),
     }
 
 
@@ -1063,6 +1069,18 @@ def generate_frontend_packs_for_run(
                     last_built = (
                         str(generated_at) if isinstance(generated_at, str) else None
                     )
+                    if not debug_mirror_enabled:
+                        for mirror_path in accounts_output_dir.glob("*/pack.full.json"):
+                            try:
+                                mirror_path.unlink()
+                            except FileNotFoundError:
+                                continue
+                            except OSError:  # pragma: no cover - defensive logging
+                                log.warning(
+                                    "FRONTEND_PACK_DEBUG_MIRROR_UNLINK_FAILED path=%s",
+                                    mirror_path,
+                                    exc_info=True,
+                                )
                     runflow_step(
                         sid,
                         "frontend",
@@ -1241,12 +1259,16 @@ def generate_frontend_packs_for_run(
                     issues=issues if issues else None,
                 )
 
+            lean_pack_payload = build_lean_pack_doc(
+                holder_name=display_holder_name,
+                primary_issue=display_primary_issue,
+                display_payload=display_payload,
+                pointers=pointers,
+                questions=_QUESTION_SET,
+            )
+
             if lean_enabled:
-                pack_payload = build_lean_pack_doc(
-                    holder_name=display_holder_name,
-                    primary_issue=display_primary_issue,
-                    display_payload=display_payload,
-                )
+                pack_payload = lean_pack_payload
             else:
                 if full_pack_payload is None:
                     full_pack_payload = build_pack_doc(
@@ -1267,10 +1289,13 @@ def generate_frontend_packs_for_run(
             account_dirname = _safe_account_dirname(account_id, account_dir.name)
             pack_dir = accounts_output_dir / account_dirname
             pack_path = pack_dir / "pack.json"
+            stage_pack_path = stage_packs_dir / f"{account_dirname}.json"
 
             try:
                 pack_dir.mkdir(parents=True, exist_ok=True)
-                changed = _write_json_if_changed(pack_path, pack_payload)
+                legacy_changed = _write_json_if_changed(pack_path, pack_payload)
+                stage_changed = _write_json_if_changed(stage_pack_path, lean_pack_payload)
+                changed = legacy_changed or stage_changed
                 if debug_mirror_enabled and full_pack_payload is not None:
                     mirror_path = pack_dir / "pack.full.json"
                     _write_json_if_changed(mirror_path, full_pack_payload)

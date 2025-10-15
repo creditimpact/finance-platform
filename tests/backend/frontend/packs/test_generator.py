@@ -85,9 +85,24 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert pack_path.exists()
 
     pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
-    assert list(pack_payload.keys()) == ["holder_name", "primary_issue", "display"]
+    assert list(pack_payload.keys()) == [
+        "holder_name",
+        "primary_issue",
+        "display",
+        "questions",
+        "pointers",
+    ]
     assert pack_payload["holder_name"] == "John Doe"
     assert pack_payload["primary_issue"] == "wrong_account"
+    assert pack_payload["questions"] == list(generator_module._QUESTION_SET)
+    assert pack_payload["pointers"] == {
+        "meta": "cases/accounts/1/meta.json",
+        "tags": "cases/accounts/1/tags.json",
+        "raw": "cases/accounts/1/raw_lines.json",
+        "bureaus": "cases/accounts/1/bureaus.json",
+        "flat": "cases/accounts/1/fields_flat.json",
+        "summary": "cases/accounts/1/summary.json",
+    }
 
     display_block = pack_payload["display"]
     assert list(display_block.keys()) == [
@@ -109,24 +124,21 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
             "transunion": "****1234",
             "experian": "XXXX1234",
             "equifax": "--",
-        },
-        "consensus": "****1234",
+        }
     }
     assert display_block["account_type"] == {
         "per_bureau": {
             "transunion": "Credit Card",
             "experian": "Credit Card",
             "equifax": "--",
-        },
-        "consensus": "Credit Card",
+        }
     }
     assert display_block["status"] == {
         "per_bureau": {
             "transunion": "Closed",
             "experian": "Closed",
             "equifax": "--",
-        },
-        "consensus": "Closed",
+        }
     }
     assert display_block["balance_owed"] == {
         "per_bureau": {
@@ -167,13 +179,34 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert index_entry["pack_path"] == "frontend/accounts/acct-1/pack.json"
     assert index_entry["holder_name"] == "John Doe"
     assert index_entry["primary_issue"] == "wrong_account"
-    assert index_entry["account_number"] == display_block["account_number"]
-    assert index_entry["account_type"] == display_block["account_type"]
-    assert index_entry["status"] == display_block["status"]
+    assert (
+        index_entry["account_number"]["per_bureau"]
+        == display_block["account_number"]["per_bureau"]
+    )
+    assert (
+        index_entry["account_type"]["per_bureau"]
+        == display_block["account_type"]["per_bureau"]
+    )
+    assert (
+        index_entry["status"]["per_bureau"]
+        == display_block["status"]["per_bureau"]
+    )
     assert index_entry["balance_owed"] == display_block["balance_owed"]
     assert index_entry["date_opened"] == display_block["date_opened"]
     assert index_entry["closed_date"] == display_block["closed_date"]
     assert index_payload["questions"][1]["id"] == "recognize"
+
+    stage_pack_path = (
+        runs_root
+        / sid
+        / "frontend"
+        / "review"
+        / "packs"
+        / "acct-1.json"
+    )
+    assert stage_pack_path.exists()
+    stage_pack_payload = json.loads(stage_pack_path.read_text(encoding="utf-8"))
+    assert stage_pack_payload == pack_payload
 
     responses_dir = runs_root / sid / "frontend" / "responses"
     assert responses_dir.is_dir()
@@ -251,7 +284,13 @@ def test_frontend_runflow_steps_are_condensed(tmp_path, monkeypatch):
         assert pack_path.exists()
 
         pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
-        assert list(pack_payload.keys()) == ["holder_name", "primary_issue", "display"]
+        assert list(pack_payload.keys()) == [
+            "holder_name",
+            "primary_issue",
+            "display",
+            "questions",
+            "pointers",
+        ]
         display_block = pack_payload["display"]
         assert list(display_block.keys()) == [
             "display_version",
@@ -409,7 +448,13 @@ def test_generate_frontend_packs_meta_heading_and_primary_issue(tmp_path):
     pack_path = runs_root / sid / "frontend" / "accounts" / "acct-meta" / "pack.json"
     payload = json.loads(pack_path.read_text(encoding="utf-8"))
 
-    assert list(payload.keys()) == ["holder_name", "primary_issue", "display"]
+    assert list(payload.keys()) == [
+        "holder_name",
+        "primary_issue",
+        "display",
+        "questions",
+        "pointers",
+    ]
     assert payload["holder_name"] == "SPS"
     assert payload["primary_issue"] == "delinquency"
     assert "issues" not in payload
@@ -435,7 +480,13 @@ def test_generate_frontend_packs_holder_name_from_raw_when_meta_missing(tmp_path
     pack_path = runs_root / sid / "frontend" / "accounts" / "acct-raw" / "pack.json"
     payload = json.loads(pack_path.read_text(encoding="utf-8"))
 
-    assert list(payload.keys()) == ["holder_name", "primary_issue", "display"]
+    assert list(payload.keys()) == [
+        "holder_name",
+        "primary_issue",
+        "display",
+        "questions",
+        "pointers",
+    ]
     assert payload["holder_name"] == "ACME BANK"
     assert payload["primary_issue"] == "ownership"
     assert "issues" not in payload
@@ -508,6 +559,19 @@ def test_generate_frontend_packs_backfills_missing_pointers(tmp_path, monkeypatc
         "flat": "cases/accounts/1/fields_flat.json",
         "summary": "cases/accounts/1/summary.json",
     }
+    stage_pack_path = (
+        runs_root
+        / sid
+        / "frontend"
+        / "review"
+        / "packs"
+        / "acct-legacy.json"
+    )
+    stage_payload = json.loads(stage_pack_path.read_text(encoding="utf-8"))
+    assert "sid" not in stage_payload
+    assert "account_id" not in stage_payload
+    assert stage_payload["pointers"] == payload["pointers"]
+    assert stage_payload["questions"] == list(generator_module._QUESTION_SET)
     assert result["packs_count"] == 1
 
 
@@ -535,7 +599,13 @@ def test_generate_frontend_packs_debug_mirror_toggle(tmp_path, monkeypatch):
     assert mirror_path.exists()
     mirror_payload = json.loads(mirror_path.read_text(encoding="utf-8"))
 
-    assert list(pack_payload.keys()) == ["holder_name", "primary_issue", "display"]
+    assert list(pack_payload.keys()) == [
+        "holder_name",
+        "primary_issue",
+        "display",
+        "questions",
+        "pointers",
+    ]
     assert mirror_payload["sid"] == sid
     assert mirror_payload["account_id"] == "acct-debug"
     assert mirror_payload["holder_name"] == "Debug Holder"
@@ -566,7 +636,13 @@ def test_generate_frontend_packs_multiple_issues_first_primary(tmp_path):
     pack_path = runs_root / sid / "frontend" / "accounts" / "acct-issues" / "pack.json"
     payload = json.loads(pack_path.read_text(encoding="utf-8"))
 
-    assert list(payload.keys()) == ["holder_name", "primary_issue", "display"]
+    assert list(payload.keys()) == [
+        "holder_name",
+        "primary_issue",
+        "display",
+        "questions",
+        "pointers",
+    ]
     assert payload["primary_issue"] == "collection"
     assert "issues" not in payload
 
@@ -602,7 +678,13 @@ def test_generate_frontend_packs_holder_name_fallback(tmp_path):
     pack_path = runs_root / sid / "frontend" / "accounts" / "acct-2" / "pack.json"
     pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
 
-    assert list(pack_payload.keys()) == ["holder_name", "primary_issue", "display"]
+    assert list(pack_payload.keys()) == [
+        "holder_name",
+        "primary_issue",
+        "display",
+        "questions",
+        "pointers",
+    ]
     assert pack_payload["holder_name"] == "JANE SAMPLE"
     assert pack_payload["primary_issue"] == "identity_theft"
     assert "issues" not in pack_payload

@@ -1,7 +1,8 @@
 function getMetaEnv(): Record<string, any> {
   try {
-    return (typeof import !== 'undefined' && import.meta && import.meta.env) || {};
-  } catch (err) {
+    // @ts-ignore
+    return (import.meta as any)?.env ?? {};
+  } catch {
     return {};
   }
 }

@@ -776,6 +776,33 @@ def generate_frontend_packs_for_run(
     run_dir = base_root / sid
     accounts_dir = run_dir / "cases" / "accounts"
     frontend_dir = run_dir / "frontend"
+
+    stage_dir_env = os.getenv("FRONTEND_PACKS_STAGE_DIR", "frontend/review")
+    stage_dir = run_dir / Path(stage_dir_env)
+
+    packs_dir_env = os.getenv("FRONTEND_PACKS_DIR")
+    if packs_dir_env:
+        stage_packs_dir = run_dir / Path(packs_dir_env)
+    else:
+        stage_packs_dir = stage_dir / "packs"
+
+    responses_dir_env = os.getenv("FRONTEND_PACKS_RESPONSES_DIR")
+    if responses_dir_env:
+        stage_responses_dir = run_dir / Path(responses_dir_env)
+    else:
+        stage_responses_dir = stage_dir / "responses"
+
+    index_path_env = os.getenv("FRONTEND_PACKS_INDEX")
+    if index_path_env:
+        stage_index_path = run_dir / Path(index_path_env)
+    else:
+        stage_index_path = stage_dir / "index.json"
+
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    stage_packs_dir.mkdir(parents=True, exist_ok=True)
+    stage_responses_dir.mkdir(parents=True, exist_ok=True)
+    stage_index_path.parent.mkdir(parents=True, exist_ok=True)
+
     accounts_output_dir = frontend_dir / "accounts"
     responses_dir = frontend_dir / "responses"
     index_path = frontend_dir / "index.json"

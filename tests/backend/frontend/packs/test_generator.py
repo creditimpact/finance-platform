@@ -443,13 +443,20 @@ def test_frontend_runflow_steps_are_condensed(tmp_path, monkeypatch):
             "frontend_review_finish",
         ]
 
+        start_step = next(
+            step for step in frontend_steps if step["name"] == "frontend_review_start"
+        )
+        assert start_step.get("metrics") == {"accounts": 1}
+
         pack_created_step = next(
             step for step in frontend_steps if step["name"] == "frontend_review_pack_created"
         )
-        assert pack_created_step["out"] == {
-            "account": "acct-1",
-            "path": "frontend/review/packs/acct-1.json",
-        }
+        pack_out = pack_created_step.get("out")
+        assert pack_out is not None
+        assert pack_out["account_id"] == "acct-1"
+        assert pack_out["path"] == "frontend/review/packs/acct-1.json"
+        assert isinstance(pack_out["bytes"], int)
+        assert pack_out["bytes"] > 0
 
         assert result["status"] == "success"
         assert result["packs_count"] == 1

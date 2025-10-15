@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -151,6 +152,32 @@ def _write_json_if_changed(path: Path, payload: Any) -> bool:
 
     _atomic_write_json(path, payload)
     return True
+
+
+def _relative_to_run_dir(path: Path, run_dir: Path) -> str:
+    try:
+        return path.relative_to(run_dir).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _optional_str(value: Any) -> str | None:
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return trimmed or None
+    return None
+
+
+def _safe_sha1(path: Path) -> str | None:
+    try:
+        digest = hashlib.sha1()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(8192), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:  # pragma: no cover - defensive logging
+        log.warning("FRONTEND_PACK_SHA1_FAILED path=%s", path, exc_info=True)
+        return None
 
 
 def _resolve_pack_output_path(pack_path: str, run_dir: Path) -> Path:
@@ -764,6 +791,94 @@ def _safe_account_dirname(account_id: str, fallback: str) -> str:
     return sanitized or fallback
 
 
+def _build_stage_manifest(
+    *,
+    sid: str,
+    stage_name: str,
+    run_dir: Path,
+    stage_packs_dir: Path,
+    stage_responses_dir: Path,
+    stage_index_path: Path,
+) -> None:
+    pack_entries: list[dict[str, Any]] = []
+
+    if stage_packs_dir.is_dir():
+        pack_paths = sorted(
+            (
+                path
+                for path in stage_packs_dir.iterdir()
+                if path.is_file() and path.suffix == ".json"
+            ),
+            key=_account_sort_key,
+        )
+
+        for pack_path in pack_paths:
+            payload = _load_json_payload(pack_path)
+            holder_name: str | None = None
+            primary_issue: str | None = None
+            has_questions = False
+
+            if isinstance(payload, Mapping):
+                holder_name = _optional_str(payload.get("holder_name"))
+                primary_issue = _optional_str(payload.get("primary_issue"))
+                questions = payload.get("questions")
+                if isinstance(questions, Sequence) and not isinstance(
+                    questions, (str, bytes, bytearray)
+                ):
+                    has_questions = len(questions) > 0
+
+            if not has_questions:
+                has_questions = bool(_QUESTION_SET)
+
+            account_id = None
+            if isinstance(payload, Mapping):
+                account_id = _optional_str(payload.get("account_id"))
+
+            if not account_id:
+                account_id = pack_path.stem
+
+            pack_entry: dict[str, Any] = {
+                "account_id": account_id,
+                "holder_name": holder_name,
+                "primary_issue": primary_issue,
+                "path": _relative_to_run_dir(pack_path, run_dir),
+                "bytes": os.path.getsize(pack_path),
+                "has_questions": has_questions,
+            }
+
+            sha1_digest = _safe_sha1(pack_path)
+            if sha1_digest:
+                pack_entry["sha1"] = sha1_digest
+
+            pack_entries.append(pack_entry)
+
+    responses_count = _count_frontend_responses(stage_responses_dir)
+    responses_dir_value = _relative_to_run_dir(stage_responses_dir, run_dir)
+
+    manifest_core: dict[str, Any] = {
+        "sid": sid,
+        "stage": stage_name,
+        "schema_version": "1.0",
+        "counts": {
+            "packs": len(pack_entries),
+            "responses": responses_count,
+        },
+        "packs": pack_entries,
+        "responses_dir": responses_dir_value,
+    }
+
+    generated_at = _now_iso()
+    existing_manifest = _load_json_payload(stage_index_path)
+    if isinstance(existing_manifest, Mapping):
+        previous_core = dict(existing_manifest)
+        previous_generated = previous_core.pop("generated_at", None)
+        if previous_core == manifest_core and isinstance(previous_generated, str):
+            generated_at = previous_generated
+
+    manifest_payload = {**manifest_core, "generated_at": generated_at}
+    _write_json_if_changed(stage_index_path, manifest_payload)
+
+
 def generate_frontend_packs_for_run(
     sid: str,
     *,
@@ -777,6 +892,7 @@ def generate_frontend_packs_for_run(
     accounts_dir = run_dir / "cases" / "accounts"
     frontend_dir = run_dir / "frontend"
 
+    stage_name = os.getenv("FRONTEND_STAGE_NAME", "review")
     stage_dir_env = os.getenv("FRONTEND_PACKS_STAGE_DIR", "frontend/review")
     stage_dir = run_dir / Path(stage_dir_env)
 
@@ -797,11 +913,6 @@ def generate_frontend_packs_for_run(
         stage_index_path = run_dir / Path(index_path_env)
     else:
         stage_index_path = stage_dir / "index.json"
-
-    stage_dir.mkdir(parents=True, exist_ok=True)
-    stage_packs_dir.mkdir(parents=True, exist_ok=True)
-    stage_responses_dir.mkdir(parents=True, exist_ok=True)
-    stage_index_path.parent.mkdir(parents=True, exist_ok=True)
 
     accounts_output_dir = frontend_dir / "accounts"
     responses_dir = frontend_dir / "responses"
@@ -844,6 +955,11 @@ def generate_frontend_packs_for_run(
                 "last_built_at": None,
             }
 
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        stage_packs_dir.mkdir(parents=True, exist_ok=True)
+        stage_responses_dir.mkdir(parents=True, exist_ok=True)
+        stage_index_path.parent.mkdir(parents=True, exist_ok=True)
+
         accounts_output_dir.mkdir(parents=True, exist_ok=True)
         responses_dir.mkdir(parents=True, exist_ok=True)
 
@@ -871,6 +987,14 @@ def generate_frontend_packs_for_run(
                 "questions": _QUESTION_SET,
             }
             _write_json_if_changed(index_path, payload)
+            _build_stage_manifest(
+                sid=sid,
+                stage_name=stage_name,
+                run_dir=run_dir,
+                stage_packs_dir=stage_packs_dir,
+                stage_responses_dir=stage_responses_dir,
+                stage_index_path=stage_index_path,
+            )
             runflow_step(
                 sid,
                 "frontend",
@@ -1258,6 +1382,15 @@ def generate_frontend_packs_for_run(
         index_payload = {**index_payload_base, "generated_at": generated_at}
 
         _write_json_if_changed(index_path, index_payload)
+
+        _build_stage_manifest(
+            sid=sid,
+            stage_name=stage_name,
+            run_dir=run_dir,
+            stage_packs_dir=stage_packs_dir,
+            stage_responses_dir=stage_responses_dir,
+            stage_index_path=stage_index_path,
+        )
 
         if lean_enabled:
             runflow_step(

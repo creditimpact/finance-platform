@@ -14,6 +14,12 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _read_stage_pack(base_dir: Path, sid: str, account_id: str) -> tuple[Path, dict]:
+    pack_path = base_dir / sid / "frontend" / "review" / "packs" / f"{account_id}.json"
+    payload = json.loads(pack_path.read_text(encoding="utf-8"))
+    return pack_path, payload
+
+
 def test_holder_name_from_raw_lines_prefers_spaced_candidate() -> None:
     raw_lines = ["UNRELATED", "JANE SAMPLE", "ACCOUNT # 123"]
 
@@ -82,30 +88,20 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
 
     result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
-    pack_path = runs_root / sid / "frontend" / "accounts" / "acct-1" / "pack.json"
-    assert pack_path.exists()
-
-    pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
-    assert list(pack_payload.keys()) == [
+    stage_pack_path, stage_pack_payload = _read_stage_pack(runs_root, sid, "acct-1")
+    assert list(stage_pack_payload.keys()) == [
+        "account_id",
         "holder_name",
         "primary_issue",
         "display",
-        "questions",
-        "pointers",
     ]
-    assert pack_payload["holder_name"] == "John Doe"
-    assert pack_payload["primary_issue"] == "wrong_account"
-    assert pack_payload["questions"] == list(generator_module._QUESTION_SET)
-    assert pack_payload["pointers"] == {
-        "meta": "cases/accounts/1/meta.json",
-        "tags": "cases/accounts/1/tags.json",
-        "raw": "cases/accounts/1/raw_lines.json",
-        "bureaus": "cases/accounts/1/bureaus.json",
-        "flat": "cases/accounts/1/fields_flat.json",
-        "summary": "cases/accounts/1/summary.json",
-    }
+    assert stage_pack_payload["account_id"] == "acct-1"
+    assert stage_pack_payload["holder_name"] == "John Doe"
+    assert stage_pack_payload["primary_issue"] == "wrong_account"
+    assert "questions" not in stage_pack_payload
+    assert "pointers" not in stage_pack_payload
 
-    display_block = pack_payload["display"]
+    display_block = stage_pack_payload["display"]
     assert list(display_block.keys()) == [
         "display_version",
         "holder_name",
@@ -177,7 +173,7 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
         "closed_date",
         "pack_path",
     ]
-    assert index_entry["pack_path"] == "frontend/accounts/acct-1/pack.json"
+    assert index_entry["pack_path"] == "frontend/review/packs/acct-1.json"
     assert index_entry["holder_name"] == "John Doe"
     assert index_entry["primary_issue"] == "wrong_account"
     assert (
@@ -197,27 +193,6 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert index_entry["closed_date"] == display_block["closed_date"]
     assert index_payload["questions"][1]["id"] == "recognize"
 
-    stage_pack_path = (
-        runs_root
-        / sid
-        / "frontend"
-        / "review"
-        / "packs"
-        / "acct-1.json"
-    )
-    assert stage_pack_path.exists()
-    stage_pack_payload = json.loads(stage_pack_path.read_text(encoding="utf-8"))
-    assert list(stage_pack_payload.keys()) == [
-        "account_id",
-        "holder_name",
-        "primary_issue",
-        "display",
-    ]
-    assert stage_pack_payload["account_id"] == "acct-1"
-    assert stage_pack_payload["holder_name"] == pack_payload["holder_name"]
-    assert stage_pack_payload["primary_issue"] == pack_payload["primary_issue"]
-    assert stage_pack_payload["display"] == pack_payload["display"]
-
     stage_index_path = runs_root / sid / "frontend" / "review" / "index.json"
     assert stage_index_path.exists()
     stage_index_payload = json.loads(stage_index_path.read_text(encoding="utf-8"))
@@ -230,7 +205,7 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert manifest_entry["primary_issue"] == "wrong_account"
     assert manifest_entry["path"] == "frontend/review/packs/acct-1.json"
 
-    responses_dir = runs_root / sid / "frontend" / "responses"
+    responses_dir = runs_root / sid / "frontend" / "review" / "responses"
     assert responses_dir.is_dir()
     assert not any(responses_dir.iterdir())
 
@@ -238,7 +213,9 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert result["packs_count"] == 1
     assert result["empty_ok"] is False
     assert result["built"] is True
-    assert result["packs_dir"] == str((runs_root / sid / "frontend").absolute())
+    assert result["packs_dir"] == str(
+        (runs_root / sid / "frontend" / "review" / "packs").absolute()
+    )
     assert isinstance(result["last_built_at"], str)
 
 
@@ -371,18 +348,9 @@ def test_frontend_runflow_steps_are_condensed(tmp_path, monkeypatch):
 
         result = generator.generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
-        pack_path = runs_root / sid / "frontend" / "accounts" / "acct-1" / "pack.json"
-        assert pack_path.exists()
-
-        pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
-        assert list(pack_payload.keys()) == [
-            "holder_name",
-            "primary_issue",
-            "display",
-            "questions",
-            "pointers",
-        ]
-        display_block = pack_payload["display"]
+        stage_pack_path, stage_pack_payload = _read_stage_pack(runs_root, sid, "acct-1")
+        assert stage_pack_path.exists()
+        display_block = stage_pack_payload["display"]
         assert list(display_block.keys()) == [
             "display_version",
             "holder_name",
@@ -401,7 +369,7 @@ def test_frontend_runflow_steps_are_condensed(tmp_path, monkeypatch):
         index_payload = json.loads(index_path.read_text(encoding="utf-8"))
         assert index_payload["packs_count"] == 1
         index_entry = index_payload["accounts"][0]
-        assert index_entry["pack_path"] == "frontend/accounts/acct-1/pack.json"
+        assert index_entry["pack_path"] == "frontend/review/packs/acct-1.json"
 
         steps_path = runs_root / sid / "runflow_steps.json"
         assert steps_path.exists()
@@ -409,6 +377,7 @@ def test_frontend_runflow_steps_are_condensed(tmp_path, monkeypatch):
         frontend_steps = steps_payload["stages"]["frontend"]["substages"]["default"]["steps"]
         step_names = [step["name"] for step in frontend_steps]
         assert step_names == [
+            "frontend_review_start",
             "frontend_review_pack_created",
             "frontend_review_finish",
         ]
@@ -460,8 +429,7 @@ def test_generate_frontend_packs_falls_back_to_raw_holder_name(tmp_path):
 
     generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
-    pack_path = runs_root / sid / "frontend" / "accounts" / "acct-raw" / "pack.json"
-    pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
+    _, pack_payload = _read_stage_pack(runs_root, sid, "acct-raw")
 
     assert pack_payload["holder_name"] == "JANE SAMPLE"
     assert pack_payload["display"]["holder_name"] == "JANE SAMPLE"
@@ -494,8 +462,7 @@ def test_generate_frontend_packs_defaults_unknown_issue(tmp_path):
 
     generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
-    pack_path = runs_root / sid / "frontend" / "accounts" / "acct-issue" / "pack.json"
-    pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
+    _, pack_payload = _read_stage_pack(runs_root, sid, "acct-issue")
 
     assert pack_payload["primary_issue"] == "unknown"
     assert pack_payload["display"]["primary_issue"] == "unknown"
@@ -546,20 +513,21 @@ def test_generate_frontend_packs_meta_heading_and_primary_issue(tmp_path):
 
     result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
-    pack_path = runs_root / sid / "frontend" / "accounts" / "acct-meta" / "pack.json"
-    payload = json.loads(pack_path.read_text(encoding="utf-8"))
+    pack_path, payload = _read_stage_pack(runs_root, sid, "acct-meta")
 
     assert list(payload.keys()) == [
+        "account_id",
         "holder_name",
         "primary_issue",
         "display",
-        "questions",
-        "pointers",
     ]
+    assert payload["account_id"] == "acct-meta"
     assert payload["holder_name"] == "SPS"
     assert payload["primary_issue"] == "delinquency"
-    assert "issues" not in payload
-    assert not (pack_path.parent / "pack.full.json").exists()
+
+    debug_dir = runs_root / sid / "frontend" / "review" / "debug"
+    if debug_dir.exists():
+        assert not any(debug_dir.iterdir())
 
     assert result["packs_count"] == 1
 
@@ -578,20 +546,16 @@ def test_generate_frontend_packs_holder_name_from_raw_when_meta_missing(tmp_path
 
     result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
-    pack_path = runs_root / sid / "frontend" / "accounts" / "acct-raw" / "pack.json"
-    payload = json.loads(pack_path.read_text(encoding="utf-8"))
+    _, payload = _read_stage_pack(runs_root, sid, "acct-raw")
 
     assert list(payload.keys()) == [
+        "account_id",
         "holder_name",
         "primary_issue",
         "display",
-        "questions",
-        "pointers",
     ]
     assert payload["holder_name"] == "ACME BANK"
     assert payload["primary_issue"] == "ownership"
-    assert "issues" not in payload
-    assert not (pack_path.parent / "pack.full.json").exists()
 
     assert result["packs_count"] == 1
 
@@ -649,26 +613,7 @@ def test_generate_frontend_packs_backfills_missing_pointers(tmp_path, monkeypatc
 
     result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
-    pack_path = runs_root / sid / "frontend" / "accounts" / "acct-legacy" / "pack.json"
-    payload = json.loads(pack_path.read_text(encoding="utf-8"))
-
-    assert payload["pointers"] == {
-        "meta": "cases/accounts/1/meta.json",
-        "tags": "cases/accounts/1/tags.json",
-        "raw": "cases/accounts/1/raw_lines.json",
-        "bureaus": "cases/accounts/1/bureaus.json",
-        "flat": "cases/accounts/1/fields_flat.json",
-        "summary": "cases/accounts/1/summary.json",
-    }
-    stage_pack_path = (
-        runs_root
-        / sid
-        / "frontend"
-        / "review"
-        / "packs"
-        / "acct-legacy.json"
-    )
-    stage_payload = json.loads(stage_pack_path.read_text(encoding="utf-8"))
+    stage_pack_path, stage_payload = _read_stage_pack(runs_root, sid, "acct-legacy")
     assert set(stage_payload.keys()) == {
         "account_id",
         "holder_name",
@@ -676,10 +621,13 @@ def test_generate_frontend_packs_backfills_missing_pointers(tmp_path, monkeypatc
         "display",
     }
     assert stage_payload["account_id"] == "acct-legacy"
-    assert stage_payload["display"]["holder_name"] == stage_payload["holder_name"]
-    assert stage_payload["display"]["primary_issue"] == stage_payload["primary_issue"]
     assert "pointers" not in stage_payload
     assert "questions" not in stage_payload
+
+    index_payload = json.loads(
+        (runs_root / sid / "frontend" / "index.json").read_text(encoding="utf-8")
+    )
+    assert index_payload["accounts"][0]["pack_path"] == "frontend/review/packs/acct-legacy.json"
     assert result["packs_count"] == 1
 
 
@@ -699,20 +647,18 @@ def test_generate_frontend_packs_debug_mirror_toggle(tmp_path, monkeypatch):
 
     generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
-    pack_dir = runs_root / sid / "frontend" / "accounts" / "acct-debug"
-    pack_path = pack_dir / "pack.json"
-    pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
-    mirror_path = pack_dir / "pack.full.json"
+    _, pack_payload = _read_stage_pack(runs_root, sid, "acct-debug")
+    debug_dir = runs_root / sid / "frontend" / "review" / "debug"
+    mirror_path = debug_dir / "acct-debug.full.json"
 
     assert mirror_path.exists()
     mirror_payload = json.loads(mirror_path.read_text(encoding="utf-8"))
 
     assert list(pack_payload.keys()) == [
+        "account_id",
         "holder_name",
         "primary_issue",
         "display",
-        "questions",
-        "pointers",
     ]
     assert mirror_payload["sid"] == sid
     assert mirror_payload["account_id"] == "acct-debug"
@@ -741,18 +687,15 @@ def test_generate_frontend_packs_multiple_issues_first_primary(tmp_path):
 
     result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
-    pack_path = runs_root / sid / "frontend" / "accounts" / "acct-issues" / "pack.json"
-    payload = json.loads(pack_path.read_text(encoding="utf-8"))
+    _, payload = _read_stage_pack(runs_root, sid, "acct-issues")
 
     assert list(payload.keys()) == [
+        "account_id",
         "holder_name",
         "primary_issue",
         "display",
-        "questions",
-        "pointers",
     ]
     assert payload["primary_issue"] == "collection"
-    assert "issues" not in payload
 
     assert result["packs_count"] == 1
 
@@ -783,19 +726,16 @@ def test_generate_frontend_packs_holder_name_fallback(tmp_path):
 
     result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
-    pack_path = runs_root / sid / "frontend" / "accounts" / "acct-2" / "pack.json"
-    pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
+    _, pack_payload = _read_stage_pack(runs_root, sid, "acct-2")
 
     assert list(pack_payload.keys()) == [
+        "account_id",
         "holder_name",
         "primary_issue",
         "display",
-        "questions",
-        "pointers",
     ]
     assert pack_payload["holder_name"] == "JANE SAMPLE"
     assert pack_payload["primary_issue"] == "identity_theft"
-    assert "issues" not in pack_payload
 
     index_path = runs_root / sid / "frontend" / "index.json"
     index_payload = json.loads(index_path.read_text(encoding="utf-8"))
@@ -838,7 +778,9 @@ def test_generate_frontend_packs_handles_missing_accounts(tmp_path):
     assert result["packs_count"] == 0
     assert result["empty_ok"] is True
     assert result["built"] is True
-    assert result["packs_dir"] == str((runs_root / sid / "frontend").absolute())
+    assert result["packs_dir"] == str(
+        (runs_root / sid / "frontend" / "review" / "packs").absolute()
+    )
     assert isinstance(result["last_built_at"], str)
 
     stage_index_path = runs_root / sid / "frontend" / "review" / "index.json"
@@ -860,7 +802,9 @@ def test_generate_frontend_packs_respects_feature_flag(tmp_path, monkeypatch):
         "packs_count": 0,
         "empty_ok": True,
         "built": False,
-        "packs_dir": str((runs_root / sid / "frontend").absolute()),
+        "packs_dir": str(
+            (runs_root / sid / "frontend" / "review" / "packs").absolute()
+        ),
         "last_built_at": None,
     }
     assert not (runs_root / sid).exists()
@@ -935,9 +879,11 @@ def test_generate_frontend_packs_continues_on_pack_write_failure(tmp_path, monke
 
     result = generator_module.generate_frontend_packs_for_run(sid, runs_root=runs_root)
 
-    failing_pack = runs_root / sid / "frontend" / "accounts" / "acct-fail" / "pack.json"
+    failing_pack = (
+        runs_root / sid / "frontend" / "review" / "packs" / "acct-fail.json"
+    )
     successful_pack = (
-        runs_root / sid / "frontend" / "accounts" / "acct-success" / "pack.json"
+        runs_root / sid / "frontend" / "review" / "packs" / "acct-success.json"
     )
 
     assert not failing_pack.exists()

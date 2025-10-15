@@ -709,6 +709,38 @@ def build_display_payload(
     }
 
 
+def _build_compact_display(
+    *,
+    holder_name: str | None,
+    primary_issue: str | None,
+    display_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    def _per_bureau_only(source: Mapping[str, Any] | None) -> dict[str, Any]:
+        per_bureau: Mapping[str, Any] | None = None
+        if isinstance(source, Mapping):
+            per_bureau = source.get("per_bureau")
+        if isinstance(per_bureau, Mapping):
+            return {"per_bureau": dict(per_bureau)}
+        return {"per_bureau": {}}
+
+    def _bureau_dates(source: Mapping[str, Any] | None) -> dict[str, Any]:
+        return dict(source) if isinstance(source, Mapping) else {}
+
+    return {
+        "display_version": display_payload.get(
+            "display_version", _DISPLAY_SCHEMA_VERSION
+        ),
+        "holder_name": holder_name,
+        "primary_issue": primary_issue,
+        "account_number": _per_bureau_only(display_payload.get("account_number")),
+        "account_type": _per_bureau_only(display_payload.get("account_type")),
+        "status": _per_bureau_only(display_payload.get("status")),
+        "balance_owed": _per_bureau_only(display_payload.get("balance_owed")),
+        "date_opened": _bureau_dates(display_payload.get("date_opened")),
+        "closed_date": _bureau_dates(display_payload.get("closed_date")),
+    }
+
+
 def build_pack_doc(
     *,
     sid: str,
@@ -752,28 +784,11 @@ def build_lean_pack_doc(
     pointers: Mapping[str, str],
     questions: Sequence[Any],
 ) -> dict[str, Any]:
-    def _per_bureau_only(source: Mapping[str, Any] | None) -> dict[str, Any]:
-        per_bureau: Mapping[str, Any] | None = None
-        if isinstance(source, Mapping):
-            per_bureau = source.get("per_bureau")
-        if isinstance(per_bureau, Mapping):
-            return {"per_bureau": dict(per_bureau)}
-        return {"per_bureau": {}}
-
-    def _bureau_dates(source: Mapping[str, Any] | None) -> dict[str, Any]:
-        return dict(source) if isinstance(source, Mapping) else {}
-
-    display: dict[str, Any] = {
-        "display_version": display_payload.get("display_version", _DISPLAY_SCHEMA_VERSION),
-        "holder_name": holder_name,
-        "primary_issue": primary_issue,
-        "account_number": _per_bureau_only(display_payload.get("account_number")),
-        "account_type": _per_bureau_only(display_payload.get("account_type")),
-        "status": _per_bureau_only(display_payload.get("status")),
-        "balance_owed": _per_bureau_only(display_payload.get("balance_owed")),
-        "date_opened": _bureau_dates(display_payload.get("date_opened")),
-        "closed_date": _bureau_dates(display_payload.get("closed_date")),
-    }
+    display = _build_compact_display(
+        holder_name=holder_name,
+        primary_issue=primary_issue,
+        display_payload=display_payload,
+    )
 
     questions_payload = []
     for question in questions:
@@ -786,6 +801,27 @@ def build_lean_pack_doc(
         "display": display,
         "questions": questions_payload,
         "pointers": dict(pointers),
+    }
+
+
+def build_stage_pack_doc(
+    *,
+    account_id: str,
+    holder_name: str | None,
+    primary_issue: str | None,
+    display_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    display = _build_compact_display(
+        holder_name=holder_name,
+        primary_issue=primary_issue,
+        display_payload=display_payload,
+    )
+
+    return {
+        "account_id": account_id,
+        "holder_name": holder_name,
+        "primary_issue": primary_issue,
+        "display": display,
     }
 
 
@@ -915,10 +951,15 @@ def generate_frontend_packs_for_run(
         stage_responses_dir = stage_dir / "responses"
 
     index_path_env = os.getenv("FRONTEND_PACKS_INDEX")
+    stage_index_path = stage_dir / "index.json"
     if index_path_env:
-        stage_index_path = run_dir / Path(index_path_env)
-    else:
-        stage_index_path = stage_dir / "index.json"
+        candidate = Path(index_path_env)
+        if not candidate.is_absolute() and candidate.as_posix() == "frontend/index.json":
+            stage_index_path = stage_dir / "index.json"
+        else:
+            if not candidate.is_absolute():
+                candidate = run_dir / candidate
+            stage_index_path = candidate
 
     accounts_output_dir = frontend_dir / "accounts"
     responses_dir = frontend_dir / "responses"
@@ -926,12 +967,6 @@ def generate_frontend_packs_for_run(
     packs_dir_str = str(frontend_dir.absolute())
 
     runflow_stage_start("frontend", sid=sid)
-    runflow_step(
-        sid,
-        "frontend",
-        "frontend_review_start",
-        out={"stage": stage_name},
-    )
     current_account_id: str | None = None
     try:
         if not _frontend_packs_enabled():
@@ -1080,6 +1115,13 @@ def generate_frontend_packs_for_run(
                                     mirror_path,
                                     exc_info=True,
                                 )
+                    if packs_count == 0:
+                        runflow_step(
+                            sid,
+                            "frontend",
+                            "frontend_review_no_candidates",
+                            out={"reason": "cache"},
+                        )
                     runflow_step(
                         sid,
                         "frontend",
@@ -1245,6 +1287,13 @@ def generate_frontend_packs_for_run(
                 questions=_QUESTION_SET,
             )
 
+            stage_pack_payload = build_stage_pack_doc(
+                account_id=account_id,
+                holder_name=display_holder_name,
+                primary_issue=display_primary_issue,
+                display_payload=display_payload,
+            )
+
             if lean_enabled:
                 pack_payload = lean_pack_payload
             else:
@@ -1272,7 +1321,9 @@ def generate_frontend_packs_for_run(
             try:
                 pack_dir.mkdir(parents=True, exist_ok=True)
                 legacy_changed = _write_json_if_changed(pack_path, pack_payload)
-                stage_changed = _write_json_if_changed(stage_pack_path, lean_pack_payload)
+                stage_changed = _write_json_if_changed(
+                    stage_pack_path, stage_pack_payload
+                )
                 changed = legacy_changed or stage_changed
                 if debug_mirror_enabled and full_pack_payload is not None:
                     mirror_path = pack_dir / "pack.full.json"
@@ -1391,6 +1442,12 @@ def generate_frontend_packs_for_run(
         }
         finish_out = {key: value for key, value in finish_out.items() if value is not None}
 
+        if pack_count == 0:
+            runflow_step(
+                sid,
+                "frontend",
+                "frontend_review_no_candidates",
+            )
         runflow_step(
             sid,
             "frontend",

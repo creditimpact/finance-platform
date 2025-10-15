@@ -73,7 +73,12 @@ def test_frontend_review_pack_returns_stage_pack(api_client):
     sid = "S222"
     run_dir = runs_root / sid
     pack_path = run_dir / "frontend" / "review" / "packs" / "acct-1.json"
-    pack_payload = {"holder_name": "Jane", "questions": []}
+    pack_payload = {
+        "account_id": "acct-1",
+        "holder_name": "Jane",
+        "primary_issue": "",
+        "display": {"display_version": 1},
+    }
     _write_json(pack_path, pack_payload)
 
     response = client.get(

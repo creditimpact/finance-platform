@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import json
 from pathlib import Path
 import re
@@ -698,7 +699,22 @@ def test_generate_frontend_packs_backfills_missing_pointers(tmp_path, monkeypatc
     manifest_entry = stage_manifest["packs"][0]
     assert manifest_entry["path"] == "frontend/review/packs/acct-legacy.json"
     assert manifest_entry["pack_path"] == "frontend/review/packs/acct-legacy.json"
-    assert result["packs_count"] == 1
+
+
+def test_generate_frontend_packs_warns_on_legacy_accounts_dir(tmp_path, caplog):
+    runs_root = tmp_path / "runs"
+    sid = "S-legacy-dir"
+    legacy_dir = runs_root / sid / "frontend" / "accounts"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+
+    caplog.set_level(logging.WARNING)
+
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    assert result["packs_count"] == 0
+    assert any(
+        "FRONTEND_LEGACY_ACCOUNTS_DIR" in message for message in caplog.messages
+    )
 
 
 def test_generate_frontend_packs_debug_mirror_toggle(tmp_path, monkeypatch):

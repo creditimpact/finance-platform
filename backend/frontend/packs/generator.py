@@ -926,17 +926,15 @@ def generate_frontend_packs_for_run(
     packs_dir_str = str(frontend_dir.absolute())
 
     runflow_stage_start("frontend", sid=sid)
+    runflow_step(
+        sid,
+        "frontend",
+        "frontend_review_start",
+        out={"stage": stage_name},
+    )
     current_account_id: str | None = None
     try:
         if not _frontend_packs_enabled():
-            runflow_step(
-                sid,
-                "frontend",
-                "build_pack_docs",
-                status="skipped",
-                metrics={"accounts": 0, "built": 0, "skipped_missing": 0},
-                out={"reason": "disabled"},
-            )
             responses_count = _emit_responses_scan(sid, responses_dir)
             summary = {
                 "packs_count": 0,
@@ -944,6 +942,20 @@ def generate_frontend_packs_for_run(
                 "empty_ok": True,
                 "reason": "disabled",
             }
+            runflow_step(
+                sid,
+                "frontend",
+                "frontend_review_no_candidates",
+                out={"reason": "disabled"},
+            )
+            runflow_step(
+                sid,
+                "frontend",
+                "frontend_review_finish",
+                status="skipped",
+                metrics={"packs": 0},
+                out={"reason": "disabled"},
+            )
             runflow_stage_end(
                 "frontend",
                 sid=sid,
@@ -1004,28 +1016,15 @@ def generate_frontend_packs_for_run(
             runflow_step(
                 sid,
                 "frontend",
-                "build_pack_docs",
-                metrics={"accounts": total_accounts, "built": 0, "skipped_missing": 0},
-                out={"reason": "no_accounts"},
+                "frontend_review_no_candidates",
+                metrics={"accounts": total_accounts},
             )
-            try:
-                index_out = index_path.relative_to(run_dir).as_posix()
-            except ValueError:
-                index_out = str(index_path)
             runflow_step(
                 sid,
                 "frontend",
-                "write_index",
+                "frontend_review_finish",
                 metrics={"packs": 0},
-                out={"path": index_out},
             )
-            if lean_enabled:
-                runflow_step(
-                    sid,
-                    "frontend",
-                    "frontend_minify",
-                    metrics={"packs": 0, "lean": True},
-                )
             responses_count = _emit_responses_scan(sid, responses_dir)
             summary = {
                 "packs_count": 0,
@@ -1084,32 +1083,11 @@ def generate_frontend_packs_for_run(
                     runflow_step(
                         sid,
                         "frontend",
-                        "build_pack_docs",
-                        metrics={
-                            "accounts": total_accounts,
-                            "built": packs_count,
-                            "skipped_missing": 0,
-                        },
+                        "frontend_review_finish",
+                        status="success",
+                        metrics={"packs": packs_count},
                         out={"cache_hit": True},
                     )
-                    try:
-                        index_out = index_path.relative_to(run_dir).as_posix()
-                    except ValueError:
-                        index_out = str(index_path)
-                    runflow_step(
-                        sid,
-                        "frontend",
-                        "write_index",
-                        metrics={"packs": packs_count},
-                        out={"path": index_out},
-                    )
-                    if lean_enabled:
-                        runflow_step(
-                            sid,
-                            "frontend",
-                            "frontend_minify",
-                            metrics={"packs": packs_count, "lean": True},
-                        )
                     responses_count = _emit_responses_scan(sid, responses_dir)
                     summary = {
                         "packs_count": packs_count,
@@ -1348,37 +1326,25 @@ def generate_frontend_packs_for_run(
                 }
             )
 
+            try:
+                relative_stage_pack = stage_pack_path.relative_to(run_dir).as_posix()
+            except ValueError:
+                relative_stage_pack = str(stage_pack_path)
+
+            runflow_step(
+                sid,
+                "frontend",
+                "frontend_review_pack_created",
+                out={"account": account_id, "path": relative_stage_pack},
+            )
+
         build_metrics = {
             "accounts": total_accounts,
             "built": built_docs,
             "skipped_missing": skipped_missing,
             "unchanged": unchanged_docs,
         }
-        build_out: dict[str, Any] = {}
         skip_summary = {key: value for key, value in skip_reasons.items() if value}
-        if skip_summary:
-            build_out["skip_reasons"] = skip_summary
-        if write_errors:
-            build_out["write_failures"] = len(write_errors)
-            build_out["failed_accounts"] = [acct for acct, _ in write_errors[:5]]
-
-        build_status = "error" if write_errors else "success"
-        error_payload = None
-        if write_errors:
-            error_payload = {
-                "type": "PackWriteError",
-                "message": f"{len(write_errors)} pack writes failed",
-            }
-
-        runflow_step(
-            sid,
-            "frontend",
-            "build_pack_docs",
-            status=build_status,
-            metrics=build_metrics,
-            out=build_out or None,
-            error=error_payload,
-        )
 
         generated_at = _now_iso()
         pack_count = len(packs)
@@ -1416,29 +1382,30 @@ def generate_frontend_packs_for_run(
             stage_responses_dir=stage_responses_dir,
             stage_index_path=stage_index_path,
         )
-
-        if lean_enabled:
-            runflow_step(
-                sid,
-                "frontend",
-                "frontend_minify",
-                metrics={"packs": pack_count, "lean": True},
-            )
-
         done_status = "error" if write_errors else "success"
         _log_done(sid, pack_count, status=done_status)
 
-        try:
-            index_out = index_path.relative_to(run_dir).as_posix()
-        except ValueError:
-            index_out = str(index_path)
+        finish_out: dict[str, Any] = {
+            "skip_reasons": skip_summary or None,
+            "write_failures": len(write_errors) if write_errors else None,
+        }
+        finish_out = {key: value for key, value in finish_out.items() if value is not None}
 
         runflow_step(
             sid,
             "frontend",
-            "write_index",
-            metrics={"packs": pack_count},
-            out={"path": index_out},
+            "frontend_review_finish",
+            status=done_status,
+            metrics={**build_metrics, "packs": pack_count},
+            out=finish_out or None,
+            error=(
+                {
+                    "type": "PackWriteError",
+                    "message": f"{len(write_errors)} pack writes failed",
+                }
+                if write_errors
+                else None
+            ),
         )
 
         responses_count = _emit_responses_scan(sid, responses_dir)
@@ -1473,20 +1440,17 @@ def generate_frontend_packs_for_run(
         runflow_step(
             sid,
             "frontend",
-            "frontend_error",
+            "frontend_review_finish",
             status="error",
             out={
                 "account_id": current_account_id,
                 "error_class": exc.__class__.__name__,
                 "message": str(exc),
             },
-        )
-        runflow_step(
-            sid,
-            "frontend",
-            "build_pack_docs",
-            status="error",
-            out={"error": exc.__class__.__name__, "msg": str(exc)},
+            error={
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            },
         )
         runflow_stage_error(
             "frontend",

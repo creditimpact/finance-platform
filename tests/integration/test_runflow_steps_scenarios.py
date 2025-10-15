@@ -92,9 +92,10 @@ def test_validation_zero_findings_still_runs_frontend(tmp_path, monkeypatch):
     assert frontend_stage["summary"]["packs_count"] == 0
 
     step_names = [entry["name"] for entry in frontend_stage["steps"]]
-    assert step_names[:2] == [
-        "build_pack_docs",
-        "write_index",
+    assert step_names == [
+        "frontend_review_start",
+        "frontend_review_no_candidates",
+        "frontend_review_finish",
     ]
 
     validation_stage = steps_payload["stages"]["validation"]

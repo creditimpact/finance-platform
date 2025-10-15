@@ -317,8 +317,19 @@ def test_frontend_runflow_steps_are_condensed(tmp_path, monkeypatch):
         steps_payload = json.loads(steps_path.read_text(encoding="utf-8"))
         frontend_steps = steps_payload["stages"]["frontend"]["substages"]["default"]["steps"]
         step_names = [step["name"] for step in frontend_steps]
-        assert step_names == ["build_pack_docs", "frontend_minify", "write_index"]
-        assert all("account" not in step for step in frontend_steps)
+        assert step_names == [
+            "frontend_review_start",
+            "frontend_review_pack_created",
+            "frontend_review_finish",
+        ]
+
+        pack_created_step = next(
+            step for step in frontend_steps if step["name"] == "frontend_review_pack_created"
+        )
+        assert pack_created_step["out"] == {
+            "account": "acct-1",
+            "path": "frontend/review/packs/acct-1.json",
+        }
 
         assert result["status"] == "success"
         assert result["packs_count"] == 1

@@ -149,8 +149,8 @@ def _collect_stage_paths(root: Path, stage: str, sid: str) -> dict[str, Any]:
         review_base = Path(canonical["review_dir"])
         packs_dir = Path(canonical["packs_dir"])
         responses_dir = Path(canonical["responses_dir"])
-        index_path = review_base / "index.json"
-        legacy_index = Path(canonical["index"])
+        index_path = Path(canonical["index"])
+        legacy_index = Path(canonical.get("legacy_index", canonical["index"]))
         base = review_base.resolve()
         payload["frontend"] = {
             "base": str(base),

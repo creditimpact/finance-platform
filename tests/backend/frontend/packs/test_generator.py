@@ -893,7 +893,12 @@ def test_generate_frontend_packs_respects_feature_flag(tmp_path, monkeypatch):
         ),
         "last_built_at": None,
     }
-    assert not (runs_root / sid).exists()
+
+    packs_dir = runs_root / sid / "frontend" / "review" / "packs"
+    responses_dir = runs_root / sid / "frontend" / "review" / "responses"
+
+    assert packs_dir.is_dir()
+    assert responses_dir.is_dir()
 
 
 def test_generate_frontend_packs_task_exposed(tmp_path, monkeypatch):

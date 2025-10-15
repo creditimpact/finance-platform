@@ -55,10 +55,21 @@ def test_update_manifest_frontend_persists_section(tmp_path):
     manifest_path = runs_root / sid / "manifest.json"
     payload = _load_manifest(manifest_path)
     frontend_section = payload.get("frontend")
-    assert frontend_section == {
-        "packs_dir": str(packs_dir),
-        "built": True,
-        "packs_count": 3,
-        "last_built_at": "2024-01-01T00:00:00Z",
-    }
+
+    assert isinstance(frontend_section, dict)
+    assert frontend_section["built"] is True
+    assert frontend_section["packs_count"] == 3
+    assert frontend_section["counts"] == {"packs": 3, "responses": 0}
+    assert frontend_section["last_built_at"] == "2024-01-01T00:00:00Z"
+    assert frontend_section["last_responses_at"]
+
+    assert frontend_section["base"].endswith("frontend")
+    assert frontend_section["dir"].endswith("frontend/review")
+    assert frontend_section["packs"].endswith("frontend/review/packs")
+    assert frontend_section["packs_dir"].endswith("frontend/review/packs")
+    assert frontend_section["results"].endswith("frontend/review/responses")
+    assert frontend_section["results_dir"].endswith("frontend/review/responses")
+    assert frontend_section["index"].endswith("frontend/review/index.json")
+    assert frontend_section["legacy_index"].endswith("frontend/index.json")
+
     assert result.data["frontend"] == frontend_section

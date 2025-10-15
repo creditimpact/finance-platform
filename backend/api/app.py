@@ -118,13 +118,15 @@ def _frontend_stage_index_candidates(run_dir: Path) -> list[Path]:
         candidates.append(config.index_path)
 
     canonical = get_frontend_review_paths(str(run_dir))
-    review_index = Path(canonical["review_dir"]) / "index.json"
+    review_index = Path(canonical["index"])
     if review_index not in candidates:
         candidates.append(review_index)
 
-    legacy_index = Path(canonical["index"])
-    if legacy_index not in candidates:
-        candidates.append(legacy_index)
+    legacy_index_value = canonical.get("legacy_index")
+    if legacy_index_value:
+        legacy_index = Path(legacy_index_value)
+        if legacy_index not in candidates:
+            candidates.append(legacy_index)
 
     return candidates
 

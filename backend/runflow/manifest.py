@@ -83,6 +83,7 @@ def update_manifest_frontend(
     review_dir_path = canonical_paths["review_dir"]
     frontend_base = canonical_paths["frontend_base"]
     index_path = canonical_paths["index"]
+    legacy_index_path = canonical_paths.get("legacy_index")
 
     packs_count_glob = len(glob.glob(os.path.join(packs_dir_path, "idx-*.json")))
     packs_count_param = int(packs_count or 0)
@@ -107,6 +108,7 @@ def update_manifest_frontend(
         "results": responses_dir_path,
         "results_dir": responses_dir_path,
         "index": index_path,
+        "legacy_index": legacy_index_path,
         "built": bool(built),
         "packs_count": packs_count_value,
         "counts": {

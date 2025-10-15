@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import logging
 import os
 import re
+import shutil
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from backend.core.io.json_io import _atomic_write_json
-from backend.core.paths.frontend_review import ensure_frontend_review_dirs
+from backend.core.paths.frontend_review import (
+    ensure_frontend_review_dirs,
+    get_frontend_review_paths,
+)
 from backend.core.runflow import runflow_step
 from backend.core.runflow.io import (
     compose_hint,
@@ -155,10 +160,10 @@ def _write_json_if_changed(path: Path, payload: Any) -> bool:
     return True
 
 
-def _ensure_frontend_index_redirect_stub(path: Path) -> None:
+def _ensure_frontend_index_redirect_stub(path: Path, *, force: bool = False) -> None:
     """Write the legacy ``frontend/index.json`` redirect if it is missing."""
 
-    if path.exists():
+    if path.exists() and not force:
         return
 
     # Backward-compatibility stub for clients still reading the legacy path.
@@ -972,6 +977,75 @@ def _build_stage_manifest(
     return manifest_payload
 
 
+def _migrate_legacy_frontend_root_packs(
+    *,
+    sid: str,
+    stage_name: str,
+    run_dir: Path,
+    stage_dir: Path,
+    stage_packs_dir: Path,
+    stage_responses_dir: Path,
+    stage_index_path: Path,
+    redirect_stub_path: Path,
+) -> Mapping[str, Any] | None:
+    canonical = get_frontend_review_paths(str(run_dir))
+    legacy_glob = os.path.join(canonical["frontend_base"], "idx-*.json")
+
+    moved = 0
+    for legacy_path in glob.glob(legacy_glob):
+        source = Path(legacy_path)
+        if not source.is_file():
+            continue
+
+        destination = stage_packs_dir / source.name
+        if destination.exists():
+            log.warning(
+                "FRONTEND_LEGACY_MIGRATE_EXISTS sid=%s source=%s target=%s",
+                sid,
+                source,
+                destination,
+            )
+            continue
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            shutil.move(str(source), str(destination))
+        except (OSError, shutil.Error):
+            log.warning(
+                "FRONTEND_LEGACY_MIGRATE_FAILED sid=%s source=%s target=%s",
+                sid,
+                source,
+                destination,
+                exc_info=True,
+            )
+            continue
+
+        moved += 1
+
+    if not moved:
+        return None
+
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    stage_packs_dir.mkdir(parents=True, exist_ok=True)
+    stage_responses_dir.mkdir(parents=True, exist_ok=True)
+    stage_index_path.parent.mkdir(parents=True, exist_ok=True)
+
+    manifest_payload = _build_stage_manifest(
+        sid=sid,
+        stage_name=stage_name,
+        run_dir=run_dir,
+        stage_packs_dir=stage_packs_dir,
+        stage_responses_dir=stage_responses_dir,
+        stage_index_path=stage_index_path,
+        question_set=_QUESTION_SET,
+    )
+    _ensure_frontend_index_redirect_stub(redirect_stub_path, force=True)
+
+    log.info("FRONTEND_LEGACY_PACK_MIGRATION sid=%s moved=%d", sid, moved)
+    return manifest_payload
+
+
 def generate_frontend_packs_for_run(
     sid: str,
     *,
@@ -1001,6 +1075,8 @@ def generate_frontend_packs_for_run(
     stage_index_path = config.index_path
     debug_packs_dir = stage_dir / "debug"
 
+    canonical_paths = ensure_frontend_review_dirs(str(run_dir))
+
     legacy_accounts_dir = run_dir / "frontend" / "accounts"
     if legacy_accounts_dir.is_dir():
         log.warning(
@@ -1017,8 +1093,20 @@ def generate_frontend_packs_for_run(
         else:
             redirect_stub_path = candidate
     else:
-        canonical_paths = ensure_frontend_review_dirs(str(run_dir))
-        redirect_stub_path = Path(canonical_paths["index"])
+        redirect_stub_path = Path(
+            canonical_paths.get("legacy_index", canonical_paths["index"])
+        )
+
+    _migrate_legacy_frontend_root_packs(
+        sid=sid,
+        stage_name=stage_name,
+        run_dir=run_dir,
+        stage_dir=stage_dir,
+        stage_packs_dir=stage_packs_dir,
+        stage_responses_dir=stage_responses_dir,
+        stage_index_path=stage_index_path,
+        redirect_stub_path=redirect_stub_path,
+    )
     packs_dir_str = str(stage_packs_dir.absolute())
 
     runflow_stage_start("frontend", sid=sid)

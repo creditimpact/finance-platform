@@ -8,6 +8,8 @@ function getImportMetaEnv(): Record<string, string | undefined> {
 
 const metaEnv = getImportMetaEnv();
 
+import type { AccountPack } from './components/AccountCard';
+
 const API =
   metaEnv.VITE_API_URL ??
   metaEnv.VITE_API_BASE_URL ??
@@ -55,44 +57,78 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-export interface FrontendAccountIndexEntry {
+export interface FrontendReviewManifestPack {
   account_id: string;
   holder_name?: string | null;
   primary_issue?: string | null;
+  display?: AccountPack['display'];
   account_number?: unknown;
   account_type?: unknown;
   status?: unknown;
   balance_owed?: unknown;
   date_opened?: unknown;
   closed_date?: unknown;
+  path?: string;
   pack_path?: string;
+  has_questions?: boolean;
 }
 
-export interface FrontendIndexResponse {
+export interface FrontendReviewManifest {
+  sid?: string;
+  stage?: string;
   schema_version?: string | number;
-  packs_count?: number;
-  accounts?: FrontendAccountIndexEntry[];
+  counts?: { packs?: number; responses?: number };
+  packs?: FrontendReviewManifestPack[];
 }
 
-export async function fetchRunFrontendIndex(
+function buildFrontendReviewIndexUrl(sessionId: string): string {
+  return `${API}/api/runs/${encodeURIComponent(sessionId)}/frontend/review/index`;
+}
+
+function buildFrontendReviewAccountUrl(sessionId: string, accountId: string): string {
+  return `${API}/api/runs/${encodeURIComponent(sessionId)}/frontend/review/accounts/${encodeURIComponent(accountId)}`;
+}
+
+export async function fetchFrontendReviewManifest(
   sessionId: string,
   init?: RequestInit
-): Promise<FrontendIndexResponse> {
-  return fetchJson<FrontendIndexResponse>(
-    buildRunAssetUrl(sessionId, 'frontend/index.json'),
-    init
-  );
+): Promise<FrontendReviewManifest> {
+  return fetchJson<FrontendReviewManifest>(buildFrontendReviewIndexUrl(sessionId), init);
 }
 
-export async function fetchRunAccountPack<T = unknown>(
+export async function fetchFrontendReviewAccount<T = AccountPack>(
   sessionId: string,
-  packPath: string,
+  accountId: string,
   init?: RequestInit
 ): Promise<T> {
-  if (!packPath) {
-    throw new Error('Missing pack path');
+  if (!accountId) {
+    throw new Error('Missing account id');
   }
-  return fetchJson<T>(buildRunAssetUrl(sessionId, packPath), init);
+  return fetchJson<T>(buildFrontendReviewAccountUrl(sessionId, accountId), init);
+}
+
+export async function submitFrontendReviewAnswers(
+  sessionId: string,
+  accountId: string,
+  answers: Record<string, string>,
+  init?: RequestInit
+): Promise<{ ok: true }> {
+  if (!accountId) {
+    throw new Error('Missing account id');
+  }
+  const payload = {
+    answers,
+    client_ts: new Date().toISOString(),
+  };
+  return fetchJson<{ ok: true }>(
+    `${buildFrontendReviewAccountUrl(sessionId, accountId)}/answer`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      ...init,
+    }
+  );
 }
 
 export async function uploadReport(email: string, file: File) {

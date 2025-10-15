@@ -47,61 +47,58 @@ describe('AccountsPage', () => {
     }
   });
 
-  it('loads account packs and renders cards', async () => {
-    const mockIndex = {
-      accounts: [
-        { account_id: 'acct-1', pack_path: 'frontend/accounts/acct-1/pack.json' },
+  it('renders manifest entries from the review stage', async () => {
+    const manifest = {
+      packs: [
+        {
+          account_id: 'acct-1',
+          holder_name: 'John Doe',
+          primary_issue: 'wrong_account',
+          display: samplePack.display,
+        },
       ],
     };
 
-    const mockPack = {
-      ...samplePack,
-      holder_name: 'John Doe',
-      primary_issue: 'wrong_account',
-    };
-
-    (global.fetch as jest.Mock).mockResolvedValueOnce(createFetchResponse(mockIndex));
-    (global.fetch as jest.Mock).mockResolvedValueOnce(createFetchResponse(mockPack));
+    (global.fetch as jest.Mock).mockResolvedValueOnce(createFetchResponse(manifest));
 
     renderWithRouter();
 
-    expect(screen.getByText('Accounts')).toBeInTheDocument();
-    await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'John Doe' })).toBeInTheDocument()
-    );
-    expect(screen.getByText('Run S123')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('John Doe')).toBeInTheDocument());
+    expect(screen.getByText(/Primary issue:/i)).toHaveTextContent('wrong account');
+    expect(screen.getByText('Balance owed')).toBeInTheDocument();
   });
 
   it('filters accounts using the search box', async () => {
-    const mockIndex = {
-      accounts: [
-        { account_id: 'acct-1', pack_path: 'frontend/accounts/acct-1/pack.json' },
-        { account_id: 'acct-2', pack_path: 'frontend/accounts/acct-2/pack.json' },
+    const manifest = {
+      packs: [
+        {
+          account_id: 'acct-1',
+          holder_name: 'First Bank',
+          primary_issue: 'wrong_account',
+          display: samplePack.display,
+        },
+        {
+          account_id: 'acct-2',
+          holder_name: 'Second Bank',
+          primary_issue: 'identity_theft',
+          display: samplePack.display,
+        },
       ],
     };
 
-    const firstPack = { ...samplePack, holder_name: 'First Bank', primary_issue: 'wrong_account' };
-    const secondPack = { ...samplePack, holder_name: 'Second Bank', primary_issue: 'identity_theft' };
-
-    (global.fetch as jest.Mock).mockResolvedValueOnce(createFetchResponse(mockIndex));
-    (global.fetch as jest.Mock).mockResolvedValueOnce(createFetchResponse(firstPack));
-    (global.fetch as jest.Mock).mockResolvedValueOnce(createFetchResponse(secondPack));
+    (global.fetch as jest.Mock).mockResolvedValueOnce(createFetchResponse(manifest));
 
     renderWithRouter();
 
-    await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'First Bank' })).toBeInTheDocument()
-    );
-    expect(screen.getByRole('heading', { name: 'Second Bank' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('First Bank')).toBeInTheDocument());
+    expect(screen.getByText('Second Bank')).toBeInTheDocument();
 
     const input = screen.getByLabelText('Search accounts');
 
     fireEvent.change(input, { target: { value: 'identity' } });
 
-    await waitFor(() =>
-      expect(screen.queryByRole('heading', { name: 'First Bank' })).not.toBeInTheDocument()
-    );
-    expect(screen.getByRole('heading', { name: 'Second Bank' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('First Bank')).not.toBeInTheDocument());
+    expect(screen.getByText('Second Bank')).toBeInTheDocument();
 
     fireEvent.change(input, { target: { value: 'zzz' } });
 
@@ -110,7 +107,56 @@ describe('AccountsPage', () => {
     );
   });
 
-  it('shows an error message when fetching fails', async () => {
+  it('loads account details and submits answers', async () => {
+    const manifest = {
+      packs: [
+        {
+          account_id: 'acct-1',
+          holder_name: 'John Doe',
+          primary_issue: 'wrong_account',
+          display: samplePack.display,
+        },
+      ],
+    };
+
+    const detailPack = {
+      ...samplePack,
+      account_id: 'acct-1',
+      questions: samplePack.display?.questions,
+    };
+
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce(createFetchResponse(manifest))
+      .mockResolvedValueOnce(createFetchResponse(detailPack))
+      .mockResolvedValueOnce(createFetchResponse({ ok: true }));
+
+    renderWithRouter();
+
+    await waitFor(() => expect(screen.getByText('John Doe')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('John Doe'));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Do you own this account?')).toBeInTheDocument()
+    );
+
+    fireEvent.change(screen.getByLabelText('Do you own this account?'), {
+      target: { value: 'yes' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Submit answers' }));
+
+    await waitFor(() =>
+      expect((global.fetch as jest.Mock).mock.calls[2][0]).toContain(
+        '/api/runs/S123/frontend/review/accounts/acct-1/answer'
+      )
+    );
+
+    expect(screen.getByText('Answers saved successfully.')).toBeInTheDocument();
+    expect(screen.getByText('Answered')).toBeInTheDocument();
+  });
+
+  it('shows an error message when fetching the manifest fails', async () => {
     (global.fetch as jest.Mock).mockResolvedValueOnce(
       createFetchResponse({ message: 'boom' }, { ok: false, status: 500, statusText: 'Server error' })
     );

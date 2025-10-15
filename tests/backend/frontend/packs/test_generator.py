@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 from pathlib import Path
+import re
 
 import backend.frontend.packs.generator as generator_module
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
@@ -18,6 +19,66 @@ def _read_stage_pack(base_dir: Path, sid: str, account_id: str) -> tuple[Path, d
     pack_path = base_dir / sid / "frontend" / "review" / "packs" / f"{account_id}.json"
     payload = json.loads(pack_path.read_text(encoding="utf-8"))
     return pack_path, payload
+
+
+def test_build_stage_manifest_scans_review_pack_directory(tmp_path):
+    sid = "SID-123"
+    run_dir = tmp_path / "runs" / sid
+    stage_packs_dir = run_dir / "frontend" / "review" / "packs"
+    stage_responses_dir = run_dir / "frontend" / "review" / "responses"
+    stage_index_path = run_dir / "frontend" / "review" / "index.json"
+
+    pack_one = {
+        "account_id": "idx-001",
+        "holder_name": "Alice Example",
+        "primary_issue": "wrong_account",
+        "questions": [{"id": "ownership"}],
+    }
+    pack_two = {
+        "holder_name": "Bob Example",
+        "primary_issue": "identity_theft",
+    }
+
+    _write_json(stage_packs_dir / "idx-002.json", pack_two)
+    _write_json(stage_packs_dir / "idx-001.json", pack_one)
+    stage_responses_dir.mkdir(parents=True, exist_ok=True)
+
+    generator_module._build_stage_manifest(
+        sid=sid,
+        stage_name="review",
+        run_dir=run_dir,
+        stage_packs_dir=stage_packs_dir,
+        stage_responses_dir=stage_responses_dir,
+        stage_index_path=stage_index_path,
+    )
+
+    manifest_payload = json.loads(stage_index_path.read_text(encoding="utf-8"))
+
+    assert manifest_payload["sid"] == sid
+    assert manifest_payload["stage"] == "review"
+    assert manifest_payload["schema_version"] == "1.0"
+    assert manifest_payload["responses_dir"] == "frontend/review/responses"
+    assert manifest_payload["counts"] == {"packs": 2, "responses": 0}
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", manifest_payload["generated_at"])
+
+    pack_entries = manifest_payload["packs"]
+    assert [entry["account_id"] for entry in pack_entries] == ["idx-001", "idx-002"]
+
+    pack_one_path = stage_packs_dir / "idx-001.json"
+    pack_two_path = stage_packs_dir / "idx-002.json"
+
+    first_entry, second_entry = pack_entries
+    assert first_entry["holder_name"] == "Alice Example"
+    assert first_entry["primary_issue"] == "wrong_account"
+    assert first_entry["path"] == "frontend/review/packs/idx-001.json"
+    assert first_entry["bytes"] == pack_one_path.stat().st_size
+    assert first_entry["has_questions"] is True
+
+    assert second_entry["holder_name"] == "Bob Example"
+    assert second_entry["primary_issue"] == "identity_theft"
+    assert second_entry["path"] == "frontend/review/packs/idx-002.json"
+    assert second_entry["bytes"] == pack_two_path.stat().st_size
+    assert second_entry["has_questions"] is True
 
 
 def test_holder_name_from_raw_lines_prefers_spaced_candidate() -> None:

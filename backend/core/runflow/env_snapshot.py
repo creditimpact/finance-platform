@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from backend.core.paths.frontend_review import get_frontend_review_paths
+
 _LOG = logging.getLogger(__name__)
 
 _MASK_KEYWORDS: tuple[str, ...] = ("KEY", "TOKEN", "SECRET", "PASSWORD")
@@ -82,6 +84,8 @@ def _collect_validation_env() -> dict[str, str]:
 
 def _collect_template_paths(root: Path) -> dict[str, Any]:
     base = root / "<sid>"
+    canonical = get_frontend_review_paths(str(base))
+
     return {
         "runs_root": str(root),
         "templates": {
@@ -89,7 +93,7 @@ def _collect_template_paths(root: Path) -> dict[str, Any]:
             "merge_results": str((base / "ai_packs" / "merge" / "results").resolve()),
             "validation_packs": str((base / "ai_packs" / "validation" / "packs").resolve()),
             "validation_results": str((base / "ai_packs" / "validation" / "results").resolve()),
-            "frontend_dir": str((base / "frontend").resolve()),
+            "frontend_dir": str(Path(canonical["frontend_base"]).resolve()),
         },
     }
 
@@ -141,12 +145,20 @@ def _collect_stage_paths(root: Path, stage: str, sid: str) -> dict[str, Any]:
             "index_file": str((base / "index.json").resolve()),
         }
     elif normalized_stage == "frontend":
-        base = (root / normalized_sid / "frontend").resolve()
+        canonical = get_frontend_review_paths(str(root / normalized_sid))
+        review_base = Path(canonical["review_dir"])
+        packs_dir = Path(canonical["packs_dir"])
+        responses_dir = Path(canonical["responses_dir"])
+        index_path = review_base / "index.json"
+        legacy_index = Path(canonical["index"])
+        base = review_base.resolve()
         payload["frontend"] = {
             "base": str(base),
-            "responses_dir": str((base / "responses").resolve()),
-            "accounts_dir": str((base / "accounts").resolve()),
-            "index_file": str((base / "index.json").resolve()),
+            "packs_dir": str(packs_dir.resolve()),
+            "responses_dir": str(responses_dir.resolve()),
+            "accounts_dir": str(packs_dir.resolve()),
+            "index_file": str(index_path.resolve()),
+            "legacy_index_file": str(legacy_index.resolve()),
         }
     else:  # pragma: no cover - defensive logging
         payload["stage"] = normalized_stage

@@ -6,6 +6,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from backend.core.paths.frontend_review import get_frontend_review_paths
+
 
 @dataclass(frozen=True, slots=True)
 class FrontendStageConfig:
@@ -29,14 +31,23 @@ def load_frontend_stage_config(run_dir: Path | str) -> FrontendStageConfig:
     """Load the configured frontend review stage paths."""
 
     base_dir = Path(run_dir)
+    canonical = get_frontend_review_paths(str(base_dir))
 
-    stage_dir = _resolve_path(base_dir, "FRONTEND_PACKS_STAGE_DIR", default="frontend/review")
-    packs_dir = _resolve_path(base_dir, "FRONTEND_PACKS_DIR", default="frontend/review/packs")
+    stage_dir = _resolve_path(
+        base_dir, "FRONTEND_PACKS_STAGE_DIR", default=canonical["review_dir"]
+    )
+    packs_dir = _resolve_path(
+        base_dir, "FRONTEND_PACKS_DIR", default=canonical["packs_dir"]
+    )
     responses_dir = _resolve_path(
-        base_dir, "FRONTEND_PACKS_RESPONSES_DIR", default="frontend/review/responses"
+        base_dir,
+        "FRONTEND_PACKS_RESPONSES_DIR",
+        default=canonical["responses_dir"],
     )
     index_path = _resolve_path(
-        base_dir, "FRONTEND_PACKS_INDEX", default="frontend/review/index.json"
+        base_dir,
+        "FRONTEND_PACKS_INDEX",
+        default=os.path.join(canonical["review_dir"], "index.json"),
     )
 
     return FrontendStageConfig(

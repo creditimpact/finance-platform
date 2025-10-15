@@ -47,6 +47,7 @@ from backend.api.session_manager import (
 from backend.api.tasks import run_credit_repair_process  # noqa: F401
 from backend.api.tasks import app as celery_app, smoke_task
 from backend.pipeline.runs import RunManifest, persist_manifest
+from backend.core.paths.frontend_review import get_frontend_review_paths
 from backend.frontend.packs.responses import append_frontend_response
 from backend.api.routes_smoke import bp as smoke_bp
 from backend.api.ui_events import ui_event_bp
@@ -104,13 +105,21 @@ def _run_dir_for_sid(sid: str) -> Path:
 
 
 def _frontend_stage_dir(run_dir: Path) -> Path:
-    stage_dir_env = os.getenv("FRONTEND_PACKS_STAGE_DIR", "frontend/review")
-    return run_dir / Path(stage_dir_env)
+    stage_dir_env = os.getenv("FRONTEND_PACKS_STAGE_DIR")
+    if stage_dir_env:
+        candidate = Path(stage_dir_env)
+        if not candidate.is_absolute():
+            candidate = run_dir / candidate
+        return candidate
+
+    canonical = get_frontend_review_paths(str(run_dir))
+    return Path(canonical["review_dir"])
 
 
 def _frontend_stage_index_candidates(run_dir: Path) -> list[Path]:
     candidates: list[Path] = []
-    stage_default = _frontend_stage_dir(run_dir) / "index.json"
+    canonical = get_frontend_review_paths(str(run_dir))
+    stage_default = Path(canonical["review_dir"]) / "index.json"
     candidates.append(stage_default)
 
     index_env = os.getenv("FRONTEND_PACKS_INDEX")
@@ -121,7 +130,7 @@ def _frontend_stage_index_candidates(run_dir: Path) -> list[Path]:
         if env_candidate not in candidates:
             candidates.append(env_candidate)
 
-    legacy_index = run_dir / "frontend" / "index.json"
+    legacy_index = Path(canonical["index"])
     if legacy_index not in candidates:
         candidates.append(legacy_index)
     return candidates
@@ -131,7 +140,8 @@ def _frontend_stage_packs_dir(run_dir: Path) -> Path:
     packs_dir_env = os.getenv("FRONTEND_PACKS_DIR")
     if packs_dir_env:
         return run_dir / Path(packs_dir_env)
-    return _frontend_stage_dir(run_dir) / "packs"
+    canonical = get_frontend_review_paths(str(run_dir))
+    return Path(canonical["packs_dir"])
 
 
 def _is_valid_frontend_account_id(account_id: str) -> bool:

@@ -1,14 +1,25 @@
+import sys
 import time
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
+try:  # pragma: no cover - optional dependency shim for test envs
+    import requests  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    requests = ModuleType("requests")
+    requests.Session = object  # type: ignore[attr-defined]
+    sys.modules["requests"] = requests
+
+from backend.core.paths.frontend_review import ensure_frontend_review_dirs
 from backend.pipeline.runs import (
     RunManifest,
     RUNS_ROOT_ENV,
     MANIFEST_ENV,
     write_breadcrumb,
 )
+from backend.runflow.manifest import update_manifest_frontend
 
 
 def test_run_manifest_basic(tmp_path, monkeypatch):
@@ -80,3 +91,40 @@ def test_write_breadcrumb(tmp_path, monkeypatch):
     breadcrumb = trace_dir / ".manifest"
     write_breadcrumb(m.path, breadcrumb)
     assert breadcrumb.read_text() == str(m.path.resolve())
+
+
+def test_frontend_review_structure(tmp_path, monkeypatch):
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv(RUNS_ROOT_ENV, str(runs_root))
+
+    manifest = RunManifest.for_sid("sid-review")
+    run_dir = runs_root / "sid-review"
+
+    canonical = ensure_frontend_review_dirs(str(run_dir))
+    packs_dir = Path(canonical["packs_dir"])
+    responses_dir = Path(canonical["responses_dir"])
+
+    (packs_dir / "idx-0001.json").write_text("{}")
+    (packs_dir / "idx-0002.json").write_text("{}")
+
+    updated_manifest = update_manifest_frontend(
+        "sid-review",
+        packs_dir=packs_dir,
+        packs_count=0,
+        built=True,
+        last_built_at=None,
+        manifest=manifest,
+    )
+
+    assert packs_dir.exists()
+    pack_files = list(packs_dir.glob("*.json"))
+    assert len(pack_files) == 2
+
+    assert responses_dir.exists()
+
+    frontend_block = updated_manifest.data["frontend"]
+    for key in ("dir", "packs", "results", "index"):
+        assert frontend_block[key]
+    assert frontend_block["packs_count"] > 0
+
+    assert not (run_dir / "frontend" / "accounts").exists()

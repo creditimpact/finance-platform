@@ -10,6 +10,7 @@ import { QUESTION_COPY, type AccountQuestionKey } from './questionCopy';
 
 type PerBureauBlock = {
   per_bureau?: Partial<Record<BureauKey, string | null | undefined>>;
+  consensus?: string | null | undefined;
 };
 
 type DateBlock = Partial<Record<BureauKey, string | null | undefined>>;

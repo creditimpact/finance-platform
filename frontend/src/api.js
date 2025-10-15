@@ -1,7 +1,7 @@
 function getImportMetaEnv() {
   try {
     return new Function('return (typeof import !== "undefined" && import.meta && import.meta.env) || {};')();
-  } catch (err) {
+  } catch {
     return {};
   }
 }
@@ -38,8 +38,8 @@ async function fetchJson(url, init) {
   let parseError = null;
   try {
     data = await response.json();
-  } catch (err) {
-    parseError = err;
+  } catch (error) {
+    parseError = error;
   }
 
   if (!response.ok) {
@@ -93,7 +93,7 @@ export async function uploadReport(email, file) {
   let data = {};
   try {
     data = await res.json();
-  } catch (_) {
+  } catch {
     // swallow JSON parse errors to craft a useful message below
   }
   if (!res.ok || !data?.ok || !data?.session_id) {
@@ -113,7 +113,7 @@ export async function pollResult(sessionId, abortSignal) {
     let data = null;
     try {
       data = await res.json();
-    } catch (_) {
+    } catch {
       // ignore JSON parse errors; handle via status code below
     }
     if (res.status === 404) {
@@ -123,7 +123,7 @@ export async function pollResult(sessionId, abortSignal) {
       throw new Error(data?.message || `Result request failed (${res.status})`);
     }
     return data;
-  } catch (e) {
+  } catch {
     // Network/reset: surface as in-progress to keep UI tolerant
     return { ok: true, status: 'processing' };
   }

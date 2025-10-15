@@ -1,5 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/react';
-import AccountCard from '../components/AccountCard';
+import AccountCard, { type AccountPack } from '../components/AccountCard';
 import samplePack from '../__fixtures__/sampleAccountPack.json';
 
 describe('AccountCard', () => {
@@ -33,5 +33,29 @@ describe('AccountCard', () => {
     render(<AccountCard pack={samplePack} />);
 
     expect(screen.getAllByText('No response yet')).toHaveLength(4);
+  });
+
+  it('ignores consensus fields when computing summaries', () => {
+    const pack: AccountPack = {
+      holder_name: 'Jane Doe',
+      display: {
+        account_type: {
+          per_bureau: {
+            transunion: 'Auto',
+            experian: 'Auto',
+            equifax: 'Boat Loan'
+          },
+          consensus: 'Boat Loan'
+        }
+      }
+    };
+
+    render(<AccountCard pack={pack} />);
+
+    const [accountTypeLabel] = screen.getAllByText('Account type');
+    const accountTypeCell = accountTypeLabel.closest('div');
+
+    expect(accountTypeCell).toHaveTextContent('Auto');
+    expect(accountTypeCell).not.toHaveTextContent('Boat Loan');
   });
 });

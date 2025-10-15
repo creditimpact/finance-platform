@@ -6,6 +6,7 @@ from pathlib import Path
 
 import backend.frontend.packs.generator as generator_module
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
+from backend.frontend.packs.responses import append_frontend_response
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -239,6 +240,75 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert result["built"] is True
     assert result["packs_dir"] == str((runs_root / sid / "frontend").absolute())
     assert isinstance(result["last_built_at"], str)
+
+
+def test_frontend_review_stage_minimal_smoke(tmp_path):
+    runs_root = tmp_path / "runs"
+    sid = "SID-frontend-review-smoke"
+
+    for index in range(2):
+        account_id = f"acct-{index + 1}"
+        account_dir = runs_root / sid / "cases" / "accounts" / str(index)
+        summary_payload = {
+            "account_id": account_id,
+            "labels": {
+                "creditor": f"Creditor {index + 1}",
+                "account_type": {"normalized": "Credit Card"},
+                "status": {"normalized": "Open"},
+            },
+        }
+        bureaus_payload = {
+            "transunion": {
+                "account_number_display": f"****{index + 1}234",
+                "balance_owed": "$123",
+                "date_opened": "2024-01-01",
+                "account_status": "Open",
+                "account_type": "Credit Card",
+            }
+        }
+        _write_json(account_dir / "summary.json", summary_payload)
+        _write_json(account_dir / "bureaus.json", bureaus_payload)
+
+    result = generate_frontend_packs_for_run(sid, runs_root=runs_root)
+    assert result["packs_count"] == 2
+
+    run_dir = runs_root / sid
+    stage_dir = run_dir / "frontend" / "review"
+    stage_packs_dir = stage_dir / "packs"
+    stage_responses_dir = stage_dir / "responses"
+
+    assert stage_dir.is_dir()
+    assert stage_packs_dir.is_dir()
+    assert stage_responses_dir.is_dir()
+
+    pack_files = sorted(stage_packs_dir.glob("*.json"))
+    assert len(pack_files) == 2
+
+    manifest_path = stage_dir / "index.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["counts"]["packs"] == 2
+
+    manifest_entries = {entry["path"]: entry for entry in manifest["packs"]}
+    assert set(manifest_entries) == {
+        f"frontend/review/packs/{path.name}" for path in pack_files
+    }
+
+    for pack_path in pack_files:
+        payload = json.loads(pack_path.read_text(encoding="utf-8"))
+        assert set(payload) == {"account_id", "holder_name", "primary_issue", "display"}
+
+        rel_path = f"frontend/review/packs/{pack_path.name}"
+        entry = manifest_entries[rel_path]
+        assert entry["bytes"] == pack_path.stat().st_size
+        assert entry["path"] == rel_path
+
+    append_frontend_response(run_dir, "acct-1", {"answer": "yes"})
+    append_frontend_response(run_dir, "acct-1", {"answer": "still yes"})
+
+    response_path = stage_responses_dir / "acct-1.jsonl"
+    assert response_path.exists()
+    response_lines = response_path.read_text(encoding="utf-8").splitlines()
+    assert response_lines == ["{\"answer\": \"yes\"}", "{\"answer\": \"still yes\"}"]
 
 
 def test_frontend_runflow_steps_are_condensed(tmp_path, monkeypatch):

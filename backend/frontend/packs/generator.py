@@ -1001,6 +1001,14 @@ def generate_frontend_packs_for_run(
     stage_index_path = config.index_path
     debug_packs_dir = stage_dir / "debug"
 
+    legacy_accounts_dir = run_dir / "frontend" / "accounts"
+    if legacy_accounts_dir.is_dir():
+        log.warning(
+            "FRONTEND_LEGACY_ACCOUNTS_DIR sid=%s path=%s",
+            sid,
+            legacy_accounts_dir,
+        )
+
     legacy_index_env = _env_override("FRONTEND_INDEX_PATH", "FRONTEND_INDEX")
     if legacy_index_env:
         candidate = Path(legacy_index_env)

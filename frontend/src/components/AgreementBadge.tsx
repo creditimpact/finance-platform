@@ -11,10 +11,10 @@ const LABELS: Record<AgreementLevel, string> = {
 };
 
 const TONE_STYLES: Record<AgreementLevel, string> = {
-  all: 'border-transparent bg-slate-200 text-slate-700',
-  majority: 'border-transparent bg-sky-100 text-sky-800',
-  mixed: 'border-transparent bg-amber-100 text-amber-900',
-  none: 'border-transparent bg-slate-100 text-slate-500'
+  all: 'border-transparent bg-slate-200 text-slate-900',
+  majority: 'border-transparent bg-sky-200 text-sky-950',
+  mixed: 'border-transparent bg-amber-200 text-amber-950',
+  none: 'border-transparent bg-slate-100 text-slate-700'
 };
 
 export interface AgreementBadgeProps extends React.HTMLAttributes<HTMLDivElement> {

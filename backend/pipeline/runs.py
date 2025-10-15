@@ -146,7 +146,21 @@ class RunManifest:
                 "exports": {},
                 "logs": {},
             },
-            "env_snapshot": {}
+            "env_snapshot": {},
+            "frontend": {
+                "base": None,
+                "dir": None,
+                "packs": None,
+                "packs_dir": None,
+                "results": None,
+                "results_dir": None,
+                "index": None,
+                "built": False,
+                "packs_count": 0,
+                "counts": {"packs": 0, "responses": 0},
+                "last_built_at": None,
+                "last_responses_at": None,
+            },
         }
         self._update_index(sid)
         (self.path.parent.parent / "current.txt").write_text(sid, encoding="utf-8")

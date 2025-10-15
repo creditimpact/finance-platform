@@ -209,7 +209,7 @@ data from:
 
 * **Merge** – `runs/<SID>/ai_packs/merge/pairs_index.json` (`totals.scored_pairs`).
 * **Validation** – `runs/<SID>/ai_packs/validation/index.json` (sum of pack line counts).
-* **Frontend** – `runs/<SID>/frontend/accounts/*/pack.json` (count of pack files).
+* **Frontend** – `runs/<SID>/frontend/review/packs/*.json` (count of pack files).
 
 If the counters disagree, the stage payload receives an `error` block detailing
 the mismatch. Double-check the referenced files and the upstream producer.

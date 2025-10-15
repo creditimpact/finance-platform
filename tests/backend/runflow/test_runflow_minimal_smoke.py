@@ -174,10 +174,10 @@ def test_frontend_skips_accounts_missing_bureaus(runflow_env: SimpleNamespace) -
 
     assert result["packs_count"] == 1
 
-    index_path = runs_root / sid / "frontend" / "index.json"
+    index_path = runs_root / sid / "frontend" / "review" / "index.json"
     index_payload = json.loads(index_path.read_text(encoding="utf-8"))
     assert index_payload["packs_count"] == 1
-    assert len(index_payload["accounts"]) == 1
+    assert len(index_payload["packs"]) == 1
 
     steps_payload = _load_steps(runs_root, sid)
     frontend_stage = steps_payload["stages"]["frontend"]
@@ -214,11 +214,16 @@ def test_frontend_error_records_runflow_stage_error(
     summary = frontend_stage["summary"]
     assert "error" in summary
     assert summary["error"]["type"] == "RuntimeError"
-    error_steps = [
-        step for step in frontend_stage["steps"] if step.get("name") == "frontend_error"
+    finish_steps = [
+        step
+        for step in frontend_stage["steps"]
+        if step.get("name") == "frontend_review_finish"
     ]
-    assert error_steps, "frontend_error step should be recorded"
-    error_entry = error_steps[0]
+    assert finish_steps, "frontend_review_finish step should be recorded"
+    assert any(step.get("status") == "error" for step in finish_steps)
+    error_entry = next(
+        step for step in finish_steps if step.get("status") == "error"
+    )
     assert error_entry.get("out", {}).get("account_id") == "ERR-1"
     assert error_entry.get("out", {}).get("error_class") == "RuntimeError"
 

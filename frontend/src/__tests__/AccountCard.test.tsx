@@ -3,6 +3,12 @@ import AccountCard, { type AccountPack } from '../components/AccountCard';
 import samplePack from '../__fixtures__/sampleAccountPack.json';
 
 describe('AccountCard', () => {
+  const ORIGINAL_FLAG = process.env.VITE_SHOW_BUREAU_DETAILS;
+
+  afterEach(() => {
+    process.env.VITE_SHOW_BUREAU_DETAILS = ORIGINAL_FLAG;
+  });
+
   it('renders the summary view and bureau grid', () => {
     render(<AccountCard pack={samplePack} />);
 
@@ -57,5 +63,13 @@ describe('AccountCard', () => {
 
     expect(accountTypeCell).toHaveTextContent('Auto');
     expect(accountTypeCell).not.toHaveTextContent('Boat Loan');
+  });
+
+  it('hides the bureau grid when the feature flag is disabled', () => {
+    process.env.VITE_SHOW_BUREAU_DETAILS = '0';
+
+    render(<AccountCard pack={samplePack} />);
+
+    expect(screen.queryByRole('button', { name: /details/i })).not.toBeInTheDocument();
   });
 });

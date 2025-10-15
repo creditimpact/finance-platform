@@ -101,20 +101,40 @@ describe('summarizeField', () => {
 
   it('selects the most informative masked value for account numbers when mixed', () => {
     const triple: BureauTriple = {
-      transunion: '***1234',
-      experian: '***123456',
-      equifax: '***12',
+      transunion: '****',
+      experian: '440066**********',
+      equifax: '44******',
     };
 
     const result = summarize(triple, { kind: 'account_number' });
 
     expect(result).toEqual({
-      summary: '***123456',
+      summary: '440066**********',
       agreement: 'mixed' satisfies Agreement,
       values: {
-        transunion: '***1234',
-        experian: '***123456',
-        equifax: '***12',
+        transunion: '****',
+        experian: '440066**********',
+        equifax: '44******',
+      },
+    });
+  });
+
+  it('breaks ties for equally informative account numbers using bureau order', () => {
+    const triple: BureauTriple = {
+      transunion: '***1111',
+      experian: '***2222',
+      equifax: '***3333',
+    };
+
+    const result = summarize(triple, { kind: 'account_number' });
+
+    expect(result).toEqual({
+      summary: '***1111',
+      agreement: 'mixed' satisfies Agreement,
+      values: {
+        transunion: '***1111',
+        experian: '***2222',
+        equifax: '***3333',
       },
     });
   });

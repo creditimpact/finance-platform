@@ -970,9 +970,25 @@ def generate_frontend_packs_for_run(
     packs_dir_str = str(stage_packs_dir.absolute())
 
     runflow_stage_start("frontend", sid=sid)
-    runflow_step(sid, "frontend", "frontend_review_start")
     current_account_id: str | None = None
     try:
+        account_dirs: list[Path] = (
+            sorted(
+                [path for path in accounts_dir.iterdir() if path.is_dir()],
+                key=_account_sort_key,
+            )
+            if accounts_dir.is_dir()
+            else []
+        )
+        total_accounts = len(account_dirs)
+
+        runflow_step(
+            sid,
+            "frontend",
+            "frontend_review_start",
+            metrics={"accounts": total_accounts},
+        )
+
         if not _frontend_packs_enabled():
             responses_count = _emit_responses_scan(sid, stage_responses_dir)
             summary = {
@@ -1020,16 +1036,6 @@ def generate_frontend_packs_for_run(
 
         lean_enabled = _frontend_packs_lean_enabled()
         debug_mirror_enabled = _frontend_packs_debug_mirror_enabled()
-
-        account_dirs = (
-            sorted(
-                [path for path in accounts_dir.iterdir() if path.is_dir()],
-                key=_account_sort_key,
-            )
-            if accounts_dir.is_dir()
-            else []
-        )
-        total_accounts = len(account_dirs)
 
         if not account_dirs:
             generated_at = _now_iso()
@@ -1354,12 +1360,17 @@ def generate_frontend_packs_for_run(
             except ValueError:
                 relative_stage_pack = str(stage_pack_path)
 
-            runflow_step(
-                sid,
-                "frontend",
-                "frontend_review_pack_created",
-                out={"account": account_id, "path": relative_stage_pack},
-            )
+            if stage_changed:
+                runflow_step(
+                    sid,
+                    "frontend",
+                    "frontend_review_pack_created",
+                    out={
+                        "account_id": account_id,
+                        "bytes": stage_pack_path.stat().st_size,
+                        "path": relative_stage_pack,
+                    },
+                )
 
         build_metrics = {
             "accounts": total_accounts,

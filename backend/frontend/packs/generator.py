@@ -32,7 +32,6 @@ _BUREAU_BADGES: Mapping[str, Mapping[str, str]] = {
 
 _BUREAU_ORDER: tuple[str, ...] = ("transunion", "experian", "equifax")
 
-_FRONTEND_INDEX_SCHEMA_VERSION = 2
 _DISPLAY_SCHEMA_VERSION = "1.2"
 
 
@@ -154,6 +153,17 @@ def _write_json_if_changed(path: Path, payload: Any) -> bool:
     return True
 
 
+def _ensure_frontend_index_redirect_stub(path: Path) -> None:
+    """Write the legacy ``frontend/index.json`` redirect if it is missing."""
+
+    if path.exists():
+        return
+
+    # Backward-compatibility stub for clients still reading the legacy path.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(path, {"redirect": "frontend/review/index.json"})
+
+
 def _relative_to_run_dir(path: Path, run_dir: Path) -> str:
     try:
         return path.relative_to(run_dir).as_posix()
@@ -205,16 +215,33 @@ def _pack_requires_pointer_backfill(payload: Mapping[str, Any]) -> bool:
 def _index_requires_pointer_backfill(
     index_payload: Mapping[str, Any], run_dir: Path
 ) -> bool:
+    candidates: list[Mapping[str, Any]] = []
+
     accounts = index_payload.get("accounts")
-    if not isinstance(accounts, Sequence):
+    if isinstance(accounts, Sequence):
+        for entry in accounts:
+            if isinstance(entry, Mapping):
+                candidates.append(entry)
+
+    packs = index_payload.get("packs")
+    if isinstance(packs, Sequence):
+        for entry in packs:
+            if isinstance(entry, Mapping):
+                candidates.append(entry)
+
+    if not candidates:
         return False
 
-    for entry in accounts:
-        if not isinstance(entry, Mapping):
-            continue
+    seen_paths: set[str] = set()
+    for entry in candidates:
         pack_path_value = entry.get("pack_path")
         if not isinstance(pack_path_value, str):
+            pack_path_value = entry.get("path") if isinstance(entry, Mapping) else None
+        if not isinstance(pack_path_value, str):
             continue
+        if pack_path_value in seen_paths:
+            continue
+        seen_paths.add(pack_path_value)
         if "frontend/accounts/" in pack_path_value:
             return True
         pack_path = _resolve_pack_output_path(pack_path_value, run_dir)
@@ -845,7 +872,8 @@ def _build_stage_manifest(
     stage_packs_dir: Path,
     stage_responses_dir: Path,
     stage_index_path: Path,
-) -> None:
+    question_set: Sequence[Mapping[str, Any]] | None = None,
+) -> Mapping[str, Any]:
     pack_entries: list[dict[str, Any]] = []
 
     if stage_packs_dir.is_dir():
@@ -883,6 +911,12 @@ def _build_stage_manifest(
             if not account_id:
                 account_id = pack_path.stem
 
+            display_payload = None
+            if isinstance(payload, Mapping):
+                raw_display = payload.get("display")
+                if isinstance(raw_display, Mapping):
+                    display_payload = raw_display
+
             pack_entry: dict[str, Any] = {
                 "account_id": account_id,
                 "holder_name": holder_name,
@@ -892,6 +926,11 @@ def _build_stage_manifest(
                 "has_questions": has_questions,
             }
 
+            if display_payload is not None:
+                pack_entry["display"] = display_payload
+
+            pack_entry["pack_path"] = pack_entry["path"]
+
             sha1_digest = _safe_sha1(pack_path)
             if sha1_digest:
                 pack_entry["sha1"] = sha1_digest
@@ -900,6 +939,8 @@ def _build_stage_manifest(
 
     responses_count = _count_frontend_responses(stage_responses_dir)
     responses_dir_value = _relative_to_run_dir(stage_responses_dir, run_dir)
+
+    questions_payload = list(question_set) if question_set is not None else list(_QUESTION_SET)
 
     manifest_core: dict[str, Any] = {
         "sid": sid,
@@ -911,6 +952,8 @@ def _build_stage_manifest(
         },
         "packs": pack_entries,
         "responses_dir": responses_dir_value,
+        "packs_count": len(pack_entries),
+        "questions": questions_payload,
     }
 
     generated_at = _now_iso()
@@ -923,6 +966,8 @@ def _build_stage_manifest(
 
     manifest_payload = {**manifest_core, "generated_at": generated_at}
     _write_json_if_changed(stage_index_path, manifest_payload)
+
+    return manifest_payload
 
 
 def generate_frontend_packs_for_run(
@@ -962,11 +1007,11 @@ def generate_frontend_packs_for_run(
     if legacy_index_env:
         candidate = Path(legacy_index_env)
         if not candidate.is_absolute():
-            index_path = run_dir / candidate
+            redirect_stub_path = run_dir / candidate
         else:
-            index_path = candidate
+            redirect_stub_path = candidate
     else:
-        index_path = run_dir / "frontend" / "index.json"
+        redirect_stub_path = run_dir / "frontend" / "index.json"
     packs_dir_str = str(stage_packs_dir.absolute())
 
     runflow_stage_start("frontend", sid=sid)
@@ -1032,30 +1077,21 @@ def generate_frontend_packs_for_run(
         os.makedirs(stage_packs_dir, exist_ok=True)
         os.makedirs(stage_responses_dir, exist_ok=True)
         stage_index_path.parent.mkdir(parents=True, exist_ok=True)
-        index_path.parent.mkdir(parents=True, exist_ok=True)
 
         lean_enabled = _frontend_packs_lean_enabled()
         debug_mirror_enabled = _frontend_packs_debug_mirror_enabled()
 
         if not account_dirs:
-            generated_at = _now_iso()
-            payload = {
-                "schema_version": _FRONTEND_INDEX_SCHEMA_VERSION,
-                "sid": sid,
-                "generated_at": generated_at,
-                "accounts": [],
-                "packs_count": 0,
-                "questions": _QUESTION_SET,
-            }
-            _write_json_if_changed(index_path, payload)
-            _build_stage_manifest(
+            manifest_payload = _build_stage_manifest(
                 sid=sid,
                 stage_name=stage_name,
                 run_dir=run_dir,
                 stage_packs_dir=stage_packs_dir,
                 stage_responses_dir=stage_responses_dir,
                 stage_index_path=stage_index_path,
+                question_set=_QUESTION_SET,
             )
+            _ensure_frontend_index_redirect_stub(redirect_stub_path)
             runflow_step(
                 sid,
                 "frontend",
@@ -1087,11 +1123,11 @@ def generate_frontend_packs_for_run(
                 "empty_ok": True,
                 "built": True,
                 "packs_dir": packs_dir_str,
-                "last_built_at": generated_at,
+                "last_built_at": manifest_payload.get("generated_at"),
             }
 
-        if not force and index_path.exists():
-            existing = _load_json(index_path)
+        if not force and stage_index_path.exists():
+            existing = _load_json(stage_index_path)
             if existing:
                 pointer_backfill_required = _index_requires_pointer_backfill(
                     existing, run_dir
@@ -1105,12 +1141,15 @@ def generate_frontend_packs_for_run(
                         if isinstance(accounts, list):
                             packs_count = len(accounts)
                     log.debug(
-                        "FRONTEND_PACKS_EXISTS sid=%s path=%s", sid, index_path
+                        "FRONTEND_PACKS_EXISTS sid=%s path=%s",
+                        sid,
+                        stage_index_path,
                     )
                     generated_at = existing.get("generated_at")
                     last_built = (
                         str(generated_at) if isinstance(generated_at, str) else None
                     )
+                    _ensure_frontend_index_redirect_stub(redirect_stub_path)
                     if not debug_mirror_enabled and debug_packs_dir.is_dir():
                         for mirror_path in debug_packs_dir.glob("*.full.json"):
                             try:
@@ -1161,12 +1200,12 @@ def generate_frontend_packs_for_run(
                         "last_built_at": last_built,
                     }
 
-        packs: list[dict[str, Any]] = []
         built_docs = 0
         unchanged_docs = 0
         skipped_missing = 0
         skip_reasons = {"missing_inputs": 0, "no_bureaus": 0}
         write_errors: list[tuple[str, Exception]] = []
+        pack_count = 0
 
         for account_dir in account_dirs:
             summary = _load_json(account_dir / "summary.json")
@@ -1338,22 +1377,7 @@ def generate_frontend_packs_for_run(
             except ValueError:
                 relative_pack = str(stage_pack_path)
 
-            packs.append(
-                {
-                    "account_id": account_id,
-                    "holder_name": display_payload.get("holder_name"),
-                    "primary_issue": display_payload.get("primary_issue"),
-                    "account_number": display_payload.get("account_number"),
-                    "account_type": display_payload.get("account_type"),
-                    "status": display_payload.get("status"),
-                    "balance_owed": {
-                        "per_bureau": display_payload["balance_owed"]["per_bureau"],
-                    },
-                    "date_opened": display_payload["date_opened"],
-                    "closed_date": display_payload["closed_date"],
-                    "pack_path": relative_pack,
-                }
-            )
+            pack_count += 1
 
             try:
                 relative_stage_pack = stage_pack_path.relative_to(run_dir).as_posix()
@@ -1381,41 +1405,16 @@ def generate_frontend_packs_for_run(
         skip_summary = {key: value for key, value in skip_reasons.items() if value}
 
         generated_at = _now_iso()
-        pack_count = len(packs)
-        index_payload_base = {
-            "schema_version": _FRONTEND_INDEX_SCHEMA_VERSION,
-            "sid": sid,
-            "accounts": packs,
-            "packs_count": pack_count,
-            "questions": list(_QUESTION_SET),
-        }
-
-        existing_index = _load_json_payload(index_path)
-        if isinstance(existing_index, Mapping):
-            existing_base = {
-                "schema_version": existing_index.get("schema_version"),
-                "sid": existing_index.get("sid"),
-                "accounts": existing_index.get("accounts"),
-                "packs_count": existing_index.get("packs_count"),
-                "questions": existing_index.get("questions"),
-            }
-            if existing_base == index_payload_base:
-                prior_generated = existing_index.get("generated_at")
-                if isinstance(prior_generated, str):
-                    generated_at = prior_generated
-
-        index_payload = {**index_payload_base, "generated_at": generated_at}
-
-        _write_json_if_changed(index_path, index_payload)
-
-        _build_stage_manifest(
+        manifest_payload = _build_stage_manifest(
             sid=sid,
             stage_name=stage_name,
             run_dir=run_dir,
             stage_packs_dir=stage_packs_dir,
             stage_responses_dir=stage_responses_dir,
             stage_index_path=stage_index_path,
+            question_set=_QUESTION_SET,
         )
+        _ensure_frontend_index_redirect_stub(redirect_stub_path)
         done_status = "error" if write_errors else "success"
         _log_done(sid, pack_count, status=done_status)
 
@@ -1474,7 +1473,7 @@ def generate_frontend_packs_for_run(
             "empty_ok": pack_count == 0,
             "built": True,
             "packs_dir": packs_dir_str,
-            "last_built_at": generated_at,
+            "last_built_at": manifest_payload.get("generated_at"),
         }
     except Exception as exc:
         runflow_step(

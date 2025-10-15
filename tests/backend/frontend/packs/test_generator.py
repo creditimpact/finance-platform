@@ -60,6 +60,8 @@ def test_build_stage_manifest_scans_review_pack_directory(tmp_path):
     assert manifest_payload["responses_dir"] == "frontend/review/responses"
     assert manifest_payload["counts"] == {"packs": 2, "responses": 0}
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", manifest_payload["generated_at"])
+    assert manifest_payload["packs_count"] == 2
+    assert manifest_payload["questions"] == list(generator_module._QUESTION_SET)
 
     pack_entries = manifest_payload["packs"]
     assert [entry["account_id"] for entry in pack_entries] == ["idx-001", "idx-002"]
@@ -71,14 +73,18 @@ def test_build_stage_manifest_scans_review_pack_directory(tmp_path):
     assert first_entry["holder_name"] == "Alice Example"
     assert first_entry["primary_issue"] == "wrong_account"
     assert first_entry["path"] == "frontend/review/packs/idx-001.json"
+    assert first_entry["pack_path"] == "frontend/review/packs/idx-001.json"
     assert first_entry["bytes"] == pack_one_path.stat().st_size
     assert first_entry["has_questions"] is True
+    assert "display" not in first_entry
 
     assert second_entry["holder_name"] == "Bob Example"
     assert second_entry["primary_issue"] == "identity_theft"
     assert second_entry["path"] == "frontend/review/packs/idx-002.json"
+    assert second_entry["pack_path"] == "frontend/review/packs/idx-002.json"
     assert second_entry["bytes"] == pack_two_path.stat().st_size
     assert second_entry["has_questions"] is True
+    assert "display" not in second_entry
 
 
 def test_holder_name_from_raw_lines_prefers_spaced_candidate() -> None:
@@ -218,41 +224,8 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
 
     index_path = runs_root / sid / "frontend" / "index.json"
     assert index_path.exists()
-    index_payload = json.loads(index_path.read_text(encoding="utf-8"))
-    assert index_payload["schema_version"] == generator_module._FRONTEND_INDEX_SCHEMA_VERSION
-    assert index_payload["packs_count"] == 1
-    index_entry = index_payload["accounts"][0]
-    assert list(index_entry.keys()) == [
-        "account_id",
-        "holder_name",
-        "primary_issue",
-        "account_number",
-        "account_type",
-        "status",
-        "balance_owed",
-        "date_opened",
-        "closed_date",
-        "pack_path",
-    ]
-    assert index_entry["pack_path"] == "frontend/review/packs/acct-1.json"
-    assert index_entry["holder_name"] == "John Doe"
-    assert index_entry["primary_issue"] == "wrong_account"
-    assert (
-        index_entry["account_number"]["per_bureau"]
-        == display_block["account_number"]["per_bureau"]
-    )
-    assert (
-        index_entry["account_type"]["per_bureau"]
-        == display_block["account_type"]["per_bureau"]
-    )
-    assert (
-        index_entry["status"]["per_bureau"]
-        == display_block["status"]["per_bureau"]
-    )
-    assert index_entry["balance_owed"] == display_block["balance_owed"]
-    assert index_entry["date_opened"] == display_block["date_opened"]
-    assert index_entry["closed_date"] == display_block["closed_date"]
-    assert index_payload["questions"][1]["id"] == "recognize"
+    stub_payload = json.loads(index_path.read_text(encoding="utf-8"))
+    assert stub_payload == {"redirect": "frontend/review/index.json"}
 
     stage_index_path = runs_root / sid / "frontend" / "review" / "index.json"
     assert stage_index_path.exists()
@@ -260,11 +233,28 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert stage_index_payload["stage"] == "review"
     assert stage_index_payload["counts"]["packs"] == 1
     assert stage_index_payload["counts"]["responses"] == 0
+    assert stage_index_payload["packs_count"] == 1
+    assert stage_index_payload["questions"][1]["id"] == "recognize"
     manifest_entry = stage_index_payload["packs"][0]
     assert manifest_entry["account_id"] == "acct-1"
     assert manifest_entry["holder_name"] == "John Doe"
     assert manifest_entry["primary_issue"] == "wrong_account"
     assert manifest_entry["path"] == "frontend/review/packs/acct-1.json"
+    assert manifest_entry["pack_path"] == "frontend/review/packs/acct-1.json"
+    assert manifest_entry["display"]["holder_name"] == "John Doe"
+    assert manifest_entry["display"]["primary_issue"] == "wrong_account"
+    assert manifest_entry["display"]["account_number"]["per_bureau"] == display_block[
+        "account_number"
+    ]["per_bureau"]
+    assert manifest_entry["display"]["account_type"]["per_bureau"] == display_block[
+        "account_type"
+    ]["per_bureau"]
+    assert manifest_entry["display"]["status"]["per_bureau"] == display_block["status"][
+        "per_bureau"
+    ]
+    assert manifest_entry["display"]["balance_owed"] == display_block["balance_owed"]
+    assert manifest_entry["display"]["date_opened"] == display_block["date_opened"]
+    assert manifest_entry["display"]["closed_date"] == display_block["closed_date"]
 
     responses_dir = runs_root / sid / "frontend" / "review" / "responses"
     assert responses_dir.is_dir()
@@ -427,9 +417,13 @@ def test_frontend_runflow_steps_are_condensed(tmp_path, monkeypatch):
 
         index_path = runs_root / sid / "frontend" / "index.json"
         assert index_path.exists()
-        index_payload = json.loads(index_path.read_text(encoding="utf-8"))
-        assert index_payload["packs_count"] == 1
-        index_entry = index_payload["accounts"][0]
+        stub_payload = json.loads(index_path.read_text(encoding="utf-8"))
+        assert stub_payload == {"redirect": "frontend/review/index.json"}
+
+        manifest_path = runs_root / sid / "frontend" / "review" / "index.json"
+        manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert manifest_payload["packs_count"] == 1
+        index_entry = manifest_payload["packs"][0]
         assert index_entry["pack_path"] == "frontend/review/packs/acct-1.json"
 
         steps_path = runs_root / sid / "runflow_steps.json"
@@ -692,10 +686,18 @@ def test_generate_frontend_packs_backfills_missing_pointers(tmp_path, monkeypatc
     assert "pointers" not in stage_payload
     assert "questions" not in stage_payload
 
-    index_payload = json.loads(
-        (runs_root / sid / "frontend" / "index.json").read_text(encoding="utf-8")
+    legacy_index_path = runs_root / sid / "frontend" / "index.json"
+    index_payload = json.loads(legacy_index_path.read_text(encoding="utf-8"))
+    assert index_payload == legacy_index_payload
+
+    stage_manifest = json.loads(
+        (runs_root / sid / "frontend" / "review" / "index.json").read_text(
+            encoding="utf-8"
+        )
     )
-    assert index_payload["accounts"][0]["pack_path"] == "frontend/review/packs/acct-legacy.json"
+    manifest_entry = stage_manifest["packs"][0]
+    assert manifest_entry["path"] == "frontend/review/packs/acct-legacy.json"
+    assert manifest_entry["pack_path"] == "frontend/review/packs/acct-legacy.json"
     assert result["packs_count"] == 1
 
 
@@ -806,26 +808,24 @@ def test_generate_frontend_packs_holder_name_fallback(tmp_path):
     assert pack_payload["primary_issue"] == "identity_theft"
 
     index_path = runs_root / sid / "frontend" / "index.json"
-    index_payload = json.loads(index_path.read_text(encoding="utf-8"))
-    assert index_payload["schema_version"] == generator_module._FRONTEND_INDEX_SCHEMA_VERSION
-    index_entry = index_payload["accounts"][0]
+    stub_payload = json.loads(index_path.read_text(encoding="utf-8"))
+    assert stub_payload == {"redirect": "frontend/review/index.json"}
 
-    assert index_entry["holder_name"] == "JANE SAMPLE"
-    assert index_entry["primary_issue"] == "identity_theft"
-    assert index_entry["account_number"] == {
-        "per_bureau": {
-            "transunion": "--",
-            "experian": "--",
-            "equifax": "****5678",
-        },
-        "consensus": "****5678",
+    manifest_path = runs_root / sid / "frontend" / "review" / "index.json"
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_entry = manifest_payload["packs"][0]
+
+    assert manifest_entry["display"]["holder_name"] == "JANE SAMPLE"
+    assert manifest_entry["display"]["primary_issue"] == "identity_theft"
+    assert manifest_entry["display"]["account_number"]["per_bureau"] == {
+        "transunion": "--",
+        "experian": "--",
+        "equifax": "****5678",
     }
-    assert index_entry["balance_owed"] == {
-        "per_bureau": {
-            "transunion": "--",
-            "experian": "--",
-            "equifax": "$75",
-        }
+    assert manifest_entry["display"]["balance_owed"]["per_bureau"] == {
+        "transunion": "--",
+        "experian": "--",
+        "equifax": "$75",
     }
 
     assert result["packs_count"] == 1
@@ -840,8 +840,7 @@ def test_generate_frontend_packs_handles_missing_accounts(tmp_path):
     index_path = runs_root / sid / "frontend" / "index.json"
     assert index_path.exists()
     payload = json.loads(index_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == generator_module._FRONTEND_INDEX_SCHEMA_VERSION
-    assert payload["accounts"] == []
+    assert payload == {"redirect": "frontend/review/index.json"}
     assert result["status"] == "success"
     assert result["packs_count"] == 0
     assert result["empty_ok"] is True
@@ -855,6 +854,9 @@ def test_generate_frontend_packs_handles_missing_accounts(tmp_path):
     assert stage_index_path.exists()
     stage_payload = json.loads(stage_index_path.read_text(encoding="utf-8"))
     assert stage_payload["counts"]["packs"] == 0
+    assert stage_payload["packs_count"] == 0
+    assert stage_payload["packs"] == []
+    assert stage_payload["questions"] == list(generator_module._QUESTION_SET)
 
 
 def test_generate_frontend_packs_respects_feature_flag(tmp_path, monkeypatch):
@@ -958,28 +960,26 @@ def test_generate_frontend_packs_continues_on_pack_write_failure(tmp_path, monke
     assert successful_pack.exists()
 
     index_path = runs_root / sid / "frontend" / "index.json"
-    index_payload = json.loads(index_path.read_text(encoding="utf-8"))
+    stub_payload = json.loads(index_path.read_text(encoding="utf-8"))
+    assert stub_payload == {"redirect": "frontend/review/index.json"}
 
-    assert index_payload["schema_version"] == generator_module._FRONTEND_INDEX_SCHEMA_VERSION
-    assert index_payload["packs_count"] == 1
-    index_entry = index_payload["accounts"][0]
+    manifest_path = runs_root / sid / "frontend" / "review" / "index.json"
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest_payload["packs_count"] == 1
+    index_entry = manifest_payload["packs"][0]
     assert index_entry["account_id"] == "acct-success"
-    assert index_entry["holder_name"] == ""
-    assert index_entry["primary_issue"] == "late_payment"
-    assert index_entry["account_number"] == {
-        "per_bureau": {
-            "transunion": "****9999",
-            "experian": "--",
-            "equifax": "--",
-        },
-        "consensus": "****9999",
+    assert index_entry["display"]["holder_name"] == ""
+    assert index_entry["display"]["primary_issue"] == "late_payment"
+    assert index_entry["display"]["account_number"]["per_bureau"] == {
+        "transunion": "****9999",
+        "experian": "--",
+        "equifax": "--",
     }
-    assert index_entry["balance_owed"] == {
-        "per_bureau": {
-            "transunion": "$50",
-            "experian": "--",
-            "equifax": "--",
-        }
+    assert index_entry["display"]["balance_owed"]["per_bureau"] == {
+        "transunion": "$50",
+        "experian": "--",
+        "equifax": "--",
     }
 
     assert result["status"] == "success"

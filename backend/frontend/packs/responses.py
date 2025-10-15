@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 from typing import Mapping, MutableSequence
 
+from backend.frontend.packs.config import load_frontend_stage_config
+
 
 def _sanitize_account_id(account_id: str) -> str:
     trimmed = account_id.strip() if isinstance(account_id, str) else ""
@@ -19,12 +21,8 @@ def _sanitize_account_id(account_id: str) -> str:
 
 
 def _resolve_stage_responses_dir(run_dir: Path) -> Path:
-    responses_dir_env = os.getenv("FRONTEND_PACKS_RESPONSES_DIR")
-    if responses_dir_env:
-        return run_dir / Path(responses_dir_env)
-
-    stage_dir_env = os.getenv("FRONTEND_PACKS_STAGE_DIR", "frontend/review")
-    return run_dir / Path(stage_dir_env) / "responses"
+    config = load_frontend_stage_config(run_dir)
+    return config.responses_dir
 
 
 def _resolve_legacy_responses_dir(run_dir: Path) -> Path:

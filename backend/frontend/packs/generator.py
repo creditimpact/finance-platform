@@ -21,6 +21,7 @@ from backend.core.runflow.io import (
     runflow_stage_error,
     runflow_stage_start,
 )
+from backend.frontend.packs.config import load_frontend_stage_config
 
 log = logging.getLogger(__name__)
 
@@ -991,16 +992,12 @@ def generate_frontend_packs_for_run(
 
     stage_name = _env_override("FRONTEND_STAGE_NAME", "FRONTEND_STAGE", default="review")
 
-    stage_dir = run_dir / Path(os.getenv("FRONTEND_PACKS_STAGE_DIR", "frontend/review"))
-    stage_packs_dir = run_dir / Path(
-        os.getenv("FRONTEND_PACKS_DIR", "frontend/review/packs")
-    )
-    stage_responses_dir = run_dir / Path(
-        os.getenv("FRONTEND_PACKS_RESPONSES_DIR", "frontend/review/responses")
-    )
-    stage_index_path = run_dir / Path(
-        os.getenv("FRONTEND_PACKS_INDEX", "frontend/review/index.json")
-    )
+    config = load_frontend_stage_config(run_dir)
+
+    stage_dir = config.stage_dir
+    stage_packs_dir = config.packs_dir
+    stage_responses_dir = config.responses_dir
+    stage_index_path = config.index_path
     debug_packs_dir = stage_dir / "debug"
 
     legacy_index_env = _env_override("FRONTEND_INDEX_PATH", "FRONTEND_INDEX")

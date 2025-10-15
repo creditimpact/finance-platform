@@ -189,6 +189,8 @@ def _resolve_pack_output_path(pack_path: str, run_dir: Path) -> Path:
 
 def _pack_requires_pointer_backfill(payload: Mapping[str, Any]) -> bool:
     pointers = payload.get("pointers") if isinstance(payload, Mapping) else None
+    if pointers is None:
+        return False
     if not isinstance(pointers, Mapping):
         return True
 
@@ -213,6 +215,8 @@ def _index_requires_pointer_backfill(
         pack_path_value = entry.get("pack_path")
         if not isinstance(pack_path_value, str):
             continue
+        if "frontend/accounts/" in pack_path_value:
+            return True
         pack_path = _resolve_pack_output_path(pack_path_value, run_dir)
         pack_payload = _load_json_payload(pack_path)
         if not isinstance(pack_payload, Mapping):
@@ -932,7 +936,6 @@ def generate_frontend_packs_for_run(
     base_root = _resolve_runs_root(runs_root)
     run_dir = base_root / sid
     accounts_dir = run_dir / "cases" / "accounts"
-    frontend_dir = run_dir / "frontend"
 
     def _env_override(*names: str, default: str | None = None) -> str | None:
         for name in names:
@@ -942,53 +945,18 @@ def generate_frontend_packs_for_run(
         return default
 
     stage_name = _env_override("FRONTEND_STAGE_NAME", "FRONTEND_STAGE", default="review")
-    stage_dir_env = _env_override(
-        "FRONTEND_PACKS_STAGE_DIR", "FRONTEND_STAGE_DIR", default="frontend/review"
+
+    stage_dir = run_dir / Path(os.getenv("FRONTEND_PACKS_STAGE_DIR", "frontend/review"))
+    stage_packs_dir = run_dir / Path(
+        os.getenv("FRONTEND_PACKS_DIR", "frontend/review/packs")
     )
-    stage_dir = run_dir / Path(stage_dir_env)
-
-    packs_dir_env = _env_override(
-        "FRONTEND_PACKS_DIR",
-        "FRONTEND_ACCOUNTS_DIR",
-        "FRONTEND_PACKS_PATH",
+    stage_responses_dir = run_dir / Path(
+        os.getenv("FRONTEND_PACKS_RESPONSES_DIR", "frontend/review/responses")
     )
-    if packs_dir_env:
-        stage_packs_dir = run_dir / Path(packs_dir_env)
-    else:
-        stage_packs_dir = stage_dir / "packs"
-
-    responses_dir_env = _env_override(
-        "FRONTEND_PACKS_RESPONSES_DIR", "FRONTEND_RESPONSES_DIR"
+    stage_index_path = run_dir / Path(
+        os.getenv("FRONTEND_PACKS_INDEX", "frontend/review/index.json")
     )
-    if responses_dir_env:
-        stage_responses_dir = run_dir / Path(responses_dir_env)
-    else:
-        stage_responses_dir = stage_dir / "responses"
-
-    index_path_env = _env_override(
-        "FRONTEND_PACKS_INDEX", "FRONTEND_INDEX_PATH", "FRONTEND_INDEX"
-    )
-    stage_index_path = stage_dir / "index.json"
-    if index_path_env:
-        candidate = Path(index_path_env)
-        if not candidate.is_absolute() and candidate.as_posix() == "frontend/index.json":
-            stage_index_path = stage_dir / "index.json"
-        else:
-            if not candidate.is_absolute():
-                candidate = run_dir / candidate
-            stage_index_path = candidate
-
-    legacy_accounts_env = _env_override("FRONTEND_ACCOUNTS_DIR")
-    if legacy_accounts_env:
-        accounts_output_dir = run_dir / Path(legacy_accounts_env)
-    else:
-        accounts_output_dir = frontend_dir / "accounts"
-
-    legacy_responses_env = _env_override("FRONTEND_RESPONSES_DIR")
-    if legacy_responses_env:
-        responses_dir = run_dir / Path(legacy_responses_env)
-    else:
-        responses_dir = frontend_dir / "responses"
+    debug_packs_dir = stage_dir / "debug"
 
     legacy_index_env = _env_override("FRONTEND_INDEX_PATH", "FRONTEND_INDEX")
     if legacy_index_env:
@@ -998,14 +966,15 @@ def generate_frontend_packs_for_run(
         else:
             index_path = candidate
     else:
-        index_path = frontend_dir / "index.json"
-    packs_dir_str = str(frontend_dir.absolute())
+        index_path = run_dir / "frontend" / "index.json"
+    packs_dir_str = str(stage_packs_dir.absolute())
 
     runflow_stage_start("frontend", sid=sid)
+    runflow_step(sid, "frontend", "frontend_review_start")
     current_account_id: str | None = None
     try:
         if not _frontend_packs_enabled():
-            responses_count = _emit_responses_scan(sid, responses_dir)
+            responses_count = _emit_responses_scan(sid, stage_responses_dir)
             summary = {
                 "packs_count": 0,
                 "responses_received": responses_count,
@@ -1044,12 +1013,10 @@ def generate_frontend_packs_for_run(
             }
 
         stage_dir.mkdir(parents=True, exist_ok=True)
-        stage_packs_dir.mkdir(parents=True, exist_ok=True)
-        stage_responses_dir.mkdir(parents=True, exist_ok=True)
+        os.makedirs(stage_packs_dir, exist_ok=True)
+        os.makedirs(stage_responses_dir, exist_ok=True)
         stage_index_path.parent.mkdir(parents=True, exist_ok=True)
-
-        accounts_output_dir.mkdir(parents=True, exist_ok=True)
-        responses_dir.mkdir(parents=True, exist_ok=True)
+        index_path.parent.mkdir(parents=True, exist_ok=True)
 
         lean_enabled = _frontend_packs_lean_enabled()
         debug_mirror_enabled = _frontend_packs_debug_mirror_enabled()
@@ -1095,7 +1062,7 @@ def generate_frontend_packs_for_run(
                 "frontend_review_finish",
                 metrics={"packs": 0},
             )
-            responses_count = _emit_responses_scan(sid, responses_dir)
+            responses_count = _emit_responses_scan(sid, stage_responses_dir)
             summary = {
                 "packs_count": 0,
                 "responses_received": responses_count,
@@ -1138,8 +1105,8 @@ def generate_frontend_packs_for_run(
                     last_built = (
                         str(generated_at) if isinstance(generated_at, str) else None
                     )
-                    if not debug_mirror_enabled:
-                        for mirror_path in accounts_output_dir.glob("*/pack.full.json"):
+                    if not debug_mirror_enabled and debug_packs_dir.is_dir():
+                        for mirror_path in debug_packs_dir.glob("*.full.json"):
                             try:
                                 mirror_path.unlink()
                             except FileNotFoundError:
@@ -1165,7 +1132,7 @@ def generate_frontend_packs_for_run(
                         metrics={"packs": packs_count},
                         out={"cache_hit": True},
                     )
-                    responses_count = _emit_responses_scan(sid, responses_dir)
+                    responses_count = _emit_responses_scan(sid, stage_responses_dir)
                     summary = {
                         "packs_count": packs_count,
                         "responses_received": responses_count,
@@ -1314,14 +1281,6 @@ def generate_frontend_packs_for_run(
                     issues=issues if issues else None,
                 )
 
-            lean_pack_payload = build_lean_pack_doc(
-                holder_name=display_holder_name,
-                primary_issue=display_primary_issue,
-                display_payload=display_payload,
-                pointers=pointers,
-                questions=_QUESTION_SET,
-            )
-
             stage_pack_payload = build_stage_pack_doc(
                 account_id=account_id,
                 holder_name=display_holder_name,
@@ -1329,42 +1288,20 @@ def generate_frontend_packs_for_run(
                 display_payload=display_payload,
             )
 
-            if lean_enabled:
-                pack_payload = lean_pack_payload
-            else:
-                if full_pack_payload is None:
-                    full_pack_payload = build_pack_doc(
-                        sid=sid,
-                        account_id=account_id,
-                        creditor_name=creditor_name_value,
-                        account_type=account_type_value,
-                        status=status_value,
-                        bureau_summary=bureau_summary,
-                        holder_name=holder_name,
-                        primary_issue=primary_issue,
-                        display_payload=display_payload,
-                        pointers=pointers,
-                        issues=issues if issues else None,
-                    )
-                pack_payload = full_pack_payload
-
-            account_dirname = _safe_account_dirname(account_id, account_dir.name)
-            pack_dir = accounts_output_dir / account_dirname
-            pack_path = pack_dir / "pack.json"
-            stage_pack_path = stage_packs_dir / f"{account_dirname}.json"
+            account_filename = _safe_account_dirname(account_id, account_dir.name)
+            stage_pack_path = stage_packs_dir / f"{account_filename}.json"
 
             try:
-                pack_dir.mkdir(parents=True, exist_ok=True)
-                legacy_changed = _write_json_if_changed(pack_path, pack_payload)
                 stage_changed = _write_json_if_changed(
                     stage_pack_path, stage_pack_payload
                 )
-                changed = legacy_changed or stage_changed
+                changed = stage_changed
                 if debug_mirror_enabled and full_pack_payload is not None:
-                    mirror_path = pack_dir / "pack.full.json"
+                    debug_packs_dir.mkdir(parents=True, exist_ok=True)
+                    mirror_path = debug_packs_dir / f"{account_filename}.full.json"
                     _write_json_if_changed(mirror_path, full_pack_payload)
                 elif not debug_mirror_enabled:
-                    mirror_path = pack_dir / "pack.full.json"
+                    mirror_path = debug_packs_dir / f"{account_filename}.full.json"
                     try:
                         mirror_path.unlink()
                     except FileNotFoundError:
@@ -1380,7 +1317,7 @@ def generate_frontend_packs_for_run(
                     "FRONTEND_PACK_WRITE_FAILED sid=%s account=%s path=%s",
                     sid,
                     account_id,
-                    pack_path,
+                    stage_pack_path,
                 )
                 write_errors.append((account_id, exc))
                 continue
@@ -1391,9 +1328,9 @@ def generate_frontend_packs_for_run(
                 unchanged_docs += 1
 
             try:
-                relative_pack = pack_path.relative_to(run_dir).as_posix()
+                relative_pack = stage_pack_path.relative_to(run_dir).as_posix()
             except ValueError:
-                relative_pack = str(pack_path)
+                relative_pack = str(stage_pack_path)
 
             packs.append(
                 {
@@ -1500,7 +1437,7 @@ def generate_frontend_packs_for_run(
             ),
         )
 
-        responses_count = _emit_responses_scan(sid, responses_dir)
+        responses_count = _emit_responses_scan(sid, stage_responses_dir)
         summary = {
             "packs_count": pack_count,
             "responses_received": responses_count,

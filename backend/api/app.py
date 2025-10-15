@@ -107,11 +107,16 @@ def _frontend_stage_dir(run_dir: Path) -> Path:
 
 def _frontend_stage_index_candidates(run_dir: Path) -> list[Path]:
     candidates: list[Path] = []
+    stage_default = _frontend_stage_dir(run_dir) / "index.json"
+    candidates.append(stage_default)
+
     index_env = os.getenv("FRONTEND_PACKS_INDEX")
     if index_env:
-        candidates.append(run_dir / Path(index_env))
-    else:
-        candidates.append(_frontend_stage_dir(run_dir) / "index.json")
+        env_candidate = Path(index_env)
+        if not env_candidate.is_absolute():
+            env_candidate = run_dir / env_candidate
+        if env_candidate not in candidates:
+            candidates.append(env_candidate)
 
     legacy_index = run_dir / "frontend" / "index.json"
     if legacy_index not in candidates:

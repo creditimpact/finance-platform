@@ -328,6 +328,9 @@ def runflow_step(
             allowed_success_steps = {
                 "merge_scoring_start",
                 "acctnum_normalize",
+                "acctnum_match_level",
+                "acctnum_pairs_summary",
+                "no_merge_candidates",
                 "pack_create",
                 "merge_scoring_finish",
             }

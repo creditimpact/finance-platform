@@ -7,6 +7,7 @@ import BureauGrid from './BureauGrid';
 import { AgreementLevel, BUREAUS, BureauKey, MISSING_VALUE } from './accountFieldTypes';
 import { summarizeField as summarizeBureauField, type BureauTriple } from '../utils/bureauSummary';
 import { QUESTION_COPY, type AccountQuestionKey } from './questionCopy';
+import { shouldShowBureauDetails } from '../config/featureFlags';
 
 type PerBureauBlock = {
   per_bureau?: Partial<Record<BureauKey, string | null | undefined>>;
@@ -129,16 +130,20 @@ export function AccountCard({ pack }: AccountCardProps) {
     );
   }, [display]);
 
+  const showBureauDetails = React.useMemo(() => shouldShowBureauDetails(), []);
+
   const hasDisagreement = fieldSummaries.some(
     (field) => field.agreement === 'majority' || field.agreement === 'mixed'
   );
 
-  const [expanded, setExpanded] = React.useState(hasDisagreement);
+  const [expanded, setExpanded] = React.useState(showBureauDetails && hasDisagreement);
   const detailsId = React.useId();
 
   React.useEffect(() => {
-    setExpanded(hasDisagreement);
-  }, [hasDisagreement]);
+    if (showBureauDetails) {
+      setExpanded(hasDisagreement);
+    }
+  }, [hasDisagreement, showBureauDetails]);
 
   const accountNumberSummary = React.useMemo(() => {
     const result = summarizeBureauField(toBureauTriple(display.account_number), {
@@ -176,33 +181,35 @@ export function AccountCard({ pack }: AccountCardProps) {
           ))}
         </div>
 
-        <div className="space-y-3">
-          <button
-            type="button"
-            className="flex items-center gap-2 text-sm font-semibold text-slate-700 transition hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2"
-            onClick={() => setExpanded((state) => !state)}
-            aria-expanded={expanded}
-            aria-controls={detailsId}
-          >
-            <span>{expanded ? 'Hide details' : 'See details'}</span>
-            <ChevronDownIcon className={cn('transition-transform', expanded ? 'rotate-180' : 'rotate-0')} />
-            {hasDisagreement ? (
-              <Badge className="bg-amber-100 text-amber-900">Disagreement</Badge>
-            ) : null}
-          </button>
+        {showBureauDetails ? (
+          <div className="space-y-3">
+            <button
+              type="button"
+              className="flex items-center gap-2 text-sm font-semibold text-slate-700 transition hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2"
+              onClick={() => setExpanded((state) => !state)}
+              aria-expanded={expanded}
+              aria-controls={detailsId}
+            >
+              <span>{expanded ? 'Hide details' : 'See details'}</span>
+              <ChevronDownIcon className={cn('transition-transform', expanded ? 'rotate-180' : 'rotate-0')} />
+              {hasDisagreement ? (
+                <Badge className="bg-amber-100 text-amber-900">Disagreement</Badge>
+              ) : null}
+            </button>
 
-          {expanded ? (
-            <BureauGrid
-              id={detailsId}
-              fields={fieldSummaries.map((field) => ({
-                fieldKey: field.key,
-                label: field.label,
-                values: field.values,
-                agreement: field.agreement
-              }))}
-            />
-          ) : null}
-        </div>
+            {expanded ? (
+              <BureauGrid
+                id={detailsId}
+                fields={fieldSummaries.map((field) => ({
+                  fieldKey: field.key,
+                  label: field.label,
+                  values: field.values,
+                  agreement: field.agreement
+                }))}
+              />
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="space-y-4">
           <h4 className="text-base font-semibold text-slate-900">Tell us about this account</h4>

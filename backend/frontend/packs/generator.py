@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from backend.core.io.json_io import _atomic_write_json
-from backend.core.paths.frontend_review import get_frontend_review_paths
+from backend.core.paths.frontend_review import ensure_frontend_review_dirs
 from backend.core.runflow import runflow_step
 from backend.core.runflow.io import (
     compose_hint,
@@ -1009,7 +1009,7 @@ def generate_frontend_packs_for_run(
         else:
             redirect_stub_path = candidate
     else:
-        canonical_paths = get_frontend_review_paths(str(run_dir))
+        canonical_paths = ensure_frontend_review_dirs(str(run_dir))
         redirect_stub_path = Path(canonical_paths["index"])
     packs_dir_str = str(stage_packs_dir.absolute())
 

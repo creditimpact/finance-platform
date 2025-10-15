@@ -1,7 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import ReviewPage from './ReviewPage';
-import { emitUiEvent } from '../telemetry/uiTelemetry';
 
 jest.mock('../api', () => ({
   submitExplanations: jest.fn(),

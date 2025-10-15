@@ -934,23 +934,40 @@ def generate_frontend_packs_for_run(
     accounts_dir = run_dir / "cases" / "accounts"
     frontend_dir = run_dir / "frontend"
 
-    stage_name = os.getenv("FRONTEND_STAGE_NAME", "review")
-    stage_dir_env = os.getenv("FRONTEND_PACKS_STAGE_DIR", "frontend/review")
+    def _env_override(*names: str, default: str | None = None) -> str | None:
+        for name in names:
+            value = os.getenv(name)
+            if value:
+                return value
+        return default
+
+    stage_name = _env_override("FRONTEND_STAGE_NAME", "FRONTEND_STAGE", default="review")
+    stage_dir_env = _env_override(
+        "FRONTEND_PACKS_STAGE_DIR", "FRONTEND_STAGE_DIR", default="frontend/review"
+    )
     stage_dir = run_dir / Path(stage_dir_env)
 
-    packs_dir_env = os.getenv("FRONTEND_PACKS_DIR")
+    packs_dir_env = _env_override(
+        "FRONTEND_PACKS_DIR",
+        "FRONTEND_ACCOUNTS_DIR",
+        "FRONTEND_PACKS_PATH",
+    )
     if packs_dir_env:
         stage_packs_dir = run_dir / Path(packs_dir_env)
     else:
         stage_packs_dir = stage_dir / "packs"
 
-    responses_dir_env = os.getenv("FRONTEND_PACKS_RESPONSES_DIR")
+    responses_dir_env = _env_override(
+        "FRONTEND_PACKS_RESPONSES_DIR", "FRONTEND_RESPONSES_DIR"
+    )
     if responses_dir_env:
         stage_responses_dir = run_dir / Path(responses_dir_env)
     else:
         stage_responses_dir = stage_dir / "responses"
 
-    index_path_env = os.getenv("FRONTEND_PACKS_INDEX")
+    index_path_env = _env_override(
+        "FRONTEND_PACKS_INDEX", "FRONTEND_INDEX_PATH", "FRONTEND_INDEX"
+    )
     stage_index_path = stage_dir / "index.json"
     if index_path_env:
         candidate = Path(index_path_env)
@@ -961,9 +978,27 @@ def generate_frontend_packs_for_run(
                 candidate = run_dir / candidate
             stage_index_path = candidate
 
-    accounts_output_dir = frontend_dir / "accounts"
-    responses_dir = frontend_dir / "responses"
-    index_path = frontend_dir / "index.json"
+    legacy_accounts_env = _env_override("FRONTEND_ACCOUNTS_DIR")
+    if legacy_accounts_env:
+        accounts_output_dir = run_dir / Path(legacy_accounts_env)
+    else:
+        accounts_output_dir = frontend_dir / "accounts"
+
+    legacy_responses_env = _env_override("FRONTEND_RESPONSES_DIR")
+    if legacy_responses_env:
+        responses_dir = run_dir / Path(legacy_responses_env)
+    else:
+        responses_dir = frontend_dir / "responses"
+
+    legacy_index_env = _env_override("FRONTEND_INDEX_PATH", "FRONTEND_INDEX")
+    if legacy_index_env:
+        candidate = Path(legacy_index_env)
+        if not candidate.is_absolute():
+            index_path = run_dir / candidate
+        else:
+            index_path = candidate
+    else:
+        index_path = frontend_dir / "index.json"
     packs_dir_str = str(frontend_dir.absolute())
 
     runflow_stage_start("frontend", sid=sid)

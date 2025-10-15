@@ -47,10 +47,8 @@ from backend.api.session_manager import (
 from backend.api.tasks import run_credit_repair_process  # noqa: F401
 from backend.api.tasks import app as celery_app, smoke_task
 from backend.pipeline.runs import RunManifest, persist_manifest
-from backend.core.paths.frontend_review import (
-    ensure_frontend_review_dirs,
-    get_frontend_review_paths,
-)
+from backend.core.paths.frontend_review import get_frontend_review_paths
+from backend.frontend.packs.config import load_frontend_stage_config
 from backend.api.routes_smoke import bp as smoke_bp
 from backend.api.ui_events import ui_event_bp
 from backend.core import orchestrators as orch
@@ -79,6 +77,7 @@ with open(SCHEMA_DIR / "problem_account.json") as _f:
 
 
 FRONTEND_ACCOUNT_ID_PATTERN = re.compile(r"^idx-\d{3}$")
+FRONTEND_PACK_FILENAME_PATTERN = re.compile(r"^idx-\d{3}\.json$")
 
 
 _request_counts: dict[str, list[float]] = defaultdict(list)
@@ -107,43 +106,32 @@ def _run_dir_for_sid(sid: str) -> Path:
 
 
 def _frontend_stage_dir(run_dir: Path) -> Path:
-    stage_dir_env = os.getenv("FRONTEND_PACKS_STAGE_DIR")
-    if stage_dir_env:
-        candidate = Path(stage_dir_env)
-        if not candidate.is_absolute():
-            candidate = run_dir / candidate
-        return candidate
-
-    canonical = get_frontend_review_paths(str(run_dir))
-    return Path(canonical["review_dir"])
+    config = load_frontend_stage_config(run_dir)
+    return config.stage_dir
 
 
 def _frontend_stage_index_candidates(run_dir: Path) -> list[Path]:
+    config = load_frontend_stage_config(run_dir)
     candidates: list[Path] = []
-    canonical = get_frontend_review_paths(str(run_dir))
-    stage_default = Path(canonical["review_dir"]) / "index.json"
-    candidates.append(stage_default)
 
-    index_env = os.getenv("FRONTEND_PACKS_INDEX")
-    if index_env:
-        env_candidate = Path(index_env)
-        if not env_candidate.is_absolute():
-            env_candidate = run_dir / env_candidate
-        if env_candidate not in candidates:
-            candidates.append(env_candidate)
+    if config.index_path not in candidates:
+        candidates.append(config.index_path)
+
+    canonical = get_frontend_review_paths(str(run_dir))
+    review_index = Path(canonical["review_dir"]) / "index.json"
+    if review_index not in candidates:
+        candidates.append(review_index)
 
     legacy_index = Path(canonical["index"])
     if legacy_index not in candidates:
         candidates.append(legacy_index)
+
     return candidates
 
 
 def _frontend_stage_packs_dir(run_dir: Path) -> Path:
-    packs_dir_env = os.getenv("FRONTEND_PACKS_DIR")
-    if packs_dir_env:
-        return run_dir / Path(packs_dir_env)
-    canonical = get_frontend_review_paths(str(run_dir))
-    return Path(canonical["packs_dir"])
+    config = load_frontend_stage_config(run_dir)
+    return config.packs_dir
 
 
 def _is_valid_frontend_account_id(account_id: str) -> bool:
@@ -404,8 +392,8 @@ def api_frontend_review_answer(sid: str, account_id: str):
     if client_ts is not None:
         record["client_ts"] = client_ts
 
-    canonical_paths = ensure_frontend_review_dirs(str(run_dir))
-    responses_dir = Path(canonical_paths["responses_dir"])
+    stage_config = load_frontend_stage_config(run_dir)
+    responses_dir = stage_config.responses_dir
     responses_dir.mkdir(parents=True, exist_ok=True)
     filename = _response_filename_for_account(account_id)
     resp_path = responses_dir / filename
@@ -791,6 +779,54 @@ def create_app() -> Flask:
             return jsonify({"status": "error", "message": "Too Many Requests"}), 429
         recent.append(now)
         _request_counts[identifier] = recent
+
+    @app.route("/runs/<sid>/frontend/packs", methods=["GET"])
+    def dev_frontend_packs(sid: str):
+        try:
+            run_dir = _run_dir_for_sid(sid)
+        except ValueError:
+            return jsonify({"error": "invalid_sid"}), 400
+
+        stage_config = load_frontend_stage_config(run_dir)
+        packs_dir = stage_config.packs_dir
+        packs: list[str] = []
+
+        if packs_dir.is_dir():
+            for entry in sorted(packs_dir.iterdir()):
+                if not entry.is_file():
+                    continue
+                if not FRONTEND_PACK_FILENAME_PATTERN.fullmatch(entry.name):
+                    continue
+                try:
+                    rel_path = entry.relative_to(run_dir).as_posix()
+                except ValueError:
+                    rel_path = entry.as_posix()
+                packs.append(rel_path)
+
+        try:
+            relative_dir = packs_dir.relative_to(run_dir).as_posix()
+        except ValueError:
+            relative_dir = packs_dir.as_posix()
+
+        return jsonify({"dir": relative_dir, "packs": packs})
+
+    @app.route("/runs/<sid>/frontend/pack/<account_id>", methods=["GET"])
+    def dev_frontend_pack(sid: str, account_id: str):
+        try:
+            run_dir = _run_dir_for_sid(sid)
+        except ValueError:
+            return jsonify({"error": "invalid_sid"}), 400
+
+        stage_pack = _stage_pack_path_for_account(run_dir, account_id)
+        if stage_pack is None or not stage_pack.is_file():
+            return jsonify({"error": "pack_not_found"}), 404
+
+        try:
+            payload = _load_frontend_pack(stage_pack)
+        except Exception:  # pragma: no cover - error path
+            return jsonify({"error": "pack_read_failed"}), 500
+
+        return jsonify(payload)
 
     return app
 

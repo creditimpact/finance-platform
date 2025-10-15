@@ -27,7 +27,10 @@ from backend.core.runflow.io import (
     runflow_stage_error,
     runflow_stage_start,
 )
-from backend.frontend.packs.config import load_frontend_stage_config
+from backend.frontend.packs.config import (
+    FrontendStageConfig,
+    load_frontend_stage_config,
+)
 
 log = logging.getLogger(__name__)
 
@@ -88,6 +91,36 @@ def _frontend_packs_lean_enabled() -> bool:
 def _frontend_packs_debug_mirror_enabled() -> bool:
     value = os.getenv("FRONTEND_PACKS_DEBUG_MIRROR", "0")
     return value not in {"0", "false", "False"}
+
+
+def _log_stage_paths(
+    sid: str,
+    config: FrontendStageConfig,
+    canonical_paths: Mapping[str, str],
+) -> None:
+    base_path = canonical_paths.get("frontend_base") or config.stage_dir.parent
+    log.info(
+        "FRONTEND_REVIEW_PATHS sid=%s base=%s dir=%s packs=%s results=%s",
+        sid,
+        str(base_path),
+        str(config.stage_dir),
+        str(config.packs_dir),
+        str(config.responses_dir),
+    )
+
+
+def _log_build_summary(
+    sid: str,
+    *,
+    packs_count: int,
+    last_built_at: str | None,
+) -> None:
+    log.info(
+        "FRONTEND_REVIEW_BUILD_COMPLETE sid=%s packs_count=%s last_built_at=%s",
+        sid,
+        packs_count,
+        last_built_at or "-",
+    )
 
 
 def _count_frontend_responses(responses_dir: Path) -> int:
@@ -1077,6 +1110,8 @@ def generate_frontend_packs_for_run(
 
     canonical_paths = ensure_frontend_review_dirs(str(run_dir))
 
+    _log_stage_paths(sid, config, canonical_paths)
+
     legacy_accounts_dir = run_dir / "frontend" / "accounts"
     if legacy_accounts_dir.is_dir():
         log.warning(
@@ -1159,7 +1194,7 @@ def generate_frontend_packs_for_run(
                 empty_ok=True,
             )
             _log_done(sid, 0, status="skipped", reason="disabled")
-            return {
+            result = {
                 "status": "skipped",
                 "packs_count": 0,
                 "empty_ok": True,
@@ -1167,6 +1202,8 @@ def generate_frontend_packs_for_run(
                 "packs_dir": packs_dir_str,
                 "last_built_at": None,
             }
+            _log_build_summary(sid, packs_count=0, last_built_at=None)
+            return result
 
         stage_dir.mkdir(parents=True, exist_ok=True)
         os.makedirs(stage_packs_dir, exist_ok=True)
@@ -1212,7 +1249,7 @@ def generate_frontend_packs_for_run(
                 empty_ok=True,
             )
             _log_done(sid, 0, status="success")
-            return {
+            result = {
                 "status": "success",
                 "packs_count": 0,
                 "empty_ok": True,
@@ -1220,6 +1257,12 @@ def generate_frontend_packs_for_run(
                 "packs_dir": packs_dir_str,
                 "last_built_at": manifest_payload.get("generated_at"),
             }
+            _log_build_summary(
+                sid,
+                packs_count=0,
+                last_built_at=manifest_payload.get("generated_at"),
+            )
+            return result
 
         if not force and stage_index_path.exists():
             existing = _load_json(stage_index_path)
@@ -1286,7 +1329,7 @@ def generate_frontend_packs_for_run(
                         empty_ok=packs_count == 0,
                     )
                     _log_done(sid, packs_count, status="success", cache_hit=True)
-                    return {
+                    result = {
                         "status": "success",
                         "packs_count": packs_count,
                         "empty_ok": packs_count == 0,
@@ -1294,6 +1337,12 @@ def generate_frontend_packs_for_run(
                         "packs_dir": packs_dir_str,
                         "last_built_at": last_built,
                     }
+                    _log_build_summary(
+                        sid,
+                        packs_count=packs_count,
+                        last_built_at=last_built,
+                    )
+                    return result
 
         built_docs = 0
         unchanged_docs = 0
@@ -1562,7 +1611,7 @@ def generate_frontend_packs_for_run(
             empty_ok=pack_count == 0,
         )
 
-        return {
+        result = {
             "status": "success",
             "packs_count": pack_count,
             "empty_ok": pack_count == 0,
@@ -1570,6 +1619,12 @@ def generate_frontend_packs_for_run(
             "packs_dir": packs_dir_str,
             "last_built_at": manifest_payload.get("generated_at"),
         }
+        _log_build_summary(
+            sid,
+            packs_count=pack_count,
+            last_built_at=manifest_payload.get("generated_at"),
+        )
+        return result
     except Exception as exc:
         runflow_step(
             sid,

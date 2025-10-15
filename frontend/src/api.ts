@@ -34,6 +34,47 @@ function buildRunAssetUrl(sessionId: string, relativePath: string): string {
   return `${base}/${encodePathSegments(relativePath)}`;
 }
 
+function trimSlashes(input?: string | null): string {
+  if (typeof input !== 'string') {
+    return '';
+  }
+  let result = input.trim();
+  while (result.startsWith('/')) {
+    result = result.slice(1);
+  }
+  while (result.endsWith('/')) {
+    result = result.slice(0, -1);
+  }
+  return result;
+}
+function ensureFrontendPath(candidate: string | null | undefined, fallback: string): string {
+  const trimmed = trimSlashes(candidate);
+  const base = trimmed || trimSlashes(fallback);
+  if (!base) {
+    return 'frontend';
+  }
+  if (base.startsWith('frontend/')) {
+    return base;
+  }
+  return `frontend/${base}`;
+}
+
+function stripFrontendPrefix(path: string | null | undefined): string {
+  const trimmed = trimSlashes(path);
+  if (trimmed.startsWith('frontend/')) {
+    return trimmed.slice('frontend/'.length);
+  }
+  return trimmed;
+}
+
+function joinFrontendPath(base: string, child: string): string {
+  return [trimSlashes(base), trimSlashes(child)].filter(Boolean).join('/');
+}
+
+function buildFrontendReviewAccountUrl(sessionId: string, accountId: string): string {
+  return `${API}/api/runs/${encodeURIComponent(sessionId)}/frontend/review/accounts/${encodeURIComponent(accountId)}`;
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   let data: any = null;
@@ -71,6 +112,7 @@ export interface FrontendReviewManifestPack {
   path?: string;
   pack_path?: string;
   has_questions?: boolean;
+  pack_path_rel?: string;
 }
 
 export interface FrontendReviewManifest {
@@ -79,32 +121,146 @@ export interface FrontendReviewManifest {
   schema_version?: string | number;
   counts?: { packs?: number; responses?: number };
   packs?: FrontendReviewManifestPack[];
+  generated_at?: string;
+  index_rel?: string;
+  index_path?: string;
+  packs_dir_rel?: string;
+  packs_dir_path?: string;
+  responses_dir_rel?: string;
+  responses_dir_path?: string;
 }
 
-function buildFrontendReviewIndexUrl(sessionId: string): string {
-  return `${API}/api/runs/${encodeURIComponent(sessionId)}/frontend/review/index`;
+interface FrontendStageDescriptor {
+  stage?: string;
+  schema_version?: string | number;
+  generated_at?: string;
+  index?: string;
+  index_rel?: string;
+  packs_dir?: string;
+  packs_dir_rel?: string;
+  responses_dir?: string;
+  responses_dir_rel?: string;
+  counts?: { packs?: number; responses?: number };
+  packs?: FrontendReviewManifestPack[];
 }
 
-function buildFrontendReviewAccountUrl(sessionId: string, accountId: string): string {
-  return `${API}/api/runs/${encodeURIComponent(sessionId)}/frontend/review/accounts/${encodeURIComponent(accountId)}`;
+interface FrontendRootIndex {
+  sid?: string;
+  review?: FrontendStageDescriptor;
 }
 
 export async function fetchFrontendReviewManifest(
   sessionId: string,
   init?: RequestInit
 ): Promise<FrontendReviewManifest> {
-  return fetchJson<FrontendReviewManifest>(buildFrontendReviewIndexUrl(sessionId), init);
+  const rootIndex = await fetchJson<FrontendRootIndex>(
+    buildRunAssetUrl(sessionId, 'frontend/index.json'),
+    init
+  );
+
+  const stage = (rootIndex?.review ?? {}) as FrontendStageDescriptor;
+  const indexPath = ensureFrontendPath(
+    stage.index_rel ?? stage.index ?? 'review/index.json',
+    'review/index.json'
+  );
+  const packsDirPath = ensureFrontendPath(
+    stage.packs_dir_rel ?? stage.packs_dir ?? 'review/packs',
+    'review/packs'
+  );
+  const responsesDirPath = ensureFrontendPath(
+    stage.responses_dir_rel ?? stage.responses_dir ?? 'review/responses',
+    'review/responses'
+  );
+
+  let manifestPayload: FrontendStageDescriptor | FrontendReviewManifest | null = stage;
+  if (!manifestPayload || !Array.isArray(manifestPayload.packs)) {
+    manifestPayload = await fetchJson<FrontendReviewManifest>(
+      buildRunAssetUrl(sessionId, indexPath)
+    );
+  }
+
+  const packs = Array.isArray(manifestPayload?.packs)
+    ? manifestPayload.packs.map((entry) => {
+        const pack: FrontendReviewManifestPack = { ...entry };
+        const rawPath =
+          typeof entry.pack_path === 'string'
+            ? entry.pack_path
+            : typeof entry.path === 'string'
+            ? entry.path
+            : undefined;
+
+        const normalizedPath = rawPath
+          ? ensureFrontendPath(rawPath, joinFrontendPath(packsDirPath, `${entry.account_id}.json`))
+          : joinFrontendPath(packsDirPath, `${entry.account_id}.json`);
+
+        pack.pack_path = normalizedPath;
+        pack.pack_path_rel = stripFrontendPrefix(normalizedPath);
+        pack.path = normalizedPath;
+        return pack;
+      })
+    : [];
+
+  return {
+    sid: manifestPayload?.sid ?? rootIndex?.sid,
+    stage: manifestPayload?.stage ?? stage.stage ?? 'review',
+    schema_version: manifestPayload?.schema_version ?? stage.schema_version,
+    counts: manifestPayload?.counts ?? stage.counts,
+    generated_at:
+      (manifestPayload as FrontendStageDescriptor | FrontendReviewManifest | undefined)?.generated_at ??
+      stage.generated_at,
+    packs,
+    index_rel: stripFrontendPrefix(indexPath),
+    index_path: indexPath,
+    packs_dir_rel: stripFrontendPrefix(packsDirPath),
+    packs_dir_path: packsDirPath,
+    responses_dir_rel: stripFrontendPrefix(responsesDirPath),
+    responses_dir_path: responsesDirPath,
+  };
 }
 
 export async function fetchFrontendReviewAccount<T = AccountPack>(
   sessionId: string,
   accountId: string,
-  init?: RequestInit
+  initOrOptions?: RequestInit | (RequestInit & { packPath?: string | null | undefined })
 ): Promise<T> {
   if (!accountId) {
     throw new Error('Missing account id');
   }
-  return fetchJson<T>(buildFrontendReviewAccountUrl(sessionId, accountId), init);
+
+  let packPath: string | undefined;
+  let init: RequestInit | undefined;
+
+  if (initOrOptions && typeof initOrOptions === 'object' && 'packPath' in initOrOptions) {
+    const { packPath: candidate, ...rest } = initOrOptions as RequestInit & {
+      packPath?: string | null | undefined;
+    };
+    if (typeof candidate === 'string' && candidate.trim()) {
+      packPath = ensureFrontendPath(candidate, candidate);
+    }
+    init = rest as RequestInit;
+  } else {
+    init = initOrOptions as RequestInit | undefined;
+  }
+
+  if (!packPath) {
+    const manifest = await fetchFrontendReviewManifest(sessionId);
+    const match = manifest.packs?.find((entry) => entry.account_id === accountId);
+    if (match?.pack_path) {
+      packPath = match.pack_path;
+    } else if (match?.path) {
+      packPath = ensureFrontendPath(match.path, match.path);
+    } else {
+      const packsDir = manifest.packs_dir_path ?? ensureFrontendPath('review/packs', 'review/packs');
+      packPath = joinFrontendPath(packsDir, `${accountId}.json`);
+    }
+  }
+
+  const normalizedPath = packPath ? ensureFrontendPath(packPath, packPath) : undefined;
+  if (!normalizedPath) {
+    throw new Error(`Unable to resolve pack path for account ${accountId}`);
+  }
+
+  return fetchJson<T>(buildRunAssetUrl(sessionId, normalizedPath), init);
 }
 
 export async function submitFrontendReviewAnswers(

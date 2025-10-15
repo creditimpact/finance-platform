@@ -1,5 +1,6 @@
 # ruff: noqa: E402
 import os
+import re
 import sys
 
 # Ensure the project root is always on sys.path, regardless of the
@@ -21,6 +22,7 @@ import logging
 import time
 import uuid
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from shutil import copy2
 from typing import Any, Mapping
@@ -45,6 +47,7 @@ from backend.api.session_manager import (
 from backend.api.tasks import run_credit_repair_process  # noqa: F401
 from backend.api.tasks import app as celery_app, smoke_task
 from backend.pipeline.runs import RunManifest, persist_manifest
+from backend.frontend.packs.responses import append_frontend_response
 from backend.api.routes_smoke import bp as smoke_bp
 from backend.api.ui_events import ui_event_bp
 from backend.core import orchestrators as orch
@@ -73,6 +76,91 @@ with open(SCHEMA_DIR / "problem_account.json") as _f:
 
 
 _request_counts: dict[str, list[float]] = defaultdict(list)
+
+
+def _runs_root_path() -> Path:
+    root = os.getenv("RUNS_ROOT")
+    return Path(root) if root else Path("runs")
+
+
+def _validate_sid(sid: str) -> str:
+    sid = (sid or "").strip()
+    if not sid or sid.startswith("/") or sid.startswith("\\"):
+        raise ValueError("invalid sid")
+    if "/" in sid or "\\" in sid:
+        raise ValueError("invalid sid")
+    parts = Path(sid).parts
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("invalid sid")
+    return sid
+
+
+def _run_dir_for_sid(sid: str) -> Path:
+    validated = _validate_sid(sid)
+    return _runs_root_path() / validated
+
+
+def _frontend_stage_dir(run_dir: Path) -> Path:
+    stage_dir_env = os.getenv("FRONTEND_PACKS_STAGE_DIR", "frontend/review")
+    return run_dir / Path(stage_dir_env)
+
+
+def _frontend_stage_index_candidates(run_dir: Path) -> list[Path]:
+    candidates: list[Path] = []
+    index_env = os.getenv("FRONTEND_PACKS_INDEX")
+    if index_env:
+        candidates.append(run_dir / Path(index_env))
+    else:
+        candidates.append(_frontend_stage_dir(run_dir) / "index.json")
+
+    legacy_index = run_dir / "frontend" / "index.json"
+    if legacy_index not in candidates:
+        candidates.append(legacy_index)
+    return candidates
+
+
+def _frontend_stage_packs_dir(run_dir: Path) -> Path:
+    packs_dir_env = os.getenv("FRONTEND_PACKS_DIR")
+    if packs_dir_env:
+        return run_dir / Path(packs_dir_env)
+    return _frontend_stage_dir(run_dir) / "packs"
+
+
+def _candidate_account_keys(account_id: str) -> list[str]:
+    trimmed = (account_id or "").strip()
+    candidates: list[str] = []
+    if trimmed:
+        candidates.append(trimmed)
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]", "_", trimmed)
+    if sanitized and sanitized not in candidates:
+        candidates.append(sanitized)
+    return candidates
+
+
+def _safe_relative_path(run_dir: Path, relative_path: str) -> Path:
+    rel = Path(relative_path)
+    if rel.is_absolute():
+        return rel
+
+    candidate = (run_dir / rel).resolve(strict=False)
+    try:
+        base = run_dir.resolve(strict=False)
+    except FileNotFoundError:
+        base = run_dir
+
+    if base == candidate or base in candidate.parents:
+        return candidate
+
+    raise ValueError("path escapes run directory")
+
+
+def _load_json_file(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _now_utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _merge_collectors(
@@ -141,6 +229,158 @@ def run_batch_job():
     runner = BatchRunner()
     job_id = runner.run(filters, fmt)
     return jsonify({"status": "ok", "job_id": job_id})
+
+
+def _load_frontend_stage_manifest(run_dir: Path) -> tuple[Path, Any] | None:
+    for candidate in _frontend_stage_index_candidates(run_dir):
+        if not candidate.is_file():
+            continue
+        try:
+            payload = _load_json_file(candidate)
+        except json.JSONDecodeError:
+            logger.warning(
+                "FRONTEND_STAGE_INDEX_DECODE_FAILED path=%s", candidate, exc_info=True
+            )
+            continue
+        except OSError:
+            logger.warning(
+                "FRONTEND_STAGE_INDEX_READ_FAILED path=%s", candidate, exc_info=True
+            )
+            continue
+
+        return candidate, payload
+    return None
+
+
+def _load_frontend_pack(pack_path: Path) -> Any:
+    try:
+        return _load_json_file(pack_path)
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive logging
+        logger.warning(
+            "FRONTEND_PACK_DECODE_FAILED path=%s error=%s", pack_path, exc, exc_info=True
+        )
+        raise
+    except OSError as exc:  # pragma: no cover - defensive logging
+        logger.warning(
+            "FRONTEND_PACK_READ_FAILED path=%s error=%s", pack_path, exc, exc_info=True
+        )
+        raise
+
+
+@api_bp.route("/api/runs/<sid>/frontend/review/index", methods=["GET"])
+def api_frontend_review_index(sid: str):
+    try:
+        run_dir = _run_dir_for_sid(sid)
+    except ValueError:
+        return jsonify({"error": "invalid_sid"}), 400
+
+    manifest = _load_frontend_stage_manifest(run_dir)
+    if manifest is None:
+        return jsonify({"error": "not_found"}), 404
+
+    _, payload = manifest
+    return jsonify(payload)
+
+
+def _stage_pack_path_for_account(run_dir: Path, account_id: str) -> Path | None:
+    stage_dir = _frontend_stage_packs_dir(run_dir)
+    for key in _candidate_account_keys(account_id):
+        candidate = stage_dir / f"{key}.json"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _legacy_pack_path_for_account(run_dir: Path, account_id: str) -> Path | None:
+    base = run_dir / "frontend" / "accounts"
+    for key in _candidate_account_keys(account_id):
+        candidate = base / key / "pack.json"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+@api_bp.route("/api/runs/<sid>/frontend/review/accounts/<account_id>", methods=["GET"])
+def api_frontend_review_pack(sid: str, account_id: str):
+    try:
+        run_dir = _run_dir_for_sid(sid)
+    except ValueError:
+        return jsonify({"error": "invalid_sid"}), 400
+
+    stage_pack = _stage_pack_path_for_account(run_dir, account_id)
+    if stage_pack is None:
+        manifest_info = _load_frontend_stage_manifest(run_dir)
+        if manifest_info:
+            _, manifest_payload = manifest_info
+            packs = manifest_payload.get("packs") if isinstance(manifest_payload, Mapping) else None
+            if isinstance(packs, list):
+                account_keys = set(_candidate_account_keys(account_id))
+                for pack_meta in packs:
+                    if not isinstance(pack_meta, Mapping):
+                        continue
+                    meta_account_id = pack_meta.get("account_id")
+                    if isinstance(meta_account_id, str) and meta_account_id in account_keys:
+                        path_value = pack_meta.get("path")
+                        if isinstance(path_value, str):
+                            try:
+                                candidate = _safe_relative_path(run_dir, path_value)
+                            except ValueError:
+                                continue
+                            if candidate.is_file():
+                                stage_pack = candidate
+                                break
+
+    if stage_pack is None:
+        stage_pack = _legacy_pack_path_for_account(run_dir, account_id)
+
+    if stage_pack is None or not stage_pack.is_file():
+        return jsonify({"error": "pack_not_found"}), 404
+
+    try:
+        payload = _load_frontend_pack(stage_pack)
+    except Exception:  # pragma: no cover - error path
+        return jsonify({"error": "pack_read_failed"}), 500
+
+    return jsonify(payload)
+
+
+@api_bp.route(
+    "/api/runs/<sid>/frontend/review/accounts/<account_id>/answer",
+    methods=["POST"],
+)
+def api_frontend_review_answer(sid: str, account_id: str):
+    try:
+        run_dir = _run_dir_for_sid(sid)
+    except ValueError:
+        return jsonify({"error": "invalid_sid"}), 400
+
+    if not run_dir.exists():
+        return jsonify({"error": "run_not_found"}), 404
+
+    data = request.get_json(force=True, silent=True) or {}
+    if not isinstance(data, Mapping):
+        return jsonify({"error": "invalid_payload"}), 400
+
+    answers = data.get("answers")
+    if not isinstance(answers, Mapping):
+        return jsonify({"error": "invalid_answers"}), 400
+
+    client_ts = data.get("client_ts")
+    if client_ts is not None and not isinstance(client_ts, str):
+        return jsonify({"error": "invalid_client_ts"}), 400
+
+    record: dict[str, Any] = {
+        "sid": sid,
+        "account_id": account_id,
+        "answers": dict(answers),
+        "received_at": _now_utc_iso(),
+    }
+    if client_ts is not None:
+        record["client_ts"] = client_ts
+
+    append_frontend_response(run_dir, account_id, record)
+
+    return jsonify({"ok": True})
 
 
 @api_bp.route("/api/start-process", methods=["POST"])

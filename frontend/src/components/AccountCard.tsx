@@ -134,6 +134,7 @@ export function AccountCard({ pack }: AccountCardProps) {
   );
 
   const [expanded, setExpanded] = React.useState(hasDisagreement);
+  const detailsId = React.useId();
 
   React.useEffect(() => {
     setExpanded(hasDisagreement);
@@ -178,8 +179,10 @@ export function AccountCard({ pack }: AccountCardProps) {
         <div className="space-y-3">
           <button
             type="button"
-            className="flex items-center gap-2 text-sm font-semibold text-slate-700 transition hover:text-slate-900"
+            className="flex items-center gap-2 text-sm font-semibold text-slate-700 transition hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2"
             onClick={() => setExpanded((state) => !state)}
+            aria-expanded={expanded}
+            aria-controls={detailsId}
           >
             <span>{expanded ? 'Hide details' : 'See details'}</span>
             <ChevronDownIcon className={cn('transition-transform', expanded ? 'rotate-180' : 'rotate-0')} />
@@ -190,6 +193,7 @@ export function AccountCard({ pack }: AccountCardProps) {
 
           {expanded ? (
             <BureauGrid
+              id={detailsId}
               fields={fieldSummaries.map((field) => ({
                 fieldKey: field.key,
                 label: field.label,

@@ -58,7 +58,31 @@ export function enableFrontendReviewMock(options: FrontendReviewMockOptions = {}
     stage: 'review',
     schema_version: 'mock-1.0',
     counts: { packs: 1, responses: 0 },
-    packs: [manifestPack],
+    packs: [
+      {
+        ...manifestPack,
+        pack_path: `frontend/review/packs/${accountId}.json`,
+        pack_path_rel: `review/packs/${accountId}.json`,
+        path: `frontend/review/packs/${accountId}.json`,
+      },
+    ],
+    index_path: 'frontend/review/index.json',
+    index_rel: 'review/index.json',
+    packs_dir_path: 'frontend/review/packs',
+    packs_dir_rel: 'review/packs',
+    responses_dir_path: 'frontend/review/responses',
+    responses_dir_rel: 'review/responses',
+  };
+
+  const rootIndex = {
+    review: {
+      stage: 'review',
+      schema_version: manifest.schema_version,
+      index_rel: 'review/index.json',
+      packs_dir_rel: 'review/packs',
+      responses_dir_rel: 'review/responses',
+      counts: manifest.counts,
+    },
   };
 
   const basePack: AccountPack & { account_id: string } = {
@@ -83,11 +107,18 @@ export function enableFrontendReviewMock(options: FrontendReviewMockOptions = {}
 
     const pathname = url?.pathname ?? '';
 
-    if (method === 'GET' && pathname === `/api/runs/${encodedSid}/frontend/review/index`) {
+    if (method === 'GET' && pathname === `/runs/${encodedSid}/frontend/index.json`) {
+      return createResponse(rootIndex);
+    }
+
+    if (method === 'GET' && pathname === `/runs/${encodedSid}/frontend/review/index.json`) {
       return createResponse(manifest);
     }
 
-    if (method === 'GET' && pathname === `/api/runs/${encodedSid}/frontend/review/accounts/${encodedAccountId}`) {
+    if (
+      method === 'GET' &&
+      pathname === `/runs/${encodedSid}/frontend/review/packs/${accountId}.json`
+    ) {
       const pack = {
         ...basePack,
         answers: Object.keys(answers).length > 0 ? { ...answers } : undefined,

@@ -20,6 +20,18 @@ function createFetchResponse(data: unknown, init: FetchResponseInit = {}) {
   } as unknown as Response;
 }
 
+function buildFrontendIndex(manifest: { counts?: { packs?: number; responses?: number } }) {
+  return {
+    review: {
+      stage: 'review',
+      index_rel: 'review/index.json',
+      packs_dir_rel: 'review/packs',
+      responses_dir_rel: 'review/responses',
+      counts: manifest.counts ?? { packs: 0, responses: 0 },
+    },
+  };
+}
+
 function renderWithRouter() {
   return render(
     <MemoryRouter initialEntries={['/runs/S123/accounts']}>
@@ -49,17 +61,21 @@ describe('AccountsPage', () => {
 
   it('renders manifest entries from the review stage', async () => {
     const manifest = {
+      counts: { packs: 1, responses: 0 },
       packs: [
         {
           account_id: 'acct-1',
           holder_name: 'John Doe',
           primary_issue: 'wrong_account',
           display: samplePack.display,
+          path: 'frontend/review/packs/acct-1.json',
         },
       ],
     };
 
-    (global.fetch as jest.Mock).mockResolvedValueOnce(createFetchResponse(manifest));
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce(createFetchResponse(buildFrontendIndex(manifest)))
+      .mockResolvedValueOnce(createFetchResponse(manifest));
 
     renderWithRouter();
 
@@ -70,23 +86,28 @@ describe('AccountsPage', () => {
 
   it('filters accounts using the search box', async () => {
     const manifest = {
+      counts: { packs: 2, responses: 0 },
       packs: [
         {
           account_id: 'acct-1',
           holder_name: 'First Bank',
           primary_issue: 'wrong_account',
           display: samplePack.display,
+          path: 'frontend/review/packs/acct-1.json',
         },
         {
           account_id: 'acct-2',
           holder_name: 'Second Bank',
           primary_issue: 'identity_theft',
           display: samplePack.display,
+          path: 'frontend/review/packs/acct-2.json',
         },
       ],
     };
 
-    (global.fetch as jest.Mock).mockResolvedValueOnce(createFetchResponse(manifest));
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce(createFetchResponse(buildFrontendIndex(manifest)))
+      .mockResolvedValueOnce(createFetchResponse(manifest));
 
     renderWithRouter();
 
@@ -109,12 +130,14 @@ describe('AccountsPage', () => {
 
   it('loads account details and submits answers', async () => {
     const manifest = {
+      counts: { packs: 1, responses: 0 },
       packs: [
         {
           account_id: 'acct-1',
           holder_name: 'John Doe',
           primary_issue: 'wrong_account',
           display: samplePack.display,
+          path: 'frontend/review/packs/acct-1.json',
         },
       ],
     };
@@ -126,6 +149,7 @@ describe('AccountsPage', () => {
     };
 
     (global.fetch as jest.Mock)
+      .mockResolvedValueOnce(createFetchResponse(buildFrontendIndex(manifest)))
       .mockResolvedValueOnce(createFetchResponse(manifest))
       .mockResolvedValueOnce(createFetchResponse(detailPack))
       .mockResolvedValueOnce(createFetchResponse({ ok: true }));
@@ -147,7 +171,7 @@ describe('AccountsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Submit answers' }));
 
     await waitFor(() =>
-      expect((global.fetch as jest.Mock).mock.calls[2][0]).toContain(
+      expect((global.fetch as jest.Mock).mock.calls[3][0]).toContain(
         '/api/runs/S123/frontend/review/accounts/acct-1/answer'
       )
     );
@@ -157,9 +181,15 @@ describe('AccountsPage', () => {
   });
 
   it('shows an error message when fetching the manifest fails', async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce(
-      createFetchResponse({ message: 'boom' }, { ok: false, status: 500, statusText: 'Server error' })
-    );
+    const manifest = {
+      counts: { packs: 0, responses: 0 },
+    };
+
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce(createFetchResponse(buildFrontendIndex(manifest)))
+      .mockResolvedValueOnce(
+        createFetchResponse({ message: 'boom' }, { ok: false, status: 500, statusText: 'Server error' })
+      );
 
     renderWithRouter();
 

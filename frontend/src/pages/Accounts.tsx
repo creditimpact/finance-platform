@@ -371,7 +371,11 @@ export default function AccountsPage() {
 
     (async () => {
       try {
-        const pack = await fetchFrontendReviewAccount<AccountPack>(sid, selectedAccountId);
+        const manifestEntry = entries.find((entry) => entry.account_id === selectedAccountId);
+        const packPath = manifestEntry?.pack_path ?? manifestEntry?.path ?? manifestEntry?.pack_path_rel;
+        const pack = await fetchFrontendReviewAccount<AccountPack>(sid, selectedAccountId, {
+          packPath: typeof packPath === 'string' ? packPath : undefined,
+        });
         if (!active) {
           return;
         }
@@ -394,7 +398,7 @@ export default function AccountsPage() {
     return () => {
       active = false;
     };
-  }, [sid, selectedAccountId]);
+  }, [sid, selectedAccountId, entries]);
 
   const handleAnswerChange = React.useCallback((answers: AccountQuestionAnswers) => {
     setQuestionAnswers(answers);

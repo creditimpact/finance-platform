@@ -32,6 +32,48 @@ function buildRunAssetUrl(sessionId, relativePath) {
   return `${base}/${encodePathSegments(relativePath)}`;
 }
 
+function trimSlashes(input = '') {
+  if (typeof input !== 'string') {
+    return '';
+  }
+  let result = input.trim();
+  while (result.startsWith('/')) {
+    result = result.slice(1);
+  }
+  while (result.endsWith('/')) {
+    result = result.slice(0, -1);
+  }
+  return result;
+}
+
+function ensureFrontendPath(candidate, fallback) {
+  const trimmed = trimSlashes(typeof candidate === 'string' ? candidate : '');
+  const base = trimmed || trimSlashes(typeof fallback === 'string' ? fallback : '');
+  if (!base) {
+    return 'frontend';
+  }
+  if (base.startsWith('frontend/')) {
+    return base;
+  }
+  return `frontend/${base}`;
+}
+
+function stripFrontendPrefix(path) {
+  const trimmed = trimSlashes(typeof path === 'string' ? path : '');
+  if (trimmed.startsWith('frontend/')) {
+    return trimmed.slice('frontend/'.length);
+  }
+  return trimmed;
+}
+
+function joinFrontendPath(base, child) {
+  return [trimSlashes(base), trimSlashes(child)].filter(Boolean).join('/');
+}
+
+function buildFrontendReviewAccountUrl(sessionId, accountId) {
+  return `${API}/api/runs/${encodeURIComponent(sessionId)}/frontend/review/accounts/${encodeURIComponent(accountId)}`;
+}
+
 async function fetchJson(url, init) {
   const response = await fetch(url, init);
   let data = null;
@@ -55,23 +97,99 @@ async function fetchJson(url, init) {
   return data;
 }
 
-function buildFrontendReviewIndexUrl(sessionId) {
-  return `${API}/api/runs/${encodeURIComponent(sessionId)}/frontend/review/index`;
-}
-
-function buildFrontendReviewAccountUrl(sessionId, accountId) {
-  return `${API}/api/runs/${encodeURIComponent(sessionId)}/frontend/review/accounts/${encodeURIComponent(accountId)}`;
-}
-
 export async function fetchFrontendReviewManifest(sessionId, init) {
-  return fetchJson(buildFrontendReviewIndexUrl(sessionId), init);
+  const rootIndex = await fetchJson(buildRunAssetUrl(sessionId, 'frontend/index.json'), init);
+
+  const stage = (rootIndex && rootIndex.review) || {};
+  const indexPath = ensureFrontendPath(
+    stage.index_rel || stage.index || 'review/index.json',
+    'review/index.json'
+  );
+  const packsDirPath = ensureFrontendPath(
+    stage.packs_dir_rel || stage.packs_dir || 'review/packs',
+    'review/packs'
+  );
+  const responsesDirPath = ensureFrontendPath(
+    stage.responses_dir_rel || stage.responses_dir || 'review/responses',
+    'review/responses'
+  );
+
+  let manifestPayload = stage;
+  if (!manifestPayload || !Array.isArray(manifestPayload.packs)) {
+    manifestPayload = await fetchJson(buildRunAssetUrl(sessionId, indexPath));
+  }
+
+  const packs = Array.isArray(manifestPayload?.packs)
+    ? manifestPayload.packs.map((entry) => {
+        const pack = { ...entry };
+        const rawPath =
+          typeof entry.pack_path === 'string'
+            ? entry.pack_path
+            : typeof entry.path === 'string'
+            ? entry.path
+            : undefined;
+
+        const normalizedPath = rawPath
+          ? ensureFrontendPath(rawPath, joinFrontendPath(packsDirPath, `${entry.account_id}.json`))
+          : joinFrontendPath(packsDirPath, `${entry.account_id}.json`);
+
+        pack.pack_path = normalizedPath;
+        pack.pack_path_rel = stripFrontendPrefix(normalizedPath);
+        pack.path = normalizedPath;
+        return pack;
+      })
+    : [];
+
+  return {
+    sid: manifestPayload?.sid || rootIndex?.sid,
+    stage: manifestPayload?.stage || stage.stage || 'review',
+    schema_version: manifestPayload?.schema_version || stage.schema_version,
+    counts: manifestPayload?.counts || stage.counts,
+    generated_at: manifestPayload?.generated_at || stage.generated_at,
+    packs,
+    index_rel: stripFrontendPrefix(indexPath),
+    index_path: indexPath,
+    packs_dir_rel: stripFrontendPrefix(packsDirPath),
+    packs_dir_path: packsDirPath,
+    responses_dir_rel: stripFrontendPrefix(responsesDirPath),
+    responses_dir_path: responsesDirPath,
+  };
 }
 
 export async function fetchFrontendReviewAccount(sessionId, accountId, init) {
   if (!accountId) {
     throw new Error('Missing account id');
   }
-  return fetchJson(buildFrontendReviewAccountUrl(sessionId, accountId), init);
+  let packPath;
+  let requestInit = init;
+
+  if (init && typeof init === 'object' && Object.prototype.hasOwnProperty.call(init, 'packPath')) {
+    const { packPath: candidate, ...rest } = init;
+    requestInit = rest;
+    if (typeof candidate === 'string' && candidate.trim()) {
+      packPath = ensureFrontendPath(candidate, candidate);
+    }
+  }
+
+  if (!packPath) {
+    const manifest = await fetchFrontendReviewManifest(sessionId);
+    const match = manifest.packs?.find((entry) => entry.account_id === accountId);
+    if (match?.pack_path) {
+      packPath = match.pack_path;
+    } else if (match?.path) {
+      packPath = ensureFrontendPath(match.path, match.path);
+    } else {
+      const packsDir = manifest.packs_dir_path || ensureFrontendPath('review/packs', 'review/packs');
+      packPath = joinFrontendPath(packsDir, `${accountId}.json`);
+    }
+  }
+
+  const normalizedPath = packPath ? ensureFrontendPath(packPath, packPath) : null;
+  if (!normalizedPath) {
+    throw new Error(`Unable to resolve pack path for account ${accountId}`);
+  }
+
+  return fetchJson(buildRunAssetUrl(sessionId, normalizedPath), requestInit);
 }
 
 export async function submitFrontendReviewAnswers(sessionId, accountId, answers, init) {

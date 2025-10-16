@@ -53,6 +53,78 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def test_frontend_review_smoke_endpoints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    client, runs_root = _create_api_client(tmp_path, monkeypatch)
+
+    sid = "S905"
+    account_id = "idx-001"
+    run_dir = runs_root / sid
+
+    pack_payload = {
+        "account_id": account_id,
+        "holder_name": "Smoke Tester",
+        "primary_issue": "incorrect_information",
+        "questions": [
+            {"id": "ownership", "prompt": "Do you own this account?"},
+        ],
+        "display": {"holder_name": "Smoke Tester"},
+    }
+    _write_json(
+        run_dir / "frontend" / "review" / "packs" / f"{account_id}.json",
+        pack_payload,
+    )
+
+    index_payload = {
+        "packs_count": 1,
+        "items": [
+            {
+                "account_id": account_id,
+                "file": f"frontend/review/packs/{account_id}.json",
+            }
+        ],
+    }
+    _write_json(run_dir / "frontend" / "review" / "index.json", index_payload)
+
+    manifest_payload = {
+        "sid": sid,
+        "frontend": {
+            "review": {
+                "index": "frontend/review/index.json",
+                "packs_dir": "frontend/review/packs",
+                "responses_dir": "frontend/review/responses",
+                "packs_count": 1,
+            }
+        },
+    }
+    _write_json(run_dir / "manifest.json", manifest_payload)
+
+    manifest_resp = client.get(
+        f"/api/runs/{sid}/frontend/manifest", query_string={"section": "frontend"}
+    )
+    assert manifest_resp.status_code == 200
+    manifest_data = manifest_resp.get_json()
+    review_manifest = manifest_data["frontend"]["review"]
+    assert review_manifest["packs_count"] == 1
+    assert review_manifest["index"] == "frontend/review/index.json"
+
+    index_resp = client.get(f"/api/runs/{sid}/frontend/review/index")
+    assert index_resp.status_code == 200
+    index_data = index_resp.get_json()
+    assert index_data["packs_count"] == 1
+    assert index_data["items"] == index_payload["items"]
+
+    packs_resp = client.get(f"/api/runs/{sid}/frontend/review/packs")
+    assert packs_resp.status_code == 200
+    packs_data = packs_resp.get_json()
+    assert packs_data == {"items": index_payload["items"]}
+
+    pack_resp = client.get(f"/api/runs/{sid}/frontend/review/pack/{account_id}")
+    assert pack_resp.status_code == 200
+    assert pack_resp.get_json() == pack_payload
+
+
 def test_frontend_review_pack_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     client, runs_root = _create_api_client(tmp_path, monkeypatch)
 

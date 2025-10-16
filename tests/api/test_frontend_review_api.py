@@ -270,6 +270,36 @@ def test_frontend_review_submit_writes_response_file(api_client):
     assert not legacy_dir.exists()
 
 
+def test_frontend_review_submit_honors_stage_responses_override(api_client, monkeypatch):
+    client, runs_root = api_client
+    sid = "S778"
+    account_id = "idx-006"
+    run_dir = runs_root / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    custom_rel = "frontend/review/custom_responses"
+    monkeypatch.setenv("FRONTEND_PACKS_RESPONSES_DIR", custom_rel)
+
+    payload = {"answers": {"q1": "custom"}}
+
+    response = client.post(
+        f"/api/runs/{sid}/frontend/review/response/{account_id}",
+        json=payload,
+    )
+    assert response.status_code == 200
+
+    responses_dir = run_dir / custom_rel
+    stored_path = responses_dir / "idx-006.result.json"
+    assert stored_path.is_file()
+
+    stored = json.loads(stored_path.read_text(encoding="utf-8"))
+    assert stored["answers"] == payload["answers"]
+    assert stored["account_id"] == account_id
+
+    default_path = run_dir / "frontend" / "review" / "responses" / "idx-006.result.json"
+    assert not default_path.exists()
+
+
 def test_frontend_review_submit_accepts_client_meta(api_client, monkeypatch):
     client, runs_root = api_client
     sid = "S777"

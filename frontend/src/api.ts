@@ -453,3 +453,31 @@ export async function pollResult(sessionId: string, abortSignal?: AbortSignal) {
     }
   }
 }
+
+export interface SubmitExplanationsPayload {
+  [key: string]: unknown;
+}
+
+export async function submitExplanations(payload: SubmitExplanationsPayload): Promise<any> {
+  const response = await fetch(`${API}/api/submit-explanations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to submit explanations');
+  }
+
+  return response.json();
+}
+
+export async function getSummaries(sessionId: string): Promise<any> {
+  const response = await fetch(`${API}/api/summaries/${encodeURIComponent(sessionId)}`);
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch summaries');
+  }
+
+  return response.json();
+}

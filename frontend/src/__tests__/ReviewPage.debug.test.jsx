@@ -6,7 +6,7 @@ import { emitUiEvent } from '../telemetry/uiTelemetry';
 jest.mock('../telemetry/uiTelemetry', () => ({
   emitUiEvent: jest.fn(),
 }));
-jest.mock('../api', () => ({
+jest.mock('../api.ts', () => ({
   submitExplanations: jest.fn(),
   getSummaries: jest.fn().mockResolvedValue({ summaries: {} }),
 }));

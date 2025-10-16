@@ -89,11 +89,13 @@ def test_frontend_manifest_endpoint_supports_filter(api_client):
         f"/api/runs/{sid}/frontend/manifest", query_string={"section": "frontend"}
     )
     assert subset_response.status_code == 200
-    expected_review = dict(manifest_payload["frontend"])
+    expected_frontend = dict(manifest_payload["frontend"])
+    expected_review = dict(expected_frontend)
     expected_review["responses_dir"] = "frontend/review/responses"
+    expected_frontend["review"] = expected_review
     assert subset_response.get_json() == {
         "sid": sid,
-        "frontend": {"review": expected_review},
+        "frontend": expected_frontend,
     }
 
 
@@ -122,16 +124,7 @@ def test_frontend_manifest_section_preserves_existing_review_block(api_client):
     assert subset_response.status_code == 200
     assert subset_response.get_json() == {
         "sid": sid,
-        "frontend": {
-            "review": {
-                "index": "frontend/review/index.json",
-                "packs_dir": "frontend/review/packs",
-                "responses_dir": "frontend/review/responses",
-                "packs_count": 3,
-                "extra": {"note": "keep"},
-            },
-            "status": "success",
-        },
+        "frontend": manifest_payload["frontend"],
     }
 
 

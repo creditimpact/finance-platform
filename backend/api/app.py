@@ -480,6 +480,41 @@ def _iter_frontend_pack_entries(payload: Mapping[str, Any]) -> Iterable[Mapping[
                     yield entry
 
 
+def _to_posix_path(value: str) -> str:
+    return value.replace("\\", "/")
+
+
+def _normalize_path_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _to_posix_path(value)
+    if isinstance(value, Mapping):
+        return _normalize_path_like_entries(dict(value))
+    if isinstance(value, list):
+        return [_normalize_path_value(item) for item in value]
+    return value
+
+
+def _is_path_like_key(key: str) -> bool:
+    lowered = key.lower()
+    if "path" in lowered or "dir" in lowered:
+        return True
+    return lowered in {"index", "file", "packs"}
+
+
+def _normalize_path_like_entries(payload: Any) -> Any:
+    if isinstance(payload, Mapping):
+        for key in list(payload.keys()):
+            value = payload[key]
+            if _is_path_like_key(key):
+                payload[key] = _normalize_path_value(value)
+            else:
+                payload[key] = _normalize_path_like_entries(value)
+        return payload
+    if isinstance(payload, list):
+        return [_normalize_path_like_entries(item) for item in payload]
+    return payload
+
+
 def _normalize_review_listing_path(run_dir: Path, value: str) -> str | None:
     try:
         candidate = _safe_relative_path(run_dir, value)
@@ -488,9 +523,9 @@ def _normalize_review_listing_path(run_dir: Path, value: str) -> str | None:
 
     try:
         rel = candidate.relative_to(run_dir)
-        return rel.as_posix()
+        return _to_posix_path(rel.as_posix())
     except ValueError:
-        return candidate.as_posix()
+        return _to_posix_path(candidate.as_posix())
 
 
 def _collect_review_pack_listing(
@@ -587,7 +622,8 @@ def api_frontend_manifest(sid: str):
             "sid": manifest.get("sid"),
             "frontend": normalized_frontend if normalized_frontend is not None else frontend_payload,
         }
-        return jsonify(subset)
+        normalized_subset = _normalize_path_like_entries(subset)
+        return jsonify(normalized_subset)
 
     return jsonify(manifest)
 
@@ -736,10 +772,13 @@ def _normalize_frontend_review_index_payload(
 
     result["packs_count"] = packs_count
 
-    if result:
-        return result
+    normalized_result = _normalize_path_like_entries(result)
 
-    return {"packs_count": packs_count, "items": items}
+    if normalized_result:
+        return normalized_result
+
+    fallback = {"packs_count": packs_count, "items": items}
+    return _normalize_path_like_entries(fallback)
 
 
 def _stage_pack_path_for_account(run_dir: Path, account_id: str) -> Path | None:

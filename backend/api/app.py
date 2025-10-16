@@ -1236,7 +1236,15 @@ def submit_explanations():
 def create_app() -> Flask:
     sanitize_openai_env()
     app = Flask(__name__)
-    CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+
+    cors_enable = os.getenv("CORS_ENABLE", "").strip().lower()
+    if cors_enable in {"1", "true", "yes", "on"}:
+        allowed_origins = ["http://127.0.0.1:5173", "http://localhost:5173"]
+        CORS(
+            app,
+            resources={r"/api/*": {"origins": allowed_origins}},
+            supports_credentials=True,
+        )
     app.register_blueprint(admin_bp)
     app.register_blueprint(api_bp)
     app.register_blueprint(ai_bp)

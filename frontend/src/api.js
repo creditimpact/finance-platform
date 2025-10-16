@@ -8,13 +8,14 @@ function getImportMetaEnv() {
 
 const metaEnv = getImportMetaEnv();
 
-const API =
-  metaEnv.VITE_API_URL ||
+const apiBaseUrl =
   metaEnv.VITE_API_BASE_URL ||
+  metaEnv.VITE_API_URL ||
   (typeof process !== 'undefined'
-    ? process.env?.VITE_API_URL || process.env?.VITE_API_BASE_URL
-    : undefined) ||
-  'http://localhost:5000';
+    ? process.env?.VITE_API_BASE_URL || process.env?.VITE_API_URL
+    : undefined);
+
+const API = apiBaseUrl || 'http://127.0.0.1:5000';
 
 function encodePathSegments(path = '') {
   return path

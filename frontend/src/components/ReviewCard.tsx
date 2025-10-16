@@ -11,7 +11,7 @@ import { summarizeField, type BureauTriple } from '../utils/bureauSummary';
 import AccountQuestions, { type AccountQuestionAnswers } from './AccountQuestions';
 import { type AccountQuestionKey } from './questionCopy';
 import type { AccountPack } from './AccountCard';
-import type { FrontendReviewResponse } from '../api';
+import type { FrontendReviewResponse } from '../api.ts';
 
 export type ReviewCardStatus = 'idle' | 'waiting' | 'ready' | 'saving' | 'done';
 

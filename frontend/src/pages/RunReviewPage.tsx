@@ -542,7 +542,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       try {
         const listing = packListingRef.current[accountId];
         const pack = await fetchFrontendReviewAccount<ReviewAccountPack>(sid, accountId, {
-          packPath: typeof listing?.file === 'string' ? listing.file : undefined,
+          staticPath: typeof listing?.file === 'string' ? listing.file : undefined,
         });
         if (!isMountedRef.current) {
           return;

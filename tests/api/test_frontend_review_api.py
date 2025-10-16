@@ -55,17 +55,77 @@ def _write_json(path, payload):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def test_frontend_review_index_returns_manifest(api_client):
+def test_frontend_manifest_endpoint_supports_filter(api_client):
     client, runs_root = api_client
     sid = "S123"
     run_dir = runs_root / sid
+    manifest_payload = {
+        "sid": sid,
+        "status": "in_progress",
+        "frontend": {
+            "index": "frontend/review/index.json",
+            "packs_dir": "frontend/review/packs",
+            "packs_count": 2,
+        },
+        "other": {"value": 1},
+    }
+    _write_json(run_dir / "manifest.json", manifest_payload)
+
+    full_response = client.get(f"/api/runs/{sid}/frontend/manifest")
+    assert full_response.status_code == 200
+    assert full_response.get_json() == manifest_payload
+
+    subset_response = client.get(
+        f"/api/runs/{sid}/frontend/manifest", query_string={"section": "frontend"}
+    )
+    assert subset_response.status_code == 200
+    assert subset_response.get_json() == {
+        "sid": sid,
+        "frontend": manifest_payload["frontend"],
+    }
+
+
+def test_frontend_index_returns_payload(api_client):
+    client, runs_root = api_client
+    sid = "S124"
+    run_dir = runs_root / sid
     manifest_path = run_dir / "frontend" / "review" / "index.json"
-    payload = {"sid": sid, "stage": "review", "packs": []}
+    payload = {
+        "sid": sid,
+        "stage": "review",
+        "items": [
+            {"account_id": "idx-001", "file": "frontend/review/packs/idx-001.json"}
+        ],
+    }
     _write_json(manifest_path, payload)
 
-    response = client.get(f"/api/runs/{sid}/frontend/review/index")
+    response = client.get(f"/api/runs/{sid}/frontend/index")
     assert response.status_code == 200
     assert response.get_json() == payload
+
+
+def test_frontend_review_packs_listing_from_index(api_client):
+    client, runs_root = api_client
+    sid = "S130"
+    run_dir = runs_root / sid
+    index_path = run_dir / "frontend" / "review" / "index.json"
+    payload = {
+        "items": [
+            {"account_id": "idx-001", "file": "frontend/review/packs/idx-001.json"},
+            {"account_id": "idx-002", "filename": "idx-002.json"},
+        ]
+    }
+    _write_json(index_path, payload)
+
+    response = client.get(f"/api/runs/{sid}/frontend/review/packs")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data == {
+        "items": [
+            {"account_id": "idx-001", "file": "frontend/review/packs/idx-001.json"},
+            {"account_id": "idx-002", "file": "frontend/review/packs/idx-002.json"},
+        ]
+    }
 
 
 def test_frontend_review_pack_returns_stage_pack(api_client):
@@ -81,9 +141,7 @@ def test_frontend_review_pack_returns_stage_pack(api_client):
     }
     _write_json(pack_path, pack_payload)
 
-    response = client.get(
-        f"/api/runs/{sid}/frontend/review/accounts/idx-001",
-    )
+    response = client.get(f"/api/runs/{sid}/frontend/review/pack/idx-001")
     assert response.status_code == 200
     assert response.get_json() == pack_payload
 
@@ -120,9 +178,7 @@ def test_frontend_review_pack_uses_manifest_path(api_client, monkeypatch):
     }
     _write_json(legacy_pack_path, pack_payload)
 
-    response = client.get(
-        f"/api/runs/{sid}/frontend/review/accounts/idx-001",
-    )
+    response = client.get(f"/api/runs/{sid}/frontend/review/pack/idx-001")
     assert response.status_code == 200
     assert response.get_json() == pack_payload
 
@@ -132,9 +188,7 @@ def test_frontend_review_pack_missing_returns_404(api_client):
     sid = "S404"
     runs_root.joinpath(sid).mkdir(parents=True, exist_ok=True)
 
-    response = client.get(
-        f"/api/runs/{sid}/frontend/review/accounts/idx-999",
-    )
+    response = client.get(f"/api/runs/{sid}/frontend/review/pack/idx-999")
     assert response.status_code == 404
 
 
@@ -143,9 +197,7 @@ def test_frontend_review_pack_invalid_account_id_returns_404(api_client):
     sid = "S405"
     runs_root.joinpath(sid).mkdir(parents=True, exist_ok=True)
 
-    response = client.get(
-        f"/api/runs/{sid}/frontend/review/accounts/acct-1",
-    )
+    response = client.get(f"/api/runs/{sid}/frontend/review/pack/acct-1")
     assert response.status_code == 404
 
 
@@ -162,11 +214,15 @@ def test_frontend_review_submit_writes_response_file(api_client):
     }
 
     response = client.post(
-        f"/api/runs/{sid}/frontend/review/accounts/{account_id}/answer",
+        f"/api/runs/{sid}/frontend/review/response/{account_id}",
         json=payload,
     )
     assert response.status_code == 200
-    assert response.get_json() == {"ok": True}
+    body = response.get_json()
+    assert body["answers"] == payload["answers"]
+    assert body["account_id"] == account_id
+    assert body["sid"] == sid
+    assert "received_at" in body
 
     responses_dir = runs_root / sid / "frontend" / "review" / "responses"
     target_file = responses_dir / "idx-005.result.json"
@@ -179,3 +235,39 @@ def test_frontend_review_submit_writes_response_file(api_client):
 
     legacy_dir = runs_root / sid / "frontend" / "responses"
     assert not legacy_dir.exists()
+
+
+def test_frontend_review_submit_accepts_client_meta(api_client, monkeypatch):
+    client, runs_root = api_client
+    sid = "S777"
+    account_id = "idx-007"
+    run_dir = runs_root / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    fixed_now = "2024-02-02T10:00:00"
+    monkeypatch.setattr("backend.api.app._now_utc_iso", lambda: fixed_now)
+
+    payload = {
+        "answers": {"q1": "yes"},
+        "client_meta": {"browser": "Chrome"},
+    }
+
+    response = client.post(
+        f"/api/runs/{sid}/frontend/review/response/{account_id}",
+        json=payload,
+    )
+    assert response.status_code == 200
+    record = response.get_json()
+    assert record == {
+        "sid": sid,
+        "account_id": account_id,
+        "answers": payload["answers"],
+        "client_meta": payload["client_meta"],
+        "received_at": fixed_now,
+    }
+
+    stored = json.loads(
+        (runs_root / sid / "frontend" / "review" / "responses" / "idx-007.result.json")
+        .read_text(encoding="utf-8")
+    )
+    assert stored == record

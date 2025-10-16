@@ -34,7 +34,7 @@ export function joinRunAsset(base: string, rel: string): string {
 }
 
 function buildRunAssetUrl(sessionId: string, relativePath: string): string {
-  const base = `${API}/runs/${encodeURIComponent(sessionId)}`;
+  const base = `/runs/${encodeURIComponent(sessionId)}`;
   if (!relativePath) {
     return base;
   }

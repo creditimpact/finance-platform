@@ -1,11 +1,14 @@
 import * as React from 'react';
 import { Link, useParams } from 'react-router-dom';
-import AccountCard, { type AccountPack } from '../components/AccountCard';
-import AccountQuestions, {
+import {
   type AccountQuestionAnswers,
   type AccountQuestionKey,
 } from '../components/AccountQuestions';
-import { cn } from '../lib/utils';
+import ReviewCard, {
+  type ReviewAccountPack,
+  type ReviewCardStatus,
+} from '../components/ReviewCard';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import {
   buildFrontendReviewStreamUrl,
   fetchFrontendReviewAccount,
@@ -19,11 +22,11 @@ import {
 
 const POLL_INTERVAL_MS = 2000;
 
-type CardStatus = 'idle' | 'waiting' | 'ready' | 'saving' | 'done';
+type CardStatus = ReviewCardStatus;
 
 interface CardState {
   status: CardStatus;
-  pack: AccountPack | null;
+  pack: ReviewAccountPack | null;
   answers: AccountQuestionAnswers;
   error: string | null;
   success: boolean;
@@ -101,74 +104,54 @@ function createInitialCardState(): CardState {
   };
 }
 
-interface ReviewCardProps {
+interface ReviewCardContainerProps {
   accountId: string;
   state: CardState;
   onChange: (answers: AccountQuestionAnswers) => void;
   onSubmit: () => void;
 }
 
-function ReviewCard({ accountId, state, onChange, onSubmit }: ReviewCardProps) {
-  const cleanedAnswers = React.useMemo(() => cleanAnswers(state.answers), [state.answers]);
-  const hasAnswers = Object.keys(cleanedAnswers).length > 0;
-  const submitDisabled =
-    state.status === 'saving' || state.status === 'waiting' || state.pack === null || state.error !== null;
+function ReviewCardContainer({ accountId, state, onChange, onSubmit }: ReviewCardContainerProps) {
+  if (state.status === 'waiting') {
+    return (
+      <Card className="w-full">
+        <CardHeader className="border-b border-slate-100 pb-4">
+          <CardTitle className="text-xl font-semibold text-slate-900">Account {accountId}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 pt-6">
+          <div className="h-5 w-1/2 animate-pulse rounded bg-slate-200" />
+          <div className="h-40 animate-pulse rounded bg-slate-100" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!state.pack) {
+    return (
+      <Card className="w-full">
+        <CardHeader className="border-b border-slate-100 pb-4">
+          <CardTitle className="text-xl font-semibold text-slate-900">Account {accountId}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 pt-6">
+          <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
+            {state.error ?? 'Unable to load account details.'}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-slate-900">Account {accountId}</h2>
-        <span className="text-xs font-medium uppercase tracking-wide text-slate-400">{state.status}</span>
-      </div>
-
-      {state.status === 'waiting' ? (
-        <div className="space-y-4">
-          <div className="h-6 w-2/5 animate-pulse rounded bg-slate-200" />
-          <div className="h-48 animate-pulse rounded bg-slate-100" />
-        </div>
-      ) : null}
-
-      {state.error ? (
-        <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
-          {state.error}
-        </div>
-      ) : null}
-
-      {state.pack && state.status !== 'waiting' ? (
-        <div className="space-y-6">
-          <AccountCard pack={state.pack} />
-
-          <div>
-            <h3 className="text-base font-semibold text-slate-900">Questions</h3>
-            <p className="mt-1 text-sm text-slate-600">
-              Your answers help us tailor dispute language and keep records of your responses.
-            </p>
-          </div>
-
-          <AccountQuestions onChange={onChange} initialAnswers={state.answers} />
-
-          {state.success ? (
-            <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-              Answers saved successfully.
-            </div>
-          ) : null}
-
-          <button
-            type="button"
-            onClick={onSubmit}
-            disabled={submitDisabled || !hasAnswers}
-            className={cn(
-              'inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-semibold shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-offset-2',
-              submitDisabled || !hasAnswers
-                ? 'cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400'
-                : 'border border-slate-900 bg-slate-900 text-white hover:bg-slate-800'
-            )}
-          >
-            {state.status === 'saving' ? 'Saving…' : state.status === 'done' ? 'Submitted' : 'Submit answers'}
-          </button>
-        </div>
-      ) : null}
-    </div>
+    <ReviewCard
+      accountId={accountId}
+      pack={state.pack}
+      answers={state.answers}
+      status={state.status}
+      error={state.error}
+      success={state.success}
+      onAnswersChange={onChange}
+      onSubmit={onSubmit}
+    />
   );
 }
 
@@ -247,7 +230,7 @@ export default function RunReviewPage() {
       await Promise.all(
         filteredItems.map(async (item) => {
           try {
-            const pack = await fetchFrontendReviewAccount<AccountPack>(sid, item.account_id, {
+            const pack = await fetchFrontendReviewAccount<ReviewAccountPack>(sid, item.account_id, {
               packPath: typeof item.file === 'string' ? item.file : undefined,
             });
 
@@ -513,7 +496,7 @@ export default function RunReviewPage() {
 
       <div className="space-y-6">
         {orderedCards.map(({ accountId, state }) => (
-          <ReviewCard
+          <ReviewCardContainer
             key={accountId}
             accountId={accountId}
             state={state ?? createInitialCardState()}

@@ -45,6 +45,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from celery import Celery, shared_task, signals
+from kombu import Queue
 
 from backend.api.env_sanitize import sanitize_openai_env as _sanitize_openai_env
 
@@ -56,6 +57,142 @@ from backend.core.utils.json_utils import _json_safe
 _sanitize_openai_env()
 
 app = Celery("tasks")
+
+
+def _default_queue_name() -> str:
+    value = (os.getenv("CELERY_DEFAULT_QUEUE") or "").strip() or "celery"
+    return value
+
+
+def _frontend_queue_name() -> str:
+    value = (os.getenv("CELERY_FRONTEND_QUEUE") or "").strip() or "frontend"
+    return value
+
+
+def _known_queue_names() -> list[str]:
+    base: list[str] = [
+        _default_queue_name(),
+        _frontend_queue_name(),
+        "merge",
+        "validation",
+    ]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for name in base:
+        key = name.strip()
+        if not key or key in seen:
+            continue
+        ordered.append(key)
+        seen.add(key)
+    existing = getattr(app.conf, "task_queues", None) or []
+    for queue in existing:
+        try:
+            queue_name = getattr(queue, "name", None)
+        except AttributeError:  # pragma: no cover - defensive
+            queue_name = None
+        if queue_name and queue_name not in seen:
+            ordered.append(queue_name)
+            seen.add(queue_name)
+    return ordered
+
+
+def _flatten_task_routes(routes: object) -> dict[str, dict]:
+    mapping: dict[str, dict] = {}
+    if isinstance(routes, dict):
+        for task_name, route in routes.items():
+            if isinstance(route, dict):
+                mapping.setdefault(task_name, {}).update(route)
+    elif isinstance(routes, (list, tuple)):
+        for entry in routes:
+            if isinstance(entry, dict):
+                for task_name, route in entry.items():
+                    if isinstance(route, dict):
+                        mapping.setdefault(task_name, {}).update(route)
+    return mapping
+
+
+def _ensure_frontend_queue_configuration() -> None:
+    """Ensure Celery is aware of the dedicated frontend queue."""
+
+    default_queue = _default_queue_name()
+    frontend_queue = _frontend_queue_name()
+
+    queues = list(getattr(app.conf, "task_queues", []) or [])
+    known_names = _known_queue_names()
+    existing_names = {getattr(queue, "name", None) for queue in queues}
+
+    for name in known_names:
+        if name not in existing_names:
+            queues.append(Queue(name))
+            existing_names.add(name)
+
+    app.conf.task_create_missing_queues = True
+    app.conf.task_default_queue = default_queue
+    app.conf.task_default_exchange = os.getenv(
+        "CELERY_DEFAULT_EXCHANGE", default_queue
+    )
+    app.conf.task_default_routing_key = os.getenv(
+        "CELERY_DEFAULT_ROUTING_KEY", f"{default_queue}.default"
+    )
+    app.conf.task_queues = queues
+
+    frontend_tasks = {
+        "backend.api.tasks.generate_frontend_packs_task": frontend_queue,
+    }
+
+    routes_config = getattr(app.conf, "task_routes", None)
+    if not routes_config:
+        app.conf.task_routes = {
+            task_name: {"queue": queue_name, "routing_key": queue_name}
+            for task_name, queue_name in frontend_tasks.items()
+        }
+        return
+
+    if isinstance(routes_config, dict):
+        for task_name, queue_name in frontend_tasks.items():
+            existing = routes_config.get(task_name)
+            if isinstance(existing, dict):
+                existing.setdefault("queue", queue_name)
+                existing.setdefault("routing_key", queue_name)
+            elif existing is None:
+                routes_config[task_name] = {
+                    "queue": queue_name,
+                    "routing_key": queue_name,
+                }
+        app.conf.task_routes = routes_config
+        return
+
+    if isinstance(routes_config, (list, tuple)):
+        updated_routes = list(routes_config)
+        for task_name, queue_name in frontend_tasks.items():
+            applied = False
+            for entry in updated_routes:
+                if not isinstance(entry, dict) or task_name not in entry:
+                    continue
+                value = entry.get(task_name)
+                if isinstance(value, dict):
+                    value.setdefault("queue", queue_name)
+                    value.setdefault("routing_key", queue_name)
+                    applied = True
+                    break
+            if not applied:
+                updated_routes.append(
+                    {task_name: {"queue": queue_name, "routing_key": queue_name}}
+                )
+        app.conf.task_routes = updated_routes
+        return
+
+    # Fallback: leave exotic configurations untouched but append our routes.
+    app.conf.task_routes = [
+        routes_config,
+        {
+            task_name: {"queue": queue_name, "routing_key": queue_name}
+            for task_name, queue_name in frontend_tasks.items()
+        },
+    ]
+
+
+_ensure_frontend_queue_configuration()
 
 
 def _parse_task_routes(raw: str) -> object | None:
@@ -78,6 +215,7 @@ def configure_worker(**_):
             broker_url=os.getenv("CELERY_BROKER_URL", cfg.celery_broker_url),
             result_backend=os.getenv("CELERY_RESULT_BACKEND", cfg.celery_broker_url),
         )
+        _ensure_frontend_queue_configuration()
 
         routes_env = os.getenv("CELERY_TASK_ROUTES")
         if routes_env:

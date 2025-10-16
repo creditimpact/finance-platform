@@ -102,9 +102,12 @@ $PY = "$PWD\.venv\Scripts\python.exe"
 & $PY -m celery -A backend.api.tasks worker `
   --loglevel=INFO `
   --pool=solo `
-  -Q celery,merge,validation `
+  -Q celery,merge,validation,frontend `
   --prefetch-multiplier=1 `
   --max-tasks-per-child=50
+
+At least one worker process must listen on the `frontend` queue so the review
+packs generate promptly even while merge or validation jobs are running.
 ```
 
 `backend.validation.manifest` validates that every pack referenced in the

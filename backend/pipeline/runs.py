@@ -20,6 +20,12 @@ def _runs_root() -> Path:
 
 RUNS_ROOT = _runs_root()
 
+
+def get_runs_root() -> Path:
+    """Return the configured runs/ root directory."""
+
+    return _runs_root()
+
 def _utc_now():
     # timezone-aware UTC to avoid deprecation; normalize suffix to 'Z'
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")

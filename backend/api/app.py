@@ -49,7 +49,7 @@ from backend.api.session_manager import (
 )
 from backend.api.tasks import run_credit_repair_process  # noqa: F401
 from backend.api.tasks import app as celery_app, smoke_task
-from backend.pipeline.runs import RunManifest, persist_manifest
+from backend.pipeline.runs import RunManifest, get_runs_root, persist_manifest
 from backend.core.paths.frontend_review import get_frontend_review_paths
 from backend.frontend.packs.config import load_frontend_stage_config
 from backend.api.routes_smoke import bp as smoke_bp
@@ -128,8 +128,7 @@ _review_stream_broker = _ReviewStreamBroker()
 
 
 def _runs_root_path() -> Path:
-    root = os.getenv("RUNS_ROOT")
-    return Path(root) if root else Path("runs")
+    return get_runs_root()
 
 
 def _validate_sid(sid: str) -> str:

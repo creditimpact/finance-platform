@@ -80,6 +80,10 @@ function buildFrontendReviewAccountUrl(sessionId: string, accountId: string): st
   return `${buildRunApiUrl(sessionId, '/frontend/review/accounts')}/${encodeURIComponent(accountId)}`;
 }
 
+function buildFrontendReviewResponseUrl(sessionId: string, accountId: string): string {
+  return `${buildRunApiUrl(sessionId, '/frontend/review/response')}/${encodeURIComponent(accountId)}`;
+}
+
 export function buildFrontendReviewStreamUrl(sessionId: string): string {
   return buildRunApiUrl(sessionId, '/frontend/review/stream');
 }
@@ -320,21 +324,61 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
   return fetchJson<T>(buildRunAssetUrl(sessionId, normalizedPath), init);
 }
 
+export interface FrontendReviewResponseClientMeta {
+  user_agent?: string | null;
+  tz?: string | null;
+  ts?: string | null;
+  [key: string]: unknown;
+}
+
+export interface FrontendReviewResponse {
+  account_id?: string | null;
+  answers?: Record<string, string> | null;
+  client_meta?: FrontendReviewResponseClientMeta | null;
+  saved_at?: string | null;
+  [key: string]: unknown;
+}
+
+function resolveUserAgent(): string | undefined {
+  if (typeof navigator !== 'undefined' && typeof navigator.userAgent === 'string') {
+    return navigator.userAgent;
+  }
+  return undefined;
+}
+
+function resolveTimeZone(): string | undefined {
+  if (typeof Intl !== 'undefined' && typeof Intl.DateTimeFormat === 'function') {
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (typeof tz === 'string' && tz.trim() !== '') {
+        return tz;
+      }
+    } catch (err) {
+      console.warn('Unable to resolve timezone', err);
+    }
+  }
+  return undefined;
+}
+
 export async function submitFrontendReviewAnswers(
   sessionId: string,
   accountId: string,
   answers: Record<string, string>,
   init?: RequestInit
-): Promise<{ ok: true }> {
+): Promise<FrontendReviewResponse> {
   if (!accountId) {
     throw new Error('Missing account id');
   }
   const payload = {
     answers,
-    client_ts: new Date().toISOString(),
+    client_meta: {
+      user_agent: resolveUserAgent() ?? 'unknown',
+      tz: resolveTimeZone() ?? 'UTC',
+      ts: new Date().toISOString(),
+    },
   };
-  return fetchJson<{ ok: true }>(
-    `${buildFrontendReviewAccountUrl(sessionId, accountId)}/answer`,
+  return fetchJson<FrontendReviewResponse>(
+    buildFrontendReviewResponseUrl(sessionId, accountId),
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

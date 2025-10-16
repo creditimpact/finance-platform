@@ -6,9 +6,17 @@ export type AccountQuestionAnswers = Partial<Record<AccountQuestionKey, string>>
 export interface AccountQuestionsProps {
   onChange?: (answers: AccountQuestionAnswers) => void;
   initialAnswers?: AccountQuestionAnswers;
+  visibleQuestions?: AccountQuestionKey[];
 }
 
 const MAX_EXPLANATION_LENGTH = 1500;
+
+const QUESTION_ORDER: AccountQuestionKey[] = [
+  'ownership',
+  'recognize',
+  'identity_theft',
+  'explanation'
+];
 
 const OWNERSHIP_OPTIONS = [
   { value: '', label: 'Select an option' },
@@ -34,7 +42,29 @@ function createInitialState(initialAnswers?: AccountQuestionAnswers) {
   } satisfies Record<AccountQuestionKey, string>;
 }
 
-export function AccountQuestions({ onChange, initialAnswers }: AccountQuestionsProps) {
+export function AccountQuestions({ onChange, initialAnswers, visibleQuestions }: AccountQuestionsProps) {
+  const normalizedVisibleQuestions = React.useMemo(() => {
+    if (!visibleQuestions || visibleQuestions.length === 0) {
+      return QUESTION_ORDER;
+    }
+
+    const seen = new Set<AccountQuestionKey>();
+    const filtered: AccountQuestionKey[] = [];
+
+    for (const key of visibleQuestions) {
+      if (QUESTION_ORDER.includes(key) && !seen.has(key)) {
+        filtered.push(key);
+        seen.add(key);
+      }
+    }
+
+    if (filtered.length === 0) {
+      return QUESTION_ORDER;
+    }
+
+    return filtered;
+  }, [visibleQuestions]);
+
   const [answers, setAnswers] = React.useState(() => createInitialState(initialAnswers));
 
   React.useEffect(() => {
@@ -74,42 +104,55 @@ export function AccountQuestions({ onChange, initialAnswers }: AccountQuestionsP
 
   const explanationLength = answers.explanation.length;
 
+  const showOwnership = normalizedVisibleQuestions.includes('ownership');
+  const showRecognize = normalizedVisibleQuestions.includes('recognize');
+  const showIdentityTheft = normalizedVisibleQuestions.includes('identity_theft');
+  const showExplanation = normalizedVisibleQuestions.includes('explanation');
+
   return (
     <div className="space-y-6">
       <div className="grid gap-6 md:grid-cols-2">
-        <QuestionSelect
-          id="account-question-ownership"
-          label={QUESTION_COPY.ownership.title}
-          helper={QUESTION_COPY.ownership.helper}
-          options={OWNERSHIP_OPTIONS}
-          value={answers.ownership}
-          onChange={handleSelectChange('ownership')}
-        />
-        <QuestionSelect
-          id="account-question-recognize"
-          label={QUESTION_COPY.recognize.title}
-          helper={QUESTION_COPY.recognize.helper}
-          options={RECOGNIZE_OPTIONS}
-          value={answers.recognize}
-          onChange={handleSelectChange('recognize')}
-        />
-        <QuestionSelect
-          id="account-question-identity-theft"
-          label={QUESTION_COPY.identity_theft.title}
-          helper={QUESTION_COPY.identity_theft.helper}
-          options={IDENTITY_THEFT_OPTIONS}
-          value={answers.identity_theft}
-          onChange={handleSelectChange('identity_theft')}
-        />
-        <ExplanationField
-          id="account-question-explanation"
-          label={QUESTION_COPY.explanation.title}
-          helper={QUESTION_COPY.explanation.helper}
-          value={answers.explanation}
-          onChange={handleExplanationChange}
-          maxLength={MAX_EXPLANATION_LENGTH}
-          length={explanationLength}
-        />
+        {showOwnership ? (
+          <QuestionSelect
+            id="account-question-ownership"
+            label={QUESTION_COPY.ownership.title}
+            helper={QUESTION_COPY.ownership.helper}
+            options={OWNERSHIP_OPTIONS}
+            value={answers.ownership}
+            onChange={handleSelectChange('ownership')}
+          />
+        ) : null}
+        {showRecognize ? (
+          <QuestionSelect
+            id="account-question-recognize"
+            label={QUESTION_COPY.recognize.title}
+            helper={QUESTION_COPY.recognize.helper}
+            options={RECOGNIZE_OPTIONS}
+            value={answers.recognize}
+            onChange={handleSelectChange('recognize')}
+          />
+        ) : null}
+        {showIdentityTheft ? (
+          <QuestionSelect
+            id="account-question-identity-theft"
+            label={QUESTION_COPY.identity_theft.title}
+            helper={QUESTION_COPY.identity_theft.helper}
+            options={IDENTITY_THEFT_OPTIONS}
+            value={answers.identity_theft}
+            onChange={handleSelectChange('identity_theft')}
+          />
+        ) : null}
+        {showExplanation ? (
+          <ExplanationField
+            id="account-question-explanation"
+            label={QUESTION_COPY.explanation.title}
+            helper={QUESTION_COPY.explanation.helper}
+            value={answers.explanation}
+            onChange={handleExplanationChange}
+            maxLength={MAX_EXPLANATION_LENGTH}
+            length={explanationLength}
+          />
+        ) : null}
       </div>
     </div>
   );

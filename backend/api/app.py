@@ -25,7 +25,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from shutil import copy2
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from flask import Blueprint, Flask, jsonify, redirect, request, url_for
 from flask_cors import CORS
@@ -289,8 +289,133 @@ def _load_frontend_pack(pack_path: Path) -> Any:
         raise
 
 
-@api_bp.route("/api/runs/<sid>/frontend/review/index", methods=["GET"])
-def api_frontend_review_index(sid: str):
+def _resolve_run_manifest(run_dir: Path) -> Path | None:
+    candidate = run_dir / "manifest.json"
+    return candidate if candidate.is_file() else None
+
+
+def _load_run_manifest(run_dir: Path) -> Mapping[str, Any] | None:
+    manifest_path = _resolve_run_manifest(run_dir)
+    if manifest_path is None:
+        return None
+
+    try:
+        payload = _load_json_file(manifest_path)
+    except json.JSONDecodeError:
+        logger.warning(
+            "RUN_MANIFEST_DECODE_FAILED sid=%s path=%s", run_dir.name, manifest_path
+        )
+        raise
+    except OSError:
+        logger.warning(
+            "RUN_MANIFEST_READ_FAILED sid=%s path=%s", run_dir.name, manifest_path
+        )
+        raise
+
+    if isinstance(payload, Mapping):
+        return payload
+    return None
+
+
+def _iter_frontend_pack_entries(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
+    for key in ("items", "packs"):
+        entries = payload.get(key)
+        if isinstance(entries, list):
+            for entry in entries:
+                if isinstance(entry, Mapping):
+                    yield entry
+
+
+def _normalize_review_listing_path(run_dir: Path, value: str) -> str | None:
+    try:
+        candidate = _safe_relative_path(run_dir, value)
+    except ValueError:
+        return None
+
+    try:
+        rel = candidate.relative_to(run_dir)
+        return str(rel)
+    except ValueError:
+        return str(candidate)
+
+
+def _collect_review_pack_listing(
+    run_dir: Path, payload: Mapping[str, Any]
+) -> list[dict[str, str]]:
+    listing: list[dict[str, str]] = []
+    stage_config = load_frontend_stage_config(run_dir)
+
+    packs_dir_hint = payload.get("packs_dir") if isinstance(payload, Mapping) else None
+    packs_dir_str: str | None = packs_dir_hint if isinstance(packs_dir_hint, str) else None
+
+    for entry in _iter_frontend_pack_entries(payload):
+        account_id = entry.get("account_id")
+        if not isinstance(account_id, str):
+            continue
+
+        candidates: list[str] = []
+        for key in ("file", "path"):
+            value = entry.get(key)
+            if isinstance(value, str):
+                candidates.append(value)
+
+        filename = entry.get("filename")
+        if isinstance(filename, str):
+            candidates.append(str(stage_config.packs_dir / filename))
+            candidates.append(filename)
+            dir_hint = entry.get("dir")
+            if isinstance(dir_hint, str):
+                candidates.append(str(Path(dir_hint) / filename))
+            if packs_dir_str:
+                candidates.append(str(Path(packs_dir_str) / filename))
+
+        normalized: str | None = None
+        for candidate in candidates:
+            normalized = _normalize_review_listing_path(run_dir, candidate)
+            if normalized:
+                break
+
+        if not normalized:
+            fallback = stage_config.packs_dir / f"{account_id}.json"
+            normalized = _normalize_review_listing_path(run_dir, str(fallback))
+
+        if normalized:
+            listing.append({"account_id": account_id, "file": normalized})
+
+    return listing
+
+
+@api_bp.route("/api/runs/<sid>/frontend/manifest", methods=["GET"])
+def api_frontend_manifest(sid: str):
+    try:
+        run_dir = _run_dir_for_sid(sid)
+    except ValueError:
+        return jsonify({"error": "invalid_sid"}), 400
+
+    if not run_dir.exists():
+        return jsonify({"error": "run_not_found"}), 404
+
+    try:
+        manifest = _load_run_manifest(run_dir)
+    except Exception:  # pragma: no cover - defensive logging
+        return jsonify({"error": "manifest_read_failed"}), 500
+
+    if manifest is None:
+        return jsonify({"error": "manifest_not_found"}), 404
+
+    section = (request.args.get("section") or "").strip().lower()
+    if section == "frontend":
+        subset: dict[str, Any] = {
+            "sid": manifest.get("sid"),
+            "frontend": manifest.get("frontend"),
+        }
+        return jsonify(subset)
+
+    return jsonify(manifest)
+
+
+@api_bp.route("/api/runs/<sid>/frontend/index", methods=["GET"])
+def api_frontend_index(sid: str):
     try:
         run_dir = _run_dir_for_sid(sid)
     except ValueError:
@@ -298,10 +423,34 @@ def api_frontend_review_index(sid: str):
 
     manifest = _load_frontend_stage_manifest(run_dir)
     if manifest is None:
-        return jsonify({"error": "not_found"}), 404
+        return jsonify({"error": "index_not_found"}), 404
 
     _, payload = manifest
     return jsonify(payload)
+
+
+@api_bp.route("/api/runs/<sid>/frontend/review/index", methods=["GET"])
+def api_frontend_review_index(sid: str):
+    return api_frontend_index(sid)
+
+
+@api_bp.route("/api/runs/<sid>/frontend/review/packs", methods=["GET"])
+def api_frontend_review_packs(sid: str):
+    try:
+        run_dir = _run_dir_for_sid(sid)
+    except ValueError:
+        return jsonify({"error": "invalid_sid"}), 400
+
+    manifest = _load_frontend_stage_manifest(run_dir)
+    if manifest is None:
+        return jsonify({"error": "index_not_found"}), 404
+
+    _, payload = manifest
+    if not isinstance(payload, Mapping):
+        return jsonify({"items": []})
+
+    items = _collect_review_pack_listing(run_dir, payload)
+    return jsonify({"items": items})
 
 
 def _stage_pack_path_for_account(run_dir: Path, account_id: str) -> Path | None:
@@ -315,32 +464,48 @@ def _stage_pack_path_for_account(run_dir: Path, account_id: str) -> Path | None:
 
     manifest_info = _load_frontend_stage_manifest(run_dir)
     if manifest_info is None:
-        return None
+        return candidate if candidate.is_file() else None
 
     _, manifest_payload = manifest_info
-    packs = manifest_payload.get("packs") if isinstance(manifest_payload, Mapping) else None
-    if not isinstance(packs, list):
-        return None
+    if not isinstance(manifest_payload, Mapping):
+        return candidate if candidate.is_file() else None
 
-    for pack_meta in packs:
-        if not isinstance(pack_meta, Mapping):
-            continue
-        if pack_meta.get("account_id") != account_id:
-            continue
-        path_value = pack_meta.get("path")
-        if not isinstance(path_value, str):
-            continue
-        try:
-            manifest_candidate = _safe_relative_path(run_dir, path_value)
-        except ValueError:
-            continue
-        if manifest_candidate.is_file():
-            return manifest_candidate
+    packs_dir_hint = manifest_payload.get("packs_dir")
+    packs_dir_value = Path(packs_dir_hint) if isinstance(packs_dir_hint, str) else None
 
-    return None
+    for entry in _iter_frontend_pack_entries(manifest_payload):
+        if entry.get("account_id") != account_id:
+            continue
+
+        path_candidates: list[str] = []
+        for key in ("path", "file"):
+            value = entry.get(key)
+            if isinstance(value, str):
+                path_candidates.append(value)
+
+        filename_value = entry.get("filename")
+        if isinstance(filename_value, str):
+            path_candidates.append(filename_value)
+            dir_hint = entry.get("dir")
+            if isinstance(dir_hint, str):
+                path_candidates.append(str(Path(dir_hint) / filename_value))
+            if packs_dir_value is not None:
+                path_candidates.append(str(packs_dir_value / filename_value))
+            path_candidates.append(str(stage_dir / filename_value))
+
+        for value in path_candidates:
+            try:
+                manifest_candidate = _safe_relative_path(run_dir, value)
+            except ValueError:
+                continue
+            if manifest_candidate.is_file():
+                return manifest_candidate
+
+    return candidate if candidate.is_file() else None
 
 
 @api_bp.route("/api/runs/<sid>/frontend/review/accounts/<account_id>", methods=["GET"])
+@api_bp.route("/api/runs/<sid>/frontend/review/pack/<account_id>", methods=["GET"])
 def api_frontend_review_pack(sid: str, account_id: str):
     try:
         run_dir = _run_dir_for_sid(sid)
@@ -364,6 +529,10 @@ def api_frontend_review_pack(sid: str, account_id: str):
     "/api/runs/<sid>/frontend/review/accounts/<account_id>/answer",
     methods=["POST"],
 )
+@api_bp.route(
+    "/api/runs/<sid>/frontend/review/response/<account_id>",
+    methods=["POST"],
+)
 def api_frontend_review_answer(sid: str, account_id: str):
     try:
         run_dir = _run_dir_for_sid(sid)
@@ -385,6 +554,10 @@ def api_frontend_review_answer(sid: str, account_id: str):
     if client_ts is not None and not isinstance(client_ts, str):
         return jsonify({"error": "invalid_client_ts"}), 400
 
+    client_meta = data.get("client_meta")
+    if client_meta is not None and not isinstance(client_meta, Mapping):
+        return jsonify({"error": "invalid_client_meta"}), 400
+
     record: dict[str, Any] = {
         "sid": sid,
         "account_id": account_id,
@@ -393,6 +566,8 @@ def api_frontend_review_answer(sid: str, account_id: str):
     }
     if client_ts is not None:
         record["client_ts"] = client_ts
+    if isinstance(client_meta, Mapping):
+        record["client_meta"] = dict(client_meta)
 
     stage_config = load_frontend_stage_config(run_dir)
     responses_dir = stage_config.responses_dir
@@ -402,7 +577,7 @@ def api_frontend_review_answer(sid: str, account_id: str):
     with resp_path.open("w", encoding="utf-8") as handle:
         json.dump(record, handle, ensure_ascii=False, indent=2)
 
-    return jsonify({"ok": True})
+    return jsonify(record)
 
 
 @api_bp.route("/api/start-process", methods=["POST"])

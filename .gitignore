@@ -30,6 +30,8 @@ nohup.out
 # קבצים רגישים או מקומיים
 .env
 .env.*
+!frontend/.env
+!frontend/.env.*
 *.sqlite3
 *.db
 config.py  # אם הוא מכיל סודות – השארת רק גרסת example

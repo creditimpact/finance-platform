@@ -25,12 +25,20 @@ function encodePathSegments(path = '') {
     .join('/');
 }
 
+export function joinRunAsset(base, rel) {
+  const b = base.replace(/\/+$/, '');
+  const r = rel.replace(/\\/g, '/').replace(/^\/+/, '');
+  return `${b}/${r}`;
+}
+
 function buildRunAssetUrl(sessionId, relativePath) {
   const base = `${API}/runs/${encodeURIComponent(sessionId)}`;
   if (!relativePath) {
     return base;
   }
-  return `${base}/${encodePathSegments(relativePath)}`;
+  const normalizedPath = (typeof relativePath === 'string' ? relativePath : '').replace(/\\/g, '/');
+  const encodedPath = encodePathSegments(normalizedPath);
+  return joinRunAsset(base, encodedPath);
 }
 
 function trimSlashes(input = '') {

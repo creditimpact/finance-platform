@@ -604,7 +604,8 @@ def api_frontend_index(sid: str):
         return jsonify({"error": "index_not_found"}), 404
 
     _, payload = manifest
-    return jsonify(payload)
+    normalized = _normalize_frontend_review_index_payload(run_dir, payload)
+    return jsonify(normalized)
 
 
 @api_bp.route("/api/runs/<sid>/frontend/review/index", methods=["GET"])
@@ -696,11 +697,32 @@ def api_frontend_review_packs(sid: str):
         return jsonify({"error": "index_not_found"}), 404
 
     _, payload = manifest
-    if not isinstance(payload, Mapping):
-        return jsonify({"items": []})
+    normalized = _normalize_frontend_review_index_payload(run_dir, payload)
+    return jsonify({"items": normalized.get("items", [])})
 
-    items = _collect_review_pack_listing(run_dir, payload)
-    return jsonify({"items": items})
+
+def _normalize_frontend_review_index_payload(
+    run_dir: Path, payload: Any
+) -> dict[str, Any]:
+    result: dict[str, Any]
+    if isinstance(payload, Mapping):
+        result = dict(payload)
+    else:
+        result = {}
+
+    items = _collect_review_pack_listing(run_dir, result) if isinstance(payload, Mapping) else []
+    result["items"] = items
+
+    packs_count = _extract_packs_count(result)
+    if packs_count <= 0 and items:
+        packs_count = len(items)
+
+    result["packs_count"] = packs_count
+
+    if result:
+        return result
+
+    return {"packs_count": packs_count, "items": items}
 
 
 def _stage_pack_path_for_account(run_dir: Path, account_id: str) -> Path | None:

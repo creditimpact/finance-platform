@@ -1,0 +1,23 @@
+{
+  "schema": "review-index/v1",
+  "packs_dir_rel": "review/packs",
+  "responses_dir_rel": "review/responses",
+  "items": [
+    {
+      "account_id": "idx-008",
+      "file": "frontend/review/packs/idx-008.json"
+    },
+    {
+      "account_id": "idx-011",
+      "file": "frontend/review/packs/idx-011.json"
+    },
+    {
+      "account_id": "idx-012",
+      "file": "frontend/review/packs/idx-012.json"
+    },
+    {
+      "account_id": "idx-016",
+      "file": "frontend/review/packs/idx-016.json"
+    }
+  ]
+}

@@ -7,7 +7,12 @@ import BureauGrid from './BureauGrid';
 import { AgreementLevel, BUREAUS, BureauKey, MISSING_VALUE } from './accountFieldTypes';
 import { summarizeField as summarizeBureauField, type BureauTriple } from '../utils/bureauSummary';
 import { QUESTION_COPY, type AccountQuestionKey } from './questionCopy';
-import { shouldShowBureauDetails } from '../config/featureFlags';
+import {
+  shouldHideConsensus,
+  shouldPreferLongestAccountMask,
+  shouldShowBureauDetails
+} from '../config/featureFlags';
+import { useI18n } from '../lib/i18n';
 
 type PerBureauBlock = {
   per_bureau?: Partial<Record<BureauKey, string | null | undefined>>;
@@ -36,7 +41,8 @@ export type AccountPack = {
 
 type SummaryFieldConfig = {
   key: keyof AccountDisplay;
-  label: string;
+  messageId: string;
+  defaultLabel: string;
 };
 
 type FieldSummaryEntry = SummaryFieldConfig & {
@@ -46,11 +52,15 @@ type FieldSummaryEntry = SummaryFieldConfig & {
 };
 
 const SUMMARY_FIELDS: SummaryFieldConfig[] = [
-  { key: 'account_type', label: 'Account type' },
-  { key: 'status', label: 'Status' },
-  { key: 'balance_owed', label: 'Balance owed' },
-  { key: 'date_opened', label: 'Date opened' },
-  { key: 'closed_date', label: 'Closed date' }
+  { key: 'account_type', messageId: 'accountCard.summary.accountType', defaultLabel: 'Account type' },
+  { key: 'status', messageId: 'accountCard.summary.status', defaultLabel: 'Status' },
+  {
+    key: 'balance_owed',
+    messageId: 'accountCard.summary.balanceOwed',
+    defaultLabel: 'Balance owed'
+  },
+  { key: 'date_opened', messageId: 'accountCard.summary.dateOpened', defaultLabel: 'Date opened' },
+  { key: 'closed_date', messageId: 'accountCard.summary.closedDate', defaultLabel: 'Closed date' }
 ];
 
 function toBureauTriple(field: PerBureauBlock | DateBlock | undefined): BureauTriple {
@@ -83,13 +93,25 @@ function toBureauTriple(field: PerBureauBlock | DateBlock | undefined): BureauTr
 
 function buildFieldSummary(
   field: PerBureauBlock | DateBlock | undefined,
-  config: SummaryFieldConfig
+  config: SummaryFieldConfig,
+  options: { includeConsensus: boolean }
 ): FieldSummaryEntry {
   const summary = summarizeBureauField(toBureauTriple(field));
 
+  let summaryValue = summary.summary;
+
+  if (options.includeConsensus && field && 'consensus' in field) {
+    const consensusValue = (field as PerBureauBlock).consensus;
+    if (consensusValue && consensusValue.trim() !== '') {
+      if (summaryValue === MISSING_VALUE || summaryValue.trim() === '') {
+        summaryValue = consensusValue;
+      }
+    }
+  }
+
   return {
     ...config,
-    summaryValue: summary.summary,
+    summaryValue,
     agreement: summary.agreement as AgreementLevel,
     values: summary.values
   };
@@ -122,35 +144,79 @@ export interface AccountCardProps {
 }
 
 export function AccountCard({ pack }: AccountCardProps) {
+  const t = useI18n();
   const display = pack.display ?? ({} as AccountDisplay);
+
+  const includeConsensus = React.useMemo(() => !shouldHideConsensus(), []);
+  const preferLongestAccountMask = React.useMemo(() => shouldPreferLongestAccountMask(), []);
+  const expandDetailsByDefault = React.useMemo(() => shouldShowBureauDetails(), []);
 
   const fieldSummaries = React.useMemo<FieldSummaryEntry[]>(() => {
     return SUMMARY_FIELDS.map((field) =>
-      buildFieldSummary(display[field.key] as PerBureauBlock | DateBlock | undefined, field)
+      buildFieldSummary(display[field.key] as PerBureauBlock | DateBlock | undefined, field, {
+        includeConsensus
+      })
     );
-  }, [display]);
-
-  const showBureauDetails = React.useMemo(() => shouldShowBureauDetails(), []);
+  }, [display, includeConsensus]);
 
   const hasDisagreement = fieldSummaries.some(
     (field) => field.agreement === 'majority' || field.agreement === 'mixed'
   );
 
-  const [expanded, setExpanded] = React.useState(showBureauDetails && hasDisagreement);
+  const [expanded, setExpanded] = React.useState(() => expandDetailsByDefault && hasDisagreement);
   const detailsId = React.useId();
 
   React.useEffect(() => {
-    if (showBureauDetails) {
+    if (expandDetailsByDefault) {
       setExpanded(hasDisagreement);
     }
-  }, [hasDisagreement, showBureauDetails]);
+  }, [expandDetailsByDefault, hasDisagreement]);
 
   const accountNumberSummary = React.useMemo(() => {
-    const result = summarizeBureauField(toBureauTriple(display.account_number), {
+    const triple = toBureauTriple(display.account_number);
+    const result = summarizeBureauField(triple, {
       kind: 'account_number'
     });
-    return result.summary;
-  }, [display.account_number]);
+    const values = Object.values(triple).filter(
+      (value): value is string => typeof value === 'string' && value.trim() !== ''
+    );
+
+    let summaryValue = result.summary;
+
+    if (preferLongestAccountMask && values.length > 0) {
+      const longest = values.reduce((current, candidate) => {
+        if (!current) {
+          return candidate;
+        }
+
+        if (candidate.length > current.length) {
+          return candidate;
+        }
+
+        return current;
+      }, '');
+
+      if (!summaryValue || longest.length > summaryValue.length) {
+        summaryValue = longest;
+      }
+    }
+
+    if (includeConsensus && display.account_number?.consensus) {
+      const consensusValue = display.account_number.consensus.trim();
+      if (consensusValue) {
+        const shouldUseConsensus =
+          summaryValue === MISSING_VALUE || summaryValue.trim() === '';
+        const shouldPreferConsensus =
+          preferLongestAccountMask && consensusValue.length > summaryValue.length;
+
+        if (shouldUseConsensus || shouldPreferConsensus) {
+          summaryValue = consensusValue;
+        }
+      }
+    }
+
+    return summaryValue;
+  }, [display.account_number, includeConsensus, preferLongestAccountMask]);
 
   const questions: QuestionBlock = display.questions ?? {};
 
@@ -159,9 +225,16 @@ export function AccountCard({ pack }: AccountCardProps) {
       <CardHeader className="gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-1">
           <CardTitle className="text-xl font-semibold text-slate-900">
-            {pack.holder_name ?? 'Unknown account holder'}
+            {pack.holder_name ??
+              t({ id: 'accountCard.unknownHolder', defaultMessage: 'Unknown account holder' })}
           </CardTitle>
-          <p className="text-sm text-slate-600">Account number: {accountNumberSummary ?? MISSING_VALUE}</p>
+          <p className="text-sm text-slate-600">
+            {t({
+              id: 'accountCard.accountNumberLabel',
+              defaultMessage: 'Account number: {accountNumber}',
+              values: { accountNumber: accountNumberSummary ?? MISSING_VALUE }
+            })}
+          </p>
         </div>
         {pack.primary_issue ? (
           <Badge variant="outline" className="whitespace-nowrap text-xs font-semibold capitalize text-slate-700">
@@ -174,45 +247,51 @@ export function AccountCard({ pack }: AccountCardProps) {
           {fieldSummaries.map((field) => (
             <FieldSummary
               key={field.key}
-              label={field.label}
+              label={t({ id: field.messageId, defaultMessage: field.defaultLabel })}
               value={field.summaryValue}
               agreement={field.agreement}
             />
           ))}
         </div>
 
-        {showBureauDetails ? (
-          <div className="space-y-3">
-            <button
-              type="button"
-              className="flex items-center gap-2 text-sm font-semibold text-slate-700 transition hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2"
-              onClick={() => setExpanded((state) => !state)}
-              aria-expanded={expanded}
-              aria-controls={detailsId}
-            >
-              <span>{expanded ? 'Hide details' : 'See details'}</span>
-              <ChevronDownIcon className={cn('transition-transform', expanded ? 'rotate-180' : 'rotate-0')} />
-              {hasDisagreement ? (
-                <Badge className="bg-amber-100 text-amber-900">Disagreement</Badge>
-              ) : null}
-            </button>
-
-            {expanded ? (
-              <BureauGrid
-                id={detailsId}
-                fields={fieldSummaries.map((field) => ({
-                  fieldKey: field.key,
-                  label: field.label,
-                  values: field.values,
-                  agreement: field.agreement
-                }))}
-              />
+        <div className="space-y-3">
+          <button
+            type="button"
+            className="flex items-center gap-2 text-sm font-semibold text-slate-700 transition hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2"
+            onClick={() => setExpanded((state) => !state)}
+            aria-expanded={expanded}
+            aria-controls={detailsId}
+          >
+            <span>
+              {expanded
+                ? t({ id: 'accountCard.details.hide', defaultMessage: 'Hide details' })
+                : t({ id: 'accountCard.details.show', defaultMessage: 'See details' })}
+            </span>
+            <ChevronDownIcon className={cn('transition-transform', expanded ? 'rotate-180' : 'rotate-0')} />
+            {hasDisagreement ? (
+              <Badge className="bg-amber-100 text-amber-900">
+                {t({ id: 'accountCard.details.disagreement', defaultMessage: 'Disagreement' })}
+              </Badge>
             ) : null}
-          </div>
-        ) : null}
+          </button>
+
+          {expanded ? (
+            <BureauGrid
+              id={detailsId}
+              fields={fieldSummaries.map((field) => ({
+                fieldKey: field.key,
+                label: t({ id: field.messageId, defaultMessage: field.defaultLabel }),
+                values: field.values,
+                agreement: field.agreement
+              }))}
+            />
+          ) : null}
+        </div>
 
         <div className="space-y-4">
-          <h4 className="text-base font-semibold text-slate-900">Tell us about this account</h4>
+          <h4 className="text-base font-semibold text-slate-900">
+            {t({ id: 'accountCard.questions.heading', defaultMessage: 'Tell us about this account' })}
+          </h4>
           <div className="grid gap-3 md:grid-cols-2">
             {Object.entries(QUESTION_COPY).map(([key, copy]) => {
               const value = questions?.[key as keyof QuestionBlock];
@@ -222,11 +301,17 @@ export function AccountCard({ pack }: AccountCardProps) {
                   className="flex flex-col gap-2 rounded-lg border border-slate-200 p-4"
                 >
                   <div>
-                    <p className="text-sm font-semibold text-slate-900">{copy.title}</p>
-                    <p className="text-xs text-slate-600">{copy.helper}</p>
+                    <p className="text-sm font-semibold text-slate-900">
+                      {t({ id: `accountCard.questions.${key}.title`, defaultMessage: copy.title })}
+                    </p>
+                    <p className="text-xs text-slate-600">
+                      {t({ id: `accountCard.questions.${key}.helper`, defaultMessage: copy.helper })}
+                    </p>
                   </div>
                   <Badge variant="subtle" className="w-fit bg-slate-100 text-slate-600">
-                    {value ? value : 'No response yet'}
+                    {value
+                      ? value
+                      : t({ id: 'accountCard.questions.noResponse', defaultMessage: 'No response yet' })}
                   </Badge>
                 </div>
               );

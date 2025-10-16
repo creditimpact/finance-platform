@@ -48,3 +48,11 @@ export function getBooleanFlag(key: string, defaultValue: boolean): boolean {
 export function shouldShowBureauDetails(): boolean {
   return getBooleanFlag('VITE_SHOW_BUREAU_DETAILS', true);
 }
+
+export function shouldHideConsensus(): boolean {
+  return getBooleanFlag('VITE_HIDE_CONSENSUS', true);
+}
+
+export function shouldPreferLongestAccountMask(): boolean {
+  return getBooleanFlag('VITE_ACCOUNT_NUMBER_PREFER_LONGEST_MASK', false);
+}

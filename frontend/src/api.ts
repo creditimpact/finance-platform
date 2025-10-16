@@ -71,8 +71,17 @@ function joinFrontendPath(base: string, child: string): string {
   return [trimSlashes(base), trimSlashes(child)].filter(Boolean).join('/');
 }
 
+function buildRunApiUrl(sessionId: string, path: string): string {
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  return `${API}/api/runs/${encodeURIComponent(sessionId)}${normalized}`;
+}
+
 function buildFrontendReviewAccountUrl(sessionId: string, accountId: string): string {
-  return `${API}/api/runs/${encodeURIComponent(sessionId)}/frontend/review/accounts/${encodeURIComponent(accountId)}`;
+  return `${buildRunApiUrl(sessionId, '/frontend/review/accounts')}/${encodeURIComponent(accountId)}`;
+}
+
+export function buildFrontendReviewStreamUrl(sessionId: string): string {
+  return buildRunApiUrl(sessionId, '/frontend/review/stream');
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -149,6 +158,23 @@ interface FrontendRootIndex {
   review?: FrontendStageDescriptor;
 }
 
+export interface RunFrontendManifestResponse {
+  sid?: string;
+  frontend?: {
+    review?: FrontendStageDescriptor | null;
+    [key: string]: unknown;
+  } | null;
+}
+
+export async function fetchRunFrontendManifest(
+  sessionId: string,
+  init?: RequestInit
+): Promise<RunFrontendManifestResponse> {
+  const url = new URL(buildRunApiUrl(sessionId, '/frontend/manifest'));
+  url.searchParams.set('section', 'frontend');
+  return fetchJson<RunFrontendManifestResponse>(url.toString(), init);
+}
+
 export async function fetchFrontendReviewManifest(
   sessionId: string,
   init?: RequestInit
@@ -216,6 +242,37 @@ export async function fetchFrontendReviewManifest(
     responses_dir_rel: stripFrontendPrefix(responsesDirPath),
     responses_dir_path: responsesDirPath,
   };
+}
+
+export interface FrontendReviewPackListingItem {
+  account_id: string;
+  file?: string;
+}
+
+export interface FrontendReviewPackListingResponse {
+  items: FrontendReviewPackListingItem[];
+}
+
+export async function fetchRunFrontendReviewIndex(
+  sessionId: string,
+  init?: RequestInit
+): Promise<FrontendStageDescriptor | Record<string, unknown>> {
+  return fetchJson<FrontendStageDescriptor | Record<string, unknown>>(
+    buildRunApiUrl(sessionId, '/frontend/index'),
+    init
+  );
+}
+
+export async function fetchRunReviewPackListing(
+  sessionId: string,
+  init?: RequestInit
+): Promise<FrontendReviewPackListingResponse> {
+  const response = await fetchJson<{ items?: FrontendReviewPackListingItem[] | null }>(
+    buildRunApiUrl(sessionId, '/frontend/review/packs'),
+    init
+  );
+  const items = Array.isArray(response.items) ? response.items : [];
+  return { items };
 }
 
 export async function fetchFrontendReviewAccount<T = AccountPack>(

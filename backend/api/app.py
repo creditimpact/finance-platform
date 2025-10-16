@@ -206,6 +206,87 @@ def _load_json_file(path: Path) -> Any:
         return json.load(handle)
 
 
+def _parse_created_at(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _latest_run_from_index(runs_root: Path) -> str | None:
+    index_path = runs_root / "index.json"
+    if not index_path.is_file():
+        return None
+
+    try:
+        payload = _load_json_file(index_path)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.warning("RUN_INDEX_READ_FAILED path=%s", index_path, exc_info=True)
+        return None
+
+    runs = payload.get("runs") if isinstance(payload, Mapping) else None
+    if not isinstance(runs, Iterable):
+        return None
+
+    latest_sid: str | None = None
+    latest_created: datetime | None = None
+
+    for entry in runs:
+        if not isinstance(entry, Mapping):
+            continue
+        sid = entry.get("sid")
+        if not isinstance(sid, str) or not sid:
+            continue
+
+        created_at = _parse_created_at(entry.get("created_at"))
+        if latest_created is None:
+            latest_sid = sid
+            latest_created = created_at
+            continue
+
+        if created_at is None:
+            continue
+
+        if latest_created is None or created_at > latest_created:
+            latest_sid = sid
+            latest_created = created_at
+
+    return latest_sid
+
+
+def _latest_run_from_directories(runs_root: Path) -> str | None:
+    try:
+        entries = list(runs_root.iterdir())
+    except FileNotFoundError:
+        return None
+
+    latest_sid: str | None = None
+    latest_mtime: float | None = None
+
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+
+        try:
+            stat = entry.stat()
+        except OSError:
+            continue
+
+        mtime = stat.st_mtime
+        if latest_mtime is None or mtime > latest_mtime:
+            latest_mtime = mtime
+            latest_sid = entry.name
+
+    return latest_sid
+
+
 def _format_sse(event: str | None, data: Any | None) -> bytes:
     lines: list[str] = []
     if event:
@@ -281,6 +362,15 @@ def smoke():
     """Lightweight health check verifying Celery round-trip."""
     result = smoke_task.delay().get(timeout=10)
     return jsonify({"ok": True, "celery": result})
+
+
+@api_bp.route("/api/runs/last", methods=["GET"])
+def api_runs_last():
+    runs_root = _runs_root_path()
+    sid = _latest_run_from_index(runs_root) or _latest_run_from_directories(runs_root)
+    if not sid:
+        return jsonify({"error": "no_runs"}), 404
+    return jsonify({"sid": sid})
 
 
 @api_bp.route("/api/batch-runner", methods=["POST"])

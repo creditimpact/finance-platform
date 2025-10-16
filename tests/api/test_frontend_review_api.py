@@ -1,6 +1,8 @@
 import importlib
 import json
+import os
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -159,6 +161,43 @@ def test_frontend_review_packs_listing_from_index(api_client):
             {"account_id": "idx-002", "file": "frontend/review/packs/idx-002.json"},
         ]
     }
+
+
+def test_runs_last_returns_latest_from_index(api_client):
+    client, runs_root = api_client
+    runs_root.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        runs_root / "index.json",
+        {
+            "runs": [
+                {"sid": "old", "created_at": "2025-01-01T00:00:00Z"},
+                {"sid": "new", "created_at": "2025-02-01T00:00:00Z"},
+            ]
+        },
+    )
+    (runs_root / "old").mkdir(parents=True, exist_ok=True)
+    (runs_root / "new").mkdir(parents=True, exist_ok=True)
+
+    response = client.get("/api/runs/last")
+    assert response.status_code == 200
+    assert response.get_json() == {"sid": "new"}
+
+
+def test_runs_last_falls_back_to_directory_mtime(api_client):
+    client, runs_root = api_client
+    first = runs_root / "A001"
+    second = runs_root / "A002"
+    first.mkdir(parents=True, exist_ok=True)
+    second.mkdir(parents=True, exist_ok=True)
+
+    older = time.time() - 120
+    newer = older + 30
+    os.utime(first, (older, older))
+    os.utime(second, (newer, newer))
+
+    response = client.get("/api/runs/last")
+    assert response.status_code == 200
+    assert response.get_json() == {"sid": "A002"}
 
 
 def test_frontend_review_pack_returns_stage_pack(api_client):

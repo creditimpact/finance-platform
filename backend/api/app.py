@@ -19,6 +19,8 @@ sanitize_openai_env()
 
 import json
 import logging
+import queue
+import threading
 import time
 import uuid
 from collections import defaultdict
@@ -27,7 +29,8 @@ from pathlib import Path
 from shutil import copy2
 from typing import Any, Iterable, Mapping
 
-from flask import Blueprint, Flask, jsonify, redirect, request, url_for
+from flask import Blueprint, Flask, Response, jsonify, redirect, request, url_for
+from flask import stream_with_context
 from flask_cors import CORS
 from jsonschema import Draft7Validator, ValidationError
 
@@ -81,6 +84,47 @@ FRONTEND_PACK_FILENAME_PATTERN = re.compile(r"^idx-\d{3}\.json$")
 
 
 _request_counts: dict[str, list[float]] = defaultdict(list)
+
+
+_REVIEW_STREAM_KEEPALIVE_INTERVAL = 25.0
+_REVIEW_STREAM_QUEUE_WAIT_SECONDS = 1.0
+
+
+class _ReviewStreamBroker:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._subscribers: dict[str, list[queue.Queue]] = defaultdict(list)
+
+    def subscribe(self, sid: str) -> queue.Queue:
+        channel: queue.Queue = queue.Queue()
+        with self._lock:
+            self._subscribers[sid].append(channel)
+        return channel
+
+    def unsubscribe(self, sid: str, channel: queue.Queue) -> None:
+        with self._lock:
+            channels = self._subscribers.get(sid)
+            if not channels:
+                return
+            try:
+                channels.remove(channel)
+            except ValueError:
+                return
+            if not channels:
+                self._subscribers.pop(sid, None)
+
+    def publish(self, sid: str, event: str, data: Any | None = None) -> None:
+        message = {"event": event, "data": data}
+        with self._lock:
+            subscribers = list(self._subscribers.get(sid, ()))
+        for channel in subscribers:
+            try:
+                channel.put_nowait(message)
+            except queue.Full:  # pragma: no cover - unbounded queue
+                continue
+
+
+_review_stream_broker = _ReviewStreamBroker()
 
 
 def _runs_root_path() -> Path:
@@ -160,6 +204,26 @@ def _safe_relative_path(run_dir: Path, relative_path: str) -> Path:
 def _load_json_file(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def _format_sse(event: str | None, data: Any | None) -> bytes:
+    lines: list[str] = []
+    if event:
+        lines.append(f"event: {event}")
+
+    payload: str
+    if data is None:
+        payload = "null"
+    else:
+        try:
+            payload = json.dumps(data, ensure_ascii=False)
+        except TypeError:
+            payload = json.dumps(str(data), ensure_ascii=False)
+
+    for chunk in payload.splitlines() or [""]:
+        lines.append(f"data: {chunk}")
+
+    return ("\n".join(lines) + "\n\n").encode("utf-8")
 
 
 def _now_utc_iso() -> str:
@@ -434,6 +498,78 @@ def api_frontend_review_index(sid: str):
     return api_frontend_index(sid)
 
 
+def _extract_packs_count(payload: Mapping[str, Any] | None) -> int:
+    if not isinstance(payload, Mapping):
+        return 0
+    value = payload.get("packs_count", 0)
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+@api_bp.route("/api/runs/<sid>/frontend/review/stream", methods=["GET"])
+def api_frontend_review_stream(sid: str):
+    try:
+        run_dir = _run_dir_for_sid(sid)
+    except ValueError:
+        return jsonify({"error": "invalid_sid"}), 400
+
+    if not run_dir.exists():
+        return jsonify({"error": "run_not_found"}), 404
+
+    keepalive_interval = _REVIEW_STREAM_KEEPALIVE_INTERVAL
+    queue_wait = _REVIEW_STREAM_QUEUE_WAIT_SECONDS
+
+    def _generate():
+        subscription = _review_stream_broker.subscribe(sid)
+        keepalive_deadline = time.monotonic() + keepalive_interval
+        packs_ready_sent = False
+
+        try:
+            while True:
+                if not packs_ready_sent:
+                    manifest = _load_frontend_stage_manifest(run_dir)
+                    if manifest is not None:
+                        _, payload = manifest
+                        packs_count = _extract_packs_count(payload)
+                        if packs_count > 0:
+                            yield _format_sse("packs_ready", {"packs_count": packs_count})
+                            packs_ready_sent = True
+                            keepalive_deadline = time.monotonic() + keepalive_interval
+
+                timeout = min(queue_wait, keepalive_interval)
+                try:
+                    message = subscription.get(timeout=timeout)
+                except queue.Empty:
+                    message = None
+
+                if message is not None:
+                    event = message.get("event") if isinstance(message, Mapping) else None
+                    data = message.get("data") if isinstance(message, Mapping) else None
+                    if event:
+                        yield _format_sse(event, data)
+                        keepalive_deadline = time.monotonic() + keepalive_interval
+
+                now = time.monotonic()
+                if now >= keepalive_deadline:
+                    yield b": keepalive\n\n"
+                    keepalive_deadline = now + keepalive_interval
+        finally:
+            _review_stream_broker.unsubscribe(sid, subscription)
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+
+    return Response(
+        stream_with_context(_generate()),
+        mimetype="text/event-stream",
+        headers=headers,
+    )
+
+
 @api_bp.route("/api/runs/<sid>/frontend/review/packs", methods=["GET"])
 def api_frontend_review_packs(sid: str):
     try:
@@ -576,6 +712,8 @@ def api_frontend_review_answer(sid: str, account_id: str):
     resp_path = responses_dir / filename
     with resp_path.open("w", encoding="utf-8") as handle:
         json.dump(record, handle, ensure_ascii=False, indent=2)
+
+    _review_stream_broker.publish(sid, "responses_written", {"account_id": account_id})
 
     return jsonify(record)
 

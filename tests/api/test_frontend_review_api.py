@@ -151,7 +151,11 @@ def test_frontend_index_returns_payload(api_client):
 
     response = client.get(f"/api/runs/{sid}/frontend/index")
     assert response.status_code == 200
-    assert response.get_json() == payload
+    data = response.get_json()
+    assert data["sid"] == sid
+    assert data["stage"] == "review"
+    assert data["packs_count"] == len(payload["items"])
+    assert data["items"] == payload["items"]
 
 
 def test_frontend_review_stream_emits_packs_ready(api_client, monkeypatch):

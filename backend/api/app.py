@@ -1289,7 +1289,11 @@ def create_app() -> Flask:
 
     cors_enable = os.getenv("CORS_ENABLE", "").strip().lower()
     if cors_enable in {"1", "true", "yes", "on"}:
-        allowed_origins = ["http://127.0.0.1:5173", "http://localhost:5173"]
+        allowed_origins = [
+            origin.strip()
+            for origin in os.getenv("CORS_ALLOW_ORIGINS", "").split(",")
+            if origin.strip()
+        ]
         CORS(
             app,
             resources={

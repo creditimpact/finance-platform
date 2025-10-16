@@ -808,6 +808,24 @@ def api_frontend_review_answer(sid: str, account_id: str):
     return jsonify(record)
 
 
+@api_bp.route(
+    "/api/runs/<sid>/frontend/review/complete",
+    methods=["POST"],
+)
+def api_frontend_review_complete(sid: str):
+    try:
+        run_dir = _run_dir_for_sid(sid)
+    except ValueError:
+        return jsonify({"error": "invalid_sid"}), 400
+
+    if not run_dir.exists():
+        return jsonify({"error": "run_not_found"}), 404
+
+    completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    payload = {"ok": True, "sid": sid, "completed_at": completed_at}
+    return jsonify(payload), 200
+
+
 @api_bp.route("/api/start-process", methods=["POST"])
 def start_process():
     try:

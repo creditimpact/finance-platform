@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { uploadReport, pollResult, listAccounts, getAccount } from '../api';
 
 const STATUS_BADGES = [
@@ -106,6 +107,7 @@ export default function UploadPage() {
   const [selectedId, setSelectedId] = useState(null);
   const [accountDetail, setAccountDetail] = useState(null);
   const abortRef = useRef(null);
+  const navigate = useNavigate();
 
   const weakFieldEntries = useMemo(() => extractWeakFields(accountDetail), [accountDetail]);
 
@@ -138,6 +140,7 @@ export default function UploadPage() {
             setAccounts(items);
             setSelectedId(null);
             setAccountDetail(null);
+            navigate(`/runs/${encodeURIComponent(session_id)}/review`, { replace: true });
             return;
           }
           if (data?.ok && (data.status === 'queued' || data.status === 'processing')) {

@@ -9,6 +9,7 @@ function getImportMetaEnv(): Record<string, string | undefined> {
 const metaEnv = getImportMetaEnv();
 
 import type { AccountPack } from './components/AccountCard';
+import { REVIEW_DEBUG_ENABLED, reviewDebugLog } from './utils/reviewDebug';
 
 const apiBaseUrl =
   metaEnv.VITE_API_BASE_URL ??
@@ -98,23 +99,43 @@ export function buildFrontendReviewStreamUrl(sessionId: string): string {
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  if (REVIEW_DEBUG_ENABLED) {
+    reviewDebugLog('fetch:start', { url, init });
+  }
   const response = await fetch(url, init);
+  if (REVIEW_DEBUG_ENABLED) {
+    reviewDebugLog('fetch:response', {
+      url,
+      status: response.status,
+      ok: response.ok,
+    });
+  }
   let data: any = null;
   let parseError: unknown = null;
   try {
     data = await response.json();
   } catch (err) {
     parseError = err;
+    if (REVIEW_DEBUG_ENABLED) {
+      reviewDebugLog('fetch:parse-error', { url, error: err });
+    }
   }
 
   if (!response.ok) {
     const detail = data?.message ?? data?.error ?? response.statusText;
     const suffix = detail ? `: ${detail}` : '';
+    if (REVIEW_DEBUG_ENABLED) {
+      reviewDebugLog('fetch:error', { url, status: response.status, detail });
+    }
     throw new Error(`Request failed (${response.status})${suffix}`);
   }
 
   if (data === null && parseError) {
     throw new Error('Failed to parse response');
+  }
+
+  if (REVIEW_DEBUG_ENABLED) {
+    reviewDebugLog('fetch:success', { url, body: data });
   }
 
   return data as T;

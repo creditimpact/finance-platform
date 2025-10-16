@@ -6,6 +6,7 @@ import ReviewPage from './pages/ReviewPage';
 import RunReviewPage from './pages/RunReviewPage';
 import RunReviewCompletePage from './pages/RunReviewCompletePage';
 import AccountsPage from './pages/Accounts';
+import RunDebugPage from './pages/RunDebugPage';
 import './App.css';
 
 function App() {
@@ -23,6 +24,7 @@ function App() {
         <Route path="/runs/:sid/review" element={<RunReviewPage />} />
         <Route path="/runs/:sid/review/complete" element={<RunReviewCompletePage />} />
         <Route path="/runs/:sid/accounts" element={<AccountsPage />} />
+        <Route path="/debug/run/:sid" element={<RunDebugPage />} />
       </Routes>
     </BrowserRouter>
   );

@@ -40,7 +40,7 @@ interface CardState {
 
 type CardsState = Record<string, CardState>;
 
-type Phase = 'idle' | 'loading_manifest' | 'waiting' | 'ready' | 'error';
+type Phase = 'loading' | 'waiting' | 'ready' | 'error';
 
 function toNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -216,7 +216,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const { getPack, setPack, clear } = useReviewPackStore();
   const { showToast } = useToast();
   const navigate = useNavigate();
-  const [phase, setPhase] = React.useState<Phase>('idle');
+  const [phase, setPhase] = React.useState<Phase>('loading');
   const [phaseError, setPhaseError] = React.useState<string | null>(null);
   const [manifest, setManifest] = React.useState<RunFrontendManifestResponse | null>(null);
   const [cards, setCards] = React.useState<CardsState>({});
@@ -225,6 +225,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const [isCompleting, setIsCompleting] = React.useState(false);
   const [showWorkerHint, setShowWorkerHint] = React.useState(false);
   const [frontendMissing, setFrontendMissing] = React.useState(false);
+  const [initialPacksCount, setInitialPacksCount] = React.useState<number | null>(null);
 
   const isMountedRef = React.useRef(false);
   const loadingRef = React.useRef(false);
@@ -269,6 +270,11 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     }
     retryAttemptsRef.current = {};
     setFrontendMissing(false);
+    setInitialPacksCount(null);
+    if (isMountedRef.current) {
+      setPhase('loading');
+      setPhaseError(null);
+    }
   }, [sid, clear]);
 
   const clearWorkerWait = React.useCallback(() => {
@@ -611,11 +617,12 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       return undefined;
     }
 
-    setPhase('loading_manifest');
+    setPhase('loading');
     setPhaseError(null);
     setManifest(null);
     setCards({});
     setOrder([]);
+    setInitialPacksCount(null);
 
     let cancelled = false;
 
@@ -631,6 +638,10 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         const reviewStage = frontendSection?.review;
         setFrontendMissing(!(frontendSection && typeof frontendSection === 'object'));
         const packsCount = extractPacksCount(reviewStage);
+        setInitialPacksCount(packsCount);
+        if (isMountedRef.current) {
+          setPhase((state) => (state === 'ready' ? state : 'waiting'));
+        }
         if (packsCount > 0) {
           clearWorkerWait();
           await loadPackListing();
@@ -762,6 +773,13 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   );
 
   const allDone = totalCards > 0 && submittedCount === totalCards;
+  const isLoadingPhase = phase === 'loading' || phase === 'waiting';
+  const loaderMessage = phase === 'waiting'
+    ? showWorkerHint
+      ? 'Waiting for worker…'
+      : 'Waiting for review packs…'
+    : 'Loading review data…';
+  const showNoCardsMessage = manifest !== null && initialPacksCount === 0 && orderedCards.length === 0 && phase !== 'error';
 
   const handleFinishReview = React.useCallback(async () => {
     if (!sid) {
@@ -794,8 +812,14 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             {readyCount} {readyCount === 1 ? 'card' : 'cards'} ready for review.
           </p>
         ) : null}
-        {phase === 'waiting' ? (
-          <p className="text-sm text-slate-500">{showWorkerHint ? 'Waiting for worker…' : 'Waiting for review packs…'}</p>
+        {isLoadingPhase ? (
+          <div className="flex items-center gap-2 text-sm text-slate-600" role="status" aria-live="polite">
+            <span
+              aria-hidden="true"
+              className="inline-flex h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-transparent"
+            />
+            <span>{loaderMessage}</span>
+          </div>
         ) : null}
         {phaseError && phase === 'error' ? (
           <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">{phaseError}</div>
@@ -809,10 +833,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         </div>
       ) : null}
 
-      {orderedCards.length === 0 && phase === 'ready' ? (
-        <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">
-          No review cards available for this run.
-        </div>
+      {showNoCardsMessage ? (
+        <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">No cards yet.</div>
       ) : null}
 
       <div className="space-y-6">

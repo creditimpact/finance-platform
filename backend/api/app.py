@@ -598,13 +598,13 @@ def api_frontend_manifest(sid: str):
         normalized_frontend: Mapping[str, Any] | None = None
 
         if isinstance(frontend_payload, Mapping):
+            normalized_frontend = dict(frontend_payload)
             review_payload = frontend_payload.get("review")
             if isinstance(review_payload, Mapping):
-                normalized_frontend = dict(frontend_payload)
                 review_section = dict(review_payload)
             else:
                 review_section = dict(frontend_payload)
-                normalized_frontend = {"review": review_section}
+                review_section.pop("review", None)
 
             if not isinstance(review_section.get("responses_dir"), str):
                 results_dir = review_section.get("results_dir")

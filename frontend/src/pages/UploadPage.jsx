@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { uploadReport, pollResult, listAccounts, getAccount } from '../api';
+import { uploadReport, pollResult, getAccount } from '../api';
 
 const STATUS_BADGES = [
   { key: 'missing', label: 'Missing', className: 'missing' },
@@ -135,12 +135,13 @@ export default function UploadPage() {
           const data = await pollResult(session_id, abortRef.current.signal);
           if (data?.ok && data.status === 'done') {
             setStatus('done');
-            // Fetch compact accounts list from the new Accounts API
-            const items = await listAccounts(session_id);
-            setAccounts(items);
+            setSessionId(session_id);
+            setAccounts([]);
             setSelectedId(null);
             setAccountDetail(null);
-            navigate(`/runs/${encodeURIComponent(session_id)}/review`, { replace: true });
+            if (session_id) {
+              navigate(`/runs/${encodeURIComponent(session_id)}/review`);
+            }
             return;
           }
           if (data?.ok && (data.status === 'queued' || data.status === 'processing')) {

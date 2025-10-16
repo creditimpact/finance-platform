@@ -641,17 +641,32 @@ def api_frontend_review_stream(sid: str):
         keepalive_deadline = time.monotonic() + keepalive_interval
         packs_ready_sent = False
 
+        def _resolve_packs_ready_event() -> bytes | None:
+            manifest = _load_frontend_stage_manifest(run_dir)
+            if manifest is None:
+                return None
+
+            _, payload = manifest
+            normalized = _normalize_frontend_review_index_payload(run_dir, payload)
+            packs_count = _extract_packs_count(normalized)
+            if packs_count > 0:
+                return _format_sse("packs_ready", {"packs_count": packs_count})
+            return None
+
         try:
+            initial_event = _resolve_packs_ready_event()
+            if initial_event is not None:
+                packs_ready_sent = True
+                yield initial_event
+                keepalive_deadline = time.monotonic() + keepalive_interval
+
             while True:
                 if not packs_ready_sent:
-                    manifest = _load_frontend_stage_manifest(run_dir)
-                    if manifest is not None:
-                        _, payload = manifest
-                        packs_count = _extract_packs_count(payload)
-                        if packs_count > 0:
-                            yield _format_sse("packs_ready", {"packs_count": packs_count})
-                            packs_ready_sent = True
-                            keepalive_deadline = time.monotonic() + keepalive_interval
+                    ready_event = _resolve_packs_ready_event()
+                    if ready_event is not None:
+                        packs_ready_sent = True
+                        yield ready_event
+                        keepalive_deadline = time.monotonic() + keepalive_interval
 
                 timeout = min(queue_wait, keepalive_interval)
                 try:
@@ -664,6 +679,8 @@ def api_frontend_review_stream(sid: str):
                     data = message.get("data") if isinstance(message, Mapping) else None
                     if event:
                         yield _format_sse(event, data)
+                        if event == "packs_ready":
+                            packs_ready_sent = True
                         keepalive_deadline = time.monotonic() + keepalive_interval
 
                 now = time.monotonic()

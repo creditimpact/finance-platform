@@ -157,6 +157,10 @@ export function enableFrontendReviewMock(options: FrontendReviewMockOptions = {}
       return createResponse({ ok: true });
     }
 
+    if (method === 'POST' && pathname === `/api/runs/${encodedSid}/frontend/review/complete`) {
+      return createResponse({ ok: true });
+    }
+
     return originalFetch(input as RequestInfo, init);
   };
 

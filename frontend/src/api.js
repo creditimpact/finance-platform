@@ -202,10 +202,29 @@ export async function submitFrontendReviewAnswers(sessionId, accountId, answers,
   };
   return fetchJson(`${buildFrontendReviewAccountUrl(sessionId, accountId)}/answer`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
     body: JSON.stringify(payload),
     ...init,
   });
+}
+
+export async function completeFrontendReview(sessionId, init) {
+  const response = await fetch(`${API}/api/runs/${encodeURIComponent(sessionId)}/frontend/review/complete`, {
+    method: 'POST',
+    ...(init || {}),
+  });
+
+  if (!response.ok) {
+    let detail;
+    try {
+      const data = await response.json();
+      detail = data?.message || data?.error;
+    } catch (err) {
+      // Ignore parse errors for non-JSON responses
+    }
+    const suffix = detail ? `: ${detail}` : '';
+    throw new Error(`Request failed (${response.status})${suffix}`);
+  }
 }
 
 export async function startProcess(email, file) {

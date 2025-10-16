@@ -4,6 +4,7 @@ import UploadPage from './pages/UploadPage';
 import StatusPage from './pages/StatusPage';
 import ReviewPage from './pages/ReviewPage';
 import RunReviewPage from './pages/RunReviewPage';
+import RunReviewCompletePage from './pages/RunReviewCompletePage';
 import AccountsPage from './pages/Accounts';
 import './App.css';
 
@@ -20,6 +21,7 @@ function App() {
         <Route path="/status" element={<StatusPage />} />
         <Route path="/review" element={<ReviewPage />} />
         <Route path="/runs/:sid/review" element={<RunReviewPage />} />
+        <Route path="/runs/:sid/review/complete" element={<RunReviewCompletePage />} />
         <Route path="/runs/:sid/accounts" element={<AccountsPage />} />
       </Routes>
     </BrowserRouter>

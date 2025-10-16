@@ -226,6 +226,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const [submittedAccounts, setSubmittedAccounts] = React.useState<Set<string>>(() => new Set());
   const [isCompleting, setIsCompleting] = React.useState(false);
   const [showWorkerHint, setShowWorkerHint] = React.useState(false);
+  const [liveUpdatesUnavailable, setLiveUpdatesUnavailable] = React.useState(false);
   const [frontendMissing, setFrontendMissing] = React.useState(false);
 
   const isMountedRef = React.useRef(false);
@@ -239,6 +240,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const workerWaitingRef = React.useRef(false);
   const retryAttemptsRef = React.useRef<Record<string, number>>({});
   const retryTimeoutsRef = React.useRef<Record<string, number | undefined>>({});
+  const hasShownLiveUpdateToastRef = React.useRef(false);
 
   React.useEffect(() => {
     isMountedRef.current = true;
@@ -271,6 +273,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     }
     retryAttemptsRef.current = {};
     setFrontendMissing(false);
+    setLiveUpdatesUnavailable(false);
+    hasShownLiveUpdateToastRef.current = false;
     if (isMountedRef.current) {
       setPhase('loading');
       setPhaseError(null);
@@ -672,14 +676,32 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           if (!isMountedRef.current) {
             return;
           }
+          setLiveUpdatesUnavailable(true);
+          if (!hasShownLiveUpdateToastRef.current) {
+            hasShownLiveUpdateToastRef.current = true;
+            showToast({
+              variant: 'warning',
+              title: 'Live updates unavailable',
+              description: 'Live updates unavailable, falling back to polling…',
+            });
+          }
           schedulePoll(sessionId);
         };
       } catch (err) {
         console.warn('Unable to open review stream', err);
+        setLiveUpdatesUnavailable(true);
+        if (!hasShownLiveUpdateToastRef.current) {
+          hasShownLiveUpdateToastRef.current = true;
+          showToast({
+            variant: 'warning',
+            title: 'Live updates unavailable',
+            description: 'Live updates unavailable, falling back to polling…',
+          });
+        }
         schedulePoll(sessionId);
       }
     },
-    [beginWorkerWait, clearWorkerWait, loadPackListing, schedulePoll, stopStream]
+    [beginWorkerWait, clearWorkerWait, loadPackListing, schedulePoll, showToast, stopStream]
   );
 
   React.useEffect(() => {
@@ -855,6 +877,11 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           <p className="text-sm text-slate-600">
             {readyCount} {readyCount === 1 ? 'card' : 'cards'} ready for review.
           </p>
+        ) : null}
+        {liveUpdatesUnavailable ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            Live updates unavailable, falling back to polling…
+          </div>
         ) : null}
         {isLoadingPhase ? (
           <div className="flex items-center gap-2 text-sm text-slate-600" role="status" aria-live="polite">

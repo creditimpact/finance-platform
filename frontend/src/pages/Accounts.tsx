@@ -19,6 +19,7 @@ import {
   submitFrontendReviewAnswers,
   type FrontendReviewManifestPack,
 } from '../api';
+import { type ReviewAccountPack } from '../components/ReviewCard';
 
 const PLACEHOLDER_VALUES = new Set(['--', '—', '', 'n/a', 'N/A']);
 
@@ -307,7 +308,7 @@ export default function AccountsPage() {
   const [answeredAccounts, setAnsweredAccounts] = React.useState<Set<string>>(new Set());
   const [detailLoading, setDetailLoading] = React.useState(false);
   const [detailError, setDetailError] = React.useState<string | null>(null);
-  const [selectedPack, setSelectedPack] = React.useState<AccountPack | null>(null);
+  const [selectedPack, setSelectedPack] = React.useState<ReviewAccountPack | null>(null);
   const [questionAnswers, setQuestionAnswers] = React.useState<AccountQuestionAnswers>({});
   const [submitting, setSubmitting] = React.useState(false);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
@@ -373,7 +374,7 @@ export default function AccountsPage() {
       try {
         const manifestEntry = entries.find((entry) => entry.account_id === selectedAccountId);
         const packPath = manifestEntry?.pack_path ?? manifestEntry?.path ?? manifestEntry?.pack_path_rel;
-        const pack = await fetchFrontendReviewAccount<AccountPack>(sid, selectedAccountId, {
+        const pack = await fetchFrontendReviewAccount<ReviewAccountPack>(sid, selectedAccountId, {
           packPath: typeof packPath === 'string' ? packPath : undefined,
         });
         if (!active) {
@@ -423,11 +424,22 @@ export default function AccountsPage() {
     setSubmitSuccess(false);
 
     try {
-      await submitFrontendReviewAnswers(sid, selectedAccountId, cleanedAnswers);
+      const response = await submitFrontendReviewAnswers(sid, selectedAccountId, cleanedAnswers);
       setAnsweredAccounts((prev) => {
         const next = new Set(prev);
         next.add(selectedAccountId);
         return next;
+      });
+      setSelectedPack((previous) => {
+        if (!previous) {
+          return previous;
+        }
+        const updated: ReviewAccountPack = {
+          ...previous,
+          answers: (response && response.answers) || cleanedAnswers,
+          response: response ?? null,
+        };
+        return updated;
       });
       setSubmitSuccess(true);
     } catch (err) {

@@ -11,6 +11,7 @@ import { summarizeField, type BureauTriple } from '../utils/bureauSummary';
 import AccountQuestions, { type AccountQuestionAnswers } from './AccountQuestions';
 import { type AccountQuestionKey } from './questionCopy';
 import type { AccountPack } from './AccountCard';
+import type { FrontendReviewResponse } from '../api';
 
 export type ReviewCardStatus = 'idle' | 'waiting' | 'ready' | 'saving' | 'done';
 
@@ -23,6 +24,8 @@ type QuestionDescriptor = {
 export type ReviewAccountPack = AccountPack & {
   account_id?: string;
   questions?: QuestionDescriptor[] | null;
+  answers?: Record<string, string> | null;
+  response?: FrontendReviewResponse | null;
 };
 
 type SummaryFieldKey = 'account_number' | 'account_type' | 'status';
@@ -229,6 +232,22 @@ export interface ReviewCardProps {
   onSubmit: () => void;
 }
 
+const CheckCircleIcon = ({ className }: { className?: string }) => (
+  <svg
+    aria-hidden="true"
+    viewBox="0 0 24 24"
+    className={cn('h-4 w-4', className)}
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M9 12l2 2 4-4" />
+    <circle cx="12" cy="12" r="9" />
+  </svg>
+);
+
 export function ReviewCard({
   pack,
   accountId,
@@ -314,7 +333,7 @@ export function ReviewCard({
     [onSubmit, submitDisabled]
   );
 
-  const buttonLabel = status === 'saving' ? 'Saving…' : status === 'done' ? 'Submitted' : 'Submit answers';
+  const buttonLabel = success ? 'Saved' : status === 'saving' ? 'Saving…' : 'Save answers';
 
   return (
     <Card className="w-full">
@@ -326,9 +345,16 @@ export function ReviewCard({
               <p className="text-sm uppercase tracking-wide text-slate-500">{primaryIssue}</p>
             ) : null}
           </div>
-          {accountId ? (
-            <span className="text-xs font-medium uppercase tracking-wide text-slate-400">Account {accountId}</span>
-          ) : null}
+          <div className="flex flex-col items-end gap-2">
+            {success ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+                <CheckCircleIcon className="text-emerald-600" /> Saved
+              </span>
+            ) : null}
+            {accountId ? (
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-400">Account {accountId}</span>
+            ) : null}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-6 pt-6">
@@ -420,7 +446,7 @@ export function ReviewCard({
           <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">{error}</div>
         ) : null}
 
-        {success ? (
+        {success && status !== 'ready' ? (
           <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
             Answers saved successfully.
           </div>

@@ -17,9 +17,11 @@ import {
   fetchRunReviewPackListing,
   submitFrontendReviewAnswers,
   type FrontendReviewPackListingItem,
+  type FrontendReviewResponse,
   type RunFrontendManifestResponse,
 } from '../api';
 import { ReviewPackStoreProvider, useReviewPackStore } from '../stores/reviewPackStore';
+import { useToast } from '../components/ToastProvider';
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -31,6 +33,7 @@ interface CardState {
   answers: AccountQuestionAnswers;
   error: string | null;
   success: boolean;
+  response: FrontendReviewResponse | null;
 }
 
 type CardsState = Record<string, CardState>;
@@ -102,6 +105,7 @@ function createInitialCardState(): CardState {
     answers: {},
     error: null,
     success: false,
+    response: null,
   };
 }
 
@@ -200,6 +204,7 @@ function ReviewCardContainer({ accountId, state, onChange, onSubmit, onLoad }: R
 
 function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const { getPack, setPack, clear } = useReviewPackStore();
+  const { showToast } = useToast();
   const [phase, setPhase] = React.useState<Phase>('idle');
   const [phaseError, setPhaseError] = React.useState<string | null>(null);
   const [manifest, setManifest] = React.useState<RunFrontendManifestResponse | null>(null);
@@ -277,7 +282,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
               pack: cached,
               answers: normalizeExistingAnswers((cached as Record<string, unknown> | undefined)?.answers),
               error: null,
-              success: false,
+              success: Boolean(cached.response),
+              response: cached.response ?? null,
             };
           } else {
             initial[item.account_id] = {
@@ -286,6 +292,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
               answers: {},
               error: null,
               success: false,
+              response: null,
             };
           }
         }
@@ -324,6 +331,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             ? state.answers
             : normalizeExistingAnswers((cachedPack as Record<string, unknown> | undefined)?.answers),
           error: null,
+          success: Boolean(cachedPack.response),
+          response: cachedPack.response ?? null,
         }));
         return;
       }
@@ -354,7 +363,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           pack,
           answers: normalizeExistingAnswers((pack as Record<string, unknown> | undefined)?.answers),
           error: null,
-          success: false,
+          success: Boolean(pack.response),
+          response: pack.response ?? null,
         }));
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unable to load account details';
@@ -535,11 +545,37 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         return;
       }
 
-      updateCard(accountId, (state) => ({ ...state, status: 'saving', error: null, success: false }));
+      updateCard(accountId, (state) => ({
+        ...state,
+        status: 'saving',
+        error: null,
+        success: true,
+      }));
 
       try {
-        await submitFrontendReviewAnswers(sid, accountId, cleaned);
-        updateCard(accountId, (state) => ({ ...state, status: 'done', success: true }));
+        const response = await submitFrontendReviewAnswers(sid, accountId, cleaned);
+        let updatedPack: ReviewAccountPack | null = null;
+        updateCard(accountId, (state) => {
+          const nextPack = state.pack
+            ? {
+                ...state.pack,
+                answers: (response && response.answers) || cleaned,
+                response,
+              }
+            : state.pack;
+          updatedPack = nextPack ?? null;
+          return {
+            ...state,
+            status: 'done',
+            success: true,
+            error: null,
+            response: response ?? null,
+            pack: nextPack,
+          };
+        });
+        if (updatedPack) {
+          setPack(accountId, updatedPack);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unable to submit answers';
         updateCard(accountId, (state) => ({
@@ -548,9 +584,14 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           error: message,
           success: false,
         }));
+        showToast({
+          variant: 'error',
+          title: 'Save failed',
+          description: message,
+        });
       }
     },
-    [cards, sid, updateCard]
+    [cards, sid, updateCard, setPack, showToast]
   );
 
   const orderedCards = React.useMemo(() => order.map((accountId) => ({ accountId, state: cards[accountId] })), [order, cards]);

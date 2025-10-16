@@ -884,8 +884,23 @@ def api_frontend_review_complete(sid: str):
     if not run_dir.exists():
         return jsonify({"error": "run_not_found"}), 404
 
-    completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    completed_at = _now_utc_iso().replace("+00:00", "Z")
     payload = {"ok": True, "sid": sid, "completed_at": completed_at}
+
+    marker_path = _frontend_stage_dir(run_dir) / "completed.json"
+    marker_payload = {"sid": sid, "completed_at": completed_at}
+    try:
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_path.write_text(
+            json.dumps(marker_payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except OSError:
+        log.exception(
+            "failed to write frontend review completion marker",
+            extra={"sid": sid, "marker_path": str(marker_path)},
+        )
+
     return jsonify(payload), 200
 
 

@@ -53,6 +53,7 @@ from backend.pipeline.runs import RunManifest, get_runs_root, persist_manifest
 from backend.core.paths.frontend_review import get_frontend_review_paths
 from backend.frontend.packs.config import load_frontend_stage_config
 from backend.api.routes_smoke import bp as smoke_bp
+from backend.api.routes_run_assets import bp as run_assets_bp
 from backend.api.ui_events import ui_event_bp
 from backend.core import orchestrators as orch
 from backend.core.case_store import api as cs_api
@@ -487,9 +488,9 @@ def _normalize_review_listing_path(run_dir: Path, value: str) -> str | None:
 
     try:
         rel = candidate.relative_to(run_dir)
-        return str(rel)
+        return rel.as_posix()
     except ValueError:
-        return str(candidate)
+        return candidate.as_posix()
 
 
 def _collect_review_pack_listing(
@@ -1242,13 +1243,17 @@ def create_app() -> Flask:
         allowed_origins = ["http://127.0.0.1:5173", "http://localhost:5173"]
         CORS(
             app,
-            resources={r"/api/*": {"origins": allowed_origins}},
+            resources={
+                r"/api/*": {"origins": allowed_origins},
+                r"/runs/*": {"origins": allowed_origins},
+            },
             supports_credentials=True,
         )
     app.register_blueprint(admin_bp)
     app.register_blueprint(api_bp)
     app.register_blueprint(ai_bp)
     app.register_blueprint(ui_event_bp)
+    app.register_blueprint(run_assets_bp)
     app.register_blueprint(smoke_bp, url_prefix="/smoke")
 
     @app.before_request

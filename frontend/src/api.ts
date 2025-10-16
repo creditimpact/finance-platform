@@ -381,11 +381,30 @@ export async function submitFrontendReviewAnswers(
     buildFrontendReviewResponseUrl(sessionId, accountId),
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
       body: JSON.stringify(payload),
       ...init,
     }
   );
+}
+
+export async function completeFrontendReview(sessionId: string, init?: RequestInit): Promise<void> {
+  const response = await fetch(buildRunApiUrl(sessionId, '/frontend/review/complete'), {
+    method: 'POST',
+    ...(init ?? {}),
+  });
+
+  if (!response.ok) {
+    let detail: string | undefined;
+    try {
+      const data = await response.json();
+      detail = data?.message ?? data?.error ?? undefined;
+    } catch (err) {
+      // Ignore parse errors for non-JSON responses
+    }
+    const suffix = detail ? `: ${detail}` : '';
+    throw new Error(`Request failed (${response.status})${suffix}`);
+  }
 }
 
 export async function uploadReport(email: string, file: File) {

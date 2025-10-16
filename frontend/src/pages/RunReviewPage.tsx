@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   type AccountQuestionAnswers,
   type AccountQuestionKey,
@@ -15,6 +15,7 @@ import {
   fetchRunFrontendManifest,
   fetchRunFrontendReviewIndex,
   fetchRunReviewPackListing,
+  completeFrontendReview,
   submitFrontendReviewAnswers,
   type FrontendReviewPackListingItem,
   type FrontendReviewResponse,
@@ -205,11 +206,14 @@ function ReviewCardContainer({ accountId, state, onChange, onSubmit, onLoad }: R
 function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const { getPack, setPack, clear } = useReviewPackStore();
   const { showToast } = useToast();
+  const navigate = useNavigate();
   const [phase, setPhase] = React.useState<Phase>('idle');
   const [phaseError, setPhaseError] = React.useState<string | null>(null);
   const [manifest, setManifest] = React.useState<RunFrontendManifestResponse | null>(null);
   const [cards, setCards] = React.useState<CardsState>({});
   const [order, setOrder] = React.useState<string[]>([]);
+  const [submittedAccounts, setSubmittedAccounts] = React.useState<Set<string>>(() => new Set());
+  const [isCompleting, setIsCompleting] = React.useState(false);
 
   const isMountedRef = React.useRef(false);
   const loadingRef = React.useRef(false);
@@ -231,6 +235,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     loadingRef.current = false;
     packListingRef.current = {};
     loadingAccountsRef.current = new Set();
+    setSubmittedAccounts(new Set());
     clear();
   }, [sid, clear]);
 
@@ -242,6 +247,28 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         return previous;
       }
       return { ...previous, [accountId]: next };
+    });
+  }, []);
+
+  const markSubmitted = React.useCallback((accountId: string) => {
+    setSubmittedAccounts((previous) => {
+      if (previous.has(accountId)) {
+        return previous;
+      }
+      const next = new Set(previous);
+      next.add(accountId);
+      return next;
+    });
+  }, []);
+
+  const markUnsubmitted = React.useCallback((accountId: string) => {
+    setSubmittedAccounts((previous) => {
+      if (!previous.has(accountId)) {
+        return previous;
+      }
+      const next = new Set(previous);
+      next.delete(accountId);
+      return next;
     });
   }, []);
 
@@ -272,17 +299,23 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       packListingRef.current = listingMap;
 
       setOrder(filteredItems.map((item) => item.account_id));
+      const initialSubmitted = new Set<string>();
       setCards(() => {
         const initial: CardsState = {};
         for (const item of filteredItems) {
           const cached = getPack(item.account_id);
           if (cached) {
+            const normalizedAnswers = normalizeExistingAnswers((cached as Record<string, unknown> | undefined)?.answers);
+            const hasResponse = Boolean(cached.response);
+            if (hasResponse) {
+              initialSubmitted.add(item.account_id);
+            }
             initial[item.account_id] = {
               status: 'ready',
               pack: cached,
-              answers: normalizeExistingAnswers((cached as Record<string, unknown> | undefined)?.answers),
+              answers: normalizedAnswers,
               error: null,
-              success: Boolean(cached.response),
+              success: hasResponse,
               response: cached.response ?? null,
             };
           } else {
@@ -298,6 +331,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         }
         return initial;
       });
+      setSubmittedAccounts(initialSubmitted);
 
       if (isMountedRef.current) {
         setPhase('ready');
@@ -334,6 +368,11 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           success: Boolean(cachedPack.response),
           response: cachedPack.response ?? null,
         }));
+        if (cachedPack.response) {
+          markSubmitted(accountId);
+        } else {
+          markUnsubmitted(accountId);
+        }
         return;
       }
 
@@ -366,6 +405,11 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           success: Boolean(pack.response),
           response: pack.response ?? null,
         }));
+        if (pack.response) {
+          markSubmitted(accountId);
+        } else {
+          markUnsubmitted(accountId);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unable to load account details';
         if (isMountedRef.current) {
@@ -380,7 +424,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         loadingAccountsRef.current.delete(accountId);
       }
     },
-    [getPack, setPack, sid, updateCard]
+    [getPack, setPack, sid, updateCard, markSubmitted, markUnsubmitted]
   );
 
   const stopPolling = React.useCallback(() => {
@@ -526,8 +570,9 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         error: null,
         success: false,
       }));
+      markUnsubmitted(accountId);
     },
-    [updateCard]
+    [markUnsubmitted, updateCard]
   );
 
   const handleSubmit = React.useCallback(
@@ -576,6 +621,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         if (updatedPack) {
           setPack(accountId, updatedPack);
         }
+        markSubmitted(accountId);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unable to submit answers';
         updateCard(accountId, (state) => ({
@@ -591,7 +637,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         });
       }
     },
-    [cards, sid, updateCard, setPack, showToast]
+    [cards, sid, updateCard, setPack, showToast, markSubmitted]
   );
 
   const orderedCards = React.useMemo(() => order.map((accountId) => ({ accountId, state: cards[accountId] })), [order, cards]);
@@ -600,10 +646,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     () => orderedCards.filter(({ state }) => state?.status === 'ready' || state?.status === 'done').length,
     [orderedCards]
   );
-  const doneCount = React.useMemo(
-    () => orderedCards.filter(({ state }) => state?.status === 'done').length,
-    [orderedCards]
-  );
+  const submittedCount = submittedAccounts.size;
+  const totalCards = orderedCards.length;
 
   const handleCardLoad = React.useCallback(
     (accountId: string) => {
@@ -612,10 +656,31 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     [loadAccountPack]
   );
 
-  const allDone = orderedCards.length > 0 && doneCount === orderedCards.length;
+  const allDone = totalCards > 0 && submittedCount === totalCards;
+
+  const handleFinishReview = React.useCallback(async () => {
+    if (!sid) {
+      return;
+    }
+    setIsCompleting(true);
+    try {
+      await completeFrontendReview(sid);
+      navigate(`/runs/${encodeURIComponent(sid)}/review/complete`);
+      return;
+    } catch (err) {
+      console.warn('Failed to complete review', err);
+      showToast({
+        variant: 'error',
+        title: 'Unable to finish review',
+        description: err instanceof Error ? err.message : 'Unknown error occurred.',
+      });
+    } finally {
+      setIsCompleting(false);
+    }
+  }, [sid, navigate, showToast]);
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8">
+    <div className={`mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8 ${allDone ? 'pb-32' : ''}`}>
       <header className="space-y-2">
         <h1 className="text-2xl font-semibold text-slate-900">Run review</h1>
         {sid ? <p className="text-sm text-slate-600">Run {sid}</p> : null}
@@ -670,8 +735,27 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
 
       {orderedCards.length > 0 ? (
         <p className="text-xs text-slate-500">
-          {doneCount} of {orderedCards.length} cards submitted.
+          {submittedCount} of {orderedCards.length} cards submitted.
         </p>
+      ) : null}
+
+      {allDone ? (
+        <div className="fixed bottom-0 left-0 right-0 border-t border-slate-200 bg-white shadow-lg">
+          <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">All cards submitted</p>
+              <p className="text-sm text-slate-600">You can finish the review now.</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleFinishReview}
+              className="inline-flex items-center justify-center rounded-md border border-emerald-600 bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:border-emerald-300 disabled:bg-emerald-300"
+              disabled={isCompleting}
+            >
+              {isCompleting ? 'Finishing…' : 'Finish review'}
+            </button>
+          </div>
+        </div>
       ) : null}
     </div>
   );

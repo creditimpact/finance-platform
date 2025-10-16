@@ -184,6 +184,41 @@ def test_frontend_review_stream_emits_packs_ready(api_client, monkeypatch):
     response.close()
 
 
+def test_frontend_review_stream_emits_ready_without_count(api_client, monkeypatch):
+    client, runs_root = api_client
+    sid = "S891"
+    run_dir = runs_root / sid
+    packs_dir = run_dir / "frontend" / "review" / "packs"
+    pack_path = packs_dir / "acct-001.json"
+    _write_json(pack_path, {"account_id": "acct-001", "status": "pending"})
+
+    index_payload = {
+        "items": [
+            {"account_id": "acct-001", "file": "frontend/review/packs/acct-001.json"}
+        ]
+    }
+    index_path = run_dir / "frontend" / "review" / "index.json"
+    _write_json(index_path, index_payload)
+
+    monkeypatch.setattr("backend.api.app._REVIEW_STREAM_QUEUE_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr("backend.api.app._REVIEW_STREAM_KEEPALIVE_INTERVAL", 0.1)
+
+    response = client.get(
+        f"/api/runs/{sid}/frontend/review/stream",
+        buffered=False,
+        headers={"Accept": "text/event-stream"},
+    )
+    assert response.status_code == 200
+    stream = response.response
+
+    chunk = _next_chunk(stream)
+    text = chunk.decode("utf-8")
+    assert "event: packs_ready" in text
+    assert '"packs_count": 1' in text
+
+    response.close()
+
+
 def test_frontend_review_packs_listing_from_index(api_client):
     client, runs_root = api_client
     sid = "S130"

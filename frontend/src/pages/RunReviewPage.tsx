@@ -227,7 +227,6 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const [isCompleting, setIsCompleting] = React.useState(false);
   const [showWorkerHint, setShowWorkerHint] = React.useState(false);
   const [frontendMissing, setFrontendMissing] = React.useState(false);
-  const [initialPacksCount, setInitialPacksCount] = React.useState<number | null>(null);
 
   const isMountedRef = React.useRef(false);
   const loadingRef = React.useRef(false);
@@ -272,7 +271,6 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     }
     retryAttemptsRef.current = {};
     setFrontendMissing(false);
-    setInitialPacksCount(null);
     if (isMountedRef.current) {
       setPhase('loading');
       setPhaseError(null);
@@ -305,6 +303,27 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       }
     }, WORKER_HINT_DELAY_MS);
   }, [showWorkerHint]);
+
+  const loadManifestInfo = React.useCallback(
+    async (sessionId: string, options?: { isCancelled?: () => boolean }) => {
+      const isCancelled = options?.isCancelled ?? (() => false);
+      try {
+        const manifestResponse = await fetchRunFrontendManifest(sessionId);
+        if (isCancelled() || !isMountedRef.current) {
+          return;
+        }
+        setManifest(manifestResponse);
+        const frontendSection = manifestResponse.frontend;
+        setFrontendMissing(!(frontendSection && typeof frontendSection === 'object'));
+      } catch (err) {
+        if (isCancelled()) {
+          return;
+        }
+        console.warn('Unable to load run manifest', err);
+      }
+    },
+    []
+  );
 
   const clearRetryTimeout = React.useCallback((accountId: string) => {
     const timeoutId = retryTimeoutsRef.current[accountId];
@@ -358,6 +377,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     }
 
     try {
+      const packsUrl = `/api/runs/${encodeURIComponent(sid)}/frontend/review/packs`;
+      console.log(`[RunReviewPage] GET ${packsUrl}`);
       const { items } = await fetchRunReviewPackListing(sid);
       if (!isMountedRef.current) {
         return;
@@ -366,6 +387,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       const filteredItems = items.filter((item): item is FrontendReviewPackListingItem & { account_id: string } => {
         return typeof item.account_id === 'string' && item.account_id.trim() !== '';
       });
+
+      console.log(`[RunReviewPage] Received ${filteredItems.length} review packs from ${packsUrl}`);
 
       const listingMap: Record<string, FrontendReviewPackListingItem & { account_id: string }> = {};
       for (const item of filteredItems) {
@@ -418,12 +441,49 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         return;
       }
       const message = err instanceof Error ? err.message : 'Unable to load review packs';
+      clearWorkerWait();
       setPhase('error');
       setPhaseError(message);
     } finally {
       loadingRef.current = false;
     }
   }, [clearWorkerWait, getPack, sid]);
+
+  const bootstrap = React.useCallback(
+    async (sessionId: string, options?: { isCancelled?: () => boolean }) => {
+      const isCancelled = options?.isCancelled ?? (() => false);
+      if (!sessionId) {
+        return;
+      }
+      const indexUrl = `/api/runs/${encodeURIComponent(sessionId)}/frontend/index`;
+      console.log(`[RunReviewPage] GET ${indexUrl}`);
+      try {
+        const payload = await fetchRunFrontendReviewIndex(sessionId);
+        if (isCancelled() || !isMountedRef.current) {
+          return;
+        }
+        const packsCount = extractPacksCount(payload);
+        console.log(`[RunReviewPage] packs_count from ${indexUrl}: ${packsCount}`);
+        if (packsCount > 0) {
+          clearWorkerWait();
+          await loadPackListing();
+          return;
+        }
+        setPhase((state) => (state === 'ready' ? state : 'waiting'));
+        beginWorkerWait();
+      } catch (err) {
+        if (isCancelled() || !isMountedRef.current) {
+          return;
+        }
+        const message = err instanceof Error ? err.message : 'Unable to load review packs';
+        clearWorkerWait();
+        setPhase('error');
+        setPhaseError(message);
+        console.error(`[RunReviewPage] Failed to load ${indexUrl}`, err);
+      }
+    },
+    [beginWorkerWait, clearWorkerWait, loadPackListing]
+  );
 
   const loadAccountPack = React.useCallback(
     async (accountId: string, options?: { force?: boolean; resetAttempts?: boolean }) => {
@@ -538,7 +598,12 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     (sessionId: string) => {
       stopPolling();
       if (isMountedRef.current) {
-        setPhase((state) => (state === 'ready' ? state : 'waiting'));
+        setPhase((state) => {
+          if (state === 'ready' || state === 'error') {
+            return state;
+          }
+          return 'waiting';
+        });
       }
       beginWorkerWait();
 
@@ -579,7 +644,12 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         const eventSource = new EventSource(url);
         eventSourceRef.current = eventSource;
         if (isMountedRef.current) {
-          setPhase((state) => (state === 'ready' ? state : 'waiting'));
+          setPhase((state) => {
+            if (state === 'ready' || state === 'loading' || state === 'error') {
+              return state;
+            }
+            return 'waiting';
+          });
         }
         beginWorkerWait();
 
@@ -616,7 +686,11 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     if (!sid) {
       setPhase('error');
       setPhaseError('Missing run id.');
-      return undefined;
+      return () => {
+        stopPolling();
+        stopStream();
+        clearWorkerWait();
+      };
     }
 
     setPhase('loading');
@@ -624,45 +698,13 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     setManifest(null);
     setCards({});
     setOrder([]);
-    setInitialPacksCount(null);
 
     let cancelled = false;
+    const isCancelled = () => cancelled;
 
-    const init = async () => {
-      try {
-        const manifestResponse = await fetchRunFrontendManifest(sid);
-        if (cancelled || !isMountedRef.current) {
-          return;
-        }
-        setManifest(manifestResponse);
-
-        const frontendSection = manifestResponse.frontend;
-        const reviewStage = frontendSection?.review;
-        setFrontendMissing(!(frontendSection && typeof frontendSection === 'object'));
-        const packsCount = extractPacksCount(reviewStage);
-        setInitialPacksCount(packsCount);
-        if (isMountedRef.current) {
-          setPhase((state) => (state === 'ready' ? state : 'waiting'));
-        }
-        if (packsCount > 0) {
-          clearWorkerWait();
-          await loadPackListing();
-        } else {
-          beginWorkerWait();
-          startStream(sid);
-        }
-      } catch (err) {
-        if (!isMountedRef.current || cancelled) {
-          return;
-        }
-        const message = err instanceof Error ? err.message : 'Unable to load run manifest';
-        setPhase('error');
-        setPhaseError(message);
-        startStream(sid);
-      }
-    };
-
-    init();
+    startStream(sid);
+    void loadManifestInfo(sid, { isCancelled });
+    void bootstrap(sid, { isCancelled });
 
     return () => {
       cancelled = true;
@@ -670,7 +712,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       stopStream();
       clearWorkerWait();
     };
-  }, [beginWorkerWait, clearWorkerWait, sid, loadPackListing, schedulePoll, startStream, stopPolling, stopStream]);
+  }, [sid, bootstrap, loadManifestInfo, startStream, stopPolling, stopStream, clearWorkerWait]);
 
   const handleAnswerChange = React.useCallback(
     (accountId: string, answers: AccountQuestionAnswers) => {
@@ -780,8 +822,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     ? showWorkerHint
       ? 'Waiting for worker…'
       : 'Waiting for review packs…'
-    : 'Loading review data…';
-  const showNoCardsMessage = manifest !== null && initialPacksCount === 0 && orderedCards.length === 0 && phase !== 'error';
+    : 'Loading review packs…';
+  const showNoCardsMessage = orderedCards.length === 0 && phase !== 'error' && phase !== 'loading';
 
   const handleFinishReview = React.useCallback(async () => {
     if (!sid) {
@@ -836,7 +878,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       ) : null}
 
       {showNoCardsMessage ? (
-        <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">No cards yet.</div>
+        <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">No review cards yet</div>
       ) : null}
 
       <div className="space-y-6">

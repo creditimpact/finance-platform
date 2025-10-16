@@ -18,7 +18,7 @@ import {
   fetchFrontendReviewAccount,
   submitFrontendReviewAnswers,
   type FrontendReviewManifestPack,
-} from '../api';
+} from '../api.ts';
 import { type ReviewAccountPack } from '../components/ReviewCard';
 
 const PLACEHOLDER_VALUES = new Set(['--', '—', '', 'n/a', 'N/A']);

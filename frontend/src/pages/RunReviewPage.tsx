@@ -20,7 +20,7 @@ import {
   type FrontendReviewPackListingItem,
   type FrontendReviewResponse,
   type RunFrontendManifestResponse,
-} from '../api';
+} from '../api.ts';
 import { ReviewPackStoreProvider, useReviewPackStore } from '../stores/reviewPackStore';
 import { useToast } from '../components/ToastProvider';
 

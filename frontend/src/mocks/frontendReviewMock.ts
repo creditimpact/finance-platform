@@ -1,6 +1,6 @@
 import sampleAccountPack from '../__fixtures__/sampleAccountPack.json';
 import type { AccountPack } from '../components/AccountCard';
-import type { FrontendReviewManifest, FrontendReviewManifestPack } from '../api';
+import type { FrontendReviewManifest, FrontendReviewManifestPack } from '../api.ts';
 
 interface FrontendReviewMockOptions {
   sessionId?: string;

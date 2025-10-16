@@ -25,6 +25,7 @@ import { ReviewPackStoreProvider, useReviewPackStore } from '../stores/reviewPac
 import { useToast } from '../components/ToastProvider';
 
 const POLL_INTERVAL_MS = 2000;
+const WORKER_HINT_DELAY_MS = 30_000;
 
 type CardStatus = ReviewCardStatus;
 
@@ -116,9 +117,10 @@ interface ReviewCardContainerProps {
   onChange: (answers: AccountQuestionAnswers) => void;
   onSubmit: () => void;
   onLoad: (accountId: string) => void;
+  onRetry: (accountId: string) => void;
 }
 
-function ReviewCardContainer({ accountId, state, onChange, onSubmit, onLoad }: ReviewCardContainerProps) {
+function ReviewCardContainer({ accountId, state, onChange, onSubmit, onLoad, onRetry }: ReviewCardContainerProps) {
   const cardRef = React.useRef<HTMLDivElement | null>(null);
   const hasRequestedRef = React.useRef(false);
 
@@ -182,6 +184,13 @@ function ReviewCardContainer({ accountId, state, onChange, onSubmit, onLoad }: R
           <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
             {state.error ?? 'Unable to load account details.'}
           </div>
+          <button
+            type="button"
+            onClick={() => onRetry(accountId)}
+            className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-400 hover:text-slate-900"
+          >
+            Retry
+          </button>
         </CardContent>
       </Card>
     );
@@ -214,6 +223,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const [order, setOrder] = React.useState<string[]>([]);
   const [submittedAccounts, setSubmittedAccounts] = React.useState<Set<string>>(() => new Set());
   const [isCompleting, setIsCompleting] = React.useState(false);
+  const [showWorkerHint, setShowWorkerHint] = React.useState(false);
+  const [frontendMissing, setFrontendMissing] = React.useState(false);
 
   const isMountedRef = React.useRef(false);
   const loadingRef = React.useRef(false);
@@ -222,6 +233,10 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const eventSourceRef = React.useRef<EventSource | null>(null);
   const packListingRef = React.useRef<Record<string, FrontendReviewPackListingItem & { account_id: string }>>({});
   const loadingAccountsRef = React.useRef<Set<string>>(new Set());
+  const workerHintTimeoutRef = React.useRef<number | null>(null);
+  const workerWaitingRef = React.useRef(false);
+  const retryAttemptsRef = React.useRef<Record<string, number>>({});
+  const retryTimeoutsRef = React.useRef<Record<string, number | undefined>>({});
 
   React.useEffect(() => {
     isMountedRef.current = true;
@@ -237,7 +252,59 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     loadingAccountsRef.current = new Set();
     setSubmittedAccounts(new Set());
     clear();
+    workerWaitingRef.current = false;
+    if (workerHintTimeoutRef.current !== null) {
+      window.clearTimeout(workerHintTimeoutRef.current);
+      workerHintTimeoutRef.current = null;
+    }
+    if (isMountedRef.current) {
+      setShowWorkerHint(false);
+    }
+    for (const key of Object.keys(retryTimeoutsRef.current)) {
+      const timeoutId = retryTimeoutsRef.current[key];
+      if (typeof timeoutId === 'number') {
+        window.clearTimeout(timeoutId);
+      }
+      delete retryTimeoutsRef.current[key];
+    }
+    retryAttemptsRef.current = {};
+    setFrontendMissing(false);
   }, [sid, clear]);
+
+  const clearWorkerWait = React.useCallback(() => {
+    workerWaitingRef.current = false;
+    if (workerHintTimeoutRef.current !== null) {
+      window.clearTimeout(workerHintTimeoutRef.current);
+      workerHintTimeoutRef.current = null;
+    }
+    if (isMountedRef.current) {
+      setShowWorkerHint(false);
+    }
+  }, []);
+
+  const beginWorkerWait = React.useCallback(() => {
+    workerWaitingRef.current = true;
+    if (showWorkerHint) {
+      return;
+    }
+    if (workerHintTimeoutRef.current !== null) {
+      return;
+    }
+    workerHintTimeoutRef.current = window.setTimeout(() => {
+      workerHintTimeoutRef.current = null;
+      if (isMountedRef.current && workerWaitingRef.current) {
+        setShowWorkerHint(true);
+      }
+    }, WORKER_HINT_DELAY_MS);
+  }, [showWorkerHint]);
+
+  const clearRetryTimeout = React.useCallback((accountId: string) => {
+    const timeoutId = retryTimeoutsRef.current[accountId];
+    if (typeof timeoutId === 'number') {
+      window.clearTimeout(timeoutId);
+    }
+    delete retryTimeoutsRef.current[accountId];
+  }, []);
 
   const updateCard = React.useCallback((accountId: string, updater: (state: CardState) => CardState) => {
     setCards((previous) => {
@@ -332,6 +399,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         return initial;
       });
       setSubmittedAccounts(initialSubmitted);
+      clearWorkerWait();
 
       if (isMountedRef.current) {
         setPhase('ready');
@@ -347,16 +415,16 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     } finally {
       loadingRef.current = false;
     }
-  }, [getPack, sid]);
+  }, [clearWorkerWait, getPack, sid]);
 
   const loadAccountPack = React.useCallback(
-    async (accountId: string) => {
+    async (accountId: string, options?: { force?: boolean; resetAttempts?: boolean }) => {
       if (!sid) {
         return;
       }
 
       const cachedPack = getPack(accountId);
-      if (cachedPack) {
+      if (cachedPack && !options?.force) {
         updateCard(accountId, (state) => ({
           ...state,
           status: 'ready',
@@ -381,9 +449,13 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       }
 
       loadingAccountsRef.current.add(accountId);
+      if (options?.resetAttempts) {
+        delete retryAttemptsRef.current[accountId];
+      }
+      clearRetryTimeout(accountId);
       updateCard(accountId, (state) => ({
         ...state,
-        status: 'waiting',
+        status: state.pack && !options?.force ? state.status : 'waiting',
         error: null,
       }));
 
@@ -396,6 +468,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           return;
         }
         setPack(accountId, pack);
+        delete retryAttemptsRef.current[accountId];
+        clearRetryTimeout(accountId);
         updateCard(accountId, (state) => ({
           ...state,
           status: 'ready',
@@ -420,11 +494,22 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             pack: state.pack,
           }));
         }
+        const nextAttempt = (retryAttemptsRef.current[accountId] ?? 0) + 1;
+        retryAttemptsRef.current[accountId] = nextAttempt;
+        const delay = Math.min(30_000, 1_000 * 2 ** (nextAttempt - 1));
+        clearRetryTimeout(accountId);
+        retryTimeoutsRef.current[accountId] = window.setTimeout(() => {
+          delete retryTimeoutsRef.current[accountId];
+          if (!isMountedRef.current) {
+            return;
+          }
+          void loadAccountPack(accountId);
+        }, delay);
       } finally {
         loadingAccountsRef.current.delete(accountId);
       }
     },
-    [getPack, setPack, sid, updateCard, markSubmitted, markUnsubmitted]
+    [clearRetryTimeout, getPack, setPack, sid, updateCard, markSubmitted, markUnsubmitted]
   );
 
   const stopPolling = React.useCallback(() => {
@@ -444,6 +529,10 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const schedulePoll = React.useCallback(
     (sessionId: string) => {
       stopPolling();
+      if (isMountedRef.current) {
+        setPhase((state) => (state === 'ready' ? state : 'waiting'));
+      }
+      beginWorkerWait();
 
       const poll = async () => {
         if (!isMountedRef.current) {
@@ -457,9 +546,11 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           const packsCount = extractPacksCount(payload);
           if (packsCount > 0) {
             stopPolling();
+            clearWorkerWait();
             await loadPackListing();
             return;
           }
+          beginWorkerWait();
         } catch (err) {
           console.warn('Review poll failed', err);
         }
@@ -469,7 +560,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
 
       pollTimeoutRef.current = window.setTimeout(poll, POLL_INTERVAL_MS);
     },
-    [loadPackListing, stopPolling]
+    [beginWorkerWait, clearWorkerWait, loadPackListing, stopPolling]
   );
 
   const startStream = React.useCallback(
@@ -482,6 +573,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         if (isMountedRef.current) {
           setPhase((state) => (state === 'ready' ? state : 'waiting'));
         }
+        beginWorkerWait();
 
         eventSource.addEventListener('packs_ready', async (event) => {
           try {
@@ -489,6 +581,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
               return;
             }
             stopPolling();
+            clearWorkerWait();
             await loadPackListing();
           } catch (err) {
             console.error('Failed to load packs after packs_ready', err);
@@ -508,7 +601,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         schedulePoll(sessionId);
       }
     },
-    [loadPackListing, schedulePoll, stopStream]
+    [beginWorkerWait, clearWorkerWait, loadPackListing, schedulePoll, stopStream]
   );
 
   React.useEffect(() => {
@@ -534,11 +627,15 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         }
         setManifest(manifestResponse);
 
-        const reviewStage = manifestResponse.frontend?.review;
+        const frontendSection = manifestResponse.frontend;
+        const reviewStage = frontendSection?.review;
+        setFrontendMissing(!(frontendSection && typeof frontendSection === 'object'));
         const packsCount = extractPacksCount(reviewStage);
         if (packsCount > 0) {
+          clearWorkerWait();
           await loadPackListing();
         } else {
+          beginWorkerWait();
           startStream(sid);
         }
       } catch (err) {
@@ -558,8 +655,9 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       cancelled = true;
       stopPolling();
       stopStream();
+      clearWorkerWait();
     };
-  }, [sid, loadPackListing, schedulePoll, startStream, stopPolling]);
+  }, [beginWorkerWait, clearWorkerWait, sid, loadPackListing, schedulePoll, startStream, stopPolling, stopStream]);
 
   const handleAnswerChange = React.useCallback(
     (accountId: string, answers: AccountQuestionAnswers) => {
@@ -656,6 +754,13 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     [loadAccountPack]
   );
 
+  const handleRetryLoad = React.useCallback(
+    (accountId: string) => {
+      void loadAccountPack(accountId, { force: true, resetAttempts: true });
+    },
+    [loadAccountPack]
+  );
+
   const allDone = totalCards > 0 && submittedCount === totalCards;
 
   const handleFinishReview = React.useCallback(async () => {
@@ -690,12 +795,19 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           </p>
         ) : null}
         {phase === 'waiting' ? (
-          <p className="text-sm text-slate-500">Waiting for review packs…</p>
+          <p className="text-sm text-slate-500">{showWorkerHint ? 'Waiting for worker…' : 'Waiting for review packs…'}</p>
         ) : null}
         {phaseError && phase === 'error' ? (
           <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">{phaseError}</div>
         ) : null}
       </header>
+
+      {frontendMissing && sid ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          Frontend manifest block missing for run <span className="font-mono">{sid}</span>. Waiting for worker to publish review
+          metadata.
+        </div>
+      ) : null}
 
       {orderedCards.length === 0 && phase === 'ready' ? (
         <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">
@@ -712,6 +824,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             onChange={(answers) => handleAnswerChange(accountId, answers)}
             onSubmit={() => handleSubmit(accountId)}
             onLoad={handleCardLoad}
+            onRetry={handleRetryLoad}
           />
         ))}
       </div>

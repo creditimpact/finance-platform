@@ -487,3 +487,25 @@ def test_frontend_review_stream_emits_responses_written_event(api_client, monkey
     assert account_id in text
 
     response.close()
+
+
+def test_frontend_review_complete_endpoint_creates_marker(api_client):
+    client, runs_root = api_client
+    sid = "S999"
+    (runs_root / sid).mkdir(parents=True, exist_ok=True)
+
+    response = client.post(f"/api/runs/{sid}/frontend/review/complete")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["sid"] == sid
+    completed_at = payload["completed_at"]
+    assert isinstance(completed_at, str)
+
+    marker_path = runs_root / sid / "frontend" / "review" / "completed.json"
+    assert marker_path.exists()
+    marker_payload = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert marker_payload == {
+        "sid": sid,
+        "completed_at": completed_at,
+    }

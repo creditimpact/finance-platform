@@ -2,7 +2,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import ReviewPage from './ReviewPage';
 
-jest.mock('../api', () => ({
+jest.mock('../api.ts', () => ({
   submitExplanations: jest.fn(),
   getSummaries: jest.fn().mockResolvedValue({
     summaries: {

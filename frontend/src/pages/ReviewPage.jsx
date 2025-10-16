@@ -1,6 +1,6 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
-import { submitExplanations, getSummaries } from '../api';
+import { submitExplanations, getSummaries } from '../api.ts';
 import DecisionBadge from '../components/DecisionBadge';
 import ReasonChips from '../components/ReasonChips';
 import ConfidenceTooltip from '../components/ConfidenceTooltip';

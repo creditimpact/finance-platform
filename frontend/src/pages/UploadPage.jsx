@@ -203,6 +203,15 @@ export default function UploadPage() {
       </form>
       {status === 'queued' && <p>Queued… waiting for worker.</p>}
       {status === 'processing' && <p>Processing…</p>}
+      {sessionId && status !== 'idle' && (
+        <button
+          type="button"
+          style={{ marginTop: 12 }}
+          onClick={() => navigate(`/runs/${encodeURIComponent(sessionId)}/review`)}
+        >
+          Go to Review
+        </button>
+      )}
       {status === 'done' && Array.isArray(accounts) && (
         <div style={{ marginTop: 16 }}>
           <h3>Problem Accounts</h3>

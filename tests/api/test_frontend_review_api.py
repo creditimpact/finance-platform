@@ -75,6 +75,7 @@ def test_frontend_manifest_endpoint_supports_filter(api_client):
             "index": "frontend/review/index.json",
             "packs_dir": "frontend/review/packs",
             "packs_count": 2,
+            "results_dir": "frontend/review/responses",
         },
         "other": {"value": 1},
     }
@@ -88,9 +89,49 @@ def test_frontend_manifest_endpoint_supports_filter(api_client):
         f"/api/runs/{sid}/frontend/manifest", query_string={"section": "frontend"}
     )
     assert subset_response.status_code == 200
+    expected_review = dict(manifest_payload["frontend"])
+    expected_review["responses_dir"] = "frontend/review/responses"
     assert subset_response.get_json() == {
         "sid": sid,
-        "frontend": manifest_payload["frontend"],
+        "frontend": {"review": expected_review},
+    }
+
+
+def test_frontend_manifest_section_preserves_existing_review_block(api_client):
+    client, runs_root = api_client
+    sid = "S125"
+    run_dir = runs_root / sid
+    manifest_payload = {
+        "sid": sid,
+        "frontend": {
+            "review": {
+                "index": "frontend/review/index.json",
+                "packs_dir": "frontend/review/packs",
+                "responses_dir": "frontend/review/responses",
+                "packs_count": 3,
+                "extra": {"note": "keep"},
+            },
+            "status": "success",
+        },
+    }
+    _write_json(run_dir / "manifest.json", manifest_payload)
+
+    subset_response = client.get(
+        f"/api/runs/{sid}/frontend/manifest", query_string={"section": "frontend"}
+    )
+    assert subset_response.status_code == 200
+    assert subset_response.get_json() == {
+        "sid": sid,
+        "frontend": {
+            "review": {
+                "index": "frontend/review/index.json",
+                "packs_dir": "frontend/review/packs",
+                "responses_dir": "frontend/review/responses",
+                "packs_count": 3,
+                "extra": {"note": "keep"},
+            },
+            "status": "success",
+        },
     }
 
 

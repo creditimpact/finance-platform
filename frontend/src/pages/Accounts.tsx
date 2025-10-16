@@ -375,7 +375,7 @@ export default function AccountsPage() {
         const manifestEntry = entries.find((entry) => entry.account_id === selectedAccountId);
         const packPath = manifestEntry?.pack_path ?? manifestEntry?.path ?? manifestEntry?.pack_path_rel;
         const pack = await fetchFrontendReviewAccount<ReviewAccountPack>(sid, selectedAccountId, {
-          packPath: typeof packPath === 'string' ? packPath : undefined,
+          staticPath: typeof packPath === 'string' ? packPath : undefined,
         });
         if (!active) {
           return;

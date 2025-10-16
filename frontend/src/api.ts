@@ -94,6 +94,10 @@ function buildFrontendReviewResponseUrl(sessionId: string, accountId: string): s
   return `${buildRunApiUrl(sessionId, '/frontend/review/response')}/${encodeURIComponent(accountId)}`;
 }
 
+function buildFrontendReviewPackUrl(sessionId: string, accountId: string): string {
+  return `${buildRunApiUrl(sessionId, '/frontend/review/pack')}/${encodeURIComponent(accountId)}`;
+}
+
 export function buildFrontendReviewStreamUrl(sessionId: string): string {
   return buildRunApiUrl(sessionId, '/frontend/review/stream');
 }
@@ -341,49 +345,102 @@ export async function fetchRunReviewPackListing(
   return { items };
 }
 
+type FetchFrontendReviewAccountOptions = RequestInit & {
+  staticPath?: string | null | undefined;
+};
+
+function normalizeStaticPackPath(path: string): string {
+  const replaced = path.replace(/\\/g, '/');
+  const trimmed = trimSlashes(replaced);
+  if (!trimmed) {
+    return trimmed;
+  }
+  return ensureFrontendPath(trimmed, trimmed);
+}
+
+function extractPackPayload(candidate: unknown): AccountPack | null {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+    return null;
+  }
+
+  const wrapped = (candidate as { pack?: unknown }).pack;
+  const pack =
+    wrapped && typeof wrapped === 'object' && !Array.isArray(wrapped) ? wrapped : candidate;
+
+  if (!pack || typeof pack !== 'object' || Array.isArray(pack)) {
+    return null;
+  }
+
+  const { account_id: accountId, display } = pack as { account_id?: unknown; display?: unknown };
+
+  if (typeof accountId !== 'string' || accountId.trim() === '') {
+    return null;
+  }
+
+  if (!display || typeof display !== 'object') {
+    return null;
+  }
+
+  return pack as AccountPack;
+}
+
 export async function fetchFrontendReviewAccount<T = AccountPack>(
   sessionId: string,
   accountId: string,
-  initOrOptions?: RequestInit | (RequestInit & { packPath?: string | null | undefined })
+  initOrOptions?: RequestInit | FetchFrontendReviewAccountOptions
 ): Promise<T> {
   if (!accountId) {
     throw new Error('Missing account id');
   }
 
-  let packPath: string | undefined;
   let init: RequestInit | undefined;
+  let staticPath: string | undefined;
 
-  if (initOrOptions && typeof initOrOptions === 'object' && 'packPath' in initOrOptions) {
-    const { packPath: candidate, ...rest } = initOrOptions as RequestInit & {
-      packPath?: string | null | undefined;
-    };
-    if (typeof candidate === 'string' && candidate.trim()) {
-      packPath = ensureFrontendPath(candidate, candidate);
+  if (initOrOptions && typeof initOrOptions === 'object' && 'staticPath' in initOrOptions) {
+    const { staticPath: providedStaticPath, ...rest } = initOrOptions as FetchFrontendReviewAccountOptions;
+    if (typeof providedStaticPath === 'string' && providedStaticPath.trim() !== '') {
+      const normalized = normalizeStaticPackPath(providedStaticPath);
+      staticPath = normalized || undefined;
     }
     init = rest as RequestInit;
   } else {
     init = initOrOptions as RequestInit | undefined;
   }
 
-  if (!packPath) {
-    const manifest = await fetchFrontendReviewManifest(sessionId);
-    const match = manifest.packs?.find((entry) => entry.account_id === accountId);
-    if (match?.pack_path) {
-      packPath = match.pack_path;
-    } else if (match?.path) {
-      packPath = ensureFrontendPath(match.path, match.path);
-    } else {
-      const packsDir = manifest.packs_dir_path ?? ensureFrontendPath('review/packs', 'review/packs');
-      packPath = joinFrontendPath(packsDir, `${accountId}.json`);
+  const apiEndpoints = [
+    buildFrontendReviewAccountUrl(sessionId, accountId),
+    buildFrontendReviewPackUrl(sessionId, accountId),
+  ];
+
+  for (const endpoint of apiEndpoints) {
+    try {
+      const payload = await fetchJson<unknown>(endpoint, init);
+      const pack = extractPackPayload(payload);
+      if (pack) {
+        return pack as T;
+      }
+    } catch (err) {
+      if (REVIEW_DEBUG_ENABLED) {
+        reviewDebugLog('fetchFrontendReviewAccount:endpoint-error', { endpoint, error: err });
+      }
     }
   }
 
-  const normalizedPath = packPath ? ensureFrontendPath(packPath, packPath) : undefined;
-  if (!normalizedPath) {
-    throw new Error(`Unable to resolve pack path for account ${accountId}`);
+  if (staticPath) {
+    try {
+      const payload = await fetchJson<unknown>(buildRunAssetUrl(sessionId, staticPath), init);
+      const pack = extractPackPayload(payload);
+      if (pack) {
+        return pack as T;
+      }
+    } catch (err) {
+      if (REVIEW_DEBUG_ENABLED) {
+        reviewDebugLog('fetchFrontendReviewAccount:static-error', { staticPath, error: err });
+      }
+    }
   }
 
-  return fetchJson<T>(buildRunAssetUrl(sessionId, normalizedPath), init);
+  throw new Error('pack-parse-failed');
 }
 
 export interface FrontendReviewResponseClientMeta {

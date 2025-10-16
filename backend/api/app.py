@@ -559,9 +559,33 @@ def api_frontend_manifest(sid: str):
 
     section = (request.args.get("section") or "").strip().lower()
     if section == "frontend":
+        frontend_payload = manifest.get("frontend")
+        normalized_frontend: Mapping[str, Any] | None = None
+
+        if isinstance(frontend_payload, Mapping):
+            review_payload = frontend_payload.get("review")
+            if isinstance(review_payload, Mapping):
+                normalized_frontend = dict(frontend_payload)
+                review_section = dict(review_payload)
+            else:
+                review_section = dict(frontend_payload)
+                normalized_frontend = {"review": review_section}
+
+            if not isinstance(review_section.get("responses_dir"), str):
+                results_dir = review_section.get("results_dir")
+                if isinstance(results_dir, str):
+                    review_section["responses_dir"] = results_dir
+
+            if not isinstance(review_section.get("packs_dir"), str):
+                packs_dir_hint = review_section.get("packs")
+                if isinstance(packs_dir_hint, str):
+                    review_section["packs_dir"] = packs_dir_hint
+
+            normalized_frontend["review"] = review_section
+
         subset: dict[str, Any] = {
             "sid": manifest.get("sid"),
-            "frontend": manifest.get("frontend"),
+            "frontend": normalized_frontend if normalized_frontend is not None else frontend_payload,
         }
         return jsonify(subset)
 

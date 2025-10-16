@@ -176,7 +176,39 @@ export async function fetchRunFrontendManifest(
 ): Promise<RunFrontendManifestResponse> {
   const url = new URL(buildRunApiUrl(sessionId, '/frontend/manifest'));
   url.searchParams.set('section', 'frontend');
-  return fetchJson<RunFrontendManifestResponse>(url.toString(), init);
+  const res = await fetchJson<RunFrontendManifestResponse>(url.toString(), init);
+
+  const frontendSection = res?.frontend;
+  const reviewCandidate =
+    (frontendSection as { review?: FrontendStageDescriptor | null } | null | undefined)?.review ??
+    (frontendSection as FrontendStageDescriptor | null | undefined) ??
+    (res as { review?: FrontendStageDescriptor | null } | null | undefined)?.review ??
+    null;
+
+  const normalizedReview =
+    reviewCandidate && typeof reviewCandidate === 'object' && !Array.isArray(reviewCandidate)
+      ? (reviewCandidate as FrontendStageDescriptor)
+      : null;
+
+  let normalizedFrontend: RunFrontendManifestResponse['frontend'];
+
+  if (frontendSection && typeof frontendSection === 'object' && !Array.isArray(frontendSection)) {
+    normalizedFrontend = {
+      ...(frontendSection as Record<string, unknown>),
+      review: normalizedReview,
+    } as RunFrontendManifestResponse['frontend'];
+  } else if (frontendSection === null) {
+    normalizedFrontend = null;
+  } else if (normalizedReview) {
+    normalizedFrontend = { review: normalizedReview };
+  } else {
+    normalizedFrontend = frontendSection as RunFrontendManifestResponse['frontend'];
+  }
+
+  return {
+    ...res,
+    frontend: normalizedFrontend,
+  };
 }
 
 export async function fetchFrontendReviewManifest(

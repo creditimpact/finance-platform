@@ -25,6 +25,7 @@ import type {
 } from '../api.ts';
 import { ReviewPackStoreProvider, useReviewPackStore } from '../stores/reviewPackStore';
 import { useToast } from '../components/ToastProvider';
+import { REVIEW_DEBUG_ENABLED, reviewDebugLog } from '../utils/reviewDebug';
 
 const POLL_INTERVAL_MS = 2000;
 const WORKER_HINT_DELAY_MS = 30_000;
@@ -233,6 +234,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const loadingRef = React.useRef(false);
   const loadedRef = React.useRef(false);
   const pollTimeoutRef = React.useRef<number | null>(null);
+  const pollIterationRef = React.useRef(0);
   const eventSourceRef = React.useRef<EventSource | null>(null);
   const packListingRef = React.useRef<Record<string, FrontendReviewPackListingItem & { account_id: string }>>({});
   const loadingAccountsRef = React.useRef<Set<string>>(new Set());
@@ -374,6 +376,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     if (!sid || loadingRef.current || loadedRef.current) {
       return;
     }
+    reviewDebugLog('loadPackListing:start', { sid });
     loadingRef.current = true;
     setPhaseError(null);
     if (isMountedRef.current) {
@@ -382,7 +385,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
 
     try {
       const packsUrl = `/api/runs/${encodeURIComponent(sid)}/frontend/review/packs`;
-      console.log(`[RunReviewPage] GET ${packsUrl}`);
+      reviewDebugLog('loadPackListing:fetch', { url: packsUrl });
       const { items } = await fetchRunReviewPackListing(sid);
       if (!isMountedRef.current) {
         return;
@@ -392,7 +395,10 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         return typeof item.account_id === 'string' && item.account_id.trim() !== '';
       });
 
-      console.log(`[RunReviewPage] Received ${filteredItems.length} review packs from ${packsUrl}`);
+      reviewDebugLog('loadPackListing:received', {
+        url: packsUrl,
+        count: filteredItems.length,
+      });
 
       const listingMap: Record<string, FrontendReviewPackListingItem & { account_id: string }> = {};
       for (const item of filteredItems) {
@@ -440,6 +446,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         setPhase('ready');
         loadedRef.current = true;
       }
+      reviewDebugLog('loadPackListing:ready', { count: filteredItems.length });
     } catch (err) {
       if (!isMountedRef.current) {
         return;
@@ -460,15 +467,16 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         return;
       }
       const indexUrl = `/api/runs/${encodeURIComponent(sessionId)}/frontend/index`;
-      console.log(`[RunReviewPage] GET ${indexUrl}`);
+      reviewDebugLog('bootstrap:fetch', { url: indexUrl, sessionId });
       try {
         const payload = await fetchRunFrontendReviewIndex(sessionId);
         if (isCancelled() || !isMountedRef.current) {
           return;
         }
         const packsCount = extractPacksCount(payload);
-        console.log(`[RunReviewPage] packs_count from ${indexUrl}: ${packsCount}`);
+        reviewDebugLog('bootstrap:packs-count', { url: indexUrl, packsCount });
         if (packsCount > 0) {
+          reviewDebugLog('bootstrap:packs-ready', { url: indexUrl, packsCount });
           clearWorkerWait();
           await loadPackListing();
           return;
@@ -483,6 +491,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         clearWorkerWait();
         setPhase('error');
         setPhaseError(message);
+        reviewDebugLog('bootstrap:error', { url: indexUrl, error: err });
         console.error(`[RunReviewPage] Failed to load ${indexUrl}`, err);
       }
     },
@@ -588,19 +597,30 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     if (pollTimeoutRef.current !== null) {
       window.clearTimeout(pollTimeoutRef.current);
       pollTimeoutRef.current = null;
+      reviewDebugLog('poll:stop');
     }
   }, []);
 
   const stopStream = React.useCallback(() => {
     if (eventSourceRef.current) {
+      reviewDebugLog('sse:close-request', {
+        readyState: eventSourceRef.current.readyState,
+      });
       eventSourceRef.current.close();
       eventSourceRef.current = null;
+      reviewDebugLog('sse:closed');
     }
   }, []);
+
+  React.useEffect(() => {
+    reviewDebugLog('RunReviewPage session', { sid, debug: REVIEW_DEBUG_ENABLED });
+  }, [sid]);
 
   const schedulePoll = React.useCallback(
     (sessionId: string) => {
       stopPolling();
+      reviewDebugLog('poll:schedule', { sessionId });
+      pollIterationRef.current = 0;
       if (isMountedRef.current) {
         setPhase((state) => {
           if (state === 'ready' || state === 'error') {
@@ -615,13 +635,18 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         if (!isMountedRef.current) {
           return;
         }
+        const iteration = pollIterationRef.current + 1;
+        pollIterationRef.current = iteration;
+        reviewDebugLog('poll:tick', { sessionId, iteration });
         try {
           const payload = await fetchRunFrontendReviewIndex(sessionId);
           if (!isMountedRef.current) {
             return;
           }
           const packsCount = extractPacksCount(payload);
+          reviewDebugLog('poll:packs-count', { sessionId, iteration, packsCount });
           if (packsCount > 0) {
+            reviewDebugLog('poll:packs-ready', { sessionId, iteration, packsCount });
             stopPolling();
             clearWorkerWait();
             await loadPackListing();
@@ -629,13 +654,16 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           }
           beginWorkerWait();
         } catch (err) {
+          reviewDebugLog('poll:error', { sessionId, error: err });
           console.warn('Review poll failed', err);
         }
 
         pollTimeoutRef.current = window.setTimeout(poll, POLL_INTERVAL_MS);
+        reviewDebugLog('poll:scheduled-next', { sessionId, iteration, delay: POLL_INTERVAL_MS });
       };
 
       pollTimeoutRef.current = window.setTimeout(poll, POLL_INTERVAL_MS);
+      reviewDebugLog('poll:initial-timeout', { sessionId, delay: POLL_INTERVAL_MS });
     },
     [beginWorkerWait, clearWorkerWait, loadPackListing, stopPolling]
   );
@@ -645,6 +673,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       stopStream();
       try {
         const url = buildFrontendReviewStreamUrl(sessionId);
+        reviewDebugLog('sse:connect', { url, sessionId });
         const eventSource = new EventSource(url);
         eventSourceRef.current = eventSource;
         if (isMountedRef.current) {
@@ -657,7 +686,12 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         }
         beginWorkerWait();
 
+        eventSource.onopen = () => {
+          reviewDebugLog('sse:open', { url, sessionId });
+        };
+
         eventSource.addEventListener('packs_ready', async (event) => {
+          reviewDebugLog('sse:event', { url, sessionId, type: 'packs_ready', data: event?.data });
           try {
             if (!isMountedRef.current) {
               return;
@@ -666,13 +700,16 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             clearWorkerWait();
             await loadPackListing();
           } catch (err) {
+            reviewDebugLog('sse:event-error', { url, sessionId, error: err });
             console.error('Failed to load packs after packs_ready', err);
           }
         });
 
         eventSource.onerror = () => {
+          reviewDebugLog('sse:error', { url, sessionId });
           eventSource.close();
           eventSourceRef.current = null;
+          reviewDebugLog('sse:error-closed', { url, sessionId });
           if (!isMountedRef.current) {
             return;
           }
@@ -685,9 +722,11 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
               description: 'Live updates unavailable, falling back to polling…',
             });
           }
+          reviewDebugLog('sse:fallback-poll', { sessionId });
           schedulePoll(sessionId);
         };
       } catch (err) {
+        reviewDebugLog('sse:connect-error', { sessionId, error: err });
         console.warn('Unable to open review stream', err);
         setLiveUpdatesUnavailable(true);
         if (!hasShownLiveUpdateToastRef.current) {
@@ -814,6 +853,10 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     },
     [cards, sid, updateCard, setPack, showToast, markSubmitted]
   );
+
+  React.useEffect(() => {
+    reviewDebugLog('cards:rendered', { count: order.length, accounts: order });
+  }, [order]);
 
   const orderedCards = React.useMemo(() => order.map((accountId) => ({ accountId, state: cards[accountId] })), [order, cards]);
 

@@ -15,7 +15,6 @@ import {
   fetchRunFrontendManifest,
   fetchRunFrontendReviewIndex,
   fetchRunReviewPackListing,
-  completeFrontendReview,
   submitFrontendReviewAnswers,
 } from '../api.ts';
 import type {
@@ -890,26 +889,13 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     : 'Loading review packs…';
   const showNoCardsMessage = orderedCards.length === 0 && phase !== 'error' && phase !== 'loading';
 
-  const handleFinishReview = React.useCallback(async () => {
+  const handleFinishReview = React.useCallback(() => {
     if (!sid) {
       return;
     }
     setIsCompleting(true);
-    try {
-      await completeFrontendReview(sid);
-      navigate(`/runs/${encodeURIComponent(sid)}/review/complete`);
-      return;
-    } catch (err) {
-      console.warn('Failed to complete review', err);
-      showToast({
-        variant: 'error',
-        title: 'Unable to finish review',
-        description: err instanceof Error ? err.message : 'Unknown error occurred.',
-      });
-    } finally {
-      setIsCompleting(false);
-    }
-  }, [sid, navigate, showToast]);
+    navigate(`/runs/${encodeURIComponent(sid)}/review/complete`);
+  }, [sid, navigate]);
 
   return (
     <div className={`mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8 ${allDone ? 'pb-32' : ''}`}>

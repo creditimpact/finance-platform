@@ -55,6 +55,13 @@ def _write_json(path, payload):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _next_chunk(iterator):
+    try:
+        return next(iterator)
+    except StopIteration:  # pragma: no cover - defensive
+        raise AssertionError("stream ended unexpectedly")
+
+
 def test_frontend_manifest_endpoint_supports_filter(api_client):
     client, runs_root = api_client
     sid = "S123"
@@ -102,6 +109,32 @@ def test_frontend_index_returns_payload(api_client):
     response = client.get(f"/api/runs/{sid}/frontend/index")
     assert response.status_code == 200
     assert response.get_json() == payload
+
+
+def test_frontend_review_stream_emits_packs_ready(api_client, monkeypatch):
+    client, runs_root = api_client
+    sid = "S890"
+    index_path = runs_root / sid / "frontend" / "review" / "index.json"
+    _write_json(index_path, {"packs_count": 3})
+
+    monkeypatch.setattr("backend.api.app._REVIEW_STREAM_QUEUE_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr("backend.api.app._REVIEW_STREAM_KEEPALIVE_INTERVAL", 0.1)
+
+    response = client.get(
+        f"/api/runs/{sid}/frontend/review/stream",
+        buffered=False,
+        headers={"Accept": "text/event-stream"},
+    )
+    assert response.status_code == 200
+    assert response.mimetype == "text/event-stream"
+
+    stream = response.response
+    chunk = _next_chunk(stream)
+    text = chunk.decode("utf-8")
+    assert "event: packs_ready" in text
+    assert '"packs_count": 3' in text
+
+    response.close()
 
 
 def test_frontend_review_packs_listing_from_index(api_client):
@@ -271,3 +304,37 @@ def test_frontend_review_submit_accepts_client_meta(api_client, monkeypatch):
         .read_text(encoding="utf-8")
     )
     assert stored == record
+
+
+def test_frontend_review_stream_emits_responses_written_event(api_client, monkeypatch):
+    client, runs_root = api_client
+    sid = "S891"
+    account_id = "idx-010"
+    index_path = runs_root / sid / "frontend" / "review" / "index.json"
+    _write_json(index_path, {"packs_count": 1})
+
+    monkeypatch.setattr("backend.api.app._REVIEW_STREAM_QUEUE_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr("backend.api.app._REVIEW_STREAM_KEEPALIVE_INTERVAL", 0.1)
+
+    response = client.get(
+        f"/api/runs/{sid}/frontend/review/stream",
+        buffered=False,
+        headers={"Accept": "text/event-stream"},
+    )
+
+    stream = response.response
+    _next_chunk(stream)  # consume packs_ready event
+
+    payload = {"answers": {"status": "ok"}}
+    post_resp = client.post(
+        f"/api/runs/{sid}/frontend/review/response/{account_id}",
+        json=payload,
+    )
+    assert post_resp.status_code == 200
+
+    chunk = _next_chunk(stream)
+    text = chunk.decode("utf-8")
+    assert "event: responses_written" in text
+    assert account_id in text
+
+    response.close()

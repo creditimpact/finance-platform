@@ -185,7 +185,17 @@ def _is_valid_frontend_account_id(account_id: str) -> bool:
 
 
 def _safe_relative_path(run_dir: Path, relative_path: str) -> Path:
-    rel = Path(relative_path)
+    """Return ``relative_path`` resolved under ``run_dir`` with guardrails.
+
+    ``relative_path`` can include Windows-style path separators even when the
+    backend is running on POSIX.  Converting to a POSIX-style string before
+    constructing :class:`Path` objects ensures the separators are interpreted as
+    directory boundaries instead of literal ``"\\"`` characters in the final
+    URL responses.
+    """
+
+    normalized = relative_path.replace("\\", "/")
+    rel = Path(normalized)
     if rel.is_absolute():
         return rel
 

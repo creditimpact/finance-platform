@@ -252,6 +252,36 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const retryAttemptsRef = React.useRef<Record<string, number>>({});
   const retryTimeoutsRef = React.useRef<Record<string, number | undefined>>({});
   const hasShownLiveUpdateToastRef = React.useRef(false);
+  const fallbackTimeoutRef = React.useRef<number | null>(null);
+  const lastNetworkStatusRef = React.useRef<string | null>(null);
+
+  const stopFallbackTimeout = React.useCallback(() => {
+    if (fallbackTimeoutRef.current !== null) {
+      window.clearTimeout(fallbackTimeoutRef.current);
+      fallbackTimeoutRef.current = null;
+      reviewDebugLog('timeout:stop');
+    }
+  }, []);
+
+  const startTimeout = React.useCallback(
+    (delay: number, handler: () => void | Promise<void>) => {
+      stopFallbackTimeout();
+      reviewDebugLog('timeout:start', { delay });
+      fallbackTimeoutRef.current = window.setTimeout(() => {
+        fallbackTimeoutRef.current = null;
+        reviewDebugLog('timeout:fire', { delay });
+        void (async () => {
+          try {
+            await handler();
+          } catch (err) {
+            reviewDebugLog('timeout:error', { error: err });
+            console.error('Review timeout handler failed', err);
+          }
+        })();
+      }, delay);
+    },
+    [stopFallbackTimeout]
+  );
 
   React.useEffect(() => {
     isMountedRef.current = true;
@@ -268,6 +298,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     setSubmittedAccounts(new Set());
     clear();
     workerWaitingRef.current = false;
+    stopFallbackTimeout();
     if (workerHintTimeoutRef.current !== null) {
       window.clearTimeout(workerHintTimeoutRef.current);
       workerHintTimeoutRef.current = null;
@@ -286,12 +317,13 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     setFrontendMissing(false);
     setLiveUpdatesUnavailable(false);
     hasShownLiveUpdateToastRef.current = false;
+    lastNetworkStatusRef.current = null;
     if (isMountedRef.current) {
       setPhase('loading');
       setPhaseError(null);
     }
     setDiagnosticsPacksCount(null);
-  }, [sid, clear]);
+  }, [sid, clear, stopFallbackTimeout]);
 
   const clearWorkerWait = React.useCallback(() => {
     workerWaitingRef.current = false;
@@ -470,6 +502,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       setDiagnosticsPacksCount((previous) => (previous == null ? filteredItems.length : previous));
 
       if (isMountedRef.current) {
+        stopFallbackTimeout();
         setPhase('ready');
         loadedRef.current = true;
       }
@@ -485,7 +518,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     } finally {
       loadingRef.current = false;
     }
-  }, [clearWorkerWait, getPack, sid]);
+  }, [clearWorkerWait, getPack, sid, stopFallbackTimeout]);
 
   const loadAccountPack = React.useCallback(
     async (accountId: string, options?: { force?: boolean; resetAttempts?: boolean }) => {
@@ -651,10 +684,13 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             await loadPackListing();
             return;
           }
+          lastNetworkStatusRef.current = `Poll #${iteration} returned no review packs (packs_count=${packsCount}).`;
           beginWorkerWait();
         } catch (err) {
           reviewDebugLog('poll:error', { sessionId, error: err });
           console.warn('Review poll failed', err);
+          const message = err instanceof Error ? err.message : 'Poll failed';
+          lastNetworkStatusRef.current = `Poll error: ${message}`;
         }
 
         pollTimeoutRef.current = window.setTimeout(poll, POLL_INTERVAL_MS);
@@ -697,6 +733,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             }
             stopPolling();
             clearWorkerWait();
+            lastNetworkStatusRef.current = 'Received packs_ready event.';
             await loadPackListing();
           } catch (err) {
             reviewDebugLog('sse:event-error', { url, sessionId, error: err });
@@ -713,6 +750,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             return;
           }
           setLiveUpdatesUnavailable(true);
+          lastNetworkStatusRef.current = 'Live updates unavailable (stream error).';
           if (!hasShownLiveUpdateToastRef.current) {
             hasShownLiveUpdateToastRef.current = true;
             showToast({
@@ -728,6 +766,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         reviewDebugLog('sse:connect-error', { sessionId, error: err });
         console.warn('Unable to open review stream', err);
         setLiveUpdatesUnavailable(true);
+        const message = err instanceof Error ? err.message : 'Unable to open review stream';
+        lastNetworkStatusRef.current = `Stream connection failed: ${message}`;
         if (!hasShownLiveUpdateToastRef.current) {
           hasShownLiveUpdateToastRef.current = true;
           showToast({
@@ -750,6 +790,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         stopPolling();
         stopStream();
         clearWorkerWait();
+        stopFallbackTimeout();
       };
     }
 
@@ -797,6 +838,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           return;
         }
 
+        lastNetworkStatusRef.current = `Initial index fetch returned no review packs (packs_count=${packsCount}).`;
         beginWorkerWait();
       } catch (err) {
         if (isCancelled() || !isMountedRef.current) {
@@ -804,11 +846,63 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         }
         reviewDebugLog('bootstrap:error', { url: indexUrl, sessionId: sid, error: err });
         console.warn('index fetch failed, falling back to stream/poll', err);
+        const message = err instanceof Error ? err.message : 'Unable to load review index';
+        lastNetworkStatusRef.current = `Initial index fetch failed: ${message}`;
       }
 
       if (isCancelled() || !isMountedRef.current) {
         return;
       }
+
+      startTimeout(15_000, async () => {
+        if (!isMountedRef.current || loadedRef.current) {
+          return;
+        }
+        reviewDebugLog('timeout:refetch', { url: indexUrl, sessionId: sid });
+        try {
+          const retryPayload = await fetchRunFrontendReviewIndex(sid);
+          if (!isMountedRef.current || loadedRef.current) {
+            return;
+          }
+          const retryPacksCount = extractPacksCount(retryPayload);
+          const retryRecord =
+            retryPayload && typeof retryPayload === 'object' ? (retryPayload as Record<string, unknown>) : null;
+          const retryPacksField = retryRecord?.packs;
+          const hasPacksRetry =
+            retryPacksCount > 0 || (Array.isArray(retryPacksField) && retryPacksField.length > 0);
+          lastNetworkStatusRef.current = hasPacksRetry
+            ? `Timeout refetch found review packs (packs_count=${retryPacksCount}).`
+            : `Timeout refetch returned no review packs (packs_count=${retryPacksCount}).`;
+          if (hasPacksRetry) {
+            reviewDebugLog('timeout:packs-ready', { url: indexUrl, sessionId: sid, retryPacksCount });
+            await loadPackListing();
+            if (isMountedRef.current) {
+              setPhase('ready');
+            }
+            return;
+          }
+          stopPolling();
+          stopStream();
+          clearWorkerWait();
+          if (isMountedRef.current) {
+            setPhase('error');
+            setPhaseError(
+              lastNetworkStatusRef.current ?? 'No review packs received after waiting for updates.'
+            );
+          }
+        } catch (err) {
+          reviewDebugLog('timeout:refetch-error', { url: indexUrl, sessionId: sid, error: err });
+          const message = err instanceof Error ? err.message : 'Unable to load review packs';
+          lastNetworkStatusRef.current = `Timeout refetch failed: ${message}`;
+          stopPolling();
+          stopStream();
+          clearWorkerWait();
+          if (isMountedRef.current) {
+            setPhase('error');
+            setPhaseError(message);
+          }
+        }
+      });
 
       reviewDebugLog('bootstrap:fallback', { sessionId: sid });
       startStream(sid);
@@ -822,6 +916,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       stopPolling();
       stopStream();
       clearWorkerWait();
+      stopFallbackTimeout();
     };
   }, [
     sid,
@@ -833,6 +928,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     startStream,
     stopPolling,
     stopStream,
+    stopFallbackTimeout,
+    startTimeout,
   ]);
 
   const handleAnswerChange = React.useCallback(

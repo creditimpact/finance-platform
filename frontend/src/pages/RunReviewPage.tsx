@@ -475,50 +475,6 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     }
   }, [clearWorkerWait, getPack, sid]);
 
-  const bootstrap = React.useCallback(
-    async (sessionId: string, options?: { isCancelled?: () => boolean }) => {
-      const isCancelled = options?.isCancelled ?? (() => false);
-      if (!sessionId) {
-        return;
-      }
-      const indexUrl = apiUrl(`/api/runs/${encodeURIComponent(sessionId)}/frontend/index`);
-      reviewDebugLog('bootstrap:fetch', { url: indexUrl, sessionId });
-      try {
-        const payload = await fetchRunFrontendReviewIndex(sessionId);
-        if (isCancelled() || !isMountedRef.current) {
-          return;
-        }
-        const packsCount = extractPacksCount(payload);
-        setDiagnosticsPacksCount(packsCount);
-        reviewDebugLog('bootstrap:packs-count', { url: indexUrl, packsCount });
-        if (packsCount > 0) {
-          reviewDebugLog('bootstrap:packs-ready', { url: indexUrl, packsCount });
-          clearWorkerWait();
-          await loadPackListing();
-          return;
-        }
-        setPhase((state) => (state === 'ready' ? state : 'waiting'));
-        beginWorkerWait();
-      } catch (err) {
-        if (isCancelled() || !isMountedRef.current) {
-          return;
-        }
-        reviewDebugLog('bootstrap:error', { url: indexUrl, error: err });
-        console.error(`[RunReviewPage] Failed to load ${indexUrl}`, err);
-        clearWorkerWait();
-        if (!loadedRef.current) {
-          await loadPackListing();
-        }
-        if (!loadedRef.current && isMountedRef.current) {
-          const message = err instanceof Error ? err.message : 'Unable to load review packs';
-          setPhase('error');
-          setPhaseError((previous) => previous ?? message);
-        }
-      }
-    },
-    [beginWorkerWait, clearWorkerWait, loadPackListing]
-  );
-
   const loadAccountPack = React.useCallback(
     async (accountId: string, options?: { force?: boolean; resetAttempts?: boolean }) => {
       if (!sid) {
@@ -788,9 +744,60 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     let cancelled = false;
     const isCancelled = () => cancelled;
 
-    startStream(sid);
     void loadManifestInfo(sid, { isCancelled });
-    void bootstrap(sid, { isCancelled });
+
+    const initialize = async () => {
+      const indexUrl = apiUrl(`/api/runs/${encodeURIComponent(sid)}/frontend/index`);
+      if (isMountedRef.current) {
+        setPhase((state) => (state === 'ready' ? state : 'waiting'));
+      }
+      reviewDebugLog('bootstrap:fetch', { url: indexUrl, sessionId: sid });
+      try {
+        const payload = await fetchRunFrontendReviewIndex(sid);
+        if (isCancelled() || !isMountedRef.current) {
+          return;
+        }
+
+        const packsCount = extractPacksCount(payload);
+        setDiagnosticsPacksCount(packsCount);
+        const payloadRecord =
+          payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : null;
+        const packsField = payloadRecord?.packs;
+        const hasPacks =
+          packsCount > 0 || (Array.isArray(packsField) && packsField.length > 0);
+
+        reviewDebugLog('bootstrap:packs-count', {
+          url: indexUrl,
+          sessionId: sid,
+          packsCount,
+          hasPacks,
+        });
+
+        if (hasPacks) {
+          reviewDebugLog('bootstrap:packs-ready', { url: indexUrl, sessionId: sid, packsCount });
+          await loadPackListing();
+          return;
+        }
+
+        beginWorkerWait();
+      } catch (err) {
+        if (isCancelled() || !isMountedRef.current) {
+          return;
+        }
+        reviewDebugLog('bootstrap:error', { url: indexUrl, sessionId: sid, error: err });
+        console.warn('index fetch failed, falling back to stream/poll', err);
+      }
+
+      if (isCancelled() || !isMountedRef.current) {
+        return;
+      }
+
+      reviewDebugLog('bootstrap:fallback', { sessionId: sid });
+      startStream(sid);
+      schedulePoll(sid);
+    };
+
+    void initialize();
 
     return () => {
       cancelled = true;
@@ -798,7 +805,17 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       stopStream();
       clearWorkerWait();
     };
-  }, [sid, bootstrap, loadManifestInfo, startStream, stopPolling, stopStream, clearWorkerWait]);
+  }, [
+    sid,
+    beginWorkerWait,
+    clearWorkerWait,
+    loadManifestInfo,
+    loadPackListing,
+    schedulePoll,
+    startStream,
+    stopPolling,
+    stopStream,
+  ]);
 
   const handleAnswerChange = React.useCallback(
     (accountId: string, answers: AccountQuestionAnswers) => {

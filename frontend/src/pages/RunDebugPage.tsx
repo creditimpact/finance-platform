@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useParams } from 'react-router-dom';
-import { joinRunAsset } from '../api.ts';
+import { apiUrl, joinRunAsset } from '../api.ts';
 import { reviewDebugLog } from '../utils/reviewDebug';
 
 interface FetchState {
@@ -94,8 +94,8 @@ function useRunDebugData(sid: string | undefined) {
       return;
     }
     const encodedSid = encodeURIComponent(sid);
-    const indexUrl = `/api/runs/${encodedSid}/frontend/index`;
-    const packsUrl = `/api/runs/${encodedSid}/frontend/review/packs`;
+    const indexUrl = apiUrl(`/api/runs/${encodedSid}/frontend/index`);
+    const packsUrl = apiUrl(`/api/runs/${encodedSid}/frontend/review/packs`);
     setIndexState(createInitialState(indexUrl));
     setPacksState(createInitialState(packsUrl));
     setPackState(null);

@@ -8,14 +8,17 @@ function getImportMetaEnv() {
 
 const metaEnv = getImportMetaEnv();
 
-const apiBaseUrl =
+const rawApiBaseUrl =
   metaEnv.VITE_API_BASE_URL ||
   metaEnv.VITE_API_URL ||
   (typeof process !== 'undefined'
     ? process.env?.VITE_API_BASE_URL || process.env?.VITE_API_URL
     : undefined);
 
-const API = (apiBaseUrl || '').replace(/\/+$/, '');
+const API_BASE = (rawApiBaseUrl || '').replace(/\/+$/, '');
+
+export const apiUrl = (path) =>
+  `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
 
 function encodePathSegments(path = '') {
   return path
@@ -80,7 +83,7 @@ function joinFrontendPath(base, child) {
 }
 
 function buildFrontendReviewAccountUrl(sessionId, accountId) {
-  return `${API}/api/runs/${encodeURIComponent(sessionId)}/frontend/review/accounts/${encodeURIComponent(accountId)}`;
+  return apiUrl(`/api/runs/${encodeURIComponent(sessionId)}/frontend/review/accounts/${encodeURIComponent(accountId)}`);
 }
 
 async function fetchJson(url, init) {
@@ -220,10 +223,13 @@ export async function submitFrontendReviewAnswers(sessionId, accountId, answers,
 }
 
 export async function completeFrontendReview(sessionId, init) {
-  const response = await fetch(`${API}/api/runs/${encodeURIComponent(sessionId)}/frontend/review/complete`, {
-    method: 'POST',
-    ...(init || {}),
-  });
+  const response = await fetch(
+    apiUrl(`/api/runs/${encodeURIComponent(sessionId)}/frontend/review/complete`),
+    {
+      method: 'POST',
+      ...(init || {}),
+    }
+  );
 
   if (!response.ok) {
     let detail;
@@ -243,7 +249,7 @@ export async function startProcess(email, file) {
   formData.append('email', email);
   formData.append('file', file);
 
-  const response = await fetch(`${API}/api/start-process`, {
+  const response = await fetch(apiUrl('/api/start-process'), {
     method: 'POST',
     body: formData,
   });
@@ -261,7 +267,7 @@ export async function uploadReport(email, file) {
   fd.append('email', email);
   fd.append('file', file);
 
-  const res = await fetch(`${API}/api/upload`, { method: 'POST', body: fd });
+  const res = await fetch(apiUrl('/api/upload'), { method: 'POST', body: fd });
   let data = {};
   try {
     data = await res.json();
@@ -279,7 +285,7 @@ export async function pollResult(sessionId, abortSignal) {
   // One attempt of polling. Treat 404 as in-progress (session not yet materialized)
   try {
     const res = await fetch(
-      `${API}/api/result?session_id=${encodeURIComponent(sessionId)}`,
+      apiUrl(`/api/result?session_id=${encodeURIComponent(sessionId)}`),
       { signal: abortSignal }
     );
     let data = null;
@@ -302,7 +308,7 @@ export async function pollResult(sessionId, abortSignal) {
 }
 
 export async function listAccounts(sessionId) {
-  const res = await fetch(`${API}/api/accounts/${encodeURIComponent(sessionId)}`);
+  const res = await fetch(apiUrl(`/api/accounts/${encodeURIComponent(sessionId)}`));
   const data = await res.json();
   if (!res.ok || !data?.ok) {
     throw new Error(data?.message || `List accounts failed (${res.status})`);
@@ -312,7 +318,7 @@ export async function listAccounts(sessionId) {
 
 export async function getAccount(sessionId, accountId) {
   const res = await fetch(
-    `${API}/api/accounts/${encodeURIComponent(sessionId)}/${encodeURIComponent(accountId)}`
+    apiUrl(`/api/accounts/${encodeURIComponent(sessionId)}/${encodeURIComponent(accountId)}`)
   );
   const data = await res.json();
   if (!res.ok || !data?.ok) {
@@ -322,7 +328,7 @@ export async function getAccount(sessionId, accountId) {
 }
 
 export async function submitExplanations(payload) {
-  const response = await fetch(`${API}/api/submit-explanations`, {
+  const response = await fetch(apiUrl('/api/submit-explanations'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -334,7 +340,7 @@ export async function submitExplanations(payload) {
 }
 
 export async function getSummaries(sessionId) {
-  const response = await fetch(`${API}/api/summaries/${sessionId}`);
+  const response = await fetch(apiUrl(`/api/summaries/${sessionId}`));
   if (!response.ok) {
     throw new Error('Failed to fetch summaries');
   }

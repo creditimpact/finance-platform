@@ -360,40 +360,74 @@ function normalizeStaticPackPath(path: string): string {
   return ensureFrontendPath(trimmed, trimmed);
 }
 
-type ExtractedAccountPack = AccountPack & { account_id?: string | null };
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+type ExtractedAccountPack = AccountPack & {
+  account_id?: string | null;
+  answers?: Record<string, string> | null;
+  response?: FrontendReviewResponse | null;
+};
+
+function unwrapPackCandidate(source: unknown): Record<string, unknown> | null {
+  if (!isRecord(source)) {
+    return null;
+  }
+
+  const visited = new Set<Record<string, unknown>>();
+  let current: Record<string, unknown> | null = source;
+
+  while (current && !visited.has(current)) {
+    visited.add(current);
+    const nested = (current as { pack?: unknown }).pack;
+    if (isRecord(nested)) {
+      current = nested;
+      continue;
+    }
+    break;
+  }
+
+  return current;
+}
 
 function extractPackPayload(
   candidate: unknown,
   fallbackAccountId?: string
 ): ExtractedAccountPack | null {
-  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+  const packCandidate = unwrapPackCandidate(candidate);
+  if (!packCandidate) {
     return null;
   }
 
-  const wrapped = (candidate as { pack?: unknown }).pack;
-  const packCandidate =
-    wrapped && typeof wrapped === 'object' && !Array.isArray(wrapped) ? wrapped : candidate;
+  const result = { ...packCandidate } as ExtractedAccountPack;
+  const rootRecord = isRecord(candidate) ? (candidate as Record<string, unknown>) : null;
 
-  if (!packCandidate || typeof packCandidate !== 'object' || Array.isArray(packCandidate)) {
-    return null;
-  }
-
-  const { account_id: accountId } = packCandidate as { account_id?: unknown };
-
+  const accountId = result.account_id;
   if (typeof accountId !== 'string' || accountId.trim() === '') {
     const normalizedFallback =
       typeof fallbackAccountId === 'string' ? fallbackAccountId.trim() : '';
     if (!normalizedFallback) {
       return null;
     }
-
-    return {
-      ...(packCandidate as Record<string, unknown>),
-      account_id: normalizedFallback,
-    } as ExtractedAccountPack;
+    result.account_id = normalizedFallback;
   }
 
-  return packCandidate as ExtractedAccountPack;
+  if (result.answers == null && rootRecord) {
+    const rootAnswers = rootRecord.answers;
+    if (isRecord(rootAnswers)) {
+      result.answers = rootAnswers as Record<string, string>;
+    }
+  }
+
+  if (result.response == null && rootRecord) {
+    const rootResponse = rootRecord.response;
+    if (isRecord(rootResponse)) {
+      result.response = rootResponse as FrontendReviewResponse;
+    }
+  }
+
+  return result;
 }
 
 function hasDisplayData(

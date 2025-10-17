@@ -760,9 +760,10 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   }, [sid]);
 
   const schedulePoll = React.useCallback(
-    (sessionId: string) => {
+    (sessionId: string, options?: { immediate?: boolean; reason?: string }) => {
       stopPolling();
-      reviewDebugLog('poll:schedule', { sessionId });
+      const immediate = Boolean(options?.immediate);
+      reviewDebugLog('poll:schedule', { sessionId, immediate, reason: options?.reason ?? null });
       pollIterationRef.current = 0;
       if (isMountedRef.current) {
         setPhase((state) => {
@@ -807,6 +808,12 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         pollTimeoutRef.current = window.setTimeout(poll, POLL_INTERVAL_MS);
         reviewDebugLog('poll:scheduled-next', { sessionId, iteration, delay: POLL_INTERVAL_MS });
       };
+
+      if (immediate) {
+        reviewDebugLog('poll:initial-immediate', { sessionId });
+        void poll();
+        return;
+      }
 
       pollTimeoutRef.current = window.setTimeout(poll, POLL_INTERVAL_MS);
       reviewDebugLog('poll:initial-timeout', { sessionId, delay: POLL_INTERVAL_MS });
@@ -861,17 +868,17 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             return;
           }
           setLiveUpdatesUnavailable(true);
-          lastNetworkStatusRef.current = 'Live updates unavailable (stream error).';
+          lastNetworkStatusRef.current = 'Stream disconnected. Retrying via poll immediately.';
           if (!hasShownLiveUpdateToastRef.current) {
             hasShownLiveUpdateToastRef.current = true;
             showToast({
               variant: 'warning',
-              title: 'Live updates unavailable',
-              description: 'Live updates unavailable, falling back to polling…',
+              title: 'Stream disconnected',
+              description: 'The live updates stream disconnected. Retrying via poll…',
             });
           }
-          reviewDebugLog('sse:fallback-poll', { sessionId });
-          schedulePoll(sessionId);
+          reviewDebugLog('sse:fallback-poll', { sessionId, immediate: true });
+          schedulePoll(sessionId, { immediate: true, reason: 'sse-error' });
         };
       } catch (err) {
         reviewDebugLog('sse:connect-error', { sessionId, error: err });

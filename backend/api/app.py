@@ -453,6 +453,48 @@ def _load_frontend_pack(pack_path: Path) -> Any:
         raise
 
 
+def _unwrap_pack_payload(payload: Any) -> Mapping[str, Any] | None:
+    if not isinstance(payload, Mapping):
+        return None
+    pack_value = payload.get("pack")
+    if isinstance(pack_value, Mapping):
+        return pack_value
+    return payload
+
+
+def _extract_pack_questions(payload: Any, account_id: str) -> list[Any] | None:
+    if isinstance(payload, Mapping):
+        questions = payload.get("questions")
+        if isinstance(questions, list):
+            return list(questions)
+
+        for entry in _iter_frontend_pack_entries(payload):
+            if entry.get("account_id") != account_id:
+                continue
+            entry_questions = entry.get("questions")
+            if isinstance(entry_questions, list):
+                return list(entry_questions)
+    return None
+
+
+def _prepare_pack_response(payload: Any, account_id: str) -> dict[str, Any]:
+    pack_mapping = _unwrap_pack_payload(payload)
+    result: dict[str, Any] = dict(pack_mapping) if isinstance(pack_mapping, Mapping) else {}
+
+    if isinstance(payload, Mapping):
+        for key in ("answers", "response"):
+            if key in result:
+                continue
+            value = payload.get(key)
+            if isinstance(value, Mapping):
+                result[key] = value
+
+    if account_id and not result.get("account_id"):
+        result["account_id"] = account_id
+
+    return result
+
+
 def _resolve_run_manifest(run_dir: Path) -> Path | None:
     candidate = run_dir / "manifest.json"
     return candidate if candidate.is_file() else None
@@ -860,7 +902,16 @@ def api_frontend_review_pack(sid: str, account_id: str):
     except Exception:  # pragma: no cover - error path
         return jsonify({"error": "pack_read_failed"}), 500
 
-    return jsonify(payload)
+    pack_obj = _prepare_pack_response(payload, account_id)
+
+    manifest_info = _load_frontend_stage_manifest(run_dir)
+    if manifest_info is not None:
+        _, manifest_payload = manifest_info
+        questions = _extract_pack_questions(manifest_payload, account_id)
+        if questions is not None and "questions" not in pack_obj:
+            pack_obj["questions"] = questions
+
+    return jsonify({"pack": pack_obj})
 
 
 @api_bp.route(

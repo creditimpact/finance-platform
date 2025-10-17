@@ -477,12 +477,17 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         if (isCancelled() || !isMountedRef.current) {
           return;
         }
-        const message = err instanceof Error ? err.message : 'Unable to load review packs';
-        clearWorkerWait();
-        setPhase('error');
-        setPhaseError(message);
         reviewDebugLog('bootstrap:error', { url: indexUrl, error: err });
         console.error(`[RunReviewPage] Failed to load ${indexUrl}`, err);
+        clearWorkerWait();
+        if (!loadedRef.current) {
+          await loadPackListing();
+        }
+        if (!loadedRef.current && isMountedRef.current) {
+          const message = err instanceof Error ? err.message : 'Unable to load review packs';
+          setPhase('error');
+          setPhaseError((previous) => previous ?? message);
+        }
       }
     },
     [beginWorkerWait, clearWorkerWait, loadPackListing]

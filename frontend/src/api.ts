@@ -362,7 +362,10 @@ function normalizeStaticPackPath(path: string): string {
 
 type ExtractedAccountPack = AccountPack & { account_id?: string | null };
 
-function extractPackPayload(candidate: unknown): ExtractedAccountPack | null {
+function extractPackPayload(
+  candidate: unknown,
+  fallbackAccountId?: string
+): ExtractedAccountPack | null {
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
     return null;
   }
@@ -378,7 +381,16 @@ function extractPackPayload(candidate: unknown): ExtractedAccountPack | null {
   const { account_id: accountId } = packCandidate as { account_id?: unknown };
 
   if (typeof accountId !== 'string' || accountId.trim() === '') {
-    return null;
+    const normalizedFallback =
+      typeof fallbackAccountId === 'string' ? fallbackAccountId.trim() : '';
+    if (!normalizedFallback) {
+      return null;
+    }
+
+    return {
+      ...(packCandidate as Record<string, unknown>),
+      account_id: normalizedFallback,
+    } as ExtractedAccountPack;
   }
 
   return packCandidate as ExtractedAccountPack;
@@ -468,7 +480,7 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
 
     try {
       const payload = await fetchJson<unknown>(attempt.url, init);
-      const pack = extractPackPayload(payload);
+      const pack = extractPackPayload(payload, accountId);
 
       if (pack) {
         if (hasDisplayData(pack)) {

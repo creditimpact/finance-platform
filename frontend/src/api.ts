@@ -89,6 +89,11 @@ function buildRunApiUrl(sessionId: string, path: string): string {
   return apiUrl(`/api/runs/${encodeURIComponent(sessionId)}${normalized}`);
 }
 
+export function buildRunFrontendManifestUrl(sessionId: string): string {
+  const baseUrl = buildRunApiUrl(sessionId, '/frontend/manifest');
+  return baseUrl.includes('?') ? `${baseUrl}&section=frontend` : `${baseUrl}?section=frontend`;
+}
+
 function buildFrontendReviewAccountUrl(sessionId: string, accountId: string): string {
   return `${buildRunApiUrl(sessionId, '/frontend/review/accounts')}/${encodeURIComponent(accountId)}`;
 }
@@ -213,8 +218,7 @@ export async function fetchRunFrontendManifest(
   sessionId: string,
   init?: RequestInit
 ): Promise<RunFrontendManifestResponse> {
-  const baseUrl = buildRunApiUrl(sessionId, '/frontend/manifest');
-  const url = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}section=frontend`;
+  const url = buildRunFrontendManifestUrl(sessionId);
   const res = await fetchJson<RunFrontendManifestResponse>(url, init);
 
   const frontendSection = res?.frontend;

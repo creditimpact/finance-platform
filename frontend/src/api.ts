@@ -612,18 +612,46 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
       ? staticPath
       : buildRunAssetUrl(sessionId, staticPath)
     : null;
-  const attempts: FrontendReviewAccountAttempt[] = [];
-
+  const failureMessages: string[] = [];
   if (staticUrl) {
     const staticLabel = stripFrontendPrefix(staticPath) || staticPath;
-    attempts.push({
-      kind: 'static',
-      url: staticUrl,
-      label: `static(${staticLabel})`,
-    });
+    if (REVIEW_DEBUG_ENABLED) {
+      reviewDebugLog('fetchFrontendReviewAccount:attempt', {
+        accountId,
+        label: `static(${staticLabel})`,
+        url: staticUrl,
+      });
+    }
+
+    try {
+      const staticInit: RequestInit = { ...(init ?? {}), cache: 'no-store' };
+      const payload = await fetchJson<unknown>(staticUrl, staticInit);
+      const pack = normalizeAccountPackPayload(payload, accountId);
+      if (!pack) {
+        throw new Error('No pack payload in response');
+      }
+      console.info(
+        `[frontend-review] Pack ${accountId}: loaded from static fallback (${staticUrl})`
+      );
+      return pack as T;
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      failureMessages.push(`static(${staticLabel}): ${error.message}`);
+      console.error(
+        `[frontend-review] Pack ${accountId}: static fallback failed (${staticUrl}) - ${error.message}`
+      );
+      if (REVIEW_DEBUG_ENABLED) {
+        reviewDebugLog('fetchFrontendReviewAccount:attempt-error', {
+          accountId,
+          label: `static(${staticLabel})`,
+          url: staticUrl,
+          error,
+        });
+      }
+    }
   }
 
-  attempts.push(
+  const attempts: FrontendReviewAccountAttempt[] = [
     {
       kind: 'account',
       url: buildFrontendReviewAccountUrl(sessionId, accountId),
@@ -633,8 +661,8 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
       kind: 'pack',
       url: buildFrontendReviewPackUrl(sessionId, accountId),
       label: 'pack/:id',
-    }
-  );
+    },
+  ];
 
   let fallbackPack: ExtractedAccountPack | null = null;
   let fallbackSource: FrontendReviewAccountAttempt | null = null;
@@ -675,19 +703,14 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
       console.error(
         `[frontend-review] Pack ${accountId}: ${attempt.label} returned no pack payload (${attempt.url})`
       );
+      failureMessages.push(`${attempt.label}: ${noPackError.message}`);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       attempt.error = error;
 
-      if (attempt.kind === 'static') {
-        console.error(
-          `[frontend-review] Pack ${accountId}: static fallback failed (${attempt.url}) - ${error.message}`
-        );
-      } else {
-        console.error(
-          `[frontend-review] Pack ${accountId}: ${attempt.label} failed (${attempt.url}) - ${error.message}`
-        );
-      }
+      console.error(
+        `[frontend-review] Pack ${accountId}: ${attempt.label} failed (${attempt.url}) - ${error.message}`
+      );
 
       if (REVIEW_DEBUG_ENABLED) {
         reviewDebugLog('fetchFrontendReviewAccount:attempt-error', {
@@ -697,6 +720,7 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
           error,
         });
       }
+      failureMessages.push(`${attempt.label}: ${error.message}`);
     }
   }
 
@@ -708,10 +732,6 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
     }
     return fallbackPack as T;
   }
-
-  const failureMessages = attempts
-    .filter((attempt) => attempt.error)
-    .map((attempt) => `${attempt.label}: ${attempt.error?.message ?? 'Unknown error'}`);
 
   const detail = failureMessages.length > 0 ? failureMessages.join('; ') : 'No pack payload found';
 

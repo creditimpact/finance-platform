@@ -135,7 +135,9 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   }
 
   if (data === null && parseError) {
-    throw new Error('Failed to parse response');
+    const detail = parseError instanceof Error ? parseError.message : String(parseError);
+    const suffix = detail ? `: ${detail}` : '';
+    throw new Error(`Failed to parse JSON${suffix}`);
   }
 
   if (REVIEW_DEBUG_ENABLED) {
@@ -397,6 +399,15 @@ function hasDisplayData(
   return true;
 }
 
+type FrontendReviewAccountAttemptKind = 'account' | 'pack' | 'static';
+
+interface FrontendReviewAccountAttempt {
+  kind: FrontendReviewAccountAttemptKind;
+  url: string;
+  label: string;
+  error?: Error;
+}
+
 export async function fetchFrontendReviewAccount<T = AccountPack>(
   sessionId: string,
   accountId: string,
@@ -420,56 +431,109 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
     init = initOrOptions as RequestInit | undefined;
   }
 
-  const apiEndpoints = [
-    buildFrontendReviewAccountUrl(sessionId, accountId),
-    buildFrontendReviewPackUrl(sessionId, accountId),
+  const staticUrl = staticPath ? buildRunAssetUrl(sessionId, staticPath) : null;
+  const attempts: FrontendReviewAccountAttempt[] = [
+    {
+      kind: 'account',
+      url: buildFrontendReviewAccountUrl(sessionId, accountId),
+      label: 'accounts/:id',
+    },
+    {
+      kind: 'pack',
+      url: buildFrontendReviewPackUrl(sessionId, accountId),
+      label: 'pack/:id',
+    },
   ];
 
-  let fallbackPack: ExtractedAccountPack | null = null;
-
-  for (const endpoint of apiEndpoints) {
-    try {
-      const payload = await fetchJson<unknown>(endpoint, init);
-      const pack = extractPackPayload(payload);
-      if (pack) {
-        if (hasDisplayData(pack)) {
-          return pack as T;
-        }
-        if (!fallbackPack) {
-          fallbackPack = pack;
-        }
-      }
-    } catch (err) {
-      if (REVIEW_DEBUG_ENABLED) {
-        reviewDebugLog('fetchFrontendReviewAccount:endpoint-error', { endpoint, error: err });
-      }
-    }
+  if (staticUrl) {
+    const staticLabel = stripFrontendPrefix(staticPath) || staticPath;
+    attempts.push({
+      kind: 'static',
+      url: staticUrl,
+      label: `static(${staticLabel})`,
+    });
   }
 
-  if (staticPath) {
+  let fallbackPack: ExtractedAccountPack | null = null;
+  let fallbackSource: FrontendReviewAccountAttempt | null = null;
+
+  for (const attempt of attempts) {
+    if (REVIEW_DEBUG_ENABLED) {
+      reviewDebugLog('fetchFrontendReviewAccount:attempt', {
+        accountId,
+        label: attempt.label,
+        url: attempt.url,
+      });
+    }
+
     try {
-      const payload = await fetchJson<unknown>(buildRunAssetUrl(sessionId, staticPath), init);
+      const payload = await fetchJson<unknown>(attempt.url, init);
       const pack = extractPackPayload(payload);
+
       if (pack) {
         if (hasDisplayData(pack)) {
+          if (attempt.kind === 'static') {
+            console.info(
+              `[frontend-review] Pack ${accountId}: loaded from static fallback (${attempt.url})`
+            );
+          }
           return pack as T;
         }
+
         if (!fallbackPack) {
           fallbackPack = pack;
+          fallbackSource = attempt;
         }
+
+        continue;
       }
+
+      const noPackError = new Error('No pack payload in response');
+      attempt.error = noPackError;
+      console.error(
+        `[frontend-review] Pack ${accountId}: ${attempt.label} returned no pack payload (${attempt.url})`
+      );
     } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      attempt.error = error;
+
+      if (attempt.kind === 'static') {
+        console.error(
+          `[frontend-review] Pack ${accountId}: static fallback failed (${attempt.url}) - ${error.message}`
+        );
+      } else {
+        console.error(
+          `[frontend-review] Pack ${accountId}: ${attempt.label} failed (${attempt.url}) - ${error.message}`
+        );
+      }
+
       if (REVIEW_DEBUG_ENABLED) {
-        reviewDebugLog('fetchFrontendReviewAccount:static-error', { staticPath, error: err });
+        reviewDebugLog('fetchFrontendReviewAccount:attempt-error', {
+          accountId,
+          label: attempt.label,
+          url: attempt.url,
+          error,
+        });
       }
     }
   }
 
   if (fallbackPack) {
+    if (fallbackSource?.kind === 'static') {
+      console.info(
+        `[frontend-review] Pack ${accountId}: using static fallback without display (${fallbackSource.url})`
+      );
+    }
     return fallbackPack as T;
   }
 
-  throw new Error('pack-parse-failed');
+  const failureMessages = attempts
+    .filter((attempt) => attempt.error)
+    .map((attempt) => `${attempt.label}: ${attempt.error?.message ?? 'Unknown error'}`);
+
+  const detail = failureMessages.length > 0 ? failureMessages.join('; ') : 'No pack payload found';
+
+  throw new Error(`Pack ${accountId}: ${detail}`);
 }
 
 export interface FrontendReviewResponseClientMeta {

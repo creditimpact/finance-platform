@@ -160,19 +160,46 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
       ok: response.ok,
     });
   }
-  let data: any = null;
+
+  const contentType = response.headers.get('Content-Type') ?? undefined;
+  let rawBody: string | null = null;
+  let data: unknown = null;
   let parseError: unknown = null;
+
   try {
-    data = await response.json();
+    rawBody = await response.text();
   } catch (err) {
     parseError = err;
     if (REVIEW_DEBUG_ENABLED) {
-      reviewDebugLog('fetch:parse-error', { url, error: err });
+      reviewDebugLog('fetch:parse-error', { url, error: err, contentType });
+    }
+  }
+
+  if (rawBody != null && parseError == null) {
+    try {
+      data = JSON.parse(rawBody);
+    } catch (err) {
+      parseError = err;
+      if (REVIEW_DEBUG_ENABLED) {
+        reviewDebugLog('fetch:parse-error', {
+          url,
+          error: err,
+          contentType,
+          snippet: rawBody.slice(0, 200),
+        });
+      }
     }
   }
 
   if (!response.ok) {
-    const detail = data?.message ?? data?.error ?? response.statusText;
+    const bodyRecord = (data ?? null) && typeof data === 'object' && !Array.isArray(data)
+      ? (data as Record<string, unknown>)
+      : null;
+    const detail =
+      bodyRecord?.message ??
+      bodyRecord?.error ??
+      response.statusText ??
+      (typeof rawBody === 'string' && rawBody ? rawBody.slice(0, 200) : undefined);
     const suffix = detail ? `: ${detail}` : '';
     if (REVIEW_DEBUG_ENABLED) {
       reviewDebugLog('fetch:error', { url, status: response.status, detail });
@@ -180,7 +207,11 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(`Request failed (${response.status})${suffix}`);
   }
 
-  if (data === null && parseError) {
+  if (parseError) {
+    const snippet = typeof rawBody === 'string' ? rawBody.slice(0, 200) : '';
+    console.error(
+      `[frontend-review] JSON parse failed (${url}) - content-type: ${contentType ?? 'unknown'}; snippet(first 200 bytes): ${snippet}`
+    );
     const detail = parseError instanceof Error ? parseError.message : String(parseError);
     const suffix = detail ? `: ${detail}` : '';
     throw new Error(`Failed to parse JSON${suffix}`);
@@ -538,23 +569,19 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
     init = initOrOptions as RequestInit | undefined;
   }
 
+  if (!staticPath) {
+    const defaultStaticPath = normalizeStaticPackPath(
+      joinFrontendPath('frontend/review/packs', `${accountId}.json`)
+    );
+    staticPath = defaultStaticPath || undefined;
+  }
+
   const staticUrl = staticPath
     ? isAbsoluteUrl(staticPath)
       ? staticPath
       : buildRunAssetUrl(sessionId, staticPath)
     : null;
-  const attempts: FrontendReviewAccountAttempt[] = [
-    {
-      kind: 'account',
-      url: buildFrontendReviewAccountUrl(sessionId, accountId),
-      label: 'accounts/:id',
-    },
-    {
-      kind: 'pack',
-      url: buildFrontendReviewPackUrl(sessionId, accountId),
-      label: 'pack/:id',
-    },
-  ];
+  const attempts: FrontendReviewAccountAttempt[] = [];
 
   if (staticUrl) {
     const staticLabel = stripFrontendPrefix(staticPath) || staticPath;
@@ -564,6 +591,19 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
       label: `static(${staticLabel})`,
     });
   }
+
+  attempts.push(
+    {
+      kind: 'account',
+      url: buildFrontendReviewAccountUrl(sessionId, accountId),
+      label: 'accounts/:id',
+    },
+    {
+      kind: 'pack',
+      url: buildFrontendReviewPackUrl(sessionId, accountId),
+      label: 'pack/:id',
+    }
+  );
 
   let fallbackPack: ExtractedAccountPack | null = null;
   let fallbackSource: FrontendReviewAccountAttempt | null = null;

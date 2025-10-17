@@ -18,7 +18,7 @@ const apiBaseUrl =
     ? process.env?.VITE_API_BASE_URL ?? process.env?.VITE_API_URL
     : undefined);
 
-const API = apiBaseUrl ?? 'http://127.0.0.1:5000';
+const API = (apiBaseUrl ?? '').replace(/\/+$/, '');
 
 function encodePathSegments(path: string): string {
   return path
@@ -83,7 +83,11 @@ function joinFrontendPath(base: string, child: string): string {
 
 function buildRunApiUrl(sessionId: string, path: string): string {
   const normalized = path.startsWith('/') ? path : `/${path}`;
-  return `${API}/api/runs/${encodeURIComponent(sessionId)}${normalized}`;
+  const prefix = API ? `${API}` : '';
+  if (prefix) {
+    return `${prefix}/api/runs/${encodeURIComponent(sessionId)}${normalized}`;
+  }
+  return `/api/runs/${encodeURIComponent(sessionId)}${normalized}`;
 }
 
 function buildFrontendReviewAccountUrl(sessionId: string, accountId: string): string {
@@ -210,9 +214,9 @@ export async function fetchRunFrontendManifest(
   sessionId: string,
   init?: RequestInit
 ): Promise<RunFrontendManifestResponse> {
-  const url = new URL(buildRunApiUrl(sessionId, '/frontend/manifest'));
-  url.searchParams.set('section', 'frontend');
-  const res = await fetchJson<RunFrontendManifestResponse>(url.toString(), init);
+  const baseUrl = buildRunApiUrl(sessionId, '/frontend/manifest');
+  const url = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}section=frontend`;
+  const res = await fetchJson<RunFrontendManifestResponse>(url, init);
 
   const frontendSection = res?.frontend;
   const reviewCandidate =
@@ -344,7 +348,17 @@ export async function fetchRunReviewPackListing(
     init
   );
   const items = Array.isArray(response.items) ? response.items : [];
-  return { items };
+  const normalizedItems = items.map((item) => {
+    if (!item || typeof item !== 'object') {
+      return item as FrontendReviewPackListingItem;
+    }
+    const file = typeof item.file === 'string' ? item.file.replace(/\\/g, '/') : item.file;
+    if (file === item.file) {
+      return item as FrontendReviewPackListingItem;
+    }
+    return { ...item, file } as FrontendReviewPackListingItem;
+  });
+  return { items: normalizedItems };
 }
 
 type FetchFrontendReviewAccountOptions = RequestInit & {

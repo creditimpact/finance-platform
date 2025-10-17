@@ -15,7 +15,7 @@ const apiBaseUrl =
     ? process.env?.VITE_API_BASE_URL || process.env?.VITE_API_URL
     : undefined);
 
-const API = apiBaseUrl || 'http://127.0.0.1:5000';
+const API = (apiBaseUrl || '').replace(/\/+$/, '');
 
 function encodePathSegments(path = '') {
   return path

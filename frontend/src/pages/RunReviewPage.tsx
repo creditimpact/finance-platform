@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import {
   apiUrl,
   buildFrontendReviewStreamUrl,
+  buildRunFrontendManifestUrl,
   fetchFrontendReviewAccount,
   fetchRunFrontendManifest,
   fetchRunFrontendReviewIndex,
@@ -316,6 +317,13 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const loadManifestInfo = React.useCallback(
     async (sessionId: string, options?: { isCancelled?: () => boolean }) => {
       const isCancelled = options?.isCancelled ?? (() => false);
+      if (!sessionId) {
+        return;
+      }
+
+      const manifestUrl = buildRunFrontendManifestUrl(sessionId);
+      reviewDebugLog('manifest:fetch', { url: manifestUrl, sessionId });
+
       try {
         const manifestResponse = await fetchRunFrontendManifest(sessionId);
         if (isCancelled() || !isMountedRef.current) {
@@ -324,11 +332,13 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         setManifest(manifestResponse);
         const frontendSection = manifestResponse.frontend;
         setFrontendMissing(!(frontendSection && typeof frontendSection === 'object'));
+        reviewDebugLog('manifest:success', { url: manifestUrl, sessionId });
       } catch (err) {
         if (isCancelled()) {
           return;
         }
-        console.warn('Unable to load run manifest', err);
+        reviewDebugLog('manifest:error', { url: manifestUrl, sessionId, error: err });
+        console.warn(`[RunReviewPage] Unable to load ${manifestUrl}`, err);
       }
     },
     []

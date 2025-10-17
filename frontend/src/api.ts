@@ -358,30 +358,43 @@ function normalizeStaticPackPath(path: string): string {
   return ensureFrontendPath(trimmed, trimmed);
 }
 
-function extractPackPayload(candidate: unknown): AccountPack | null {
+type ExtractedAccountPack = AccountPack & { account_id?: string | null };
+
+function extractPackPayload(candidate: unknown): ExtractedAccountPack | null {
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
     return null;
   }
 
   const wrapped = (candidate as { pack?: unknown }).pack;
-  const pack =
+  const packCandidate =
     wrapped && typeof wrapped === 'object' && !Array.isArray(wrapped) ? wrapped : candidate;
 
-  if (!pack || typeof pack !== 'object' || Array.isArray(pack)) {
+  if (!packCandidate || typeof packCandidate !== 'object' || Array.isArray(packCandidate)) {
     return null;
   }
 
-  const { account_id: accountId, display } = pack as { account_id?: unknown; display?: unknown };
+  const { account_id: accountId } = packCandidate as { account_id?: unknown };
 
   if (typeof accountId !== 'string' || accountId.trim() === '') {
     return null;
   }
 
-  if (!display || typeof display !== 'object') {
-    return null;
+  return packCandidate as ExtractedAccountPack;
+}
+
+function hasDisplayData(
+  pack: ExtractedAccountPack | null | undefined
+): pack is ExtractedAccountPack & { display: NonNullable<AccountPack['display']> } {
+  if (!pack) {
+    return false;
   }
 
-  return pack as AccountPack;
+  const display = pack.display;
+  if (!display || typeof display !== 'object' || Array.isArray(display)) {
+    return false;
+  }
+
+  return true;
 }
 
 export async function fetchFrontendReviewAccount<T = AccountPack>(
@@ -412,12 +425,19 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
     buildFrontendReviewPackUrl(sessionId, accountId),
   ];
 
+  let fallbackPack: ExtractedAccountPack | null = null;
+
   for (const endpoint of apiEndpoints) {
     try {
       const payload = await fetchJson<unknown>(endpoint, init);
       const pack = extractPackPayload(payload);
       if (pack) {
-        return pack as T;
+        if (hasDisplayData(pack)) {
+          return pack as T;
+        }
+        if (!fallbackPack) {
+          fallbackPack = pack;
+        }
       }
     } catch (err) {
       if (REVIEW_DEBUG_ENABLED) {
@@ -431,13 +451,22 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
       const payload = await fetchJson<unknown>(buildRunAssetUrl(sessionId, staticPath), init);
       const pack = extractPackPayload(payload);
       if (pack) {
-        return pack as T;
+        if (hasDisplayData(pack)) {
+          return pack as T;
+        }
+        if (!fallbackPack) {
+          fallbackPack = pack;
+        }
       }
     } catch (err) {
       if (REVIEW_DEBUG_ENABLED) {
         reviewDebugLog('fetchFrontendReviewAccount:static-error', { staticPath, error: err });
       }
     }
+  }
+
+  if (fallbackPack) {
+    return fallbackPack as T;
   }
 
   throw new Error('pack-parse-failed');

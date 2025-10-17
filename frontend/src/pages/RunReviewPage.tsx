@@ -14,6 +14,7 @@ import {
   fetchRunFrontendManifest,
   fetchRunFrontendReviewIndex,
   fetchRunReviewPackListing,
+  joinRunAsset,
   submitFrontendReviewAnswers,
 } from '../api.ts';
 import type {
@@ -42,6 +43,11 @@ interface CardState {
 }
 
 type CardsState = Record<string, CardState>;
+
+type PackListingEntry = FrontendReviewPackListingItem & {
+  account_id: string;
+  staticUrl?: string;
+};
 
 type Phase = 'loading' | 'waiting' | 'ready' | 'error';
 
@@ -239,7 +245,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const pollTimeoutRef = React.useRef<number | null>(null);
   const pollIterationRef = React.useRef(0);
   const eventSourceRef = React.useRef<EventSource | null>(null);
-  const packListingRef = React.useRef<Record<string, FrontendReviewPackListingItem & { account_id: string }>>({});
+  const packListingRef = React.useRef<Record<string, PackListingEntry>>({});
   const loadingAccountsRef = React.useRef<Set<string>>(new Set());
   const workerHintTimeoutRef = React.useRef<number | null>(null);
   const workerWaitingRef = React.useRef(false);
@@ -413,12 +419,18 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         count: filteredItems.length,
       });
 
-      const listingMap: Record<string, FrontendReviewPackListingItem & { account_id: string }> = {};
+      const basePath = `/runs/${encodeURIComponent(sid)}`;
+      const baseUrl = apiUrl(basePath);
+      const listingMap: Record<string, PackListingEntry> = {};
       for (const item of filteredItems) {
         const normalizedFile = normalizeListingFilePath(item.file);
+        const staticUrl =
+          normalizedFile && normalizedFile.trim() !== ''
+            ? joinRunAsset(baseUrl, normalizedFile)
+            : undefined;
         listingMap[item.account_id] = normalizedFile
-          ? { ...item, file: normalizedFile }
-          : item;
+          ? { ...item, file: normalizedFile, staticUrl }
+          : { ...item, staticUrl };
       }
       packListingRef.current = listingMap;
 
@@ -521,8 +533,14 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
 
       try {
         const listing = packListingRef.current[accountId];
+        const staticReference =
+          typeof listing?.staticUrl === 'string' && listing.staticUrl.trim() !== ''
+            ? listing.staticUrl
+            : typeof listing?.file === 'string'
+            ? listing.file
+            : undefined;
         const pack = await fetchFrontendReviewAccount<ReviewAccountPack>(sid, accountId, {
-          staticPath: typeof listing?.file === 'string' ? listing.file : undefined,
+          staticPath: staticReference,
         });
         if (!isMountedRef.current) {
           return;

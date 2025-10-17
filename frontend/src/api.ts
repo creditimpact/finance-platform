@@ -118,6 +118,10 @@ function joinFrontendPath(base: string, child: string): string {
   return [trimSlashes(base), trimSlashes(child)].filter(Boolean).join('/');
 }
 
+function isAbsoluteUrl(candidate: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(candidate) || candidate.startsWith('//');
+}
+
 function buildRunApiUrl(sessionId: string, path: string): string {
   const normalized = path.startsWith('/') ? path : `/${path}`;
   return apiUrl(`/api/runs/${encodeURIComponent(sessionId)}${normalized}`);
@@ -403,7 +407,13 @@ type FetchFrontendReviewAccountOptions = RequestInit & {
 };
 
 function normalizeStaticPackPath(path: string): string {
-  const replaced = path.replace(/\\/g, '/');
+  const replaced = path.replace(/\\/g, '/').trim();
+  if (!replaced) {
+    return replaced;
+  }
+  if (isAbsoluteUrl(replaced)) {
+    return replaced;
+  }
   const trimmed = trimSlashes(replaced);
   if (!trimmed) {
     return trimmed;
@@ -528,7 +538,11 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
     init = initOrOptions as RequestInit | undefined;
   }
 
-  const staticUrl = staticPath ? buildRunAssetUrl(sessionId, staticPath) : null;
+  const staticUrl = staticPath
+    ? isAbsoluteUrl(staticPath)
+      ? staticPath
+      : buildRunAssetUrl(sessionId, staticPath)
+    : null;
   const attempts: FrontendReviewAccountAttempt[] = [
     {
       kind: 'account',

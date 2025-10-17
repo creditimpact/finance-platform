@@ -8,7 +8,11 @@ function getImportMetaEnv() {
 
 const metaEnv = getImportMetaEnv();
 
-const metaEnvConfiguredApiBaseRaw = metaEnv.VITE_API_BASE_URL;
+const metaEnvConfiguredApiBaseRaw =
+  (metaEnv.VITE_API_BASE_URL ?? metaEnv.VITE_API_URL) ??
+  (typeof process !== 'undefined'
+    ? process.env?.VITE_API_BASE_URL ?? process.env?.VITE_API_URL
+    : undefined);
 
 const trimmedMetaEnvConfiguredApiBase =
   typeof metaEnvConfiguredApiBaseRaw === 'string'
@@ -18,14 +22,7 @@ const trimmedMetaEnvConfiguredApiBase =
       ? String(metaEnvConfiguredApiBaseRaw).trim()
       : '';
 
-const fallbackConfiguredApiBase =
-  metaEnv.VITE_API_URL ||
-  (typeof process !== 'undefined'
-    ? process.env?.VITE_API_BASE_URL || process.env?.VITE_API_URL
-    : undefined);
-
-const rawConfiguredApiBase =
-  trimmedMetaEnvConfiguredApiBase || fallbackConfiguredApiBase;
+const rawConfiguredApiBase = trimmedMetaEnvConfiguredApiBase;
 
 const trimmedConfiguredApiBase =
   typeof rawConfiguredApiBase === 'string' ? rawConfiguredApiBase.trim() : '';

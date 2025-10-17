@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { uploadReport, pollResult } from '../api.ts';
-import { getAccount } from '../api';
+import { uploadReport, pollResult, getAccount } from '../api.ts';
 
 const STATUS_BADGES = [
   { key: 'missing', label: 'Missing', className: 'missing' },

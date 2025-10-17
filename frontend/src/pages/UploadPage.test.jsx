@@ -5,9 +5,6 @@ import UploadPage from './UploadPage';
 jest.mock('../api.ts', () => ({
   uploadReport: jest.fn(),
   pollResult: jest.fn(),
-}));
-
-jest.mock('../api', () => ({
   getAccount: jest.fn(),
 }));
 

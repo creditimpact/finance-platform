@@ -22,6 +22,7 @@ import type {
 import { ReviewPackStoreProvider, useReviewPackStore } from '../stores/reviewPackStore';
 import { useToast } from '../components/ToastProvider';
 import { REVIEW_DEBUG_ENABLED, reviewDebugLog } from '../utils/reviewDebug';
+import { DEV_DIAGNOSTICS_ENABLED } from '../utils/devDiagnostics';
 
 const POLL_INTERVAL_MS = 2000;
 const WORKER_HINT_DELAY_MS = 30_000;
@@ -35,6 +36,7 @@ interface CardState {
   error: string | null;
   success: boolean;
   response: FrontendReviewResponse | null;
+  fetchStatus: string;
 }
 
 type CardsState = Record<string, CardState>;
@@ -101,7 +103,15 @@ function createInitialCardState(): CardState {
     error: null,
     success: false,
     response: null,
+    fetchStatus: 'idle',
   };
+}
+
+function normalizeListingFilePath(path: string | null | undefined): string | undefined {
+  if (typeof path !== 'string') {
+    return undefined;
+  }
+  return path.replace(/\\/g, '/');
 }
 
 interface ReviewCardContainerProps {
@@ -219,6 +229,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const [showWorkerHint, setShowWorkerHint] = React.useState(false);
   const [liveUpdatesUnavailable, setLiveUpdatesUnavailable] = React.useState(false);
   const [frontendMissing, setFrontendMissing] = React.useState(false);
+  const [diagnosticsPacksCount, setDiagnosticsPacksCount] = React.useState<number | null>(null);
 
   const isMountedRef = React.useRef(false);
   const loadingRef = React.useRef(false);
@@ -271,6 +282,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       setPhase('loading');
       setPhaseError(null);
     }
+    setDiagnosticsPacksCount(null);
   }, [sid, clear]);
 
   const clearWorkerWait = React.useCallback(() => {
@@ -392,7 +404,10 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
 
       const listingMap: Record<string, FrontendReviewPackListingItem & { account_id: string }> = {};
       for (const item of filteredItems) {
-        listingMap[item.account_id] = item;
+        const normalizedFile = normalizeListingFilePath(item.file);
+        listingMap[item.account_id] = normalizedFile
+          ? { ...item, file: normalizedFile }
+          : item;
       }
       packListingRef.current = listingMap;
 
@@ -409,7 +424,9 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
               initialSubmitted.add(item.account_id);
             }
             initial[item.account_id] = {
+              ...createInitialCardState(),
               status: 'ready',
+              fetchStatus: 'cached',
               pack: cached,
               answers: normalizedAnswers,
               error: null,
@@ -418,12 +435,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             };
           } else {
             initial[item.account_id] = {
+              ...createInitialCardState(),
               status: 'waiting',
-              pack: null,
-              answers: {},
-              error: null,
-              success: false,
-              response: null,
             };
           }
         }
@@ -431,6 +444,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       });
       setSubmittedAccounts(initialSubmitted);
       clearWorkerWait();
+      setDiagnosticsPacksCount((previous) => (previous == null ? filteredItems.length : previous));
 
       if (isMountedRef.current) {
         setPhase('ready');
@@ -464,6 +478,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           return;
         }
         const packsCount = extractPacksCount(payload);
+        setDiagnosticsPacksCount(packsCount);
         reviewDebugLog('bootstrap:packs-count', { url: indexUrl, packsCount });
         if (packsCount > 0) {
           reviewDebugLog('bootstrap:packs-ready', { url: indexUrl, packsCount });
@@ -511,6 +526,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           error: null,
           success: Boolean(cachedPack.response),
           response: cachedPack.response ?? null,
+          fetchStatus: 'cached',
         }));
         if (cachedPack.response) {
           markSubmitted(accountId);
@@ -533,6 +549,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         ...state,
         status: state.pack && !options?.force ? state.status : 'waiting',
         error: null,
+        fetchStatus: 'fetching',
       }));
 
       try {
@@ -554,6 +571,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           error: null,
           success: Boolean(pack.response),
           response: pack.response ?? null,
+          fetchStatus: 'success',
         }));
         if (pack.response) {
           markSubmitted(accountId);
@@ -568,6 +586,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             status: 'ready',
             error: message,
             pack: state.pack,
+            fetchStatus: `error: ${message}`,
           }));
         }
         const nextAttempt = (retryAttemptsRef.current[accountId] ?? 0) + 1;
@@ -854,6 +873,14 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   }, [order]);
 
   const orderedCards = React.useMemo(() => order.map((accountId) => ({ accountId, state: cards[accountId] })), [order, cards]);
+  const diagnosticsCards = React.useMemo(
+    () =>
+      orderedCards.map(({ accountId, state }) => ({
+        accountId,
+        status: state?.fetchStatus ?? state?.status ?? 'idle',
+      })),
+    [orderedCards]
+  );
 
   const readyCount = React.useMemo(
     () => orderedCards.filter(({ state }) => state?.status === 'ready' || state?.status === 'done').length,
@@ -987,6 +1014,38 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             </button>
           </div>
         </div>
+      ) : null}
+
+      {DEV_DIAGNOSTICS_ENABLED ? (
+        <footer className="mt-8 border-t border-dashed border-slate-300 pt-4 text-xs text-slate-500">
+          <p className="font-semibold text-slate-600">Diagnostics</p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <div>
+              <span className="font-medium">SID:</span>{' '}
+              <span className="font-mono text-slate-700">{sid ?? 'n/a'}</span>
+            </div>
+            <div>
+              <span className="font-medium">packs_count:</span>{' '}
+              <span className="font-mono text-slate-700">
+                {diagnosticsPacksCount != null ? diagnosticsPacksCount : 'unknown'}
+              </span>
+            </div>
+          </div>
+          <div className="mt-3 space-y-1">
+            <p className="font-medium text-slate-600">Card fetch status</p>
+            {diagnosticsCards.length > 0 ? (
+              <ul className="space-y-1">
+                {diagnosticsCards.map(({ accountId, status }) => (
+                  <li key={accountId} className="font-mono text-slate-700">
+                    {accountId}: {status}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="font-mono text-slate-400">No cards loaded</p>
+            )}
+          </div>
+        </footer>
       ) : null}
     </div>
   );

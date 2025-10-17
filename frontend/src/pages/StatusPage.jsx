@@ -22,7 +22,7 @@ export default function StatusPage() {
           setPhase('redirecting');
           navigate(`/runs/${encodeURIComponent(sid)}/review`, { replace: true });
         }
-      } catch (err) {
+      } catch {
         // Ignore polling errors and retry on the next interval.
       }
     };

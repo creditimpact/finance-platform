@@ -100,7 +100,9 @@ async function fetchJson(url, init) {
   }
 
   if (data === null && parseError) {
-    throw new Error('Failed to parse response');
+    const detail = parseError instanceof Error ? parseError.message : String(parseError);
+    const suffix = detail ? `: ${detail}` : '';
+    throw new Error(`Failed to parse JSON${suffix}`);
   }
 
   return data;
@@ -228,7 +230,7 @@ export async function completeFrontendReview(sessionId, init) {
     try {
       const data = await response.json();
       detail = data?.message || data?.error;
-    } catch (err) {
+    } catch {
       // Ignore parse errors for non-JSON responses
     }
     const suffix = detail ? `: ${detail}` : '';

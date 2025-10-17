@@ -127,6 +127,78 @@ function joinFrontendPath(base, child) {
   return [trimSlashes(base), trimSlashes(child)].filter(Boolean).join('/');
 }
 
+function isRecord(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function unwrapPackCandidate(source) {
+  if (!isRecord(source)) {
+    return null;
+  }
+
+  const visited = new Set();
+  let current = source;
+
+  while (current && !visited.has(current)) {
+    visited.add(current);
+    const nested = current.pack;
+    if (isRecord(nested)) {
+      current = nested;
+      continue;
+    }
+    break;
+  }
+
+  return current;
+}
+
+function extractPackPayload(candidate, fallbackAccountId) {
+  const packCandidate = unwrapPackCandidate(candidate);
+  if (!packCandidate) {
+    return null;
+  }
+
+  const result = { ...packCandidate };
+  const rootRecord = isRecord(candidate) ? candidate : null;
+
+  let accountId = typeof result.account_id === 'string' ? result.account_id.trim() : '';
+  if (!accountId) {
+    const normalizedFallback =
+      typeof fallbackAccountId === 'string' ? fallbackAccountId.trim() : '';
+    if (!normalizedFallback) {
+      return null;
+    }
+    accountId = normalizedFallback;
+  }
+  result.account_id = accountId;
+
+  if (result.answers == null && rootRecord && isRecord(rootRecord.answers)) {
+    result.answers = rootRecord.answers;
+  }
+
+  if (result.response == null && rootRecord && isRecord(rootRecord.response)) {
+    result.response = rootRecord.response;
+  }
+
+  return result;
+}
+
+function normalizeAccountPackPayload(candidate, fallbackAccountId) {
+  const pack = extractPackPayload(candidate, fallbackAccountId);
+  if (!pack) {
+    return null;
+  }
+
+  const normalizedAccountId =
+    typeof pack.account_id === 'string' ? pack.account_id.trim() : '';
+  if (!normalizedAccountId) {
+    return null;
+  }
+
+  pack.account_id = normalizedAccountId;
+  return pack;
+}
+
 function buildFrontendReviewAccountUrl(sessionId, accountId) {
   return apiUrl(`/api/runs/${encodeURIComponent(sessionId)}/frontend/review/accounts/${encodeURIComponent(accountId)}`);
 }
@@ -248,7 +320,12 @@ export async function fetchFrontendReviewAccount(sessionId, accountId, init) {
     throw new Error(`Unable to resolve pack path for account ${accountId}`);
   }
 
-  return fetchJson(buildRunAssetUrl(sessionId, normalizedPath), requestInit);
+  const payload = await fetchJson(buildRunAssetUrl(sessionId, normalizedPath), requestInit);
+  const pack = normalizeAccountPackPayload(payload, accountId);
+  if (!pack) {
+    throw new Error(`Pack ${accountId}: No pack payload found`);
+  }
+  return pack;
 }
 
 export async function submitFrontendReviewAnswers(sessionId, accountId, answers, init) {

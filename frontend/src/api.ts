@@ -534,6 +534,25 @@ function extractPackPayload(
   return result;
 }
 
+function normalizeAccountPackPayload(
+  candidate: unknown,
+  fallbackAccountId: string
+): ExtractedAccountPack | null {
+  const pack = extractPackPayload(candidate, fallbackAccountId);
+  if (!pack) {
+    return null;
+  }
+
+  const normalizedAccountId =
+    typeof pack.account_id === 'string' ? pack.account_id.trim() : '';
+  if (!normalizedAccountId) {
+    return null;
+  }
+
+  pack.account_id = normalizedAccountId;
+  return pack;
+}
+
 function hasDisplayData(
   pack: ExtractedAccountPack | null | undefined
 ): pack is ExtractedAccountPack & { display: NonNullable<AccountPack['display']> } {
@@ -631,7 +650,7 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
 
     try {
       const payload = await fetchJson<unknown>(attempt.url, init);
-      const pack = extractPackPayload(payload, accountId);
+      const pack = normalizeAccountPackPayload(payload, accountId);
 
       if (pack) {
         if (hasDisplayData(pack)) {

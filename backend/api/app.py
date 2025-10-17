@@ -911,7 +911,7 @@ def api_frontend_review_pack(sid: str, account_id: str):
         if questions is not None and "questions" not in pack_obj:
             pack_obj["questions"] = questions
 
-    return jsonify({"pack": pack_obj})
+    return jsonify(pack_obj)
 
 
 @api_bp.route(

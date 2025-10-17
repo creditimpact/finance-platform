@@ -149,6 +149,33 @@ def test_frontend_index_returns_payload(api_client):
     assert data["stage"] == "review"
     assert data["packs_count"] == len(payload["items"])
     assert data["items"] == payload["items"]
+    assert data["counts"]["packs"] == len(payload["items"])
+    assert data["counts"]["responses"] == 0
+
+
+def test_frontend_index_normalizes_counts(api_client):
+    client, runs_root = api_client
+    sid = "S224"
+    run_dir = runs_root / sid
+    manifest_path = run_dir / "frontend" / "review" / "index.json"
+    payload = {
+        "sid": sid,
+        "stage": "review",
+        "packs_count": 0,
+        "counts": {"packs": 0, "responses": 5},
+        "items": [
+            {"account_id": "acct-001", "file": "frontend/review/packs/acct-001.json"},
+            {"account_id": "acct-002", "file": "frontend/review/packs/acct-002.json"},
+        ],
+    }
+    _write_json(manifest_path, payload)
+
+    response = client.get(f"/api/runs/{sid}/frontend/index")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["packs_count"] == len(payload["items"])
+    assert data["counts"]["packs"] == len(payload["items"])
+    assert data["counts"]["responses"] == 5
 
 
 def test_frontend_review_stream_emits_packs_ready(api_client, monkeypatch):

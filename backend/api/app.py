@@ -701,14 +701,38 @@ def api_frontend_review_index(sid: str):
     return api_frontend_index(sid)
 
 
+def _coerce_non_negative_int(value: Any) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(number, 0)
+
+
 def _extract_packs_count(payload: Mapping[str, Any] | None) -> int:
     if not isinstance(payload, Mapping):
         return 0
     value = payload.get("packs_count", 0)
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
+    count = _coerce_non_negative_int(value)
+    if count:
+        return count
+    counts_payload = payload.get("counts")
+    if isinstance(counts_payload, Mapping):
+        return _coerce_non_negative_int(counts_payload.get("packs"))
+    return 0
+
+
+def _extract_responses_count(payload: Mapping[str, Any] | None) -> int:
+    if not isinstance(payload, Mapping):
         return 0
+
+    counts_payload = payload.get("counts")
+    if isinstance(counts_payload, Mapping):
+        count = _coerce_non_negative_int(counts_payload.get("responses"))
+        if count:
+            return count
+
+    return _coerce_non_negative_int(payload.get("responses_count"))
 
 
 @api_bp.route("/api/runs/<sid>/frontend/review/stream", methods=["GET"])
@@ -823,6 +847,23 @@ def _normalize_frontend_review_index_payload(
         packs_count = len(items)
 
     result["packs_count"] = packs_count
+
+    responses_count = _extract_responses_count(result)
+    if responses_count <= 0:
+        responses_payload = result.get("responses")
+        if isinstance(responses_payload, list):
+            responses_count = len(responses_payload)
+
+    counts_payload = result.get("counts")
+    counts: dict[str, Any]
+    if isinstance(counts_payload, Mapping):
+        counts = dict(counts_payload)
+    else:
+        counts = {}
+
+    counts["packs"] = packs_count
+    counts["responses"] = responses_count
+    result["counts"] = counts
 
     normalized_result = _normalize_path_like_entries(result)
 

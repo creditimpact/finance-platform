@@ -160,23 +160,21 @@ describe('AccountsPage', () => {
 
     fireEvent.click(screen.getByText('John Doe'));
 
-    await waitFor(() =>
-      expect(screen.getByLabelText('Do you own this account?')).toBeInTheDocument()
-    );
+    await waitFor(() => expect(screen.getByLabelText('Explain')).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText('Do you own this account?'), {
-      target: { value: 'yes' },
+    fireEvent.change(screen.getByLabelText('Explain'), {
+      target: { value: 'Some explanation' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Submit answers' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
 
     await waitFor(() =>
       expect((global.fetch as jest.Mock).mock.calls[3][0]).toContain(
-        '/api/runs/S123/frontend/review/accounts/acct-1/answer'
+        '/api/runs/S123/frontend/review/response/acct-1'
       )
     );
 
-    expect(screen.getByText('Answers saved successfully.')).toBeInTheDocument();
+    expect(await screen.findByText('Explanation saved successfully.')).toBeInTheDocument();
     expect(screen.getByText('Answered')).toBeInTheDocument();
   });
 

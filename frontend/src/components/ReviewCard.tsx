@@ -9,7 +9,6 @@ import {
 } from './accountFieldTypes';
 import { summarizeField, type BureauTriple } from '../utils/bureauSummary';
 import AccountQuestions, { type AccountQuestionAnswers } from './AccountQuestions';
-import { type AccountQuestionKey } from './questionCopy';
 import type { AccountPack } from './AccountCard';
 import type { FrontendReviewResponse } from '../api.ts';
 
@@ -58,39 +57,6 @@ const DETAIL_FIELDS: BureauFieldConfig<DetailFieldKey>[] = [
   { key: 'date_opened', label: 'Date opened' },
   { key: 'closed_date', label: 'Closed date' },
 ];
-
-const QUESTION_ORDER: AccountQuestionKey[] = [
-  'ownership',
-  'recognize',
-  'identity_theft',
-  'explanation',
-];
-
-function isAccountQuestionKey(value: unknown): value is AccountQuestionKey {
-  return typeof value === 'string' && (QUESTION_ORDER as string[]).includes(value);
-}
-
-function defaultRequired(key: AccountQuestionKey): boolean {
-  return key !== 'explanation';
-}
-
-function parseQuestionRequired(value: unknown, key: AccountQuestionKey): boolean {
-  if (typeof value === 'boolean') {
-    return value;
-  }
-
-  if (typeof value === 'string') {
-    const trimmed = value.trim().toLowerCase();
-    if (['true', 'required', 'yes', '1'].includes(trimmed)) {
-      return true;
-    }
-    if (['false', 'optional', 'no', '0'].includes(trimmed)) {
-      return false;
-    }
-  }
-
-  return defaultRequired(key);
-}
 
 type PerBureauSource =
   | {
@@ -173,54 +139,6 @@ function formatHolderName(holder?: string | null, fallback?: string | null): str
   return value;
 }
 
-function useQuestionConfigs(pack: ReviewAccountPack) {
-  return React.useMemo(() => {
-    const configs: Array<{ key: AccountQuestionKey; required: boolean }> = [];
-    const seen = new Set<AccountQuestionKey>();
-
-    const pushConfig = (key: AccountQuestionKey, required?: boolean) => {
-      if (seen.has(key)) {
-        return;
-      }
-      seen.add(key);
-      const requirement = required ?? defaultRequired(key);
-      configs.push({ key, required: requirement });
-    };
-
-    const fromPack = Array.isArray(pack.questions) ? pack.questions : [];
-    for (const descriptor of fromPack) {
-      const key = descriptor?.id;
-      if (!isAccountQuestionKey(key)) {
-        continue;
-      }
-      pushConfig(key, parseQuestionRequired(descriptor?.required, key));
-    }
-
-    if (configs.length === 0) {
-      const displayQuestions = pack.display?.questions;
-      if (displayQuestions && typeof displayQuestions === 'object') {
-        for (const key of Object.keys(displayQuestions)) {
-          if (isAccountQuestionKey(key)) {
-            pushConfig(key as AccountQuestionKey);
-          }
-        }
-      }
-    }
-
-    if (configs.length === 0) {
-      for (const key of QUESTION_ORDER) {
-        pushConfig(key);
-      }
-    }
-
-    configs.sort(
-      (a, b) => QUESTION_ORDER.indexOf(a.key) - QUESTION_ORDER.indexOf(b.key)
-    );
-
-    return configs;
-  }, [pack.questions, pack.display?.questions]);
-}
-
 export interface ReviewCardProps {
   pack: ReviewAccountPack;
   accountId?: string;
@@ -290,37 +208,10 @@ export function ReviewCard({
 
   const [detailsOpen, setDetailsOpen] = React.useState(false);
 
-  const questionConfigs = useQuestionConfigs(pack);
-  const visibleQuestions = React.useMemo(
-    () => questionConfigs.map((config) => config.key),
-    [questionConfigs]
-  );
-  const isAnswerProvided = React.useCallback((value?: string) => {
-    return typeof value === 'string' && value.trim() !== '';
-  }, []);
-
-  const hasAnyAnswer = React.useMemo(
-    () => questionConfigs.some((config) => isAnswerProvided(answers[config.key])),
-    [answers, isAnswerProvided, questionConfigs]
-  );
-
-  const missingRequired = React.useMemo(
-    () =>
-      questionConfigs.some((config) => {
-        if (!config.required) {
-          return false;
-        }
-        return !isAnswerProvided(answers[config.key]);
-      }),
-    [answers, isAnswerProvided, questionConfigs]
-  );
-
+  const explanationValue = answers.explanation ?? '';
+  const hasExplanation = typeof explanationValue === 'string' && explanationValue.trim() !== '';
   const disableBecauseOfStatus = status === 'saving' || status === 'waiting';
-  const requireAnswers = questionConfigs.length > 0;
-  const submitDisabled =
-    disableBecauseOfStatus ||
-    !!error ||
-    (requireAnswers && (!hasAnyAnswer || missingRequired));
+  const submitDisabled = disableBecauseOfStatus || !!error || !hasExplanation;
 
   const handleSubmit = React.useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -333,7 +224,7 @@ export function ReviewCard({
     [onSubmit, submitDisabled]
   );
 
-  const buttonLabel = success ? 'Saved' : status === 'saving' ? 'Saving…' : 'Save answers';
+  const buttonLabel = success ? 'Saved' : status === 'saving' ? 'Saving…' : 'Submit';
 
   return (
     <Card className="w-full">
@@ -426,21 +317,15 @@ export function ReviewCard({
           ) : null}
         </div>
 
-        {questionConfigs.length > 0 ? (
-          <div className="space-y-4">
-            <div>
-              <h3 className="text-base font-semibold text-slate-900">Questions</h3>
-              <p className="mt-1 text-sm text-slate-600">
-                Your answers help us tailor dispute language and keep records of your responses.
-              </p>
-            </div>
-            <AccountQuestions
-              onChange={onAnswersChange}
-              initialAnswers={answers}
-              visibleQuestions={visibleQuestions}
-            />
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-base font-semibold text-slate-900">Explain</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Share a brief explanation to help us understand this account.
+            </p>
           </div>
-        ) : null}
+          <AccountQuestions onChange={onAnswersChange} initialAnswers={answers} />
+        </div>
 
         {error ? (
           <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">{error}</div>
@@ -448,7 +333,7 @@ export function ReviewCard({
 
         {success && status !== 'ready' ? (
           <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-            Answers saved successfully.
+            Explanation saved successfully.
           </div>
         ) : null}
 
@@ -466,9 +351,6 @@ export function ReviewCard({
           >
             {buttonLabel}
           </button>
-          {missingRequired && !disableBecauseOfStatus ? (
-            <p className="mt-2 text-xs text-rose-600">Answer the required questions before submitting.</p>
-          ) : null}
         </div>
       </CardContent>
     </Card>

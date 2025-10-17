@@ -1,10 +1,7 @@
 import * as React from 'react';
 import { useParams } from 'react-router-dom';
 import AccountCard, { type AccountPack } from '../components/AccountCard';
-import AccountQuestions, {
-  type AccountQuestionAnswers,
-  type AccountQuestionKey,
-} from '../components/AccountQuestions';
+import AccountQuestions, { type AccountQuestionAnswers } from '../components/AccountQuestions';
 import { Badge } from '../components/ui/badge';
 import {
   BUREAUS,
@@ -260,14 +257,11 @@ function AccountListRow({ entry, onSelect, selected, answered }: AccountListRowP
 }
 
 function cleanAnswers(answers: AccountQuestionAnswers): Record<string, string> {
-  const result: Record<string, string> = {};
-  (['ownership', 'recognize', 'explanation', 'identity_theft'] as AccountQuestionKey[]).forEach((key) => {
-    const value = answers[key];
-    if (typeof value === 'string' && value.trim() !== '') {
-      result[key] = value;
-    }
-  });
-  return result;
+  const explanation = answers.explanation;
+  if (typeof explanation === 'string' && explanation.trim() !== '') {
+    return { explanation };
+  }
+  return {};
 }
 
 function normalizeExistingAnswers(source: unknown): AccountQuestionAnswers {
@@ -275,14 +269,11 @@ function normalizeExistingAnswers(source: unknown): AccountQuestionAnswers {
     return {};
   }
   const record = source as Record<string, unknown>;
-  const normalized: AccountQuestionAnswers = {};
-  (['ownership', 'recognize', 'explanation', 'identity_theft'] as AccountQuestionKey[]).forEach((key) => {
-    const value = record[key];
-    if (typeof value === 'string' && value.trim() !== '') {
-      normalized[key] = value;
-    }
-  });
-  return normalized;
+  const explanation = record.explanation;
+  if (typeof explanation === 'string' && explanation.trim() !== '') {
+    return { explanation };
+  }
+  return {};
 }
 
 function LoadingRow() {
@@ -415,7 +406,7 @@ export default function AccountsPage() {
       return;
     }
     if (!hasAnswers) {
-      setSubmitError('Please provide an answer before submitting.');
+      setSubmitError('Please provide an explanation before submitting.');
       return;
     }
 
@@ -560,9 +551,9 @@ export default function AccountsPage() {
               <div className="space-y-6">
                 <AccountCard pack={selectedPack} />
                 <div>
-                  <h2 className="text-lg font-semibold text-slate-900">Questions</h2>
+                  <h2 className="text-lg font-semibold text-slate-900">Explain</h2>
                   <p className="mt-1 text-sm text-slate-600">
-                    Your answers help us tailor dispute language and keep records of your responses.
+                    Share a brief explanation to help us understand this account.
                   </p>
                 </div>
                 <AccountQuestions onChange={handleAnswerChange} initialAnswers={questionAnswers} />
@@ -573,7 +564,7 @@ export default function AccountsPage() {
                 ) : null}
                 {submitSuccess ? (
                   <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-                    Answers saved successfully.
+                    Explanation saved successfully.
                   </div>
                 ) : null}
                 <button
@@ -587,7 +578,7 @@ export default function AccountsPage() {
                       : 'border border-slate-900 bg-slate-900 text-white hover:bg-slate-800'
                   )}
                 >
-                  {submitting ? 'Submitting…' : 'Submit answers'}
+                  {submitting ? 'Submitting…' : 'Submit'}
                 </button>
               </div>
             ) : (

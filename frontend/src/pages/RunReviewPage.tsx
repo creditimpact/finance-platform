@@ -1,9 +1,6 @@
 import * as React from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import {
-  type AccountQuestionAnswers,
-  type AccountQuestionKey,
-} from '../components/AccountQuestions';
+import { type AccountQuestionAnswers } from '../components/AccountQuestions';
 import ReviewCard, {
   type ReviewAccountPack,
   type ReviewCardStatus,
@@ -77,14 +74,11 @@ function extractPacksCount(source: unknown): number {
 }
 
 function cleanAnswers(answers: AccountQuestionAnswers): Record<string, string> {
-  const result: Record<string, string> = {};
-  (['ownership', 'recognize', 'explanation', 'identity_theft'] as AccountQuestionKey[]).forEach((key) => {
-    const value = answers[key];
-    if (typeof value === 'string' && value.trim() !== '') {
-      result[key] = value;
-    }
-  });
-  return result;
+  const explanation = answers.explanation;
+  if (typeof explanation === 'string' && explanation.trim() !== '') {
+    return { explanation };
+  }
+  return {};
 }
 
 function normalizeExistingAnswers(source: unknown): AccountQuestionAnswers {
@@ -92,14 +86,11 @@ function normalizeExistingAnswers(source: unknown): AccountQuestionAnswers {
     return {};
   }
   const record = source as Record<string, unknown>;
-  const normalized: AccountQuestionAnswers = {};
-  (['ownership', 'recognize', 'explanation', 'identity_theft'] as AccountQuestionKey[]).forEach((key) => {
-    const value = record[key];
-    if (typeof value === 'string' && value.trim() !== '') {
-      normalized[key] = value;
-    }
-  });
-  return normalized;
+  const explanation = record.explanation;
+  if (typeof explanation === 'string' && explanation.trim() !== '') {
+    return { explanation };
+  }
+  return {};
 }
 
 function createInitialCardState(): CardState {
@@ -798,7 +789,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       if (Object.keys(cleaned).length === 0) {
         updateCard(accountId, (state) => ({
           ...state,
-          error: 'Please provide an answer before submitting.',
+          error: 'Please provide an explanation before submitting.',
         }));
         return;
       }

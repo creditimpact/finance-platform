@@ -7,6 +7,7 @@ import ReviewCard, {
 } from '../components/ReviewCard';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import {
+  apiUrl,
   buildFrontendReviewStreamUrl,
   fetchFrontendReviewAccount,
   fetchRunFrontendManifest,
@@ -386,7 +387,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     }
 
     try {
-      const packsUrl = `/api/runs/${encodeURIComponent(sid)}/frontend/review/packs`;
+      const packsUrl = apiUrl(`/api/runs/${encodeURIComponent(sid)}/frontend/review/packs`);
       reviewDebugLog('loadPackListing:fetch', { url: packsUrl });
       const { items } = await fetchRunReviewPackListing(sid);
       if (!isMountedRef.current) {
@@ -470,7 +471,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       if (!sessionId) {
         return;
       }
-      const indexUrl = `/api/runs/${encodeURIComponent(sessionId)}/frontend/index`;
+      const indexUrl = apiUrl(`/api/runs/${encodeURIComponent(sessionId)}/frontend/index`);
       reviewDebugLog('bootstrap:fetch', { url: indexUrl, sessionId });
       try {
         const payload = await fetchRunFrontendReviewIndex(sessionId);

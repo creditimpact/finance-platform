@@ -11,14 +11,17 @@ const metaEnv = getImportMetaEnv();
 import type { AccountPack } from './components/AccountCard';
 import { REVIEW_DEBUG_ENABLED, reviewDebugLog } from './utils/reviewDebug';
 
-const apiBaseUrl =
+const rawApiBaseUrl =
   metaEnv.VITE_API_BASE_URL ??
   metaEnv.VITE_API_URL ??
   (typeof process !== 'undefined'
     ? process.env?.VITE_API_BASE_URL ?? process.env?.VITE_API_URL
     : undefined);
 
-const API = (apiBaseUrl ?? '').replace(/\/+$/, '');
+const API_BASE = rawApiBaseUrl?.replace(/\/+$/, '') ?? '';
+
+export const apiUrl = (path: string) =>
+  `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
 
 function encodePathSegments(path: string): string {
   return path
@@ -83,11 +86,7 @@ function joinFrontendPath(base: string, child: string): string {
 
 function buildRunApiUrl(sessionId: string, path: string): string {
   const normalized = path.startsWith('/') ? path : `/${path}`;
-  const prefix = API ? `${API}` : '';
-  if (prefix) {
-    return `${prefix}/api/runs/${encodeURIComponent(sessionId)}${normalized}`;
-  }
-  return `/api/runs/${encodeURIComponent(sessionId)}${normalized}`;
+  return apiUrl(`/api/runs/${encodeURIComponent(sessionId)}${normalized}`);
 }
 
 function buildFrontendReviewAccountUrl(sessionId: string, accountId: string): string {
@@ -684,7 +683,7 @@ export async function uploadReport(email: string, file: File) {
   fd.append('email', email);
   fd.append('file', file);
 
-  const res = await fetch(`${API}/api/upload`, { method: 'POST', body: fd });
+  const res = await fetch(apiUrl('/api/upload'), { method: 'POST', body: fd });
   let data: any = {};
   try {
     data = await res.json();
@@ -699,7 +698,10 @@ export async function uploadReport(email: string, file: File) {
 export async function pollResult(sessionId: string, abortSignal?: AbortSignal) {
   while (true) {
     try {
-      const res = await fetch(`${API}/api/result?session_id=${encodeURIComponent(sessionId)}`, { signal: abortSignal });
+      const res = await fetch(
+        apiUrl(`/api/result?session_id=${encodeURIComponent(sessionId)}`),
+        { signal: abortSignal }
+      );
       let data: any = null;
       try { data = await res.json(); } catch {}
 
@@ -731,7 +733,7 @@ export interface SubmitExplanationsPayload {
 }
 
 export async function submitExplanations(payload: SubmitExplanationsPayload): Promise<any> {
-  const response = await fetch(`${API}/api/submit-explanations`, {
+  const response = await fetch(apiUrl('/api/submit-explanations'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -745,7 +747,7 @@ export async function submitExplanations(payload: SubmitExplanationsPayload): Pr
 }
 
 export async function getSummaries(sessionId: string): Promise<any> {
-  const response = await fetch(`${API}/api/summaries/${encodeURIComponent(sessionId)}`);
+  const response = await fetch(apiUrl(`/api/summaries/${encodeURIComponent(sessionId)}`));
 
   if (!response.ok) {
     throw new Error('Failed to fetch summaries');

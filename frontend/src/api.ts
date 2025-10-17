@@ -695,37 +695,61 @@ export async function uploadReport(email: string, file: File) {
   return data as { ok: true; status: string; session_id: string; task_id?: string };
 }
 
-export async function pollResult(sessionId: string, abortSignal?: AbortSignal) {
-  while (true) {
-    try {
-      const res = await fetch(
-        apiUrl(`/api/result?session_id=${encodeURIComponent(sessionId)}`),
-        { signal: abortSignal }
-      );
-      let data: any = null;
-      try { data = await res.json(); } catch {}
+export interface PollResultResponse {
+  ok?: boolean;
+  status?: string;
+  result?: unknown;
+  message?: string;
+}
 
-      if (res.status === 404) {
-        await new Promise((r) => setTimeout(r, 3000));
-        continue;
+export async function pollResult(
+  sessionId: string,
+  abortSignal?: AbortSignal
+): Promise<PollResultResponse> {
+  const url = apiUrl(`/api/result?session_id=${encodeURIComponent(sessionId)}`);
+  try {
+    const res = await fetch(url, { signal: abortSignal });
+    let data: PollResultResponse | null = null;
+    try {
+      data = (await res.json()) as PollResultResponse;
+    } catch (err) {
+      if (REVIEW_DEBUG_ENABLED) {
+        reviewDebugLog('fetch:parse-error', {
+          url,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
-      if (!res.ok) {
-        throw new Error(data?.message || `Result request failed (${res.status})`);
-      }
-      if (data?.ok && data?.status === 'done') {
-        return data.result;
-      }
-      if (data?.ok && (data?.status === 'queued' || data?.status === 'processing')) {
-        await new Promise((r) => setTimeout(r, 3000));
-        continue;
-      }
-      throw new Error(data?.message || 'Processing error');
-    } catch (_) {
-      // Treat transient errors as in-progress and keep waiting
-      await new Promise((r) => setTimeout(r, 3000));
-      continue;
     }
+
+    if (res.status === 404) {
+      return { ok: true, status: 'processing' };
+    }
+
+    if (!res.ok) {
+      throw new Error(data?.message || `Result request failed (${res.status})`);
+    }
+
+    return data ?? { ok: true, status: 'processing' };
+  } catch (err) {
+    if (REVIEW_DEBUG_ENABLED) {
+      reviewDebugLog('fetch:error', {
+        url,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return { ok: true, status: 'processing' };
   }
+}
+
+export async function getAccount(sessionId: string, accountId: string): Promise<any> {
+  const res = await fetch(
+    apiUrl(`/api/accounts/${encodeURIComponent(sessionId)}/${encodeURIComponent(accountId)}`)
+  );
+  const data: any = await res.json();
+  if (!res.ok || !data?.ok) {
+    throw new Error(data?.message || `Get account failed (${res.status})`);
+  }
+  return data.account;
 }
 
 export interface SubmitExplanationsPayload {

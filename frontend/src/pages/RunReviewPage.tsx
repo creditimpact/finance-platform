@@ -16,6 +16,8 @@ import {
   fetchRunReviewPackListing,
   joinRunAsset,
   submitFrontendReviewAnswers,
+  FrontendReviewAccountError,
+  FetchJsonError,
 } from '../api.ts';
 import type {
   FrontendReviewPackListingItem,
@@ -32,6 +34,13 @@ const WORKER_HINT_DELAY_MS = 30_000;
 
 type CardStatus = ReviewCardStatus;
 
+interface CardErrorDetails {
+  status?: number;
+  url?: string;
+  responseSnippet?: string;
+  message?: string;
+}
+
 interface CardState {
   status: CardStatus;
   pack: ReviewAccountPack | null;
@@ -40,6 +49,7 @@ interface CardState {
   success: boolean;
   response: FrontendReviewResponse | null;
   fetchStatus: string;
+  errorDetails: CardErrorDetails | null;
 }
 
 type CardsState = Record<string, CardState>;
@@ -103,6 +113,74 @@ function normalizeExistingAnswers(source: unknown): AccountQuestionAnswers {
   return {};
 }
 
+function createResponseSnippet(value: string | null | undefined, maxLength = 120): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const collapsed = value.replace(/\s+/g, ' ').trim();
+  if (!collapsed) {
+    return undefined;
+  }
+  if (collapsed.length > maxLength) {
+    return `${collapsed.slice(0, maxLength)}…`;
+  }
+  return collapsed;
+}
+
+function extractCardErrorDetails(error: unknown): CardErrorDetails | null {
+  if (error instanceof FrontendReviewAccountError) {
+    const attempts = Array.isArray(error.attempts) ? error.attempts : [];
+    const prioritized = attempts.filter((attempt) => {
+      if (!attempt) {
+        return false;
+      }
+      if (attempt.status != null) {
+        return true;
+      }
+      if (typeof attempt.responseText === 'string' && attempt.responseText.trim() !== '') {
+        return true;
+      }
+      return Boolean(attempt.error?.message);
+    });
+    const pick =
+      prioritized.find((attempt) => attempt.kind !== 'static') ??
+      prioritized[0] ??
+      attempts[0];
+    if (pick) {
+      const snippet = createResponseSnippet(
+        pick.responseText ?? pick.error?.message ?? undefined
+      );
+      return {
+        status: pick.status,
+        url: pick.url,
+        responseSnippet: snippet,
+        message: pick.error?.message ?? undefined,
+      };
+    }
+    return { message: error.message };
+  }
+
+  if (error instanceof FetchJsonError) {
+    const snippet = createResponseSnippet(error.responseText ?? error.message ?? undefined);
+    return {
+      status: error.status,
+      url: error.url,
+      responseSnippet: snippet,
+      message: error.message,
+    };
+  }
+
+  if (error instanceof Error) {
+    return { message: error.message };
+  }
+
+  if (typeof error === 'string' && error.trim() !== '') {
+    return { message: error };
+  }
+
+  return null;
+}
+
 function createInitialCardState(): CardState {
   return {
     status: 'idle',
@@ -112,6 +190,7 @@ function createInitialCardState(): CardState {
     success: false,
     response: null,
     fetchStatus: 'idle',
+    errorDetails: null,
   };
 }
 
@@ -186,6 +265,17 @@ function ReviewCardContainer({ accountId, state, onChange, onSubmit, onLoad, onR
   }
 
   if (!state.pack) {
+    const detail = state.errorDetails;
+    const statusText = detail?.status != null ? String(detail.status) : 'Unknown';
+    const urlText = detail?.url ?? 'Unknown';
+    const messageSnippet = detail?.message ? createResponseSnippet(detail.message) ?? detail.message : undefined;
+    const fallbackMessage = state.error ? createResponseSnippet(state.error) ?? state.error : undefined;
+    const responseText =
+      detail?.responseSnippet ??
+      messageSnippet ??
+      fallbackMessage ??
+      'No response text available.';
+
     return (
       <Card ref={cardRef} className="w-full">
         <CardHeader className="border-b border-slate-100 pb-4">
@@ -193,7 +283,23 @@ function ReviewCardContainer({ accountId, state, onChange, onSubmit, onLoad, onR
         </CardHeader>
         <CardContent className="space-y-4 pt-6">
           <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
-            {state.error ?? 'Unable to load account details.'}
+            <div className="space-y-2">
+              <p className="font-semibold text-rose-900">Failed to load card {accountId}</p>
+              <dl className="space-y-1 text-xs text-rose-700">
+                <div>
+                  <dt className="font-semibold uppercase tracking-wide text-rose-800">Status</dt>
+                  <dd className="text-rose-900">{statusText}</dd>
+                </div>
+                <div>
+                  <dt className="font-semibold uppercase tracking-wide text-rose-800">URL</dt>
+                  <dd className="break-all text-rose-900">{urlText}</dd>
+                </div>
+                <div>
+                  <dt className="font-semibold uppercase tracking-wide text-rose-800">Response</dt>
+                  <dd className="text-rose-900">{responseText}</dd>
+                </div>
+              </dl>
+            </div>
           </div>
           <button
             type="button"
@@ -485,6 +591,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
               pack: cached,
               answers: normalizedAnswers,
               error: null,
+              errorDetails: null,
               success: hasResponse,
               response: cached.response ?? null,
             };
@@ -536,6 +643,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             ? state.answers
             : normalizeExistingAnswers((cachedPack as Record<string, unknown> | undefined)?.answers),
           error: null,
+          errorDetails: null,
           success: Boolean(cachedPack.response),
           response: cachedPack.response ?? null,
           fetchStatus: 'cached',
@@ -561,6 +669,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         ...state,
         status: state.pack && !options?.force ? state.status : 'waiting',
         error: null,
+        errorDetails: null,
         fetchStatus: 'fetching',
       }));
 
@@ -587,6 +696,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           pack,
           answers: normalizeExistingAnswers((pack as Record<string, unknown> | undefined)?.answers),
           error: null,
+          errorDetails: null,
           success: Boolean(pack.response),
           response: pack.response ?? null,
           fetchStatus: 'success',
@@ -603,6 +713,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             ...state,
             status: 'ready',
             error: message,
+            errorDetails: extractCardErrorDetails(err),
             pack: state.pack,
             fetchStatus: `error: ${message}`,
           }));
@@ -939,6 +1050,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         answers,
         status: state.status === 'done' ? 'ready' : state.status,
         error: null,
+        errorDetails: null,
         success: false,
       }));
       markUnsubmitted(accountId);
@@ -957,6 +1069,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         updateCard(accountId, (state) => ({
           ...state,
           error: 'Please provide an explanation before submitting.',
+          errorDetails: null,
         }));
         return;
       }
@@ -965,6 +1078,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         ...state,
         status: 'saving',
         error: null,
+        errorDetails: null,
         success: true,
       }));
 
@@ -985,6 +1099,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             status: 'done',
             success: true,
             error: null,
+            errorDetails: null,
             response: response ?? null,
             pack: nextPack,
           };
@@ -999,6 +1114,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           ...state,
           status: 'ready',
           error: message,
+          errorDetails: null,
           success: false,
         }));
         showToast({

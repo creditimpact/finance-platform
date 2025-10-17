@@ -160,11 +160,40 @@ export function buildFrontendReviewStreamUrl(sessionId: string): string {
   return buildRunApiUrl(sessionId, '/frontend/review/stream');
 }
 
+export interface FetchJsonErrorInfo {
+  status?: number;
+  statusText?: string;
+  url?: string;
+  responseText?: string;
+}
+
+export class FetchJsonError extends Error {
+  status?: number;
+  statusText?: string;
+  url?: string;
+  responseText?: string;
+
+  constructor(message: string, info: FetchJsonErrorInfo = {}) {
+    super(message);
+    this.name = 'FetchJsonError';
+    this.status = info.status;
+    this.statusText = info.statusText;
+    this.url = info.url;
+    this.responseText = info.responseText;
+  }
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   if (REVIEW_DEBUG_ENABLED) {
     reviewDebugLog('fetch:start', { url, init });
   }
-  const response = await fetch(url, init);
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new FetchJsonError(`Request failed: ${detail}`, { url });
+  }
   if (REVIEW_DEBUG_ENABLED) {
     reviewDebugLog('fetch:response', {
       url,
@@ -216,7 +245,12 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     if (REVIEW_DEBUG_ENABLED) {
       reviewDebugLog('fetch:error', { url, status: response.status, detail });
     }
-    throw new Error(`Request failed (${response.status})${suffix}`);
+    throw new FetchJsonError(`Request failed (${response.status})${suffix}`, {
+      status: response.status,
+      statusText: response.statusText ?? undefined,
+      url,
+      responseText: typeof rawBody === 'string' ? rawBody : undefined,
+    });
   }
 
   if (parseError) {
@@ -226,7 +260,10 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     );
     const detail = parseError instanceof Error ? parseError.message : String(parseError);
     const suffix = detail ? `: ${detail}` : '';
-    throw new Error(`Failed to parse JSON${suffix}`);
+    throw new FetchJsonError(`Failed to parse JSON${suffix}`, {
+      url,
+      responseText: typeof rawBody === 'string' ? rawBody : undefined,
+    });
   }
 
   if (REVIEW_DEBUG_ENABLED) {
@@ -575,6 +612,34 @@ interface FrontendReviewAccountAttempt {
   url: string;
   label: string;
   error?: Error;
+  status?: number;
+  responseText?: string;
+}
+
+export interface FrontendReviewAccountAttemptResult {
+  kind: FrontendReviewAccountAttemptKind;
+  url: string;
+  label: string;
+  error?: Error;
+  status?: number;
+  responseText?: string;
+}
+
+export class FrontendReviewAccountError extends Error {
+  readonly attempts: ReadonlyArray<FrontendReviewAccountAttemptResult>;
+
+  constructor(message: string, attempts: FrontendReviewAccountAttempt[]) {
+    super(message);
+    this.name = 'FrontendReviewAccountError';
+    this.attempts = attempts.map((attempt) => ({
+      kind: attempt.kind,
+      url: attempt.url,
+      label: attempt.label,
+      error: attempt.error,
+      status: attempt.status,
+      responseText: attempt.responseText,
+    }));
+  }
 }
 
 export async function fetchFrontendReviewAccount<T = AccountPack>(
@@ -613,6 +678,7 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
       : buildRunAssetUrl(sessionId, staticPath)
     : null;
   const failureMessages: string[] = [];
+  const attemptRecords: FrontendReviewAccountAttempt[] = [];
   if (staticUrl) {
     const staticLabel = stripFrontendPrefix(staticPath) || staticPath;
     if (REVIEW_DEBUG_ENABLED) {
@@ -636,6 +702,17 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
       return pack as T;
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
+      const attemptRecord: FrontendReviewAccountAttempt = {
+        kind: 'static',
+        url: staticUrl,
+        label: `static(${staticLabel})`,
+        error,
+      };
+      if (err instanceof FetchJsonError) {
+        attemptRecord.status = err.status;
+        attemptRecord.responseText = err.responseText ?? undefined;
+      }
+      attemptRecords.push(attemptRecord);
       failureMessages.push(`static(${staticLabel}): ${error.message}`);
       console.error(
         `[frontend-review] Pack ${accountId}: static fallback failed (${staticUrl}) - ${error.message}`
@@ -663,6 +740,7 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
       label: 'pack/:id',
     },
   ];
+  attemptRecords.push(...attempts);
 
   let fallbackPack: ExtractedAccountPack | null = null;
   let fallbackSource: FrontendReviewAccountAttempt | null = null;
@@ -707,6 +785,10 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       attempt.error = error;
+      if (err instanceof FetchJsonError) {
+        attempt.status = err.status;
+        attempt.responseText = err.responseText ?? undefined;
+      }
 
       console.error(
         `[frontend-review] Pack ${accountId}: ${attempt.label} failed (${attempt.url}) - ${error.message}`
@@ -735,7 +817,7 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
 
   const detail = failureMessages.length > 0 ? failureMessages.join('; ') : 'No pack payload found';
 
-  throw new Error(`Pack ${accountId}: ${detail}`);
+  throw new FrontendReviewAccountError(`Pack ${accountId}: ${detail}`, attemptRecords);
 }
 
 export interface FrontendReviewResponseClientMeta {

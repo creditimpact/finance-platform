@@ -15,7 +15,16 @@ const rawApiBaseUrl =
     ? process.env?.VITE_API_BASE_URL || process.env?.VITE_API_URL
     : undefined);
 
-const API_BASE = (rawApiBaseUrl || '').replace(/\/+$/, '');
+const trimmedApiBaseInput =
+  typeof rawApiBaseUrl === 'string' ? rawApiBaseUrl.trim() : '';
+
+export const API_BASE_URL = trimmedApiBaseInput
+  ? trimmedApiBaseInput.replace(/\/+$/, '')
+  : '';
+
+export const API_BASE_CONFIGURED = API_BASE_URL.length > 0;
+
+const API_BASE = API_BASE_URL;
 
 export const apiUrl = (path) =>
   `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
@@ -268,6 +277,11 @@ export async function uploadReport(email, file) {
   fd.append('file', file);
 
   const res = await fetch(apiUrl('/api/upload'), { method: 'POST', body: fd });
+  if (res.status === 404) {
+    throw new Error(
+      'Could not reach backend (404 from dev server). Did you configure VITE_API_BASE_URL or Vite proxy?'
+    );
+  }
   let data = {};
   try {
     data = await res.json();

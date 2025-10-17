@@ -3,6 +3,8 @@ import { MemoryRouter } from 'react-router-dom';
 import ReviewPage from './ReviewPage';
 
 jest.mock('../api.ts', () => ({
+  API_BASE_CONFIGURED: true,
+  API_BASE_URL: 'http://127.0.0.1:5000',
   submitExplanations: jest.fn(),
   getSummaries: jest.fn().mockResolvedValue({
     summaries: {

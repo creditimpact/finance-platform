@@ -8,7 +8,7 @@ import {
   type BureauKey,
 } from './accountFieldTypes';
 import { summarizeField, type BureauTriple } from '../utils/bureauSummary';
-import AccountQuestions, { type AccountQuestionAnswers } from './AccountQuestions';
+import { type AccountQuestionAnswers } from './AccountQuestions';
 import type { AccountPack } from './AccountCard';
 import type { FrontendReviewResponse } from '../api.ts';
 
@@ -180,6 +180,7 @@ export function ReviewCard({
 
   const holderName = formatHolderName(pack.holder_name, display.holder_name ?? null);
   const primaryIssue = formatPrimaryIssue(pack.primary_issue ?? display.primary_issue ?? null);
+  const explanationId = React.useId();
 
   const summaryFields = React.useMemo(() => {
     return SUMMARY_FIELDS.map((field) => {
@@ -212,6 +213,19 @@ export function ReviewCard({
   const hasExplanation = typeof explanationValue === 'string' && explanationValue.trim() !== '';
   const disableBecauseOfStatus = status === 'saving' || status === 'waiting';
   const submitDisabled = disableBecauseOfStatus || !!error || !hasExplanation;
+
+  const handleExplanationChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const nextValue = event.target.value;
+      if (onAnswersChange) {
+        onAnswersChange({
+          ...answers,
+          explanation: nextValue,
+        });
+      }
+    },
+    [answers, onAnswersChange]
+  );
 
   const handleSubmit = React.useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -317,14 +331,25 @@ export function ReviewCard({
           ) : null}
         </div>
 
-        <div className="space-y-4">
-          <div>
-            <h3 className="text-base font-semibold text-slate-900">Explain</h3>
-            <p className="mt-1 text-sm text-slate-600">
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <label htmlFor={explanationId} className="block text-base font-semibold text-slate-900">
+              Explain
+            </label>
+            <p className="text-sm text-slate-600">
               Share a brief explanation to help us understand this account.
             </p>
           </div>
-          <AccountQuestions onChange={onAnswersChange} initialAnswers={answers} />
+          <textarea
+            id={explanationId}
+            name="explanation"
+            value={explanationValue}
+            onChange={handleExplanationChange}
+            disabled={disableBecauseOfStatus}
+            required
+            rows={5}
+            className="block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500"
+          />
         </div>
 
         {error ? (

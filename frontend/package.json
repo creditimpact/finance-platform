@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "review:dev": "node ./scripts/review-dev.mjs",
+    "smoke": "node ./scripts/dev-smoke.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",

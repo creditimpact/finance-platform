@@ -1,4 +1,4 @@
-function getImportMetaEnv(): Record<string, string | undefined> {
+function getImportMetaEnv(): Record<string, string | boolean | undefined> {
   try {
     return new Function('return (typeof import !== "undefined" && import.meta && import.meta.env) || {};')();
   } catch (err) {
@@ -11,21 +11,45 @@ const metaEnv = getImportMetaEnv();
 import type { AccountPack } from './components/AccountCard';
 import { REVIEW_DEBUG_ENABLED, reviewDebugLog } from './utils/reviewDebug';
 
-const rawApiBaseUrl =
+const rawConfiguredApiBase =
   metaEnv.VITE_API_BASE_URL ??
   metaEnv.VITE_API_URL ??
   (typeof process !== 'undefined'
     ? process.env?.VITE_API_BASE_URL ?? process.env?.VITE_API_URL
     : undefined);
 
-const trimmedApiBaseInput =
-  typeof rawApiBaseUrl === 'string' ? rawApiBaseUrl.trim() : '';
+const trimmedConfiguredApiBase =
+  typeof rawConfiguredApiBase === 'string' ? rawConfiguredApiBase.trim() : '';
 
-export const API_BASE_URL = trimmedApiBaseInput
-  ? trimmedApiBaseInput.replace(/\/+$/, '')
+const metaEnvDev = (metaEnv as Record<string, unknown>).DEV;
+const isMetaEnvDev =
+  typeof metaEnvDev === 'boolean'
+    ? metaEnvDev
+    : typeof metaEnvDev === 'string'
+      ? metaEnvDev.toLowerCase() === 'true'
+      : false;
+
+const processEnv = typeof process !== 'undefined' ? process.env : undefined;
+const nodeEnv = processEnv?.NODE_ENV;
+const isProcessDev = typeof nodeEnv === 'string' ? nodeEnv !== 'production' : false;
+
+const fallbackApiBase =
+  !trimmedConfiguredApiBase && (isMetaEnvDev || isProcessDev) ? 'http://127.0.0.1:5000' : '';
+
+const effectiveApiBaseInput = trimmedConfiguredApiBase || fallbackApiBase;
+
+export const API_BASE_URL = effectiveApiBaseInput
+  ? effectiveApiBaseInput.replace(/\/+$/, '')
   : '';
 
-export const API_BASE_CONFIGURED = API_BASE_URL.length > 0;
+export const API_BASE_CONFIGURED = trimmedConfiguredApiBase.length > 0;
+export const API_BASE_INFERRED = !API_BASE_CONFIGURED && API_BASE_URL.length > 0;
+
+if (API_BASE_INFERRED && typeof console !== 'undefined') {
+  console.warn(
+    '[api] Falling back to default API base URL. Configure VITE_API_BASE_URL to point to your backend.'
+  );
+}
 
 const API_BASE = API_BASE_URL;
 
@@ -47,13 +71,14 @@ export function joinRunAsset(base: string, rel: string): string {
 }
 
 function buildRunAssetUrl(sessionId: string, relativePath: string): string {
-  const base = `/runs/${encodeURIComponent(sessionId)}`;
+  const basePath = `/runs/${encodeURIComponent(sessionId)}`;
+  const baseUrl = apiUrl(basePath);
   if (!relativePath) {
-    return base;
+    return baseUrl;
   }
   const normalizedPath = relativePath.replace(/\\/g, '/');
   const encodedPath = encodePathSegments(normalizedPath);
-  return joinRunAsset(base, encodedPath);
+  return joinRunAsset(baseUrl, encodedPath);
 }
 
 function trimSlashes(input?: string | null): string {

@@ -73,7 +73,8 @@ function resolvePackUrl(sid: string, packsBody: unknown): string | null {
     if (entry && typeof entry === 'object' && 'file' in entry) {
       const file = (entry as { file?: unknown }).file;
       if (typeof file === 'string' && file.trim() !== '') {
-        const base = `/runs/${encodeURIComponent(sid)}`;
+        const basePath = `/runs/${encodeURIComponent(sid)}`;
+        const base = apiUrl(basePath);
         const url = joinRunAsset(base, file);
         if (url.includes('idx-')) {
           return url;
@@ -112,7 +113,7 @@ function useRunDebugData(sid: string | undefined) {
       const nextPack = await fetchEndpoint(packUrl);
       setPackState(nextPack);
     } else {
-      const fallbackUrl = `/runs/${encodedSid}/frontend/review/packs/idx-000.json`;
+      const fallbackUrl = apiUrl(`/runs/${encodedSid}/frontend/review/packs/idx-000.json`);
       setPackState({
         url: fallbackUrl,
         loading: false,

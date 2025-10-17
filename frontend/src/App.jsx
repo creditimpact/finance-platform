@@ -7,11 +7,17 @@ import RunReviewPage from './pages/RunReviewPage';
 import RunReviewCompletePage from './pages/RunReviewCompletePage';
 import AccountsPage from './pages/Accounts';
 import RunDebugPage from './pages/RunDebugPage';
+import { API_BASE_CONFIGURED } from './api.ts';
 import './App.css';
 
 function App() {
   return (
     <BrowserRouter>
+      {!API_BASE_CONFIGURED && (
+        <div className="api-base-warning" role="alert">
+          API base URL is not configured. Create frontend/.env.local with VITE_API_BASE_URL=…
+        </div>
+      )}
       <nav>
         <Link to="/">Home</Link>
         <Link to="/upload">Upload</Link>

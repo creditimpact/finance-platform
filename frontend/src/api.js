@@ -8,21 +8,44 @@ function getImportMetaEnv() {
 
 const metaEnv = getImportMetaEnv();
 
-const rawApiBaseUrl =
+const rawConfiguredApiBase =
   metaEnv.VITE_API_BASE_URL ||
   metaEnv.VITE_API_URL ||
   (typeof process !== 'undefined'
     ? process.env?.VITE_API_BASE_URL || process.env?.VITE_API_URL
     : undefined);
 
-const trimmedApiBaseInput =
-  typeof rawApiBaseUrl === 'string' ? rawApiBaseUrl.trim() : '';
+const trimmedConfiguredApiBase =
+  typeof rawConfiguredApiBase === 'string' ? rawConfiguredApiBase.trim() : '';
 
-export const API_BASE_URL = trimmedApiBaseInput
-  ? trimmedApiBaseInput.replace(/\/+$/, '')
+const metaEnvDev = metaEnv.DEV;
+const isMetaEnvDev =
+  typeof metaEnvDev === 'boolean'
+    ? metaEnvDev
+    : typeof metaEnvDev === 'string'
+      ? metaEnvDev.toLowerCase() === 'true'
+      : false;
+
+const nodeEnv = typeof process !== 'undefined' ? process.env?.NODE_ENV : undefined;
+const isProcessDev = typeof nodeEnv === 'string' ? nodeEnv !== 'production' : false;
+
+const fallbackApiBase =
+  !trimmedConfiguredApiBase && (isMetaEnvDev || isProcessDev) ? 'http://127.0.0.1:5000' : '';
+
+const effectiveApiBaseInput = trimmedConfiguredApiBase || fallbackApiBase;
+
+export const API_BASE_URL = effectiveApiBaseInput
+  ? effectiveApiBaseInput.replace(/\/+$/, '')
   : '';
 
-export const API_BASE_CONFIGURED = API_BASE_URL.length > 0;
+export const API_BASE_CONFIGURED = trimmedConfiguredApiBase.length > 0;
+export const API_BASE_INFERRED = !API_BASE_CONFIGURED && API_BASE_URL.length > 0;
+
+if (API_BASE_INFERRED && typeof console !== 'undefined') {
+  console.warn(
+    '[api] Falling back to default API base URL. Configure VITE_API_BASE_URL to point to your backend.'
+  );
+}
 
 const API_BASE = API_BASE_URL;
 
@@ -44,13 +67,14 @@ export function joinRunAsset(base, rel) {
 }
 
 function buildRunAssetUrl(sessionId, relativePath) {
-  const base = `/runs/${encodeURIComponent(sessionId)}`;
+  const basePath = `/runs/${encodeURIComponent(sessionId)}`;
+  const baseUrl = apiUrl(basePath);
   if (!relativePath) {
-    return base;
+    return baseUrl;
   }
   const normalizedPath = (typeof relativePath === 'string' ? relativePath : '').replace(/\\/g, '/');
   const encodedPath = encodePathSegments(normalizedPath);
-  return joinRunAsset(base, encodedPath);
+  return joinRunAsset(baseUrl, encodedPath);
 }
 
 function trimSlashes(input = '') {

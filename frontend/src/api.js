@@ -1,9 +1,10 @@
 function getImportMetaEnv() {
   try {
-    return new Function('return (typeof import !== "undefined" && import.meta && import.meta.env) || {};')();
-  } catch {
-    return {};
-  }
+    if (typeof import.meta !== 'undefined' && import.meta?.env) {
+      return import.meta.env;
+    }
+  } catch {}
+  return {};
 }
 
 const metaEnv = getImportMetaEnv();

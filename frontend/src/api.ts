@@ -67,6 +67,17 @@ const API_BASE = API_BASE_URL;
 export const apiUrl = (path: string) =>
   `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
 
+export type ReviewClaimEvidence = {
+  claim: ClaimKey;
+  docs: { doc_key: string; doc_ids: string[] }[];
+};
+
+export type SubmitReviewPayload = {
+  answers: { explanation?: string };
+  claims?: ClaimKey[];
+  evidence?: ReviewClaimEvidence[];
+};
+
 function encodePathSegments(path: string): string {
   return path
     .split('/')
@@ -878,14 +889,14 @@ function resolveTimeZone(): string | undefined {
 export async function submitFrontendReviewAnswers(
   sessionId: string,
   accountId: string,
-  answers: Record<string, unknown>,
+  payload: SubmitReviewPayload,
   init?: RequestInit
 ): Promise<FrontendReviewResponse> {
   if (!accountId) {
     throw new Error('Missing account id');
   }
-  const payload = {
-    answers,
+  const requestBody = {
+    ...payload,
     client_meta: {
       user_agent: resolveUserAgent() ?? 'unknown',
       tz: resolveTimeZone() ?? 'UTC',
@@ -897,10 +908,36 @@ export async function submitFrontendReviewAnswers(
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(requestBody),
       ...init,
     }
   );
+}
+
+export async function uploadReviewDoc(
+  sessionId: string,
+  accountId: string,
+  claim: ClaimKey,
+  docKey: string,
+  files: File[]
+): Promise<{ doc_ids: string[] }> {
+  const form = new FormData();
+  form.append('sid', sessionId);
+  form.append('account_id', accountId);
+  form.append('claim', claim);
+  form.append('doc_key', docKey);
+  files.forEach((file) => form.append('files', file));
+
+  const response = await fetch(`${API_BASE}/api/runs/${sessionId}/frontend/review/uploads`, {
+    method: 'POST',
+    body: form,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Upload failed: ${response.status}`);
+  }
+
+  return response.json();
 }
 
 export async function uploadFrontendReviewEvidence(

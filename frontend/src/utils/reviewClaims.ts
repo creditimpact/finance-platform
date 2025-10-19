@@ -1,5 +1,6 @@
 import { CLAIMS, type ClaimKey } from '../constants/claims';
 import type { AccountQuestionAnswers, ClaimDocuments } from '../components/AccountQuestions';
+import type { ReviewClaimEvidence, SubmitReviewPayload } from '../api';
 
 function isClaimKey(value: string): value is ClaimKey {
   return Object.prototype.hasOwnProperty.call(CLAIMS, value);
@@ -61,22 +62,30 @@ export function normalizeClaimDocuments(value: unknown): ClaimDocuments {
   return normalized;
 }
 
-export function prepareClaimDocuments(claimDocuments?: ClaimDocuments): Record<string, Record<string, string[]>> | undefined {
+export function prepareClaimEvidence(
+  claimDocuments?: ClaimDocuments
+): ReviewClaimEvidence[] | undefined {
   if (!claimDocuments) {
     return undefined;
   }
-  const prepared: Record<string, Record<string, string[]>> = {};
+
+  const evidence: ReviewClaimEvidence[] = [];
+
   for (const [claimKey, docMap] of Object.entries(claimDocuments)) {
     if (!isClaimKey(claimKey) || !docMap || typeof docMap !== 'object') {
       continue;
     }
-    const normalizedDocs: Record<string, string[]> = {};
+
+    const docs: ReviewClaimEvidence['docs'] = [];
+
     for (const [docKey, docIds] of Object.entries(docMap)) {
       if (!docIds) {
         continue;
       }
+
       const array = Array.isArray(docIds) ? docIds : [docIds];
       const filtered: string[] = [];
+
       for (const value of array) {
         if (typeof value !== 'string') {
           continue;
@@ -87,15 +96,18 @@ export function prepareClaimDocuments(claimDocuments?: ClaimDocuments): Record<s
         }
         filtered.push(trimmed);
       }
+
       if (filtered.length > 0) {
-        normalizedDocs[docKey] = filtered;
+        docs.push({ doc_key: docKey, doc_ids: filtered });
       }
     }
-    if (Object.keys(normalizedDocs).length > 0) {
-      prepared[claimKey] = normalizedDocs;
+
+    if (docs.length > 0) {
+      evidence.push({ claim: claimKey, docs });
     }
   }
-  return Object.keys(prepared).length > 0 ? prepared : undefined;
+
+  return evidence.length > 0 ? evidence : undefined;
 }
 
 export function getMissingRequiredDocs(
@@ -145,45 +157,184 @@ export function formatDocKey(docKey: string): string {
     .join(' ');
 }
 
+function convertEvidenceToClaimDocuments(evidence: unknown): ClaimDocuments {
+  if (!Array.isArray(evidence)) {
+    return {};
+  }
+
+  const documents: ClaimDocuments = {};
+
+  for (const entry of evidence) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+
+    const record = entry as { claim?: unknown; docs?: unknown };
+    const claimKey = typeof record.claim === 'string' ? record.claim.trim() : undefined;
+    if (!claimKey || !isClaimKey(claimKey)) {
+      continue;
+    }
+
+    const docEntries = Array.isArray(record.docs) ? record.docs : [];
+    const docMap: Partial<Record<string, string[]>> = documents[claimKey] ?? {};
+
+    for (const docEntry of docEntries) {
+      if (!docEntry || typeof docEntry !== 'object') {
+        continue;
+      }
+
+      const docRecord = docEntry as { doc_key?: unknown; doc_ids?: unknown };
+      const docKey = typeof docRecord.doc_key === 'string' ? docRecord.doc_key : undefined;
+      if (!docKey) {
+        continue;
+      }
+
+      const array = Array.isArray(docRecord.doc_ids) ? docRecord.doc_ids : [docRecord.doc_ids];
+      const collected: string[] = docMap[docKey] ? [...docMap[docKey]!] : [];
+
+      for (const value of array) {
+        if (typeof value !== 'string') {
+          continue;
+        }
+        const trimmed = value.trim();
+        if (!trimmed || collected.includes(trimmed)) {
+          continue;
+        }
+        collected.push(trimmed);
+      }
+
+      if (collected.length > 0) {
+        docMap[docKey] = collected;
+      }
+    }
+
+    if (Object.keys(docMap).length > 0) {
+      documents[claimKey] = docMap;
+    }
+  }
+
+  return documents;
+}
+
+function mergeClaimDocuments(
+  primary: ClaimDocuments | undefined,
+  secondary: ClaimDocuments | undefined
+): ClaimDocuments {
+  if (!primary && !secondary) {
+    return {};
+  }
+
+  const merged: ClaimDocuments = {};
+
+  const apply = (source?: ClaimDocuments) => {
+    if (!source) {
+      return;
+    }
+    for (const [claimKey, docMap] of Object.entries(source)) {
+      if (!isClaimKey(claimKey) || !docMap) {
+        continue;
+      }
+      const target: Partial<Record<string, string[]>> = merged[claimKey] ?? {};
+      for (const [docKey, docIds] of Object.entries(docMap)) {
+        if (!Array.isArray(docIds) || docIds.length === 0) {
+          continue;
+        }
+        const collected = target[docKey] ? new Set(target[docKey]) : new Set<string>();
+        for (const value of docIds) {
+          if (typeof value !== 'string') {
+            continue;
+          }
+          const trimmed = value.trim();
+          if (!trimmed) {
+            continue;
+          }
+          collected.add(trimmed);
+        }
+        if (collected.size > 0) {
+          target[docKey] = Array.from(collected);
+        }
+      }
+      if (Object.keys(target).length > 0) {
+        merged[claimKey] = target;
+      }
+    }
+  };
+
+  apply(secondary);
+  apply(primary);
+
+  return merged;
+}
+
 export function normalizeExistingAnswers(source: unknown): AccountQuestionAnswers {
   if (!source || typeof source !== 'object') {
     return {};
   }
+
   const record = source as Record<string, unknown>;
-  const explanation = typeof record.explanation === 'string' ? record.explanation : undefined;
-  const claims = normalizeClaims(record.claims);
-  const claimDocuments = normalizeClaimDocuments(record.claim_documents ?? record.claimDocuments);
+  const answersSection =
+    record.answers && typeof record.answers === 'object' && !Array.isArray(record.answers)
+      ? (record.answers as Record<string, unknown>)
+      : undefined;
+
+  const explanationFromRoot = typeof record.explanation === 'string' ? record.explanation : undefined;
+  const explanationFromSection =
+    answersSection && typeof answersSection.explanation === 'string'
+      ? (answersSection.explanation as string)
+      : undefined;
+
+  const claims = normalizeClaims(
+    record.claims ?? (answersSection?.claims as unknown)
+  );
+
+  const legacyClaimDocuments = normalizeClaimDocuments(
+    record.claim_documents ??
+      record.claimDocuments ??
+      answersSection?.claim_documents ??
+      answersSection?.claimDocuments
+  );
+
+  const evidenceDocuments = convertEvidenceToClaimDocuments(record.evidence ?? answersSection?.evidence);
+
   const answers: AccountQuestionAnswers = {};
+
+  const explanation = explanationFromRoot ?? explanationFromSection;
   if (explanation && explanation.trim() !== '') {
     answers.explanation = explanation;
   }
+
   if (claims.length > 0) {
     answers.claims = claims;
   }
-  if (Object.keys(claimDocuments).length > 0) {
-    answers.claimDocuments = claimDocuments;
+
+  const mergedDocuments = mergeClaimDocuments(legacyClaimDocuments, evidenceDocuments);
+  if (Object.keys(mergedDocuments).length > 0) {
+    answers.claimDocuments = mergedDocuments;
   }
+
   return answers;
 }
 
 export function prepareAnswersPayload(
   answers: AccountQuestionAnswers,
   options?: { includeClaims?: boolean }
-): Record<string, unknown> {
-  const payload: Record<string, unknown> = {};
+): SubmitReviewPayload {
   const explanation = answers.explanation;
+  const answersPayload: SubmitReviewPayload['answers'] = {};
   if (typeof explanation === 'string' && explanation.trim() !== '') {
-    payload.explanation = explanation.trim();
+    answersPayload.explanation = explanation.trim();
   }
+
+  const payload: SubmitReviewPayload = { answers: answersPayload };
 
   if (options?.includeClaims) {
     const claims = normalizeClaims(answers.claims);
     if (claims.length > 0) {
       payload.claims = claims;
     }
-    const claimDocuments = prepareClaimDocuments(answers.claimDocuments);
-    if (claimDocuments) {
-      payload.claim_documents = claimDocuments;
+    const evidence = prepareClaimEvidence(answers.claimDocuments);
+    if (evidence) {
+      payload.evidence = evidence;
     }
   }
 

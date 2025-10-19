@@ -53,6 +53,36 @@ _QUESTION_SET = [
 ]
 
 
+def _coerce_question_list(questions: Any) -> list[dict[str, Any]]:
+    if not isinstance(questions, Sequence) or isinstance(
+        questions, (str, bytes, bytearray)
+    ):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for question in questions:
+        if isinstance(question, Mapping):
+            normalized.append(dict(question))
+
+    return normalized
+
+
+def _resolve_stage_pack_questions(
+    *,
+    existing_pack: Mapping[str, Any] | None,
+    question_set: Sequence[Mapping[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    if isinstance(existing_pack, Mapping):
+        existing_questions = _coerce_question_list(existing_pack.get("questions"))
+        if existing_questions:
+            return existing_questions
+
+    if question_set is None:
+        return []
+
+    return _coerce_question_list(question_set)
+
+
 _POINTER_KEYS: tuple[str, ...] = (
     "meta",
     "tags",
@@ -861,10 +891,7 @@ def build_lean_pack_doc(
         display_payload=display_payload,
     )
 
-    questions_payload = []
-    for question in questions:
-        if isinstance(question, Mapping):
-            questions_payload.append(dict(question))
+    questions_payload = _coerce_question_list(questions)
 
     return {
         "holder_name": holder_name,
@@ -1479,6 +1506,17 @@ def generate_frontend_packs_for_run(
 
             account_filename = _safe_account_dirname(account_id, account_dir.name)
             stage_pack_path = stage_packs_dir / f"{account_filename}.json"
+
+            existing_stage_pack: Mapping[str, Any] | None = None
+            if stage_pack_path.exists():
+                existing_payload = _load_json_payload(stage_pack_path)
+                if isinstance(existing_payload, Mapping):
+                    existing_stage_pack = existing_payload
+
+            stage_pack_payload["questions"] = _resolve_stage_pack_questions(
+                existing_pack=existing_stage_pack,
+                question_set=_QUESTION_SET,
+            )
 
             try:
                 stage_changed = _write_json_if_changed(

@@ -48,6 +48,8 @@ def test_display_defaults_and_idempotent(tmp_path) -> None:
     stage_dir = runs_root / sid / "frontend" / "review"
     pack_path = stage_dir / "packs" / "001.json"
     pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
+    assert pack_payload["questions"] == list(generator._QUESTION_SET)
+    assert len(pack_payload["questions"]) >= 1
     display_payload = pack_payload["display"]
 
     expected_per_bureau = {"transunion": "--", "experian": "--", "equifax": "--"}

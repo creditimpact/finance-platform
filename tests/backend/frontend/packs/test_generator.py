@@ -162,11 +162,12 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
         "holder_name",
         "primary_issue",
         "display",
+        "questions",
     ]
     assert stage_pack_payload["account_id"] == "acct-1"
     assert stage_pack_payload["holder_name"] == "John Doe"
     assert stage_pack_payload["primary_issue"] == "wrong_account"
-    assert "questions" not in stage_pack_payload
+    assert stage_pack_payload["questions"] == list(generator_module._QUESTION_SET)
     assert "pointers" not in stage_pack_payload
 
     display_block = stage_pack_payload["display"]
@@ -324,7 +325,14 @@ def test_frontend_review_stage_minimal_smoke(tmp_path):
 
     for pack_path in pack_files:
         payload = json.loads(pack_path.read_text(encoding="utf-8"))
-        assert set(payload) == {"account_id", "holder_name", "primary_issue", "display"}
+        assert set(payload) == {
+            "account_id",
+            "holder_name",
+            "primary_issue",
+            "display",
+            "questions",
+        }
+        assert payload["questions"] == list(generator_module._QUESTION_SET)
 
         rel_path = f"frontend/review/packs/{pack_path.name}"
         entry = manifest_entries[rel_path]
@@ -583,7 +591,9 @@ def test_generate_frontend_packs_meta_heading_and_primary_issue(tmp_path):
         "holder_name",
         "primary_issue",
         "display",
+        "questions",
     ]
+    assert payload["questions"] == list(generator_module._QUESTION_SET)
     assert payload["account_id"] == "acct-meta"
     assert payload["holder_name"] == "SPS"
     assert payload["primary_issue"] == "delinquency"
@@ -616,7 +626,9 @@ def test_generate_frontend_packs_holder_name_from_raw_when_meta_missing(tmp_path
         "holder_name",
         "primary_issue",
         "display",
+        "questions",
     ]
+    assert payload["questions"] == list(generator_module._QUESTION_SET)
     assert payload["holder_name"] == "ACME BANK"
     assert payload["primary_issue"] == "ownership"
 
@@ -682,10 +694,11 @@ def test_generate_frontend_packs_backfills_missing_pointers(tmp_path, monkeypatc
         "holder_name",
         "primary_issue",
         "display",
+        "questions",
     }
     assert stage_payload["account_id"] == "acct-legacy"
     assert "pointers" not in stage_payload
-    assert "questions" not in stage_payload
+    assert stage_payload["questions"] == list(generator_module._QUESTION_SET)
 
     legacy_index_path = runs_root / sid / "frontend" / "index.json"
     index_payload = json.loads(legacy_index_path.read_text(encoding="utf-8"))
@@ -745,7 +758,9 @@ def test_generate_frontend_packs_debug_mirror_toggle(tmp_path, monkeypatch):
         "holder_name",
         "primary_issue",
         "display",
+        "questions",
     ]
+    assert pack_payload["questions"] == list(generator_module._QUESTION_SET)
     assert mirror_payload["sid"] == sid
     assert mirror_payload["account_id"] == "acct-debug"
     assert mirror_payload["holder_name"] == "Debug Holder"
@@ -780,10 +795,42 @@ def test_generate_frontend_packs_multiple_issues_first_primary(tmp_path):
         "holder_name",
         "primary_issue",
         "display",
+        "questions",
     ]
+    assert payload["questions"] == list(generator_module._QUESTION_SET)
     assert payload["primary_issue"] == "collection"
 
     assert result["packs_count"] == 1
+
+
+def test_generate_frontend_packs_preserves_existing_questions(tmp_path):
+    runs_root = tmp_path / "runs"
+    sid = "S-custom-questions"
+    account_dir = runs_root / sid / "cases" / "accounts" / "1"
+
+    _write_minimal_account(
+        account_dir,
+        account_id="acct-custom",
+        tags_payload=[{"kind": "issue", "type": "collection"}],
+    )
+
+    generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    pack_path, payload = _read_stage_pack(runs_root, sid, "acct-custom")
+
+    custom_questions = [
+        {"id": "custom", "prompt": "Custom question?"},
+        {"id": "followup", "prompt": "Anything else?"},
+    ]
+    payload["questions"] = custom_questions
+    pack_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    generate_frontend_packs_for_run(sid, runs_root=runs_root)
+
+    _, updated_payload = _read_stage_pack(runs_root, sid, "acct-custom")
+
+    assert updated_payload["questions"] == custom_questions
+
 
 def test_generate_frontend_packs_holder_name_fallback(tmp_path):
     runs_root = tmp_path / "runs"
@@ -819,7 +866,9 @@ def test_generate_frontend_packs_holder_name_fallback(tmp_path):
         "holder_name",
         "primary_issue",
         "display",
+        "questions",
     ]
+    assert pack_payload["questions"] == list(generator_module._QUESTION_SET)
     assert pack_payload["holder_name"] == "JANE SAMPLE"
     assert pack_payload["primary_issue"] == "identity_theft"
 

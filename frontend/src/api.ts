@@ -1,9 +1,10 @@
 function getImportMetaEnv(): Record<string, string | boolean | undefined> {
   try {
-    return new Function('return (typeof import !== "undefined" && import.meta && import.meta.env) || {};')();
-  } catch (err) {
-    return {};
-  }
+    if (typeof import.meta !== 'undefined' && (import.meta as any)?.env) {
+      return (import.meta as any).env;
+    }
+  } catch {}
+  return {};
 }
 
 const metaEnv = getImportMetaEnv();

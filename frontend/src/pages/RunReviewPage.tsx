@@ -151,36 +151,78 @@ function extractReviewListingItems(source: unknown): FrontendReviewPackListingIt
 
   const normalized: FrontendReviewPackListingItem[] = [];
   for (const item of items) {
-    if (!item || typeof item !== 'object') {
+    const normalizedItem = normalizePackListingItem(item);
+    if (!normalizedItem) {
       continue;
     }
-    const record = item as Record<string, unknown>;
-    const accountCandidate = record.account_id ?? record.id ?? record.accountId;
-    const accountId =
-      typeof accountCandidate === 'string' && accountCandidate.trim() !== ''
-        ? accountCandidate.trim()
-        : undefined;
-    if (!accountId) {
-      continue;
-    }
-
-    let file: string | undefined;
-    for (const key of ['file', 'path', 'static_path', 'staticPath']) {
-      const value = record[key];
-      if (typeof value === 'string' && value.trim() !== '') {
-        file = value;
-        break;
-      }
-    }
-
-    if (file) {
-      normalized.push({ account_id: accountId, file });
-    } else {
-      normalized.push({ account_id: accountId });
-    }
+    normalized.push(normalizedItem);
   }
 
   return normalized;
+}
+
+function extractAccountId(candidate: unknown): string | undefined {
+  if (typeof candidate === 'string') {
+    const trimmed = candidate.trim();
+    return trimmed !== '' ? trimmed : undefined;
+  }
+  if (!candidate || typeof candidate !== 'object') {
+    return undefined;
+  }
+  const record = candidate as Record<string, unknown>;
+  const keys = ['account_id', 'accountId', 'id'];
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim() !== '') {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function normalizePackListingItem(
+  item: unknown
+): (FrontendReviewPackListingItem & { account_id: string }) | null {
+  if (!item || typeof item !== 'object') {
+    return null;
+  }
+  const record = item as Record<string, unknown>;
+
+  const accountCandidates = [
+    record.account_id,
+    record.id,
+    record.accountId,
+    record.account,
+    record.accountID,
+  ];
+
+  let accountId: string | undefined;
+  for (const candidate of accountCandidates) {
+    accountId = extractAccountId(candidate);
+    if (accountId) {
+      break;
+    }
+  }
+
+  if (!accountId) {
+    return null;
+  }
+
+  const fileKeys = ['file', 'path', 'static_path', 'staticPath', 'pack_path', 'packPath'];
+  let file: string | undefined;
+  for (const key of fileKeys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim() !== '') {
+      file = value;
+      break;
+    }
+  }
+
+  if (typeof file === 'string') {
+    return { account_id: accountId, file };
+  }
+
+  return { account_id: accountId };
 }
 
 function cleanAnswers(answers: AccountQuestionAnswers): Record<string, string> {
@@ -452,6 +494,12 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const fallbackTimeoutRef = React.useRef<number | null>(null);
   const lastNetworkStatusRef = React.useRef<string | null>(null);
   const bootstrapItemsRef = React.useRef<FrontendReviewPackListingItem[]>([]);
+  const readyStatsRef = React.useRef<{ total: number; api: number; staticPacks: number }>({
+    total: 0,
+    api: 0,
+    staticPacks: 0,
+  });
+  const previousPhaseRef = React.useRef<Phase>('loading');
 
   const stopFallbackTimeout = React.useCallback(() => {
     if (fallbackTimeoutRef.current !== null) {
@@ -522,6 +570,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       setPhaseError(null);
     }
     setDiagnosticsPacksCount(null);
+    readyStatsRef.current = { total: 0, api: 0, staticPacks: 0 };
+    previousPhaseRef.current = 'loading';
   }, [sid, clear, stopFallbackTimeout]);
 
   const clearWorkerWait = React.useCallback(() => {
@@ -648,26 +698,28 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         bootstrapItemsRef.current = options.fallbackItems;
       }
 
-      const sourceItems = items.length > 0 ? items : fallbackItems ?? [];
-      const filteredItems = sourceItems
-        .map((item) => {
-          if (!item || typeof item !== 'object') {
-            return null;
-          }
-          const accountId =
-            typeof item.account_id === 'string' && item.account_id.trim() !== ''
-              ? item.account_id.trim()
-              : null;
-          if (!accountId) {
-            return null;
-          }
-          return { account_id: accountId, file: typeof item.file === 'string' ? item.file : undefined };
-        })
-        .filter((item): item is FrontendReviewPackListingItem & { account_id: string } => Boolean(item));
+      const normalizedApiItems = items
+        .map((item) => normalizePackListingItem(item))
+        .filter(
+          (item): item is FrontendReviewPackListingItem & { account_id: string } => Boolean(item)
+        );
+      const normalizedFallbackItems = (fallbackItems ?? [])
+        .map((item) => normalizePackListingItem(item))
+        .filter(
+          (item): item is FrontendReviewPackListingItem & { account_id: string } => Boolean(item)
+        );
+
+      const filteredItems =
+        normalizedApiItems.length > 0 ? normalizedApiItems : normalizedFallbackItems;
+
+      const staticCount = normalizedApiItems.length > 0 ? 0 : normalizedFallbackItems.length;
 
       reviewDebugLog('loadPackListing:received', {
         url: packsUrl,
         count: filteredItems.length,
+        apiCount: normalizedApiItems.length,
+        fallbackCount: normalizedFallbackItems.length,
+        source: normalizedApiItems.length > 0 ? 'api' : 'fallback',
       });
 
       const basePath = `/runs/${encodeURIComponent(sid)}`;
@@ -736,13 +788,23 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       setSubmittedAccounts(initialSubmitted);
       clearWorkerWait();
       setDiagnosticsPacksCount((previous) => (previous == null ? filteredItems.length : previous));
+      readyStatsRef.current = {
+        total: filteredItems.length,
+        api: normalizedApiItems.length,
+        staticPacks: staticCount,
+      };
 
       if (isMountedRef.current) {
         stopFallbackTimeout();
         setPhase('ready');
         loadedRef.current = true;
       }
-      reviewDebugLog('loadPackListing:ready', { count: filteredItems.length });
+      reviewDebugLog('loadPackListing:ready', {
+        count: filteredItems.length,
+        apiCount: normalizedApiItems.length,
+        fallbackCount: normalizedFallbackItems.length,
+        source: normalizedApiItems.length > 0 ? 'api' : 'fallback',
+      });
     } catch (err) {
       if (!isMountedRef.current) {
         return;
@@ -1345,6 +1407,17 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     setIsCompleting(true);
     navigate(`/runs/${encodeURIComponent(sid)}/review/complete`);
   }, [sid, navigate]);
+
+  React.useEffect(() => {
+    const previous = previousPhaseRef.current;
+    if (phase === 'ready' && previous !== 'ready') {
+      const stats = readyStatsRef.current;
+      console.log(
+        `[frontend-review] ready=true items=${stats.total}, apiPacks=${stats.api}, staticPacks=${stats.staticPacks}`
+      );
+    }
+    previousPhaseRef.current = phase;
+  }, [phase]);
 
   return (
     <div className={`mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8 ${allDone ? 'pb-32' : ''}`}>

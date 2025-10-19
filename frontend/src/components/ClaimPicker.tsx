@@ -10,6 +10,33 @@ type Props = {
   uploadedMap: Record<ClaimKey, Record<string, string[]>>;
 };
 
+const DEFAULT_DOC_TIP = 'PDF, JPG, or PNG files work best.';
+
+const DOC_TIPS: Record<string, string> = {
+  id_theft_report_or_police: 'Upload your FTC Identity Theft Report or police report (PDF/JPG/PNG).',
+  pay_proof: 'Receipts or bank statements showing payment (PDF/JPG/PNG).',
+  payoff_letter: 'Final payoff letter or confirmation (PDF/JPG/PNG).',
+  settlement_letter: 'Signed settlement agreement (PDF/JPG/PNG).',
+  settlement_payment_proof: 'Screenshots or receipts showing settlement payment (PDF/JPG/PNG).',
+  closure_letter_or_official_screenshot: 'Closure letter or account screenshot (PDF/JPG/PNG).',
+  statement_showing_AU_or_issuer_letter: 'Statement showing AU status or issuer letter (PDF/JPG/PNG).',
+  bk_discharge_order: 'Bankruptcy discharge order (PDF/JPG/PNG).',
+  bk_schedule_with_account: 'Schedule listing this account (PDF/JPG/PNG).',
+  insurance_EOB: 'Explanation of Benefits from your insurer (PDF/JPG/PNG).',
+  payment_proof_if_any: 'Any proof of payment made (PDF/JPG/PNG).',
+  release_or_reinstatement_letter: 'Release or reinstatement letter (PDF/JPG/PNG).',
+  final_payment_proofs: 'Proof of the final payment (PDF/JPG/PNG).',
+  satisfaction_or_vacate_order: 'Court order showing satisfaction/vacate (PDF/JPG/PNG).',
+  rehab_completion_or_consolidation_payoff: 'Rehab completion or consolidation payoff letter (PDF/JPG/PNG).',
+  original_chargeoff_letter_or_old_statements: 'Charge-off letter or old statements (PDF/JPG/PNG).',
+  third_party_payment_letter: 'Letter showing a third party paid the debt (PDF/JPG/PNG).',
+  payment_proof: 'Proof of the third-party payment (PDF/JPG/PNG).',
+};
+
+function getDocTip(docKey: string): string {
+  return DOC_TIPS[docKey] ?? DEFAULT_DOC_TIP;
+}
+
 function ClaimPicker({ selected, onChange, onFilesSelected, uploadedMap }: Props) {
   const handleToggle = React.useCallback(
     (claim: ClaimKey) => {
@@ -112,6 +139,7 @@ function ClaimPicker({ selected, onChange, onFilesSelected, uploadedMap }: Props
                         onChange={handleFileChange(claimKey, docKey)}
                         className="mt-2 block text-sm text-slate-700 file:mr-3 file:rounded-md file:border file:border-slate-300 file:bg-white file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-50"
                       />
+                      <p className="mt-2 text-xs text-slate-500">{getDocTip(docKey)}</p>
                     </div>
                   );
                 })}

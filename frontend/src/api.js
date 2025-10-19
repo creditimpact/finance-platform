@@ -125,6 +125,27 @@ function joinFrontendPath(base, child) {
   return [trimSlashes(base), trimSlashes(child)].filter(Boolean).join('/');
 }
 
+export function isAbsUrl(s) {
+  return /^https?:\/\//i.test(typeof s === 'string' ? s : '');
+}
+
+export function normalizeStaticPackPath(p) {
+  const s = (typeof p === 'string' ? p : '').replace(/\\/g, '/').trim();
+  if (!s) return null;
+
+  if (isAbsUrl(s)) return s;
+
+  if (s.startsWith('/runs/') || s.startsWith('runs/')) {
+    return s.startsWith('/') ? s : `/${s}`;
+  }
+
+  if (s.startsWith('/frontend/') || s.startsWith('frontend/')) {
+    return s.startsWith('/') ? s : `/${s}`;
+  }
+
+  return `/frontend/${s.replace(/^\/+/, '')}`;
+}
+
 function isRecord(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -258,9 +279,9 @@ export async function fetchFrontendReviewManifest(sessionId, init) {
             ? entry.path
             : undefined;
 
-        const normalizedPath = rawPath
-          ? ensureFrontendPath(rawPath, joinFrontendPath(packsDirPath, `${entry.account_id}.json`))
-          : joinFrontendPath(packsDirPath, `${entry.account_id}.json`);
+        const defaultPath = joinFrontendPath(packsDirPath, `${entry.account_id}.json`);
+        const normalizedPath =
+          normalizeStaticPackPath(rawPath) ?? normalizeStaticPackPath(defaultPath) ?? defaultPath;
 
         pack.pack_path = normalizedPath;
         pack.pack_path_rel = stripFrontendPrefix(normalizedPath);
@@ -289,36 +310,55 @@ export async function fetchFrontendReviewAccount(sessionId, accountId, init) {
   if (!accountId) {
     throw new Error('Missing account id');
   }
-  let packPath;
+
   let requestInit = init;
+  let staticPath = null;
 
   if (init && typeof init === 'object' && Object.prototype.hasOwnProperty.call(init, 'packPath')) {
     const { packPath: candidate, ...rest } = init;
     requestInit = rest;
     if (typeof candidate === 'string' && candidate.trim()) {
-      packPath = ensureFrontendPath(candidate, candidate);
+      staticPath = normalizeStaticPackPath(candidate);
+    }
+  } else if (
+    init &&
+    typeof init === 'object' &&
+    Object.prototype.hasOwnProperty.call(init, 'staticPath')
+  ) {
+    const { staticPath: candidate, ...rest } = init;
+    requestInit = rest;
+    if (typeof candidate === 'string' && candidate.trim()) {
+      staticPath = normalizeStaticPackPath(candidate);
     }
   }
 
-  if (!packPath) {
+  if (!staticPath) {
     const manifest = await fetchFrontendReviewManifest(sessionId);
     const match = manifest.packs?.find((entry) => entry.account_id === accountId);
-    if (match?.pack_path) {
-      packPath = match.pack_path;
-    } else if (match?.path) {
-      packPath = ensureFrontendPath(match.path, match.path);
-    } else {
-      const packsDir = manifest.packs_dir_path || ensureFrontendPath('review/packs', 'review/packs');
-      packPath = joinFrontendPath(packsDir, `${accountId}.json`);
-    }
+    const candidate =
+      (typeof match?.pack_path === 'string' && match.pack_path) ||
+      (typeof match?.path === 'string' && match.path) ||
+      joinFrontendPath(
+        manifest.packs_dir_path || ensureFrontendPath('review/packs', 'review/packs'),
+        `${accountId}.json`
+      );
+    staticPath = normalizeStaticPackPath(candidate);
   }
 
-  const normalizedPath = packPath ? ensureFrontendPath(packPath, packPath) : null;
-  if (!normalizedPath) {
+  if (!staticPath) {
     throw new Error(`Unable to resolve pack path for account ${accountId}`);
   }
 
-  const payload = await fetchJson(buildRunAssetUrl(sessionId, normalizedPath), requestInit);
+  let url;
+  if (isAbsUrl(staticPath)) {
+    url = staticPath;
+  } else if (staticPath.startsWith('/runs/') || staticPath.startsWith('runs/')) {
+    url = staticPath.startsWith('/') ? staticPath : `/${staticPath}`;
+  } else {
+    url = buildRunAssetUrl(sessionId, staticPath);
+  }
+
+  const payload = await fetchJson(url, requestInit);
   const pack = normalizeAccountPackPayload(payload, accountId);
   if (!pack) {
     throw new Error(`Pack ${accountId}: No pack payload found`);

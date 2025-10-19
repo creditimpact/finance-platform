@@ -16,6 +16,7 @@ class FrontendStageConfig:
     stage_dir: Path
     packs_dir: Path
     responses_dir: Path
+    uploads_dir: Path
     index_path: Path
 
 
@@ -72,6 +73,7 @@ def load_frontend_stage_config(run_dir: Path | str) -> FrontendStageConfig:
     review_dir = Path(canonical["review_dir"])
     packs_default = Path(canonical["packs_dir"])
     responses_default = Path(canonical["responses_dir"])
+    uploads_default = Path(canonical["uploads_dir"])
     index_default = review_dir / "index.json"
 
     stage_dir = _resolve_review_path(
@@ -94,6 +96,13 @@ def load_frontend_stage_config(run_dir: Path | str) -> FrontendStageConfig:
         review_dir=review_dir,
         require_descendant=True,
     )
+    uploads_dir = _resolve_review_path(
+        base_dir,
+        "FRONTEND_PACKS_UPLOADS_DIR",
+        canonical=uploads_default,
+        review_dir=review_dir,
+        require_descendant=True,
+    )
     index_path = _resolve_review_path(
         base_dir,
         "FRONTEND_PACKS_INDEX",
@@ -105,6 +114,7 @@ def load_frontend_stage_config(run_dir: Path | str) -> FrontendStageConfig:
         stage_dir=stage_dir,
         packs_dir=packs_dir,
         responses_dir=responses_dir,
+        uploads_dir=uploads_dir,
         index_path=index_path,
     )
 

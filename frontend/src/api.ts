@@ -10,6 +10,7 @@ function getImportMetaEnv(): Record<string, string | boolean | undefined> {
 const metaEnv = getImportMetaEnv();
 
 import type { AccountPack } from './components/AccountCard';
+import type { ClaimKey } from './constants/claims';
 import { REVIEW_DEBUG_ENABLED, reviewDebugLog } from './utils/reviewDebug';
 
 const metaEnvConfiguredApiBaseRaw =
@@ -165,6 +166,10 @@ function buildFrontendReviewAccountUrl(sessionId: string, accountId: string): st
 
 function buildFrontendReviewResponseUrl(sessionId: string, accountId: string): string {
   return `${buildRunApiUrl(sessionId, '/frontend/review/response')}/${encodeURIComponent(accountId)}`;
+}
+
+function buildFrontendReviewUploadUrl(sessionId: string): string {
+  return buildRunApiUrl(sessionId, '/frontend/review/uploads');
 }
 
 export function buildFrontendReviewStreamUrl(sessionId: string): string {
@@ -824,10 +829,29 @@ export interface FrontendReviewResponseClientMeta {
 
 export interface FrontendReviewResponse {
   account_id?: string | null;
-  answers?: Record<string, string> | null;
+  answers?: Record<string, unknown> | null;
   client_meta?: FrontendReviewResponseClientMeta | null;
   saved_at?: string | null;
   [key: string]: unknown;
+}
+
+export interface FrontendReviewUploadDocInfo {
+  id: string;
+  claim: string;
+  doc_key: string;
+  account_id?: string;
+  filename?: string;
+  stored_filename?: string;
+  uploaded_at?: string;
+  size?: number;
+  [key: string]: unknown;
+}
+
+export interface FrontendReviewUploadResponse {
+  ok: boolean;
+  doc?: FrontendReviewUploadDocInfo;
+  error?: string;
+  message?: string;
 }
 
 function resolveUserAgent(): string | undefined {
@@ -854,7 +878,7 @@ function resolveTimeZone(): string | undefined {
 export async function submitFrontendReviewAnswers(
   sessionId: string,
   accountId: string,
-  answers: Record<string, string>,
+  answers: Record<string, unknown>,
   init?: RequestInit
 ): Promise<FrontendReviewResponse> {
   if (!accountId) {
@@ -877,6 +901,46 @@ export async function submitFrontendReviewAnswers(
       ...init,
     }
   );
+}
+
+export async function uploadFrontendReviewEvidence(
+  sessionId: string,
+  accountId: string,
+  claim: ClaimKey,
+  docKey: string,
+  file: File,
+  init?: RequestInit
+): Promise<FrontendReviewUploadResponse> {
+  if (!accountId) {
+    throw new Error('Missing account id');
+  }
+  if (!claim) {
+    throw new Error('Missing claim key');
+  }
+  if (!docKey) {
+    throw new Error('Missing document key');
+  }
+
+  const form = new FormData();
+  form.append('account_id', accountId);
+  form.append('claim', claim);
+  form.append('doc_key', docKey);
+  form.append('file', file);
+
+  const response = await fetch(buildFrontendReviewUploadUrl(sessionId), {
+    method: 'POST',
+    body: form,
+    ...init,
+  });
+
+  const data = (await response.json().catch(() => ({}))) as FrontendReviewUploadResponse | undefined;
+
+  if (!response.ok) {
+    const errorMessage = data?.error ?? data?.message ?? `Upload failed (${response.status})`;
+    throw new Error(errorMessage);
+  }
+
+  return data ?? { ok: true };
 }
 
 export async function completeFrontendReview(sessionId: string, init?: RequestInit): Promise<void> {

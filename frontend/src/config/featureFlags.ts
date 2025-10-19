@@ -56,3 +56,7 @@ export function shouldHideConsensus(): boolean {
 export function shouldPreferLongestAccountMask(): boolean {
   return getBooleanFlag('VITE_ACCOUNT_NUMBER_PREFER_LONGEST_MASK', false);
 }
+
+export function shouldEnableReviewClaims(): boolean {
+  return getBooleanFlag('VITE_REVIEW_CLAIMS', false);
+}

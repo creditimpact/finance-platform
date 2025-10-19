@@ -19,6 +19,7 @@ def get_frontend_review_paths(run_dir: str) -> Dict[str, str]:
     review_dir = os.path.join(frontend_base, "review")
     packs_dir = os.path.join(review_dir, "packs")
     responses_dir = os.path.join(review_dir, "responses")
+    uploads_dir = os.path.join(review_dir, "uploads")
     index_path = os.path.join(review_dir, "index.json")
     legacy_index = os.path.join(frontend_base, "index.json")
     return {
@@ -26,6 +27,7 @@ def get_frontend_review_paths(run_dir: str) -> Dict[str, str]:
         "review_dir": review_dir,
         "packs_dir": packs_dir,
         "responses_dir": responses_dir,
+        "uploads_dir": uploads_dir,
         "legacy_index": legacy_index,
         "index": index_path,
     }
@@ -38,4 +40,5 @@ def ensure_frontend_review_dirs(run_dir: str) -> Dict[str, str]:
     os.makedirs(paths["review_dir"], exist_ok=True)
     os.makedirs(paths["packs_dir"], exist_ok=True)
     os.makedirs(paths["responses_dir"], exist_ok=True)
+    os.makedirs(paths["uploads_dir"], exist_ok=True)
     return paths

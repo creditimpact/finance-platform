@@ -144,13 +144,17 @@ def test_frontend_index_returns_payload(api_client):
 
     response = client.get(f"/api/runs/{sid}/frontend/index")
     assert response.status_code == 200
+    assert response.headers.get("X-Index-Shape") == "nested"
     data = response.get_json()
-    assert data["sid"] == sid
-    assert data["stage"] == "review"
-    assert data["packs_count"] == len(payload["items"])
-    assert data["items"] == payload["items"]
-    assert data["counts"]["packs"] == len(payload["items"])
-    assert data["counts"]["responses"] == 0
+    assert set(data.keys()) == {"frontend"}
+    assert set(data["frontend"].keys()) == {"review"}
+    review = data["frontend"]["review"]
+    assert review["sid"] == sid
+    assert review["stage"] == "review"
+    assert review["packs_count"] == len(payload["items"])
+    assert review["items"] == payload["items"]
+    assert review["counts"]["packs"] == len(payload["items"])
+    assert review["counts"]["responses"] == 0
 
 
 def test_frontend_index_normalizes_counts(api_client):
@@ -172,10 +176,12 @@ def test_frontend_index_normalizes_counts(api_client):
 
     response = client.get(f"/api/runs/{sid}/frontend/index")
     assert response.status_code == 200
+    assert response.headers.get("X-Index-Shape") == "nested"
     data = response.get_json()
-    assert data["packs_count"] == len(payload["items"])
-    assert data["counts"]["packs"] == len(payload["items"])
-    assert data["counts"]["responses"] == 5
+    review = data["frontend"]["review"]
+    assert review["packs_count"] == len(payload["items"])
+    assert review["counts"]["packs"] == len(payload["items"])
+    assert review["counts"]["responses"] == 5
 
 
 def test_frontend_review_stream_emits_packs_ready(api_client, monkeypatch):

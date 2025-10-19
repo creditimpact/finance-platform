@@ -693,7 +693,10 @@ def api_frontend_index(sid: str):
 
     _, payload = manifest
     normalized = _normalize_frontend_review_index_payload(run_dir, payload)
-    return jsonify(normalized)
+    response_payload = {"frontend": {"review": normalized}}
+    response = jsonify(response_payload)
+    response.headers["X-Index-Shape"] = "nested"
+    return response
 
 
 @api_bp.route("/api/runs/<sid>/frontend/review/index", methods=["GET"])

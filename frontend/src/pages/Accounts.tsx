@@ -429,9 +429,21 @@ export default function AccountsPage() {
         if (!previous) {
           return previous;
         }
+        const persistedAnswers: Record<string, unknown> = {
+          answers: {
+            ...(response?.answers && typeof response.answers === 'object' ? response.answers : {}),
+            ...cleanedAnswers.answers,
+          },
+        };
+        if (cleanedAnswers.claims && cleanedAnswers.claims.length > 0) {
+          persistedAnswers.claims = cleanedAnswers.claims;
+        }
+        if (cleanedAnswers.evidence && cleanedAnswers.evidence.length > 0) {
+          persistedAnswers.evidence = cleanedAnswers.evidence;
+        }
         const updated: ReviewAccountPack = {
           ...previous,
-          answers: (response && response.answers) || cleanedAnswers,
+          answers: persistedAnswers,
           response: response ?? null,
         };
         return updated;

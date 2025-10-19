@@ -1407,10 +1407,22 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         const response = await submitFrontendReviewAnswers(sid, accountId, cleaned);
         let updatedPack: ReviewAccountPack | null = null;
         updateCard(accountId, (state) => {
+          const persistedAnswers: Record<string, unknown> = {
+            answers: {
+              ...(response?.answers && typeof response.answers === 'object' ? response.answers : {}),
+              ...cleaned.answers,
+            },
+          };
+          if (cleaned.claims && cleaned.claims.length > 0) {
+            persistedAnswers.claims = cleaned.claims;
+          }
+          if (cleaned.evidence && cleaned.evidence.length > 0) {
+            persistedAnswers.evidence = cleaned.evidence;
+          }
           const nextPack = state.pack
             ? {
                 ...state.pack,
-                answers: (response && response.answers) || cleaned,
+                answers: persistedAnswers,
                 response,
               }
             : state.pack;

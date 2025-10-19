@@ -51,7 +51,16 @@ from backend.api.tasks import run_credit_repair_process  # noqa: F401
 from backend.api.tasks import app as celery_app, smoke_task
 from backend.pipeline.runs import RunManifest, get_runs_root, persist_manifest
 from backend.core.paths.frontend_review import get_frontend_review_paths
-from backend.frontend.packs.claims import CLAIMS, get_claim_definition
+from backend.frontend.packs.claim_schema import (
+    ClaimSchemaEntry,
+    all_claim_keys,
+    all_doc_keys_for_claim,
+    all_doc_keys,
+    auto_attach_base,
+    get_claim_entry,
+    load_claims_schema,
+    resolve_issue_claims,
+)
 from backend.frontend.packs.config import load_frontend_stage_config
 from backend.api.routes_smoke import bp as smoke_bp
 from backend.api.routes_run_assets import bp as run_assets_bp
@@ -81,8 +90,20 @@ with open(SCHEMA_DIR / "problem_account.json") as _f:
     _problem_account_validator = Draft7Validator(json.load(_f))
 
 
+_CLAIMS_SCHEMA_DATA = load_claims_schema()
+_ALL_CLAIM_KEYS = all_claim_keys()
+_AUTO_ATTACH_BASE = tuple(auto_attach_base())
+_ALL_DOC_KEYS = all_doc_keys()
+
+
 FRONTEND_ACCOUNT_ID_PATTERN = re.compile(r"^idx-\d{3}$")
 FRONTEND_PACK_FILENAME_PATTERN = re.compile(r"^idx-\d{3}\.json$")
+
+
+_PRIMARY_ISSUE_ALIASES = {
+    "late_payment": "delinquency",
+    "late_history": "delinquency",
+}
 
 
 _request_counts: dict[str, list[float]] = defaultdict(list)
@@ -548,6 +569,16 @@ def _prepare_pack_response(payload: Any, account_id: str) -> dict[str, Any]:
     if account_id and not result.get("account_id"):
         result["account_id"] = account_id
 
+    if "claims" not in result:
+        primary_issue = result.get("primary_issue")
+        if not primary_issue:
+            display = result.get("display")
+            if isinstance(display, Mapping):
+                primary_issue = display.get("primary_issue")
+        claims_payload = _resolved_claims_payload(primary_issue)
+        if claims_payload:
+            result["claims"] = claims_payload
+
     return result
 
 
@@ -621,6 +652,58 @@ def _normalize_path_like_entries(payload: Any) -> Any:
     if isinstance(payload, list):
         return [_normalize_path_like_entries(item) for item in payload]
     return payload
+
+
+def _normalize_primary_issue(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    return _PRIMARY_ISSUE_ALIASES.get(normalized, normalized)
+
+
+def _claim_entry_to_payload(entry: ClaimSchemaEntry) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "key": entry.key,
+        "title": entry.title,
+        "requires": list(entry.requires),
+    }
+    if entry.description:
+        payload["description"] = entry.description
+    if entry.optional:
+        payload["optional"] = list(entry.optional)
+    if entry.auto_attach:
+        payload["autoAttach"] = list(entry.auto_attach)
+    if entry.min_uploads is not None:
+        payload["minUploads"] = entry.min_uploads
+    return payload
+
+
+def _resolved_claims_payload(primary_issue: Any) -> dict[str, Any] | None:
+    normalized_issue = _normalize_primary_issue(primary_issue)
+    base_docs, claim_entries = resolve_issue_claims(normalized_issue)
+    items = [_claim_entry_to_payload(entry) for entry in claim_entries]
+    return {"autoAttachBase": list(base_docs), "items": items}
+
+
+def _resolve_pack_primary_issue(run_dir: Path, account_id: str) -> str | None:
+    stage_pack = _stage_pack_path_for_account(run_dir, account_id)
+    if stage_pack is None or not stage_pack.is_file():
+        return None
+    try:
+        payload = _load_frontend_pack(stage_pack)
+    except Exception:  # pragma: no cover - defensive
+        return None
+    pack_mapping = _unwrap_pack_payload(payload)
+    if isinstance(pack_mapping, Mapping):
+        primary_issue = pack_mapping.get("primary_issue")
+        if not primary_issue:
+            display = pack_mapping.get("display")
+            if isinstance(display, Mapping):
+                primary_issue = display.get("primary_issue")
+        return _normalize_primary_issue(primary_issue)
+    return None
 
 
 def _normalize_review_listing_path(run_dir: Path, value: str) -> str | None:
@@ -1014,6 +1097,11 @@ def api_frontend_review_pack(sid: str, account_id: str):
     return jsonify(pack_obj)
 
 
+@api_bp.route("/api/review/claims-schema", methods=["GET"])
+def api_review_claims_schema():
+    return jsonify(_CLAIMS_SCHEMA_DATA)
+
+
 @api_bp.route(
     "/api/runs/<sid>/frontend/review/accounts/<account_id>/answer",
     methods=["POST"],
@@ -1050,99 +1138,152 @@ def api_frontend_review_answer(sid: str, account_id: str):
     stage_config = load_frontend_stage_config(run_dir)
     uploads_dir = stage_config.uploads_dir
 
-    claims_payload = data.get("claims")
-    claims_list: list[str] | None = None
-    if claims_payload is not None:
-        if not isinstance(claims_payload, list):
+    primary_issue = _resolve_pack_primary_issue(run_dir, account_id)
+    base_docs, issue_claim_entries = resolve_issue_claims(primary_issue)
+    claim_entry_map: dict[str, ClaimSchemaEntry] = {
+        entry.key: entry for entry in issue_claim_entries
+    }
+
+    allowed_doc_keys = set(_ALL_DOC_KEYS)
+    allowed_doc_keys.update(base_docs)
+    for claim_entry in claim_entry_map.values():
+        allowed_doc_keys.update(all_doc_keys_for_claim(claim_entry))
+
+    selected_claims_raw = answers.get("selected_claims")
+    if selected_claims_raw is None and isinstance(data.get("claims"), list):
+        selected_claims_raw = data.get("claims")
+
+    selected_claims: list[str] = []
+    if selected_claims_raw is not None:
+        if not isinstance(selected_claims_raw, list):
             return jsonify({"error": "invalid_claims"}), 400
-        dedup: list[str] = []
         seen: set[str] = set()
-        for value in claims_payload:
+        for value in selected_claims_raw:
             if not isinstance(value, str):
                 return jsonify({"error": "invalid_claims"}), 400
             key = value.strip()
-            if key not in CLAIMS:
+            if not key:
+                continue
+            entry = claim_entry_map.get(key)
+            if entry is None:
+                entry = get_claim_entry(key)
+            if entry is None:
                 return jsonify({"error": "invalid_claims"}), 400
             if key in seen:
                 continue
             seen.add(key)
-            dedup.append(key)
-        claims_list = dedup
+            selected_claims.append(key)
 
-    evidence_payload = data.get("evidence")
-    evidence_list: list[dict[str, Any]] | None = None
-    if evidence_payload is not None:
-        if not isinstance(evidence_payload, list):
-            return jsonify({"error": "invalid_evidence"}), 400
-        evidence_items: list[dict[str, Any]] = []
-        allowed_claims = set(claims_list or []) if claims_list is not None else None
-        for entry in evidence_payload:
-            if not isinstance(entry, Mapping):
-                return jsonify({"error": "invalid_evidence"}), 400
-            claim_value = entry.get("claim")
-            if not isinstance(claim_value, str):
-                return jsonify({"error": "invalid_evidence"}), 400
-            claim_key = claim_value.strip()
-            if claim_key not in CLAIMS:
-                return jsonify({"error": "invalid_evidence"}), 400
-            if allowed_claims is not None and claim_key not in allowed_claims:
-                return jsonify({"error": "invalid_evidence"}), 400
+    attachments_raw = answers.get("attachments")
+    attachments_map: dict[str, list[str]] = {}
+    if attachments_raw is not None:
+        if not isinstance(attachments_raw, Mapping):
+            return jsonify({"error": "invalid_attachments"}), 400
+        for doc_key_raw, value in attachments_raw.items():
+            if not isinstance(doc_key_raw, str):
+                return jsonify({"error": "invalid_attachments"}), 400
+            doc_key = doc_key_raw.strip()
+            if not doc_key or not _REVIEW_DOC_KEY_PATTERN.fullmatch(doc_key):
+                return jsonify({"error": "invalid_attachments"}), 400
+            if doc_key not in allowed_doc_keys:
+                return jsonify({"error": "invalid_attachments"}), 400
 
-            docs_payload = entry.get("docs")
-            if not isinstance(docs_payload, list):
-                return jsonify({"error": "invalid_evidence"}), 400
+            candidates: list[Any]
+            if isinstance(value, list):
+                candidates = value
+            else:
+                candidates = [value]
 
-            docs_items: list[dict[str, Any]] = []
-            claim_def = get_claim_definition(claim_key)
-            required_docs = set(claim_def.required_docs if claim_def else [])
+            validated_ids: list[str] = []
+            for candidate in candidates:
+                if not isinstance(candidate, str):
+                    return jsonify({"error": "invalid_attachment_doc"}), 400
+                doc_id = candidate.strip()
+                if not doc_id:
+                    continue
+                if _resolve_review_doc_id(doc_id, run_dir, uploads_dir) is None:
+                    return jsonify({"error": "invalid_attachment_doc"}), 400
+                if doc_id not in validated_ids:
+                    validated_ids.append(doc_id)
 
-            for doc_entry in docs_payload:
-                if not isinstance(doc_entry, Mapping):
-                    return jsonify({"error": "invalid_evidence"}), 400
-                doc_key_value = doc_entry.get("doc_key")
-                if not isinstance(doc_key_value, str):
-                    return jsonify({"error": "invalid_evidence"}), 400
-                doc_key = doc_key_value.strip()
-                if not doc_key or not _REVIEW_DOC_KEY_PATTERN.fullmatch(doc_key):
-                    return jsonify({"error": "invalid_evidence"}), 400
-                if claim_def and claim_def.requires_docs and doc_key not in required_docs:
-                    return jsonify({"error": "invalid_evidence"}), 400
+            if validated_ids:
+                attachments_map[doc_key] = validated_ids
 
-                doc_ids_value = doc_entry.get("doc_ids")
-                if not isinstance(doc_ids_value, list) or not doc_ids_value:
-                    return jsonify({"error": "invalid_evidence"}), 400
+    missing_docs: dict[str, list[str]] = {}
+    min_upload_failures: dict[str, int] = {}
+    if selected_claims:
+        for claim_key in selected_claims:
+            claim_entry = claim_entry_map.get(claim_key) or get_claim_entry(claim_key)
+            if claim_entry is None:
+                continue
+            required_docs = list(claim_entry.requires)
+            missing_for_claim = [doc for doc in required_docs if not attachments_map.get(doc)]
+            if missing_for_claim:
+                missing_docs[claim_key] = missing_for_claim
 
-                validated_doc_ids: list[str] = []
-                for doc_id_value in doc_ids_value:
-                    if not isinstance(doc_id_value, str):
-                        return jsonify({"error": "invalid_evidence"}), 400
-                    doc_id = doc_id_value.strip()
-                    if not doc_id:
-                        return jsonify({"error": "invalid_evidence"}), 400
-                    if _resolve_review_doc_id(doc_id, run_dir, uploads_dir) is None:
-                        return jsonify({"error": "invalid_evidence_doc"}), 400
-                    validated_doc_ids.append(doc_id)
+            if claim_entry.min_uploads is not None and claim_entry.min_uploads > 0:
+                present_count = sum(
+                    1
+                    for doc_key in all_doc_keys_for_claim(claim_entry)
+                    if attachments_map.get(doc_key)
+                )
+                if present_count < claim_entry.min_uploads:
+                    min_upload_failures[claim_key] = claim_entry.min_uploads
 
-                docs_items.append({"doc_key": doc_key, "doc_ids": validated_doc_ids})
+    if missing_docs or min_upload_failures:
+        return (
+            jsonify(
+                {
+                    "error": "missing_required_docs",
+                    "details": {
+                        "missing": missing_docs,
+                        "min_uploads": min_upload_failures,
+                    },
+                }
+            ),
+            400,
+        )
 
-            evidence_items.append({"claim": claim_key, "docs": docs_items})
+    sanitized_answers = dict(answers)
 
-        evidence_list = evidence_items
+    explanation_value = sanitized_answers.get("explanation")
+    if isinstance(explanation_value, str):
+        trimmed = explanation_value.strip()
+        sanitized_answers["explanation"] = trimmed if trimmed else ""
+
+    if selected_claims:
+        sanitized_answers["selected_claims"] = selected_claims
+    elif "selected_claims" in sanitized_answers:
+        sanitized_answers.pop("selected_claims", None)
+
+    if attachments_map:
+        formatted_attachments: dict[str, Any] = {}
+        for doc_key, doc_ids in attachments_map.items():
+            if not doc_ids:
+                continue
+            if len(doc_ids) == 1:
+                formatted_attachments[doc_key] = doc_ids[0]
+            else:
+                formatted_attachments[doc_key] = doc_ids
+        if formatted_attachments:
+            sanitized_answers["attachments"] = formatted_attachments
+        else:
+            sanitized_answers.pop("attachments", None)
+    elif "attachments" in sanitized_answers:
+        sanitized_answers.pop("attachments", None)
 
     record: dict[str, Any] = {
         "sid": sid,
         "account_id": account_id,
-        "answers": dict(answers),
+        "answers": sanitized_answers,
         "received_at": _now_utc_iso(),
     }
     if client_ts is not None:
         record["client_ts"] = client_ts
     if isinstance(client_meta, Mapping):
         record["client_meta"] = dict(client_meta)
-    if claims_list is not None:
-        record["claims"] = claims_list
-    if evidence_list is not None:
-        record["evidence"] = evidence_list
+    if selected_claims:
+        record["claims"] = selected_claims
 
     responses_dir = stage_config.responses_dir
     responses_dir.mkdir(parents=True, exist_ok=True)
@@ -1179,15 +1320,20 @@ def api_frontend_review_upload(sid: str):
     if sid_from_form and sid_from_form != sid:
         return jsonify({"error": "invalid_sid"}), 400
 
-    if not claim_key or claim_key not in CLAIMS:
+    if not claim_key:
+        return jsonify({"error": "invalid_claim"}), 400
+
+    claim_entry = get_claim_entry(claim_key)
+    if claim_entry is None:
         return jsonify({"error": "invalid_claim"}), 400
 
     doc_key = doc_key_raw.strip()
     if not doc_key or not _REVIEW_DOC_KEY_PATTERN.fullmatch(doc_key):
         return jsonify({"error": "invalid_doc_key"}), 400
 
-    claim_def = get_claim_definition(claim_key)
-    if claim_def and claim_def.requires_docs and doc_key not in claim_def.required_docs:
+    allowed_doc_keys = all_doc_keys_for_claim(claim_entry)
+    allowed_doc_keys.update(_AUTO_ATTACH_BASE)
+    if doc_key not in allowed_doc_keys:
         return jsonify({"error": "unsupported_doc_key"}), 400
 
     uploaded_files = request.files.getlist("files")

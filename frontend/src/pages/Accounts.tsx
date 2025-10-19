@@ -22,7 +22,9 @@ import {
   hasMissingRequiredDocs,
   normalizeExistingAnswers,
   prepareAnswersPayload,
+  resolveClaimsPayload,
 } from '../utils/reviewClaims';
+import type { ClaimSchema } from '../types/review';
 
 const PLACEHOLDER_VALUES = new Set(['--', '—', '', 'n/a', 'N/A']);
 const REVIEW_CLAIMS_ENABLED = shouldEnableReviewClaims();
@@ -292,6 +294,19 @@ export default function AccountsPage() {
   const [submitError, setSubmitError] = React.useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = React.useState(false);
 
+  const resolvedClaims = React.useMemo(
+    () => resolveClaimsPayload(selectedPack?.claims),
+    [selectedPack?.claims]
+  );
+
+  const claimDefinitions = React.useMemo(() => {
+    const map = new Map<string, ClaimSchema>();
+    resolvedClaims.items.forEach((claim) => {
+      map.set(claim.key, claim);
+    });
+    return map;
+  }, [resolvedClaims]);
+
   React.useEffect(() => {
     if (!sid) {
       setError('Missing session id');
@@ -397,8 +412,12 @@ export default function AccountsPage() {
     if (!REVIEW_CLAIMS_ENABLED) {
       return false;
     }
-    return hasMissingRequiredDocs(questionAnswers.claims, questionAnswers.claimDocuments);
-  }, [questionAnswers.claimDocuments, questionAnswers.claims]);
+    return hasMissingRequiredDocs(
+      questionAnswers.selectedClaims ?? [],
+      questionAnswers.attachments,
+      claimDefinitions
+    );
+  }, [REVIEW_CLAIMS_ENABLED, claimDefinitions, questionAnswers.attachments, questionAnswers.selectedClaims]);
   const canSubmit = explanationProvided && !missingRequiredDocs;
 
   const handleSubmitAnswers = React.useCallback(async () => {

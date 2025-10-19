@@ -27,7 +27,6 @@ import type {
   RunFrontendManifestResponse,
   ReviewQuestion,
 } from '../api.ts';
-import { ReviewPackStoreProvider, useReviewPackStore } from '../stores/reviewPackStore';
 import { useToast } from '../components/ToastProvider';
 import { REVIEW_DEBUG_ENABLED, reviewDebugLog } from '../utils/reviewDebug';
 import { DEV_DIAGNOSTICS_ENABLED } from '../utils/devDiagnostics';
@@ -63,6 +62,8 @@ type PackListingEntry = FrontendReviewPackListingItem & {
 };
 
 type Phase = 'loading' | 'waiting' | 'ready' | 'error';
+
+type PackMap = Record<string, ReviewAccountPack>;
 
 function toNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -462,7 +463,6 @@ function ReviewCardContainer({ accountId, state, onChange, onSubmit, onLoad, onR
 }
 
 function RunReviewPageContent({ sid }: { sid: string | undefined }) {
-  const { getPack, setPack, clear } = useReviewPackStore();
   const { showToast } = useToast();
   const navigate = useNavigate();
   const [phase, setPhase] = React.useState<Phase>('loading');
@@ -476,6 +476,39 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const [liveUpdatesUnavailable, setLiveUpdatesUnavailable] = React.useState(false);
   const [frontendMissing, setFrontendMissing] = React.useState(false);
   const [diagnosticsPacksCount, setDiagnosticsPacksCount] = React.useState<number | null>(null);
+  const [packsById, setPacksById] = React.useState<PackMap>({});
+  const [reviewItems, setReviewItems] = React.useState<FrontendReviewPackListingItem[]>([]);
+  const [reviewReady, setReviewReady] = React.useState(false);
+
+  const getPack = React.useCallback(
+    (accountId: string) => packsById[accountId],
+    [packsById]
+  );
+
+  const rememberPack = React.useCallback((accountId: string, pack: ReviewAccountPack) => {
+    setPacksById((previous) => {
+      if (previous[accountId] === pack) {
+        return previous;
+      }
+      return { ...previous, [accountId]: pack };
+    });
+  }, []);
+
+  const clearPacks = React.useCallback(() => {
+    setPacksById({});
+  }, []);
+
+  const applyReviewIndex = React.useCallback((payload: unknown): FrontendReviewPackListingItem[] => {
+    const normalizedItems = extractReviewListingItems(payload);
+    setReviewItems(normalizedItems);
+    setReviewReady(true);
+    readyStatsRef.current = {
+      total: normalizedItems.length,
+      api: readyStatsRef.current.api,
+      staticPacks: readyStatsRef.current.staticPacks,
+    };
+    return normalizedItems;
+  }, []);
 
   const isMountedRef = React.useRef(false);
   const loadingRef = React.useRef(false);
@@ -499,7 +532,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     api: 0,
     staticPacks: 0,
   });
-  const previousPhaseRef = React.useRef<Phase>('loading');
+  const previousReadyRef = React.useRef(false);
 
   const stopFallbackTimeout = React.useCallback(() => {
     if (fallbackTimeoutRef.current !== null) {
@@ -543,7 +576,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     loadingAccountsRef.current = new Set();
     bootstrapItemsRef.current = [];
     setSubmittedAccounts(new Set());
-    clear();
+    clearPacks();
     workerWaitingRef.current = false;
     stopFallbackTimeout();
     if (workerHintTimeoutRef.current !== null) {
@@ -570,9 +603,11 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       setPhaseError(null);
     }
     setDiagnosticsPacksCount(null);
+    setReviewItems([]);
+    setReviewReady(false);
     readyStatsRef.current = { total: 0, api: 0, staticPacks: 0 };
-    previousPhaseRef.current = 'loading';
-  }, [sid, clear, stopFallbackTimeout]);
+    previousReadyRef.current = false;
+  }, [sid, clearPacks, stopFallbackTimeout]);
 
   const clearWorkerWait = React.useCallback(() => {
     workerWaitingRef.current = false;
@@ -584,6 +619,42 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       setShowWorkerHint(false);
     }
   }, []);
+
+  React.useEffect(() => {
+    if (!isMountedRef.current) {
+      return;
+    }
+    const nextOrder = reviewItems.map((item) => item.account_id);
+    setOrder((previous) => {
+      if (previous.length === nextOrder.length && previous.every((value, index) => value === nextOrder[index])) {
+        return previous;
+      }
+      return nextOrder;
+    });
+    setCards((previous) => {
+      let changed = false;
+      const nextState: CardsState = {};
+      for (const accountId of nextOrder) {
+        const existing = previous[accountId];
+        if (existing) {
+          nextState[accountId] = existing;
+        } else {
+          nextState[accountId] = { ...createInitialCardState(), status: 'waiting' };
+          changed = true;
+        }
+      }
+      if (Object.keys(previous).length !== nextOrder.length) {
+        changed = true;
+      }
+      if (!changed) {
+        const sameEntries = nextOrder.every((accountId) => previous[accountId] === nextState[accountId]);
+        if (sameEntries) {
+          return previous;
+        }
+      }
+      return nextState;
+    });
+  }, [reviewItems]);
 
   const beginWorkerWait = React.useCallback(() => {
     workerWaitingRef.current = true;
@@ -753,6 +824,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         bootstrapItemsRef.current = sanitizedBootstrapItems;
       }
 
+      setReviewItems(filteredItems);
+      setReviewReady(true);
       setOrder(filteredItems.map((item) => item.account_id));
       const initialSubmitted = new Set<string>();
       setCards(() => {
@@ -876,7 +949,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         if (!isMountedRef.current) {
           return;
         }
-        setPack(accountId, pack);
+        rememberPack(accountId, pack);
         delete retryAttemptsRef.current[accountId];
         clearRetryTimeout(accountId);
         updateCard(accountId, (state) => ({
@@ -922,7 +995,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         loadingAccountsRef.current.delete(accountId);
       }
     },
-    [clearRetryTimeout, getPack, setPack, sid, updateCard, markSubmitted, markUnsubmitted]
+    [clearRetryTimeout, getPack, rememberPack, sid, updateCard, markSubmitted, markUnsubmitted]
   );
 
   const stopPolling = React.useCallback(() => {
@@ -947,6 +1020,19 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   React.useEffect(() => {
     reviewDebugLog('RunReviewPage session', { sid, debug: REVIEW_DEBUG_ENABLED });
   }, [sid]);
+
+  React.useEffect(() => {
+    if (!reviewReady) {
+      return;
+    }
+    for (const item of reviewItems) {
+      const accountId = item?.account_id;
+      if (!accountId) {
+        continue;
+      }
+      void loadAccountPack(accountId);
+    }
+  }, [reviewReady, reviewItems, loadAccountPack]);
 
   const schedulePoll = React.useCallback(
     (sessionId: string, options?: { immediate?: boolean; reason?: string }) => {
@@ -979,7 +1065,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           globalQuestionsRef.current = extractReviewQuestions(payload);
           const reviewSection = getReviewSection(payload);
           const reviewItems = Array.isArray(reviewSection?.items) ? reviewSection.items : [];
-          const normalizedReviewItems = extractReviewListingItems(payload);
+          const normalizedReviewItems = applyReviewIndex(payload);
           const packsCount = extractPacksCount(payload);
           reviewDebugLog('poll:packs-count', { sessionId, iteration, packsCount });
           if (packsCount > 0 || reviewItems.length > 0 || normalizedReviewItems.length > 0) {
@@ -1014,7 +1100,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       pollTimeoutRef.current = window.setTimeout(poll, POLL_INTERVAL_MS);
       reviewDebugLog('poll:initial-timeout', { sessionId, delay: POLL_INTERVAL_MS });
     },
-    [beginWorkerWait, clearWorkerWait, loadPackListing, stopPolling]
+    [beginWorkerWait, clearWorkerWait, loadPackListing, applyReviewIndex, stopPolling]
   );
 
   const startStream = React.useCallback(
@@ -1140,7 +1226,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         const packsField = payloadRecord?.packs;
         const reviewSection = getReviewSection(payload);
         const reviewItems = Array.isArray(reviewSection?.items) ? reviewSection.items : [];
-        const normalizedReviewItems = extractReviewListingItems(payload);
+        const normalizedReviewItems = applyReviewIndex(payload);
         const reviewPacksField = reviewSection?.packs;
         const hasPacks =
           packsCount > 0 ||
@@ -1199,7 +1285,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           const retryPacksField = retryRecord?.packs;
           const retryReviewSection = getReviewSection(retryPayload);
           const retryReviewItems = Array.isArray(retryReviewSection?.items) ? retryReviewSection.items : [];
-          const normalizedRetryItems = extractReviewListingItems(retryPayload);
+          const normalizedRetryItems = applyReviewIndex(retryPayload);
           const retryReviewPacks = retryReviewSection?.packs;
           const hasPacksRetry =
             retryPacksCount > 0 ||
@@ -1264,6 +1350,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     clearWorkerWait,
     loadManifestInfo,
     loadPackListing,
+    applyReviewIndex,
     schedulePoll,
     startStream,
     stopPolling,
@@ -1334,7 +1421,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           };
         });
         if (updatedPack) {
-          setPack(accountId, updatedPack);
+          rememberPack(accountId, updatedPack);
         }
         markSubmitted(accountId);
       } catch (err) {
@@ -1353,14 +1440,21 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         });
       }
     },
-    [cards, sid, updateCard, setPack, showToast, markSubmitted]
+    [cards, sid, updateCard, rememberPack, showToast, markSubmitted]
   );
 
   React.useEffect(() => {
     reviewDebugLog('cards:rendered', { count: order.length, accounts: order });
   }, [order]);
 
-  const orderedCards = React.useMemo(() => order.map((accountId) => ({ accountId, state: cards[accountId] })), [order, cards]);
+  const orderedCards = React.useMemo(
+    () =>
+      order.map((accountId) => ({
+        accountId,
+        state: cards[accountId] ?? { ...createInitialCardState(), status: 'waiting' },
+      })),
+    [order, cards]
+  );
   const diagnosticsCards = React.useMemo(
     () =>
       orderedCards.map(({ accountId, state }) => ({
@@ -1376,7 +1470,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   );
   const submittedCount = submittedAccounts.size;
   const totalCards = orderedCards.length;
-  const ready = phase === 'ready';
+  const ready = reviewReady;
 
   const handleCardLoad = React.useCallback(
     (accountId: string) => {
@@ -1409,15 +1503,15 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   }, [sid, navigate]);
 
   React.useEffect(() => {
-    const previous = previousPhaseRef.current;
-    if (phase === 'ready' && previous !== 'ready') {
+    const wasReady = previousReadyRef.current;
+    if (reviewReady && !wasReady) {
       const stats = readyStatsRef.current;
       console.log(
-        `[frontend-review] ready=true items=${stats.total}, apiPacks=${stats.api}, staticPacks=${stats.staticPacks}`
+        `[frontend-review] ready=true items=${reviewItems.length}, apiPacks=${stats.api}, staticPacks=${stats.staticPacks}`
       );
     }
-    previousPhaseRef.current = phase;
-  }, [phase]);
+    previousReadyRef.current = reviewReady;
+  }, [reviewReady, reviewItems.length]);
 
   return (
     <div className={`mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8 ${allDone ? 'pb-32' : ''}`}>
@@ -1555,9 +1649,5 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
 export default function RunReviewPage() {
   const { sid } = useParams();
 
-  return (
-    <ReviewPackStoreProvider>
-      <RunReviewPageContent sid={sid} />
-    </ReviewPackStoreProvider>
-  );
+  return <RunReviewPageContent sid={sid} />;
 }

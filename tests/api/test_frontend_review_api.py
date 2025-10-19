@@ -1,4 +1,5 @@
 import importlib
+import io
 import json
 import os
 import sys
@@ -479,6 +480,175 @@ def test_frontend_review_submit_accepts_client_meta(api_client, monkeypatch):
         .read_text(encoding="utf-8")
     )
     assert stored == record
+
+
+def test_frontend_review_upload_stores_multiple_documents(api_client):
+    client, runs_root = api_client
+    sid = "U101"
+    account_id = "idx-011"
+    run_dir = runs_root / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    data = {
+        "sid": sid,
+        "account_id": account_id,
+        "claim": "paid_in_full",
+        "doc_key": "pay_proof",
+        "files": [
+            (io.BytesIO(b"%PDF-1.4\n"), "Pay Proof.pdf"),
+            (io.BytesIO(b"image-bytes"), "Receipt.PNG"),
+        ],
+    }
+
+    response = client.post(
+        f"/api/runs/{sid}/frontend/review/uploads",
+        data=data,
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    doc_ids = payload["doc_ids"]
+    assert len(doc_ids) == 2
+
+    expected_prefix = (
+        f"runs/{sid}/frontend/review/uploads/{account_id}/paid_in_full/pay_proof/"
+    )
+    project_root = runs_root.parent
+    for doc_id in doc_ids:
+        assert doc_id.startswith(expected_prefix)
+        stored_path = project_root / doc_id
+        assert stored_path.is_file()
+
+    assert doc_ids[0].endswith("_pay-proof.pdf")
+    assert doc_ids[1].endswith("_receipt.png")
+
+
+def test_frontend_review_upload_rejects_invalid_files(api_client):
+    client, runs_root = api_client
+    sid = "U102"
+    account_id = "idx-012"
+    run_dir = runs_root / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    bad_extension = {
+        "account_id": account_id,
+        "claim": "paid_in_full",
+        "doc_key": "pay_proof",
+        "files": [(io.BytesIO(b"bad"), "payload.exe")],
+    }
+    response = client.post(
+        f"/api/runs/{sid}/frontend/review/uploads",
+        data=bad_extension,
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+
+    bad_pdf = {
+        "account_id": account_id,
+        "claim": "paid_in_full",
+        "doc_key": "pay_proof",
+        "files": [(io.BytesIO(b"notpdf"), "proof.pdf")],
+    }
+    response = client.post(
+        f"/api/runs/{sid}/frontend/review/uploads",
+        data=bad_pdf,
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+
+
+def test_frontend_review_submit_persists_claims_and_evidence(api_client):
+    client, runs_root = api_client
+    sid = "S880"
+    account_id = "idx-020"
+    run_dir = runs_root / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    upload = {
+        "sid": sid,
+        "account_id": account_id,
+        "claim": "paid_in_full",
+        "doc_key": "pay_proof",
+        "files": [(io.BytesIO(b"%PDF-1.4\n"), "Proof.pdf")],
+    }
+    upload_response = client.post(
+        f"/api/runs/{sid}/frontend/review/uploads",
+        data=upload,
+        content_type="multipart/form-data",
+    )
+    assert upload_response.status_code == 200
+    doc_id = upload_response.get_json()["doc_ids"][0]
+
+    payload = {
+        "answers": {"explanation": "Complete"},
+        "claims": ["paid_in_full"],
+        "evidence": [
+            {
+                "claim": "paid_in_full",
+                "docs": [
+                    {
+                        "doc_key": "pay_proof",
+                        "doc_ids": [doc_id],
+                    }
+                ],
+            }
+        ],
+    }
+
+    response = client.post(
+        f"/api/runs/{sid}/frontend/review/response/{account_id}",
+        json=payload,
+    )
+    assert response.status_code == 200
+    record = response.get_json()
+    assert record["claims"] == payload["claims"]
+    assert record["evidence"] == payload["evidence"]
+
+    stored_path = (
+        runs_root
+        / sid
+        / "frontend"
+        / "review"
+        / "responses"
+        / "idx-020.result.json"
+    )
+    stored = json.loads(stored_path.read_text(encoding="utf-8"))
+    assert stored["claims"] == payload["claims"]
+    assert stored["evidence"] == payload["evidence"]
+
+
+def test_frontend_review_submit_rejects_outside_upload_paths(api_client):
+    client, runs_root = api_client
+    sid = "S881"
+    account_id = "idx-021"
+    run_dir = runs_root / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "answers": {"explanation": "Attempt"},
+        "claims": ["paid_in_full"],
+        "evidence": [
+            {
+                "claim": "paid_in_full",
+                "docs": [
+                    {
+                        "doc_key": "pay_proof",
+                        "doc_ids": [
+                            "runs/OTHER/frontend/review/uploads/idx-021/paid_in_full/pay_proof/file.pdf"
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    response = client.post(
+        f"/api/runs/{sid}/frontend/review/response/{account_id}",
+        json=payload,
+    )
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"] == "invalid_evidence_doc"
 
 
 def test_frontend_review_stream_emits_responses_written_event(api_client, monkeypatch):

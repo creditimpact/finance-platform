@@ -139,6 +139,50 @@ function extractReviewQuestions(source: unknown): ReviewQuestion[] {
   return questions.filter((entry): entry is ReviewQuestion => Boolean(entry && typeof entry === 'object'));
 }
 
+function extractReviewListingItems(source: unknown): FrontendReviewPackListingItem[] {
+  const reviewRecord = getReviewSection(source);
+  if (!reviewRecord) {
+    return [];
+  }
+  const items = reviewRecord.items;
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  const normalized: FrontendReviewPackListingItem[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const accountCandidate = record.account_id ?? record.id ?? record.accountId;
+    const accountId =
+      typeof accountCandidate === 'string' && accountCandidate.trim() !== ''
+        ? accountCandidate.trim()
+        : undefined;
+    if (!accountId) {
+      continue;
+    }
+
+    let file: string | undefined;
+    for (const key of ['file', 'path', 'static_path', 'staticPath']) {
+      const value = record[key];
+      if (typeof value === 'string' && value.trim() !== '') {
+        file = value;
+        break;
+      }
+    }
+
+    if (file) {
+      normalized.push({ account_id: accountId, file });
+    } else {
+      normalized.push({ account_id: accountId });
+    }
+  }
+
+  return normalized;
+}
+
 function cleanAnswers(answers: AccountQuestionAnswers): Record<string, string> {
   const explanation = answers.explanation;
   if (typeof explanation === 'string' && explanation.trim() !== '') {
@@ -407,6 +451,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const hasShownLiveUpdateToastRef = React.useRef(false);
   const fallbackTimeoutRef = React.useRef<number | null>(null);
   const lastNetworkStatusRef = React.useRef<string | null>(null);
+  const bootstrapItemsRef = React.useRef<FrontendReviewPackListingItem[]>([]);
 
   const stopFallbackTimeout = React.useCallback(() => {
     if (fallbackTimeoutRef.current !== null) {
@@ -448,6 +493,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     loadingRef.current = false;
     packListingRef.current = {};
     loadingAccountsRef.current = new Set();
+    bootstrapItemsRef.current = [];
     setSubmittedAccounts(new Set());
     clear();
     workerWaitingRef.current = false;
@@ -576,7 +622,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     });
   }, []);
 
-  const loadPackListing = React.useCallback(async () => {
+  const loadPackListing = React.useCallback(async (options?: { fallbackItems?: FrontendReviewPackListingItem[] }) => {
     if (!sid || loadingRef.current || loadedRef.current) {
       return;
     }
@@ -595,9 +641,29 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         return;
       }
 
-      const filteredItems = items.filter((item): item is FrontendReviewPackListingItem & { account_id: string } => {
-        return typeof item.account_id === 'string' && item.account_id.trim() !== '';
-      });
+      const fallbackItems = Array.isArray(options?.fallbackItems)
+        ? options?.fallbackItems
+        : bootstrapItemsRef.current;
+      if (Array.isArray(options?.fallbackItems)) {
+        bootstrapItemsRef.current = options.fallbackItems;
+      }
+
+      const sourceItems = items.length > 0 ? items : fallbackItems ?? [];
+      const filteredItems = sourceItems
+        .map((item) => {
+          if (!item || typeof item !== 'object') {
+            return null;
+          }
+          const accountId =
+            typeof item.account_id === 'string' && item.account_id.trim() !== ''
+              ? item.account_id.trim()
+              : null;
+          if (!accountId) {
+            return null;
+          }
+          return { account_id: accountId, file: typeof item.file === 'string' ? item.file : undefined };
+        })
+        .filter((item): item is FrontendReviewPackListingItem & { account_id: string } => Boolean(item));
 
       reviewDebugLog('loadPackListing:received', {
         url: packsUrl,
@@ -607,6 +673,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       const basePath = `/runs/${encodeURIComponent(sid)}`;
       const baseUrl = apiUrl(basePath);
       const listingMap: Record<string, PackListingEntry> = {};
+      const sanitizedBootstrapItems: FrontendReviewPackListingItem[] = [];
       for (const item of filteredItems) {
         const normalizedFile = normalizeListingFilePath(item.file);
         let staticUrl: string | undefined;
@@ -625,8 +692,14 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         listingMap[item.account_id] = normalizedFile
           ? { ...item, file: normalizedFile, staticUrl }
           : { ...item, staticUrl };
+        sanitizedBootstrapItems.push(
+          normalizedFile ? { account_id: item.account_id, file: normalizedFile } : { account_id: item.account_id }
+        );
       }
       packListingRef.current = listingMap;
+      if (sanitizedBootstrapItems.length > 0) {
+        bootstrapItemsRef.current = sanitizedBootstrapItems;
+      }
 
       setOrder(filteredItems.map((item) => item.account_id));
       const initialSubmitted = new Set<string>();
@@ -844,13 +917,17 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           globalQuestionsRef.current = extractReviewQuestions(payload);
           const reviewSection = getReviewSection(payload);
           const reviewItems = Array.isArray(reviewSection?.items) ? reviewSection.items : [];
+          const normalizedReviewItems = extractReviewListingItems(payload);
           const packsCount = extractPacksCount(payload);
           reviewDebugLog('poll:packs-count', { sessionId, iteration, packsCount });
-          if (packsCount > 0 || reviewItems.length > 0) {
+          if (packsCount > 0 || reviewItems.length > 0 || normalizedReviewItems.length > 0) {
             reviewDebugLog('poll:packs-ready', { sessionId, iteration, packsCount });
             stopPolling();
             clearWorkerWait();
-            await loadPackListing();
+            if (normalizedReviewItems.length > 0) {
+              bootstrapItemsRef.current = normalizedReviewItems;
+            }
+            await loadPackListing({ fallbackItems: normalizedReviewItems });
             return;
           }
           lastNetworkStatusRef.current = `Poll #${iteration} returned no review packs (packs_count=${packsCount}).`;
@@ -909,7 +986,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             stopPolling();
             clearWorkerWait();
             lastNetworkStatusRef.current = 'Received packs_ready event.';
-            await loadPackListing();
+            await loadPackListing({ fallbackItems: bootstrapItemsRef.current });
           } catch (err) {
             reviewDebugLog('sse:event-error', { url, sessionId, error: err });
             console.error('Failed to load packs after packs_ready', err);
@@ -1001,10 +1078,12 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         const packsField = payloadRecord?.packs;
         const reviewSection = getReviewSection(payload);
         const reviewItems = Array.isArray(reviewSection?.items) ? reviewSection.items : [];
+        const normalizedReviewItems = extractReviewListingItems(payload);
         const reviewPacksField = reviewSection?.packs;
         const hasPacks =
           packsCount > 0 ||
           reviewItems.length > 0 ||
+          normalizedReviewItems.length > 0 ||
           (Array.isArray(reviewPacksField) && reviewPacksField.length > 0) ||
           (Array.isArray(packsField) && packsField.length > 0);
 
@@ -1015,9 +1094,13 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           hasPacks,
         });
 
+        if (normalizedReviewItems.length > 0) {
+          bootstrapItemsRef.current = normalizedReviewItems;
+        }
+
         if (hasPacks) {
           reviewDebugLog('bootstrap:packs-ready', { url: indexUrl, sessionId: sid, packsCount });
-          await loadPackListing();
+          await loadPackListing({ fallbackItems: normalizedReviewItems });
           return;
         }
 
@@ -1054,10 +1137,12 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           const retryPacksField = retryRecord?.packs;
           const retryReviewSection = getReviewSection(retryPayload);
           const retryReviewItems = Array.isArray(retryReviewSection?.items) ? retryReviewSection.items : [];
+          const normalizedRetryItems = extractReviewListingItems(retryPayload);
           const retryReviewPacks = retryReviewSection?.packs;
           const hasPacksRetry =
             retryPacksCount > 0 ||
             retryReviewItems.length > 0 ||
+            normalizedRetryItems.length > 0 ||
             (Array.isArray(retryReviewPacks) && retryReviewPacks.length > 0) ||
             (Array.isArray(retryPacksField) && retryPacksField.length > 0);
           lastNetworkStatusRef.current = hasPacksRetry
@@ -1065,7 +1150,10 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
             : `Timeout refetch returned no review packs (packs_count=${retryPacksCount}).`;
           if (hasPacksRetry) {
             reviewDebugLog('timeout:packs-ready', { url: indexUrl, sessionId: sid, retryPacksCount });
-            await loadPackListing();
+            if (normalizedRetryItems.length > 0) {
+              bootstrapItemsRef.current = normalizedRetryItems;
+            }
+            await loadPackListing({ fallbackItems: normalizedRetryItems });
             if (isMountedRef.current) {
               setPhase('ready');
             }
@@ -1248,7 +1336,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       ? 'Waiting for worker…'
       : 'Waiting for review packs…'
     : 'Loading review packs…';
-  const showNoCardsMessage = orderedCards.length === 0 && phase !== 'error' && phase !== 'loading';
+  const showNoCardsMessage = phase === 'ready' && orderedCards.length === 0;
 
   const handleFinishReview = React.useCallback(() => {
     if (!sid) {

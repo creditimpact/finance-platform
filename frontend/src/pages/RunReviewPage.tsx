@@ -1376,6 +1376,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   );
   const submittedCount = submittedAccounts.size;
   const totalCards = orderedCards.length;
+  const ready = phase === 'ready';
 
   const handleCardLoad = React.useCallback(
     (accountId: string) => {
@@ -1392,13 +1393,12 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   );
 
   const allDone = totalCards > 0 && submittedCount === totalCards;
-  const isLoadingPhase = phase === 'loading' || phase === 'waiting';
+  const isLoadingPhase = !ready && (phase === 'loading' || phase === 'waiting');
   const loaderMessage = phase === 'waiting'
     ? showWorkerHint
       ? 'Waiting for worker…'
       : 'Waiting for review packs…'
     : 'Loading review packs…';
-  const showNoCardsMessage = phase === 'ready' && orderedCards.length === 0;
 
   const handleFinishReview = React.useCallback(() => {
     if (!sid) {
@@ -1455,25 +1455,27 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         </div>
       ) : null}
 
-      {showNoCardsMessage ? (
-        <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">No review cards yet</div>
+      {ready ? (
+        orderedCards.length > 0 ? (
+          <div className="review-grid space-y-6">
+            {orderedCards.map(({ accountId, state }) => (
+              <ReviewCardContainer
+                key={accountId}
+                accountId={accountId}
+                state={state ?? createInitialCardState()}
+                onChange={(answers) => handleAnswerChange(accountId, answers)}
+                onSubmit={() => handleSubmit(accountId)}
+                onLoad={handleCardLoad}
+                onRetry={handleRetryLoad}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">No review cards yet</div>
+        )
       ) : null}
 
-      <div className="space-y-6">
-        {orderedCards.map(({ accountId, state }) => (
-          <ReviewCardContainer
-            key={accountId}
-            accountId={accountId}
-            state={state ?? createInitialCardState()}
-            onChange={(answers) => handleAnswerChange(accountId, answers)}
-            onSubmit={() => handleSubmit(accountId)}
-            onLoad={handleCardLoad}
-            onRetry={handleRetryLoad}
-          />
-        ))}
-      </div>
-
-      {allDone ? (
+      {ready && allDone ? (
         <div className="flex flex-col items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="font-semibold">All set!</p>
@@ -1490,13 +1492,13 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         </div>
       ) : null}
 
-      {orderedCards.length > 0 ? (
+      {ready && orderedCards.length > 0 ? (
         <p className="text-xs text-slate-500">
           {submittedCount} of {orderedCards.length} cards submitted.
         </p>
       ) : null}
 
-      {allDone ? (
+      {ready && allDone ? (
         <div className="fixed bottom-0 left-0 right-0 border-t border-slate-200 bg-white shadow-lg">
           <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
             <div>

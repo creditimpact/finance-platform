@@ -33,6 +33,7 @@ import { DEV_DIAGNOSTICS_ENABLED } from '../utils/devDiagnostics';
 import { shouldEnableReviewClaims } from '../config/featureFlags';
 import {
   hasMissingRequiredDocs,
+  normalizeClaims,
   normalizeExistingAnswers,
   prepareAnswersPayload,
 } from '../utils/reviewClaims';
@@ -1370,10 +1371,15 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         return;
       }
       const explanation = card.answers.explanation;
-      if (typeof explanation !== 'string' || explanation.trim() === '') {
+      const hasExplanation =
+        typeof explanation === 'string' && explanation.trim() !== '';
+      const normalizedClaims = REVIEW_CLAIMS_ENABLED
+        ? normalizeClaims(card.answers.claims)
+        : [];
+      if (!hasExplanation && normalizedClaims.length === 0) {
         updateCard(accountId, (state) => ({
           ...state,
-          error: 'Please provide an explanation before submitting.',
+          error: 'Please add an explanation or select at least one claim before submitting.',
           errorDetails: null,
         }));
         return;

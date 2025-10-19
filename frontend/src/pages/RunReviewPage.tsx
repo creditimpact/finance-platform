@@ -10,7 +10,7 @@ import {
   apiUrl,
   buildFrontendReviewStreamUrl,
   buildRunFrontendManifestUrl,
-  fetchFrontendReviewAccount,
+  fetchReviewPack,
   fetchRunFrontendManifest,
   fetchRunFrontendReviewIndex,
   fetchRunReviewPackListing,
@@ -25,6 +25,7 @@ import type {
   FrontendReviewPackListingItem,
   FrontendReviewResponse,
   RunFrontendManifestResponse,
+  ReviewQuestion,
 } from '../api.ts';
 import { ReviewPackStoreProvider, useReviewPackStore } from '../stores/reviewPackStore';
 import { useToast } from '../components/ToastProvider';
@@ -77,22 +78,65 @@ function toNumber(value: unknown): number | null {
 }
 
 function extractPacksCount(source: unknown): number {
-  if (!source || typeof source !== 'object') {
-    return 0;
+  const records: Array<Record<string, unknown> | null> = [];
+  const root = toRecord(source);
+  const reviewRecord = getReviewSection(source);
+  if (reviewRecord) {
+    records.push(reviewRecord);
   }
-  const record = source as Record<string, unknown>;
-  const direct = toNumber(record.packs_count);
-  if (direct !== null) {
-    return direct;
+  if (root) {
+    records.push(root);
   }
-  const counts = record.counts;
-  if (counts && typeof counts === 'object') {
-    const value = toNumber((counts as Record<string, unknown>).packs);
-    if (value !== null) {
-      return value;
+
+  for (const record of records) {
+    if (!record) {
+      continue;
+    }
+    const direct = toNumber(record.packs_count);
+    if (direct !== null) {
+      return direct;
+    }
+    const counts = toRecord(record.counts);
+    if (counts) {
+      const value = toNumber(counts.packs);
+      if (value !== null) {
+        return value;
+      }
     }
   }
+
   return 0;
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function getReviewSection(source: unknown): Record<string, unknown> | null {
+  const root = toRecord(source);
+  if (!root) {
+    return null;
+  }
+  const frontend = toRecord(root.frontend);
+  if (!frontend) {
+    return null;
+  }
+  return toRecord(frontend.review);
+}
+
+function extractReviewQuestions(source: unknown): ReviewQuestion[] {
+  const reviewRecord = getReviewSection(source);
+  if (!reviewRecord) {
+    return [];
+  }
+  const questions = reviewRecord.questions;
+  if (!Array.isArray(questions)) {
+    return [];
+  }
+  return questions.filter((entry): entry is ReviewQuestion => Boolean(entry && typeof entry === 'object'));
 }
 
 function cleanAnswers(answers: AccountQuestionAnswers): Record<string, string> {
@@ -354,6 +398,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
   const pollIterationRef = React.useRef(0);
   const eventSourceRef = React.useRef<EventSource | null>(null);
   const packListingRef = React.useRef<Record<string, PackListingEntry>>({});
+  const globalQuestionsRef = React.useRef<ReviewQuestion[]>([]);
   const loadingAccountsRef = React.useRef<Set<string>>(new Set());
   const workerHintTimeoutRef = React.useRef<number | null>(null);
   const workerWaitingRef = React.useRef(false);
@@ -686,15 +731,13 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
 
       try {
         const listing = packListingRef.current[accountId];
-        const staticReference =
-          typeof listing?.staticUrl === 'string' && listing.staticUrl.trim() !== ''
-            ? listing.staticUrl
-            : typeof listing?.file === 'string'
+        const fallbackPath =
+          typeof listing?.file === 'string' && listing.file.trim() !== ''
             ? listing.file
+            : typeof listing?.staticUrl === 'string' && listing.staticUrl.trim() !== ''
+            ? listing.staticUrl
             : undefined;
-        const pack = await fetchFrontendReviewAccount<ReviewAccountPack>(sid, accountId, {
-          staticPath: staticReference,
-        });
+        const pack = await fetchReviewPack(sid, accountId, fallbackPath, globalQuestionsRef.current);
         if (!isMountedRef.current) {
           return;
         }
@@ -798,9 +841,12 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           if (!isMountedRef.current) {
             return;
           }
+          globalQuestionsRef.current = extractReviewQuestions(payload);
+          const reviewSection = getReviewSection(payload);
+          const reviewItems = Array.isArray(reviewSection?.items) ? reviewSection.items : [];
           const packsCount = extractPacksCount(payload);
           reviewDebugLog('poll:packs-count', { sessionId, iteration, packsCount });
-          if (packsCount > 0) {
+          if (packsCount > 0 || reviewItems.length > 0) {
             reviewDebugLog('poll:packs-ready', { sessionId, iteration, packsCount });
             stopPolling();
             clearWorkerWait();
@@ -928,6 +974,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
     setManifest(null);
     setCards({});
     setOrder([]);
+    globalQuestionsRef.current = [];
 
     let cancelled = false;
     const isCancelled = () => cancelled;
@@ -946,13 +993,20 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           return;
         }
 
+        globalQuestionsRef.current = extractReviewQuestions(payload);
         const packsCount = extractPacksCount(payload);
         setDiagnosticsPacksCount(packsCount);
         const payloadRecord =
           payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : null;
         const packsField = payloadRecord?.packs;
+        const reviewSection = getReviewSection(payload);
+        const reviewItems = Array.isArray(reviewSection?.items) ? reviewSection.items : [];
+        const reviewPacksField = reviewSection?.packs;
         const hasPacks =
-          packsCount > 0 || (Array.isArray(packsField) && packsField.length > 0);
+          packsCount > 0 ||
+          reviewItems.length > 0 ||
+          (Array.isArray(reviewPacksField) && reviewPacksField.length > 0) ||
+          (Array.isArray(packsField) && packsField.length > 0);
 
         reviewDebugLog('bootstrap:packs-count', {
           url: indexUrl,
@@ -993,12 +1047,19 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
           if (!isMountedRef.current || loadedRef.current) {
             return;
           }
+          globalQuestionsRef.current = extractReviewQuestions(retryPayload);
           const retryPacksCount = extractPacksCount(retryPayload);
           const retryRecord =
             retryPayload && typeof retryPayload === 'object' ? (retryPayload as Record<string, unknown>) : null;
           const retryPacksField = retryRecord?.packs;
+          const retryReviewSection = getReviewSection(retryPayload);
+          const retryReviewItems = Array.isArray(retryReviewSection?.items) ? retryReviewSection.items : [];
+          const retryReviewPacks = retryReviewSection?.packs;
           const hasPacksRetry =
-            retryPacksCount > 0 || (Array.isArray(retryPacksField) && retryPacksField.length > 0);
+            retryPacksCount > 0 ||
+            retryReviewItems.length > 0 ||
+            (Array.isArray(retryReviewPacks) && retryReviewPacks.length > 0) ||
+            (Array.isArray(retryPacksField) && retryPacksField.length > 0);
           lastNetworkStatusRef.current = hasPacksRetry
             ? `Timeout refetch found review packs (packs_count=${retryPacksCount}).`
             : `Timeout refetch returned no review packs (packs_count=${retryPacksCount}).`;

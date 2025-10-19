@@ -15,6 +15,8 @@ import {
   fetchRunFrontendReviewIndex,
   fetchRunReviewPackListing,
   joinRunAsset,
+  isAbsUrl,
+  normalizeStaticPackPath,
   submitFrontendReviewAnswers,
   FrontendReviewAccountError,
   FetchJsonError,
@@ -198,7 +200,7 @@ function normalizeListingFilePath(path: string | null | undefined): string | und
   if (typeof path !== 'string') {
     return undefined;
   }
-  return path.replace(/\\/g, '/');
+  return normalizeStaticPackPath(path) ?? undefined;
 }
 
 interface ReviewCardContainerProps {
@@ -562,10 +564,19 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       const listingMap: Record<string, PackListingEntry> = {};
       for (const item of filteredItems) {
         const normalizedFile = normalizeListingFilePath(item.file);
-        const staticUrl =
-          normalizedFile && normalizedFile.trim() !== ''
-            ? joinRunAsset(baseUrl, normalizedFile)
-            : undefined;
+        let staticUrl: string | undefined;
+        if (normalizedFile && normalizedFile.trim() !== '') {
+          if (isAbsUrl(normalizedFile)) {
+            staticUrl = normalizedFile;
+          } else if (
+            normalizedFile.startsWith('/runs/') ||
+            normalizedFile.startsWith('runs/')
+          ) {
+            staticUrl = normalizedFile.startsWith('/') ? normalizedFile : `/${normalizedFile}`;
+          } else {
+            staticUrl = joinRunAsset(baseUrl, normalizedFile);
+          }
+        }
         listingMap[item.account_id] = normalizedFile
           ? { ...item, file: normalizedFile, staticUrl }
           : { ...item, staticUrl };

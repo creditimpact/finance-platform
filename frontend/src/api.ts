@@ -128,8 +128,25 @@ function joinFrontendPath(base: string, child: string): string {
   return [trimSlashes(base), trimSlashes(child)].filter(Boolean).join('/');
 }
 
-function isAbsoluteUrl(candidate: string): boolean {
-  return /^[a-z][a-z0-9+.-]*:\/\//i.test(candidate) || candidate.startsWith('//');
+export function isAbsUrl(s: string): boolean {
+  return /^https?:\/\//i.test(s);
+}
+
+export function normalizeStaticPackPath(p?: string | null): string | null {
+  const s = (p || '').replace(/\\/g, '/').trim();
+  if (!s) return null;
+
+  if (isAbsUrl(s)) return s;
+
+  if (s.startsWith('/runs/') || s.startsWith('runs/')) {
+    return s.startsWith('/') ? s : `/${s}`;
+  }
+
+  if (s.startsWith('/frontend/') || s.startsWith('frontend/')) {
+    return s.startsWith('/') ? s : `/${s}`;
+  }
+
+  return `/frontend/${s.replace(/^\/+/, '')}`;
 }
 
 function buildRunApiUrl(sessionId: string, path: string): string {
@@ -410,9 +427,9 @@ export async function fetchFrontendReviewManifest(
             ? entry.path
             : undefined;
 
-        const normalizedPath = rawPath
-          ? ensureFrontendPath(rawPath, joinFrontendPath(packsDirPath, `${entry.account_id}.json`))
-          : joinFrontendPath(packsDirPath, `${entry.account_id}.json`);
+        const defaultPath = joinFrontendPath(packsDirPath, `${entry.account_id}.json`);
+        const normalizedPath =
+          normalizeStaticPackPath(rawPath) ?? normalizeStaticPackPath(defaultPath) ?? defaultPath;
 
         pack.pack_path = normalizedPath;
         pack.pack_path_rel = stripFrontendPrefix(normalizedPath);
@@ -483,21 +500,6 @@ export async function fetchRunReviewPackListing(
 type FetchFrontendReviewAccountOptions = RequestInit & {
   staticPath?: string | null | undefined;
 };
-
-function normalizeStaticPackPath(path: string): string {
-  const replaced = path.replace(/\\/g, '/').trim();
-  if (!replaced) {
-    return replaced;
-  }
-  if (isAbsoluteUrl(replaced)) {
-    return replaced;
-  }
-  const trimmed = trimSlashes(replaced);
-  if (!trimmed) {
-    return trimmed;
-  }
-  return ensureFrontendPath(trimmed, trimmed);
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -650,13 +652,12 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
   }
 
   let init: RequestInit | undefined;
-  let staticPath: string | undefined;
+  let staticPath: string | null = null;
 
   if (initOrOptions && typeof initOrOptions === 'object' && 'staticPath' in initOrOptions) {
     const { staticPath: providedStaticPath, ...rest } = initOrOptions as FetchFrontendReviewAccountOptions;
     if (typeof providedStaticPath === 'string' && providedStaticPath.trim() !== '') {
-      const normalized = normalizeStaticPackPath(providedStaticPath);
-      staticPath = normalized || undefined;
+      staticPath = normalizeStaticPackPath(providedStaticPath);
     }
     init = rest as RequestInit;
   } else {
@@ -664,16 +665,17 @@ export async function fetchFrontendReviewAccount<T = AccountPack>(
   }
 
   if (!staticPath) {
-    const defaultStaticPath = normalizeStaticPackPath(
-      joinFrontendPath('frontend/review/packs', `${accountId}.json`)
-    );
-    staticPath = defaultStaticPath || undefined;
+    staticPath = normalizeStaticPackPath(joinFrontendPath('frontend/review/packs', `${accountId}.json`));
   }
 
   const staticUrl = staticPath
-    ? isAbsoluteUrl(staticPath)
+    ? isAbsUrl(staticPath)
       ? staticPath
-      : buildRunAssetUrl(sessionId, staticPath)
+      : staticPath.startsWith('/runs/') || staticPath.startsWith('runs/')
+        ? staticPath.startsWith('/')
+          ? staticPath
+          : `/${staticPath}`
+        : buildRunAssetUrl(sessionId, staticPath)
     : null;
   const failureMessages: string[] = [];
   const attemptRecords: FrontendReviewAccountAttempt[] = [];

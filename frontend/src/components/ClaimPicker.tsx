@@ -127,44 +127,58 @@ function ClaimPicker({
           }
           const requiredDocs = claim.requires;
           const optionalDocs = claim.optional ?? [];
+          const renderDocUpload = (docKey: DocKey, options: { required: boolean }) => {
+            const uploaded = attachments[docKey] ?? [];
+            const hasDocs = Array.isArray(uploaded) && uploaded.length > 0;
+            return (
+              <div
+                key={docKey}
+                className={cn(
+                  'rounded-md border bg-white p-3',
+                  options.required ? 'border-slate-200' : 'border-dashed border-slate-300'
+                )}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">{formatDocKey(docKey)}</p>
+                    <p className="text-xs text-slate-500">
+                      {options.required
+                        ? 'Required document'
+                        : 'Optional, but helps strengthen the dispute.'}
+                    </p>
+                  </div>
+                  {hasDocs ? (
+                    <span role="img" aria-label="Document uploaded" className="text-base">
+                      ✅
+                    </span>
+                  ) : null}
+                </div>
+                <input
+                  type="file"
+                  multiple
+                  onChange={handleFileChange(claim.key, docKey)}
+                  className="mt-2 block text-sm text-slate-700 file:mr-3 file:rounded-md file:border file:border-slate-300 file:bg-white file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-50"
+                />
+                <p className="mt-2 text-xs text-slate-500">{getDocTip(docKey)}</p>
+              </div>
+            );
+          };
           return (
             <details key={claim.key} className="rounded-lg border border-slate-200 bg-slate-50 p-4" open>
               <summary className="cursor-pointer text-sm font-semibold text-slate-900">
                 Upload documents for {claim.title}
               </summary>
               <div className="mt-3 space-y-3">
-                {requiredDocs.map((docKey) => {
-                  const uploaded = attachments[docKey] ?? [];
-                  const hasDocs = Array.isArray(uploaded) && uploaded.length > 0;
-                  return (
-                    <div key={docKey} className="rounded-md border border-slate-200 bg-white p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm font-semibold text-slate-900">{formatDocKey(docKey)}</p>
-                        {hasDocs ? (
-                          <span role="img" aria-label="Document uploaded" className="text-base">
-                            ✅
-                          </span>
-                        ) : null}
-                      </div>
-                      <input
-                        type="file"
-                        multiple
-                        onChange={handleFileChange(claim.key, docKey)}
-                        className="mt-2 block text-sm text-slate-700 file:mr-3 file:rounded-md file:border file:border-slate-300 file:bg-white file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-50"
-                      />
-                      <p className="mt-2 text-xs text-slate-500">{getDocTip(docKey)}</p>
-                    </div>
-                  );
-                })}
+                {requiredDocs.map((docKey) => renderDocUpload(docKey, { required: true }))}
                 {optionalDocs.length > 0 ? (
-                  <div className="rounded-md border border-dashed border-slate-300 bg-white p-3">
-                    <p className="text-sm font-semibold text-slate-900">Optional supporting docs</p>
-                    <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-600">
-                      {optionalDocs.map((docKey) => (
-                        <li key={docKey}>{formatDocKey(docKey)}</li>
-                      ))}
-                    </ul>
-                  </div>
+                  <details className="rounded-md border border-dashed border-slate-300 bg-white p-3">
+                    <summary className="cursor-pointer text-sm font-semibold text-slate-900">
+                      Add optional docs (recommended)
+                    </summary>
+                    <div className="mt-3 space-y-3">
+                      {optionalDocs.map((docKey) => renderDocUpload(docKey, { required: false }))}
+                    </div>
+                  </details>
                 ) : null}
               </div>
             </details>

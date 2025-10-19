@@ -1231,6 +1231,14 @@ def api_frontend_review_answer(sid: str, account_id: str):
                     min_upload_failures[claim_key] = claim_entry.min_uploads
 
     if missing_docs or min_upload_failures:
+        logger.info(
+            "FRONTEND_REVIEW_MISSING_DOCS sid=%s account_id=%s claims=%s missing=%s min_uploads=%s",
+            sid,
+            account_id,
+            selected_claims,
+            missing_docs,
+            min_upload_failures,
+        )
         return (
             jsonify(
                 {
@@ -1250,6 +1258,15 @@ def api_frontend_review_answer(sid: str, account_id: str):
     if isinstance(explanation_value, str):
         trimmed = explanation_value.strip()
         sanitized_answers["explanation"] = trimmed if trimmed else ""
+
+    if selected_claims:
+        logger.info(
+            "FRONTEND_REVIEW_SELECTED_CLAIMS sid=%s account_id=%s claims=%s attachments=%s",
+            sid,
+            account_id,
+            selected_claims,
+            sorted(attachments_map.keys()),
+        )
 
     if selected_claims:
         sanitized_answers["selected_claims"] = selected_claims

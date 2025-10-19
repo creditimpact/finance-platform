@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -63,6 +64,19 @@ def _next_chunk(iterator):
         return next(iterator)
     except StopIteration:  # pragma: no cover - defensive
         raise AssertionError("stream ended unexpectedly")
+
+
+def test_review_claims_schema_endpoint_returns_shared_schema(api_client):
+    client, _ = api_client
+
+    response = client.get("/api/review/claims-schema")
+    assert response.status_code == 200
+    data = response.get_json()
+
+    schema_path = Path(__file__).resolve().parents[2] / "shared" / "claims_schema.json"
+    expected = json.loads(schema_path.read_text(encoding="utf-8"))
+
+    assert data == expected
 
 
 def test_frontend_manifest_endpoint_supports_filter(api_client):
@@ -127,6 +141,34 @@ def test_frontend_manifest_section_preserves_existing_review_block(api_client):
         "sid": sid,
         "frontend": manifest_payload["frontend"],
     }
+
+
+def test_frontend_review_pack_includes_resolved_claims(api_client):
+    client, runs_root = api_client
+    sid = "S330"
+    account_id = "idx-330"
+    pack_path = runs_root / sid / "frontend" / "review" / "packs" / f"{account_id}.json"
+    pack_payload = {
+        "pack": {
+            "account_id": account_id,
+            "primary_issue": "collection",
+            "display": {"holder": "Test Holder"},
+        }
+    }
+    _write_json(pack_path, pack_payload)
+
+    response = client.get(f"/api/runs/{sid}/frontend/review/accounts/{account_id}")
+    assert response.status_code == 200
+    data = response.get_json()
+
+    claims = data.get("claims")
+    assert isinstance(claims, dict)
+    assert claims.get("autoAttachBase")
+    items = claims.get("items")
+    assert isinstance(items, list)
+    assert items
+    keys = {entry.get("key") for entry in items if isinstance(entry, dict)}
+    assert "paid_in_full" in keys
 
 
 def test_frontend_index_returns_payload(api_client):
@@ -683,6 +725,81 @@ def test_frontend_review_stream_emits_responses_written_event(api_client, monkey
     assert account_id in text
 
     response.close()
+
+
+def test_frontend_review_submit_requires_docs_for_claim(api_client):
+    client, runs_root = api_client
+    sid = "S882"
+    account_id = "idx-022"
+    pack_path = runs_root / sid / "frontend" / "review" / "packs" / f"{account_id}.json"
+    _write_json(pack_path, {"account_id": account_id, "primary_issue": "collection"})
+
+    missing_payload = {"answers": {"selected_claims": ["paid_in_full"]}}
+    missing_response = client.post(
+        f"/api/runs/{sid}/frontend/review/response/{account_id}",
+        json=missing_payload,
+    )
+    assert missing_response.status_code == 400
+    missing_data = missing_response.get_json()
+    assert missing_data["error"] == "missing_required_docs"
+    details = missing_data.get("details", {})
+    assert set(details.get("missing", {}).get("paid_in_full", [])) == {
+        "paid_in_full_letter",
+        "proof_of_payment",
+    }
+
+    uploads_dir = runs_root / sid / "frontend" / "review" / "uploads"
+    payment_doc = (
+        uploads_dir
+        / account_id
+        / "paid_in_full"
+        / "proof_of_payment"
+        / "statement.pdf"
+    )
+    payment_doc.parent.mkdir(parents=True, exist_ok=True)
+    payment_doc.write_bytes(b"%PDF-1.4\n")
+
+    letter_doc = (
+        uploads_dir
+        / account_id
+        / "paid_in_full"
+        / "paid_in_full_letter"
+        / "letter.pdf"
+    )
+    letter_doc.parent.mkdir(parents=True, exist_ok=True)
+    letter_doc.write_bytes(b"%PDF-1.4\n")
+
+    doc_payment_id = payment_doc.resolve().relative_to(runs_root.parent).as_posix()
+    doc_letter_id = letter_doc.resolve().relative_to(runs_root.parent).as_posix()
+
+    success_payload = {
+        "answers": {
+            "selected_claims": ["paid_in_full"],
+            "attachments": {
+                "proof_of_payment": doc_payment_id,
+                "paid_in_full_letter": doc_letter_id,
+            },
+        }
+    }
+
+    success_response = client.post(
+        f"/api/runs/{sid}/frontend/review/response/{account_id}",
+        json=success_payload,
+    )
+    assert success_response.status_code == 200
+    record = success_response.get_json()
+    assert record["answers"]["selected_claims"] == ["paid_in_full"]
+    attachments = record["answers"]["attachments"]
+    assert attachments["proof_of_payment"] == doc_payment_id
+    assert attachments["paid_in_full_letter"] == doc_letter_id
+
+    stored_path = (
+        runs_root / sid / "frontend" / "review" / "responses" / "idx-022.result.json"
+    )
+    stored = json.loads(stored_path.read_text(encoding="utf-8"))
+    assert stored["answers"]["selected_claims"] == ["paid_in_full"]
+    assert stored["answers"]["attachments"]["proof_of_payment"] == doc_payment_id
+    assert stored["answers"]["attachments"]["paid_in_full_letter"] == doc_letter_id
 
 
 def test_frontend_review_complete_endpoint_creates_marker(api_client):

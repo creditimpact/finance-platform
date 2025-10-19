@@ -349,6 +349,53 @@ def _sanitize_upload_component(value: str, default: str = "item") -> str:
     return sanitized or default
 
 
+_REVIEW_ALLOWED_UPLOAD_EXTENSIONS = {"pdf", "jpg", "jpeg", "png", "doc", "docx"}
+_REVIEW_UPLOAD_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+_REVIEW_DOC_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _slugify_upload_name(filename: str) -> str:
+    name = Path(filename or "document").name
+    stem = Path(name).stem
+    slug_source = stem.lower().strip()
+    if not slug_source:
+        slug_source = "document"
+    slug = re.sub(r"[^a-z0-9]+", "-", slug_source).strip("-")
+    return slug or "document"
+
+
+def _extract_upload_extension(filename: str) -> str:
+    suffix = Path(filename or "").suffix
+    if not suffix:
+        return ""
+    return suffix.lstrip(".").lower()
+
+
+def _resolve_review_doc_id(doc_id: str, run_dir: Path, uploads_dir: Path) -> Path | None:
+    project_root = _runs_root_path().parent
+    try:
+        candidate = _safe_relative_path(project_root, doc_id)
+    except ValueError:
+        return None
+
+    uploads_base = uploads_dir.resolve(strict=False)
+    try:
+        candidate.relative_to(uploads_base)
+    except ValueError:
+        return None
+
+    if not candidate.is_file():
+        return None
+
+    return candidate
+
+
+def _doc_id_for_path(path: Path) -> str:
+    project_root = _runs_root_path().parent
+    resolved = path.resolve(strict=False)
+    return resolved.relative_to(project_root).as_posix()
+
+
 def _merge_collectors(
     problems: list[Mapping[str, Any]] | None,
     logical: list[Mapping[str, Any]] | None,
@@ -1000,6 +1047,88 @@ def api_frontend_review_answer(sid: str, account_id: str):
     if client_meta is not None and not isinstance(client_meta, Mapping):
         return jsonify({"error": "invalid_client_meta"}), 400
 
+    stage_config = load_frontend_stage_config(run_dir)
+    uploads_dir = stage_config.uploads_dir
+
+    claims_payload = data.get("claims")
+    claims_list: list[str] | None = None
+    if claims_payload is not None:
+        if not isinstance(claims_payload, list):
+            return jsonify({"error": "invalid_claims"}), 400
+        dedup: list[str] = []
+        seen: set[str] = set()
+        for value in claims_payload:
+            if not isinstance(value, str):
+                return jsonify({"error": "invalid_claims"}), 400
+            key = value.strip()
+            if key not in CLAIMS:
+                return jsonify({"error": "invalid_claims"}), 400
+            if key in seen:
+                continue
+            seen.add(key)
+            dedup.append(key)
+        claims_list = dedup
+
+    evidence_payload = data.get("evidence")
+    evidence_list: list[dict[str, Any]] | None = None
+    if evidence_payload is not None:
+        if not isinstance(evidence_payload, list):
+            return jsonify({"error": "invalid_evidence"}), 400
+        evidence_items: list[dict[str, Any]] = []
+        allowed_claims = set(claims_list or []) if claims_list is not None else None
+        for entry in evidence_payload:
+            if not isinstance(entry, Mapping):
+                return jsonify({"error": "invalid_evidence"}), 400
+            claim_value = entry.get("claim")
+            if not isinstance(claim_value, str):
+                return jsonify({"error": "invalid_evidence"}), 400
+            claim_key = claim_value.strip()
+            if claim_key not in CLAIMS:
+                return jsonify({"error": "invalid_evidence"}), 400
+            if allowed_claims is not None and claim_key not in allowed_claims:
+                return jsonify({"error": "invalid_evidence"}), 400
+
+            docs_payload = entry.get("docs")
+            if not isinstance(docs_payload, list):
+                return jsonify({"error": "invalid_evidence"}), 400
+
+            docs_items: list[dict[str, Any]] = []
+            claim_def = get_claim_definition(claim_key)
+            required_docs = set(claim_def.required_docs if claim_def else [])
+
+            for doc_entry in docs_payload:
+                if not isinstance(doc_entry, Mapping):
+                    return jsonify({"error": "invalid_evidence"}), 400
+                doc_key_value = doc_entry.get("doc_key")
+                if not isinstance(doc_key_value, str):
+                    return jsonify({"error": "invalid_evidence"}), 400
+                doc_key = doc_key_value.strip()
+                if not doc_key or not _REVIEW_DOC_KEY_PATTERN.fullmatch(doc_key):
+                    return jsonify({"error": "invalid_evidence"}), 400
+                if claim_def and claim_def.requires_docs and doc_key not in required_docs:
+                    return jsonify({"error": "invalid_evidence"}), 400
+
+                doc_ids_value = doc_entry.get("doc_ids")
+                if not isinstance(doc_ids_value, list) or not doc_ids_value:
+                    return jsonify({"error": "invalid_evidence"}), 400
+
+                validated_doc_ids: list[str] = []
+                for doc_id_value in doc_ids_value:
+                    if not isinstance(doc_id_value, str):
+                        return jsonify({"error": "invalid_evidence"}), 400
+                    doc_id = doc_id_value.strip()
+                    if not doc_id:
+                        return jsonify({"error": "invalid_evidence"}), 400
+                    if _resolve_review_doc_id(doc_id, run_dir, uploads_dir) is None:
+                        return jsonify({"error": "invalid_evidence_doc"}), 400
+                    validated_doc_ids.append(doc_id)
+
+                docs_items.append({"doc_key": doc_key, "doc_ids": validated_doc_ids})
+
+            evidence_items.append({"claim": claim_key, "docs": docs_items})
+
+        evidence_list = evidence_items
+
     record: dict[str, Any] = {
         "sid": sid,
         "account_id": account_id,
@@ -1010,8 +1139,11 @@ def api_frontend_review_answer(sid: str, account_id: str):
         record["client_ts"] = client_ts
     if isinstance(client_meta, Mapping):
         record["client_meta"] = dict(client_meta)
+    if claims_list is not None:
+        record["claims"] = claims_list
+    if evidence_list is not None:
+        record["evidence"] = evidence_list
 
-    stage_config = load_frontend_stage_config(run_dir)
     responses_dir = stage_config.responses_dir
     responses_dir.mkdir(parents=True, exist_ok=True)
     filename = _response_filename_for_account(account_id)
@@ -1038,89 +1170,100 @@ def api_frontend_review_upload(sid: str):
     account_id_raw = form.get("account_id") or ""
     claim_key = (form.get("claim") or "").strip()
     doc_key_raw = form.get("doc_key") or ""
-    uploaded = request.files.get("file")
+    sid_from_form = (form.get("sid") or "").strip()
 
     account_id = account_id_raw.strip()
-    if not account_id:
+    if not _is_valid_frontend_account_id(account_id):
         return jsonify({"error": "invalid_account_id"}), 400
+
+    if sid_from_form and sid_from_form != sid:
+        return jsonify({"error": "invalid_sid"}), 400
 
     if not claim_key or claim_key not in CLAIMS:
         return jsonify({"error": "invalid_claim"}), 400
 
     doc_key = doc_key_raw.strip()
-    if not doc_key:
+    if not doc_key or not _REVIEW_DOC_KEY_PATTERN.fullmatch(doc_key):
         return jsonify({"error": "invalid_doc_key"}), 400
 
     claim_def = get_claim_definition(claim_key)
     if claim_def and claim_def.requires_docs and doc_key not in claim_def.required_docs:
         return jsonify({"error": "unsupported_doc_key"}), 400
 
-    if uploaded is None:
-        return jsonify({"error": "missing_file"}), 400
+    uploaded_files = request.files.getlist("files")
+    if not uploaded_files:
+        return jsonify({"error": "missing_files"}), 400
 
     stage_config = load_frontend_stage_config(run_dir)
     uploads_dir = stage_config.uploads_dir
 
-    safe_account = _sanitize_upload_component(account_id, default="account")
-    safe_doc_key = _sanitize_upload_component(doc_key, default="document")
-    target_dir = uploads_dir / safe_account / claim_key / safe_doc_key
+    target_dir = uploads_dir / account_id / claim_key / doc_key
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    original_name = uploaded.filename or "document"
-    extension = Path(original_name).suffix
-    doc_id = uuid.uuid4().hex
-    stored_name = f"{doc_id}{extension}" if extension else doc_id
-    target_path = target_dir / stored_name
+    doc_ids: list[str] = []
+    last_timestamp_ms = 0
+    for uploaded in uploaded_files:
+        if uploaded is None:
+            return jsonify({"error": "invalid_file"}), 400
+        original_name = uploaded.filename or "document"
+        extension = _extract_upload_extension(original_name)
+        if extension not in _REVIEW_ALLOWED_UPLOAD_EXTENSIONS:
+            return jsonify({"error": "invalid_file_type"}), 400
 
-    try:
-        uploaded.save(target_path)
-    except Exception:  # pragma: no cover - filesystem errors
-        log.exception(
-            "failed to save frontend review upload",
-            extra={
-                "sid": sid,
-                "account_id": account_id,
-                "claim": claim_key,
-                "doc_key": doc_key,
-                "target": str(target_path),
-            },
-        )
-        return jsonify({"error": "upload_failed"}), 500
+        content_length = getattr(uploaded, "content_length", None)
+        if (
+            isinstance(content_length, int)
+            and content_length > _REVIEW_UPLOAD_MAX_BYTES
+        ):
+            return jsonify({"error": "file_too_large"}), 400
 
-    size = target_path.stat().st_size if target_path.exists() else None
-    uploaded_at = _now_utc_iso()
+        if extension == "pdf":
+            head = uploaded.stream.read(4)
+            uploaded.stream.seek(0)
+            if head != b"%PDF":
+                return jsonify({"error": "invalid_pdf"}), 400
 
-    doc_info: dict[str, object] = {
-        "id": doc_id,
-        "account_id": account_id,
-        "claim": claim_key,
-        "doc_key": doc_key,
-        "filename": original_name,
-        "stored_filename": stored_name,
-        "uploaded_at": uploaded_at,
-    }
-    if size is not None:
-        doc_info["size"] = size
+        timestamp_ms = int(time.time() * 1000)
+        if timestamp_ms <= last_timestamp_ms:
+            timestamp_ms = last_timestamp_ms + 1
+        last_timestamp_ms = timestamp_ms
 
-    metadata_path = target_dir / f"{doc_id}.json"
-    try:
-        metadata_path.write_text(
-            json.dumps(doc_info, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except OSError:  # pragma: no cover - filesystem errors
-        log.exception(
-            "failed to write frontend review upload metadata",
-            extra={
-                "sid": sid,
-                "account_id": account_id,
-                "claim": claim_key,
-                "doc_key": doc_key,
-                "target": str(metadata_path),
-            },
-        )
+        slug = _slugify_upload_name(original_name)
+        stored_name = f"{timestamp_ms}_{slug}"
+        if extension:
+            stored_name = f"{stored_name}.{extension}"
+        target_path = target_dir / stored_name
 
-    return jsonify({"ok": True, "doc": doc_info})
+        try:
+            uploaded.save(target_path)
+        except Exception:  # pragma: no cover - filesystem errors
+            log.exception(
+                "failed to save frontend review upload",
+                extra={
+                    "sid": sid,
+                    "account_id": account_id,
+                    "claim": claim_key,
+                    "doc_key": doc_key,
+                    "target": str(target_path),
+                },
+            )
+            return jsonify({"error": "upload_failed"}), 500
+
+        try:
+            size = target_path.stat().st_size
+        except OSError:
+            size = None
+
+        if size is not None and size > _REVIEW_UPLOAD_MAX_BYTES:
+            try:
+                target_path.unlink()
+            except OSError:  # pragma: no cover - best effort cleanup
+                pass
+            return jsonify({"error": "file_too_large"}), 400
+
+        doc_ids.append(_doc_id_for_path(target_path))
+
+    return jsonify({"doc_ids": doc_ids})
 
 
 @api_bp.route(

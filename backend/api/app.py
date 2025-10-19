@@ -51,6 +51,7 @@ from backend.api.tasks import run_credit_repair_process  # noqa: F401
 from backend.api.tasks import app as celery_app, smoke_task
 from backend.pipeline.runs import RunManifest, get_runs_root, persist_manifest
 from backend.core.paths.frontend_review import get_frontend_review_paths
+from backend.frontend.packs.claims import CLAIMS, get_claim_definition
 from backend.frontend.packs.config import load_frontend_stage_config
 from backend.api.routes_smoke import bp as smoke_bp
 from backend.api.routes_run_assets import bp as run_assets_bp
@@ -338,6 +339,14 @@ def _response_filename_for_account(account_id: str) -> str:
 
     sanitized = re.sub(r"[^A-Za-z0-9_.-]", "_", trimmed) or "account"
     return f"{sanitized}.result.json"
+
+
+def _sanitize_upload_component(value: str, default: str = "item") -> str:
+    trimmed = value.strip() if isinstance(value, str) else ""
+    if not trimmed:
+        return default
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]", "_", trimmed)
+    return sanitized or default
 
 
 def _merge_collectors(
@@ -1013,6 +1022,105 @@ def api_frontend_review_answer(sid: str, account_id: str):
     _review_stream_broker.publish(sid, "responses_written", {"account_id": account_id})
 
     return jsonify(record)
+
+
+@api_bp.route("/api/runs/<sid>/frontend/review/uploads", methods=["POST"])
+def api_frontend_review_upload(sid: str):
+    try:
+        run_dir = _run_dir_for_sid(sid)
+    except ValueError:
+        return jsonify({"error": "invalid_sid"}), 400
+
+    if not run_dir.exists():
+        return jsonify({"error": "run_not_found"}), 404
+
+    form = request.form or {}
+    account_id_raw = form.get("account_id") or ""
+    claim_key = (form.get("claim") or "").strip()
+    doc_key_raw = form.get("doc_key") or ""
+    uploaded = request.files.get("file")
+
+    account_id = account_id_raw.strip()
+    if not account_id:
+        return jsonify({"error": "invalid_account_id"}), 400
+
+    if not claim_key or claim_key not in CLAIMS:
+        return jsonify({"error": "invalid_claim"}), 400
+
+    doc_key = doc_key_raw.strip()
+    if not doc_key:
+        return jsonify({"error": "invalid_doc_key"}), 400
+
+    claim_def = get_claim_definition(claim_key)
+    if claim_def and claim_def.requires_docs and doc_key not in claim_def.required_docs:
+        return jsonify({"error": "unsupported_doc_key"}), 400
+
+    if uploaded is None:
+        return jsonify({"error": "missing_file"}), 400
+
+    stage_config = load_frontend_stage_config(run_dir)
+    uploads_dir = stage_config.uploads_dir
+
+    safe_account = _sanitize_upload_component(account_id, default="account")
+    safe_doc_key = _sanitize_upload_component(doc_key, default="document")
+    target_dir = uploads_dir / safe_account / claim_key / safe_doc_key
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    original_name = uploaded.filename or "document"
+    extension = Path(original_name).suffix
+    doc_id = uuid.uuid4().hex
+    stored_name = f"{doc_id}{extension}" if extension else doc_id
+    target_path = target_dir / stored_name
+
+    try:
+        uploaded.save(target_path)
+    except Exception:  # pragma: no cover - filesystem errors
+        log.exception(
+            "failed to save frontend review upload",
+            extra={
+                "sid": sid,
+                "account_id": account_id,
+                "claim": claim_key,
+                "doc_key": doc_key,
+                "target": str(target_path),
+            },
+        )
+        return jsonify({"error": "upload_failed"}), 500
+
+    size = target_path.stat().st_size if target_path.exists() else None
+    uploaded_at = _now_utc_iso()
+
+    doc_info: dict[str, object] = {
+        "id": doc_id,
+        "account_id": account_id,
+        "claim": claim_key,
+        "doc_key": doc_key,
+        "filename": original_name,
+        "stored_filename": stored_name,
+        "uploaded_at": uploaded_at,
+    }
+    if size is not None:
+        doc_info["size"] = size
+
+    metadata_path = target_dir / f"{doc_id}.json"
+    try:
+        metadata_path.write_text(
+            json.dumps(doc_info, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:  # pragma: no cover - filesystem errors
+        log.exception(
+            "failed to write frontend review upload metadata",
+            extra={
+                "sid": sid,
+                "account_id": account_id,
+                "claim": claim_key,
+                "doc_key": doc_key,
+                "target": str(metadata_path),
+            },
+        )
+
+    return jsonify({"ok": True, "doc": doc_info})
 
 
 @api_bp.route(

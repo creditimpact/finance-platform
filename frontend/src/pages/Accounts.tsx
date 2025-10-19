@@ -17,8 +17,15 @@ import {
 } from '../api.ts';
 import type { FrontendReviewManifestPack } from '../api.ts';
 import { type ReviewAccountPack } from '../components/ReviewCard';
+import { shouldEnableReviewClaims } from '../config/featureFlags';
+import {
+  hasMissingRequiredDocs,
+  normalizeExistingAnswers,
+  prepareAnswersPayload,
+} from '../utils/reviewClaims';
 
 const PLACEHOLDER_VALUES = new Set(['--', '—', '', 'n/a', 'N/A']);
+const REVIEW_CLAIMS_ENABLED = shouldEnableReviewClaims();
 
 function normalizeSearchTerm(term: string): string {
   return term.trim().toLowerCase();
@@ -256,26 +263,6 @@ function AccountListRow({ entry, onSelect, selected, answered }: AccountListRowP
   );
 }
 
-function cleanAnswers(answers: AccountQuestionAnswers): Record<string, string> {
-  const explanation = answers.explanation;
-  if (typeof explanation === 'string' && explanation.trim() !== '') {
-    return { explanation };
-  }
-  return {};
-}
-
-function normalizeExistingAnswers(source: unknown): AccountQuestionAnswers {
-  if (!source || typeof source !== 'object') {
-    return {};
-  }
-  const record = source as Record<string, unknown>;
-  const explanation = record.explanation;
-  if (typeof explanation === 'string' && explanation.trim() !== '') {
-    return { explanation };
-  }
-  return {};
-}
-
 function LoadingRow() {
   return (
     <div className="animate-pulse rounded-lg border border-slate-200 bg-white p-5">
@@ -398,15 +385,32 @@ export default function AccountsPage() {
     setSubmitSuccess(false);
   }, []);
 
-  const cleanedAnswers = React.useMemo(() => cleanAnswers(questionAnswers), [questionAnswers]);
-  const hasAnswers = Object.keys(cleanedAnswers).length > 0;
+  const cleanedAnswers = React.useMemo(
+    () => prepareAnswersPayload(questionAnswers, { includeClaims: REVIEW_CLAIMS_ENABLED }),
+    [questionAnswers]
+  );
+  const explanationProvided = React.useMemo(() => {
+    const value = questionAnswers.explanation;
+    return typeof value === 'string' && value.trim() !== '';
+  }, [questionAnswers.explanation]);
+  const missingRequiredDocs = React.useMemo(() => {
+    if (!REVIEW_CLAIMS_ENABLED) {
+      return false;
+    }
+    return hasMissingRequiredDocs(questionAnswers.claims, questionAnswers.claimDocuments);
+  }, [questionAnswers.claimDocuments, questionAnswers.claims]);
+  const canSubmit = explanationProvided && !missingRequiredDocs;
 
   const handleSubmitAnswers = React.useCallback(async () => {
     if (!sid || !selectedAccountId) {
       return;
     }
-    if (!hasAnswers) {
+    if (!explanationProvided) {
       setSubmitError('Please provide an explanation before submitting.');
+      return;
+    }
+    if (missingRequiredDocs) {
+      setSubmitError('Please upload the required documents for the claims you selected.');
       return;
     }
 
@@ -439,7 +443,13 @@ export default function AccountsPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [sid, selectedAccountId, cleanedAnswers, hasAnswers]);
+  }, [
+    sid,
+    selectedAccountId,
+    cleanedAnswers,
+    explanationProvided,
+    missingRequiredDocs,
+  ]);
 
   const normalizedSearch = React.useMemo(() => normalizeSearchTerm(searchTerm), [searchTerm]);
 
@@ -570,10 +580,10 @@ export default function AccountsPage() {
                 <button
                   type="button"
                   onClick={handleSubmitAnswers}
-                  disabled={submitting || !hasAnswers}
+                  disabled={submitting || !canSubmit}
                   className={cn(
                     'inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-semibold shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-offset-2',
-                    submitting || !hasAnswers
+                    submitting || !canSubmit
                       ? 'cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400'
                       : 'border border-slate-900 bg-slate-900 text-white hover:bg-slate-800'
                   )}

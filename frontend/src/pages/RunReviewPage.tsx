@@ -30,9 +30,16 @@ import type {
 import { useToast } from '../components/ToastProvider';
 import { REVIEW_DEBUG_ENABLED, reviewDebugLog } from '../utils/reviewDebug';
 import { DEV_DIAGNOSTICS_ENABLED } from '../utils/devDiagnostics';
+import { shouldEnableReviewClaims } from '../config/featureFlags';
+import {
+  hasMissingRequiredDocs,
+  normalizeExistingAnswers,
+  prepareAnswersPayload,
+} from '../utils/reviewClaims';
 
 const POLL_INTERVAL_MS = 2000;
 const WORKER_HINT_DELAY_MS = 30_000;
+const REVIEW_CLAIMS_ENABLED = shouldEnableReviewClaims();
 
 type CardStatus = ReviewCardStatus;
 
@@ -226,26 +233,6 @@ function normalizePackListingItem(
   return { account_id: accountId };
 }
 
-function cleanAnswers(answers: AccountQuestionAnswers): Record<string, string> {
-  const explanation = answers.explanation;
-  if (typeof explanation === 'string' && explanation.trim() !== '') {
-    return { explanation };
-  }
-  return {};
-}
-
-function normalizeExistingAnswers(source: unknown): AccountQuestionAnswers {
-  if (!source || typeof source !== 'object') {
-    return {};
-  }
-  const record = source as Record<string, unknown>;
-  const explanation = record.explanation;
-  if (typeof explanation === 'string' && explanation.trim() !== '') {
-    return { explanation };
-  }
-  return {};
-}
-
 function createResponseSnippet(value: string | null | undefined, maxLength = 120): string | undefined {
   if (typeof value !== 'string') {
     return undefined;
@@ -337,13 +324,14 @@ function normalizeListingFilePath(path: string | null | undefined): string | und
 interface ReviewCardContainerProps {
   accountId: string;
   state: CardState;
+  sessionId?: string;
   onChange: (answers: AccountQuestionAnswers) => void;
   onSubmit: () => void;
   onLoad: (accountId: string) => void;
   onRetry: (accountId: string) => void;
 }
 
-function ReviewCardContainer({ accountId, state, onChange, onSubmit, onLoad, onRetry }: ReviewCardContainerProps) {
+function ReviewCardContainer({ accountId, sessionId, state, onChange, onSubmit, onLoad, onRetry }: ReviewCardContainerProps) {
   const cardRef = React.useRef<HTMLDivElement | null>(null);
   const hasRequestedRef = React.useRef(false);
 
@@ -450,6 +438,7 @@ function ReviewCardContainer({ accountId, state, onChange, onSubmit, onLoad, onR
     <div ref={cardRef} className="w-full">
       <ReviewCard
         accountId={accountId}
+        sessionId={sessionId}
         pack={state.pack}
         answers={state.answers}
         status={state.status}
@@ -1380,8 +1369,8 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       if (!sid || !card || card.status === 'saving') {
         return;
       }
-      const cleaned = cleanAnswers(card.answers);
-      if (Object.keys(cleaned).length === 0) {
+      const explanation = card.answers.explanation;
+      if (typeof explanation !== 'string' || explanation.trim() === '') {
         updateCard(accountId, (state) => ({
           ...state,
           error: 'Please provide an explanation before submitting.',
@@ -1389,6 +1378,22 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
         }));
         return;
       }
+
+      if (
+        REVIEW_CLAIMS_ENABLED &&
+        hasMissingRequiredDocs(card.answers.claims, card.answers.claimDocuments)
+      ) {
+        updateCard(accountId, (state) => ({
+          ...state,
+          error: 'Please upload the required documents for the claims you selected.',
+          errorDetails: null,
+        }));
+        return;
+      }
+
+      const cleaned = prepareAnswersPayload(card.answers, {
+        includeClaims: REVIEW_CLAIMS_ENABLED,
+      });
 
       updateCard(accountId, (state) => ({
         ...state,
@@ -1556,6 +1561,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
               <ReviewCardContainer
                 key={accountId}
                 accountId={accountId}
+                sessionId={sid}
                 state={state ?? createInitialCardState()}
                 onChange={(answers) => handleAnswerChange(accountId, answers)}
                 onSubmit={() => handleSubmit(accountId)}

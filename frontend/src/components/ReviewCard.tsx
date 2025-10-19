@@ -8,11 +8,17 @@ import {
   type BureauKey,
 } from './accountFieldTypes';
 import { summarizeField, type BureauTriple } from '../utils/bureauSummary';
-import { type AccountQuestionAnswers, type ClaimDocuments } from './AccountQuestions';
+import type { AccountQuestionAnswers } from './AccountQuestions';
 import type { AccountPack } from './AccountCard';
 import { type FrontendReviewResponse, uploadReviewDoc } from '../api.ts';
-import { CLAIMS, type ClaimKey } from '../constants/claims';
-import { normalizeClaims } from '../utils/reviewClaims';
+import type { PackClaimsPayload, ClaimSchema, DocKey } from '../types/review';
+import {
+  normalizeSelectedClaims,
+  normalizeAttachments,
+  hasMissingRequiredDocs,
+  resolveClaimsPayload,
+  type NormalizedAttachments,
+} from '../utils/reviewClaims';
 import ClaimPicker from './ClaimPicker';
 
 export type ReviewCardStatus = 'idle' | 'waiting' | 'ready' | 'saving' | 'done';
@@ -63,8 +69,6 @@ const DETAIL_FIELDS: BureauFieldConfig<DetailFieldKey>[] = [
 
 const REVIEW_CLAIMS_ENABLED = (import.meta as { env?: Record<string, string | undefined> }).env?.
   VITE_REVIEW_CLAIMS === '1';
-
-type UploadedDocMap = Record<ClaimKey, Record<string, string[]>>;
 
 type PerBureauSource =
   | {
@@ -128,56 +132,7 @@ function normalizeDisplayValue(value?: string | null): { text: string; isMissing
   return { text: trimmed, isMissing: false };
 }
 
-function buildUploadedMapFromDocuments(claimDocuments?: ClaimDocuments): UploadedDocMap {
-  const map: UploadedDocMap = {};
-  if (!claimDocuments) {
-    return map;
-  }
-  for (const [claimKey, docMap] of Object.entries(claimDocuments)) {
-    if (!CLAIMS[claimKey as ClaimKey] || !docMap || typeof docMap !== 'object') {
-      continue;
-    }
-    const perClaimEntries: Record<string, string[]> = {};
-    for (const [docKey, docIds] of Object.entries(docMap)) {
-      if (!Array.isArray(docIds)) {
-        continue;
-      }
-      const filtered = docIds
-        .map((id) => (typeof id === 'string' ? id.trim() : ''))
-        .filter((id): id is string => Boolean(id));
-      if (filtered.length > 0) {
-        perClaimEntries[docKey] = filtered;
-      }
-    }
-    map[claimKey as ClaimKey] = perClaimEntries;
-  }
-  return map;
-}
-
-function toClaimDocuments(map: UploadedDocMap, claims: ClaimKey[]): ClaimDocuments {
-  const documents: ClaimDocuments = {};
-  for (const claim of claims) {
-    const docEntries = map[claim];
-    if (!docEntries) {
-      continue;
-    }
-    const cleaned: Record<string, string[]> = {};
-    for (const [docKey, docIds] of Object.entries(docEntries)) {
-      const filtered = docIds
-        .map((id) => (typeof id === 'string' ? id.trim() : ''))
-        .filter((id): id is string => Boolean(id));
-      if (filtered.length > 0) {
-        cleaned[docKey] = filtered;
-      }
-    }
-    if (Object.keys(cleaned).length > 0) {
-      documents[claim] = cleaned;
-    }
-  }
-  return documents;
-}
-
-function areClaimListsEqual(a: ClaimKey[], b: ClaimKey[]): boolean {
+function areClaimListsEqual(a: string[], b: string[]): boolean {
   if (a.length !== b.length) {
     return false;
   }
@@ -189,35 +144,45 @@ function areClaimListsEqual(a: ClaimKey[], b: ClaimKey[]): boolean {
   return true;
 }
 
-function areUploadedMapsEqual(a: UploadedDocMap, b: UploadedDocMap): boolean {
-  const aKeys = Object.keys(a);
-  const bKeys = Object.keys(b);
+function areAttachmentMapsEqual(
+  a: NormalizedAttachments,
+  b: NormalizedAttachments
+): boolean {
+  const aKeys = Object.keys(a ?? {});
+  const bKeys = Object.keys(b ?? {});
   if (aKeys.length !== bKeys.length) {
     return false;
   }
-  for (const claimKey of aKeys) {
-    const docMapA = a[claimKey as ClaimKey] ?? {};
-    const docMapB = b[claimKey as ClaimKey] ?? {};
-    const docKeysA = Object.keys(docMapA);
-    const docKeysB = Object.keys(docMapB);
-    if (docKeysA.length !== docKeysB.length) {
+  for (const key of aKeys) {
+    const valuesA = a?.[key] ?? [];
+    const valuesB = b?.[key] ?? [];
+    if (valuesA.length !== valuesB.length) {
       return false;
     }
-    for (const docKey of docKeysA) {
-      const listA = docMapA[docKey] ?? [];
-      const listB = docMapB[docKey] ?? [];
-      if (listA.length !== listB.length) {
+    const sortedA = [...valuesA].sort();
+    const sortedB = [...valuesB].sort();
+    for (let index = 0; index < sortedA.length; index += 1) {
+      if (sortedA[index] !== sortedB[index]) {
         return false;
-      }
-      for (let index = 0; index < listA.length; index += 1) {
-        if (listA[index] !== listB[index]) {
-          return false;
-        }
       }
     }
   }
   return true;
 }
+
+function extractSelectedClaimsFromAnswers(answers: AccountQuestionAnswers): string[] {
+  const legacy = answers as Record<string, unknown>;
+  return normalizeSelectedClaims(
+    answers.selectedClaims ?? (legacy.selected_claims as unknown) ?? legacy.claims
+  );
+}
+
+function extractAttachmentsFromAnswers(answers: AccountQuestionAnswers): NormalizedAttachments {
+  const legacy = answers as Record<string, unknown>;
+  const rawAttachments = answers.attachments ?? legacy.attachments;
+  return normalizeAttachments(rawAttachments);
+}
+
 
 function formatPrimaryIssue(issue?: string | null): string | null {
   if (!issue) {
@@ -310,29 +275,41 @@ export function ReviewCard({
 
   const claimsEnabled = Boolean(REVIEW_CLAIMS_ENABLED);
   const effectiveAccountId = accountId ?? pack.account_id ?? '';
-  const [selectedClaims, setSelectedClaims] = React.useState<ClaimKey[]>(() =>
-    claimsEnabled ? normalizeClaims(answers.claims) : []
+  const [selectedClaims, setSelectedClaims] = React.useState<string[]>(() =>
+    claimsEnabled ? extractSelectedClaimsFromAnswers(answers) : []
   );
-  const [uploadedMap, setUploadedMap] = React.useState<UploadedDocMap>(() =>
-    claimsEnabled ? buildUploadedMapFromDocuments(answers.claimDocuments) : {}
+  const [attachmentsMap, setAttachmentsMap] = React.useState<NormalizedAttachments>(() =>
+    claimsEnabled ? extractAttachmentsFromAnswers(answers) : {}
   );
 
+  const resolvedClaims = React.useMemo(
+    () => resolveClaimsPayload((pack as { claims?: unknown }).claims),
+    [pack?.claims]
+  );
+
+  const claimDefinitions = React.useMemo(() => {
+    const map = new Map<string, ClaimSchema>();
+    for (const claim of resolvedClaims.items) {
+      map.set(claim.key, claim);
+    }
+    return map;
+  }, [resolvedClaims]);
+
   const syncAnswers = React.useCallback(
-    (claims: ClaimKey[], map: UploadedDocMap) => {
+    (claims: string[], map: NormalizedAttachments) => {
       if (!onAnswersChange) {
         return;
       }
       const nextAnswers: AccountQuestionAnswers = { ...answers };
       if (claims.length > 0) {
-        nextAnswers.claims = claims;
+        nextAnswers.selectedClaims = claims;
       } else {
-        delete nextAnswers.claims;
+        delete nextAnswers.selectedClaims;
       }
-      const documents = toClaimDocuments(map, claims);
-      if (Object.keys(documents).length > 0) {
-        nextAnswers.claimDocuments = documents;
+      if (Object.keys(map).length > 0) {
+        nextAnswers.attachments = map;
       } else {
-        delete nextAnswers.claimDocuments;
+        delete nextAnswers.attachments;
       }
       onAnswersChange(nextAnswers);
     },
@@ -342,46 +319,41 @@ export function ReviewCard({
   React.useEffect(() => {
     if (!claimsEnabled) {
       setSelectedClaims([]);
-      setUploadedMap({});
+      setAttachmentsMap({});
       return;
     }
-    const normalized = normalizeClaims(answers.claims);
+    const normalized = extractSelectedClaimsFromAnswers(answers);
     setSelectedClaims((previous) =>
       areClaimListsEqual(previous, normalized) ? previous : normalized
     );
-  }, [answers.claims, claimsEnabled]);
+  }, [answers, claimsEnabled]);
 
   React.useEffect(() => {
     if (!claimsEnabled) {
-      setUploadedMap({});
+      setAttachmentsMap({});
       return;
     }
-    const nextMap = buildUploadedMapFromDocuments(answers.claimDocuments);
-    setUploadedMap((previous) => (areUploadedMapsEqual(previous, nextMap) ? previous : nextMap));
-  }, [answers.claimDocuments, claimsEnabled]);
+    const nextMap = extractAttachmentsFromAnswers(answers);
+    setAttachmentsMap((previous) =>
+      areAttachmentMapsEqual(previous, nextMap) ? previous : nextMap
+    );
+  }, [answers, claimsEnabled]);
 
   const handleClaimsChange = React.useCallback(
-    (nextClaims: ClaimKey[]) => {
+    (nextClaims: string[]) => {
       if (!claimsEnabled) {
         return;
       }
       setSelectedClaims((previous) =>
         areClaimListsEqual(previous, nextClaims) ? previous : [...nextClaims]
       );
-      setUploadedMap((previous) => {
-        const nextMap: UploadedDocMap = {};
-        for (const claim of nextClaims) {
-          nextMap[claim] = { ...(previous[claim] ?? {}) };
-        }
-        syncAnswers(nextClaims, nextMap);
-        return nextMap;
-      });
+      syncAnswers(nextClaims, attachmentsMap);
     },
-    [claimsEnabled, syncAnswers]
+    [attachmentsMap, claimsEnabled, syncAnswers]
   );
 
   const queueUpload = React.useCallback(
-    async (claim: ClaimKey, docKey: string, files: File[]) => {
+    async (claim: string, docKey: string, files: File[]) => {
       if (!claimsEnabled) {
         return;
       }
@@ -415,17 +387,10 @@ export function ReviewCard({
         setSelectedClaims((previous) =>
           areClaimListsEqual(previous, baseClaims) ? previous : [...baseClaims]
         );
-        setUploadedMap((previous) => {
-          const prevClaimDocs = previous[claim] ?? {};
-          const existingDocIds = prevClaimDocs[docKey] ?? [];
+        setAttachmentsMap((previous) => {
+          const existingDocIds = previous[docKey] ?? [];
           const mergedDocIds = Array.from(new Set([...existingDocIds, ...docIds]));
-          const nextClaimDocs = { ...prevClaimDocs, [docKey]: mergedDocIds };
-          const nextMap: UploadedDocMap = { ...previous, [claim]: nextClaimDocs };
-          for (const claimKey of baseClaims) {
-            if (!nextMap[claimKey]) {
-              nextMap[claimKey] = {};
-            }
-          }
+          const nextMap: NormalizedAttachments = { ...previous, [docKey]: mergedDocIds };
           syncAnswers(baseClaims, nextMap);
           return nextMap;
         });
@@ -446,18 +411,8 @@ export function ReviewCard({
     if (!claimsEnabled) {
       return true;
     }
-    return selectedClaims.every((claimKey) => {
-      const definition = CLAIMS[claimKey];
-      if (!definition?.requiresDocs) {
-        return true;
-      }
-      const entries = uploadedMap[claimKey] ?? {};
-      return definition.requiredDocs.every((docKey) => {
-        const docIds = entries?.[docKey];
-        return Array.isArray(docIds) && docIds.length > 0;
-      });
-    });
-  }, [claimsEnabled, selectedClaims, uploadedMap]);
+    return !hasMissingRequiredDocs(selectedClaims, attachmentsMap, claimDefinitions);
+  }, [attachmentsMap, claimDefinitions, claimsEnabled, selectedClaims]);
 
   const [detailsOpen, setDetailsOpen] = React.useState(false);
 
@@ -590,10 +545,12 @@ export function ReviewCard({
 
         {claimsEnabled ? (
           <ClaimPicker
+            claims={resolvedClaims.items}
+            autoAttachBase={resolvedClaims.autoAttachBase}
             selected={selectedClaims}
+            attachments={attachmentsMap}
             onChange={handleClaimsChange}
             onFilesSelected={queueUpload}
-            uploadedMap={uploadedMap}
           />
         ) : null}
 

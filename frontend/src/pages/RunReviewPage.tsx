@@ -33,9 +33,10 @@ import { DEV_DIAGNOSTICS_ENABLED } from '../utils/devDiagnostics';
 import { shouldEnableReviewClaims } from '../config/featureFlags';
 import {
   hasMissingRequiredDocs,
-  normalizeClaims,
+  normalizeSelectedClaims,
   normalizeExistingAnswers,
   prepareAnswersPayload,
+  resolveClaimsPayload,
 } from '../utils/reviewClaims';
 
 const POLL_INTERVAL_MS = 2000;
@@ -1373,8 +1374,12 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
       const explanation = card.answers.explanation;
       const hasExplanation =
         typeof explanation === 'string' && explanation.trim() !== '';
+      const resolvedClaimsPayload = resolveClaimsPayload(card.pack?.claims);
+      const claimDefinitions = new Map(
+        resolvedClaimsPayload.items.map((claim) => [claim.key, claim] as const)
+      );
       const normalizedClaims = REVIEW_CLAIMS_ENABLED
-        ? normalizeClaims(card.answers.claims)
+        ? normalizeSelectedClaims(card.answers.selectedClaims ?? [])
         : [];
       if (!hasExplanation && normalizedClaims.length === 0) {
         updateCard(accountId, (state) => ({
@@ -1387,7 +1392,7 @@ function RunReviewPageContent({ sid }: { sid: string | undefined }) {
 
       if (
         REVIEW_CLAIMS_ENABLED &&
-        hasMissingRequiredDocs(card.answers.claims, card.answers.claimDocuments)
+        hasMissingRequiredDocs(normalizedClaims, card.answers.attachments, claimDefinitions)
       ) {
         updateCard(accountId, (state) => ({
           ...state,

@@ -10,7 +10,7 @@ function getImportMetaEnv(): Record<string, string | boolean | undefined> {
 const metaEnv = getImportMetaEnv();
 
 import type { AccountPack } from './components/AccountCard';
-import type { ClaimKey } from './constants/claims';
+import type { AttachmentsMap } from './types/review';
 import { REVIEW_DEBUG_ENABLED, reviewDebugLog } from './utils/reviewDebug';
 
 const metaEnvConfiguredApiBaseRaw =
@@ -67,16 +67,16 @@ const API_BASE = API_BASE_URL;
 export const apiUrl = (path: string) =>
   `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
 
-export type ReviewClaimEvidence = {
-  claim: ClaimKey;
-  docs: { doc_key: string; doc_ids: string[] }[];
-};
+export interface SubmitReviewAnswers {
+  explanation?: string;
+  selected_claims?: string[];
+  attachments?: AttachmentsMap;
+  [key: string]: unknown;
+}
 
-export type SubmitReviewPayload = {
-  answers: { explanation?: string };
-  claims?: ClaimKey[];
-  evidence?: ReviewClaimEvidence[];
-};
+export interface SubmitReviewPayload {
+  answers: SubmitReviewAnswers;
+}
 
 function encodePathSegments(path: string): string {
   return path
@@ -917,7 +917,7 @@ export async function submitFrontendReviewAnswers(
 export async function uploadReviewDoc(
   sessionId: string,
   accountId: string,
-  claim: ClaimKey,
+  claim: string,
   docKey: string,
   files: File[]
 ): Promise<{ doc_ids: string[] }> {

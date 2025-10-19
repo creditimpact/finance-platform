@@ -1,12 +1,11 @@
 import * as React from 'react';
 import { QUESTION_COPY, type AccountQuestionKey } from './questionCopy';
-import type { ClaimKey } from '../constants/claims';
 
-export type ClaimDocuments = Partial<Record<ClaimKey, Partial<Record<string, string[]>>>>;
+export type AccountAttachments = Partial<Record<string, string[]>>;
 
 export interface AccountQuestionAnswers extends Partial<Record<AccountQuestionKey, string>> {
-  claims?: ClaimKey[];
-  claimDocuments?: ClaimDocuments;
+  selectedClaims?: string[];
+  attachments?: AccountAttachments;
 }
 
 export interface AccountQuestionsProps {

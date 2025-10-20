@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Literal, Mapping, Optional
@@ -12,6 +13,7 @@ from typing import Any, Dict, Literal, Mapping, Optional
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.runflow import runflow_decide_step, runflow_end_stage
 from backend.runflow.counters import stage_counts as _stage_counts_from_disk
+from backend.validation.index_schema import load_validation_index
 
 StageStatus = Literal["success", "error"]
 RunState = Literal[
@@ -235,6 +237,187 @@ def record_stage(
 
     _atomic_write_json(path, data)
     return data
+
+
+def _load_json_mapping(path: Path) -> Mapping[str, Any] | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        log.warning("RUNFLOW_JSON_READ_FAILED path=%s", path, exc_info=True)
+        return None
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        log.warning("RUNFLOW_JSON_PARSE_FAILED path=%s", path, exc_info=True)
+        return None
+
+    if isinstance(payload, Mapping):
+        return payload
+
+    return None
+
+
+def _stage_status(steps: Mapping[str, Any] | None, stage: str) -> str:
+    if not isinstance(steps, Mapping):
+        return ""
+
+    stage_info = steps.get(stage)
+    if not isinstance(stage_info, Mapping):
+        return ""
+
+    status = stage_info.get("status")
+    if isinstance(status, str):
+        return status.strip().lower()
+
+    return ""
+
+
+def _validation_stage_ready(run_dir: Path) -> bool:
+    index_path = run_dir / "ai_packs" / "validation" / "index.json"
+    try:
+        index = load_validation_index(index_path)
+    except FileNotFoundError:
+        return False
+    except Exception:  # pragma: no cover - defensive
+        log.warning("RUNFLOW_VALIDATION_INDEX_LOAD_FAILED path=%s", index_path, exc_info=True)
+        return False
+
+    for record in getattr(index, "packs", ()):  # type: ignore[attr-defined]
+        status = getattr(record, "status", "")
+        if not isinstance(status, str) or status.strip().lower() != "completed":
+            return False
+
+        try:
+            result_path = index.resolve_result_json_path(record)  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover - defensive
+            log.warning(
+                "RUNFLOW_VALIDATION_RESULT_RESOLVE_FAILED account_id=%s", getattr(record, "account_id", "unknown"),
+                exc_info=True,
+            )
+            return False
+
+        try:
+            if not result_path.is_file():
+                return False
+        except OSError:
+            return False
+
+    return True
+
+
+_IDX_ACCOUNT_PATTERN = re.compile(r"idx-(\d+)")
+
+
+def _response_filename_for_account(account_id: str) -> str:
+    trimmed = (account_id or "").strip()
+    match = _IDX_ACCOUNT_PATTERN.fullmatch(trimmed)
+    number: int | None = None
+    if match:
+        number = int(match.group(1))
+    else:
+        try:
+            number = int(trimmed)
+        except ValueError:
+            number = None
+
+    if number is not None:
+        return f"idx-{number:03d}.result.json"
+
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]", "_", trimmed) or "account"
+    return f"{sanitized}.result.json"
+
+
+def _review_responses_ready(run_dir: Path) -> bool:
+    manifest_path = run_dir / "frontend" / "review" / "index.json"
+    manifest = _load_json_mapping(manifest_path)
+    if manifest is None:
+        return False
+
+    raw_packs = manifest.get("packs")
+    account_ids: list[str] = []
+    if isinstance(raw_packs, list):
+        for entry in raw_packs:
+            if not isinstance(entry, Mapping):
+                continue
+            account_id = entry.get("account_id")
+            if isinstance(account_id, str) and account_id.strip():
+                account_ids.append(account_id.strip())
+                continue
+            path_text = entry.get("path")
+            if isinstance(path_text, str) and path_text.strip():
+                account_ids.append(Path(path_text).stem)
+
+    if not account_ids:
+        counts = manifest.get("counts")
+        if isinstance(counts, Mapping):
+            packs_count = counts.get("packs")
+            try:
+                packs_count_int = int(packs_count)
+            except (TypeError, ValueError):
+                packs_count_int = None
+        else:
+            packs_count_int = None
+
+        return packs_count_int in (None, 0)
+
+    responses_dir = run_dir / "frontend" / "review" / "responses"
+    for account_id in account_ids:
+        filename = _response_filename_for_account(account_id)
+        candidate = responses_dir / filename
+        try:
+            if not candidate.is_file():
+                return False
+        except OSError:
+            return False
+
+        payload = _load_json_mapping(candidate)
+        if payload is None:
+            return False
+
+        received_at = payload.get("received_at")
+        if not isinstance(received_at, str) or not received_at.strip():
+            return False
+
+        answers = payload.get("answers")
+        if not isinstance(answers, Mapping):
+            return False
+
+        explanation = answers.get("explanation")
+        if not isinstance(explanation, str) or not explanation.strip():
+            return False
+
+    return True
+
+
+def evaluate_global_barriers(run_path: str) -> dict[str, bool]:
+    """Inspect run artifacts and report readiness for umbrella arguments."""
+
+    run_dir = Path(run_path)
+    steps_path = run_dir / "runflow_steps.json"
+    steps_payload = _load_json_mapping(steps_path)
+    stages = steps_payload.get("stages") if isinstance(steps_payload, Mapping) else None
+
+    merge_status = _stage_status(stages, "merge")
+    validation_status = _stage_status(stages, "validation")
+
+    merge_ready = merge_status in {"success", "skipped"}
+    validation_ready = False
+    if validation_status in {"success", "skipped"}:
+        validation_ready = _validation_stage_ready(run_dir)
+
+    review_ready = _review_responses_ready(run_dir)
+
+    all_ready = merge_ready and validation_ready and review_ready
+
+    return {
+        "merge_ready": merge_ready,
+        "validation_ready": validation_ready,
+        "review_ready": review_ready,
+        "all_ready": all_ready,
+    }
 
 
 def _parse_timestamp(value: Any) -> Optional[datetime]:

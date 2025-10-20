@@ -1,5 +1,7 @@
 import pytest
 
+from backend.validation import seed_arguments
+
 from ..core.logic.validation_requirements import (
     _build_finding,
     _collect_seed_arguments,
@@ -92,6 +94,37 @@ def test_missing_template_does_not_raise_and_skips_seed(details_from_map):
 
     seeds = _collect_seed_arguments([finding])
     assert seeds == []
+
+
+def test_missing_template_file_logs_warning(monkeypatch, caplog):
+    caplog.set_level("WARNING")
+    seed_arguments.load_seed_templates.cache_clear()
+    monkeypatch.setattr(
+        seed_arguments, "TEMPLATE_PATH", seed_arguments.HERE / "does-not-exist.json"
+    )
+
+    templates = seed_arguments.load_seed_templates()
+
+    assert templates == {}
+    assert any(
+        "Seed argument templates file missing" in record.message
+        for record in caplog.records
+    )
+
+    seed_arguments.load_seed_templates.cache_clear()
+
+
+def test_invalid_template_json_raises(monkeypatch, tmp_path):
+    broken = tmp_path / "seed_argument_templates.json"
+    broken.write_text("{\n  'oops':\n", encoding="utf-8")
+
+    seed_arguments.load_seed_templates.cache_clear()
+    monkeypatch.setattr(seed_arguments, "TEMPLATE_PATH", broken)
+
+    with pytest.raises(ValueError, match="Failed to parse seed argument templates JSON"):
+        seed_arguments.load_seed_templates()
+
+    seed_arguments.load_seed_templates.cache_clear()
 
 
 def test_duplicate_seed_entries_are_deduplicated(normalized_map_c4, details_from_map):

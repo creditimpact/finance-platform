@@ -195,6 +195,33 @@ def record_stage(
     if "umbrella_barriers" not in data or not isinstance(data["umbrella_barriers"], dict):
         data["umbrella_barriers"] = _default_umbrella_barriers()
 
+    # ``runflow_end_stage`` may update the on-disk payload (via
+    # ``_update_umbrella_barriers``) before we persist ``data``. Merge the
+    # latest umbrella readiness flags so stage writes do not clobber barrier
+    # evaluations that just ran.
+    try:
+        existing_raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        existing_payload: Mapping[str, Any] | None = None
+    except OSError:
+        existing_payload = None
+    else:
+        try:
+            parsed = json.loads(existing_raw)
+        except json.JSONDecodeError:
+            existing_payload = None
+        else:
+            existing_payload = parsed if isinstance(parsed, Mapping) else None
+
+    if existing_payload:
+        existing_barriers = existing_payload.get("umbrella_barriers")
+        if isinstance(existing_barriers, Mapping):
+            merged_barriers = dict(existing_barriers)
+            current_barriers = data.get("umbrella_barriers")
+            if isinstance(current_barriers, Mapping):
+                merged_barriers.update(current_barriers)
+            data["umbrella_barriers"] = merged_barriers
+
     if status == "error":
         data["run_state"] = "ERROR"
     elif stage == "validation" and data.get("run_state") == "INIT":

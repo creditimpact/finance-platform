@@ -1640,23 +1640,26 @@ def _build_finding(
         raw_value_provider=raw_value_provider,
     )
 
-    decision_value = finding.get("decision")
-    if decision_value in {"strong_actionable", "strong"}:
-        field_value = str(finding.get("field") or "")
-        reason_code_value = str(finding.get("reason_code") or "")
-        if field_value and reason_code_value:
-            argument_block = finding.get("argument")
-            if isinstance(argument_block, Mapping):
-                if "seed" not in argument_block:
+    if backend_config.SEED_ARGUMENTS_ENABLE:
+        decision_value = finding.get("decision")
+        if decision_value in {"strong_actionable", "strong"}:
+            field_value = str(finding.get("field") or "")
+            reason_code_value = str(finding.get("reason_code") or "")
+            if field_value and reason_code_value:
+                argument_block = finding.get("argument")
+                if isinstance(argument_block, Mapping):
+                    if "seed" not in argument_block:
+                        seed_payload = build_seed_argument(
+                            field_value, reason_code_value
+                        )
+                        if seed_payload:
+                            merged_argument = dict(argument_block)
+                            merged_argument.update(seed_payload)
+                            finding["argument"] = merged_argument
+                else:
                     seed_payload = build_seed_argument(field_value, reason_code_value)
                     if seed_payload:
-                        merged_argument = dict(argument_block)
-                        merged_argument.update(seed_payload)
-                        finding["argument"] = merged_argument
-            else:
-                seed_payload = build_seed_argument(field_value, reason_code_value)
-                if seed_payload:
-                    finding["argument"] = dict(seed_payload)
+                        finding["argument"] = dict(seed_payload)
 
     return finding
 

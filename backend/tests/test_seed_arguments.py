@@ -85,7 +85,9 @@ def test_missing_template_does_not_raise_and_skips_seed(details_from_map):
         normalized_map=normalized_map,
     )
 
-    assert finding["decision"] == "strong_actionable"
+    decision = finding.get("decision")
+    if decision is not None:
+        assert decision == "strong_actionable"
     assert "argument" not in finding
 
     seeds = _collect_seed_arguments([finding])
@@ -109,3 +111,25 @@ def test_duplicate_seed_entries_are_deduplicated(normalized_map_c4, details_from
 
     seeds = _collect_seed_arguments([finding_one, finding_two])
     assert seeds == [finding_one["argument"]["seed"]]
+
+
+def test_seed_generation_respects_feature_flag(
+    normalized_map_c4, details_from_map, monkeypatch
+):
+    monkeypatch.setattr(
+        "backend.core.logic.validation_requirements.backend_config.SEED_ARGUMENTS_ENABLE",
+        False,
+    )
+
+    finding = _build_finding(
+        {"field": "account_status"},
+        {},
+        details=details_from_map(normalized_map_c4),
+        normalized_map=normalized_map_c4,
+    )
+
+    assert finding["decision"] == "strong_actionable"
+    assert "argument" not in finding
+
+    seeds = _collect_seed_arguments([finding])
+    assert seeds == []

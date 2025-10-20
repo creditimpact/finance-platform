@@ -628,10 +628,14 @@ def _build_field_snapshots(
         if not isinstance(consistency_details, Mapping) and not bureaus_payload:
             consistent = True
 
+        codes = reason_codes_map.get(field, [])
+        if not codes and not consistent:
+            codes = ["INCONSISTENT_BUREAUS"]
+
         snapshots[field] = {
             "by_bureau": _bureau_value_snapshot(bureaus_payload, field),
             "consistent": consistent,
-            "c_codes": reason_codes_map.get(field, []),
+            "c_codes": codes,
         }
 
     return snapshots
@@ -721,6 +725,51 @@ def _clone_field_snapshots_payload(snapshot_map: Mapping[str, Any]) -> dict[str,
     return cloned
 
 
+def _sanitize_attachment_record(entry: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(entry, Mapping):
+        return {}
+
+    sanitized: dict[str, Any] = {}
+
+    for key in (
+        "id",
+        "claim_type",
+        "filename",
+        "stored_path",
+        "mime",
+        "sha1",
+        "uploaded_at",
+        "doc_id",
+    ):
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            sanitized[key] = value
+
+    size_value = entry.get("size")
+    if isinstance(size_value, (int, float)):
+        sanitized["size"] = int(size_value)
+
+    hot_fields: list[str] = []
+    raw_hot_fields = entry.get("hot_fields")
+    if isinstance(raw_hot_fields, Sequence) and not isinstance(
+        raw_hot_fields, (str, bytes)
+    ):
+        for field in raw_hot_fields:
+            if isinstance(field, str) and field:
+                hot_fields.append(field)
+    sanitized["hot_fields"] = hot_fields
+
+    field_snapshots_raw = entry.get("field_snapshots")
+    if isinstance(field_snapshots_raw, Mapping):
+        sanitized["field_snapshots"] = _clone_field_snapshots_payload(
+            field_snapshots_raw
+        )
+    else:
+        sanitized["field_snapshots"] = {}
+
+    return sanitized
+
+
 def _claim_field_links_payload() -> dict[str, list[str]]:
     return {key: list(values) for key, values in CLAIM_FIELD_LINK_MAP.items()}
 
@@ -747,10 +796,15 @@ def _append_attachment_summary(
         prior = record.get("attachments")
         if isinstance(prior, Sequence):
             for item in prior:
-                if isinstance(item, Mapping):
-                    existing.append(dict(item))
+                sanitized_entry = _sanitize_attachment_record(item)
+                if sanitized_entry:
+                    existing.append(sanitized_entry)
 
-        existing.extend(dict(entry) for entry in attachments)
+        for entry in attachments:
+            sanitized_entry = _sanitize_attachment_record(entry)
+            if sanitized_entry:
+                existing.append(sanitized_entry)
+
         record["attachments"] = existing
 
         union: list[str] = []
@@ -770,6 +824,42 @@ def _append_attachment_summary(
         return record
 
     update_json_in_place(summary_path, _update)
+
+
+def _build_account_attachments_summary(
+    responses_dir: Path, account_id: str, *, sid: str
+) -> dict[str, Any]:
+    summary_path = responses_dir / f"{account_id}.summary.json"
+    payload = _load_json_mapping(summary_path)
+
+    attachments: list[dict[str, Any]] = []
+    if isinstance(payload, Mapping):
+        raw_entries = payload.get("attachments")
+        if isinstance(raw_entries, Sequence):
+            for entry in raw_entries:
+                sanitized = _sanitize_attachment_record(entry)
+                if sanitized:
+                    attachments.append(sanitized)
+
+    union: list[str] = []
+    seen: set[str] = set()
+    for entry in attachments:
+        hot_fields = entry.get("hot_fields")
+        if not isinstance(hot_fields, Sequence) or isinstance(hot_fields, (str, bytes)):
+            continue
+        for field in hot_fields:
+            if not isinstance(field, str) or not field or field in seen:
+                continue
+            seen.add(field)
+            union.append(field)
+
+    return {
+        "sid": sid,
+        "account_id": account_id,
+        "attachments": attachments,
+        "hot_fields_union": union,
+    }
+
 
 def _merge_collectors(
     problems: list[Mapping[str, Any]] | None,
@@ -1397,7 +1487,7 @@ def api_frontend_index(sid: str):
         return jsonify({"error": "index_not_found"}), 404
 
     _, payload = manifest
-    normalized = _normalize_frontend_review_index_payload(run_dir, payload)
+    normalized = _normalize_frontend_review_index_payload(run_dir, payload, sid=sid)
     response_payload = {"frontend": {"review": normalized}}
     response = jsonify(response_payload)
     response.headers["X-Index-Shape"] = "nested"
@@ -1467,7 +1557,7 @@ def api_frontend_review_stream(sid: str):
                 return None
 
             _, payload = manifest
-            normalized = _normalize_frontend_review_index_payload(run_dir, payload)
+            normalized = _normalize_frontend_review_index_payload(run_dir, payload, sid=sid)
             packs_count = _extract_packs_count(normalized)
             if packs_count > 0:
                 return _format_sse("packs_ready", {"packs_count": packs_count})
@@ -1534,12 +1624,12 @@ def api_frontend_review_packs(sid: str):
         return jsonify({"error": "index_not_found"}), 404
 
     _, payload = manifest
-    normalized = _normalize_frontend_review_index_payload(run_dir, payload)
+    normalized = _normalize_frontend_review_index_payload(run_dir, payload, sid=sid)
     return jsonify({"items": normalized.get("items", [])})
 
 
 def _normalize_frontend_review_index_payload(
-    run_dir: Path, payload: Any
+    run_dir: Path, payload: Any, *, sid: str | None = None
 ) -> dict[str, Any]:
     result: dict[str, Any]
     if isinstance(payload, Mapping):
@@ -1572,6 +1662,43 @@ def _normalize_frontend_review_index_payload(
     counts["packs"] = packs_count
     counts["responses"] = responses_count
     result["counts"] = counts
+
+    attachments_overview: dict[str, Any] = {}
+    try:
+        stage_config = load_frontend_stage_config(run_dir)
+    except Exception:  # pragma: no cover - defensive fallback
+        stage_config = None
+
+    if stage_config is not None:
+        for item in items:
+            account_id = item.get("account_id") if isinstance(item, Mapping) else None
+            if not isinstance(account_id, str):
+                continue
+            if not _is_valid_frontend_account_id(account_id):
+                continue
+            summary_payload = _build_account_attachments_summary(
+                stage_config.responses_dir,
+                account_id,
+                sid=sid or "",
+            )
+            attachments_overview[account_id] = {
+                "count": len(summary_payload.get("attachments", ())),
+                "hot_fields_union": list(summary_payload.get("hot_fields_union", ())),
+            }
+
+        frontend_payload = result.get("frontend") if isinstance(result.get("frontend"), Mapping) else None
+        if frontend_payload is not None:
+            frontend_map = dict(frontend_payload)
+        else:
+            frontend_map = {}
+        review_payload = frontend_map.get("review") if isinstance(frontend_map.get("review"), Mapping) else None
+        if review_payload is not None:
+            review_map = dict(review_payload)
+        else:
+            review_map = {}
+        review_map["attachments_summary"] = attachments_overview
+        frontend_map["review"] = review_map
+        result["frontend"] = frontend_map
 
     normalized_result = _normalize_path_like_entries(result)
 
@@ -1949,6 +2076,174 @@ def api_frontend_review_answer(sid: str, account_id: str):
     _review_stream_broker.publish(sid, "responses_written", {"account_id": account_id})
 
     return jsonify(record)
+
+
+@api_bp.route(
+    "/api/runs/<sid>/frontend/review/attachments/<account_id>",
+    methods=["GET"],
+)
+def api_frontend_review_attachments_summary(sid: str, account_id: str):
+    try:
+        run_dir = _run_dir_for_sid(sid)
+    except ValueError:
+        return jsonify({"error": "invalid_sid"}), 400
+
+    if not run_dir.exists():
+        return jsonify({"error": "run_not_found"}), 404
+
+    if not _is_valid_frontend_account_id(account_id):
+        return jsonify({"error": "invalid_account_id"}), 400
+
+    stage_config = load_frontend_stage_config(run_dir)
+    summary = _build_account_attachments_summary(
+        stage_config.responses_dir,
+        account_id,
+        sid=sid,
+    )
+
+    return jsonify(summary)
+
+
+@api_bp.route(
+    "/api/runs/<sid>/frontend/review/attachments/<account_id>",
+    methods=["POST"],
+)
+def api_frontend_review_attachment_upload(sid: str, account_id: str):
+    try:
+        run_dir = _run_dir_for_sid(sid)
+    except ValueError:
+        return jsonify({"error": "invalid_sid"}), 400
+
+    if not run_dir.exists():
+        return jsonify({"error": "run_not_found"}), 404
+
+    if not _is_valid_frontend_account_id(account_id):
+        return jsonify({"error": "invalid_account_id"}), 400
+
+    claim_type = (request.form.get("claim_type") or "").strip()
+    if not claim_type or claim_type not in CLAIM_FIELD_LINK_MAP:
+        return jsonify({"error": "invalid_claim_type"}), 400
+
+    uploaded = request.files.get("file")
+    if uploaded is None:
+        return jsonify({"error": "missing_file"}), 400
+
+    original_name = uploaded.filename or "document"
+    extension = _extract_upload_extension(original_name)
+    if extension not in _REVIEW_ALLOWED_UPLOAD_EXTENSIONS:
+        return jsonify({"error": "invalid_file_type"}), 400
+
+    content_length = getattr(uploaded, "content_length", None)
+    if isinstance(content_length, int) and content_length > _REVIEW_UPLOAD_MAX_BYTES:
+        return jsonify({"error": "file_too_large"}), 400
+
+    if extension == "pdf":
+        head = uploaded.stream.read(4)
+        uploaded.stream.seek(0)
+        if head != b"%PDF":
+            return jsonify({"error": "invalid_pdf"}), 400
+
+    stage_config = load_frontend_stage_config(run_dir)
+    uploads_dir = stage_config.uploads_dir
+    target_dir = uploads_dir / account_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp_ms = int(time.time() * 1000)
+    slug = _slugify_upload_name(original_name)
+    stored_name = f"{timestamp_ms}_{slug}"
+    if extension:
+        stored_name = f"{stored_name}.{extension}"
+    target_path = target_dir / stored_name
+    counter = 1
+    while target_path.exists():
+        timestamp_ms += counter
+        stored_name = f"{timestamp_ms}_{slug}"
+        if extension:
+            stored_name = f"{stored_name}.{extension}"
+        target_path = target_dir / stored_name
+        counter += 1
+
+    try:
+        uploaded.save(target_path)
+    except Exception:
+        log.exception(
+            "failed to save frontend attachment upload",
+            extra={"sid": sid, "account_id": account_id, "claim_type": claim_type},
+        )
+        return jsonify({"error": "upload_failed"}), 500
+
+    try:
+        size_value = target_path.stat().st_size
+    except OSError:
+        size_value = None
+
+    if isinstance(size_value, int) and size_value > _REVIEW_UPLOAD_MAX_BYTES:
+        try:
+            target_path.unlink()
+        except OSError:  # pragma: no cover - best effort cleanup
+            pass
+        return jsonify({"error": "file_too_large"}), 400
+
+    mimetype_hint = getattr(uploaded, "mimetype", None)
+    mime_type = mimetype_hint if isinstance(mimetype_hint, str) and mimetype_hint else None
+    if not mime_type:
+        guess = mimetypes.guess_type(original_name)[0]
+        mime_type = guess or "application/octet-stream"
+
+    sha1 = hashlib.sha1()
+    try:
+        with target_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(65536), b""):
+                sha1.update(chunk)
+    except OSError:
+        log.warning(
+            "FRONTEND_REVIEW_ATTACHMENT_SHA1_FAILED sid=%s account_id=%s path=%s",
+            sid,
+            account_id,
+            target_path,
+            exc_info=True,
+        )
+    sha1_hex = sha1.hexdigest()
+
+    uploaded_at = (
+        datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    )
+
+    stored_path = _doc_id_for_path(target_path)
+
+    summary_payload, bureaus_payload = _load_account_validation_context(run_dir, account_id)
+    hot_fields = list(CLAIM_FIELD_LINK_MAP.get(claim_type, ()))
+    field_snapshots_raw = _build_field_snapshots(
+        summary_payload,
+        bureaus_payload,
+        hot_fields,
+    )
+    field_snapshots = _sanitize_field_snapshots(field_snapshots_raw)
+
+    attachment_record: dict[str, Any] = {
+        "id": _generate_attachment_id(),
+        "claim_type": claim_type,
+        "filename": original_name,
+        "stored_path": stored_path,
+        "mime": mime_type,
+        "size": int(size_value) if isinstance(size_value, int) else size_value,
+        "sha1": sha1_hex,
+        "uploaded_at": uploaded_at,
+        "hot_fields": list(hot_fields),
+        "field_snapshots": field_snapshots,
+        "doc_id": stored_path,
+    }
+
+    sanitized_record = _sanitize_attachment_record(attachment_record)
+
+    _append_attachment_summary(
+        stage_config.responses_dir,
+        sid=sid,
+        account_id=account_id,
+        attachments=[sanitized_record],
+    )
+
+    return jsonify(sanitized_record), 201
 
 
 @api_bp.route("/api/runs/<sid>/frontend/review/uploads", methods=["POST"])

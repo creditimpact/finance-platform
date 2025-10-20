@@ -61,6 +61,29 @@ def _coerce_int(value: Any) -> Optional[int]:
         return None
 
 
+def _default_umbrella_barriers() -> dict[str, Any]:
+    return {
+        "merge_ready": False,
+        "validation_ready": False,
+        "review_ready": False,
+        "all_ready": False,
+        "checked_at": None,
+    }
+
+
+def _normalise_umbrella_barriers(payload: Any) -> dict[str, Any]:
+    result = _default_umbrella_barriers()
+    if isinstance(payload, Mapping):
+        for key in ("merge_ready", "validation_ready", "review_ready", "all_ready"):
+            value = payload.get(key)
+            if isinstance(value, bool):
+                result[key] = value
+        checked_at = payload.get("checked_at")
+        if isinstance(checked_at, str):
+            result["checked_at"] = checked_at
+    return result
+
+
 def _load_runflow(path: Path, sid: str) -> dict[str, Any]:
     try:
         raw = path.read_text(encoding="utf-8")
@@ -70,6 +93,7 @@ def _load_runflow(path: Path, sid: str) -> dict[str, Any]:
             "run_state": "INIT",
             "stages": {},
             "updated_at": _now_iso(),
+            "umbrella_barriers": _default_umbrella_barriers(),
         }
         return data
     except OSError:
@@ -79,6 +103,7 @@ def _load_runflow(path: Path, sid: str) -> dict[str, Any]:
             "run_state": "INIT",
             "stages": {},
             "updated_at": _now_iso(),
+            "umbrella_barriers": _default_umbrella_barriers(),
         }
 
     try:
@@ -104,11 +129,14 @@ def _load_runflow(path: Path, sid: str) -> dict[str, Any]:
     }:
         run_state = "INIT"
 
+    umbrella_barriers = _normalise_umbrella_barriers(payload.get("umbrella_barriers"))
+
     return {
         "sid": sid,
         "run_state": run_state,
         "stages": dict(stages),
         "updated_at": str(payload.get("updated_at") or _now_iso()),
+        "umbrella_barriers": umbrella_barriers,
     }
 
 
@@ -142,7 +170,13 @@ def record_stage(
 
     disk_counts = _stage_counts_from_disk(stage, base_dir)
     for key, value in disk_counts.items():
-        normalized_counts[str(key)] = int(value)
+        coerced_disk = _coerce_int(value)
+        if coerced_disk is None:
+            continue
+        existing = normalized_counts.get(str(key))
+        if isinstance(existing, int) and existing > 0 and coerced_disk == 0:
+            continue
+        normalized_counts[str(key)] = coerced_disk
 
     for key, value in normalized_counts.items():
         stage_payload[key] = value
@@ -155,6 +189,9 @@ def record_stage(
         stages = {}
         data["stages"] = stages
     stages[stage] = stage_payload
+
+    if "umbrella_barriers" not in data or not isinstance(data["umbrella_barriers"], dict):
+        data["umbrella_barriers"] = _default_umbrella_barriers()
 
     if status == "error":
         data["run_state"] = "ERROR"

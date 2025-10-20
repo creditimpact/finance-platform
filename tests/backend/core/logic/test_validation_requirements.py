@@ -1577,6 +1577,49 @@ def test_apply_validation_summary_and_sync_validation_tag(tmp_path):
     assert all(tag.get("kind") != "validation_required" for tag in tags)
 
 
+
+def test_seed_arguments_propagate_to_summary(tmp_path):
+    summary_path = tmp_path / "summary.json"
+    summary_path.write_text("{}", encoding="utf-8")
+
+    normalized_map = {
+        "equifax": "open",
+        "experian": "open",
+        "transunion": "closed",
+    }
+
+    requirements = [
+        {
+            "field": "account_status",
+            "category": "status",
+            "min_days": 0,
+            "documents": [],
+            "strength": "strong",
+            "ai_needed": False,
+        }
+    ]
+
+    payload = build_summary_payload(
+        requirements,
+        field_consistency={
+            "account_status": {"normalized": normalized_map}
+        },
+    )
+
+    findings = payload["findings"]
+    assert len(findings) == 1
+    seed = findings[0]["argument"]["seed"]
+    assert seed["id"] == "account_status__C4_TWO_MATCH_ONE_DIFF"
+
+    assert payload["arguments"]["seeds"] == [seed]
+    assert payload["arguments"]["composites"] == []
+
+    apply_validation_summary(summary_path, payload)
+    summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
+
+    assert summary_data["arguments"]["seeds"] == [seed]
+    assert summary_data["arguments"]["composites"] == []
+
 def test_build_validation_requirements_for_account_writes_summary_and_tags(
     tmp_path, monkeypatch
 ):

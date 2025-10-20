@@ -44,6 +44,7 @@ from backend.core.logic.reason_classifier import classify_reason, decide_send_to
 from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.telemetry import metrics
 from backend.validation.decision_matrix import decide_default
+from backend.validation.seed_arguments import build_seed_argument
 from backend.core.merge.acctnum import acctnum_level, acctnum_match_level
 from backend.prevalidation import read_date_convention
 
@@ -1639,7 +1640,136 @@ def _build_finding(
         raw_value_provider=raw_value_provider,
     )
 
+    decision_value = finding.get("decision")
+    if decision_value in {"strong_actionable", "strong"}:
+        field_value = str(finding.get("field") or "")
+        reason_code_value = str(finding.get("reason_code") or "")
+        if field_value and reason_code_value:
+            argument_block = finding.get("argument")
+            if isinstance(argument_block, Mapping):
+                if "seed" not in argument_block:
+                    seed_payload = build_seed_argument(field_value, reason_code_value)
+                    if seed_payload:
+                        merged_argument = dict(argument_block)
+                        merged_argument.update(seed_payload)
+                        finding["argument"] = merged_argument
+            else:
+                seed_payload = build_seed_argument(field_value, reason_code_value)
+                if seed_payload:
+                    finding["argument"] = dict(seed_payload)
+
     return finding
+
+
+def _collect_seed_arguments(findings: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
+    seeds_by_id: dict[str, dict[str, Any]] = {}
+    if not findings:
+        return []
+
+    for entry in findings:
+        if not isinstance(entry, Mapping):
+            continue
+        argument_block = entry.get("argument")
+        if not isinstance(argument_block, Mapping):
+            continue
+        seed_entry = argument_block.get("seed")
+        if not isinstance(seed_entry, Mapping):
+            continue
+        seed_id = str(seed_entry.get("id") or "").strip()
+        if not seed_id or seed_id in seeds_by_id:
+            continue
+
+        tone_value = seed_entry.get("tone")
+        tone = str(tone_value).strip() if tone_value is not None else "firm_courteous"
+        if not tone:
+            tone = "firm_courteous"
+
+        text_value = seed_entry.get("text")
+        text = str(text_value or "").strip()
+
+        seeds_by_id[seed_id] = {
+            "id": seed_id,
+            "tone": tone,
+            "text": text,
+        }
+
+    return list(seeds_by_id.values())
+
+
+def _normalize_arguments_block(
+    arguments_block: Mapping[str, Any] | None,
+) -> tuple[list[dict[str, Any]], list[Any]]:
+    seeds: list[dict[str, Any]] = []
+    composites: list[Any] = []
+
+    if not isinstance(arguments_block, Mapping):
+        return seeds, composites
+
+    seeds_raw = arguments_block.get("seeds")
+    if isinstance(seeds_raw, Sequence) and not isinstance(
+        seeds_raw, (str, bytes, bytearray)
+    ):
+        seen: set[str] = set()
+        for seed_entry in seeds_raw:
+            if not isinstance(seed_entry, Mapping):
+                continue
+            seed_id = str(seed_entry.get("id") or "").strip()
+            if not seed_id or seed_id in seen:
+                continue
+            tone_value = seed_entry.get("tone")
+            tone = (
+                str(tone_value).strip() if tone_value is not None else "firm_courteous"
+            )
+            if not tone:
+                tone = "firm_courteous"
+            text_value = seed_entry.get("text")
+            text = str(text_value or "").strip()
+            seeds.append({"id": seed_id, "tone": tone, "text": text})
+            seen.add(seed_id)
+
+    composites_raw = arguments_block.get("composites")
+    if isinstance(composites_raw, list):
+        composites = composites_raw
+    elif isinstance(composites_raw, Sequence) and not isinstance(
+        composites_raw, (str, bytes, bytearray)
+    ):
+        composites = list(composites_raw)
+
+    return seeds, composites
+
+
+def _merge_summary_arguments(
+    summary_data: MutableMapping[str, Any],
+    normalized_payload: MutableMapping[str, Any],
+) -> bool:
+    payload_arguments = normalized_payload.get("arguments")
+    seeds, payload_composites = _normalize_arguments_block(
+        payload_arguments if isinstance(payload_arguments, Mapping) else None
+    )
+
+    normalized_payload["arguments"] = {
+        "seeds": seeds,
+        "composites": payload_composites,
+    }
+
+    existing_arguments = summary_data.get("arguments")
+    _, existing_composites = _normalize_arguments_block(
+        existing_arguments if isinstance(existing_arguments, Mapping) else None
+    )
+
+    composites = existing_composites or payload_composites
+    normalized_payload["arguments"]["composites"] = composites
+
+    target_arguments = {
+        "seeds": seeds,
+        "composites": composites,
+    }
+
+    if summary_data.get("arguments") != target_arguments:
+        summary_data["arguments"] = target_arguments
+        return True
+
+    return False
 
 
 def build_findings(
@@ -1827,6 +1957,23 @@ def build_summary_payload(
     payload: Dict[str, Any] = {
         "schema_version": _SUMMARY_SCHEMA_VERSION,
         "findings": findings,
+    }
+
+    seeds = _collect_seed_arguments(findings)
+    existing_arguments = payload.get("arguments")
+    composites: list[Any] = []
+    if isinstance(existing_arguments, Mapping):
+        raw_composites = existing_arguments.get("composites")
+        if isinstance(raw_composites, list):
+            composites = raw_composites
+        elif isinstance(raw_composites, Sequence) and not isinstance(
+            raw_composites, (str, bytes, bytearray)
+        ):
+            composites = list(raw_composites)
+
+    payload["arguments"] = {
+        "seeds": seeds,
+        "composites": composites,
     }
 
     if suppressed_fields:
@@ -2021,6 +2168,8 @@ def apply_validation_summary(
     normalized_payload = summary_writer.sanitize_validation_payload(normalized_payload)
     tolerance_notes_payload = normalized_payload.pop("tolerance_notes", None)
 
+    arguments_changed = _merge_summary_arguments(summary_data, normalized_payload)
+
     existing_block = summary_data.get("validation_requirements")
     existing_normalized = (
         dict(existing_block) if isinstance(existing_block, Mapping) else None
@@ -2030,6 +2179,13 @@ def apply_validation_summary(
             existing_normalized
         )
         existing_normalized.pop("tolerance_notes", None)
+        seeds_existing, composites_existing = _normalize_arguments_block(
+            existing_normalized.get("arguments")
+        )
+        existing_normalized["arguments"] = {
+            "seeds": seeds_existing,
+            "composites": composites_existing,
+        }
 
     needs_update = existing_normalized != normalized_payload
 
@@ -2054,7 +2210,7 @@ def apply_validation_summary(
             tolerance_notes_changed = True
 
     if findings_count == 0 and not summary_writer.should_write_empty_requirements():
-        write_required = scaffold_changed
+        write_required = scaffold_changed or arguments_changed
         if existing_block is not None:
             summary_data.pop("validation_requirements", None)
             write_required = True
@@ -2074,7 +2230,12 @@ def apply_validation_summary(
     if needs_update:
         summary_data["validation_requirements"] = dict(normalized_payload)
 
-    write_required = scaffold_changed or needs_update or tolerance_notes_changed
+    write_required = (
+        scaffold_changed
+        or needs_update
+        or tolerance_notes_changed
+        or arguments_changed
+    )
 
     if summary_writer.strip_disallowed_sections(summary_data):
         write_required = True
@@ -2127,6 +2288,17 @@ def _apply_dry_run_summary(
             existing_normalized
         )
 
+    arguments_changed = _merge_summary_arguments(summary_data, normalized_payload)
+
+    if isinstance(existing_normalized, dict):
+        seeds_existing, composites_existing = _normalize_arguments_block(
+            existing_normalized.get("arguments")
+        )
+        existing_normalized["arguments"] = {
+            "seeds": seeds_existing,
+            "composites": composites_existing,
+        }
+
     write_required = scaffold_changed
 
     if findings_count == 0 and not summary_writer.should_write_empty_requirements():
@@ -2141,7 +2313,7 @@ def _apply_dry_run_summary(
     if summary_writer.strip_disallowed_sections(summary_data):
         write_required = True
 
-    if write_required:
+    if write_required or arguments_changed:
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         if os.getenv("COMPACT_MERGE_SUMMARY", "1") == "1":
             compact_merge_sections(summary_data)

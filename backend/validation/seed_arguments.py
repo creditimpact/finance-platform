@@ -12,3 +12,16 @@ def load_seed_templates() -> dict:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
     return data.get("templates", {})
+
+
+def build_seed_argument(field: str, c_code: str) -> dict | None:
+    tpl = load_seed_templates().get(field, {}).get(c_code)
+    if not tpl:
+        return None
+    return {
+        "seed": {
+            "id": f"{field}__{c_code}",
+            "tone": tpl.get("tone", "firm_courteous"),
+            "text": tpl["text"].strip()
+        }
+    }

@@ -23,6 +23,19 @@ type DateBlock = Partial<Record<BureauKey, string | null | undefined>>;
 
 type QuestionBlock = Partial<Record<AccountQuestionKey, string | null | undefined>>;
 
+export type ResolvedDisplayField = {
+  value?: string | null;
+  source?: string | null;
+  method?: string | null;
+};
+
+export type ResolvedDisplay = Partial<
+  Record<
+    'account_number' | 'account_type' | 'status' | 'balance_owed' | 'date_opened' | 'closed_date',
+    ResolvedDisplayField
+  >
+>;
+
 type AccountDisplay = {
   account_number?: PerBureauBlock;
   account_type?: PerBureauBlock;
@@ -31,6 +44,7 @@ type AccountDisplay = {
   date_opened?: DateBlock;
   closed_date?: DateBlock;
   questions?: QuestionBlock;
+  resolved?: ResolvedDisplay | null;
 };
 
 export type AccountPack = {

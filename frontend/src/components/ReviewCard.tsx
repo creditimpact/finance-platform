@@ -9,7 +9,7 @@ import {
 } from './accountFieldTypes';
 import { summarizeField, type BureauTriple } from '../utils/bureauSummary';
 import type { AccountQuestionAnswers } from './AccountQuestions';
-import type { AccountPack } from './AccountCard';
+import type { AccountPack, ResolvedDisplay } from './AccountCard';
 import { type FrontendReviewResponse, uploadReviewDoc } from '../api.ts';
 import type { PackClaimsPayload, ClaimSchema, DocKey } from '../types/review';
 import {
@@ -249,13 +249,24 @@ export function ReviewCard({
   const explanationId = React.useId();
 
   const summaryFields = React.useMemo(() => {
+    const resolved: ResolvedDisplay =
+      display.resolved && typeof display.resolved === 'object'
+        ? (display.resolved as ResolvedDisplay)
+        : {};
     return SUMMARY_FIELDS.map((field) => {
       const triple = toBureauTriple(display[field.key]);
       const summary = summarizeField(
         triple,
         field.kind === 'account_number' ? { kind: 'account_number' } : undefined
       );
-      const normalized = normalizeDisplayValue(summary.summary);
+      const resolvedCandidate = resolved?.[field.key]?.value;
+      const resolvedText =
+        resolvedCandidate == null
+          ? undefined
+          : typeof resolvedCandidate === 'string'
+            ? resolvedCandidate
+            : String(resolvedCandidate);
+      const normalized = normalizeDisplayValue(resolvedText ?? summary.summary);
       return {
         key: field.key,
         label: field.label,

@@ -77,6 +77,7 @@ from backend.core.logic.letters.explanations_normalizer import (
     extract_structured,
     sanitize,
 )
+from backend.core.logic.consistency import normalize_date
 from backend.core.materialize.casestore_view import build_account_view
 
 logger = logging.getLogger(__name__)
@@ -554,6 +555,209 @@ def _extract_pack_questions(payload: Any, account_id: str) -> list[Any] | None:
     return None
 
 
+EMPTY_TOKENS = {"", "--", "n/a", "na"}
+BUREAU_ORDER = ("experian", "transunion", "equifax")
+_BUREAU_RANK_DEFAULT = len(BUREAU_ORDER)
+_KNOWN_BUREAUS = set(BUREAU_ORDER)
+
+
+def is_empty(value: Any) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip()
+    if not text:
+        return True
+    return text.lower() in EMPTY_TOKENS
+
+
+def digits_count(value: Any) -> int:
+    if value is None:
+        return 0
+    return sum(char.isdigit() for char in str(value))
+
+
+def _bureau_rank(bureau: str) -> int:
+    try:
+        return BUREAU_ORDER.index(bureau)
+    except ValueError:
+        return _BUREAU_RANK_DEFAULT
+
+
+def _stringify(value: Any) -> str:
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else str(value)
+
+
+def pick_majority(values: Mapping[str, Any] | None) -> tuple[str, str, str]:
+    if not isinstance(values, Mapping):
+        values = {}
+
+    non_empty: dict[str, str] = {}
+    for bureau_key, raw_value in values.items():
+        bureau = str(bureau_key)
+        if _KNOWN_BUREAUS and bureau not in _KNOWN_BUREAUS:
+            continue
+        if is_empty(raw_value):
+            continue
+        non_empty[bureau] = _stringify(raw_value)
+
+    if not non_empty:
+        return ("", "", "empty")
+
+    non_empty_count = len(non_empty)
+    if non_empty_count == 1:
+        bureau, value = next(iter(non_empty.items()))
+        return (_stringify(value), bureau, "general")
+
+    buckets: dict[str, dict[str, Any]] = {}
+    for bureau, text in non_empty.items():
+        key = text.strip().lower()
+        entry = buckets.setdefault(
+            key,
+            {"count": 0, "sources": [], "value": text, "value_source": bureau},
+        )
+        entry["count"] += 1
+        entry["sources"].append(bureau)
+        if _bureau_rank(bureau) < _bureau_rank(entry["value_source"]):
+            entry["value"] = text
+            entry["value_source"] = bureau
+
+    top_entry = max(buckets.values(), key=lambda item: item["count"])
+    if top_entry["count"] >= 2 or top_entry["count"] > (non_empty_count / 2):
+        source = min(top_entry["sources"], key=_bureau_rank)
+        return (_stringify(top_entry["value"]), source, "majority")
+
+    source = min(non_empty.keys(), key=_bureau_rank)
+    return (_stringify(non_empty[source]), source, "precedence")
+
+
+def pick_account_number(values: Mapping[str, Any] | None) -> tuple[str, str]:
+    if not isinstance(values, Mapping):
+        values = {}
+
+    candidates: list[tuple[str, str, int, int]] = []
+    for bureau_key, raw_value in values.items():
+        bureau = str(bureau_key)
+        if _KNOWN_BUREAUS and bureau not in _KNOWN_BUREAUS:
+            continue
+        if is_empty(raw_value):
+            continue
+        text = _stringify(raw_value)
+        candidates.append((bureau, text, digits_count(text), len(text)))
+
+    if not candidates:
+        return ("", "")
+
+    max_digits = max(candidate[2] for candidate in candidates)
+    pool = [candidate for candidate in candidates if candidate[2] == max_digits]
+    if len(pool) == 1:
+        bureau, value, _, _ = pool[0]
+        return (_stringify(value), bureau)
+
+    best_rank = min(_bureau_rank(candidate[0]) for candidate in pool)
+    ranked = [candidate for candidate in pool if _bureau_rank(candidate[0]) == best_rank]
+    if len(ranked) == 1:
+        bureau, value, _, _ = ranked[0]
+        return (_stringify(value), bureau)
+
+    bureau, value, _, _ = max(ranked, key=lambda candidate: candidate[3])
+    return (_stringify(value), bureau)
+
+
+def _extract_bureau_values(block: Any) -> dict[str, Any]:
+    if not isinstance(block, Mapping):
+        return {}
+
+    per_bureau = block.get("per_bureau")
+    if isinstance(per_bureau, Mapping):
+        return {
+            str(bureau): per_bureau[bureau]
+            for bureau in per_bureau
+            if str(bureau) in _KNOWN_BUREAUS
+        }
+
+    return {
+        str(bureau): block[bureau]
+        for bureau in block
+        if str(bureau) in _KNOWN_BUREAUS
+    }
+
+
+def _normalize_resolved_date(value: str) -> str:
+    normalized = normalize_date(value)
+    return normalized if normalized else value
+
+
+def resolve_display_fields(display: Mapping[str, Any] | None) -> dict[str, dict[str, str]]:
+    display_mapping: dict[str, Any]
+    if isinstance(display, Mapping):
+        display_mapping = dict(display)
+    else:
+        display_mapping = {}
+
+    account_number_values = _extract_bureau_values(display_mapping.get("account_number"))
+    account_number_value, account_number_source = pick_account_number(account_number_values)
+
+    account_type_value, account_type_source, account_type_method = pick_majority(
+        _extract_bureau_values(display_mapping.get("account_type"))
+    )
+    status_value, status_source, status_method = pick_majority(
+        _extract_bureau_values(display_mapping.get("status"))
+    )
+    balance_value, balance_source, balance_method = pick_majority(
+        _extract_bureau_values(display_mapping.get("balance_owed"))
+    )
+
+    date_opened_values = _extract_bureau_values(display_mapping.get("date_opened"))
+    closed_date_values = _extract_bureau_values(display_mapping.get("closed_date"))
+
+    date_opened_value, date_opened_source, date_opened_method = pick_majority(
+        date_opened_values
+    )
+    if date_opened_value:
+        date_opened_value = _normalize_resolved_date(date_opened_value)
+
+    closed_date_value, closed_date_source, closed_date_method = pick_majority(
+        closed_date_values
+    )
+    if closed_date_value:
+        closed_date_value = _normalize_resolved_date(closed_date_value)
+
+    return {
+        "account_number": {
+            "value": account_number_value,
+            "source": account_number_source,
+            "method": "max_digits",
+        },
+        "account_type": {
+            "value": account_type_value,
+            "source": account_type_source,
+            "method": account_type_method,
+        },
+        "status": {
+            "value": status_value,
+            "source": status_source,
+            "method": status_method,
+        },
+        "balance_owed": {
+            "value": balance_value,
+            "source": balance_source,
+            "method": balance_method,
+        },
+        "date_opened": {
+            "value": date_opened_value,
+            "source": date_opened_source,
+            "method": date_opened_method,
+        },
+        "closed_date": {
+            "value": closed_date_value,
+            "source": closed_date_source,
+            "method": closed_date_method,
+        },
+    }
+
+
 def _prepare_pack_response(payload: Any, account_id: str) -> dict[str, Any]:
     pack_mapping = _unwrap_pack_payload(payload)
     result: dict[str, Any] = dict(pack_mapping) if isinstance(pack_mapping, Mapping) else {}
@@ -578,6 +782,12 @@ def _prepare_pack_response(payload: Any, account_id: str) -> dict[str, Any]:
         claims_payload = _resolved_claims_payload(primary_issue)
         if claims_payload:
             result["claims"] = claims_payload
+
+    display_payload = result.get("display")
+    if isinstance(display_payload, Mapping):
+        display_mapping = dict(display_payload)
+        display_mapping["resolved"] = resolve_display_fields(display_mapping)
+        result["display"] = display_mapping
 
     return result
 

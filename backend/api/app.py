@@ -17,9 +17,12 @@ load_dotenv()
 
 sanitize_openai_env()
 
+import hashlib
 import json
 import logging
+import mimetypes
 import queue
+import secrets
 import threading
 import time
 import uuid
@@ -27,7 +30,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from shutil import copy2
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from flask import Blueprint, Flask, Response, jsonify, redirect, request, url_for
 from flask import stream_with_context
@@ -62,6 +65,10 @@ from backend.frontend.packs.claim_schema import (
     resolve_issue_claims,
 )
 from backend.frontend.packs.config import load_frontend_stage_config
+from backend.domain.claims import (
+    CLAIM_FIELD_LINK_MAP,
+    DOC_KEY_ALIAS_TO_CANONICAL,
+)
 from backend.api.routes_smoke import bp as smoke_bp
 from backend.api.routes_run_assets import bp as run_assets_bp
 from backend.api.ui_events import ui_event_bp
@@ -77,7 +84,8 @@ from backend.core.logic.letters.explanations_normalizer import (
     extract_structured,
     sanitize,
 )
-from backend.core.logic.consistency import normalize_date
+from backend.core.logic.consistency import compute_field_consistency, normalize_date
+from backend.core.io.json_io import update_json_in_place
 from backend.core.materialize.casestore_view import build_account_view
 
 logger = logging.getLogger(__name__)
@@ -94,6 +102,16 @@ with open(SCHEMA_DIR / "problem_account.json") as _f:
 _CLAIMS_SCHEMA_DATA = load_claims_schema()
 _ALL_CLAIM_KEYS = all_claim_keys()
 _AUTO_ATTACH_BASE = tuple(auto_attach_base())
+
+_CANONICAL_DOC_KEY_TO_ALIASES: dict[str, tuple[str, ...]] = {}
+if DOC_KEY_ALIAS_TO_CANONICAL:
+    alias_map: dict[str, set[str]] = {}
+    for alias, canonical in DOC_KEY_ALIAS_TO_CANONICAL.items():
+        alias_map.setdefault(canonical, set()).add(alias)
+    _CANONICAL_DOC_KEY_TO_ALIASES = {
+        canonical: tuple(sorted(aliases))
+        for canonical, aliases in alias_map.items()
+    }
 _ALL_DOC_KEYS = all_doc_keys()
 
 
@@ -417,6 +435,341 @@ def _doc_id_for_path(path: Path) -> str:
     resolved = path.resolve(strict=False)
     return resolved.relative_to(project_root).as_posix()
 
+
+def _merge_attachment_doc_ids(
+    target: dict[str, list[str]],
+    doc_key: str,
+    doc_ids: Sequence[str],
+) -> None:
+    if not doc_ids:
+        return
+
+    canonical = DOC_KEY_ALIAS_TO_CANONICAL.get(doc_key, doc_key)
+    related_keys: set[str] = {doc_key, canonical}
+    related_keys.update(_CANONICAL_DOC_KEY_TO_ALIASES.get(canonical, ()))
+
+    for key in related_keys:
+        existing = target.setdefault(key, [])
+        for doc_id in doc_ids:
+            if doc_id not in existing:
+                existing.append(doc_id)
+
+
+_FRONTEND_BUREAUS: tuple[str, ...] = ("transunion", "experian", "equifax")
+
+
+def _load_json_mapping(path: Path) -> Mapping[str, Any] | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        log.warning("FRONTEND_REVIEW_JSON_READ_FAILED path=%s", path, exc_info=True)
+        return None
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        log.warning("FRONTEND_REVIEW_JSON_PARSE_FAILED path=%s", path, exc_info=True)
+        return None
+
+    if isinstance(payload, Mapping):
+        return payload
+
+    return None
+
+
+def _account_dir_for_frontend(run_dir: Path, account_id: str) -> Path | None:
+    accounts_dir = run_dir / "cases" / "accounts"
+    direct = accounts_dir / account_id
+    if direct.is_dir():
+        return direct
+
+    if not accounts_dir.is_dir():
+        return None
+
+    for candidate in accounts_dir.iterdir():
+        if not candidate.is_dir():
+            continue
+        summary_payload = _load_json_mapping(candidate / "summary.json")
+        if not isinstance(summary_payload, Mapping):
+            continue
+        summary_account_id = summary_payload.get("account_id")
+        if isinstance(summary_account_id, str) and summary_account_id.strip() == account_id:
+            return candidate
+
+    return None
+
+
+def _load_account_validation_context(
+    run_dir: Path, account_id: str
+) -> tuple[Mapping[str, Any] | None, dict[str, Mapping[str, Any]]]:
+    account_dir = _account_dir_for_frontend(run_dir, account_id)
+    if account_dir is None:
+        return None, {}
+
+    summary_payload = _load_json_mapping(account_dir / "summary.json")
+    bureaus_payload_raw = _load_json_mapping(account_dir / "bureaus.json")
+
+    bureaus: dict[str, Mapping[str, Any]] = {}
+    if isinstance(bureaus_payload_raw, Mapping):
+        for bureau in _FRONTEND_BUREAUS:
+            branch = bureaus_payload_raw.get(bureau)
+            if isinstance(branch, Mapping):
+                bureaus[bureau] = dict(branch)
+
+    return summary_payload, bureaus
+
+
+def _extract_validation_block(summary_payload: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    if not isinstance(summary_payload, Mapping):
+        return None
+    block = summary_payload.get("validation_requirements")
+    return block if isinstance(block, Mapping) else None
+
+
+def _resolve_field_consistency_map(
+    summary_payload: Mapping[str, Any] | None,
+    bureaus_payload: Mapping[str, Mapping[str, Any]],
+) -> Mapping[str, Any]:
+    candidates: list[Mapping[str, Any]] = []
+    if isinstance(summary_payload, Mapping):
+        validation_block = _extract_validation_block(summary_payload)
+        if isinstance(validation_block, Mapping):
+            field_consistency = validation_block.get("field_consistency")
+            if isinstance(field_consistency, Mapping):
+                candidates.append(field_consistency)
+        field_consistency = summary_payload.get("field_consistency")
+        if isinstance(field_consistency, Mapping):
+            candidates.append(field_consistency)
+
+    for candidate in candidates:
+        if candidate:
+            return candidate
+
+    if bureaus_payload:
+        try:
+            return compute_field_consistency(dict(bureaus_payload))
+        except Exception:  # pragma: no cover - defensive
+            log.warning("FRONTEND_REVIEW_COMPUTE_CONSISTENCY_FAILED", exc_info=True)
+
+    return {}
+
+
+def _collect_reason_codes(validation_block: Mapping[str, Any] | None) -> dict[str, list[str]]:
+    if not isinstance(validation_block, Mapping):
+        return {}
+
+    findings = validation_block.get("findings")
+    if not isinstance(findings, Sequence):
+        return {}
+
+    collected: dict[str, set[str]] = {}
+    for entry in findings:
+        if not isinstance(entry, Mapping):
+            continue
+        field = entry.get("field")
+        reason = entry.get("reason_code")
+        if not isinstance(field, str) or not isinstance(reason, str):
+            continue
+        normalized = reason.strip().upper()
+        if not normalized or not normalized.startswith("C"):
+            continue
+        collected.setdefault(field, set()).add(normalized)
+
+    return {field: sorted(values) for field, values in collected.items()}
+
+
+def _bureau_value_snapshot(
+    bureaus_payload: Mapping[str, Mapping[str, Any]], field: str
+) -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    for bureau in _FRONTEND_BUREAUS:
+        branch = bureaus_payload.get(bureau)
+        value = "--"
+        if isinstance(branch, Mapping):
+            raw_value = branch.get(field)
+            if isinstance(raw_value, str):
+                cleaned = raw_value.strip()
+                if cleaned:
+                    value = cleaned
+            elif raw_value is not None:
+                cleaned = str(raw_value).strip()
+                if cleaned:
+                    value = cleaned
+        snapshot[bureau] = value
+    return snapshot
+
+
+def _build_field_snapshots(
+    summary_payload: Mapping[str, Any] | None,
+    bureaus_payload: Mapping[str, Mapping[str, Any]],
+    fields: Sequence[str],
+) -> dict[str, Any]:
+    if not fields:
+        return {}
+
+    field_consistency = _resolve_field_consistency_map(summary_payload, bureaus_payload)
+    validation_block = _extract_validation_block(summary_payload)
+    reason_codes_map = _collect_reason_codes(validation_block)
+
+    snapshots: dict[str, Any] = {}
+    for field in fields:
+        consistency_details = (
+            field_consistency.get(field)
+            if isinstance(field_consistency, Mapping)
+            else None
+        )
+        consensus_value = "unanimous"
+        if isinstance(consistency_details, Mapping):
+            consensus_value = str(consistency_details.get("consensus") or "")
+
+        consistent = consensus_value.lower() == "unanimous"
+        if not isinstance(consistency_details, Mapping) and not bureaus_payload:
+            consistent = True
+
+        snapshots[field] = {
+            "by_bureau": _bureau_value_snapshot(bureaus_payload, field),
+            "consistent": consistent,
+            "c_codes": reason_codes_map.get(field, []),
+        }
+
+    return snapshots
+
+
+def _generate_attachment_id() -> str:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"att_{timestamp}_{secrets.token_hex(4)}"
+
+
+def _sanitize_field_snapshots(snapshot_map: Mapping[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for field, details in snapshot_map.items():
+        if not isinstance(field, str) or not isinstance(details, Mapping):
+            continue
+
+        by_bureau_raw = details.get("by_bureau")
+        by_bureau: dict[str, str] = {}
+        if isinstance(by_bureau_raw, Mapping):
+            for bureau in _FRONTEND_BUREAUS:
+                value = by_bureau_raw.get(bureau)
+                if isinstance(value, str):
+                    by_bureau[bureau] = value
+        for bureau in _FRONTEND_BUREAUS:
+            by_bureau.setdefault(bureau, "--")
+
+        consistent = details.get("consistent")
+        if isinstance(consistent, bool):
+            consistent_value = consistent
+        else:
+            consistent_value = bool(consistent)
+
+        codes_raw = details.get("c_codes")
+        codes: list[str] = []
+        if isinstance(codes_raw, Sequence) and not isinstance(codes_raw, (str, bytes)):
+            for code in codes_raw:
+                if isinstance(code, str) and code:
+                    codes.append(code)
+
+        sanitized[field] = {
+            "by_bureau": by_bureau,
+            "consistent": consistent_value,
+            "c_codes": codes,
+        }
+
+    return sanitized
+
+
+def _clone_field_snapshots_payload(snapshot_map: Mapping[str, Any]) -> dict[str, Any]:
+    cloned: dict[str, Any] = {}
+    for field, details in snapshot_map.items():
+        if not isinstance(field, str) or not isinstance(details, Mapping):
+            continue
+
+        by_bureau: dict[str, str] = {}
+        source_bureaus = details.get("by_bureau")
+        if isinstance(source_bureaus, Mapping):
+            for bureau in _FRONTEND_BUREAUS:
+                value = source_bureaus.get(bureau)
+                if isinstance(value, str):
+                    by_bureau[bureau] = value
+                else:
+                    by_bureau[bureau] = "--"
+        else:
+            for bureau in _FRONTEND_BUREAUS:
+                by_bureau[bureau] = "--"
+
+        consistent_value = details.get("consistent")
+        if isinstance(consistent_value, bool):
+            consistent = consistent_value
+        else:
+            consistent = bool(consistent_value)
+
+        codes: list[str] = []
+        codes_raw = details.get("c_codes")
+        if isinstance(codes_raw, Sequence) and not isinstance(codes_raw, (str, bytes)):
+            for code in codes_raw:
+                if isinstance(code, str) and code:
+                    codes.append(code)
+
+        cloned[field] = {
+            "by_bureau": by_bureau,
+            "consistent": consistent,
+            "c_codes": codes,
+        }
+
+    return cloned
+
+
+def _claim_field_links_payload() -> dict[str, list[str]]:
+    return {key: list(values) for key, values in CLAIM_FIELD_LINK_MAP.items()}
+
+
+def _append_attachment_summary(
+    responses_dir: Path,
+    *,
+    sid: str,
+    account_id: str,
+    attachments: Sequence[Mapping[str, Any]],
+) -> None:
+    if not attachments:
+        return
+
+    summary_path = responses_dir / f"{account_id}.summary.json"
+
+    def _update(current: Any) -> Any:
+        payload = current if isinstance(current, Mapping) else {}
+        record = dict(payload)
+        record["sid"] = sid
+        record["account_id"] = account_id
+
+        existing: list[dict[str, Any]] = []
+        prior = record.get("attachments")
+        if isinstance(prior, Sequence):
+            for item in prior:
+                if isinstance(item, Mapping):
+                    existing.append(dict(item))
+
+        existing.extend(dict(entry) for entry in attachments)
+        record["attachments"] = existing
+
+        union: list[str] = []
+        seen: set[str] = set()
+        for entry in existing:
+            hot_fields = entry.get("hot_fields")
+            if not isinstance(hot_fields, Sequence):
+                continue
+            for field in hot_fields:
+                if not isinstance(field, str):
+                    continue
+                if field not in seen:
+                    seen.add(field)
+                    union.append(field)
+
+        record["hot_fields_union"] = union
+        return record
+
+    update_json_in_place(summary_path, _update)
 
 def _merge_collectors(
     problems: list[Mapping[str, Any]] | None,
@@ -782,6 +1135,9 @@ def _prepare_pack_response(payload: Any, account_id: str) -> dict[str, Any]:
         claims_payload = _resolved_claims_payload(primary_issue)
         if claims_payload:
             result["claims"] = claims_payload
+
+    if "claim_field_links" not in result:
+        result["claim_field_links"] = _claim_field_links_payload()
 
     display_payload = result.get("display")
     if isinstance(display_payload, Mapping):
@@ -1358,10 +1714,13 @@ def api_frontend_review_answer(sid: str, account_id: str):
     allowed_doc_keys.update(base_docs)
     for claim_entry in claim_entry_map.values():
         allowed_doc_keys.update(all_doc_keys_for_claim(claim_entry))
+    allowed_doc_keys.update(DOC_KEY_ALIAS_TO_CANONICAL.keys())
 
+    selected_claims_source = "answers"
     selected_claims_raw = answers.get("selected_claims")
     if selected_claims_raw is None and isinstance(data.get("claims"), list):
         selected_claims_raw = data.get("claims")
+        selected_claims_source = "legacy"
 
     selected_claims: list[str] = []
     if selected_claims_raw is not None:
@@ -1385,6 +1744,7 @@ def api_frontend_review_answer(sid: str, account_id: str):
             selected_claims.append(key)
 
     attachments_raw = answers.get("attachments")
+    attachments_display_map: dict[str, list[str]] = {}
     attachments_map: dict[str, list[str]] = {}
     if attachments_raw is not None:
         if not isinstance(attachments_raw, Mapping):
@@ -1395,7 +1755,8 @@ def api_frontend_review_answer(sid: str, account_id: str):
             doc_key = doc_key_raw.strip()
             if not doc_key or not _REVIEW_DOC_KEY_PATTERN.fullmatch(doc_key):
                 return jsonify({"error": "invalid_attachments"}), 400
-            if doc_key not in allowed_doc_keys:
+            canonical_doc_key = DOC_KEY_ALIAS_TO_CANONICAL.get(doc_key, doc_key)
+            if canonical_doc_key not in allowed_doc_keys:
                 return jsonify({"error": "invalid_attachments"}), 400
 
             candidates: list[Any]
@@ -1417,11 +1778,75 @@ def api_frontend_review_answer(sid: str, account_id: str):
                     validated_ids.append(doc_id)
 
             if validated_ids:
-                attachments_map[doc_key] = validated_ids
+                _merge_attachment_doc_ids(attachments_map, doc_key, validated_ids)
+                display_ids = attachments_display_map.setdefault(doc_key, [])
+                for doc_id in validated_ids:
+                    if doc_id not in display_ids:
+                        display_ids.append(doc_id)
+
+    evidence_entries = data.get("evidence")
+    validated_evidence: list[dict[str, Any]] = []
+    if isinstance(evidence_entries, list):
+        for evidence in evidence_entries:
+            if not isinstance(evidence, Mapping):
+                continue
+            docs_payload = evidence.get("docs")
+            if not isinstance(docs_payload, list):
+                continue
+            claim_value = evidence.get("claim")
+            sanitized_evidence_docs: list[dict[str, Any]] = []
+            for doc_entry in docs_payload:
+                if not isinstance(doc_entry, Mapping):
+                    continue
+                doc_key_value = doc_entry.get("doc_key")
+                doc_ids_value = doc_entry.get("doc_ids")
+                if not isinstance(doc_key_value, str):
+                    return jsonify({"error": "invalid_evidence_doc"}), 400
+                doc_key = doc_key_value.strip()
+                if not doc_key or not _REVIEW_DOC_KEY_PATTERN.fullmatch(doc_key):
+                    return jsonify({"error": "invalid_evidence_doc"}), 400
+                canonical_doc_key = DOC_KEY_ALIAS_TO_CANONICAL.get(doc_key, doc_key)
+                if canonical_doc_key not in allowed_doc_keys:
+                    return jsonify({"error": "invalid_evidence_doc"}), 400
+
+                candidates: list[Any]
+                if isinstance(doc_ids_value, list):
+                    candidates = doc_ids_value
+                else:
+                    candidates = [doc_ids_value]
+
+                validated_ids: list[str] = []
+                for candidate in candidates:
+                    if not isinstance(candidate, str):
+                        return jsonify({"error": "invalid_evidence_doc"}), 400
+                    doc_id = candidate.strip()
+                    if not doc_id:
+                        continue
+                    if _resolve_review_doc_id(doc_id, run_dir, uploads_dir) is None:
+                        return jsonify({"error": "invalid_evidence_doc"}), 400
+                    if doc_id not in validated_ids:
+                        validated_ids.append(doc_id)
+
+                if validated_ids:
+                    _merge_attachment_doc_ids(attachments_map, doc_key, validated_ids)
+                    sanitized_evidence_docs.append(
+                        {
+                            "doc_key": doc_key,
+                            "doc_ids": list(validated_ids),
+                        }
+                    )
+            if sanitized_evidence_docs:
+                entry_payload: dict[str, Any] = {"docs": sanitized_evidence_docs}
+                if isinstance(claim_value, str):
+                    entry_payload["claim"] = claim_value
+                validated_evidence.append(entry_payload)
+    elif evidence_entries is not None:
+        return jsonify({"error": "invalid_evidence"}), 400
 
     missing_docs: dict[str, list[str]] = {}
     min_upload_failures: dict[str, int] = {}
-    if selected_claims:
+    enforce_doc_requirements = selected_claims and selected_claims_source == "answers"
+    if enforce_doc_requirements:
         for claim_key in selected_claims:
             claim_entry = claim_entry_map.get(claim_key) or get_claim_entry(claim_key)
             if claim_entry is None:
@@ -1440,7 +1865,7 @@ def api_frontend_review_answer(sid: str, account_id: str):
                 if present_count < claim_entry.min_uploads:
                     min_upload_failures[claim_key] = claim_entry.min_uploads
 
-    if missing_docs or min_upload_failures:
+    if enforce_doc_requirements and (missing_docs or min_upload_failures):
         logger.info(
             "FRONTEND_REVIEW_MISSING_DOCS sid=%s account_id=%s claims=%s missing=%s min_uploads=%s",
             sid,
@@ -1483,9 +1908,9 @@ def api_frontend_review_answer(sid: str, account_id: str):
     elif "selected_claims" in sanitized_answers:
         sanitized_answers.pop("selected_claims", None)
 
-    if attachments_map:
+    if attachments_display_map:
         formatted_attachments: dict[str, Any] = {}
-        for doc_key, doc_ids in attachments_map.items():
+        for doc_key, doc_ids in attachments_display_map.items():
             if not doc_ids:
                 continue
             if len(doc_ids) == 1:
@@ -1511,6 +1936,8 @@ def api_frontend_review_answer(sid: str, account_id: str):
         record["client_meta"] = dict(client_meta)
     if selected_claims:
         record["claims"] = selected_claims
+    if validated_evidence:
+        record["evidence"] = validated_evidence
 
     responses_dir = stage_config.responses_dir
     responses_dir.mkdir(parents=True, exist_ok=True)
@@ -1560,7 +1987,9 @@ def api_frontend_review_upload(sid: str):
 
     allowed_doc_keys = all_doc_keys_for_claim(claim_entry)
     allowed_doc_keys.update(_AUTO_ATTACH_BASE)
-    if doc_key not in allowed_doc_keys:
+    allowed_doc_keys.update(DOC_KEY_ALIAS_TO_CANONICAL.keys())
+    canonical_doc_key = DOC_KEY_ALIAS_TO_CANONICAL.get(doc_key, doc_key)
+    if canonical_doc_key not in allowed_doc_keys:
         return jsonify({"error": "unsupported_doc_key"}), 400
 
     uploaded_files = request.files.getlist("files")
@@ -1570,10 +1999,20 @@ def api_frontend_review_upload(sid: str):
     stage_config = load_frontend_stage_config(run_dir)
     uploads_dir = stage_config.uploads_dir
 
-    target_dir = uploads_dir / account_id / claim_key / doc_key
+    target_dir = uploads_dir / account_id
     target_dir.mkdir(parents=True, exist_ok=True)
 
+    summary_payload, bureaus_payload = _load_account_validation_context(
+        run_dir, account_id
+    )
+    hot_fields = list(CLAIM_FIELD_LINK_MAP.get(claim_key, []))
+    field_snapshots_raw = _build_field_snapshots(
+        summary_payload, bureaus_payload, hot_fields
+    )
+    field_snapshots = _sanitize_field_snapshots(field_snapshots_raw)
+
     doc_ids: list[str] = []
+    attachments_to_append: list[dict[str, Any]] = []
     last_timestamp_ms = 0
     for uploaded in uploaded_files:
         if uploaded is None:
@@ -1634,7 +2073,62 @@ def api_frontend_review_upload(sid: str):
                 pass
             return jsonify({"error": "file_too_large"}), 400
 
-        doc_ids.append(_doc_id_for_path(target_path))
+        doc_id = _doc_id_for_path(target_path)
+        doc_ids.append(doc_id)
+
+        try:
+            stored_relative = target_path.relative_to(run_dir).as_posix()
+        except ValueError:
+            stored_relative = target_path.as_posix()
+
+        mimetype_hint = getattr(uploaded, "mimetype", None)
+        mime_type = mimetype_hint if isinstance(mimetype_hint, str) and mimetype_hint else None
+        if not mime_type:
+            guess = mimetypes.guess_type(original_name)[0]
+            mime_type = guess or "application/octet-stream"
+
+        sha1 = hashlib.sha1()
+        try:
+            with target_path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(65536), b""):
+                    sha1.update(chunk)
+        except OSError:
+            log.warning(
+                "FRONTEND_REVIEW_UPLOAD_SHA1_FAILED sid=%s account_id=%s path=%s",
+                sid,
+                account_id,
+                target_path,
+                exc_info=True,
+            )
+        sha1_hex = sha1.hexdigest()
+
+        uploaded_at = (
+            datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
+
+        attachment_record = {
+            "id": _generate_attachment_id(),
+            "claim_type": claim_key,
+            "filename": original_name,
+            "stored_path": stored_relative,
+            "mime": mime_type,
+            "size": int(size) if isinstance(size, int) else size,
+            "sha1": sha1_hex,
+            "uploaded_at": uploaded_at,
+            "hot_fields": list(hot_fields),
+            "field_snapshots": _clone_field_snapshots_payload(field_snapshots),
+        }
+        attachments_to_append.append(attachment_record)
+
+    if attachments_to_append:
+        _append_attachment_summary(
+            stage_config.responses_dir,
+            sid=sid,
+            account_id=account_id,
+            attachments=attachments_to_append,
+        )
 
     return jsonify({"doc_ids": doc_ids})
 

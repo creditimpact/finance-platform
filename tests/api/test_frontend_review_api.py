@@ -1,3 +1,4 @@
+import hashlib
 import importlib
 import io
 import json
@@ -8,6 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from backend.domain.claims import CLAIM_FIELD_LINK_MAP
 
 
 @pytest.fixture
@@ -364,7 +367,12 @@ def test_frontend_review_pack_returns_stage_pack(api_client):
 
     response = client.get(f"/api/runs/{sid}/frontend/review/pack/idx-001")
     assert response.status_code == 200
-    assert response.get_json() == pack_payload
+    payload = response.get_json()
+    assert payload["account_id"] == pack_payload["account_id"]
+    assert payload["holder_name"] == pack_payload["holder_name"]
+    assert payload["display"]["display_version"] == 1
+    assert payload["claim_field_links"] == CLAIM_FIELD_LINK_MAP
+    assert payload["claims"]["items"]
 
 
 def test_frontend_review_pack_uses_manifest_path(api_client, monkeypatch):
@@ -401,7 +409,11 @@ def test_frontend_review_pack_uses_manifest_path(api_client, monkeypatch):
 
     response = client.get(f"/api/runs/{sid}/frontend/review/pack/idx-001")
     assert response.status_code == 200
-    assert response.get_json() == pack_payload
+    payload = response.get_json()
+    assert payload["account_id"] == pack_payload["account_id"]
+    assert payload["holder_name"] == pack_payload["holder_name"]
+    assert payload["display"]["display_version"] == 1
+    assert payload["claim_field_links"] == CLAIM_FIELD_LINK_MAP
 
 
 def test_frontend_review_pack_missing_returns_404(api_client):
@@ -552,9 +564,7 @@ def test_frontend_review_upload_stores_multiple_documents(api_client):
     doc_ids = payload["doc_ids"]
     assert len(doc_ids) == 2
 
-    expected_prefix = (
-        f"runs/{sid}/frontend/review/uploads/{account_id}/paid_in_full/pay_proof/"
-    )
+    expected_prefix = f"runs/{sid}/frontend/review/uploads/{account_id}/"
     project_root = runs_root.parent
     for doc_id in doc_ids:
         assert doc_id.startswith(expected_prefix)
@@ -565,6 +575,108 @@ def test_frontend_review_upload_stores_multiple_documents(api_client):
     assert doc_ids[1].endswith("_receipt.png")
 
 
+def test_frontend_review_upload_records_attachment_summary(api_client):
+    client, runs_root = api_client
+    sid = "U202"
+    account_id = "idx-020"
+    run_dir = runs_root / sid
+    account_dir = run_dir / "cases" / "accounts" / account_id
+
+    summary_payload = {
+        "account_id": account_id,
+        "validation_requirements": {
+            "findings": [
+                {"field": "payment_status", "reason_code": "C4_TWO_MATCH_ONE_DIFF"}
+            ]
+        },
+    }
+    bureaus_payload = {
+        "transunion": {
+            "balance_owed": "$100",
+            "past_due_amount": "$0",
+            "payment_status": "Late 120 Days",
+            "last_payment": "2024-06-01",
+            "account_status": "Closed",
+        },
+        "experian": {
+            "balance_owed": "$100",
+            "past_due_amount": "$0",
+            "payment_status": "Late 150 Days",
+            "last_payment": "2024-06-02",
+            "account_status": "Closed",
+        },
+        "equifax": {
+            "balance_owed": "$100",
+            "payment_status": "Late 120 Days",
+            "account_status": "Closed",
+        },
+    }
+
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "bureaus.json", bureaus_payload)
+
+    content = b"%PDF-1.4\nhello"
+    upload = {
+        "sid": sid,
+        "account_id": account_id,
+        "claim": "paid_in_full",
+        "doc_key": "pay_proof",
+        "files": [(io.BytesIO(content), "Proof.pdf", "application/pdf")],
+    }
+
+    response = client.post(
+        f"/api/runs/{sid}/frontend/review/uploads",
+        data=upload,
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    doc_id = payload["doc_ids"][0]
+    assert doc_id.startswith(f"runs/{sid}/frontend/review/uploads/{account_id}/")
+
+    summary_path = (
+        run_dir
+        / "frontend"
+        / "review"
+        / "responses"
+        / f"{account_id}.summary.json"
+    )
+    assert summary_path.is_file()
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+    assert summary["sid"] == sid
+    assert summary["account_id"] == account_id
+    assert summary["hot_fields_union"] == CLAIM_FIELD_LINK_MAP["paid_in_full"]
+
+    attachments = summary["attachments"]
+    assert isinstance(attachments, list) and len(attachments) == 1
+    record = attachments[0]
+    assert record["claim_type"] == "paid_in_full"
+    assert record["filename"] == "Proof.pdf"
+    assert record["stored_path"].startswith(
+        f"frontend/review/uploads/{account_id}/"
+    )
+    assert record["mime"] == "application/pdf"
+    assert record["size"] == len(content)
+    assert record["sha1"] == hashlib.sha1(content).hexdigest()
+    assert record["hot_fields"] == CLAIM_FIELD_LINK_MAP["paid_in_full"]
+    assert record["uploaded_at"].endswith("Z")
+
+    snapshots = record["field_snapshots"]
+    assert set(snapshots.keys()) == set(CLAIM_FIELD_LINK_MAP["paid_in_full"])
+
+    balance_snapshot = snapshots["balance_owed"]
+    assert balance_snapshot["by_bureau"]["transunion"] == "$100"
+    assert balance_snapshot["by_bureau"]["equifax"] == "$100"
+    assert balance_snapshot["consistent"] is True
+    assert balance_snapshot["c_codes"] == []
+
+    payment_snapshot = snapshots["payment_status"]
+    assert payment_snapshot["consistent"] is False
+    assert payment_snapshot["c_codes"] == ["C4_TWO_MATCH_ONE_DIFF"]
+
+    past_due_snapshot = snapshots["past_due_amount"]
+    assert past_due_snapshot["by_bureau"]["equifax"] == "--"
 def test_frontend_review_upload_rejects_invalid_files(api_client):
     client, runs_root = api_client
     sid = "U102"
@@ -676,7 +788,7 @@ def test_frontend_review_submit_rejects_outside_upload_paths(api_client):
                     {
                         "doc_key": "pay_proof",
                         "doc_ids": [
-                            "runs/OTHER/frontend/review/uploads/idx-021/paid_in_full/pay_proof/file.pdf"
+                        "runs/OTHER/frontend/review/uploads/idx-021/file.pdf"
                         ],
                     }
                 ],

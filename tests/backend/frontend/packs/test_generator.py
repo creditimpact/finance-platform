@@ -8,6 +8,7 @@ import re
 
 import backend.frontend.packs.generator as generator_module
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
+from backend.domain.claims import CLAIM_FIELD_LINK_MAP
 from backend.frontend.packs.responses import append_frontend_response
 
 
@@ -162,6 +163,7 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
         "holder_name",
         "primary_issue",
         "display",
+        "claim_field_links",
         "questions",
     ]
     assert stage_pack_payload["account_id"] == "acct-1"
@@ -169,6 +171,7 @@ def test_generate_frontend_packs_builds_account_pack(tmp_path):
     assert stage_pack_payload["primary_issue"] == "wrong_account"
     assert stage_pack_payload["questions"] == list(generator_module._QUESTION_SET)
     assert "pointers" not in stage_pack_payload
+    assert stage_pack_payload["claim_field_links"] == CLAIM_FIELD_LINK_MAP
 
     display_block = stage_pack_payload["display"]
     assert list(display_block.keys()) == [
@@ -330,6 +333,7 @@ def test_frontend_review_stage_minimal_smoke(tmp_path):
             "holder_name",
             "primary_issue",
             "display",
+            "claim_field_links",
             "questions",
         }
         assert payload["questions"] == list(generator_module._QUESTION_SET)
@@ -591,6 +595,7 @@ def test_generate_frontend_packs_meta_heading_and_primary_issue(tmp_path):
         "holder_name",
         "primary_issue",
         "display",
+        "claim_field_links",
         "questions",
     ]
     assert payload["questions"] == list(generator_module._QUESTION_SET)
@@ -626,6 +631,7 @@ def test_generate_frontend_packs_holder_name_from_raw_when_meta_missing(tmp_path
         "holder_name",
         "primary_issue",
         "display",
+        "claim_field_links",
         "questions",
     ]
     assert payload["questions"] == list(generator_module._QUESTION_SET)
@@ -694,6 +700,7 @@ def test_generate_frontend_packs_backfills_missing_pointers(tmp_path, monkeypatc
         "holder_name",
         "primary_issue",
         "display",
+        "claim_field_links",
         "questions",
     }
     assert stage_payload["account_id"] == "acct-legacy"
@@ -758,6 +765,7 @@ def test_generate_frontend_packs_debug_mirror_toggle(tmp_path, monkeypatch):
         "holder_name",
         "primary_issue",
         "display",
+        "claim_field_links",
         "questions",
     ]
     assert pack_payload["questions"] == list(generator_module._QUESTION_SET)
@@ -795,6 +803,7 @@ def test_generate_frontend_packs_multiple_issues_first_primary(tmp_path):
         "holder_name",
         "primary_issue",
         "display",
+        "claim_field_links",
         "questions",
     ]
     assert payload["questions"] == list(generator_module._QUESTION_SET)
@@ -866,6 +875,7 @@ def test_generate_frontend_packs_holder_name_fallback(tmp_path):
         "holder_name",
         "primary_issue",
         "display",
+        "claim_field_links",
         "questions",
     ]
     assert pack_payload["questions"] == list(generator_module._QUESTION_SET)

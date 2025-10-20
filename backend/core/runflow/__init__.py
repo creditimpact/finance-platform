@@ -9,6 +9,7 @@ import functools
 import json
 import os
 
+from backend.core.io.json_io import update_json_in_place
 from backend.core.runflow_steps import (
     RUNS_ROOT,
     steps_append,
@@ -85,6 +86,50 @@ def _reset_step_counters(sid: str, stage: str) -> None:
     keys_to_delete = [key for key in _STEP_CALL_COUNTS if key[0] == sid and key[1] == stage]
     for key in keys_to_delete:
         del _STEP_CALL_COUNTS[key]
+
+
+def _update_umbrella_barriers(sid: str) -> None:
+    run_dir = RUNS_ROOT / sid
+    runflow_path = run_dir / "runflow.json"
+
+    try:
+        from backend.runflow.decider import evaluate_global_barriers  # Local import to avoid circular dependency
+    except Exception:
+        return
+
+    try:
+        barriers = evaluate_global_barriers(os.fspath(run_dir))
+    except Exception:
+        return
+
+    if not isinstance(barriers, Mapping):
+        return
+
+    timestamp = _utcnow_iso()
+
+    def _mutate(payload: Any) -> Any:
+        if not isinstance(payload, dict):
+            payload_dict: dict[str, Any] = {}
+        else:
+            payload_dict = payload
+
+        existing_raw = payload_dict.get("umbrella_barriers")
+        if isinstance(existing_raw, Mapping):
+            umbrella: dict[str, Any] = dict(existing_raw)
+        else:
+            umbrella = {}
+
+        umbrella.update(barriers)
+        umbrella["checked_at"] = timestamp
+        payload_dict["umbrella_barriers"] = umbrella
+
+        payload_dict.setdefault("sid", sid)
+        return payload_dict
+
+    try:
+        update_json_in_place(runflow_path, _mutate)
+    except Exception:
+        return
 
 
 def _should_record_step(
@@ -180,6 +225,8 @@ def runflow_end_stage(
 
     _STARTED_STAGES.discard((sid, stage))
     _reset_step_counters(sid, stage)
+
+    _update_umbrella_barriers(sid)
 
 
 def runflow_event(

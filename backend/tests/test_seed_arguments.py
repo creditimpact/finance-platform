@@ -1,0 +1,111 @@
+import pytest
+
+from ..core.logic.validation_requirements import (
+    _build_finding,
+    _collect_seed_arguments,
+)
+
+
+@pytest.fixture
+def normalized_map_c4():
+    return {
+        "experian": "open",
+        "equifax": "open",
+        "transunion": "closed",
+    }
+
+
+@pytest.fixture
+def details_from_map():
+    def _factory(normalized_map):
+        return {"normalized": normalized_map}
+
+    return _factory
+
+
+def test_strong_finding_populates_seed_and_aggregates(normalized_map_c4, details_from_map):
+    entry = {"field": "account_status"}
+    finding = _build_finding(
+        entry,
+        {},
+        details=details_from_map(normalized_map_c4),
+        normalized_map=normalized_map_c4,
+    )
+
+    assert finding["decision"] == "strong_actionable"
+
+    argument = finding.get("argument")
+    assert argument is not None
+    seed = argument.get("seed")
+    assert seed == {
+        "id": "account_status__C4_TWO_MATCH_ONE_DIFF",
+        "tone": "firm_courteous",
+        "text": (
+            "Two bureaus agree the account is <X>, while one shows <Y>. "
+            "Please verify the source records and align the discrepant bureau."
+        ),
+    }
+
+    seeds = _collect_seed_arguments([finding])
+    assert seeds == [seed]
+
+
+def test_supportive_finding_does_not_receive_seed(details_from_map):
+    normalized_map = {
+        "experian": "open",
+        "equifax": None,
+        "transunion": None,
+    }
+
+    finding = _build_finding(
+        {"field": "account_status"},
+        {},
+        details=details_from_map(normalized_map),
+        normalized_map=normalized_map,
+    )
+
+    assert finding["decision"] == "supportive_needs_companion"
+    assert "argument" not in finding
+
+    seeds = _collect_seed_arguments([finding])
+    assert seeds == []
+
+
+def test_missing_template_does_not_raise_and_skips_seed(details_from_map):
+    normalized_map = {
+        "experian": "A",
+        "equifax": "B",
+        "transunion": "C",
+    }
+
+    finding = _build_finding(
+        {"field": "account_rating"},
+        {},
+        details=details_from_map(normalized_map),
+        normalized_map=normalized_map,
+    )
+
+    assert finding["decision"] == "strong_actionable"
+    assert "argument" not in finding
+
+    seeds = _collect_seed_arguments([finding])
+    assert seeds == []
+
+
+def test_duplicate_seed_entries_are_deduplicated(normalized_map_c4, details_from_map):
+    entry = {"field": "account_status"}
+    finding_one = _build_finding(
+        entry,
+        {},
+        details=details_from_map(normalized_map_c4),
+        normalized_map=normalized_map_c4,
+    )
+    finding_two = _build_finding(
+        entry,
+        {},
+        details=details_from_map(normalized_map_c4),
+        normalized_map=normalized_map_c4,
+    )
+
+    seeds = _collect_seed_arguments([finding_one, finding_two])
+    assert seeds == [finding_one["argument"]["seed"]]

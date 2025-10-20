@@ -31,6 +31,7 @@ from backend.frontend.packs.config import (
     FrontendStageConfig,
     load_frontend_stage_config,
 )
+from backend.domain.claims import CLAIM_FIELD_LINK_MAP
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +52,10 @@ _QUESTION_SET = [
     {"id": "explanation", "prompt": "Anything else we should know about this account?"},
     {"id": "identity_theft", "prompt": "Is this account tied to identity theft?"},
 ]
+
+
+def _claim_field_links_payload() -> dict[str, list[str]]:
+    return {key: list(values) for key, values in CLAIM_FIELD_LINK_MAP.items()}
 
 
 def _coerce_question_list(questions: Any) -> list[dict[str, Any]]:
@@ -871,6 +876,7 @@ def build_pack_doc(
         "display": dict(display_payload),
         "pointers": dict(pointers),
         "questions": list(_QUESTION_SET),
+        "claim_field_links": _claim_field_links_payload(),
     }
     if issues:
         payload["issues"] = list(issues)
@@ -899,6 +905,7 @@ def build_lean_pack_doc(
         "display": display,
         "questions": questions_payload,
         "pointers": dict(pointers),
+        "claim_field_links": _claim_field_links_payload(),
     }
 
 
@@ -920,6 +927,7 @@ def build_stage_pack_doc(
         "holder_name": holder_name,
         "primary_issue": primary_issue,
         "display": display,
+        "claim_field_links": _claim_field_links_payload(),
     }
 
 

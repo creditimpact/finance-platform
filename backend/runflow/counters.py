@@ -42,6 +42,77 @@ def _load_document(path: Path) -> Optional[Mapping[str, Any]]:
     return None
 
 
+def _normalize_entry_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        try:
+            return str(int(value))
+        except (TypeError, ValueError):
+            return str(value)
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
+def _entry_first_text(entry: Mapping[str, Any], keys: Sequence[str]) -> str:
+    for key in keys:
+        try:
+            value = entry[key]
+        except KeyError:
+            continue
+        text = _normalize_entry_text(value)
+        if text:
+            return text
+    return ""
+
+
+def _validation_pack_entry_key(entry: Mapping[str, Any]) -> tuple[str, ...]:
+    account_key = _normalize_entry_text(entry.get("account_id"))
+    pack_key = _entry_first_text(
+        entry,
+        ("pack", "pack_path", "pack_file", "pack_filename"),
+    )
+    result_jsonl_key = _entry_first_text(
+        entry,
+        ("result_jsonl", "result_jsonl_path", "result_jsonl_file"),
+    )
+    result_json_key = _entry_first_text(
+        entry,
+        (
+            "result_json",
+            "result_json_path",
+            "result_summary_path",
+            "result_path",
+        ),
+    )
+    pack_id_key = _entry_first_text(entry, ("pack_id", "id"))
+    source_hash_key = _entry_first_text(entry, ("source_hash",))
+
+    identity = (
+        account_key,
+        pack_key,
+        result_jsonl_key,
+        result_json_key,
+        pack_id_key,
+        source_hash_key,
+    )
+
+    if any(identity):
+        return identity
+
+    extras: list[str] = []
+    for key in sorted(entry.keys()):
+        try:
+            encoded = json.dumps(entry[key], sort_keys=True)
+        except TypeError:
+            encoded = json.dumps(str(entry[key]))
+        extras.append(f"{key}:{encoded}")
+    return tuple(extras)
+
+
 def validation_findings_count(base_dir: Path) -> Optional[int]:
     """Return the number of validation findings written to disk for ``sid``."""
 
@@ -82,6 +153,32 @@ def validation_findings_count(base_dir: Path) -> Optional[int]:
         return fallback
 
     return None
+
+
+def validation_packs_count(base_dir: Path) -> Optional[int]:
+    """Return the number of unique validation packs written for ``sid``."""
+
+    index_path = base_dir / "ai_packs" / "validation" / "index.json"
+    document = _load_document(index_path)
+    if document is None:
+        return None
+
+    packs_value = document.get("packs")
+    if not isinstance(packs_value, Sequence):
+        return None
+
+    seen: set[tuple[str, ...]] = set()
+    count = 0
+    for entry in packs_value:
+        if not isinstance(entry, Mapping):
+            continue
+        key = _validation_pack_entry_key(entry)
+        if key in seen:
+            continue
+        seen.add(key)
+        count += 1
+
+    return count
 
 
 def _has_review_attachments(payload: Mapping[str, Any]) -> bool:
@@ -213,6 +310,35 @@ def merge_scored_pairs_count(base_dir: Path) -> Optional[int]:
     return None
 
 
+def runflow_validation_findings_total(base_dir: Path) -> Optional[int]:
+    """Return the validation findings total recorded in ``runflow.json``."""
+
+    runflow_path = base_dir / "runflow.json"
+    document = _load_document(runflow_path)
+    if document is None:
+        return None
+
+    stages = document.get("stages")
+    if not isinstance(stages, Mapping):
+        return None
+
+    validation_stage = stages.get("validation")
+    if not isinstance(validation_stage, Mapping):
+        return None
+
+    value = _coerce_int(validation_stage.get("findings_count"))
+    if value is not None:
+        return value
+
+    summary = validation_stage.get("summary")
+    if isinstance(summary, Mapping):
+        fallback = _coerce_int(summary.get("findings_count"))
+        if fallback is not None:
+            return fallback
+
+    return None
+
+
 def stage_counts(stage: str, base_dir: Path) -> dict[str, int]:
     """Return authoritative counter mappings for ``stage`` rooted at ``base_dir``."""
 
@@ -234,5 +360,7 @@ __all__ = [
     "frontend_packs_count",
     "merge_scored_pairs_count",
     "stage_counts",
+    "runflow_validation_findings_total",
+    "validation_packs_count",
     "validation_findings_count",
 ]

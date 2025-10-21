@@ -6,8 +6,8 @@ from typing import Any, Mapping, MutableMapping, Optional
 
 import json
 import os
-import uuid
 
+from backend.core.io.json_io import _atomic_write_json as _shared_atomic_write_json
 from backend.runflow.counters import stage_counts as _stage_counts_from_disk
 
 
@@ -75,10 +75,7 @@ def _steps_path(sid: str) -> Path:
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + f".tmp.{uuid.uuid4().hex}")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(path)
+    _shared_atomic_write_json(path, payload)
 
 
 def _normalise_steps(entries: Any, default_t: str) -> list[dict[str, Any]]:

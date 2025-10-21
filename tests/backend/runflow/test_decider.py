@@ -47,7 +47,7 @@ def test_decide_next_completes_when_validation_has_no_findings(tmp_path):
     runflow_decider.record_stage(
         sid,
         "validation",
-        status="success",
+        status="built",
         counts={"findings_count": 0},
         empty_ok=True,
         runs_root=runs_root,
@@ -74,7 +74,7 @@ def test_decide_next_runs_frontend_then_moves_to_await_input(tmp_path):
     runflow_decider.record_stage(
         sid,
         "validation",
-        status="success",
+        status="built",
         counts={"findings_count": 5},
         empty_ok=False,
         runs_root=runs_root,
@@ -88,7 +88,7 @@ def test_decide_next_runs_frontend_then_moves_to_await_input(tmp_path):
     runflow_decider.record_stage(
         sid,
         "frontend",
-        status="success",
+        status="published",
         counts={"packs_count": 2},
         empty_ok=False,
         runs_root=runs_root,
@@ -96,6 +96,7 @@ def test_decide_next_runs_frontend_then_moves_to_await_input(tmp_path):
 
     follow_up = runflow_decider.decide_next(sid, runs_root=runs_root)
     assert follow_up["next"] == "await_input"
+    assert follow_up["reason"] == "frontend_published"
     data = _load_runflow(runs_root, sid)
     assert data["run_state"] == "AWAITING_CUSTOMER_INPUT"
 
@@ -115,7 +116,7 @@ def test_decide_next_frontend_zero_packs_marks_complete(tmp_path):
     runflow_decider.record_stage(
         sid,
         "validation",
-        status="success",
+        status="built",
         counts={"findings_count": 3},
         empty_ok=False,
         runs_root=runs_root,
@@ -127,7 +128,7 @@ def test_decide_next_frontend_zero_packs_marks_complete(tmp_path):
     runflow_decider.record_stage(
         sid,
         "frontend",
-        status="success",
+        status="published",
         counts={"packs_count": 0},
         empty_ok=True,
         runs_root=runs_root,

@@ -19,7 +19,7 @@ from backend.core.runflow import (
 from backend.runflow.counters import stage_counts as _stage_counts_from_disk
 from backend.validation.index_schema import load_validation_index
 
-StageStatus = Literal["success", "error"]
+StageStatus = Literal["success", "error", "built", "published"]
 RunState = Literal[
     "INIT",
     "VALIDATING",
@@ -44,6 +44,14 @@ def _env_enabled(name: str, default: bool = False) -> bool:
 
 def _umbrella_barriers_enabled() -> bool:
     return _env_enabled("UMBRELLA_BARRIERS_ENABLED", True)
+
+
+def _strict_validation_enabled() -> bool:
+    return _env_enabled("UMBRELLA_BARRIERS_STRICT_VALIDATION", True)
+
+
+def _review_explanation_required() -> bool:
+    return _env_enabled("UMBRELLA_BARRIERS_REVIEW_REQUIRE_EXPLANATION", True)
 
 
 def _document_verifier_enabled() -> bool:
@@ -178,6 +186,8 @@ def record_stage(
     counts: Dict[str, int],
     empty_ok: bool,
     notes: Optional[str] = None,
+    metrics: Optional[Mapping[str, Any]] = None,
+    results: Optional[Mapping[str, Any]] = None,
     runs_root: Optional[str | Path] = None,
 ) -> dict[str, Any]:
     """Persist ``stage`` information under ``runs/<sid>/runflow.json``."""
@@ -198,6 +208,19 @@ def record_stage(
         if coerced is not None:
             normalized_counts[str(key)] = coerced
 
+    def _normalize_mapping(payload: Optional[Mapping[str, Any]]) -> dict[str, int]:
+        normalized: dict[str, int] = {}
+        if not isinstance(payload, Mapping):
+            return normalized
+        for key, value in payload.items():
+            coerced_value = _coerce_int(value)
+            if coerced_value is not None:
+                normalized[str(key)] = coerced_value
+        return normalized
+
+    normalized_metrics = _normalize_mapping(metrics)
+    normalized_results = _normalize_mapping(results)
+
     disk_counts = _stage_counts_from_disk(stage, base_dir)
     for key, value in disk_counts.items():
         coerced_disk = _coerce_int(value)
@@ -210,6 +233,12 @@ def record_stage(
 
     for key, value in normalized_counts.items():
         stage_payload[key] = value
+
+    if normalized_metrics:
+        stage_payload["metrics"] = dict(normalized_metrics)
+
+    if normalized_results:
+        stage_payload["results"] = dict(normalized_results)
 
     if notes:
         stage_payload["notes"] = str(notes)
@@ -267,6 +296,10 @@ def record_stage(
     )
 
     summary_payload: dict[str, Any] = {str(key): value for key, value in normalized_counts.items()}
+    if normalized_metrics:
+        summary_payload["metrics"] = dict(normalized_metrics)
+    if normalized_results:
+        summary_payload["results"] = dict(normalized_results)
     summary_payload["empty_ok"] = bool(empty_ok)
     if notes:
         summary_payload["notes"] = str(notes)
@@ -331,37 +364,71 @@ def _stage_status(steps: Mapping[str, Any] | None, stage: str) -> str:
     return ""
 
 
-def _validation_stage_ready(run_dir: Path) -> bool:
+def _validation_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
+    """Return (total, completed, failed, ready) for validation AI results."""
+
     index_path = run_dir / "ai_packs" / "validation" / "index.json"
     try:
         index = load_validation_index(index_path)
     except FileNotFoundError:
-        return False
+        return (0, 0, 0, False)
     except Exception:  # pragma: no cover - defensive
         log.warning("RUNFLOW_VALIDATION_INDEX_LOAD_FAILED path=%s", index_path, exc_info=True)
-        return False
+        return (0, 0, 0, False)
+
+    strict = _strict_validation_enabled()
+    total = 0
+    completed = 0
+    failed = 0
+    ready = True
 
     for record in getattr(index, "packs", ()):  # type: ignore[attr-defined]
+        total += 1
         status = getattr(record, "status", "")
-        if not isinstance(status, str) or status.strip().lower() != "completed":
-            return False
+        normalized_status = status.strip().lower() if isinstance(status, str) else ""
+        if normalized_status == "completed":
+            try:
+                result_path = index.resolve_result_json_path(record)  # type: ignore[attr-defined]
+            except Exception:  # pragma: no cover - defensive
+                log.warning(
+                    "RUNFLOW_VALIDATION_RESULT_RESOLVE_FAILED account_id=%s",
+                    getattr(record, "account_id", "unknown"),
+                    exc_info=True,
+                )
+                ready = False
+                continue
 
-        try:
-            result_path = index.resolve_result_json_path(record)  # type: ignore[attr-defined]
-        except Exception:  # pragma: no cover - defensive
-            log.warning(
-                "RUNFLOW_VALIDATION_RESULT_RESOLVE_FAILED account_id=%s", getattr(record, "account_id", "unknown"),
-                exc_info=True,
-            )
-            return False
+            try:
+                exists = result_path.is_file()
+            except OSError:
+                exists = False
 
-        try:
-            if not result_path.is_file():
-                return False
-        except OSError:
-            return False
+            if not exists:
+                ready = False
+                continue
 
-    return True
+            completed += 1
+        elif normalized_status == "failed":
+            failed += 1
+            if strict:
+                ready = False
+        else:
+            ready = False
+
+    if total == 0:
+        return (0, 0, 0, True)
+
+    if strict:
+        ready = ready and completed == total
+    else:
+        ready = ready and (completed + failed) == total
+
+    return (total, completed, failed, ready)
+
+
+def _validation_stage_ready(run_dir: Path) -> bool:
+    _, _, _, ready = _validation_results_progress(run_dir)
+    return ready
 
 
 _IDX_ACCOUNT_PATTERN = re.compile(r"idx-(\d+)")
@@ -386,11 +453,11 @@ def _response_filename_for_account(account_id: str) -> str:
     return f"{sanitized}.result.json"
 
 
-def _review_responses_ready(run_dir: Path) -> bool:
+def _frontend_responses_progress(run_dir: Path) -> tuple[int, int, bool]:
     manifest_path = run_dir / "frontend" / "review" / "index.json"
     manifest = _load_json_mapping(manifest_path)
     if manifest is None:
-        return False
+        return (0, 0, False)
 
     raw_packs = manifest.get("packs")
     account_ids: list[str] = []
@@ -406,46 +473,140 @@ def _review_responses_ready(run_dir: Path) -> bool:
             if isinstance(path_text, str) and path_text.strip():
                 account_ids.append(Path(path_text).stem)
 
-    if not account_ids:
-        counts = manifest.get("counts")
-        if isinstance(counts, Mapping):
-            packs_count = counts.get("packs")
-            try:
-                packs_count_int = int(packs_count)
-            except (TypeError, ValueError):
-                packs_count_int = None
-        else:
-            packs_count_int = None
+    counts = manifest.get("counts") if isinstance(manifest.get("counts"), Mapping) else None
+    packs_count_int = None
+    responses_count_int = None
+    if isinstance(counts, Mapping):
+        packs_count_int = _coerce_int(counts.get("packs"))
+        responses_count_int = _coerce_int(counts.get("responses"))
 
-        return packs_count_int in (None, 0)
+    if not account_ids:
+        required = packs_count_int or 0
+        if required <= 0:
+            return (0, responses_count_int or 0, True)
+        answered = responses_count_int or 0
+        ready = answered >= required and required > 0
+        return (required, answered, ready)
 
     responses_dir = run_dir / "frontend" / "review" / "responses"
+    required = len(account_ids)
+    explanation_required = _review_explanation_required()
+    answered_ids: set[str] = set()
+
     for account_id in account_ids:
         filename = _response_filename_for_account(account_id)
         candidate = responses_dir / filename
         try:
-            if not candidate.is_file():
-                return False
+            is_file = candidate.is_file()
         except OSError:
-            return False
+            is_file = False
+        if not is_file:
+            continue
 
         payload = _load_json_mapping(candidate)
         if payload is None:
-            return False
+            continue
 
         received_at = payload.get("received_at")
         if not isinstance(received_at, str) or not received_at.strip():
-            return False
+            continue
 
         answers = payload.get("answers")
         if not isinstance(answers, Mapping):
-            return False
+            continue
 
-        explanation = answers.get("explanation")
-        if not isinstance(explanation, str) or not explanation.strip():
-            return False
+        if explanation_required:
+            explanation = answers.get("explanation")
+            if not isinstance(explanation, str) or not explanation.strip():
+                continue
 
-    return True
+        answered_ids.add(account_id)
+
+    answered = len(answered_ids)
+    ready = answered >= required and required > 0
+    return (required, answered, ready)
+
+
+def _review_responses_ready(run_dir: Path) -> bool:
+    _, _, ready = _frontend_responses_progress(run_dir)
+    return ready
+
+
+def refresh_validation_stage_from_index(
+    sid: str, runs_root: Optional[str | Path] = None
+) -> None:
+    """Update the validation stage entry when AI results are complete."""
+
+    path = _runflow_path(sid, runs_root)
+    run_dir = path.parent
+    total, completed, failed, ready = _validation_results_progress(run_dir)
+    if not ready:
+        return
+
+    data = _load_runflow(path, sid)
+    stages = data.setdefault("stages", {})
+    if not isinstance(stages, dict):
+        stages = {}
+        data["stages"] = stages
+
+    existing = stages.get("validation")
+    stage_payload = dict(existing) if isinstance(existing, Mapping) else {}
+
+    stage_payload["status"] = "success"
+    stage_payload["last_at"] = _now_iso()
+    if "empty_ok" not in stage_payload:
+        stage_payload["empty_ok"] = bool(total == 0)
+
+    results_payload = {
+        "results_total": total,
+        "completed": completed,
+        "failed": failed,
+    }
+    stage_payload["results"] = results_payload
+
+    stages["validation"] = stage_payload
+    data["updated_at"] = _now_iso()
+
+    _atomic_write_json(path, data)
+    runflow_refresh_umbrella_barriers(sid)
+
+
+def refresh_frontend_stage_from_responses(
+    sid: str, runs_root: Optional[str | Path] = None
+) -> None:
+    """Update the frontend stage entry when customer responses are complete."""
+
+    path = _runflow_path(sid, runs_root)
+    run_dir = path.parent
+    required, answered, ready = _frontend_responses_progress(run_dir)
+    if not ready:
+        return
+
+    data = _load_runflow(path, sid)
+    stages = data.setdefault("stages", {})
+    if not isinstance(stages, dict):
+        stages = {}
+        data["stages"] = stages
+
+    existing = stages.get("frontend")
+    stage_payload = dict(existing) if isinstance(existing, Mapping) else {}
+
+    stage_payload["status"] = "success"
+    stage_payload["last_at"] = _now_iso()
+    if "empty_ok" not in stage_payload:
+        stage_payload["empty_ok"] = bool(required == 0)
+
+    answers_payload = {
+        "answers_received": answered,
+        "answers_required": required,
+    }
+    stage_payload["answers"] = answers_payload
+
+    stages["frontend"] = stage_payload
+    data["updated_at"] = _now_iso()
+
+    _atomic_write_json(path, data)
+    runflow_refresh_umbrella_barriers(sid)
 
 
 def evaluate_global_barriers(run_path: str) -> dict[str, bool]:
@@ -603,13 +764,14 @@ def decide_next(sid: str, runs_root: Optional[str | Path] = None) -> dict[str, s
                 _set("run_validation", "validation_pending", "VALIDATING")
             else:
                 validation_status = str(validation_stage.get("status") or "")
+                normalized_validation_status = validation_status.strip().lower()
                 findings_count = _coerce_int(validation_stage.get("findings_count"))
                 if findings_count is None:
                     findings_count = 0
 
-                if validation_status == "error":
+                if normalized_validation_status == "error":
                     _set("stop_error", "validation_error", "ERROR")
-                elif validation_status != "success":
+                elif normalized_validation_status not in {"success", "built"}:
                     _set("run_validation", "validation_pending", "VALIDATING")
                 elif findings_count <= 0:
                     _set("complete_no_action", "validation_no_findings", "COMPLETE_NO_ACTION")
@@ -619,9 +781,10 @@ def decide_next(sid: str, runs_root: Optional[str | Path] = None) -> dict[str, s
                         _set("gen_frontend_packs", "validation_has_findings", "VALIDATING")
                     else:
                         frontend_status = str(frontend_stage.get("status") or "")
-                        if frontend_status == "error":
+                        normalized_frontend_status = frontend_status.strip().lower()
+                        if normalized_frontend_status == "error":
                             _set("stop_error", "frontend_error", "ERROR")
-                        elif frontend_status == "success":
+                        elif normalized_frontend_status in {"published", "success"}:
                             packs_count = _coerce_int(frontend_stage.get("packs_count")) or 0
                             if packs_count <= 0:
                                 _set(
@@ -630,9 +793,14 @@ def decide_next(sid: str, runs_root: Optional[str | Path] = None) -> dict[str, s
                                     "COMPLETE_NO_ACTION",
                                 )
                             else:
+                                reason_label = (
+                                    "frontend_completed"
+                                    if normalized_frontend_status == "success"
+                                    else "frontend_published"
+                                )
                                 _set(
                                     "await_input",
-                                    "frontend_completed",
+                                    reason_label,
                                     "AWAITING_CUSTOMER_INPUT",
                                 )
                         else:
@@ -673,4 +841,11 @@ def decide_next(sid: str, runs_root: Optional[str | Path] = None) -> dict[str, s
     return {"next": next_action, "reason": reason}
 
 
-__all__ = ["record_stage", "decide_next", "StageStatus", "RunState"]
+__all__ = [
+    "record_stage",
+    "decide_next",
+    "StageStatus",
+    "RunState",
+    "refresh_validation_stage_from_index",
+    "refresh_frontend_stage_from_responses",
+]

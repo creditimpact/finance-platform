@@ -20,6 +20,7 @@ from backend.core.ai.paths import (
     validation_result_summary_filename_for_account,
     validation_write_json_enabled,
 )
+from backend.runflow.decider import refresh_validation_stage_from_index
 from backend.validation.io import write_json, write_jsonl
 from backend.core.ai.eligibility_policy import (
     canonicalize_history,
@@ -561,6 +562,13 @@ def store_validation_result(
         result_path=summary_path if index_status == "completed" else None,
         line_count=request_lines_count,
     )
+
+    try:
+        refresh_validation_stage_from_index(sid, runs_root=runs_root_path)
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning(
+            "VALIDATION_STAGE_REFRESH_FAILED sid=%s", sid, exc_info=True
+        )
 
     return summary_path
 

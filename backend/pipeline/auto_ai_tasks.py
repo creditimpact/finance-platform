@@ -667,10 +667,21 @@ def ai_validation_requirements_step(
         stats.get("findings", 0),
     )
 
-    stage_status: StageStatus = "success" if stats.get("ok", True) else "error"
+    validation_ok = bool(stats.get("ok", True))
+    stage_status: StageStatus = "built" if validation_ok else "error"
     findings_count = int(stats.get("findings_count", stats.get("findings", 0)) or 0)
     empty_ok = findings_count == 0
     notes_value = stats.get("notes")
+
+    packs_total = int(stats.get("processed_accounts", 0) or 0)
+    accounts_eligible = packs_total
+    total_accounts = int(stats.get("total_accounts", 0) or 0)
+    packs_skipped = max(0, total_accounts - accounts_eligible)
+    validation_metrics = {
+        "packs_total": packs_total,
+        "accounts_eligible": accounts_eligible,
+        "packs_skipped": packs_skipped,
+    }
 
     record_stage(
         sid,
@@ -679,6 +690,7 @@ def ai_validation_requirements_step(
         counts={"findings_count": findings_count},
         empty_ok=empty_ok,
         notes=notes_value,
+        metrics=validation_metrics,
         runs_root=runs_root_path,
     )
 
@@ -701,7 +713,7 @@ def ai_validation_requirements_step(
         packs_count = int(fe_result.get("packs_count", 0) or 0)
         frontend_status_value = str(fe_result.get("status") or "success")
         frontend_stage_status: StageStatus = (
-            "success" if frontend_status_value != "error" else "error"
+            "error" if frontend_status_value == "error" else "published"
         )
         notes_override = (
             frontend_status_value if frontend_status_value not in {"", "success"} else None

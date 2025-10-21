@@ -65,6 +65,7 @@ from backend.frontend.packs.claim_schema import (
     resolve_issue_claims,
 )
 from backend.frontend.packs.config import load_frontend_stage_config
+from backend.runflow.decider import refresh_frontend_stage_from_responses
 from backend.domain.claims import (
     CLAIM_FIELD_LINK_MAP,
     DOC_KEY_ALIAS_TO_CANONICAL,
@@ -2074,6 +2075,16 @@ def api_frontend_review_answer(sid: str, account_id: str):
         json.dump(record, handle, ensure_ascii=False, indent=2)
 
     _review_stream_broker.publish(sid, "responses_written", {"account_id": account_id})
+
+    try:
+        refresh_frontend_stage_from_responses(sid, runs_root=run_dir.parent)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.warning(
+            "FRONTEND_STAGE_REFRESH_FAILED sid=%s account_id=%s",
+            sid,
+            account_id,
+            exc_info=True,
+        )
 
     return jsonify(record)
 

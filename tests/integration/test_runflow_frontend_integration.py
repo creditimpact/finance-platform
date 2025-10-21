@@ -29,7 +29,7 @@ def test_runflow_completes_when_validation_has_no_findings(tmp_path):
     runflow_decider.record_stage(
         sid,
         "validation",
-        status="success",
+        status="built",
         counts={"findings_count": 0},
         empty_ok=True,
         runs_root=runs_root,
@@ -46,7 +46,7 @@ def test_runflow_completes_when_validation_has_no_findings(tmp_path):
     runflow_decider.record_stage(
         sid,
         "frontend",
-        status="success",
+        status="published",
         counts={"packs_count": result["packs_count"]},
         empty_ok=True,
         runs_root=runs_root,
@@ -104,7 +104,7 @@ def test_runflow_generates_frontend_and_moves_to_await(tmp_path):
     runflow_decider.record_stage(
         sid,
         "validation",
-        status="success",
+        status="built",
         counts={"findings_count": 2},
         empty_ok=False,
         runs_root=runs_root,
@@ -121,14 +121,14 @@ def test_runflow_generates_frontend_and_moves_to_await(tmp_path):
     runflow_decider.record_stage(
         sid,
         "frontend",
-        status="success",
+        status="published",
         counts={"packs_count": 2},
         empty_ok=False,
         runs_root=runs_root,
     )
 
     follow_up = runflow_decider.decide_next(sid, runs_root=runs_root)
-    assert follow_up == {"next": "await_input", "reason": "frontend_completed"}
+    assert follow_up == {"next": "await_input", "reason": "frontend_published"}
 
     index_path = runs_root / sid / "frontend" / "review" / "index.json"
     assert index_path.exists()
@@ -206,7 +206,7 @@ def test_runflow_instrumentation_smoke(tmp_path, monkeypatch):
         runflow_decider.record_stage(
             sid,
             "validation",
-            status="success",
+            status="built",
             counts={"findings_count": 1},
             empty_ok=False,
             runs_root=runs_root,
@@ -241,7 +241,7 @@ def test_runflow_instrumentation_smoke(tmp_path, monkeypatch):
         runflow_decider.record_stage(
             sid,
             "frontend",
-            status="success",
+            status="published",
             counts={"packs_count": frontend_result["packs_count"]},
             empty_ok=False,
             runs_root=runs_root,

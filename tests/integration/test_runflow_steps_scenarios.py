@@ -75,7 +75,7 @@ def test_validation_zero_findings_still_runs_frontend(tmp_path, monkeypatch):
     runflow_decider.record_stage(
         sid,
         "validation",
-        status="success",
+        status="built",
         counts={"findings_count": 0},
         empty_ok=True,
         runs_root=runs_root,
@@ -93,6 +93,7 @@ def test_validation_zero_findings_still_runs_frontend(tmp_path, monkeypatch):
 
     step_names = [entry["name"] for entry in frontend_stage["steps"]]
     assert step_names == [
+        "frontend_review_start",
         "frontend_review_no_candidates",
         "frontend_review_finish",
     ]

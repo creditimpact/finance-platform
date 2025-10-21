@@ -35,6 +35,7 @@ from backend.core.ai.paths import (
     validation_logs_path,
 )
 from backend.pipeline.runs import RunManifest, persist_manifest
+from backend.core.runflow import record_validation_build_summary
 from backend.runflow.decider import reconcile_umbrella_barriers
 from backend.validation.redaction import sanitize_validation_payload
 from backend.core.ai.eligibility_policy import (
@@ -1905,12 +1906,27 @@ def build_validation_packs_for_run(
         log.info(
             "VALIDATION_PACKS_DISABLED sid=%s reason=env_toggle", sid,
         )
+        record_validation_build_summary(
+            sid,
+            eligible_accounts=0,
+            packs_built=0,
+            packs_skipped=0,
+        )
         return {}
 
     _wait_for_merge_completion(sid, runs_root_path)
 
     writer = _get_writer(sid, runs_root_path)
     results = writer.write_all_packs()
+    eligible_accounts = len(results)
+    packs_built = sum(1 for payload in results.values() if payload)
+    packs_skipped = max(0, eligible_accounts - packs_built)
+    record_validation_build_summary(
+        sid,
+        eligible_accounts=eligible_accounts,
+        packs_built=packs_built,
+        packs_skipped=packs_skipped,
+    )
     if any(result for result in results.values()):
         _update_manifest_for_run(sid, runs_root_path)
     try:

@@ -37,7 +37,7 @@ from backend import config as backend_config
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.io.tags import read_tags, write_tags_atomic
 from backend.core.logic import summary_writer
-from backend.core.runflow import runflow_step
+from backend.core.runflow import runflow_account_steps_enabled, runflow_step
 from backend.core.logic.context import set_validation_context
 from backend.core.logic.consistency import _get_bureau_value, compute_field_consistency
 from backend.core.logic.reason_classifier import classify_reason, decide_send_to_ai
@@ -176,13 +176,14 @@ def _emit_tolerance_log(payload: Mapping[str, Any]) -> None:
             if isinstance(within, bool):
                 metrics["within"] = within
 
-            runflow_step(
-                sid_value,
-                "validation",
-                step_name,
-                metrics=metrics or None,
-                out={"field": str(payload.get("field") or "")},
-            )
+            if runflow_account_steps_enabled():
+                runflow_step(
+                    sid_value,
+                    "validation",
+                    step_name,
+                    metrics=metrics or None,
+                    out={"field": str(payload.get("field") or "")},
+                )
 
 
 def _evaluate_with_tolerance(
@@ -1898,17 +1899,18 @@ def build_summary_payload(
                 elif reason == "alnum_conflict":
                     alnum_conflicts += 1
 
-            runflow_step(
-                sid_value,
-                "validation",
-                "acctnum_compare_merge_semantics",
-                metrics={
-                    "level": aggregate_level,
-                    "digit_conflicts": digit_conflicts,
-                    "alnum_conflicts": alnum_conflicts,
-                },
-                out={"field": "account_number_display"},
-            )
+            if runflow_account_steps_enabled():
+                runflow_step(
+                    sid_value,
+                    "validation",
+                    "acctnum_compare_merge_semantics",
+                    metrics={
+                        "level": aggregate_level,
+                        "digit_conflicts": digit_conflicts,
+                        "alnum_conflicts": alnum_conflicts,
+                    },
+                    out={"field": "account_number_display"},
+                )
 
         if (
             field_name

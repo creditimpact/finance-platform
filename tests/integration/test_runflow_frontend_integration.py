@@ -285,16 +285,17 @@ def test_runflow_instrumentation_smoke(tmp_path, monkeypatch):
         assert validation_steps[0]["metrics"] == {"findings": 1}
 
         frontend_steps = steps_payload["stages"]["frontend"]["steps"]
-        assert len(frontend_steps) >= 3
         step_names = [entry["name"] for entry in frontend_steps]
         assert step_names[0] == "frontend_review_start"
-        assert step_names[-1] == "frontend_review_finish"
-        pack_created_entries = [
-            entry for entry in frontend_steps if entry["name"] == "frontend_review_pack_created"
-        ]
-        assert len(pack_created_entries) == frontend_result["packs_count"]
-        for entry in pack_created_entries:
-            assert entry["out"]["path"].startswith("frontend/review/packs/")
+        assert "frontend_review_finish" in step_names
+        responses_entry = next(
+            entry for entry in frontend_steps if entry["name"] == "responses_progress"
+        )
+        assert responses_entry["metrics"] == {
+            "accounts_published": frontend_result["packs_count"],
+            "answers_received": 0,
+            "answers_required": frontend_result["packs_count"],
+        }
 
         assert len(events_lines) >= 6
 

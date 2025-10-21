@@ -230,9 +230,16 @@ These environment variables control instrumentation behaviour:
 | `RUNFLOW_STEPS_ENABLE_SPANS` | Include span identifiers in step entries. | `1` (enabled) |
 | `RUNFLOW_STEP_LOG_EVERY` | Sample frequency for success steps (1 = log everything). | `1` |
 | `RUNFLOW_STEPS_PAIR_TOPN` | Number of merge pairs to keep inline before aggregating into the summary. | `5` |
+| `RUNFLOW_STEPS_SUPPRESS_PER_ACCOUNT` | Skip per-account step entries unless they error. | `0` |
+| `RUNFLOW_STEPS_ONLY_AGGREGATES` | Emit only aggregate roll-ups when combined with suppression. | `0` |
 
 Toggle these knobs via `monkeypatch.setenv` in tests or shell variables in local
 runs.
+
+When both `RUNFLOW_STEPS_SUPPRESS_PER_ACCOUNT=1` and
+`RUNFLOW_STEPS_ONLY_AGGREGATES=1`, `runflow_steps.json` records only the compact
+aggregate rows while still surfacing per-account entries if they fail. This
+keeps the steps timeline readable for large runs.
 
 ## Troubleshooting mismatched counters
 

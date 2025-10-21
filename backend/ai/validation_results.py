@@ -20,6 +20,7 @@ from backend.core.ai.paths import (
     validation_result_summary_filename_for_account,
     validation_write_json_enabled,
 )
+from backend.core.runflow import runflow_barriers_refresh
 from backend.runflow.decider import (
     reconcile_umbrella_barriers,
     refresh_validation_stage_from_index,
@@ -565,6 +566,11 @@ def store_validation_result(
         result_path=summary_path if index_status == "completed" else None,
         line_count=request_lines_count,
     )
+
+    try:
+        runflow_barriers_refresh(sid)
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning("VALIDATION_BARRIERS_REFRESH_FAILED sid=%s", sid, exc_info=True)
 
     try:
         refresh_validation_stage_from_index(sid, runs_root=runs_root_path)

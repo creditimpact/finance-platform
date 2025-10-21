@@ -201,6 +201,66 @@ def test_validation_stage_sets_validation_ready(tmp_path, monkeypatch):
         _reload_runflow()
 
 
+def test_validation_readiness_respects_env_overrides(tmp_path, monkeypatch):
+    sid = "validation-env-override"
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("UMBRELLA_BARRIERS_ENABLED", "1")
+    monkeypatch.setenv("UMBRELLA_BARRIERS_LOG", "0")
+    monkeypatch.setenv("VALIDATION_INDEX_PATH", "external/index.json")
+    monkeypatch.setenv("VALIDATION_RESULTS_DIR", "external/results")
+    _ensure_requests_stub(monkeypatch)
+    _reload_runflow()
+
+    try:
+        run_dir = tmp_path / sid
+        stages = {"validation": {"status": "success"}}
+        _prepare_runflow_files(run_dir, stages=stages)
+
+        external_dir = run_dir / "external"
+        results_dir = external_dir / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+        account_number = 5
+        result_filename = f"idx-{account_number:03d}.result.jsonl"
+        (results_dir / result_filename).write_text("{}", encoding="utf-8")
+
+        index_payload = {
+            "schema_version": 2,
+            "sid": sid,
+            "root": ".",
+            "packs_dir": "packs",
+            "results_dir": "results",
+            "packs": [
+                {
+                    "account_id": account_number,
+                    "pack": f"packs/idx-{account_number:03d}.json",
+                    "result_json": f"results/{result_filename}",
+                    "status": "completed",
+                    "lines": 1,
+                }
+            ],
+        }
+
+        _write_json(external_dir / "index.json", index_payload)
+
+        runflow._update_umbrella_barriers(sid)
+        payload = _load_runflow_payload(run_dir)
+        umbrella = payload["umbrella_barriers"]
+
+        assert umbrella["merge_ready"] is False
+        assert umbrella["validation_ready"] is True
+        assert umbrella["review_ready"] is False
+        assert umbrella["all_ready"] is False
+        assert payload["umbrella_ready"] is False
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_LOG", raising=False)
+        monkeypatch.delenv("VALIDATION_INDEX_PATH", raising=False)
+        monkeypatch.delenv("VALIDATION_RESULTS_DIR", raising=False)
+        _reload_runflow()
+
+
 def test_all_stages_ready_marks_run_ready(tmp_path, monkeypatch):
     sid = "all-ready"
     monkeypatch.setenv("RUNS_ROOT", str(tmp_path))

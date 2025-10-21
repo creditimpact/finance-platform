@@ -421,30 +421,87 @@ def _stage_status(steps: Mapping[str, Any] | None, stage: str) -> str:
     return ""
 
 
+def _resolve_validation_index_path(run_dir: Path) -> Path:
+    override = os.getenv("VALIDATION_INDEX_PATH")
+    if override:
+        candidate = Path(override)
+        if not candidate.is_absolute():
+            candidate = (run_dir / override).resolve()
+        else:
+            candidate = candidate.resolve()
+        return candidate
+
+    return (run_dir / "ai_packs" / "validation" / "index.json").resolve()
+
+
+def _resolve_validation_results_dir(run_dir: Path) -> Optional[Path]:
+    override = os.getenv("VALIDATION_RESULTS_DIR")
+    if not override:
+        return None
+
+    candidate = Path(override)
+    if not candidate.is_absolute():
+        candidate = (run_dir / override).resolve()
+    else:
+        candidate = candidate.resolve()
+    return candidate
+
+
 def _validation_record_result_paths(
-    index: "ValidationIndex", record: Any
+    index: "ValidationIndex", record: Any, *, results_override: Optional[Path] = None
 ) -> list[Path]:  # pragma: no cover - exercised via higher level tests
     paths: list[Path] = []
+    seen: set[str] = set()
+
+    def _append(path: Path) -> None:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            paths.append(path)
 
     result_json_value = getattr(record, "result_json", None)
     if isinstance(result_json_value, str) and result_json_value.strip():
         try:
-            paths.append(index.resolve_result_json_path(record))
+            _append(index.resolve_result_json_path(record))
         except Exception:
             return []
 
     result_jsonl_value = getattr(record, "result_jsonl", None)
     if isinstance(result_jsonl_value, str) and result_jsonl_value.strip():
         try:
-            paths.append(index.resolve_result_jsonl_path(record))
+            _append(index.resolve_result_jsonl_path(record))
         except Exception:
             return []
+
+    if results_override:
+        base_dir: Optional[Path]
+        try:
+            base_dir = index.results_dir_path
+        except Exception:  # pragma: no cover - defensive
+            base_dir = None
+
+        for candidate in list(paths):
+            relative: Optional[Path] = None
+            if base_dir is not None:
+                try:
+                    relative = candidate.resolve().relative_to(base_dir)
+                except ValueError:
+                    relative = None
+            if relative is None:
+                relative = Path(candidate.name)
+
+            override_candidate = (results_override / relative).resolve()
+            _append(override_candidate)
 
     return paths
 
 
-def _validation_record_has_results(index: "ValidationIndex", record: Any) -> bool:
-    paths = _validation_record_result_paths(index, record)
+def _validation_record_has_results(
+    index: "ValidationIndex", record: Any, *, results_override: Optional[Path] = None
+) -> bool:
+    paths = _validation_record_result_paths(
+        index, record, results_override=results_override
+    )
     if not paths:
         return False
 
@@ -460,7 +517,8 @@ def _validation_record_has_results(index: "ValidationIndex", record: Any) -> boo
 def _validation_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
     """Return (total, completed, failed, ready) for validation AI results."""
 
-    index_path = run_dir / "ai_packs" / "validation" / "index.json"
+    index_path = _resolve_validation_index_path(run_dir)
+    results_override = _resolve_validation_results_dir(run_dir)
     try:
         index = load_validation_index(index_path)
     except FileNotFoundError:
@@ -480,7 +538,9 @@ def _validation_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
         normalized_status = status.strip().lower() if isinstance(status, str) else ""
 
         if normalized_status == "completed":
-            if not _validation_record_has_results(index, record):
+            if not _validation_record_has_results(
+                index, record, results_override=results_override
+            ):
                 log.warning(
                     "RUNFLOW_VALIDATION_RESULT_MISSING account_id=%s",
                     getattr(record, "account_id", "unknown"),

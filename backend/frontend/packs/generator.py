@@ -19,7 +19,11 @@ from backend.core.paths.frontend_review import (
     ensure_frontend_review_dirs,
     get_frontend_review_paths,
 )
-from backend.core.runflow import runflow_step
+from backend.core.runflow import (
+    record_frontend_responses_progress,
+    runflow_account_steps_enabled,
+    runflow_step,
+)
 from backend.core.runflow.io import (
     compose_hint,
     format_exception_tail,
@@ -1213,6 +1217,12 @@ def generate_frontend_packs_for_run(
                 "frontend_review_no_candidates",
                 out={"reason": "disabled"},
             )
+            record_frontend_responses_progress(
+                sid,
+                accounts_published=0,
+                answers_received=responses_count,
+                answers_required=0,
+            )
             runflow_step(
                 sid,
                 "frontend",
@@ -1277,6 +1287,12 @@ def generate_frontend_packs_for_run(
                 "responses_received": responses_count,
                 "empty_ok": True,
             }
+            record_frontend_responses_progress(
+                sid,
+                accounts_published=0,
+                answers_received=responses_count,
+                answers_required=0,
+            )
             runflow_stage_end(
                 "frontend",
                 sid=sid,
@@ -1357,6 +1373,12 @@ def generate_frontend_packs_for_run(
                         "empty_ok": packs_count == 0,
                         "cache_hit": True,
                     }
+                    record_frontend_responses_progress(
+                        sid,
+                        accounts_published=packs_count,
+                        answers_received=responses_count,
+                        answers_required=packs_count,
+                    )
                     runflow_stage_end(
                         "frontend",
                         sid=sid,
@@ -1574,7 +1596,7 @@ def generate_frontend_packs_for_run(
             except ValueError:
                 relative_stage_pack = str(stage_pack_path)
 
-            if stage_changed:
+            if stage_changed and runflow_account_steps_enabled():
                 runflow_step(
                     sid,
                     "frontend",
@@ -1650,6 +1672,12 @@ def generate_frontend_packs_for_run(
             summary["unchanged"] = unchanged_docs
         if write_errors:
             summary["write_failures"] = len(write_errors)
+        record_frontend_responses_progress(
+            sid,
+            accounts_published=pack_count,
+            answers_received=responses_count,
+            answers_required=pack_count,
+        )
         runflow_stage_end(
             "frontend",
             sid=sid,

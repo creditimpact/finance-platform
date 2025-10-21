@@ -65,12 +65,14 @@ _ENABLE_EVENTS = _env_enabled("RUNFLOW_EVENTS")
 _STEP_SAMPLE_EVERY = max(_env_int("RUNFLOW_STEP_LOG_EVERY", 1), 1)
 _PAIR_TOPN = max(_env_int("RUNFLOW_STEPS_PAIR_TOPN", 5), 0)
 _ENABLE_SPANS = _env_enabled("RUNFLOW_STEPS_ENABLE_SPANS", True)
+_ENABLE_ACCOUNT_STEPS = _env_enabled("RUNFLOW_ACCOUNT_STEPS", True)
 _UMBRELLA_BARRIERS_ENABLED = _env_enabled("UMBRELLA_BARRIERS_ENABLED", True)
 _UMBRELLA_BARRIERS_LOG = _env_enabled("UMBRELLA_BARRIERS_LOG", True)
 
 
 _STEP_CALL_COUNTS: dict[tuple[str, str, str, str], int] = defaultdict(int)
 _STARTED_STAGES: set[tuple[str, str]] = set()
+_STAGE_COUNTERS: dict[str, dict[str, dict[str, int]]] = {}
 
 
 def _append_event(sid: str, row: Mapping[str, Any]) -> None:
@@ -83,6 +85,54 @@ def steps_pair_topn() -> int:
     """Return the configured Top-N threshold for merge pair steps."""
 
     return _PAIR_TOPN
+
+
+def runflow_account_steps_enabled() -> bool:
+    """Return ``True`` when per-account runflow step logging is enabled."""
+
+    return _ENABLE_ACCOUNT_STEPS
+
+
+def _coerce_summary_counts(summary: Mapping[str, Any]) -> dict[str, int]:
+    normalized: dict[str, int] = {}
+    for key, value in summary.items():
+        try:
+            normalized[str(key)] = int(value)
+        except (TypeError, ValueError):
+            normalized[str(key)] = 0
+    return normalized
+
+
+def _store_stage_counter(sid: str, bucket: str, summary: Mapping[str, Any]) -> dict[str, int]:
+    counters = _STAGE_COUNTERS.setdefault(sid, {})
+    payload = _coerce_summary_counts(summary)
+    counters[bucket] = payload
+    return payload
+
+
+def _emit_summary_step(
+    sid: str, stage: str, step: str, *, summary: Mapping[str, int]
+) -> None:
+    metrics = {str(key): value for key, value in summary.items()}
+    out_payload = {"summary": dict(metrics)} if metrics else None
+    runflow_step(
+        sid,
+        stage,
+        step,
+        status="success",
+        metrics=metrics or None,
+        out=out_payload,
+    )
+
+
+def _clear_stage_counters(sid: str, *buckets: str) -> None:
+    state = _STAGE_COUNTERS.get(sid)
+    if not state:
+        return
+    for bucket in buckets:
+        state.pop(bucket, None)
+    if not state:
+        _STAGE_COUNTERS.pop(sid, None)
 
 
 def _reset_step_counters(sid: str, stage: str) -> None:
@@ -284,6 +334,11 @@ def runflow_end_stage(
 
     _update_umbrella_barriers(sid)
 
+    if stage == "validation":
+        _clear_stage_counters(sid, "validation_build", "validation_results")
+    elif stage == "frontend":
+        _clear_stage_counters(sid, "frontend_review")
+
 
 def runflow_event(
     sid: str,
@@ -484,6 +539,58 @@ def runflow_step(
         _append_event(sid, event)
 
 
+def record_validation_build_summary(
+    sid: str,
+    *,
+    eligible_accounts: Any,
+    packs_built: Any,
+    packs_skipped: Any,
+) -> None:
+    summary = {
+        "eligible_accounts": eligible_accounts,
+        "packs_built": packs_built,
+        "packs_skipped": packs_skipped,
+    }
+    normalized = _store_stage_counter(sid, "validation_build", summary)
+    _emit_summary_step(sid, "validation", "build_packs", summary=normalized)
+
+
+def record_validation_results_summary(
+    sid: str,
+    *,
+    results_total: Any,
+    completed: Any,
+    failed: Any,
+    pending: Any,
+) -> None:
+    summary = {
+        "results_total": results_total,
+        "completed": completed,
+        "failed": failed,
+        "pending": pending,
+    }
+    normalized = _store_stage_counter(sid, "validation_results", summary)
+    if normalized.get("pending", 0) < 0:
+        normalized["pending"] = 0
+    _emit_summary_step(sid, "validation", "collect_results", summary=normalized)
+
+
+def record_frontend_responses_progress(
+    sid: str,
+    *,
+    accounts_published: Any,
+    answers_received: Any,
+    answers_required: Any,
+) -> None:
+    summary = {
+        "accounts_published": accounts_published,
+        "answers_received": answers_received,
+        "answers_required": answers_required,
+    }
+    normalized = _store_stage_counter(sid, "frontend_review", summary)
+    _emit_summary_step(sid, "frontend", "responses_progress", summary=normalized)
+
+
 def runflow_step_dec(stage: str, step: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def _wrap(fn: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(fn)
@@ -539,4 +646,8 @@ __all__ = [
     "runflow_step",
     "runflow_step_dec",
     "steps_pair_topn",
+    "record_validation_build_summary",
+    "record_validation_results_summary",
+    "record_frontend_responses_progress",
+    "runflow_account_steps_enabled",
 ]

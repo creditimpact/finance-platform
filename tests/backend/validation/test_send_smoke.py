@@ -298,7 +298,7 @@ def test_validation_sender_smoke_writes_results(
         assert "labels" not in entry
 
 
-def test_validation_sender_emits_ai_results_step(
+def test_validation_sender_emits_collect_results_step(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runs_root = tmp_path / "runs"
@@ -357,8 +357,15 @@ def test_validation_sender_emits_ai_results_step(
         (runs_root / sid / "runflow_steps.json").read_text(encoding="utf-8")
     )
     validation_steps = steps_payload["stages"]["validation"]["substages"]["default"]["steps"]
-    ai_step = next(entry for entry in validation_steps if entry["name"] == "ai_results")
-    assert ai_step["metrics"] == {"received": 1, "total": 1}
+    collect_step = next(
+        entry for entry in validation_steps if entry["name"] == "collect_results"
+    )
+    assert collect_step["metrics"] == {
+        "results_total": 1,
+        "completed": 1,
+        "failed": 0,
+        "pending": 0,
+    }
 
 
 def test_validation_sender_invalid_response_guardrail(

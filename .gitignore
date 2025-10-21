@@ -89,3 +89,6 @@ client_output/
 data/sessions.json
 data/intake_only.json
 archive/examples/**
+.env
+frontend/.env
+*.env.local

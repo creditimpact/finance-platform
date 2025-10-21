@@ -42,6 +42,10 @@ def _umbrella_barriers_enabled() -> bool:
     return _env_enabled("UMBRELLA_BARRIERS_ENABLED", True)
 
 
+def _document_verifier_enabled() -> bool:
+    return _env_enabled("DOCUMENT_VERIFIER_ENABLED", False)
+
+
 def _default_runs_root() -> Path:
     root_env = os.getenv("RUNS_ROOT")
     return Path(root_env) if root_env else Path("runs")
@@ -75,13 +79,18 @@ def _coerce_int(value: Any) -> Optional[int]:
 
 
 def _default_umbrella_barriers() -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "merge_ready": False,
         "validation_ready": False,
         "review_ready": False,
         "all_ready": False,
         "checked_at": None,
     }
+
+    if _document_verifier_enabled():
+        payload["document_ready"] = False
+
+    return payload
 
 
 def _normalise_umbrella_barriers(payload: Any) -> dict[str, Any]:
@@ -94,6 +103,10 @@ def _normalise_umbrella_barriers(payload: Any) -> dict[str, Any]:
         checked_at = payload.get("checked_at")
         if isinstance(checked_at, str):
             result["checked_at"] = checked_at
+
+        document_ready = payload.get("document_ready")
+        if isinstance(document_ready, bool):
+            result["document_ready"] = document_ready
     return result
 
 
@@ -458,12 +471,17 @@ def evaluate_global_barriers(run_path: str) -> dict[str, bool]:
 
     all_ready = merge_ready and validation_ready and review_ready
 
-    return {
+    readiness: dict[str, bool] = {
         "merge_ready": merge_ready,
         "validation_ready": validation_ready,
         "review_ready": review_ready,
         "all_ready": all_ready,
     }
+
+    if _document_verifier_enabled():
+        readiness["document_ready"] = False
+
+    return readiness
 
 
 def _parse_timestamp(value: Any) -> Optional[datetime]:

@@ -166,6 +166,12 @@ def _update_umbrella_barriers(sid: str) -> None:
         return
 
 
+def runflow_refresh_umbrella_barriers(sid: str) -> None:
+    """Re-evaluate umbrella readiness for ``sid``."""
+
+    _update_umbrella_barriers(sid)
+
+
 def _should_record_step(
     sid: str, stage: str, substage: str, step: str, status: str
 ) -> bool:
@@ -236,26 +242,25 @@ def runflow_end_stage(
 ) -> None:
     steps_enabled = _ENABLE_STEPS
     events_enabled = _ENABLE_EVENTS
-    if not (steps_enabled or events_enabled):
-        return
 
-    ts = _utcnow_iso()
-    if steps_enabled:
-        status_for_steps = stage_status or status
-        steps_stage_finish(
-            sid,
-            stage,
-            status_for_steps,
-            summary,
-            ended_at=ts,
-            empty_ok=empty_ok,
-        )
+    if steps_enabled or events_enabled:
+        ts = _utcnow_iso()
+        if steps_enabled:
+            status_for_steps = stage_status or status
+            steps_stage_finish(
+                sid,
+                stage,
+                status_for_steps,
+                summary,
+                ended_at=ts,
+                empty_ok=empty_ok,
+            )
 
-    if events_enabled:
-        event: dict[str, Any] = {"ts": ts, "stage": stage, "event": "end", "status": status}
-        if summary:
-            event["summary"] = {str(k): v for k, v in summary.items()}
-        _append_event(sid, event)
+        if events_enabled:
+            event: dict[str, Any] = {"ts": ts, "stage": stage, "event": "end", "status": status}
+            if summary:
+                event["summary"] = {str(k): v for k, v in summary.items()}
+            _append_event(sid, event)
 
     _STARTED_STAGES.discard((sid, stage))
     _reset_step_counters(sid, stage)
@@ -511,6 +516,7 @@ def runflow_step_dec(stage: str, step: str) -> Callable[[Callable[..., Any]], Ca
 __all__ = [
     "runflow_start_stage",
     "runflow_end_stage",
+    "runflow_refresh_umbrella_barriers",
     "runflow_decide_step",
     "runflow_event",
     "runflow_step",

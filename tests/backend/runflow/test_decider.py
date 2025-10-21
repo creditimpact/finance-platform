@@ -3,6 +3,29 @@ from __future__ import annotations
 import importlib
 import json
 from pathlib import Path
+import sys
+from types import ModuleType, SimpleNamespace
+
+
+def _ensure_requests_stub() -> None:
+    if "requests" in sys.modules:
+        return
+
+    module = ModuleType("requests")
+
+    class _DummySession:
+        def get(self, *_args, **_kwargs):
+            return SimpleNamespace(status_code=200, headers={}, text="")
+
+        def close(self) -> None:
+            pass
+
+    module.Session = _DummySession
+    module.RequestException = Exception
+    sys.modules["requests"] = module
+
+
+_ensure_requests_stub()
 
 import backend.core.runflow as runflow_module
 import backend.runflow.decider as runflow_decider

@@ -41,7 +41,12 @@ from backend.core.runflow.io import (
     runflow_stage_error,
     runflow_stage_start,
 )
-from backend.runflow.decider import StageStatus, decide_next, record_stage
+from backend.runflow.decider import (
+    StageStatus,
+    decide_next,
+    record_stage,
+    reconcile_umbrella_barriers,
+)
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
 from backend.runflow.manifest import (
     update_manifest_frontend,
@@ -709,6 +714,12 @@ def ai_validation_requirements_step(
             notes="generation_failed",
             runs_root=runs_root_path,
         )
+        try:
+            reconcile_umbrella_barriers(sid, runs_root=runs_root_path)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.warning(
+                "AUTO_AI_FRONTEND_BARRIERS_RECONCILE_FAILED sid=%s", sid, exc_info=True
+            )
     else:
         packs_count = int(fe_result.get("packs_count", 0) or 0)
         frontend_status_value = str(fe_result.get("status") or "success")
@@ -729,6 +740,13 @@ def ai_validation_requirements_step(
             notes=notes_override,
             runs_root=runs_root_path,
         )
+
+        try:
+            reconcile_umbrella_barriers(sid, runs_root=runs_root_path)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.warning(
+                "AUTO_AI_FRONTEND_BARRIERS_RECONCILE_FAILED sid=%s", sid, exc_info=True
+            )
 
         if frontend_stage_status == "success":
             update_manifest_frontend(

@@ -19,7 +19,12 @@ from backend.pipeline.auto_ai import (
     maybe_run_ai_pipeline_task,
     run_validation_requirements_for_all_accounts,
 )
-from backend.runflow.decider import StageStatus, decide_next, record_stage
+from backend.runflow.decider import (
+    StageStatus,
+    decide_next,
+    record_stage,
+    reconcile_umbrella_barriers,
+)
 from backend.frontend.packs.generator import generate_frontend_packs_for_run
 from backend.runflow.manifest import (
     update_manifest_frontend,
@@ -536,6 +541,13 @@ def build_problem_cases_task(self, prev: dict | None = None, sid: str | None = N
             notes=notes_override,
             runs_root=runs_root,
         )
+
+        try:
+            reconcile_umbrella_barriers(sid, runs_root=runs_root)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.warning(
+                "FRONTEND_BARRIERS_RECONCILE_FAILED sid=%s", sid, exc_info=True
+            )
 
         if frontend_stage_status == "success":
             manifest = update_manifest_frontend(

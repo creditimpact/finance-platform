@@ -8,7 +8,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Literal, Mapping, Optional
+from typing import Any, Dict, Iterable, Literal, Mapping, Optional
 
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.runflow import (
@@ -52,6 +52,18 @@ def _strict_validation_enabled() -> bool:
 
 def _review_explanation_required() -> bool:
     return _env_enabled("UMBRELLA_BARRIERS_REVIEW_REQUIRE_EXPLANATION", True)
+
+
+def _review_attachment_required() -> bool:
+    return _env_enabled("UMBRELLA_BARRIERS_REVIEW_REQUIRE_FILE", False)
+
+
+def _validation_autosend_enabled() -> bool:
+    return _env_enabled("VALIDATION_AUTOSEND", True)
+
+
+def _barrier_event_logging_enabled() -> bool:
+    return _env_enabled("UMBRELLA_BARRIERS_LOG", True)
 
 
 def _document_verifier_enabled() -> bool:
@@ -349,6 +361,51 @@ def _load_json_mapping(path: Path) -> Mapping[str, Any] | None:
     return None
 
 
+def _get_stage_info(
+    stages: Mapping[str, Any] | None, stage: str
+) -> Mapping[str, Any] | None:
+    if not isinstance(stages, Mapping):
+        return None
+    candidate = stages.get(stage)
+    if isinstance(candidate, Mapping):
+        return candidate
+    return None
+
+
+def _stage_has_counters(stage_info: Mapping[str, Any] | None) -> bool:
+    if not isinstance(stage_info, Mapping):
+        return False
+
+    skip_keys = {
+        "status",
+        "empty_ok",
+        "last_at",
+        "notes",
+        "metrics",
+        "results",
+        "error",
+        "summary",
+    }
+
+    for key, value in stage_info.items():
+        if key in skip_keys:
+            continue
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return True
+    return False
+
+
+def _stage_metrics_value(stage_info: Mapping[str, Any] | None, key: str) -> Optional[int]:
+    if not isinstance(stage_info, Mapping):
+        return None
+    metrics = stage_info.get("metrics")
+    if not isinstance(metrics, Mapping):
+        return None
+    return _coerce_int(metrics.get(key))
+
+
 def _stage_status(steps: Mapping[str, Any] | None, stage: str) -> str:
     if not isinstance(steps, Mapping):
         return ""
@@ -364,6 +421,42 @@ def _stage_status(steps: Mapping[str, Any] | None, stage: str) -> str:
     return ""
 
 
+def _validation_record_result_paths(
+    index: "ValidationIndex", record: Any
+) -> list[Path]:  # pragma: no cover - exercised via higher level tests
+    paths: list[Path] = []
+
+    result_json_value = getattr(record, "result_json", None)
+    if isinstance(result_json_value, str) and result_json_value.strip():
+        try:
+            paths.append(index.resolve_result_json_path(record))
+        except Exception:
+            return []
+
+    result_jsonl_value = getattr(record, "result_jsonl", None)
+    if isinstance(result_jsonl_value, str) and result_jsonl_value.strip():
+        try:
+            paths.append(index.resolve_result_jsonl_path(record))
+        except Exception:
+            return []
+
+    return paths
+
+
+def _validation_record_has_results(index: "ValidationIndex", record: Any) -> bool:
+    paths = _validation_record_result_paths(index, record)
+    if not paths:
+        return False
+
+    for candidate in paths:
+        try:
+            if candidate.is_file():
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _validation_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
     """Return (total, completed, failed, ready) for validation AI results."""
 
@@ -376,7 +469,6 @@ def _validation_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
         log.warning("RUNFLOW_VALIDATION_INDEX_LOAD_FAILED path=%s", index_path, exc_info=True)
         return (0, 0, 0, False)
 
-    strict = _strict_validation_enabled()
     total = 0
     completed = 0
     failed = 0
@@ -386,49 +478,53 @@ def _validation_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
         total += 1
         status = getattr(record, "status", "")
         normalized_status = status.strip().lower() if isinstance(status, str) else ""
+
         if normalized_status == "completed":
-            try:
-                result_path = index.resolve_result_json_path(record)  # type: ignore[attr-defined]
-            except Exception:  # pragma: no cover - defensive
+            if not _validation_record_has_results(index, record):
                 log.warning(
-                    "RUNFLOW_VALIDATION_RESULT_RESOLVE_FAILED account_id=%s",
+                    "RUNFLOW_VALIDATION_RESULT_MISSING account_id=%s",
                     getattr(record, "account_id", "unknown"),
-                    exc_info=True,
                 )
-                ready = False
-                continue
-
-            try:
-                exists = result_path.is_file()
-            except OSError:
-                exists = False
-
-            if not exists:
                 ready = False
                 continue
 
             completed += 1
         elif normalized_status == "failed":
             failed += 1
-            if strict:
-                ready = False
+            ready = False
         else:
             ready = False
 
     if total == 0:
-        return (0, 0, 0, True)
+        return (0, 0, 0, False)
 
-    if strict:
-        ready = ready and completed == total
-    else:
-        ready = ready and (completed + failed) == total
-
+    ready = ready and completed == total
     return (total, completed, failed, ready)
 
 
-def _validation_stage_ready(run_dir: Path) -> bool:
-    _, _, _, ready = _validation_results_progress(run_dir)
-    return ready
+def _validation_stage_ready(
+    run_dir: Path, validation_stage: Mapping[str, Any] | None
+) -> bool:
+    total, completed, failed, ready = _validation_results_progress(run_dir)
+
+    if total > 0:
+        return ready and completed == total
+
+    if not isinstance(validation_stage, Mapping):
+        return False
+
+    findings_count = _coerce_int(validation_stage.get("findings_count"))
+    if findings_count is None or findings_count != 0:
+        return False
+
+    packs_total = _stage_metrics_value(validation_stage, "packs_total")
+    if packs_total is None:
+        return False
+
+    if not _validation_autosend_enabled():
+        return packs_total == 0
+
+    return packs_total == 0
 
 
 _IDX_ACCOUNT_PATTERN = re.compile(r"idx-(\d+)")
@@ -451,6 +547,34 @@ def _response_filename_for_account(account_id: str) -> str:
 
     sanitized = re.sub(r"[^A-Za-z0-9_.-]", "_", trimmed) or "account"
     return f"{sanitized}.result.json"
+
+
+def _has_review_attachments(payload: Mapping[str, Any]) -> bool:
+    attachments = payload.get("attachments")
+    if isinstance(attachments, Mapping):
+        for value in attachments.values():
+            if isinstance(value, str) and value.strip():
+                return True
+            if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray)):
+                for entry in value:
+                    if isinstance(entry, str) and entry.strip():
+                        return True
+
+    legacy = payload.get("evidence")
+    if isinstance(legacy, Iterable) and not isinstance(legacy, (str, bytes, bytearray)):
+        for item in legacy:
+            if not isinstance(item, Mapping):
+                continue
+            docs = item.get("docs")
+            if isinstance(docs, Iterable) and not isinstance(docs, (str, bytes, bytearray)):
+                for doc in docs:
+                    if isinstance(doc, Mapping):
+                        doc_ids = doc.get("doc_ids")
+                        if isinstance(doc_ids, Iterable) and not isinstance(doc_ids, (str, bytes, bytearray)):
+                            for doc_id in doc_ids:
+                                if isinstance(doc_id, str) and doc_id.strip():
+                                    return True
+    return False
 
 
 def _frontend_responses_progress(run_dir: Path) -> tuple[int, int, bool]:
@@ -485,12 +609,13 @@ def _frontend_responses_progress(run_dir: Path) -> tuple[int, int, bool]:
         if required <= 0:
             return (0, responses_count_int or 0, True)
         answered = responses_count_int or 0
-        ready = answered >= required and required > 0
+        ready = answered == required and required > 0
         return (required, answered, ready)
 
     responses_dir = run_dir / "frontend" / "review" / "responses"
     required = len(account_ids)
-    explanation_required = _review_explanation_required()
+    explanation_required = True if _review_explanation_required() else False
+    attachments_required = _review_attachment_required()
     answered_ids: set[str] = set()
 
     for account_id in account_ids:
@@ -515,21 +640,106 @@ def _frontend_responses_progress(run_dir: Path) -> tuple[int, int, bool]:
         if not isinstance(answers, Mapping):
             continue
 
+        explanation = answers.get("explanation")
         if explanation_required:
-            explanation = answers.get("explanation")
             if not isinstance(explanation, str) or not explanation.strip():
                 continue
+        else:
+            if isinstance(explanation, str) and not explanation.strip():
+                answers["explanation"] = explanation.strip()
+
+        if attachments_required and not _has_review_attachments(answers):
+            continue
 
         answered_ids.add(account_id)
 
     answered = len(answered_ids)
-    ready = answered >= required and required > 0
+    if required == 0:
+        ready = True
+    else:
+        ready = answered == required
     return (required, answered, ready)
 
 
 def _review_responses_ready(run_dir: Path) -> bool:
     _, _, ready = _frontend_responses_progress(run_dir)
     return ready
+
+
+def _compute_umbrella_barriers(run_dir: Path) -> dict[str, bool]:
+    runflow_path = run_dir / "runflow.json"
+    runflow_payload = _load_json_mapping(runflow_path)
+    runflow_stages = (
+        runflow_payload.get("stages")
+        if isinstance(runflow_payload, Mapping)
+        else None
+    )
+
+    steps_path = run_dir / "runflow_steps.json"
+    steps_payload = _load_json_mapping(steps_path)
+    steps_stages = (
+        steps_payload.get("stages") if isinstance(steps_payload, Mapping) else None
+    )
+
+    def _combined_stage_status(stage_name: str) -> str:
+        status = _stage_status(runflow_stages, stage_name)
+        if status:
+            return status
+        return _stage_status(steps_stages, stage_name)
+
+    merge_stage_info = _get_stage_info(runflow_stages, "merge")
+    if merge_stage_info is None:
+        merge_stage_info = _get_stage_info(steps_stages, "merge")
+    merge_status = (_combined_stage_status("merge") or "").strip().lower()
+    merge_empty_ok = bool(merge_stage_info.get("empty_ok")) if isinstance(
+        merge_stage_info, Mapping
+    ) else False
+
+    counts_from_disk = _stage_counts_from_disk("merge", run_dir)
+    has_disk_counts = any(
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        for value in counts_from_disk.values()
+    )
+    has_recorded_counts = _stage_has_counters(merge_stage_info) or has_disk_counts
+
+    if merge_status == "error":
+        merge_ready = False
+    elif merge_empty_ok:
+        merge_ready = True
+    else:
+        merge_ready = merge_status not in {"", "running"} and has_recorded_counts
+
+    validation_stage_info = _get_stage_info(runflow_stages, "validation")
+    if validation_stage_info is None:
+        validation_stage_info = _get_stage_info(steps_stages, "validation")
+    validation_status = (_combined_stage_status("validation") or "").strip().lower()
+    validation_ready = _validation_stage_ready(run_dir, validation_stage_info)
+    if validation_status == "error":
+        validation_ready = False
+
+    review_stage_info = _get_stage_info(runflow_stages, "frontend")
+    if review_stage_info is None:
+        review_stage_info = _get_stage_info(steps_stages, "frontend")
+    review_status = (_combined_stage_status("frontend") or "").strip().lower()
+    _, _, review_ready = _frontend_responses_progress(run_dir)
+    if review_status == "error":
+        review_ready = False
+    if isinstance(review_stage_info, Mapping) and bool(review_stage_info.get("empty_ok")):
+        review_ready = True
+
+    all_ready = merge_ready and validation_ready and review_ready
+
+    readiness: dict[str, bool] = {
+        "merge_ready": merge_ready,
+        "validation_ready": validation_ready,
+        "review_ready": review_ready,
+        "all_ready": all_ready,
+    }
+
+    if _document_verifier_enabled():
+        readiness["document_ready"] = False
+
+    return readiness
 
 
 def refresh_validation_stage_from_index(
@@ -609,6 +819,56 @@ def refresh_frontend_stage_from_responses(
     runflow_refresh_umbrella_barriers(sid)
 
 
+def reconcile_umbrella_barriers(
+    sid: str, runs_root: Optional[str | Path] = None
+) -> dict[str, bool]:
+    """Recompute umbrella readiness for ``sid`` and persist the booleans."""
+
+    runflow_path = _runflow_path(sid, runs_root)
+    run_dir = runflow_path.parent
+    statuses = _compute_umbrella_barriers(run_dir)
+
+    data = _load_runflow(runflow_path, sid)
+    existing = data.get("umbrella_barriers")
+    if isinstance(existing, Mapping):
+        umbrella = dict(existing)
+    else:
+        umbrella = {}
+
+    timestamp = _now_iso()
+    for key, value in statuses.items():
+        if isinstance(key, str):
+            umbrella[key] = bool(value)
+    umbrella["checked_at"] = timestamp
+
+    data["umbrella_barriers"] = umbrella
+    data["umbrella_ready"] = bool(statuses.get("all_ready"))
+    data["updated_at"] = timestamp
+
+    _atomic_write_json(runflow_path, data)
+
+    if _barrier_event_logging_enabled():
+        events_path = run_dir / "runflow_events.jsonl"
+        event_payload = {"ts": timestamp, "event": "barriers_reconciled"}
+        for key, value in statuses.items():
+            if isinstance(key, str):
+                event_payload[key] = bool(value)
+        try:
+            events_path.parent.mkdir(parents=True, exist_ok=True)
+            with events_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event_payload, ensure_ascii=False))
+                handle.write("\n")
+        except OSError:
+            log.warning(
+                "RUNFLOW_BARRIERS_EVENT_WRITE_FAILED sid=%s path=%s",
+                sid,
+                events_path,
+                exc_info=True,
+            )
+
+    return statuses
+
+
 def evaluate_global_barriers(run_path: str) -> dict[str, bool]:
     """Inspect run artifacts and report readiness for umbrella arguments."""
 
@@ -621,45 +881,7 @@ def evaluate_global_barriers(run_path: str) -> dict[str, bool]:
         }
 
     run_dir = Path(run_path)
-    runflow_path = run_dir / "runflow.json"
-    runflow_payload = _load_json_mapping(runflow_path)
-    runflow_stages = (
-        runflow_payload.get("stages") if isinstance(runflow_payload, Mapping) else None
-    )
-
-    steps_path = run_dir / "runflow_steps.json"
-    steps_payload = _load_json_mapping(steps_path)
-    steps_stages = steps_payload.get("stages") if isinstance(steps_payload, Mapping) else None
-
-    def _combined_stage_status(stage_name: str) -> str:
-        status = _stage_status(runflow_stages, stage_name)
-        if status:
-            return status
-        return _stage_status(steps_stages, stage_name)
-
-    merge_status = _combined_stage_status("merge")
-    validation_status = _combined_stage_status("validation")
-
-    merge_ready = merge_status in {"success", "skipped"}
-    validation_ready = False
-    if validation_status in {"success", "skipped"}:
-        validation_ready = _validation_stage_ready(run_dir)
-
-    review_ready = _review_responses_ready(run_dir)
-
-    all_ready = merge_ready and validation_ready and review_ready
-
-    readiness: dict[str, bool] = {
-        "merge_ready": merge_ready,
-        "validation_ready": validation_ready,
-        "review_ready": review_ready,
-        "all_ready": all_ready,
-    }
-
-    if _document_verifier_enabled():
-        readiness["document_ready"] = False
-
-    return readiness
+    return _compute_umbrella_barriers(run_dir)
 
 
 def _parse_timestamp(value: Any) -> Optional[datetime]:
@@ -810,6 +1032,15 @@ def decide_next(sid: str, runs_root: Optional[str | Path] = None) -> dict[str, s
         data["run_state"] = new_state
         data["updated_at"] = _now_iso()
         _atomic_write_json(path, data)
+        try:
+            reconcile_umbrella_barriers(sid, runs_root=runs_root)
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "RUNFLOW_RECONCILE_AT_STATE_CHANGE_FAILED sid=%s state=%s",
+                sid,
+                new_state,
+                exc_info=True,
+            )
 
     log.info(
         "RUNFLOW_DECIDE sid=%s next=%s reason=%s state=%s",
@@ -848,4 +1079,5 @@ __all__ = [
     "RunState",
     "refresh_validation_stage_from_index",
     "refresh_frontend_stage_from_responses",
+    "reconcile_umbrella_barriers",
 ]

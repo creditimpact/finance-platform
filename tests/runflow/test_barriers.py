@@ -105,7 +105,7 @@ def test_merge_stage_sets_only_merge_ready(tmp_path, monkeypatch):
 
     try:
         run_dir = tmp_path / sid
-        stages = {"merge": {"status": "success"}}
+        stages = {"merge": {"status": "success", "scored_pairs": 1}}
         _prepare_runflow_files(run_dir, stages=stages)
 
         before = {entry.name for entry in run_dir.iterdir()}
@@ -148,7 +148,7 @@ def test_record_stage_updates_barriers_without_instrumentation(tmp_path, monkeyp
             sid,
             "merge",
             status="success",
-            counts={},
+            counts={"scored_pairs": 1},
             empty_ok=False,
             runs_root=tmp_path,
         )
@@ -212,7 +212,7 @@ def test_all_stages_ready_marks_run_ready(tmp_path, monkeypatch):
     try:
         run_dir = tmp_path / sid
         stages = {
-            "merge": {"status": "success"},
+            "merge": {"status": "success", "scored_pairs": 1},
             "validation": {"status": "success"},
         }
         _prepare_runflow_files(run_dir, stages=stages)
@@ -250,7 +250,7 @@ def test_review_readiness_updates_when_response_arrives(tmp_path, monkeypatch):
     try:
         run_dir = tmp_path / sid
         stages = {
-            "merge": {"status": "success"},
+            "merge": {"status": "success", "scored_pairs": 1},
             "validation": {"status": "success"},
         }
         _prepare_runflow_files(run_dir, stages=stages)

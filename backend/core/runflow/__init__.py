@@ -129,6 +129,8 @@ def _update_umbrella_barriers(sid: str) -> None:
         if isinstance(key, str) and key not in normalized_barriers:
             normalized_barriers[key] = value
 
+    timestamp = _utcnow_iso()
+
     if _UMBRELLA_BARRIERS_LOG:
         _LOG.info(
             "[Runflow] Umbrella barriers: merge=%s validation=%s review=%s all_ready=%s",
@@ -137,8 +139,23 @@ def _update_umbrella_barriers(sid: str) -> None:
             review_ready,
             all_ready,
         )
-
-    timestamp = _utcnow_iso()
+        event_payload: dict[str, Any] = {
+            "ts": timestamp,
+            "event": "barriers_reconciled",
+            "merge_ready": merge_ready,
+            "validation_ready": validation_ready,
+            "review_ready": review_ready,
+            "all_ready": all_ready,
+        }
+        for key, value in barriers.items():
+            if isinstance(key, str) and key not in event_payload:
+                event_payload[key] = value
+        try:
+            _append_jsonl(_events_path(sid), event_payload)
+        except Exception:
+            _LOG.debug(
+                "[Runflow] Failed to append barriers event sid=%s", sid, exc_info=True
+            )
 
     def _mutate(payload: Any) -> Any:
         if not isinstance(payload, dict):

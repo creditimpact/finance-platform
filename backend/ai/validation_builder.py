@@ -35,6 +35,7 @@ from backend.core.ai.paths import (
     validation_logs_path,
 )
 from backend.pipeline.runs import RunManifest, persist_manifest
+from backend.runflow.decider import reconcile_umbrella_barriers
 from backend.validation.redaction import sanitize_validation_payload
 from backend.core.ai.eligibility_policy import (
     canonicalize_history,
@@ -1912,4 +1913,8 @@ def build_validation_packs_for_run(
     results = writer.write_all_packs()
     if any(result for result in results.values()):
         _update_manifest_for_run(sid, runs_root_path)
+    try:
+        reconcile_umbrella_barriers(sid, runs_root=runs_root_path)
+    except Exception:  # pragma: no cover - defensive
+        log.warning("VALIDATION_BARRIERS_RECONCILE_FAILED sid=%s", sid, exc_info=True)
     return results

@@ -419,6 +419,45 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
     steps_stages_raw = steps_payload.get("stages")
     steps_stages = steps_stages_raw if isinstance(steps_stages_raw, Mapping) else {}
 
+    def _coerce_metric_int(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+        if isinstance(value, str):
+            candidate = value.strip()
+            if not candidate:
+                return None
+            try:
+                return int(candidate)
+            except ValueError:
+                return None
+        return None
+
+    def _extract_metric_entry(entry: Mapping[str, Any] | None, key: str) -> int | None:
+        if not isinstance(entry, Mapping):
+            return None
+        for container_key in ("metrics", "summary", "results", "counts"):
+            container = entry.get(container_key)
+            if isinstance(container, Mapping):
+                value = _coerce_metric_int(container.get(key))
+                if value is not None:
+                    return value
+        return _coerce_metric_int(entry.get(key))
+
+    def _stage_metric_value(stage: str, key: str) -> int | None:
+        for container in (runflow_stages, steps_stages):
+            if not isinstance(container, Mapping):
+                continue
+            entry = container.get(stage)
+            value = _extract_metric_entry(entry if isinstance(entry, Mapping) else None, key)
+            if value is not None:
+                return value
+        return None
+
     def _stage_info(stage: str) -> Mapping[str, Any] | None:
         info = runflow_stages.get(stage) if isinstance(runflow_stages, Mapping) else None
         if isinstance(info, Mapping):
@@ -444,11 +483,39 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
 
     validation_stage_info = _stage_info("validation")
     validation_ready = False
+    validation_results_total = 0
+    validation_results_completed = 0
+    validation_results_failed = 0
+    validation_index_available = False
     try:
-        from backend.runflow.decider import _validation_stage_ready  # Local import to avoid circular dependency
+        from backend.runflow.decider import (
+            _resolve_validation_index_path,
+            _validation_results_progress,
+            _validation_stage_ready,
+        )  # Local import to avoid circular dependency
     except Exception:
         validation_ready = False
     else:
+        try:
+            index_candidate = _resolve_validation_index_path(run_dir)
+        except Exception:
+            index_candidate = None
+        else:
+            try:
+                validation_index_available = bool(index_candidate and index_candidate.exists())
+            except OSError:
+                validation_index_available = False
+        try:
+            (
+                validation_results_total,
+                validation_results_completed,
+                validation_results_failed,
+                _,
+            ) = _validation_results_progress(run_dir)
+        except Exception:
+            validation_results_total = 0
+            validation_results_completed = 0
+            validation_results_failed = 0
         try:
             validation_ready = _validation_stage_ready(run_dir, validation_stage_info)
         except Exception:
@@ -456,6 +523,40 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
 
     if _stage_status("validation") == "error":
         validation_ready = False
+
+    if validation_results_total > 0 or validation_index_available:
+        validation_packs_total = max(validation_results_total, 0)
+        validation_packs_completed = max(min(validation_packs_total, validation_results_completed), 0)
+        validation_packs_pending = max(
+            validation_packs_total - validation_packs_completed,
+            validation_results_failed,
+            0,
+        )
+    else:
+        validation_packs_total = _stage_metric_value("validation", "packs_total") or 0
+        validation_packs_completed = _stage_metric_value("validation", "packs_completed") or 0
+        pending_from_stage = _stage_metric_value("validation", "packs_pending")
+        if pending_from_stage is not None:
+            validation_packs_pending = max(pending_from_stage, 0)
+        elif validation_packs_total:
+            validation_packs_pending = max(validation_packs_total - validation_packs_completed, 0)
+        else:
+            validation_packs_pending = 0
+
+    validation_packs_pending = max(validation_packs_pending, validation_results_failed)
+    if validation_packs_total < validation_packs_completed:
+        validation_packs_total = validation_packs_completed
+    if validation_packs_total < validation_packs_completed + validation_packs_pending:
+        validation_packs_total = validation_packs_completed + validation_packs_pending
+
+    validation_stage_should_update = (
+        isinstance(validation_stage_info, Mapping)
+        or validation_index_available
+        or validation_results_total > 0
+    )
+    validation_has_activity = bool(
+        validation_packs_total or validation_packs_completed or validation_packs_pending
+    )
 
     review_stage_info = _stage_info("frontend")
     review_status = _stage_status("frontend")
@@ -476,6 +577,7 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
     )
 
     index_payload = _load_json_mapping(index_path)
+    frontend_index_available = isinstance(index_payload, Mapping)
     required_answers = 0
     if isinstance(index_payload, Mapping):
         packs_entries = index_payload.get("packs")
@@ -495,7 +597,9 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
 
     attachments_required = _review_attachment_required()
     answered_ids: set[str] = set()
+    responses_dir_available = False
     if responses_dir.exists() and responses_dir.is_dir():
+        responses_dir_available = True
         for entry in sorted(responses_dir.iterdir()):
             if not entry.is_file():
                 continue
@@ -528,6 +632,24 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
 
     answers_received = len(answered_ids)
 
+    if not responses_dir_available:
+        fallback_answers_received = _stage_metric_value("frontend", "answers_received")
+        if fallback_answers_received is not None:
+            answers_received = fallback_answers_received
+
+    if not frontend_index_available:
+        fallback_answers_required = _stage_metric_value("frontend", "answers_required")
+        if fallback_answers_required is not None:
+            required_answers = fallback_answers_required
+
+    answers_received = max(0, answers_received)
+    required_answers = max(required_answers, answers_received)
+    frontend_stage_should_update = (
+        isinstance(review_stage_info, Mapping)
+        or frontend_index_available
+        or answers_received > 0
+    )
+
     review_ready = False
     if required_answers > 0:
         review_ready = answers_received >= required_answers
@@ -536,6 +658,8 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
 
     if review_status == "error":
         review_ready = False
+
+    review_has_activity = bool(required_answers or answers_received)
 
     merge_stage_info = _stage_info("merge")
     merge_status = _stage_status("merge")
@@ -563,6 +687,55 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
     timestamp = _utcnow_iso()
     normalized_barriers["checked_at"] = timestamp
 
+    progress_statuses = {"", "built", "running", "success", "published"}
+
+    validation_metrics_payload: dict[str, int] | None = None
+    if validation_stage_should_update:
+        validation_metrics_payload = {
+            "packs_total": int(validation_packs_total),
+            "packs_completed": int(validation_packs_completed),
+            "packs_pending": int(validation_packs_pending),
+        }
+
+    frontend_metrics_payload: dict[str, int] | None = None
+    if frontend_stage_should_update:
+        frontend_metrics_payload = {
+            "answers_required": int(required_answers),
+            "answers_received": int(answers_received),
+        }
+
+    validation_status_update: str | None = None
+    validation_status_current = _stage_status("validation")
+    if validation_stage_should_update and validation_status_current != "error":
+        if validation_status_current not in progress_statuses:
+            if validation_ready and validation_status_current != "success":
+                validation_status_update = "success"
+        else:
+            if validation_ready:
+                desired_validation_status = "success"
+            elif validation_has_activity:
+                desired_validation_status = "running"
+            else:
+                desired_validation_status = "built"
+            if desired_validation_status != validation_status_current:
+                validation_status_update = desired_validation_status
+
+    review_status_update: str | None = None
+    review_status_current = review_status
+    if frontend_stage_should_update and review_status_current != "error":
+        if review_status_current not in progress_statuses:
+            if review_ready and review_status_current != "success":
+                review_status_update = "success"
+        else:
+            if review_ready:
+                desired_review_status = "success"
+            elif review_has_activity:
+                desired_review_status = "running"
+            else:
+                desired_review_status = "built"
+            if desired_review_status != review_status_current:
+                review_status_update = desired_review_status
+
     def _mutate(payload: Any) -> Any:
         if not isinstance(payload, dict):
             payload_dict: dict[str, Any] = {}
@@ -579,6 +752,75 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
         payload_dict["umbrella_barriers"] = umbrella
         payload_dict["umbrella_ready"] = all_ready
         payload_dict.setdefault("sid", sid)
+
+        stages_raw = payload_dict.get("stages")
+        if isinstance(stages_raw, Mapping):
+            stages_dict: dict[str, Any] = {}
+            for key, value in stages_raw.items():
+                if not isinstance(key, str):
+                    continue
+                if isinstance(value, Mapping):
+                    stages_dict[key] = dict(value)
+                else:
+                    stages_dict[key] = value
+        else:
+            stages_dict = {}
+
+        stages_changed = False
+
+        def _update_stage(
+            stage_name: str,
+            metrics_payload: Mapping[str, int] | None,
+            status_value: str | None,
+        ) -> None:
+            nonlocal stages_changed, stages_dict
+            if metrics_payload is None and status_value is None:
+                return
+
+            existing_stage = stages_dict.get(stage_name)
+            if not isinstance(existing_stage, Mapping):
+                if metrics_payload is None:
+                    return
+                stage_entry: dict[str, Any] = {}
+            else:
+                stage_entry = dict(existing_stage)
+
+            entry_changed = False
+
+            if metrics_payload is not None:
+                metrics_existing_raw = stage_entry.get("metrics")
+                metrics_existing = (
+                    dict(metrics_existing_raw)
+                    if isinstance(metrics_existing_raw, Mapping)
+                    else {}
+                )
+                new_metrics = dict(metrics_existing)
+                for key, value in metrics_payload.items():
+                    if new_metrics.get(key) != value:
+                        new_metrics[key] = value
+                        entry_changed = True
+                if not isinstance(metrics_existing_raw, Mapping) and metrics_payload:
+                    entry_changed = True
+                if entry_changed or not isinstance(metrics_existing_raw, Mapping):
+                    stage_entry["metrics"] = new_metrics
+
+            if status_value is not None:
+                existing_status_raw = stage_entry.get("status")
+                if existing_status_raw != status_value:
+                    stage_entry["status"] = status_value
+                    entry_changed = True
+
+            if entry_changed:
+                stages_dict[stage_name] = stage_entry
+                stages_changed = True
+
+        _update_stage("validation", validation_metrics_payload, validation_status_update)
+        _update_stage("frontend", frontend_metrics_payload, review_status_update)
+
+        if stages_changed:
+            payload_dict["stages"] = stages_dict
+            payload_dict["updated_at"] = timestamp
+
         return payload_dict
 
     try:

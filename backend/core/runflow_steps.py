@@ -8,7 +8,11 @@ import json
 import os
 
 from backend.core.io.json_io import _atomic_write_json as _shared_atomic_write_json
-from backend.runflow.counters import stage_counts as _stage_counts_from_disk
+from backend.runflow.counters import (
+    runflow_validation_findings_total as _validation_findings_total_from_runflow,
+    stage_counts as _stage_counts_from_disk,
+    validation_packs_count as _validation_packs_count,
+)
 
 
 def _utcnow_iso() -> str:
@@ -437,10 +441,51 @@ def steps_update_aggregate(sid: str, stage: str, summary: Mapping[str, Any]) -> 
     _dump_steps_payload(sid, payload)
 
 
+def _verify_validation_summary(sid: str, stage_payload: MutableMapping[str, Any]) -> None:
+    run_dir = RUNS_ROOT / sid
+    expected = _validation_findings_total_from_runflow(run_dir)
+    actual = _validation_packs_count(run_dir)
+
+    if expected is None or actual is None:
+        return
+
+    try:
+        expected_int = int(expected)
+    except (TypeError, ValueError):
+        return
+
+    try:
+        actual_int = int(actual)
+    except (TypeError, ValueError):
+        return
+
+    expected_int = max(expected_int, 0)
+    actual_int = max(actual_int, 0)
+
+    if actual_int == expected_int:
+        return
+
+    existing_error = stage_payload.get("error")
+    if isinstance(existing_error, Mapping):
+        error_payload = dict(existing_error)
+    else:
+        error_payload = {}
+
+    error_payload["hint"] = (
+        "steps_verify: findings_count expected="
+        f"{expected_int} actual={actual_int}"
+    )
+    stage_payload["error"] = error_payload
+
+
 def _verify_stage_summary(
     sid: str, stage: str, stage_payload: MutableMapping[str, Any]
 ) -> None:
     if not _VERIFY_STEPS:
+        return
+
+    if stage == "validation":
+        _verify_validation_summary(sid, stage_payload)
         return
 
     summary = stage_payload.get("summary")

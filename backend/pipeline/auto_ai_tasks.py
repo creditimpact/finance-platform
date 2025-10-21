@@ -33,7 +33,7 @@ from backend.pipeline.auto_ai import (
     run_consistency_writeback_for_all_accounts,
     run_validation_requirements_for_all_accounts,
 )
-from backend.core.runflow import runflow_step
+from backend.core.runflow import runflow_barriers_refresh, runflow_step
 from backend.core.runflow.io import (
     compose_hint,
     format_exception_tail,
@@ -868,6 +868,13 @@ def _merge_compact_stage(payload: dict[str, object]) -> dict[str, object]:
         "compact",
         metrics={"packs": packs_count, "pairs": pairs_count},
     )
+
+    try:
+        runflow_barriers_refresh(sid)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.warning(
+            "AUTO_AI_MERGE_BARRIERS_REFRESH_FAILED sid=%s", sid, exc_info=True
+        )
 
     scored_pairs_value = 0
     if merge_paths is not None:

@@ -248,3 +248,36 @@ def test_review_readiness_updates_when_response_arrives(tmp_path, monkeypatch):
         monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
         monkeypatch.delenv("UMBRELLA_BARRIERS_LOG", raising=False)
         _reload_runflow()
+
+
+def test_document_barrier_flag_emitted_when_enabled(tmp_path, monkeypatch):
+    sid = "documents-enabled"
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("UMBRELLA_BARRIERS_ENABLED", "1")
+    monkeypatch.setenv("UMBRELLA_BARRIERS_LOG", "0")
+    monkeypatch.setenv("DOCUMENT_VERIFIER_ENABLED", "1")
+    _ensure_requests_stub(monkeypatch)
+    _reload_runflow()
+
+    try:
+        run_dir = tmp_path / sid
+        stages: dict[str, dict] = {}
+        _prepare_runflow_files(run_dir, stages=stages)
+
+        runflow._update_umbrella_barriers(sid)
+
+        payload = _load_runflow_payload(run_dir)
+        umbrella = payload["umbrella_barriers"]
+
+        assert umbrella["merge_ready"] is False
+        assert umbrella["validation_ready"] is False
+        assert umbrella["review_ready"] is False
+        assert umbrella["all_ready"] is False
+        assert umbrella["document_ready"] is False
+        assert payload["umbrella_ready"] is False
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_LOG", raising=False)
+        monkeypatch.delenv("DOCUMENT_VERIFIER_ENABLED", raising=False)
+        _reload_runflow()

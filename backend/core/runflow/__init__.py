@@ -22,6 +22,7 @@ from backend.core.runflow_steps import (
     steps_init,
     steps_stage_finish,
     steps_stage_start,
+    steps_update_aggregate,
 )
 from backend.runflow.counters import frontend_answers_counters as _frontend_answers_counters
 
@@ -207,6 +208,8 @@ _STEP_SAMPLE_EVERY = max(_env_int("RUNFLOW_STEP_LOG_EVERY", 1), 1)
 _PAIR_TOPN = max(_env_int("RUNFLOW_STEPS_PAIR_TOPN", 5), 0)
 _ENABLE_SPANS = _env_enabled("RUNFLOW_STEPS_ENABLE_SPANS", True)
 _ENABLE_ACCOUNT_STEPS = _env_enabled("RUNFLOW_ACCOUNT_STEPS", True)
+_SUPPRESS_ACCOUNT_STEPS = _env_enabled("RUNFLOW_STEPS_SUPPRESS_PER_ACCOUNT")
+_ONLY_AGGREGATES = _env_enabled("RUNFLOW_STEPS_ONLY_AGGREGATES")
 _UMBRELLA_BARRIERS_ENABLED = _env_enabled("UMBRELLA_BARRIERS_ENABLED", True)
 _UMBRELLA_BARRIERS_LOG = _env_enabled("UMBRELLA_BARRIERS_LOG", True)
 _UMBRELLA_BARRIERS_WATCHDOG_INTERVAL_MS = max(
@@ -217,6 +220,7 @@ _UMBRELLA_BARRIERS_WATCHDOG_INTERVAL_MS = max(
 _STEP_CALL_COUNTS: dict[tuple[str, str, str, str], int] = defaultdict(int)
 _STARTED_STAGES: set[tuple[str, str]] = set()
 _STAGE_COUNTERS: dict[str, dict[str, dict[str, int]]] = {}
+_STAGE_AGGREGATES: dict[str, dict[str, dict[str, int]]] = {}
 _WATCHDOG_LOOP: Optional[asyncio.AbstractEventLoop] = None
 _WATCHDOG_THREAD: Optional[threading.Thread] = None
 _WATCHDOG_FUTURES: dict[str, Future[Any]] = {}
@@ -256,6 +260,42 @@ def _store_stage_counter(sid: str, bucket: str, summary: Mapping[str, Any]) -> d
     payload = _coerce_summary_counts(summary)
     counters[bucket] = payload
     return payload
+
+
+def _aggregates_enabled() -> bool:
+    return _SUPPRESS_ACCOUNT_STEPS and _ONLY_AGGREGATES
+
+
+def _aggregate_state(sid: str, stage: str) -> dict[str, int]:
+    state = _STAGE_AGGREGATES.setdefault(sid, {})
+    return state.setdefault(stage, {})
+
+
+def _aggregate_set(stage_state: dict[str, int], key: str, value: Any) -> None:
+    try:
+        stage_state[key] = int(value)
+    except (TypeError, ValueError):
+        return
+
+
+def _write_stage_aggregate(sid: str, stage: str) -> None:
+    if not _aggregates_enabled():
+        return
+    state = _STAGE_AGGREGATES.get(sid, {})
+    stage_state = state.get(stage)
+    if not stage_state:
+        return
+    ordered = {key: stage_state[key] for key in sorted(stage_state)}
+    steps_update_aggregate(sid, stage, ordered)
+
+
+def _clear_stage_aggregate(sid: str, stage: str) -> None:
+    state = _STAGE_AGGREGATES.get(sid)
+    if not state:
+        return
+    state.pop(stage, None)
+    if not state:
+        _STAGE_AGGREGATES.pop(sid, None)
 
 
 def _emit_summary_step(
@@ -964,8 +1004,12 @@ def runflow_end_stage(
 
     if stage == "validation":
         _clear_stage_counters(sid, "validation_build", "validation_results")
+        if _aggregates_enabled():
+            _clear_stage_aggregate(sid, "validation")
     elif stage == "frontend":
         _clear_stage_counters(sid, "frontend_review")
+        if _aggregates_enabled():
+            _clear_stage_aggregate(sid, "review")
 
 
 def runflow_event(
@@ -1124,6 +1168,19 @@ def runflow_step(
                 should_write_step = step_for_steps in allowed_success_steps
             else:
                 should_write_step = step_for_steps == "merge_scoring_finish"
+        if (
+            _SUPPRESS_ACCOUNT_STEPS
+            and account is not None
+            and status_for_steps == "success"
+        ):
+            should_write_step = False
+        if (
+            _aggregates_enabled()
+            and stage in {"validation", "frontend"}
+            and status_for_steps == "success"
+            and error is None
+        ):
+            should_write_step = False
         if should_write_step:
             steps_append(
                 sid,
@@ -1180,6 +1237,13 @@ def record_validation_build_summary(
         "packs_skipped": packs_skipped,
     }
     normalized = _store_stage_counter(sid, "validation_build", summary)
+    if _aggregates_enabled():
+        stage_state = _aggregate_state(sid, "validation")
+        _aggregate_set(stage_state, "built", normalized.get("packs_built"))
+        eligible = normalized.get("eligible_accounts")
+        if eligible is not None and "total" not in stage_state:
+            _aggregate_set(stage_state, "total", eligible)
+        _write_stage_aggregate(sid, "validation")
     _emit_summary_step(sid, "validation", "build_packs", summary=normalized)
 
 
@@ -1200,6 +1264,14 @@ def record_validation_results_summary(
     normalized = _store_stage_counter(sid, "validation_results", summary)
     if normalized.get("pending", 0) < 0:
         normalized["pending"] = 0
+    if _aggregates_enabled():
+        stage_state = _aggregate_state(sid, "validation")
+        _aggregate_set(stage_state, "completed", normalized.get("completed"))
+        _aggregate_set(stage_state, "pending", normalized.get("pending"))
+        total_value = normalized.get("results_total")
+        if total_value is not None:
+            _aggregate_set(stage_state, "total", total_value)
+        _write_stage_aggregate(sid, "validation")
     _emit_summary_step(sid, "validation", "collect_results", summary=normalized)
 
 
@@ -1233,6 +1305,11 @@ def record_frontend_responses_progress(
         else answers_required,
     }
     normalized = _store_stage_counter(sid, "frontend_review", summary)
+    if _aggregates_enabled():
+        stage_state = _aggregate_state(sid, "review")
+        _aggregate_set(stage_state, "answers_received", normalized.get("answers_received"))
+        _aggregate_set(stage_state, "answers_required", normalized.get("answers_required"))
+        _write_stage_aggregate(sid, "review")
     _emit_summary_step(sid, "frontend", "responses_progress", summary=normalized)
 
 

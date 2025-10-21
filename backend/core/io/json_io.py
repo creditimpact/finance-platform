@@ -4,8 +4,17 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import time
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterator, Mapping
+
+
+_LOCK_POLL_INTERVAL = 0.05
+_WRITE_RETRY_DELAY = 0.1
+_WRITE_ATTEMPTS = 2
 
 
 def _merge_existing_umbrella_barriers(path: Path, payload: Any) -> Any:
@@ -46,17 +55,59 @@ def _merge_existing_umbrella_barriers(path: Path, payload: Any) -> Any:
     return merged_payload
 
 
+@contextmanager
+def _json_file_lock(path: Path) -> Iterator[None]:
+    """Serialize writers for ``path`` using a simple lock file."""
+
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            time.sleep(_LOCK_POLL_INTERVAL)
+    try:
+        os.close(fd)
+        yield
+    finally:
+        try:
+            os.unlink(lock_path)
+        except FileNotFoundError:
+            pass
+
+
 def _atomic_write_json(path: Path, payload: Any) -> None:
     """Atomically write ``payload`` as JSON to ``path``."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload_to_write = _merge_existing_umbrella_barriers(path, payload)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(payload_to_write, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    tmp.replace(path)
+
+    attempts = 0
+    last_error: OSError | None = None
+    while attempts < _WRITE_ATTEMPTS:
+        attempts += 1
+        tmp_path = path.with_suffix(path.suffix + f".tmp.{uuid.uuid4().hex}")
+        try:
+            with _json_file_lock(path):
+                payload_to_write = _merge_existing_umbrella_barriers(path, payload)
+                tmp_path.write_text(
+                    json.dumps(payload_to_write, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                tmp_path.replace(path)
+        except OSError as exc:
+            last_error = exc
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+            if attempts >= _WRITE_ATTEMPTS:
+                break
+            time.sleep(_WRITE_RETRY_DELAY)
+        else:
+            return
+
+    if last_error is not None:
+        raise last_error
 
 
 def update_json_in_place(

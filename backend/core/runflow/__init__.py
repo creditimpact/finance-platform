@@ -7,7 +7,10 @@ from typing import Any, Callable, Mapping, Optional
 
 import functools
 import json
+import logging
 import os
+
+_LOG = logging.getLogger(__name__)
 
 from backend.core.io.json_io import update_json_in_place
 from backend.core.runflow_steps import (
@@ -105,6 +108,30 @@ def _update_umbrella_barriers(sid: str) -> None:
     if not isinstance(barriers, Mapping):
         return
 
+    merge_ready = bool(barriers.get("merge_ready"))
+    validation_ready = bool(barriers.get("validation_ready"))
+    review_ready = bool(barriers.get("review_ready"))
+    all_ready = bool(barriers.get("all_ready"))
+
+    normalized_barriers: dict[str, Any] = {
+        "merge_ready": merge_ready,
+        "validation_ready": validation_ready,
+        "review_ready": review_ready,
+        "all_ready": all_ready,
+    }
+
+    for key, value in barriers.items():
+        if isinstance(key, str) and key not in normalized_barriers:
+            normalized_barriers[key] = value
+
+    _LOG.info(
+        "[Runflow] Umbrella barriers: merge=%s validation=%s review=%s all_ready=%s",
+        merge_ready,
+        validation_ready,
+        review_ready,
+        all_ready,
+    )
+
     timestamp = _utcnow_iso()
 
     def _mutate(payload: Any) -> Any:
@@ -119,9 +146,10 @@ def _update_umbrella_barriers(sid: str) -> None:
         else:
             umbrella = {}
 
-        umbrella.update(barriers)
+        umbrella.update(normalized_barriers)
         umbrella["checked_at"] = timestamp
         payload_dict["umbrella_barriers"] = umbrella
+        payload_dict["umbrella_ready"] = all_ready
 
         payload_dict.setdefault("sid", sid)
         return payload_dict

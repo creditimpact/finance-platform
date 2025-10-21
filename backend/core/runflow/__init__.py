@@ -15,6 +15,10 @@ from concurrent.futures import Future
 
 _LOG = logging.getLogger(__name__)
 
+from backend.core.ai.paths import (
+    validation_result_json_filename_for_account,
+    validation_result_jsonl_filename_for_account,
+)
 from backend.core.io.json_io import update_json_in_place
 from backend.core.runflow_steps import (
     RUNS_ROOT,
@@ -448,21 +452,43 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
     if not _UMBRELLA_BARRIERS_ENABLED:
         return None
 
-    run_dir = RUNS_ROOT / sid
-    runflow_path = run_dir / "runflow.json"
+    normalized_sid = str(sid or "").strip()
+    if not normalized_sid:
+        return None
+
+    base_path = os.path.join(str(RUNS_ROOT), normalized_sid)
+    base_dir = Path(base_path)
+
+    try:
+        if not base_dir.exists() or not base_dir.is_dir():
+            return None
+    except OSError:
+        return None
+
+    runflow_path = base_dir / "runflow.json"
+    steps_path = base_dir / "runflow_steps.json"
 
     runflow_payload = _load_json_mapping(runflow_path) or {}
-    runflow_stages_raw = runflow_payload.get("stages")
+    steps_payload = _load_json_mapping(steps_path) or {}
+
+    runflow_stages_raw = (
+        runflow_payload.get("stages")
+        if isinstance(runflow_payload, Mapping)
+        else None
+    )
     runflow_stages = runflow_stages_raw if isinstance(runflow_stages_raw, Mapping) else {}
 
-    steps_payload = _load_json_mapping(run_dir / "runflow_steps.json") or {}
-    steps_stages_raw = steps_payload.get("stages")
+    steps_stages_raw = (
+        steps_payload.get("stages") if isinstance(steps_payload, Mapping) else None
+    )
     steps_stages = steps_stages_raw if isinstance(steps_stages_raw, Mapping) else {}
 
-    def _coerce_metric_int(value: Any) -> int | None:
+    def _coerce_int(value: Any) -> int | None:
         if isinstance(value, bool):
             return None
-        if isinstance(value, (int, float)):
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
             try:
                 return int(value)
             except (TypeError, ValueError):
@@ -477,240 +503,236 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
                 return None
         return None
 
-    def _extract_metric_entry(entry: Mapping[str, Any] | None, key: str) -> int | None:
-        if not isinstance(entry, Mapping):
-            return None
-        for container_key in ("metrics", "summary", "results", "counts"):
-            container = entry.get(container_key)
-            if isinstance(container, Mapping):
-                value = _coerce_metric_int(container.get(key))
-                if value is not None:
-                    return value
-        return _coerce_metric_int(entry.get(key))
+    # ------------------------------------------------------------------
+    # Validation counters
+    # ------------------------------------------------------------------
+    validation_index_path = base_dir / "ai_packs" / "validation" / "index.json"
+    validation_index = _load_json_mapping(validation_index_path)
 
-    def _stage_metric_value(stage: str, key: str) -> int | None:
-        for container in (runflow_stages, steps_stages):
-            if not isinstance(container, Mapping):
-                continue
-            entry = container.get(stage)
-            value = _extract_metric_entry(entry if isinstance(entry, Mapping) else None, key)
-            if value is not None:
-                return value
-        return None
+    validation_entries: list[Mapping[str, Any]] = []
+    if isinstance(validation_index, Mapping):
+        packs_value = validation_index.get("packs")
+        if isinstance(packs_value, Sequence):
+            validation_entries = [
+                entry for entry in packs_value if isinstance(entry, Mapping)
+            ]
 
-    def _stage_info(stage: str) -> Mapping[str, Any] | None:
-        info = runflow_stages.get(stage) if isinstance(runflow_stages, Mapping) else None
-        if isinstance(info, Mapping):
-            return info
-        info = steps_stages.get(stage) if isinstance(steps_stages, Mapping) else None
-        if isinstance(info, Mapping):
-            return info
-        return None
+    validation_packs_total = len(validation_entries)
 
-    def _stage_status(stage: str) -> str:
-        for container in (runflow_stages, steps_stages):
-            if not isinstance(container, Mapping):
-                continue
-            info = container.get(stage)
-            if not isinstance(info, Mapping):
-                continue
-            status = info.get("status")
-            if isinstance(status, str):
-                normalized = status.strip().lower()
-                if normalized:
-                    return normalized
-        return ""
+    index_dir = validation_index_path.parent
+    results_dir_override = None
+    if isinstance(validation_index, Mapping):
+        raw_results_dir = validation_index.get("results_dir")
+        if isinstance(raw_results_dir, str) and raw_results_dir.strip():
+            candidate = Path(raw_results_dir.strip())
+            if not candidate.is_absolute():
+                candidate = (index_dir / candidate).resolve()
+            else:
+                candidate = candidate.resolve()
+            results_dir_override = candidate
 
-    validation_stage_info = _stage_info("validation")
-    validation_ready = False
-    validation_results_total = 0
-    validation_results_completed = 0
-    validation_results_failed = 0
-    validation_index_available = False
-    try:
-        from backend.runflow.decider import (
-            _resolve_validation_index_path,
-            _validation_results_progress,
-            _validation_stage_ready,
-        )  # Local import to avoid circular dependency
-    except Exception:
-        validation_ready = False
-    else:
-        try:
-            index_candidate = _resolve_validation_index_path(run_dir)
-        except Exception:
-            index_candidate = None
-        else:
+    validation_results_dir = (
+        results_dir_override
+        if results_dir_override is not None
+        else base_dir / "ai_packs" / "validation" / "results"
+    )
+
+    def _entry_result_paths(entry: Mapping[str, Any]) -> list[Path]:
+        paths: list[Path] = []
+        for key in (
+            "result_json",
+            "result_jsonl",
+            "result_json_path",
+            "result_jsonl_path",
+            "results_path",
+        ):
+            value = entry.get(key)
+            if isinstance(value, str) and value.strip():
+                candidate = Path(value.strip())
+                if not candidate.is_absolute():
+                    candidate = (index_dir / candidate).resolve()
+                else:
+                    candidate = candidate.resolve()
+                paths.append(candidate)
+        return paths
+
+    validation_packs_completed = 0
+    for entry in validation_entries:
+        status_value = entry.get("status")
+        if not isinstance(status_value, str):
+            continue
+        if status_value.strip().lower() != "completed":
+            continue
+
+        result_paths = _entry_result_paths(entry)
+        has_result = False
+        for path in result_paths:
             try:
-                validation_index_available = bool(index_candidate and index_candidate.exists())
+                if path.exists() and path.is_file():
+                    has_result = True
+                    break
             except OSError:
-                validation_index_available = False
-        try:
-            (
-                validation_results_total,
-                validation_results_completed,
-                validation_results_failed,
-                _,
-            ) = _validation_results_progress(run_dir)
-        except Exception:
-            validation_results_total = 0
-            validation_results_completed = 0
-            validation_results_failed = 0
-        try:
-            validation_ready = _validation_stage_ready(run_dir, validation_stage_info)
-        except Exception:
-            validation_ready = False
+                continue
 
-    if _stage_status("validation") == "error":
-        validation_ready = False
+        if not has_result:
+            account_id_value = entry.get("account_id")
+            candidate_ids: list[Any] = []
+            if isinstance(account_id_value, int):
+                candidate_ids.append(account_id_value)
+            elif isinstance(account_id_value, str) and account_id_value.strip():
+                candidate_ids.append(account_id_value.strip())
 
-    if validation_results_total > 0 or validation_index_available:
-        validation_packs_total = max(validation_results_total, 0)
-        validation_packs_completed = max(min(validation_packs_total, validation_results_completed), 0)
-        validation_packs_pending = max(
-            validation_packs_total - validation_packs_completed,
-            validation_results_failed,
-            0,
+            for account_id in candidate_ids:
+                for resolver in (
+                    validation_result_json_filename_for_account,
+                    validation_result_jsonl_filename_for_account,
+                ):
+                    try:
+                        filename = resolver(account_id)
+                    except Exception:
+                        continue
+                    if not isinstance(filename, str) or not filename:
+                        continue
+                    candidate_path = Path(filename)
+                    if not candidate_path.is_absolute():
+                        candidate_path = (validation_results_dir / filename).resolve()
+                    else:
+                        candidate_path = candidate_path.resolve()
+                    try:
+                        if candidate_path.exists() and candidate_path.is_file():
+                            has_result = True
+                            break
+                    except OSError:
+                        continue
+                if has_result:
+                    break
+
+        if has_result:
+            validation_packs_completed += 1
+
+    validation_packs_pending = max(
+        validation_packs_total - validation_packs_completed,
+        0,
+    )
+
+    validation_ready = bool(
+        validation_packs_total > 0 and validation_packs_completed == validation_packs_total
+    )
+
+    # ------------------------------------------------------------------
+    # Review counters
+    # ------------------------------------------------------------------
+    answers_required: int | None = None
+
+    runflow_frontend = (
+        runflow_stages.get("frontend") if isinstance(runflow_stages, Mapping) else None
+    )
+    if isinstance(runflow_frontend, Mapping):
+        metrics_payload = runflow_frontend.get("metrics")
+        if isinstance(metrics_payload, Mapping):
+            packs_count_value = _coerce_int(metrics_payload.get("packs_count"))
+            if packs_count_value is not None:
+                answers_required = packs_count_value
+            else:
+                answers_required_value = _coerce_int(
+                    metrics_payload.get("answers_required")
+                )
+                if answers_required_value is not None:
+                    answers_required = answers_required_value
+        if answers_required is None:
+            stage_packs = _coerce_int(runflow_frontend.get("packs_count"))
+            if stage_packs is not None:
+                answers_required = stage_packs
+
+    if answers_required is None:
+        steps_frontend = (
+            steps_stages.get("frontend") if isinstance(steps_stages, Mapping) else None
         )
-    else:
-        validation_packs_total = _stage_metric_value("validation", "packs_total") or 0
-        validation_packs_completed = _stage_metric_value("validation", "packs_completed") or 0
-        pending_from_stage = _stage_metric_value("validation", "packs_pending")
-        if pending_from_stage is not None:
-            validation_packs_pending = max(pending_from_stage, 0)
-        elif validation_packs_total:
-            validation_packs_pending = max(validation_packs_total - validation_packs_completed, 0)
-        else:
-            validation_packs_pending = 0
+        if isinstance(steps_frontend, Mapping):
+            summary_payload = steps_frontend.get("summary")
+            if isinstance(summary_payload, Mapping):
+                for key in ("answers_required", "packs_count", "accounts_published"):
+                    value = _coerce_int(summary_payload.get(key))
+                    if value is not None:
+                        answers_required = value
+                        break
 
-    validation_packs_pending = max(validation_packs_pending, validation_results_failed)
-    if validation_packs_total < validation_packs_completed:
-        validation_packs_total = validation_packs_completed
-    if validation_packs_total < validation_packs_completed + validation_packs_pending:
-        validation_packs_total = validation_packs_completed + validation_packs_pending
+    if answers_required is None:
+        answers_required = 0
 
-    validation_stage_should_update = (
-        isinstance(validation_stage_info, Mapping)
-        or validation_index_available
-        or validation_results_total > 0
-    )
-    validation_has_activity = bool(
-        validation_packs_total or validation_packs_completed or validation_packs_pending
-    )
+    review_responses_dir = base_dir / "frontend" / "review" / "responses"
+    explanation_required = _review_explanation_required()
 
-    review_stage_info = _stage_info("frontend")
-    review_status = _stage_status("frontend")
+    answers_received = 0
+    try:
+        response_entries = sorted(
+            path
+            for path in review_responses_dir.iterdir()
+            if path.is_file() and path.name.endswith(".result.json")
+        )
+    except OSError:
+        response_entries = []
 
-    review_dir_canonical = (run_dir / "frontend" / "review").resolve()
-    index_path = _resolve_review_path(
-        run_dir,
-        "FRONTEND_PACKS_INDEX",
-        (review_dir_canonical / "index.json").resolve(),
-        review_dir=review_dir_canonical,
-    )
-    responses_dir = _resolve_review_path(
-        run_dir,
-        "FRONTEND_PACKS_RESPONSES_DIR",
-        (review_dir_canonical / "responses").resolve(),
-        review_dir=review_dir_canonical,
-        require_descendant=True,
-    )
-
-    index_payload = _load_json_mapping(index_path)
-    frontend_index_available = isinstance(index_payload, Mapping)
-    required_answers = 0
-    if isinstance(index_payload, Mapping):
-        packs_entries = index_payload.get("packs")
-        if _is_sequence(packs_entries):
-            required_answers = max(required_answers, len(list(packs_entries)))
-        items_entries = index_payload.get("items")
-        if _is_sequence(items_entries):
-            required_answers = max(required_answers, len(list(items_entries)))
-        answers_required_value = index_payload.get("answers_required")
-        if isinstance(answers_required_value, int):
-            required_answers = max(required_answers, answers_required_value)
-        elif isinstance(answers_required_value, str):
-            try:
-                required_answers = max(required_answers, int(answers_required_value))
-            except ValueError:
-                pass
-
-    attachments_required = _review_attachment_required()
-    answered_ids: set[str] = set()
-    responses_dir_available = False
-    if responses_dir.exists() and responses_dir.is_dir():
-        responses_dir_available = True
-        for entry in sorted(responses_dir.iterdir()):
-            if not entry.is_file():
+    for response_path in response_entries:
+        payload = _load_json_mapping(response_path)
+        if not isinstance(payload, Mapping):
+            continue
+        answers_payload = payload.get("answers")
+        if not isinstance(answers_payload, Mapping):
+            continue
+        explanation = answers_payload.get("explanation")
+        if explanation_required:
+            if not isinstance(explanation, str) or not explanation.strip():
                 continue
-            name = entry.name
-            if not (name.endswith(".result.json") or name.endswith(".result.jsonl")):
-                continue
-            payload = _load_response_payload(entry)
-            if not isinstance(payload, Mapping):
-                continue
-            answers = payload.get("answers")
-            if not isinstance(answers, Mapping):
-                continue
-            explanation = answers.get("explanation")
-            if _review_explanation_required():
-                if not isinstance(explanation, str) or not explanation.strip():
-                    continue
-            else:
-                if explanation is not None and (not isinstance(explanation, str) or not explanation.strip()):
-                    continue
-            if attachments_required and not _has_review_attachments(answers):
-                continue
-            received_at = payload.get("received_at")
-            if not isinstance(received_at, str) or not received_at.strip():
-                continue
-            account_id = payload.get("account_id")
-            if isinstance(account_id, str) and account_id.strip():
-                answered_ids.add(account_id.strip())
-            else:
-                answered_ids.add(entry.stem)
+        elif explanation is not None and not isinstance(explanation, str):
+            continue
+        answers_received += 1
 
-    answers_received = len(answered_ids)
+    answers_required = max(answers_required, 0)
+    answers_received = max(answers_received, 0)
 
-    if not responses_dir_available:
-        fallback_answers_received = _stage_metric_value("frontend", "answers_received")
-        if fallback_answers_received is not None:
-            answers_received = fallback_answers_received
-
-    if not frontend_index_available:
-        fallback_answers_required = _stage_metric_value("frontend", "answers_required")
-        if fallback_answers_required is not None:
-            required_answers = fallback_answers_required
-
-    answers_received = max(0, answers_received)
-    required_answers = max(required_answers, answers_received)
-    frontend_stage_should_update = (
-        isinstance(review_stage_info, Mapping)
-        or frontend_index_available
-        or answers_received > 0
+    review_ready = bool(
+        answers_required > 0 and answers_received == answers_required
     )
 
-    review_ready = False
-    if required_answers > 0:
-        review_ready = answers_received >= required_answers
-    elif isinstance(review_stage_info, Mapping) and bool(review_stage_info.get("empty_ok")):
-        review_ready = True
+    # ------------------------------------------------------------------
+    # Merge counters
+    # ------------------------------------------------------------------
+    merge_index_path = base_dir / "ai_packs" / "merge" / "pairs_index.json"
+    merge_index = _load_json_mapping(merge_index_path)
 
-    if review_status == "error":
-        review_ready = False
+    merge_expected: int | None = None
+    if isinstance(merge_index, Mapping):
+        totals_payload = merge_index.get("totals")
+        if isinstance(totals_payload, Mapping):
+            scored_pairs = _coerce_int(totals_payload.get("scored_pairs"))
+            if scored_pairs is not None:
+                merge_expected = max(scored_pairs, 0)
+        if merge_expected is None:
+            direct_pairs = _coerce_int(merge_index.get("scored_pairs"))
+            if direct_pairs is not None:
+                merge_expected = max(direct_pairs, 0)
+        if merge_expected is None:
+            pairs_entries = merge_index.get("pairs")
+            if isinstance(pairs_entries, Sequence):
+                merge_expected = len([entry for entry in pairs_entries if isinstance(entry, Mapping)])
 
-    review_has_activity = bool(required_answers or answers_received)
+    merge_results_dir = base_dir / "ai_packs" / "merge" / "results"
+    try:
+        merge_files = [
+            path
+            for path in merge_results_dir.rglob("*.result.json")
+            if path.is_file()
+        ]
+    except OSError:
+        merge_files = []
 
-    merge_stage_info = _stage_info("merge")
-    merge_status = _stage_status("merge")
-    merge_ready = False
-    if merge_status in {"success", "built", "complete", "completed", "published"}:
-        merge_ready = True
-    elif isinstance(merge_stage_info, Mapping) and bool(merge_stage_info.get("empty_ok")):
-        merge_ready = True
+    merge_completed = len(merge_files)
 
-    if merge_status == "error":
+    if merge_expected is None:
         merge_ready = False
+    else:
+        merge_ready = merge_completed >= merge_expected
 
     all_ready = merge_ready and validation_ready and review_ready
 
@@ -727,54 +749,16 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
     timestamp = _utcnow_iso()
     normalized_barriers["checked_at"] = timestamp
 
-    progress_statuses = {"", "built", "running", "success", "published"}
+    validation_metrics_payload = {
+        "packs_total": int(validation_packs_total),
+        "packs_completed": int(validation_packs_completed),
+        "packs_pending": int(validation_packs_pending),
+    }
 
-    validation_metrics_payload: dict[str, int] | None = None
-    if validation_stage_should_update:
-        validation_metrics_payload = {
-            "packs_total": int(validation_packs_total),
-            "packs_completed": int(validation_packs_completed),
-            "packs_pending": int(validation_packs_pending),
-        }
-
-    frontend_metrics_payload: dict[str, int] | None = None
-    if frontend_stage_should_update:
-        frontend_metrics_payload = {
-            "answers_required": int(required_answers),
-            "answers_received": int(answers_received),
-        }
-
-    validation_status_update: str | None = None
-    validation_status_current = _stage_status("validation")
-    if validation_stage_should_update and validation_status_current != "error":
-        if validation_status_current not in progress_statuses:
-            if validation_ready and validation_status_current != "success":
-                validation_status_update = "success"
-        else:
-            if validation_ready:
-                desired_validation_status = "success"
-            elif validation_has_activity:
-                desired_validation_status = "running"
-            else:
-                desired_validation_status = "built"
-            if desired_validation_status != validation_status_current:
-                validation_status_update = desired_validation_status
-
-    review_status_update: str | None = None
-    review_status_current = review_status
-    if frontend_stage_should_update and review_status_current != "error":
-        if review_status_current not in progress_statuses:
-            if review_ready and review_status_current != "success":
-                review_status_update = "success"
-        else:
-            if review_ready:
-                desired_review_status = "success"
-            elif review_has_activity:
-                desired_review_status = "running"
-            else:
-                desired_review_status = "built"
-            if desired_review_status != review_status_current:
-                review_status_update = desired_review_status
+    frontend_metrics_payload = {
+        "answers_required": int(answers_required),
+        "answers_received": int(answers_received),
+    }
 
     def _mutate(payload: Any) -> Any:
         if not isinstance(payload, dict):
@@ -782,23 +766,21 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
         else:
             payload_dict = payload
 
-        existing_raw = payload_dict.get("umbrella_barriers")
-        if isinstance(existing_raw, Mapping):
-            umbrella: dict[str, Any] = dict(existing_raw)
+        existing_barriers = payload_dict.get("umbrella_barriers")
+        if isinstance(existing_barriers, Mapping):
+            barriers_payload = dict(existing_barriers)
         else:
-            umbrella = {}
+            barriers_payload = {}
 
-        umbrella.update(normalized_barriers)
-        payload_dict["umbrella_barriers"] = umbrella
+        barriers_payload.update(normalized_barriers)
+        payload_dict["umbrella_barriers"] = barriers_payload
         payload_dict["umbrella_ready"] = all_ready
-        payload_dict.setdefault("sid", sid)
+        payload_dict.setdefault("sid", normalized_sid)
 
         stages_raw = payload_dict.get("stages")
         if isinstance(stages_raw, Mapping):
             stages_dict: dict[str, Any] = {}
             for key, value in stages_raw.items():
-                if not isinstance(key, str):
-                    continue
                 if isinstance(value, Mapping):
                     stages_dict[key] = dict(value)
                 else:
@@ -806,60 +788,32 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
         else:
             stages_dict = {}
 
-        stages_changed = False
-
-        def _update_stage(
-            stage_name: str,
-            metrics_payload: Mapping[str, int] | None,
-            status_value: str | None,
-        ) -> None:
-            nonlocal stages_changed, stages_dict
-            if metrics_payload is None and status_value is None:
-                return
-
-            existing_stage = stages_dict.get(stage_name)
-            if not isinstance(existing_stage, Mapping):
-                if metrics_payload is None:
-                    return
-                stage_entry: dict[str, Any] = {}
+        def _ensure_stage_entry(stage_name: str) -> dict[str, Any]:
+            existing = stages_dict.get(stage_name)
+            if isinstance(existing, Mapping):
+                stage_entry = dict(existing)
             else:
-                stage_entry = dict(existing_stage)
+                stage_entry = {}
+            stages_dict[stage_name] = stage_entry
+            return stage_entry
 
-            entry_changed = False
+        def _update_metrics(stage_name: str, metrics: Mapping[str, int]) -> None:
+            stage_entry = _ensure_stage_entry(stage_name)
+            existing_metrics = stage_entry.get("metrics")
+            metrics_dict = dict(existing_metrics) if isinstance(existing_metrics, Mapping) else {}
+            changed = False
+            for key, value in metrics.items():
+                if metrics_dict.get(key) != value:
+                    metrics_dict[key] = value
+                    changed = True
+            if not isinstance(existing_metrics, Mapping) or changed:
+                stage_entry["metrics"] = metrics_dict
 
-            if metrics_payload is not None:
-                metrics_existing_raw = stage_entry.get("metrics")
-                metrics_existing = (
-                    dict(metrics_existing_raw)
-                    if isinstance(metrics_existing_raw, Mapping)
-                    else {}
-                )
-                new_metrics = dict(metrics_existing)
-                for key, value in metrics_payload.items():
-                    if new_metrics.get(key) != value:
-                        new_metrics[key] = value
-                        entry_changed = True
-                if not isinstance(metrics_existing_raw, Mapping) and metrics_payload:
-                    entry_changed = True
-                if entry_changed or not isinstance(metrics_existing_raw, Mapping):
-                    stage_entry["metrics"] = new_metrics
+        _update_metrics("validation", validation_metrics_payload)
+        _update_metrics("frontend", frontend_metrics_payload)
 
-            if status_value is not None:
-                existing_status_raw = stage_entry.get("status")
-                if existing_status_raw != status_value:
-                    stage_entry["status"] = status_value
-                    entry_changed = True
-
-            if entry_changed:
-                stages_dict[stage_name] = stage_entry
-                stages_changed = True
-
-        _update_stage("validation", validation_metrics_payload, validation_status_update)
-        _update_stage("frontend", frontend_metrics_payload, review_status_update)
-
-        if stages_changed:
-            payload_dict["stages"] = stages_dict
-            payload_dict["updated_at"] = timestamp
+        payload_dict["stages"] = stages_dict
+        payload_dict["updated_at"] = timestamp
 
         return payload_dict
 
@@ -887,10 +841,10 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
         if _document_verifier_enabled():
             event_payload.setdefault("document_ready", False)
         try:
-            _append_jsonl(_events_path(sid), event_payload)
+            _append_jsonl(_events_path(normalized_sid), event_payload)
         except Exception:
             _LOG.debug(
-                "[Runflow] Failed to append barriers event sid=%s", sid, exc_info=True
+                "[Runflow] Failed to append barriers event sid=%s", normalized_sid, exc_info=True
             )
 
     return normalized_barriers

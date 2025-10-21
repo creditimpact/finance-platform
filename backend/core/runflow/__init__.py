@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 import functools
 import json
@@ -63,6 +63,139 @@ def _env_int(name: str, default: int) -> int:
 
 def _review_attachment_required() -> bool:
     return _env_enabled("UMBRELLA_BARRIERS_REVIEW_REQUIRE_FILE", False)
+
+
+def _review_explanation_required() -> bool:
+    return _env_enabled("UMBRELLA_BARRIERS_REVIEW_REQUIRE_EXPLANATION", True)
+
+
+def _document_verifier_enabled() -> bool:
+    return _env_enabled("DOCUMENT_VERIFIER_ENABLED", False)
+
+
+def _load_json_mapping(path: Path) -> Mapping[str, Any] | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+    if isinstance(payload, Mapping):
+        return payload
+
+    return None
+
+
+def _is_sequence(value: Any) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+
+
+def _has_review_attachments(payload: Mapping[str, Any]) -> bool:
+    attachments = payload.get("attachments")
+    if isinstance(attachments, Mapping):
+        for value in attachments.values():
+            if isinstance(value, str) and value.strip():
+                return True
+            if isinstance(value, Iterable) and not isinstance(
+                value, (str, bytes, bytearray)
+            ):
+                for entry in value:
+                    if isinstance(entry, str) and entry.strip():
+                        return True
+
+    legacy = payload.get("evidence")
+    if isinstance(legacy, Iterable) and not isinstance(legacy, (str, bytes, bytearray)):
+        for item in legacy:
+            if not isinstance(item, Mapping):
+                continue
+            docs = item.get("docs")
+            if isinstance(docs, Iterable) and not isinstance(docs, (str, bytes, bytearray)):
+                for doc in docs:
+                    if not isinstance(doc, Mapping):
+                        continue
+                    doc_ids = doc.get("doc_ids")
+                    if isinstance(doc_ids, Iterable) and not isinstance(
+                        doc_ids, (str, bytes, bytearray)
+                    ):
+                        for doc_id in doc_ids:
+                            if isinstance(doc_id, str) and doc_id.strip():
+                                return True
+    return False
+
+
+def _resolve_review_path(
+    run_dir: Path,
+    env_name: str,
+    canonical: Path,
+    *,
+    review_dir: Path,
+    require_descendant: bool = False,
+) -> Path:
+    override = os.getenv(env_name)
+    if not override:
+        return canonical
+
+    candidate = Path(override)
+    if not candidate.is_absolute():
+        candidate = (run_dir / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+
+    frontend_base = review_dir.parent
+    try:
+        candidate.relative_to(frontend_base)
+        within_frontend = True
+    except ValueError:
+        within_frontend = False
+
+    try:
+        candidate.relative_to(review_dir)
+        within_review = True
+    except ValueError:
+        within_review = False
+
+    if within_frontend and not within_review:
+        return canonical
+
+    if require_descendant and within_review and candidate == review_dir:
+        return canonical
+
+    return candidate
+
+
+def _load_response_payload(path: Path) -> Mapping[str, Any] | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        return None
+
+    text = raw.strip()
+    if not text:
+        return None
+
+    if path.suffix == ".jsonl":
+        for line in reversed(text.splitlines()):
+            stripped = line.strip()
+            if stripped:
+                try:
+                    payload = json.loads(stripped)
+                except json.JSONDecodeError:
+                    return None
+                return payload if isinstance(payload, Mapping) else None
+        return None
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+    return payload if isinstance(payload, Mapping) else None
 
 
 _ENABLE_STEPS = _env_enabled("RUNFLOW_VERBOSE")
@@ -148,30 +281,153 @@ def _reset_step_counters(sid: str, stage: str) -> None:
         del _STEP_CALL_COUNTS[key]
 
 
-def _update_umbrella_barriers(sid: str) -> None:
+def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
+    """Recalculate umbrella readiness flags for ``sid``."""
+
     if not _UMBRELLA_BARRIERS_ENABLED:
-        return
+        return None
 
     run_dir = RUNS_ROOT / sid
     runflow_path = run_dir / "runflow.json"
 
+    runflow_payload = _load_json_mapping(runflow_path) or {}
+    runflow_stages_raw = runflow_payload.get("stages")
+    runflow_stages = runflow_stages_raw if isinstance(runflow_stages_raw, Mapping) else {}
+
+    steps_payload = _load_json_mapping(run_dir / "runflow_steps.json") or {}
+    steps_stages_raw = steps_payload.get("stages")
+    steps_stages = steps_stages_raw if isinstance(steps_stages_raw, Mapping) else {}
+
+    def _stage_info(stage: str) -> Mapping[str, Any] | None:
+        info = runflow_stages.get(stage) if isinstance(runflow_stages, Mapping) else None
+        if isinstance(info, Mapping):
+            return info
+        info = steps_stages.get(stage) if isinstance(steps_stages, Mapping) else None
+        if isinstance(info, Mapping):
+            return info
+        return None
+
+    def _stage_status(stage: str) -> str:
+        for container in (runflow_stages, steps_stages):
+            if not isinstance(container, Mapping):
+                continue
+            info = container.get(stage)
+            if not isinstance(info, Mapping):
+                continue
+            status = info.get("status")
+            if isinstance(status, str):
+                normalized = status.strip().lower()
+                if normalized:
+                    return normalized
+        return ""
+
+    validation_stage_info = _stage_info("validation")
+    validation_ready = False
     try:
-        from backend.runflow.decider import evaluate_global_barriers  # Local import to avoid circular dependency
+        from backend.runflow.decider import _validation_stage_ready  # Local import to avoid circular dependency
     except Exception:
-        return
+        validation_ready = False
+    else:
+        try:
+            validation_ready = _validation_stage_ready(run_dir, validation_stage_info)
+        except Exception:
+            validation_ready = False
 
-    try:
-        barriers = evaluate_global_barriers(os.fspath(run_dir))
-    except Exception:
-        return
+    if _stage_status("validation") == "error":
+        validation_ready = False
 
-    if not isinstance(barriers, Mapping):
-        return
+    review_stage_info = _stage_info("frontend")
+    review_status = _stage_status("frontend")
 
-    merge_ready = bool(barriers.get("merge_ready"))
-    validation_ready = bool(barriers.get("validation_ready"))
-    review_ready = bool(barriers.get("review_ready"))
-    all_ready = bool(barriers.get("all_ready"))
+    review_dir_canonical = (run_dir / "frontend" / "review").resolve()
+    index_path = _resolve_review_path(
+        run_dir,
+        "FRONTEND_PACKS_INDEX",
+        (review_dir_canonical / "index.json").resolve(),
+        review_dir=review_dir_canonical,
+    )
+    responses_dir = _resolve_review_path(
+        run_dir,
+        "FRONTEND_PACKS_RESPONSES_DIR",
+        (review_dir_canonical / "responses").resolve(),
+        review_dir=review_dir_canonical,
+        require_descendant=True,
+    )
+
+    index_payload = _load_json_mapping(index_path)
+    required_answers = 0
+    if isinstance(index_payload, Mapping):
+        packs_entries = index_payload.get("packs")
+        if _is_sequence(packs_entries):
+            required_answers = max(required_answers, len(list(packs_entries)))
+        items_entries = index_payload.get("items")
+        if _is_sequence(items_entries):
+            required_answers = max(required_answers, len(list(items_entries)))
+        answers_required_value = index_payload.get("answers_required")
+        if isinstance(answers_required_value, int):
+            required_answers = max(required_answers, answers_required_value)
+        elif isinstance(answers_required_value, str):
+            try:
+                required_answers = max(required_answers, int(answers_required_value))
+            except ValueError:
+                pass
+
+    attachments_required = _review_attachment_required()
+    answered_ids: set[str] = set()
+    if responses_dir.exists() and responses_dir.is_dir():
+        for entry in sorted(responses_dir.iterdir()):
+            if not entry.is_file():
+                continue
+            name = entry.name
+            if not (name.endswith(".result.json") or name.endswith(".result.jsonl")):
+                continue
+            payload = _load_response_payload(entry)
+            if not isinstance(payload, Mapping):
+                continue
+            answers = payload.get("answers")
+            if not isinstance(answers, Mapping):
+                continue
+            explanation = answers.get("explanation")
+            if _review_explanation_required():
+                if not isinstance(explanation, str) or not explanation.strip():
+                    continue
+            else:
+                if explanation is not None and (not isinstance(explanation, str) or not explanation.strip()):
+                    continue
+            if attachments_required and not _has_review_attachments(answers):
+                continue
+            received_at = payload.get("received_at")
+            if not isinstance(received_at, str) or not received_at.strip():
+                continue
+            account_id = payload.get("account_id")
+            if isinstance(account_id, str) and account_id.strip():
+                answered_ids.add(account_id.strip())
+            else:
+                answered_ids.add(entry.stem)
+
+    answers_received = len(answered_ids)
+
+    review_ready = False
+    if required_answers > 0:
+        review_ready = answers_received >= required_answers
+    elif isinstance(review_stage_info, Mapping) and bool(review_stage_info.get("empty_ok")):
+        review_ready = True
+
+    if review_status == "error":
+        review_ready = False
+
+    merge_stage_info = _stage_info("merge")
+    merge_status = _stage_status("merge")
+    merge_ready = False
+    if merge_status in {"success", "built", "complete", "completed", "published"}:
+        merge_ready = True
+    elif isinstance(merge_stage_info, Mapping) and bool(merge_stage_info.get("empty_ok")):
+        merge_ready = True
+
+    if merge_status == "error":
+        merge_ready = False
+
+    all_ready = merge_ready and validation_ready and review_ready
 
     normalized_barriers: dict[str, Any] = {
         "merge_ready": merge_ready,
@@ -180,11 +436,34 @@ def _update_umbrella_barriers(sid: str) -> None:
         "all_ready": all_ready,
     }
 
-    for key, value in barriers.items():
-        if isinstance(key, str) and key not in normalized_barriers:
-            normalized_barriers[key] = value
+    if _document_verifier_enabled():
+        normalized_barriers.setdefault("document_ready", False)
 
     timestamp = _utcnow_iso()
+    normalized_barriers["checked_at"] = timestamp
+
+    def _mutate(payload: Any) -> Any:
+        if not isinstance(payload, dict):
+            payload_dict: dict[str, Any] = {}
+        else:
+            payload_dict = payload
+
+        existing_raw = payload_dict.get("umbrella_barriers")
+        if isinstance(existing_raw, Mapping):
+            umbrella: dict[str, Any] = dict(existing_raw)
+        else:
+            umbrella = {}
+
+        umbrella.update(normalized_barriers)
+        payload_dict["umbrella_barriers"] = umbrella
+        payload_dict["umbrella_ready"] = all_ready
+        payload_dict.setdefault("sid", sid)
+        return payload_dict
+
+    try:
+        update_json_in_place(runflow_path, _mutate)
+    except Exception:
+        return None
 
     if _UMBRELLA_BARRIERS_LOG:
         _LOG.info(
@@ -202,9 +481,8 @@ def _update_umbrella_barriers(sid: str) -> None:
             "review_ready": review_ready,
             "all_ready": all_ready,
         }
-        for key, value in barriers.items():
-            if isinstance(key, str) and key not in event_payload:
-                event_payload[key] = value
+        if _document_verifier_enabled():
+            event_payload.setdefault("document_ready", False)
         try:
             _append_jsonl(_events_path(sid), event_payload)
         except Exception:
@@ -212,36 +490,17 @@ def _update_umbrella_barriers(sid: str) -> None:
                 "[Runflow] Failed to append barriers event sid=%s", sid, exc_info=True
             )
 
-    def _mutate(payload: Any) -> Any:
-        if not isinstance(payload, dict):
-            payload_dict: dict[str, Any] = {}
-        else:
-            payload_dict = payload
+    return normalized_barriers
 
-        existing_raw = payload_dict.get("umbrella_barriers")
-        if isinstance(existing_raw, Mapping):
-            umbrella: dict[str, Any] = dict(existing_raw)
-        else:
-            umbrella = {}
 
-        umbrella.update(normalized_barriers)
-        umbrella["checked_at"] = timestamp
-        payload_dict["umbrella_barriers"] = umbrella
-        payload_dict["umbrella_ready"] = all_ready
-
-        payload_dict.setdefault("sid", sid)
-        return payload_dict
-
-    try:
-        update_json_in_place(runflow_path, _mutate)
-    except Exception:
-        return
+def _update_umbrella_barriers(sid: str) -> None:
+    runflow_barriers_refresh(sid)
 
 
 def runflow_refresh_umbrella_barriers(sid: str) -> None:
     """Re-evaluate umbrella readiness for ``sid``."""
 
-    _update_umbrella_barriers(sid)
+    runflow_barriers_refresh(sid)
 
 
 def _should_record_step(
@@ -662,6 +921,7 @@ def runflow_step_dec(stage: str, step: str) -> Callable[[Callable[..., Any]], Ca
 __all__ = [
     "runflow_start_stage",
     "runflow_end_stage",
+    "runflow_barriers_refresh",
     "runflow_refresh_umbrella_barriers",
     "runflow_decide_step",
     "runflow_event",

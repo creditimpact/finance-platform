@@ -31,6 +31,17 @@ log = logging.getLogger(__name__)
 _RUNFLOW_FILENAME = "runflow.json"
 
 
+def _env_enabled(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _umbrella_barriers_enabled() -> bool:
+    return _env_enabled("UMBRELLA_BARRIERS_ENABLED", True)
+
+
 def _default_runs_root() -> Path:
     root_env = os.getenv("RUNS_ROOT")
     return Path(root_env) if root_env else Path("runs")
@@ -421,6 +432,14 @@ def _review_responses_ready(run_dir: Path) -> bool:
 
 def evaluate_global_barriers(run_path: str) -> dict[str, bool]:
     """Inspect run artifacts and report readiness for umbrella arguments."""
+
+    if not _umbrella_barriers_enabled():
+        return {
+            "merge_ready": False,
+            "validation_ready": False,
+            "review_ready": False,
+            "all_ready": False,
+        }
 
     run_dir = Path(run_path)
     steps_path = run_dir / "runflow_steps.json"

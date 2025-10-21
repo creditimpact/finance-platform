@@ -8,7 +8,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Literal, Mapping, Optional
+from typing import Any, Dict, Literal, Mapping, Optional
 
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.runflow import (
@@ -16,7 +16,10 @@ from backend.core.runflow import (
     runflow_end_stage,
     runflow_refresh_umbrella_barriers,
 )
-from backend.runflow.counters import stage_counts as _stage_counts_from_disk
+from backend.runflow.counters import (
+    frontend_answers_counters as _frontend_answers_counters,
+    stage_counts as _stage_counts_from_disk,
+)
 from backend.validation.index_schema import load_validation_index
 
 StageStatus = Literal["success", "error", "built", "published"]
@@ -232,6 +235,17 @@ def record_stage(
 
     normalized_metrics = _normalize_mapping(metrics)
     normalized_results = _normalize_mapping(results)
+
+    if stage == "frontend":
+        answers_metrics = _frontend_answers_counters(
+            base_dir, attachments_required=_review_attachment_required()
+        )
+        answers_required = _coerce_int(answers_metrics.get("answers_required"))
+        answers_received = _coerce_int(answers_metrics.get("answers_received"))
+        if answers_required is not None:
+            normalized_metrics["answers_required"] = answers_required
+        if answers_received is not None:
+            normalized_metrics["answers_received"] = answers_received
 
     disk_counts = _stage_counts_from_disk(stage, base_dir)
     for key, value in disk_counts.items():
@@ -609,115 +623,15 @@ def _response_filename_for_account(account_id: str) -> str:
     return f"{sanitized}.result.json"
 
 
-def _has_review_attachments(payload: Mapping[str, Any]) -> bool:
-    attachments = payload.get("attachments")
-    if isinstance(attachments, Mapping):
-        for value in attachments.values():
-            if isinstance(value, str) and value.strip():
-                return True
-            if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray)):
-                for entry in value:
-                    if isinstance(entry, str) and entry.strip():
-                        return True
-
-    legacy = payload.get("evidence")
-    if isinstance(legacy, Iterable) and not isinstance(legacy, (str, bytes, bytearray)):
-        for item in legacy:
-            if not isinstance(item, Mapping):
-                continue
-            docs = item.get("docs")
-            if isinstance(docs, Iterable) and not isinstance(docs, (str, bytes, bytearray)):
-                for doc in docs:
-                    if isinstance(doc, Mapping):
-                        doc_ids = doc.get("doc_ids")
-                        if isinstance(doc_ids, Iterable) and not isinstance(doc_ids, (str, bytes, bytearray)):
-                            for doc_id in doc_ids:
-                                if isinstance(doc_id, str) and doc_id.strip():
-                                    return True
-    return False
-
-
 def _frontend_responses_progress(run_dir: Path) -> tuple[int, int, bool]:
-    manifest_path = run_dir / "frontend" / "review" / "index.json"
-    manifest = _load_json_mapping(manifest_path)
-    if manifest is None:
-        return (0, 0, False)
-
-    raw_packs = manifest.get("packs")
-    account_ids: list[str] = []
-    if isinstance(raw_packs, list):
-        for entry in raw_packs:
-            if not isinstance(entry, Mapping):
-                continue
-            account_id = entry.get("account_id")
-            if isinstance(account_id, str) and account_id.strip():
-                account_ids.append(account_id.strip())
-                continue
-            path_text = entry.get("path")
-            if isinstance(path_text, str) and path_text.strip():
-                account_ids.append(Path(path_text).stem)
-
-    counts = manifest.get("counts") if isinstance(manifest.get("counts"), Mapping) else None
-    packs_count_int = None
-    responses_count_int = None
-    if isinstance(counts, Mapping):
-        packs_count_int = _coerce_int(counts.get("packs"))
-        responses_count_int = _coerce_int(counts.get("responses"))
-
-    if not account_ids:
-        required = packs_count_int or 0
-        if required <= 0:
-            return (0, responses_count_int or 0, True)
-        answered = responses_count_int or 0
-        ready = answered == required and required > 0
-        return (required, answered, ready)
-
-    responses_dir = run_dir / "frontend" / "review" / "responses"
-    required = len(account_ids)
-    explanation_required = True if _review_explanation_required() else False
     attachments_required = _review_attachment_required()
-    answered_ids: set[str] = set()
+    counters = _frontend_answers_counters(
+        run_dir, attachments_required=attachments_required
+    )
 
-    for account_id in account_ids:
-        filename = _response_filename_for_account(account_id)
-        candidate = responses_dir / filename
-        try:
-            is_file = candidate.is_file()
-        except OSError:
-            is_file = False
-        if not is_file:
-            continue
-
-        payload = _load_json_mapping(candidate)
-        if payload is None:
-            continue
-
-        received_at = payload.get("received_at")
-        if not isinstance(received_at, str) or not received_at.strip():
-            continue
-
-        answers = payload.get("answers")
-        if not isinstance(answers, Mapping):
-            continue
-
-        explanation = answers.get("explanation")
-        if explanation_required:
-            if not isinstance(explanation, str) or not explanation.strip():
-                continue
-        else:
-            if isinstance(explanation, str) and not explanation.strip():
-                answers["explanation"] = explanation.strip()
-
-        if attachments_required and not _has_review_attachments(answers):
-            continue
-
-        answered_ids.add(account_id)
-
-    answered = len(answered_ids)
-    if required == 0:
-        ready = True
-    else:
-        ready = answered == required
+    required = _coerce_int(counters.get("answers_required")) or 0
+    answered = _coerce_int(counters.get("answers_received")) or 0
+    ready = answered == required
     return (required, answered, ready)
 
 
@@ -866,11 +780,15 @@ def refresh_frontend_stage_from_responses(
     if "empty_ok" not in stage_payload:
         stage_payload["empty_ok"] = bool(required == 0)
 
-    answers_payload = {
-        "answers_received": answered,
-        "answers_required": required,
-    }
-    stage_payload["answers"] = answers_payload
+    metrics_payload = stage_payload.get("metrics")
+    if isinstance(metrics_payload, Mapping):
+        metrics_data = dict(metrics_payload)
+    else:
+        metrics_data = {}
+    metrics_data["answers_received"] = answered
+    metrics_data["answers_required"] = required
+    stage_payload["metrics"] = metrics_data
+    stage_payload.pop("answers", None)
 
     stages["frontend"] = stage_payload
     data["updated_at"] = _now_iso()

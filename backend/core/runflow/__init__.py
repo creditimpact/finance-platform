@@ -20,6 +20,7 @@ from backend.core.runflow_steps import (
     steps_stage_finish,
     steps_stage_start,
 )
+from backend.runflow.counters import frontend_answers_counters as _frontend_answers_counters
 
 
 def _utcnow_iso() -> str:
@@ -58,6 +59,10 @@ def _env_int(name: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return value
+
+
+def _review_attachment_required() -> bool:
+    return _env_enabled("UMBRELLA_BARRIERS_REVIEW_REQUIRE_FILE", False)
 
 
 _ENABLE_STEPS = _env_enabled("RUNFLOW_VERBOSE")
@@ -582,10 +587,27 @@ def record_frontend_responses_progress(
     answers_received: Any,
     answers_required: Any,
 ) -> None:
+    base_dir = RUNS_ROOT / sid
+    counters = _frontend_answers_counters(
+        base_dir, attachments_required=_review_attachment_required()
+    )
+
+    answers_required_disk = counters.get("answers_required")
+    answers_received_disk = counters.get("answers_received")
+
+    if isinstance(answers_required_disk, int):
+        accounts_value = answers_required_disk
+    else:
+        accounts_value = accounts_published
+
     summary = {
-        "accounts_published": accounts_published,
-        "answers_received": answers_received,
-        "answers_required": answers_required,
+        "accounts_published": accounts_value,
+        "answers_received": answers_received_disk
+        if isinstance(answers_received_disk, int)
+        else answers_received,
+        "answers_required": answers_required_disk
+        if isinstance(answers_required_disk, int)
+        else answers_required,
     }
     normalized = _store_stage_counter(sid, "frontend_review", summary)
     _emit_summary_step(sid, "frontend", "responses_progress", summary=normalized)

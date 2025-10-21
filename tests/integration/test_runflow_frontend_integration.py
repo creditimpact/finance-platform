@@ -252,7 +252,11 @@ def test_runflow_instrumentation_smoke(tmp_path, monkeypatch):
         )
         assert runflow_data["stages"]["merge"]["count"] == 2
         assert runflow_data["stages"]["validation"]["findings_count"] == 1
-        assert runflow_data["stages"]["frontend"]["packs_count"] == frontend_result["packs_count"]
+        frontend_stage = runflow_data["stages"]["frontend"]
+        assert frontend_stage["packs_count"] == frontend_result["packs_count"]
+        metrics_payload = frontend_stage.get("metrics") or {}
+        assert metrics_payload.get("answers_required") == frontend_result["packs_count"]
+        assert metrics_payload.get("answers_received") == 0
 
         steps_path = runs_root / sid / "runflow_steps.json"
         events_path = runs_root / sid / "runflow_events.jsonl"

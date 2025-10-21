@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import json
 
@@ -84,6 +84,40 @@ def validation_findings_count(base_dir: Path) -> Optional[int]:
     return None
 
 
+def _has_review_attachments(payload: Mapping[str, Any]) -> bool:
+    attachments = payload.get("attachments")
+    if isinstance(attachments, Mapping):
+        for value in attachments.values():
+            if isinstance(value, str) and value.strip():
+                return True
+            if isinstance(value, Iterable) and not isinstance(
+                value, (str, bytes, bytearray)
+            ):
+                for entry in value:
+                    if isinstance(entry, str) and entry.strip():
+                        return True
+
+    legacy = payload.get("evidence")
+    if isinstance(legacy, Iterable) and not isinstance(legacy, (str, bytes, bytearray)):
+        for item in legacy:
+            if not isinstance(item, Mapping):
+                continue
+            docs = item.get("docs")
+            if isinstance(docs, Iterable) and not isinstance(
+                docs, (str, bytes, bytearray)
+            ):
+                for doc in docs:
+                    if isinstance(doc, Mapping):
+                        doc_ids = doc.get("doc_ids")
+                        if isinstance(doc_ids, Iterable) and not isinstance(
+                            doc_ids, (str, bytes, bytearray)
+                        ):
+                            for doc_id in doc_ids:
+                                if isinstance(doc_id, str) and doc_id.strip():
+                                    return True
+    return False
+
+
 def frontend_packs_count(base_dir: Path) -> Optional[int]:
     """Return the number of frontend review packs written for ``sid``."""
 
@@ -101,6 +135,61 @@ def frontend_packs_count(base_dir: Path) -> Optional[int]:
         )
     except OSError:
         return None
+
+
+def frontend_answers_counters(
+    base_dir: Path,
+    *,
+    attachments_required: bool,
+) -> dict[str, int]:
+    """Return frontend response answer counters rooted at ``base_dir``."""
+
+    required = frontend_packs_count(base_dir) or 0
+
+    config = load_frontend_stage_config(base_dir)
+    responses_dir = config.responses_dir
+
+    try:
+        entries = sorted(
+            path
+            for path in responses_dir.iterdir()
+            if path.is_file() and path.name.endswith(".result.json")
+        )
+    except OSError:
+        entries = []
+
+    answered_ids: set[str] = set()
+
+    for entry in entries:
+        payload = _load_document(entry)
+        if payload is None:
+            continue
+
+        answers = payload.get("answers")
+        if not isinstance(answers, Mapping):
+            continue
+
+        explanation = answers.get("explanation")
+        if not isinstance(explanation, str) or not explanation.strip():
+            continue
+
+        if attachments_required and not _has_review_attachments(answers):
+            continue
+
+        received_at = payload.get("received_at")
+        if not isinstance(received_at, str) or not received_at.strip():
+            continue
+
+        account_id = payload.get("account_id")
+        if isinstance(account_id, str) and account_id.strip():
+            answered_ids.add(account_id.strip())
+        else:
+            answered_ids.add(entry.stem)
+
+    return {
+        "answers_required": required,
+        "answers_received": len(answered_ids),
+    }
 
 
 def merge_scored_pairs_count(base_dir: Path) -> Optional[int]:
@@ -141,6 +230,7 @@ def stage_counts(stage: str, base_dir: Path) -> dict[str, int]:
 
 
 __all__ = [
+    "frontend_answers_counters",
     "frontend_packs_count",
     "merge_scored_pairs_count",
     "stage_counts",

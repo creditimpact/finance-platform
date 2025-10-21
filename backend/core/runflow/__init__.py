@@ -5,10 +5,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
+import asyncio
 import functools
 import json
 import logging
 import os
+import threading
+from concurrent.futures import Future
 
 _LOG = logging.getLogger(__name__)
 
@@ -206,11 +209,18 @@ _ENABLE_SPANS = _env_enabled("RUNFLOW_STEPS_ENABLE_SPANS", True)
 _ENABLE_ACCOUNT_STEPS = _env_enabled("RUNFLOW_ACCOUNT_STEPS", True)
 _UMBRELLA_BARRIERS_ENABLED = _env_enabled("UMBRELLA_BARRIERS_ENABLED", True)
 _UMBRELLA_BARRIERS_LOG = _env_enabled("UMBRELLA_BARRIERS_LOG", True)
+_UMBRELLA_BARRIERS_WATCHDOG_INTERVAL_MS = max(
+    _env_int("UMBRELLA_BARRIERS_WATCHDOG_INTERVAL_MS", 5000), 0
+)
 
 
 _STEP_CALL_COUNTS: dict[tuple[str, str, str, str], int] = defaultdict(int)
 _STARTED_STAGES: set[tuple[str, str]] = set()
 _STAGE_COUNTERS: dict[str, dict[str, dict[str, int]]] = {}
+_WATCHDOG_LOOP: Optional[asyncio.AbstractEventLoop] = None
+_WATCHDOG_THREAD: Optional[threading.Thread] = None
+_WATCHDOG_FUTURES: dict[str, Future[Any]] = {}
+_WATCHDOG_LOCK = threading.Lock()
 
 
 def _append_event(sid: str, row: Mapping[str, Any]) -> None:
@@ -280,6 +290,117 @@ def _reset_step_counters(sid: str, stage: str) -> None:
     for key in keys_to_delete:
         del _STEP_CALL_COUNTS[key]
 
+
+def _watchdog_interval_seconds() -> float:
+    if _UMBRELLA_BARRIERS_WATCHDOG_INTERVAL_MS <= 0:
+        return 0.0
+    return _UMBRELLA_BARRIERS_WATCHDOG_INTERVAL_MS / 1000.0
+
+
+def _ensure_watchdog_loop() -> Optional[asyncio.AbstractEventLoop]:
+    interval = _watchdog_interval_seconds()
+    if interval <= 0 or not _UMBRELLA_BARRIERS_ENABLED:
+        return None
+
+    global _WATCHDOG_LOOP, _WATCHDOG_THREAD
+
+    loop = _WATCHDOG_LOOP
+    if loop is not None and loop.is_running():
+        return loop
+
+    loop = asyncio.new_event_loop()
+    _WATCHDOG_LOOP = loop
+
+    def _runner() -> None:
+        global _WATCHDOG_LOOP, _WATCHDOG_THREAD
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.close()
+            with _WATCHDOG_LOCK:
+                if _WATCHDOG_LOOP is loop:
+                    _WATCHDOG_LOOP = None
+                if _WATCHDOG_THREAD is threading.current_thread():
+                    _WATCHDOG_THREAD = None
+
+    thread = threading.Thread(
+        target=_runner,
+        name="runflow-barriers-watchdog",
+        daemon=True,
+    )
+    _WATCHDOG_THREAD = thread
+    thread.start()
+    return loop
+
+
+def _launch_watchdog_if_needed(sid: str) -> None:
+    if not sid or not _UMBRELLA_BARRIERS_ENABLED:
+        return
+
+    interval = _watchdog_interval_seconds()
+    if interval <= 0:
+        return
+
+    with _WATCHDOG_LOCK:
+        existing = _WATCHDOG_FUTURES.get(sid)
+        if existing is not None and not existing.done():
+            return
+
+        loop = _ensure_watchdog_loop()
+        if loop is None:
+            return
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(runflow_barriers_watchdog(sid), loop)
+        except RuntimeError:
+            loop = _ensure_watchdog_loop()
+            if loop is None:
+                return
+            future = asyncio.run_coroutine_threadsafe(runflow_barriers_watchdog(sid), loop)
+
+        _WATCHDOG_FUTURES[sid] = future
+
+        def _cleanup(done: Future[Any]) -> None:
+            with _WATCHDOG_LOCK:
+                current = _WATCHDOG_FUTURES.get(sid)
+                if current is done:
+                    _WATCHDOG_FUTURES.pop(sid, None)
+
+        future.add_done_callback(_cleanup)
+
+
+async def runflow_barriers_watchdog(sid: str) -> None:
+    """Periodically reconcile umbrella readiness until ``sid`` is ready."""
+
+    if not sid or not _UMBRELLA_BARRIERS_ENABLED:
+        return
+
+    interval = _watchdog_interval_seconds()
+    if interval <= 0:
+        return
+
+    while True:
+        try:
+            result = runflow_barriers_refresh(sid)
+        except Exception:  # pragma: no cover - defensive logging
+            _LOG.debug(
+                "[Runflow] Watchdog refresh failed sid=%s", sid, exc_info=True
+            )
+            result = None
+
+        if isinstance(result, Mapping) and bool(result.get("all_ready")):
+            break
+
+        try:
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            raise
 
 def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
     """Recalculate umbrella readiness flags for ``sid``."""
@@ -542,6 +663,7 @@ def runflow_start_stage(
 ) -> None:
     steps_enabled = _ENABLE_STEPS
     events_enabled = _ENABLE_EVENTS
+    _launch_watchdog_if_needed(sid)
     if not (steps_enabled or events_enabled):
         return
 
@@ -922,6 +1044,7 @@ __all__ = [
     "runflow_start_stage",
     "runflow_end_stage",
     "runflow_barriers_refresh",
+    "runflow_barriers_watchdog",
     "runflow_refresh_umbrella_barriers",
     "runflow_decide_step",
     "runflow_event",

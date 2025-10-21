@@ -65,6 +65,8 @@ _ENABLE_EVENTS = _env_enabled("RUNFLOW_EVENTS")
 _STEP_SAMPLE_EVERY = max(_env_int("RUNFLOW_STEP_LOG_EVERY", 1), 1)
 _PAIR_TOPN = max(_env_int("RUNFLOW_STEPS_PAIR_TOPN", 5), 0)
 _ENABLE_SPANS = _env_enabled("RUNFLOW_STEPS_ENABLE_SPANS", True)
+_UMBRELLA_BARRIERS_ENABLED = _env_enabled("UMBRELLA_BARRIERS_ENABLED", True)
+_UMBRELLA_BARRIERS_LOG = _env_enabled("UMBRELLA_BARRIERS_LOG", True)
 
 
 _STEP_CALL_COUNTS: dict[tuple[str, str, str, str], int] = defaultdict(int)
@@ -92,6 +94,9 @@ def _reset_step_counters(sid: str, stage: str) -> None:
 
 
 def _update_umbrella_barriers(sid: str) -> None:
+    if not _UMBRELLA_BARRIERS_ENABLED:
+        return
+
     run_dir = RUNS_ROOT / sid
     runflow_path = run_dir / "runflow.json"
 
@@ -124,13 +129,14 @@ def _update_umbrella_barriers(sid: str) -> None:
         if isinstance(key, str) and key not in normalized_barriers:
             normalized_barriers[key] = value
 
-    _LOG.info(
-        "[Runflow] Umbrella barriers: merge=%s validation=%s review=%s all_ready=%s",
-        merge_ready,
-        validation_ready,
-        review_ready,
-        all_ready,
-    )
+    if _UMBRELLA_BARRIERS_LOG:
+        _LOG.info(
+            "[Runflow] Umbrella barriers: merge=%s validation=%s review=%s all_ready=%s",
+            merge_ready,
+            validation_ready,
+            review_ready,
+            all_ready,
+        )
 
     timestamp = _utcnow_iso()
 

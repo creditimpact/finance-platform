@@ -126,6 +126,37 @@ def _normalise_steps(entries: Any, default_t: str) -> list[dict[str, Any]]:
     return result
 
 
+def _normalise_aggregate_entry(entry: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    stage = entry.get("stage")
+    if not isinstance(stage, str) or not stage:
+        return None
+
+    summary_raw = entry.get("summary")
+    summary: dict[str, int] = {}
+    if isinstance(summary_raw, Mapping):
+        for key, value in summary_raw.items():
+            try:
+                summary[str(key)] = int(value)
+            except (TypeError, ValueError):
+                continue
+
+    return {"stage": stage, "summary": summary}
+
+
+def _normalise_aggregates(entries: Any) -> list[dict[str, Any]]:
+    if not isinstance(entries, list):
+        return []
+
+    normalised: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        parsed = _normalise_aggregate_entry(entry)
+        if parsed is not None:
+            normalised.append(parsed)
+    return normalised
+
+
 def _legacy_substage_steps(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not entries:
         return []
@@ -319,12 +350,18 @@ def _load_steps_payload(sid: str, schema_version: str) -> dict[str, Any]:
     else:
         stages = {}
 
+    aggregates_raw = payload.get("aggregates")
+    aggregates = _normalise_aggregates(aggregates_raw)
+
     result: dict[str, Any] = {
         "sid": str(payload.get("sid") or sid),
         "schema_version": schema_version,
         "stages": stages,
         "updated_at": str(payload.get("updated_at") or now),
     }
+
+    if aggregates:
+        result["aggregates"] = aggregates
 
     _update_updated_at(result)
     return result
@@ -363,6 +400,41 @@ def _update_updated_at(payload: MutableMapping[str, Any], *candidates: str) -> N
 
 def _dump_steps_payload(sid: str, payload: Mapping[str, Any]) -> None:
     _atomic_write_json(_steps_path(sid), payload)
+
+
+def steps_update_aggregate(sid: str, stage: str, summary: Mapping[str, Any]) -> None:
+    now = _utcnow_iso()
+    payload = _load_steps_payload(sid, _SCHEMA_VERSION)
+    aggregates_existing = payload.get("aggregates")
+    aggregates = _normalise_aggregates(aggregates_existing)
+
+    stage_name = str(stage)
+    summary_payload: dict[str, int] = {}
+    for key, value in summary.items():
+        try:
+            summary_payload[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+
+    updated = False
+    new_entries: list[dict[str, Any]] = []
+    for entry in aggregates:
+        if entry.get("stage") == stage_name:
+            new_entries.append({"stage": stage_name, "summary": dict(summary_payload)})
+            updated = True
+        else:
+            new_entries.append(entry)
+
+    if not updated:
+        new_entries.append({"stage": stage_name, "summary": dict(summary_payload)})
+
+    if new_entries:
+        payload["aggregates"] = new_entries
+    else:
+        payload.pop("aggregates", None)
+
+    _update_updated_at(payload, now)
+    _dump_steps_payload(sid, payload)
 
 
 def _verify_stage_summary(
@@ -674,5 +746,6 @@ __all__ = [
     "steps_stage_start",
     "steps_stage_finish",
     "steps_append",
+    "steps_update_aggregate",
 ]
 

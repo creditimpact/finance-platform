@@ -130,6 +130,47 @@ def test_merge_stage_sets_only_merge_ready(tmp_path, monkeypatch):
         _reload_runflow()
 
 
+def test_record_stage_updates_barriers_without_instrumentation(tmp_path, monkeypatch):
+    sid = "merge-record"
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("UMBRELLA_BARRIERS_ENABLED", "1")
+    monkeypatch.setenv("UMBRELLA_BARRIERS_LOG", "0")
+    monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)
+    monkeypatch.delenv("RUNFLOW_EVENTS", raising=False)
+    _reload_runflow()
+
+    try:
+        import backend.runflow.decider as decider
+
+        importlib.reload(decider)
+
+        decider.record_stage(
+            sid,
+            "merge",
+            status="success",
+            counts={},
+            empty_ok=False,
+            runs_root=tmp_path,
+        )
+
+        run_dir = tmp_path / sid
+        payload = _load_runflow_payload(run_dir)
+        umbrella = payload["umbrella_barriers"]
+
+        assert umbrella["merge_ready"] is True
+        assert umbrella["validation_ready"] is False
+        assert umbrella["review_ready"] is False
+        assert payload["umbrella_ready"] is False
+        assert not (run_dir / "runflow_steps.json").exists()
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_LOG", raising=False)
+        monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)
+        monkeypatch.delenv("RUNFLOW_EVENTS", raising=False)
+        _reload_runflow()
+
+
 def test_validation_stage_sets_validation_ready(tmp_path, monkeypatch):
     sid = "validation-only"
     monkeypatch.setenv("RUNS_ROOT", str(tmp_path))

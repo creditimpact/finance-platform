@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import Any, Dict, Literal, Mapping, Optional
 
 from backend.core.io.json_io import _atomic_write_json
-from backend.core.runflow import runflow_decide_step, runflow_end_stage
+from backend.core.runflow import (
+    runflow_decide_step,
+    runflow_end_stage,
+    runflow_refresh_umbrella_barriers,
+)
 from backend.runflow.counters import stage_counts as _stage_counts_from_disk
 from backend.validation.index_schema import load_validation_index
 
@@ -287,6 +291,7 @@ def record_stage(
     )
 
     _atomic_write_json(path, data)
+    runflow_refresh_umbrella_barriers(sid)
     return data
 
 
@@ -455,12 +460,24 @@ def evaluate_global_barriers(run_path: str) -> dict[str, bool]:
         }
 
     run_dir = Path(run_path)
+    runflow_path = run_dir / "runflow.json"
+    runflow_payload = _load_json_mapping(runflow_path)
+    runflow_stages = (
+        runflow_payload.get("stages") if isinstance(runflow_payload, Mapping) else None
+    )
+
     steps_path = run_dir / "runflow_steps.json"
     steps_payload = _load_json_mapping(steps_path)
-    stages = steps_payload.get("stages") if isinstance(steps_payload, Mapping) else None
+    steps_stages = steps_payload.get("stages") if isinstance(steps_payload, Mapping) else None
 
-    merge_status = _stage_status(stages, "merge")
-    validation_status = _stage_status(stages, "validation")
+    def _combined_stage_status(stage_name: str) -> str:
+        status = _stage_status(runflow_stages, stage_name)
+        if status:
+            return status
+        return _stage_status(steps_stages, stage_name)
+
+    merge_status = _combined_stage_status("merge")
+    validation_status = _combined_stage_status("validation")
 
     merge_ready = merge_status in {"success", "skipped"}
     validation_ready = False

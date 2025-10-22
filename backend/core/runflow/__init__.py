@@ -425,20 +425,33 @@ async def runflow_barriers_watchdog(sid: str) -> None:
     if not sid or not _UMBRELLA_BARRIERS_ENABLED:
         return
 
+    normalized_sid = str(sid).strip()
+    if not normalized_sid:
+        return
+
     interval = _watchdog_interval_seconds()
     if interval <= 0:
         return
 
+    base_dir = RUNS_ROOT / normalized_sid
+    runflow_path = base_dir / "runflow.json"
+
     while True:
         try:
-            result = runflow_barriers_refresh(sid)
+            runflow_barriers_refresh(normalized_sid)
         except Exception:  # pragma: no cover - defensive logging
             _LOG.debug(
-                "[Runflow] Watchdog refresh failed sid=%s", sid, exc_info=True
+                "[Runflow] Watchdog refresh failed sid=%s", normalized_sid, exc_info=True
             )
-            result = None
 
-        if isinstance(result, Mapping) and bool(result.get("all_ready")):
+        runflow_payload = _load_json_mapping(runflow_path)
+        ready = False
+        if isinstance(runflow_payload, Mapping):
+            barriers_payload = runflow_payload.get("umbrella_barriers")
+            if isinstance(barriers_payload, Mapping):
+                ready = bool(barriers_payload.get("all_ready"))
+
+        if ready:
             break
 
         try:

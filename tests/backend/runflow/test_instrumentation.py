@@ -113,8 +113,18 @@ def test_runflow_steps_and_events(tmp_path, monkeypatch):
 
         end_events = [event for event in events if event.get("event") == "end"]
         assert len(end_events) == 1
-        assert end_events[0]["status"] == "success"
-        assert end_events[0]["summary"] == {"accounts_seen": 4}
+        end_event = end_events[0]
+        assert end_event["status"] == "success"
+        assert end_event["summary"] == {"accounts_seen": 4}
+        assert end_event["sid"] == sid
+        assert end_event["t"] == end_event["ts"]
+        assert end_event["counters"] == {}
+        assert end_event["umbrella_barriers"] == {
+            "merge_ready": False,
+            "validation_ready": False,
+            "review_ready": False,
+            "all_ready": False,
+        }
 
         step_events = [event for event in events if event.get("step") == "load_cases"]
         # load_cases is emitted twice, once per update
@@ -483,6 +493,15 @@ def test_runflow_atomic_writes_and_event_appends(tmp_path, monkeypatch):
         assert end_event["event"] == "end"
         assert end_event["summary"] == {"accounts_seen": 1}
         assert end_event["status"] == "success"
+        assert end_event["sid"] == sid
+        assert end_event["t"] == end_event["ts"]
+        assert end_event["counters"] == {}
+        assert end_event["umbrella_barriers"] == {
+            "merge_ready": False,
+            "validation_ready": False,
+            "review_ready": False,
+            "all_ready": False,
+        }
     finally:
         monkeypatch.delenv("RUNS_ROOT", raising=False)
         monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)

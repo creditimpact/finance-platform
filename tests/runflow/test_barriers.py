@@ -170,7 +170,11 @@ def test_record_stage_updates_barriers_without_instrumentation(tmp_path, monkeyp
             sid,
             "merge",
             status="success",
-            counts={"scored_pairs": 1, "result_files": 1},
+            counts={
+                "pairs_scored": 1,
+                "packs_created": 1,
+                "result_files": 1,
+            },
             empty_ok=False,
             runs_root=tmp_path,
         )
@@ -183,6 +187,11 @@ def test_record_stage_updates_barriers_without_instrumentation(tmp_path, monkeyp
         assert umbrella["validation_ready"] is False
         assert umbrella["review_ready"] is False
         assert payload["umbrella_ready"] is False
+        merge_stage = payload["stages"]["merge"]
+        summary = merge_stage["summary"]
+        assert summary["pairs_scored"] == 1
+        assert summary["packs_created"] == 1
+        assert summary["result_files"] == 1
         assert not (run_dir / "runflow_steps.json").exists()
     finally:
         monkeypatch.delenv("RUNS_ROOT", raising=False)
@@ -190,6 +199,44 @@ def test_record_stage_updates_barriers_without_instrumentation(tmp_path, monkeyp
         monkeypatch.delenv("UMBRELLA_BARRIERS_LOG", raising=False)
         monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)
         monkeypatch.delenv("RUNFLOW_EVENTS", raising=False)
+        _reload_runflow()
+
+
+def test_reconcile_barriers_honors_legacy_result_files(tmp_path, monkeypatch):
+    sid = "merge-legacy"
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("UMBRELLA_BARRIERS_ENABLED", "1")
+    monkeypatch.setenv("UMBRELLA_BARRIERS_LOG", "0")
+    _reload_runflow()
+
+    try:
+        run_dir = tmp_path / sid
+        stages = {
+            "merge": {
+                "status": "success",
+                "result_files": 2,
+            }
+        }
+        _prepare_runflow_files(run_dir, stages=stages)
+
+        import backend.runflow.decider as decider
+
+        importlib.reload(decider)
+
+        decider.reconcile_umbrella_barriers(sid, runs_root=tmp_path)
+
+        payload = _load_runflow_payload(run_dir)
+        umbrella = payload["umbrella_barriers"]
+
+        assert umbrella["merge_ready"] is True
+        assert umbrella["validation_ready"] is False
+        assert umbrella["review_ready"] is False
+        assert umbrella["all_ready"] is False
+        assert payload["umbrella_ready"] is False
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_LOG", raising=False)
         _reload_runflow()
 
 

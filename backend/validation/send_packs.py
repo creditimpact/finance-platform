@@ -19,12 +19,16 @@ from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 from jsonschema import Draft7Validator
 
+from backend.ai.validation_index import ValidationPackIndexWriter
 from backend.ai.manifest import (
     StageManifestPaths,
     extract_stage_manifest_paths,
 )
 from backend.analytics.analytics_tracker import emit_counter
-from backend.core.runflow import record_validation_results_summary
+from backend.core.runflow import (
+    record_validation_results_summary,
+    runflow_barriers_refresh,
+)
 from backend.core.ai.paths import (
     validation_result_error_filename_for_account,
     validation_result_json_filename_for_account,
@@ -37,6 +41,10 @@ from backend.core.logic.validation_field_sets import (
     ALL_VALIDATION_FIELDS,
     ALWAYS_INVESTIGATABLE_FIELDS,
     CONDITIONAL_FIELDS,
+)
+from backend.runflow.decider import (
+    reconcile_umbrella_barriers,
+    refresh_validation_stage_from_index,
 )
 from backend.validation.index_schema import (
     ValidationIndex,
@@ -1662,6 +1670,9 @@ class ValidationPackSender:
                 "VALIDATION_JSON_ENVELOPE_DISABLED env_flag=true -> forcing jsonl-only"
             )
         self._write_json_envelope = validation_write_json_enabled()
+        self._runs_root = self._infer_runs_root()
+        self._index_writer: ValidationPackIndexWriter | None = None
+        self._stage_promotion_logged = False
 
     def _log_run_summary(
         self,
@@ -2304,6 +2315,7 @@ class ValidationPackSender:
             failed=error_count,
             pending=pending_accounts,
         )
+        self._refresh_validation_progress()
         return results
 
     # ------------------------------------------------------------------
@@ -2754,6 +2766,7 @@ class ValidationPackSender:
             "decision_counts": decision_metrics,
             "model_requests": model_requests,
         }
+        completed_at = _utc_now()
         jsonl_path, summary_path = self._write_results(
             account_int,
             result_lines,
@@ -2778,7 +2791,7 @@ class ValidationPackSender:
             "model": self.model,
             "request_lines": model_requests,
             "results": result_lines,
-            "completed_at": _utc_now(),
+            "completed_at": completed_at,
         }
         if error_message:
             summary_payload["error"] = error_message
@@ -2804,6 +2817,15 @@ class ValidationPackSender:
             status,
             len(result_lines),
             duration,
+        )
+        self._record_index_result(
+            pack_path=pack_path,
+            status=status,
+            error=error_message,
+            request_lines=model_requests,
+            result_path=summary_path,
+            line_count=len(result_lines),
+            completed_at=completed_at,
         )
         return summary_payload
 
@@ -2844,6 +2866,7 @@ class ValidationPackSender:
 
         summary_display_value: str
         if finalize:
+            completed_at = _utc_now()
             jsonl_path, summary_path = self._write_results(
                 account_id,
                 [],
@@ -2856,6 +2879,7 @@ class ValidationPackSender:
             )
             summary_display_value = result_target_display or summary_path.name
         else:
+            completed_at = _utc_now()
             tmp_jsonl = self._ensure_incomplete_placeholder(jsonl_path)
             summary_display_value = result_target_display or jsonl_path.name
             summary_absolute: str
@@ -2896,7 +2920,7 @@ class ValidationPackSender:
             "model": self.model,
             "request_lines": 0,
             "results": [],
-            "completed_at": _utc_now(),
+            "completed_at": completed_at,
             "error": error,
         }
         metrics_payload = {
@@ -2919,6 +2943,15 @@ class ValidationPackSender:
             "send_account_metrics",
             account_id=f"{account_id:03d}",
             **metrics_payload,
+        )
+        self._record_index_result(
+            pack_path=pack_path,
+            status="error",
+            error=error,
+            request_lines=0,
+            result_path=None,
+            line_count=0,
+            completed_at=completed_at,
         )
         return summary_payload
 
@@ -3842,6 +3875,177 @@ class ValidationPackSender:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    def _infer_runs_root(self) -> Path | None:
+        try:
+            resolved = self._index.index_path.resolve()
+        except OSError:
+            resolved = self._index.index_path
+
+        sid = str(self.sid or "")
+        run_dir: Path | None = None
+        for parent in resolved.parents:
+            if parent.name == sid:
+                run_dir = parent
+                break
+
+        if run_dir is None:
+            parents = list(resolved.parents)
+            if len(parents) >= 3:
+                run_dir = parents[2]
+
+        if run_dir is None:
+            return None
+
+        return run_dir.parent
+
+    def _get_index_writer(self) -> ValidationPackIndexWriter | None:
+        if self._index_writer is not None:
+            return self._index_writer
+
+        try:
+            writer = ValidationPackIndexWriter(
+                sid=self.sid,
+                index_path=self._index.index_path,
+                packs_dir=self._index.packs_dir_path,
+                results_dir=self._index.results_dir_path,
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "VALIDATION_INDEX_WRITER_INIT_FAILED sid=%s index=%s",
+                self.sid,
+                str(self._index.index_path),
+                exc_info=True,
+            )
+            return None
+
+        self._index_writer = writer
+        return writer
+
+    def _load_validation_stage_status(self) -> str | None:
+        base_root = self._runs_root or Path("runs")
+        run_dir = base_root / str(self.sid)
+        runflow_path = run_dir / "runflow.json"
+        try:
+            raw = runflow_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+        except OSError:  # pragma: no cover - defensive logging
+            log.warning(
+                "VALIDATION_STAGE_STATUS_READ_FAILED sid=%s path=%s",
+                self.sid,
+                str(runflow_path),
+                exc_info=True,
+            )
+            return None
+
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+
+        stages = payload.get("stages")
+        if not isinstance(stages, Mapping):
+            return None
+
+        validation_stage = stages.get("validation")
+        if not isinstance(validation_stage, Mapping):
+            return None
+
+        status_value = validation_stage.get("status")
+        if isinstance(status_value, str):
+            normalized = status_value.strip().lower()
+            return normalized or None
+        return None
+
+    def _refresh_validation_progress(self) -> None:
+        try:
+            runflow_barriers_refresh(self.sid)
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "VALIDATION_BARRIERS_REFRESH_FAILED sid=%s",
+                self.sid,
+                exc_info=True,
+            )
+
+        try:
+            refresh_validation_stage_from_index(
+                self.sid, runs_root=self._runs_root
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "VALIDATION_STAGE_REFRESH_FAILED sid=%s",
+                self.sid,
+                exc_info=True,
+            )
+        else:
+            if not self._stage_promotion_logged:
+                status = self._load_validation_stage_status()
+                if status == "success":
+                    log.info(
+                        "VALIDATION_STAGE_PROMOTED sid=%s status=%s",
+                        self.sid,
+                        status,
+                    )
+                    self._stage_promotion_logged = True
+
+        try:
+            reconcile_umbrella_barriers(self.sid, runs_root=self._runs_root)
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "VALIDATION_BARRIERS_RECONCILE_FAILED sid=%s",
+                self.sid,
+                exc_info=True,
+            )
+
+    def _record_index_result(
+        self,
+        *,
+        pack_path: Path,
+        status: str,
+        error: str | None,
+        request_lines: int | None,
+        result_path: Path | None,
+        line_count: int,
+        completed_at: str | None,
+    ) -> None:
+        normalized_status = str(status or "").strip().lower()
+        if normalized_status in {"", "skipped"}:
+            return
+
+        if normalized_status not in {"done", "completed", "error", "failed"}:
+            return
+
+        writer = self._get_index_writer()
+        if writer is None:
+            return
+
+        index_status = (
+            "completed" if normalized_status in {"done", "completed"} else "failed"
+        )
+
+        try:
+            writer.record_result(
+                pack_path,
+                status=index_status,
+                error=error if index_status == "failed" else None,
+                request_lines=request_lines,
+                model=self.model,
+                completed_at=completed_at or _utc_now(),
+                result_path=result_path if index_status == "completed" else None,
+                line_count=line_count,
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "VALIDATION_INDEX_RECORD_FAILED sid=%s pack=%s status=%s",
+                self.sid,
+                str(pack_path),
+                index_status,
+                exc_info=True,
+            )
+            return
+
+        self._refresh_validation_progress()
+
     def _iter_pack_lines(
         self, pack_path: Path, *, display_path: str | None = None
     ) -> Iterable[Mapping[str, Any]]:

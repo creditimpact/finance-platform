@@ -12,6 +12,26 @@ which knobs control the output.
 | `runflow_events.jsonl` | Firehose of every event as it happens. Useful for streaming logs and deep forensic work. | Newline-delimited JSON. Each row is a single event. |
 | `runflow_steps.json` | Deterministic story of the run with stages, steps, summaries, and counters. Treat this as the authoritative timeline. | Compact JSON document following the v2.1 schema described below. |
 
+## Quick acceptance checks
+
+Operators can use simple `jq` probes against `runs/<sid>/runflow.json` to confirm
+each stage (and the umbrella orchestrator) has reached a healthy terminal
+state. All commands return `true` once their respective conditions are met.
+
+```bash
+# Merge stage confirms success with at least one result file recorded.
+jq '.stages.merge.status=="success" and ((.stages.merge.summary.result_files // .stages.merge.result_files) >= 1)' runs/<sid>/runflow.json
+
+# Validation stage checks that all scheduled results finished processing.
+jq '.stages.validation.status=="success" and (.stages.validation.results.completed == .stages.validation.results.results_total)' runs/<sid>/runflow.json
+
+# Review (frontend) stage verifies all expected answers arrived.
+jq '.stages.frontend.status=="success" and (.stages.frontend.metrics.answers_received == .stages.frontend.metrics.answers_required)' runs/<sid>/runflow.json
+
+# Umbrella orchestrator signals the whole pipeline is ready.
+jq '.umbrella_barriers.all_ready==true and .umbrella_ready==true' runs/<sid>/runflow.json
+```
+
 Both artifacts are safe to regenerate. Steps always include `schema_version` so
 older tooling can continue to parse historical runs.
 

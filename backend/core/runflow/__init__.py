@@ -977,6 +977,73 @@ def runflow_start_stage(
         _STARTED_STAGES.add(key)
 
 
+def _first_int_from_candidates(key: str, *candidates: Any) -> Optional[int]:
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        value = _coerce_int(candidate.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _stage_end_event_counters(
+    stage: str, summary: Optional[Mapping[str, Any]]
+) -> dict[str, Mapping[str, int]]:
+    counters: dict[str, Mapping[str, int]] = {}
+    if not isinstance(summary, Mapping):
+        return counters
+
+    stage_key = str(stage)
+    if stage_key == "merge":
+        result_files = _first_int_from_candidates(
+            "result_files",
+            summary,
+            summary.get("results"),
+        )
+        if result_files is not None:
+            counters["merge"] = {"result_files": result_files}
+        return counters
+
+    if stage_key == "validation":
+        results_candidate = summary.get("results")
+        results_payload = results_candidate if isinstance(results_candidate, Mapping) else None
+        payload: dict[str, int] = {}
+        for key in ("results_total", "completed", "failed"):
+            value = _first_int_from_candidates(key, summary, results_payload)
+            if value is not None:
+                payload[key] = value
+        if payload:
+            counters["validation"] = payload
+        return counters
+
+    if stage_key == "frontend":
+        metrics_candidate = summary.get("metrics")
+        metrics_payload = metrics_candidate if isinstance(metrics_candidate, Mapping) else None
+        payload: dict[str, int] = {}
+        for key in ("answers_required", "answers_received"):
+            value = _first_int_from_candidates(key, summary, metrics_payload)
+            if value is not None:
+                payload[key] = value
+        if payload:
+            counters["frontend"] = payload
+        return counters
+
+    return counters
+
+
+def _normalize_barrier_flags(barriers: Optional[Mapping[str, Any]]) -> dict[str, bool]:
+    keys = ("merge_ready", "validation_ready", "review_ready", "all_ready")
+    result: dict[str, bool] = {}
+    for key in keys:
+        value = False
+        if isinstance(barriers, Mapping) and key in barriers:
+            raw = barriers.get(key)
+            value = bool(raw)
+        result[key] = value
+    return result
+
+
 def runflow_end_stage(
     sid: str,
     stage: str,
@@ -1006,7 +1073,18 @@ def runflow_end_stage(
             )
 
         if events_enabled:
-            event: dict[str, Any] = {"ts": ts, "stage": stage, "event": "end", "status": status}
+            counters_payload = _stage_end_event_counters(stage, summary)
+            barrier_flags = _normalize_barrier_flags(barriers)
+            event: dict[str, Any] = {
+                "ts": ts,
+                "t": ts,
+                "sid": str(sid),
+                "stage": stage,
+                "event": "end",
+                "status": status,
+                "counters": counters_payload,
+                "umbrella_barriers": barrier_flags,
+            }
             if summary:
                 event["summary"] = {str(k): v for k, v in summary.items()}
             if barriers:

@@ -8,7 +8,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Literal, Mapping, Optional
+from typing import Any, Dict, Literal, Mapping, Optional, Sequence
 
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.runflow import (
@@ -64,6 +64,10 @@ def _review_attachment_required() -> bool:
 
 def _validation_autosend_enabled() -> bool:
     return _env_enabled("VALIDATION_AUTOSEND", True)
+
+
+def _merge_required() -> bool:
+    return _env_enabled("MERGE_REQUIRED", True)
 
 
 def _barrier_event_logging_enabled() -> bool:
@@ -749,26 +753,25 @@ def _validation_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
         status = getattr(record, "status", "")
         normalized_status = status.strip().lower() if isinstance(status, str) else ""
 
-        if normalized_status == "completed":
-            if not _validation_record_has_results(
-                index, record, results_override=results_override
-            ):
-                log.warning(
-                    "RUNFLOW_VALIDATION_RESULT_MISSING account_id=%s",
-                    getattr(record, "account_id", "unknown"),
-                )
-                ready = False
-                continue
-
-            completed += 1
-        elif normalized_status == "failed":
+        if normalized_status in {"failed", "error"}:
             failed += 1
             ready = False
-        else:
+            continue
+
+        if not _validation_record_has_results(
+            index, record, results_override=results_override
+        ):
+            log.warning(
+                "RUNFLOW_VALIDATION_RESULT_MISSING account_id=%s",
+                getattr(record, "account_id", "unknown"),
+            )
             ready = False
+            continue
+
+        completed += 1
 
     if total == 0:
-        return (0, 0, 0, False)
+        return (0, 0, 0, True)
 
     ready = ready and completed == total
     return (total, completed, failed, ready)
@@ -781,6 +784,9 @@ def _validation_stage_ready(
 
     if total > 0:
         return ready and completed == total
+
+    if ready:
+        return True
 
     if not isinstance(validation_stage, Mapping):
         return False
@@ -830,12 +836,105 @@ def _frontend_responses_progress(run_dir: Path) -> tuple[int, int, bool]:
     required = _coerce_int(counters.get("answers_required")) or 0
     answered = _coerce_int(counters.get("answers_received")) or 0
     ready = answered == required
+    if required == 0:
+        ready = True
     return (required, answered, ready)
 
 
 def _review_responses_ready(run_dir: Path) -> bool:
     _, _, ready = _frontend_responses_progress(run_dir)
     return ready
+
+
+def _stage_empty_ok(stage_info: Mapping[str, Any] | None) -> bool:
+    if not isinstance(stage_info, Mapping):
+        return False
+
+    empty_ok_value = stage_info.get("empty_ok")
+    if isinstance(empty_ok_value, bool):
+        return empty_ok_value
+    if isinstance(empty_ok_value, (int, float)):
+        return bool(empty_ok_value)
+
+    summary_payload = stage_info.get("summary")
+    if isinstance(summary_payload, Mapping):
+        summary_empty = summary_payload.get("empty_ok")
+        if isinstance(summary_empty, bool):
+            return summary_empty
+        if isinstance(summary_empty, (int, float)):
+            return bool(summary_empty)
+
+    return False
+
+
+def _merge_artifacts_progress(
+    run_dir: Path,
+) -> tuple[int, int, Optional[int], bool]:
+    merge_dir = run_dir / "ai_packs" / "merge"
+    results_dir = merge_dir / "results"
+    packs_dir = merge_dir / "packs"
+
+    try:
+        result_files_total = sum(
+            1 for path in results_dir.rglob("*.result.json") if path.is_file()
+        )
+    except OSError:
+        result_files_total = 0
+
+    try:
+        pack_files_total = sum(
+            1 for path in packs_dir.glob("pair_*.jsonl") if path.is_file()
+        )
+    except OSError:
+        pack_files_total = 0
+
+    expected_total: Optional[int] = None
+    index_path = merge_dir / "pairs_index.json"
+    index_payload = _load_json_mapping(index_path)
+    if isinstance(index_payload, Mapping):
+        totals_payload = index_payload.get("totals")
+        if isinstance(totals_payload, Mapping):
+            candidates = [
+                _coerce_int(totals_payload.get(key))
+                for key in ("created_packs", "packs_built", "total_packs")
+            ]
+            expected_candidates = [value for value in candidates if value is not None]
+            if expected_candidates:
+                expected_total = max(expected_candidates)
+
+        if expected_total is None:
+            fallback_candidates = [
+                _coerce_int(index_payload.get(key))
+                for key in ("created_packs", "packs_built", "pack_count")
+            ]
+            fallback_values = [value for value in fallback_candidates if value is not None]
+            if fallback_values:
+                expected_total = max(fallback_values)
+
+        if expected_total is None:
+            pairs_payload = index_payload.get("pairs")
+            if isinstance(pairs_payload, Sequence):
+                expected_total = len(pairs_payload)
+
+    ready = False
+
+    if expected_total == 0:
+        ready = True
+    else:
+        ready = result_files_total == pack_files_total
+        if expected_total is not None:
+            ready = ready and result_files_total == expected_total
+
+    if (
+        not ready
+        and result_files_total == 0
+        and pack_files_total == 0
+        and expected_total is None
+        and not _merge_required()
+    ):
+        ready = True
+
+    return (result_files_total, pack_files_total, expected_total, ready)
 
 
 def _compute_umbrella_barriers(run_dir: Path) -> dict[str, bool]:
@@ -875,32 +974,72 @@ def _compute_umbrella_barriers(run_dir: Path) -> dict[str, bool]:
         return None
 
     merge_stage = _stage_mapping("merge")
+    merge_empty_ok = _stage_empty_ok(merge_stage)
+    merge_stage_result_files: Optional[int] = None
     merge_ready = False
     if _stage_status_success(merge_stage):
         result_files = _summary_value(merge_stage, "result_files")
         if result_files is None and isinstance(merge_stage, Mapping):
             result_files = _coerce_int(merge_stage.get("result_files"))
-        merge_ready = (result_files or 0) >= 1
+        if result_files is None and merge_empty_ok:
+            result_files = 0
+        merge_stage_result_files = result_files
+        if merge_empty_ok:
+            merge_ready = True
+        elif result_files is not None:
+            merge_ready = result_files >= 1
+
+    (
+        merge_disk_result_files,
+        _merge_disk_pack_files,
+        _merge_expected,
+        merge_ready_disk,
+    ) = _merge_artifacts_progress(run_dir)
+    if merge_ready_disk:
+        merge_ready = True
+    elif merge_ready:
+        if merge_stage_result_files is None:
+            merge_ready = merge_empty_ok and merge_disk_result_files == 0
+        else:
+            merge_ready = merge_stage_result_files == merge_disk_result_files
 
     validation_stage = _stage_mapping("validation")
-    validation_ready = False
-    if _stage_status_success(validation_stage):
+    validation_total, validation_completed, _validation_failed, validation_ready_disk = (
+        _validation_results_progress(run_dir)
+    )
+    if validation_total > 0:
+        validation_ready_disk = validation_ready_disk and (
+            validation_completed == validation_total
+        )
+    validation_ready = validation_ready_disk
+    if not validation_ready and _stage_status_success(validation_stage):
         results_payload = validation_stage.get("results")
         if isinstance(results_payload, Mapping):
             completed = _coerce_int(results_payload.get("completed"))
             total = _coerce_int(results_payload.get("results_total"))
-            if completed is not None and total is not None:
-                validation_ready = completed == total
+            if completed is not None and total is not None and completed == total:
+                validation_ready = True
+        if not validation_ready and _stage_empty_ok(validation_stage):
+            validation_ready = True
 
     frontend_stage = _stage_mapping("frontend")
+    review_required, review_received, review_ready_disk = _frontend_responses_progress(
+        run_dir
+    )
+    has_frontend_stage = isinstance(frontend_stage, Mapping)
+    review_disk_evidence = review_required > 0 or review_received > 0
     review_ready = False
-    if _stage_status_success(frontend_stage):
+    if has_frontend_stage or review_disk_evidence:
+        review_ready = review_ready_disk and review_received >= review_required
+    if not review_ready and _stage_status_success(frontend_stage):
         metrics_payload = frontend_stage.get("metrics")
         if isinstance(metrics_payload, Mapping):
             required = _coerce_int(metrics_payload.get("answers_required"))
             received = _coerce_int(metrics_payload.get("answers_received"))
-            if required is not None and received is not None:
-                review_ready = received == required
+            if required is not None and received is not None and received == required:
+                review_ready = True
+        if not review_ready and _stage_empty_ok(frontend_stage):
+            review_ready = True
 
     all_ready = merge_ready and validation_ready and review_ready
 

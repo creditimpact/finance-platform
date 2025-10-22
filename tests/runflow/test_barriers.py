@@ -460,6 +460,169 @@ def test_review_readiness_updates_when_response_arrives(tmp_path, monkeypatch):
         _reload_runflow()
 
 
+def test_validation_zero_packs_marks_ready(tmp_path, monkeypatch):
+    sid = "validation-empty"
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("UMBRELLA_BARRIERS_ENABLED", "1")
+    monkeypatch.setenv("UMBRELLA_BARRIERS_LOG", "0")
+    _ensure_requests_stub(monkeypatch)
+    _reload_runflow()
+
+    try:
+        index_dir = tmp_path / sid / "ai_packs" / "validation"
+        index_dir.mkdir(parents=True, exist_ok=True)
+        index_payload = {
+            "schema_version": 2,
+            "sid": sid,
+            "root": ".",
+            "packs_dir": "packs",
+            "results_dir": "results",
+            "packs": [],
+        }
+        _write_json(index_dir / "index.json", index_payload)
+
+        import backend.runflow.decider as decider
+
+        importlib.reload(decider)
+
+        decider.refresh_validation_stage_from_index(sid, runs_root=tmp_path)
+        decider.reconcile_umbrella_barriers(sid, runs_root=tmp_path)
+
+        run_dir = tmp_path / sid
+        payload = _load_runflow_payload(run_dir)
+        validation_stage = payload["stages"]["validation"]
+        assert validation_stage["status"] == "success"
+        summary = validation_stage["summary"]
+        assert summary["results_total"] == 0
+        assert summary["completed"] == 0
+        assert summary["empty_ok"] is True
+        umbrella = payload["umbrella_barriers"]
+        assert umbrella["validation_ready"] is True
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_LOG", raising=False)
+        _reload_runflow()
+
+
+def test_validation_results_ready_for_built_status(tmp_path, monkeypatch):
+    sid = "validation-built"
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("UMBRELLA_BARRIERS_ENABLED", "1")
+    monkeypatch.setenv("UMBRELLA_BARRIERS_LOG", "0")
+    _ensure_requests_stub(monkeypatch)
+    _reload_runflow()
+
+    try:
+        run_dir = tmp_path / sid
+        validation_dir = run_dir / "ai_packs" / "validation"
+        results_dir = validation_dir / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        result_filename = "idx-001.result.jsonl"
+        (results_dir / result_filename).write_text("{}", encoding="utf-8")
+
+        index_payload = {
+            "schema_version": 2,
+            "sid": sid,
+            "root": ".",
+            "packs_dir": "packs",
+            "results_dir": "results",
+            "packs": [
+                {
+                    "account_id": 1,
+                    "pack": "packs/idx-001.json",
+                    "result_json": f"results/{result_filename}",
+                    "result_jsonl": f"results/{result_filename}",
+                    "status": "built",
+                    "lines": 0,
+                }
+            ],
+        }
+        _write_json(validation_dir / "index.json", index_payload)
+
+        import backend.runflow.decider as decider
+
+        importlib.reload(decider)
+
+        decider.refresh_validation_stage_from_index(sid, runs_root=tmp_path)
+        decider.reconcile_umbrella_barriers(sid, runs_root=tmp_path)
+
+        payload = _load_runflow_payload(run_dir)
+        validation_stage = payload["stages"]["validation"]
+        assert validation_stage["status"] == "success"
+        summary = validation_stage["summary"]
+        assert summary["results_total"] == 1
+        assert summary["completed"] == 1
+        umbrella = payload["umbrella_barriers"]
+        assert umbrella["validation_ready"] is True
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_LOG", raising=False)
+        _reload_runflow()
+
+
+def test_frontend_zero_required_marks_ready(tmp_path, monkeypatch):
+    sid = "frontend-empty"
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("UMBRELLA_BARRIERS_ENABLED", "1")
+    monkeypatch.setenv("UMBRELLA_BARRIERS_LOG", "0")
+    _ensure_requests_stub(monkeypatch)
+    _reload_runflow()
+
+    try:
+        import backend.runflow.decider as decider
+
+        importlib.reload(decider)
+
+        decider.refresh_frontend_stage_from_responses(sid, runs_root=tmp_path)
+        decider.reconcile_umbrella_barriers(sid, runs_root=tmp_path)
+
+        run_dir = tmp_path / sid
+        payload = _load_runflow_payload(run_dir)
+        frontend_stage = payload["stages"]["frontend"]
+        assert frontend_stage["status"] == "success"
+        summary = frontend_stage["summary"]
+        assert summary["answers_required"] == 0
+        assert summary["answers_received"] == 0
+        assert summary["empty_ok"] is True
+        umbrella = payload["umbrella_barriers"]
+        assert umbrella["review_ready"] is True
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_LOG", raising=False)
+        _reload_runflow()
+
+
+def test_merge_not_required_without_artifacts_marks_ready(tmp_path, monkeypatch):
+    sid = "merge-optional"
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("UMBRELLA_BARRIERS_ENABLED", "1")
+    monkeypatch.setenv("UMBRELLA_BARRIERS_LOG", "0")
+    monkeypatch.setenv("MERGE_REQUIRED", "0")
+    _ensure_requests_stub(monkeypatch)
+    _reload_runflow()
+
+    try:
+        import backend.runflow.decider as decider
+
+        importlib.reload(decider)
+
+        statuses = decider.reconcile_umbrella_barriers(sid, runs_root=tmp_path)
+        assert statuses["merge_ready"] is True
+
+        payload = _load_runflow_payload(tmp_path / sid)
+        umbrella = payload["umbrella_barriers"]
+        assert umbrella["merge_ready"] is True
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_LOG", raising=False)
+        monkeypatch.delenv("MERGE_REQUIRED", raising=False)
+        _reload_runflow()
+
+
 def test_document_barrier_flag_emitted_when_enabled(tmp_path, monkeypatch):
     sid = "documents-enabled"
     monkeypatch.setenv("RUNS_ROOT", str(tmp_path))

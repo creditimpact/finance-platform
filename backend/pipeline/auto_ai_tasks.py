@@ -37,13 +37,13 @@ from backend.core.runflow import runflow_barriers_refresh, runflow_step
 from backend.core.runflow.io import (
     compose_hint,
     format_exception_tail,
-    runflow_stage_end,
     runflow_stage_error,
     runflow_stage_start,
 )
 from backend.runflow.decider import (
     StageStatus,
     decide_next,
+    finalize_merge_stage,
     record_stage,
     reconcile_umbrella_barriers,
 )
@@ -957,57 +957,31 @@ def _finalize_stage(payload: dict[str, object]) -> dict[str, object]:
         payload.get("polarity_processed"),
     )
 
-    disk_created_packs: int | None = None
-    if runs_root_path is not None:
-        try:
-            merge_paths = ensure_merge_paths(runs_root_path, sid, create=False)
-        except Exception:  # pragma: no cover - defensive logging
-            logger.debug(
-                "AUTO_AI_PACK_COUNT_FAILED sid=%s runs_root=%s",
-                sid,
-                runs_root_path,
-                exc_info=True,
-            )
-        else:
-            packs_dir = merge_paths.packs_dir
-            if packs_dir.is_dir():
-                disk_created_packs = sum(
-                    1 for entry in packs_dir.glob("*.jsonl") if entry.is_file()
-                )
-            else:
-                disk_created_packs = 0
-
-    created_packs_value = (
-        disk_created_packs
-        if disk_created_packs is not None
-        else int(payload.get("created_packs", payload.get("packs", 0)) or 0)
-    )
     skip_reason = payload.get("skip_reason")
-    scored_pairs_value = int(payload.get("merge_scored_pairs", 0) or 0)
-    status_value = "success"
-    if isinstance(skip_reason, str) and skip_reason:
-        status_value = "skipped"
+    if isinstance(skip_reason, str):
+        skip_reason = skip_reason.strip()
+    else:
+        skip_reason = None
 
-    empty_ok = False
-    if status_value != "error":
-        if created_packs_value == 0:
-            empty_ok = True
-        elif scored_pairs_value == 0:
-            empty_ok = True
-
-    summary_payload: dict[str, Any] = {
-        "pairs_scored": scored_pairs_value,
-        "packs_created": created_packs_value,
-        "empty_ok": bool(empty_ok),
-    }
-
-    runflow_stage_end(
-        "merge",
-        sid=sid,
-        status=status_value,
-        summary=summary_payload,
-        empty_ok=empty_ok,
+    snapshot = finalize_merge_stage(
+        sid,
+        runs_root=runs_root_path,
+        notes=skip_reason if skip_reason else None,
     )
+
+    counts = snapshot.get("counts", {})
+    metrics = snapshot.get("metrics", {})
+
+    if "packs_created" in counts:
+        payload["packs"] = counts["packs_created"]
+        payload["created_packs"] = counts["packs_created"]
+    if "pairs_scored" in counts:
+        payload["merge_scored_pairs"] = counts["pairs_scored"]
+    elif "scored_pairs" in metrics:
+        payload["merge_scored_pairs"] = metrics["scored_pairs"]
+    if "result_files" in counts:
+        payload["merge_result_files"] = counts["result_files"]
+    payload["merge_empty_ok"] = bool(snapshot.get("empty_ok"))
 
     return payload
 

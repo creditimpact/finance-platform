@@ -354,6 +354,123 @@ def record_stage(
     return data
 
 
+def finalize_merge_stage(
+    sid: str,
+    *,
+    runs_root: Optional[str | Path] = None,
+    notes: Optional[str] = None,
+) -> dict[str, Any]:
+    """Mark the merge stage as complete using authoritative on-disk data."""
+
+    base_root = _resolve_runs_root(runs_root)
+    base_dir = base_root / sid
+    merge_dir = base_dir / "ai_packs" / "merge"
+
+    index_path = merge_dir / "pairs_index.json"
+    index_payload = _load_json_mapping(index_path)
+    if not isinstance(index_payload, Mapping):
+        index_payload = {}
+
+    totals_payload = index_payload.get("totals")
+    totals = dict(totals_payload) if isinstance(totals_payload, Mapping) else {}
+
+    def _maybe_int(value: Any) -> Optional[int]:
+        coerced = _coerce_int(value)
+        return coerced if coerced is not None else None
+
+    metrics: dict[str, int] = {}
+    for key in (
+        "scored_pairs",
+        "matches_strong",
+        "matches_weak",
+        "conflicts",
+        "skipped",
+        "packs_built",
+        "created_packs",
+        "topn_limit",
+        "normalized_accounts",
+    ):
+        coerced = _maybe_int(totals.get(key))
+        if coerced is not None:
+            metrics[key] = coerced
+
+    if "scored_pairs" not in metrics:
+        fallback_scored = _maybe_int(index_payload.get("scored_pairs"))
+        if fallback_scored is not None:
+            metrics["scored_pairs"] = fallback_scored
+    if "created_packs" not in metrics:
+        fallback_created = _maybe_int(index_payload.get("created_packs"))
+        if fallback_created is not None:
+            metrics["created_packs"] = fallback_created
+
+    pairs_payload = index_payload.get("pairs")
+    if isinstance(pairs_payload, list):
+        metrics["pairs_index_entries"] = len(pairs_payload)
+        if "created_packs" not in metrics:
+            metrics["created_packs"] = len(pairs_payload)
+
+    results_dir = merge_dir / "results"
+    try:
+        result_files_total = sum(
+            1 for path in results_dir.rglob("*.result.json") if path.is_file()
+        )
+    except OSError:
+        result_files_total = 0
+
+    metrics["result_files"] = result_files_total
+
+    packs_dir = merge_dir / "packs"
+    try:
+        pack_files_total = sum(
+            1 for path in packs_dir.glob("pair_*.jsonl") if path.is_file()
+        )
+    except OSError:
+        pack_files_total = 0
+
+    metrics["pack_files"] = pack_files_total
+
+    scored_pairs_value = metrics.get("scored_pairs")
+    if scored_pairs_value is None:
+        scored_pairs_value = 0
+        metrics["scored_pairs"] = 0
+
+    existing_created = metrics.get("created_packs")
+    candidate_created = [result_files_total, pack_files_total]
+    if isinstance(existing_created, int):
+        candidate_created.append(existing_created)
+    created_packs_value = max(candidate_created)
+    metrics["created_packs"] = created_packs_value
+
+    counts: dict[str, int] = {
+        "pairs_scored": scored_pairs_value,
+        "packs_created": created_packs_value,
+        "result_files": result_files_total,
+    }
+
+    empty_ok = created_packs_value == 0 or scored_pairs_value == 0
+
+    results_payload = {"result_files": result_files_total}
+
+    record_stage(
+        sid,
+        "merge",
+        status="success",
+        counts=counts,
+        empty_ok=empty_ok,
+        metrics=metrics,
+        results=results_payload,
+        runs_root=base_root,
+        notes=notes,
+    )
+
+    return {
+        "counts": counts,
+        "metrics": metrics,
+        "results": results_payload,
+        "empty_ok": empty_ok,
+    }
+
+
 def _load_json_mapping(path: Path) -> Mapping[str, Any] | None:
     try:
         raw = path.read_text(encoding="utf-8")

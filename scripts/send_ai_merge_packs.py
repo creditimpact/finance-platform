@@ -56,6 +56,7 @@ from backend.core.logic.report_analysis.account_merge import (
 from backend.core.logic.summary_compact import compact_merge_sections
 from backend.core.merge.acctnum import normalize_level
 from backend.core.runflow import runflow_step
+from backend.runflow.decider import finalize_merge_stage
 from backend.pipeline.runs import RunManifest, persist_manifest
 
 log = logging.getLogger(__name__)
@@ -1438,6 +1439,13 @@ def main(argv: Sequence[str] | None = None) -> None:
             persist_manifest(manifest)
             log.info("MANIFEST_AI_COMPACTED sid=%s", sid)
             log.info("TAGS_COMPACTED sid=%s", sid)
+
+        try:
+            finalize_merge_stage(sid, runs_root=runs_root_path)
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "RUNFLOW_MERGE_STAGE_FINALIZE_FAILED sid=%s", sid, exc_info=True
+            )
 
     if failures:
         raise SystemExit(1)

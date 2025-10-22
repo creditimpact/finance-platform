@@ -1151,7 +1151,10 @@ def runflow_step(
                 error=error,
             )
         elif stage == "merge":
-            steps_stage_start(sid, stage, started_at=ts)
+            key = (sid, stage)
+            if key not in _STARTED_STAGES:
+                steps_stage_start(sid, stage, started_at=ts)
+                _STARTED_STAGES.add(key)
 
     if events_enabled:
         event: dict[str, Any] = {

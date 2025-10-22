@@ -878,6 +878,8 @@ def _compute_umbrella_barriers(run_dir: Path) -> dict[str, bool]:
     merge_ready = False
     if _stage_status_success(merge_stage):
         result_files = _summary_value(merge_stage, "result_files")
+        if result_files is None and isinstance(merge_stage, Mapping):
+            result_files = _coerce_int(merge_stage.get("result_files"))
         merge_ready = (result_files or 0) >= 1
 
     validation_stage = _stage_mapping("validation")

@@ -818,6 +818,13 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
     else:
         merge_ready = merge_completed >= merge_expected
 
+    merge_pairs_total = 0 if merge_expected is None else max(int(merge_expected), 0)
+
+    merge_metrics_payload = {
+        "pairs_total": int(merge_pairs_total),
+        "results_written": int(merge_completed),
+    }
+
     all_ready = merge_ready and validation_ready and review_ready
 
     normalized_barriers: dict[str, Any] = {
@@ -895,6 +902,12 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
 
         _update_metrics("validation", validation_metrics_payload)
         _update_metrics("frontend", frontend_metrics_payload)
+        _update_metrics("merge", merge_metrics_payload)
+
+        if merge_ready:
+            merge_stage_entry = _ensure_stage_entry("merge")
+            if merge_stage_entry.get("status") != "success":
+                merge_stage_entry["status"] = "success"
 
         payload_dict["stages"] = stages_dict
         payload_dict["updated_at"] = timestamp

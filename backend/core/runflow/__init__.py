@@ -230,6 +230,9 @@ _WATCHDOG_THREAD: Optional[threading.Thread] = None
 _WATCHDOG_FUTURES: dict[str, Future[Any]] = {}
 _WATCHDOG_LOCK = threading.Lock()
 
+_VALIDATION_AGGREGATE_KEYS = frozenset({"packs_total", "packs_completed", "packs_pending"})
+_REVIEW_AGGREGATE_KEYS = frozenset({"answers_received", "answers_required"})
+
 
 def _append_event(sid: str, row: Mapping[str, Any]) -> None:
     if not _ENABLE_EVENTS:
@@ -275,11 +278,34 @@ def _aggregate_state(sid: str, stage: str) -> dict[str, int]:
     return state.setdefault(stage, {})
 
 
-def _aggregate_set(stage_state: dict[str, int], key: str, value: Any) -> None:
+def _aggregate_prune(stage_state: dict[str, int], allowed_keys: Iterable[str]) -> None:
+    allowed = set(allowed_keys)
+    for key in list(stage_state):
+        if key not in allowed:
+            stage_state.pop(key, None)
+
+
+def _aggregate_set_nonnegative(stage_state: dict[str, int], key: str, value: Any) -> bool:
     try:
-        stage_state[key] = int(value)
+        number = int(value)
     except (TypeError, ValueError):
-        return
+        return False
+    if number < 0:
+        number = 0
+    stage_state[key] = number
+    return True
+
+
+def _aggregate_value(stage_state: Mapping[str, Any], key: str) -> Optional[int]:
+    value = stage_state.get(key)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _write_stage_aggregate(sid: str, stage: str) -> None:
@@ -289,8 +315,53 @@ def _write_stage_aggregate(sid: str, stage: str) -> None:
     stage_state = state.get(stage)
     if not stage_state:
         return
-    ordered = {key: stage_state[key] for key in sorted(stage_state)}
-    steps_update_aggregate(sid, stage, ordered)
+    summary_payload: dict[str, int]
+    if stage == "validation":
+        _aggregate_prune(stage_state, _VALIDATION_AGGREGATE_KEYS)
+        total_value = _aggregate_value(stage_state, "packs_total")
+        completed_value = _aggregate_value(stage_state, "packs_completed")
+        pending_value = _aggregate_value(stage_state, "packs_pending")
+        if total_value is None and completed_value is None and pending_value is None:
+            return
+        total = max(total_value or 0, 0)
+        completed = max(completed_value or 0, 0)
+        if total and completed > total:
+            completed = total
+        if pending_value is None:
+            pending = max(total - completed, 0)
+        else:
+            pending = max(pending_value, 0)
+            if total and pending > total:
+                pending = total
+            if total and pending < total - completed:
+                pending = total - completed
+        stage_state["packs_total"] = total
+        stage_state["packs_completed"] = completed
+        stage_state["packs_pending"] = pending
+        summary_payload = {
+            "packs_total": total,
+            "packs_completed": completed,
+            "packs_pending": pending,
+        }
+    elif stage == "review":
+        _aggregate_prune(stage_state, _REVIEW_AGGREGATE_KEYS)
+        received_value = _aggregate_value(stage_state, "answers_received")
+        required_value = _aggregate_value(stage_state, "answers_required")
+        if received_value is None and required_value is None:
+            return
+        received = max(received_value or 0, 0)
+        required = max(required_value or 0, 0)
+        if required and received > required:
+            received = required
+        stage_state["answers_received"] = received
+        stage_state["answers_required"] = required
+        summary_payload = {
+            "answers_received": received,
+            "answers_required": required,
+        }
+    else:
+        summary_payload = {key: stage_state[key] for key in sorted(stage_state)}
+    steps_update_aggregate(sid, stage, summary_payload)
 
 
 def _clear_stage_aggregate(sid: str, stage: str) -> None:
@@ -1209,10 +1280,25 @@ def record_validation_build_summary(
     normalized = _store_stage_counter(sid, "validation_build", summary)
     if _aggregates_enabled():
         stage_state = _aggregate_state(sid, "validation")
-        _aggregate_set(stage_state, "built", normalized.get("packs_built"))
-        eligible = normalized.get("eligible_accounts")
-        if eligible is not None and "total" not in stage_state:
-            _aggregate_set(stage_state, "total", eligible)
+        _aggregate_prune(stage_state, _VALIDATION_AGGREGATE_KEYS)
+        total_updated = _aggregate_set_nonnegative(
+            stage_state, "packs_total", normalized.get("eligible_accounts")
+        )
+        if not total_updated and "packs_total" not in stage_state:
+            built_value = normalized.get("packs_built")
+            skipped_value = normalized.get("packs_skipped")
+            candidate_total: Optional[int]
+            try:
+                built_int = int(built_value)
+                skipped_int = int(skipped_value)
+            except (TypeError, ValueError):
+                candidate_total = None
+            else:
+                candidate_total = built_int + skipped_int
+            if candidate_total is not None:
+                _aggregate_set_nonnegative(stage_state, "packs_total", candidate_total)
+        _aggregate_set_nonnegative(stage_state, "packs_completed", normalized.get("packs_built"))
+        stage_state.pop("packs_pending", None)
         _write_stage_aggregate(sid, "validation")
     _emit_summary_step(sid, "validation", "build_packs", summary=normalized)
 
@@ -1236,11 +1322,14 @@ def record_validation_results_summary(
         normalized["pending"] = 0
     if _aggregates_enabled():
         stage_state = _aggregate_state(sid, "validation")
-        _aggregate_set(stage_state, "completed", normalized.get("completed"))
-        _aggregate_set(stage_state, "pending", normalized.get("pending"))
-        total_value = normalized.get("results_total")
-        if total_value is not None:
-            _aggregate_set(stage_state, "total", total_value)
+        _aggregate_prune(stage_state, _VALIDATION_AGGREGATE_KEYS)
+        _aggregate_set_nonnegative(stage_state, "packs_total", normalized.get("results_total"))
+        _aggregate_set_nonnegative(stage_state, "packs_completed", normalized.get("completed"))
+        pending_provided = _aggregate_set_nonnegative(
+            stage_state, "packs_pending", normalized.get("pending")
+        )
+        if not pending_provided:
+            stage_state.pop("packs_pending", None)
         _write_stage_aggregate(sid, "validation")
     _emit_summary_step(sid, "validation", "collect_results", summary=normalized)
 
@@ -1277,8 +1366,13 @@ def record_frontend_responses_progress(
     normalized = _store_stage_counter(sid, "frontend_review", summary)
     if _aggregates_enabled():
         stage_state = _aggregate_state(sid, "review")
-        _aggregate_set(stage_state, "answers_received", normalized.get("answers_received"))
-        _aggregate_set(stage_state, "answers_required", normalized.get("answers_required"))
+        _aggregate_prune(stage_state, _REVIEW_AGGREGATE_KEYS)
+        _aggregate_set_nonnegative(
+            stage_state, "answers_received", normalized.get("answers_received")
+        )
+        _aggregate_set_nonnegative(
+            stage_state, "answers_required", normalized.get("answers_required")
+        )
         _write_stage_aggregate(sid, "review")
     _emit_summary_step(sid, "frontend", "responses_progress", summary=normalized)
 

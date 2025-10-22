@@ -760,63 +760,66 @@ def _review_responses_ready(run_dir: Path) -> bool:
 def _compute_umbrella_barriers(run_dir: Path) -> dict[str, bool]:
     runflow_path = run_dir / "runflow.json"
     runflow_payload = _load_json_mapping(runflow_path)
-    runflow_stages = (
+    stages_payload = (
         runflow_payload.get("stages")
         if isinstance(runflow_payload, Mapping)
         else None
     )
 
-    steps_path = run_dir / "runflow_steps.json"
-    steps_payload = _load_json_mapping(steps_path)
-    steps_stages = (
-        steps_payload.get("stages") if isinstance(steps_payload, Mapping) else None
-    )
-
-    def _combined_stage_status(stage_name: str) -> str:
-        status = _stage_status(runflow_stages, stage_name)
-        if status:
-            return status
-        return _stage_status(steps_stages, stage_name)
-
-    merge_stage_info = _get_stage_info(runflow_stages, "merge")
-    if merge_stage_info is None:
-        merge_stage_info = _get_stage_info(steps_stages, "merge")
-    merge_status = (_combined_stage_status("merge") or "").strip().lower()
-    merge_empty_ok = bool(merge_stage_info.get("empty_ok")) if isinstance(
-        merge_stage_info, Mapping
-    ) else False
-
-    counts_from_disk = _stage_counts_from_disk("merge", run_dir)
-    has_disk_counts = any(
-        isinstance(value, (int, float)) and not isinstance(value, bool)
-        for value in counts_from_disk.values()
-    )
-    has_recorded_counts = _stage_has_counters(merge_stage_info) or has_disk_counts
-
-    if merge_status == "error":
-        merge_ready = False
-    elif merge_empty_ok:
-        merge_ready = True
+    if isinstance(stages_payload, Mapping):
+        stages = stages_payload
     else:
-        merge_ready = merge_status not in {"", "running"} and has_recorded_counts
+        stages = {}
 
-    validation_stage_info = _get_stage_info(runflow_stages, "validation")
-    if validation_stage_info is None:
-        validation_stage_info = _get_stage_info(steps_stages, "validation")
-    validation_status = (_combined_stage_status("validation") or "").strip().lower()
-    validation_ready = _validation_stage_ready(run_dir, validation_stage_info)
-    if validation_status == "error":
-        validation_ready = False
+    def _stage_mapping(stage_name: str) -> Mapping[str, Any] | None:
+        candidate = stages.get(stage_name)
+        if isinstance(candidate, Mapping):
+            return candidate
+        return None
 
-    review_stage_info = _get_stage_info(runflow_stages, "frontend")
-    if review_stage_info is None:
-        review_stage_info = _get_stage_info(steps_stages, "frontend")
-    review_status = (_combined_stage_status("frontend") or "").strip().lower()
-    _, _, review_ready = _frontend_responses_progress(run_dir)
-    if review_status == "error":
-        review_ready = False
-    if isinstance(review_stage_info, Mapping) and bool(review_stage_info.get("empty_ok")):
-        review_ready = True
+    def _stage_status_success(stage_info: Mapping[str, Any] | None) -> bool:
+        if not isinstance(stage_info, Mapping):
+            return False
+        status_value = stage_info.get("status")
+        if not isinstance(status_value, str):
+            return False
+        return status_value.strip().lower() == "success"
+
+    def _summary_value(stage_info: Mapping[str, Any], key: str) -> Optional[int]:
+        summary = stage_info.get("summary")
+        if isinstance(summary, Mapping):
+            value = _coerce_int(summary.get(key))
+            if value is not None:
+                return value
+        return None
+
+    merge_stage = _stage_mapping("merge")
+    merge_ready = False
+    if _stage_status_success(merge_stage):
+        result_files = _summary_value(merge_stage, "result_files")
+        if result_files is None:
+            result_files = _coerce_int(merge_stage.get("result_files"))
+        merge_ready = (result_files or 0) >= 1
+
+    validation_stage = _stage_mapping("validation")
+    validation_ready = False
+    if _stage_status_success(validation_stage):
+        results_payload = validation_stage.get("results")
+        if isinstance(results_payload, Mapping):
+            completed = _coerce_int(results_payload.get("completed"))
+            total = _coerce_int(results_payload.get("results_total"))
+            if completed is not None and total is not None:
+                validation_ready = completed == total
+
+    frontend_stage = _stage_mapping("frontend")
+    review_ready = False
+    if _stage_status_success(frontend_stage):
+        metrics_payload = frontend_stage.get("metrics")
+        if isinstance(metrics_payload, Mapping):
+            required = _coerce_int(metrics_payload.get("answers_required"))
+            received = _coerce_int(metrics_payload.get("answers_received"))
+            if required is not None and received is not None:
+                review_ready = received == required
 
     all_ready = merge_ready and validation_ready and review_ready
 

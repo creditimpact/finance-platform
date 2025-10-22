@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib
 import json
 from pathlib import Path
@@ -40,8 +41,24 @@ def _write_json(path: Path, payload: dict) -> None:
 
 def _prepare_runflow_files(run_dir: Path, *, stages: dict[str, dict], runflow_payload: dict | None = None) -> None:
     _write_json(run_dir / "runflow_steps.json", {"stages": stages})
+    stage_snapshot = {key: copy.deepcopy(value) for key, value in stages.items()}
     default_payload = {"sid": run_dir.name, "note": "persist"}
-    payload = runflow_payload or default_payload
+    if runflow_payload is not None:
+        payload = copy.deepcopy(runflow_payload)
+        if not isinstance(payload, dict):
+            payload = dict(default_payload)
+    else:
+        payload = dict(default_payload)
+
+    payload.setdefault("sid", run_dir.name)
+    existing_stages = payload.get("stages")
+    if isinstance(existing_stages, dict):
+        combined_stages = copy.deepcopy(existing_stages)
+        combined_stages.update(stage_snapshot)
+    else:
+        combined_stages = stage_snapshot
+
+    payload["stages"] = combined_stages
     _write_json(run_dir / "runflow.json", payload)
 
 
@@ -105,7 +122,12 @@ def test_merge_stage_sets_only_merge_ready(tmp_path, monkeypatch):
 
     try:
         run_dir = tmp_path / sid
-        stages = {"merge": {"status": "success", "scored_pairs": 1}}
+        stages = {
+            "merge": {
+                "status": "success",
+                "summary": {"result_files": 1},
+            }
+        }
         _prepare_runflow_files(run_dir, stages=stages)
 
         before = {entry.name for entry in run_dir.iterdir()}
@@ -148,7 +170,7 @@ def test_record_stage_updates_barriers_without_instrumentation(tmp_path, monkeyp
             sid,
             "merge",
             status="success",
-            counts={"scored_pairs": 1},
+            counts={"scored_pairs": 1, "result_files": 1},
             empty_ok=False,
             runs_root=tmp_path,
         )
@@ -181,7 +203,12 @@ def test_validation_stage_sets_validation_ready(tmp_path, monkeypatch):
 
     try:
         run_dir = tmp_path / sid
-        stages = {"validation": {"status": "success"}}
+        stages = {
+            "validation": {
+                "status": "success",
+                "results": {"results_total": 1, "completed": 1},
+            }
+        }
         _prepare_runflow_files(run_dir, stages=stages)
         _prepare_validation_artifacts(run_dir, sid=sid, account_number=42)
 
@@ -213,7 +240,12 @@ def test_validation_readiness_respects_env_overrides(tmp_path, monkeypatch):
 
     try:
         run_dir = tmp_path / sid
-        stages = {"validation": {"status": "success"}}
+        stages = {
+            "validation": {
+                "status": "success",
+                "results": {"results_total": 1, "completed": 1},
+            }
+        }
         _prepare_runflow_files(run_dir, stages=stages)
 
         external_dir = run_dir / "external"
@@ -272,8 +304,18 @@ def test_all_stages_ready_marks_run_ready(tmp_path, monkeypatch):
     try:
         run_dir = tmp_path / sid
         stages = {
-            "merge": {"status": "success", "scored_pairs": 1},
-            "validation": {"status": "success"},
+            "merge": {
+                "status": "success",
+                "summary": {"result_files": 1},
+            },
+            "validation": {
+                "status": "success",
+                "results": {"results_total": 1, "completed": 1},
+            },
+            "frontend": {
+                "status": "success",
+                "metrics": {"answers_required": 1, "answers_received": 1},
+            },
         }
         _prepare_runflow_files(run_dir, stages=stages)
         _prepare_validation_artifacts(run_dir, sid=sid, account_number=7)
@@ -310,8 +352,18 @@ def test_review_readiness_updates_when_response_arrives(tmp_path, monkeypatch):
     try:
         run_dir = tmp_path / sid
         stages = {
-            "merge": {"status": "success", "scored_pairs": 1},
-            "validation": {"status": "success"},
+            "merge": {
+                "status": "success",
+                "summary": {"result_files": 1},
+            },
+            "validation": {
+                "status": "success",
+                "results": {"results_total": 1, "completed": 1},
+            },
+            "frontend": {
+                "status": "success",
+                "metrics": {"answers_required": 1, "answers_received": 0},
+            },
         }
         _prepare_runflow_files(run_dir, stages=stages)
         _prepare_validation_artifacts(run_dir, sid=sid, account_number=21)
@@ -331,6 +383,16 @@ def test_review_readiness_updates_when_response_arrives(tmp_path, monkeypatch):
         assert payload["umbrella_ready"] is False
 
         _write_review_response(run_dir, account_id)
+        updated_snapshot = _load_runflow_payload(run_dir)
+        frontend_stage = updated_snapshot.setdefault("stages", {}).setdefault(
+            "frontend", {}
+        )
+        metrics_payload = frontend_stage.setdefault("metrics", {})
+        metrics_payload["answers_required"] = metrics_payload.get(
+            "answers_required", 1
+        )
+        metrics_payload["answers_received"] = 1
+        _write_json(run_dir / "runflow.json", updated_snapshot)
         runflow._update_umbrella_barriers(sid)
 
         updated_payload = _load_runflow_payload(run_dir)

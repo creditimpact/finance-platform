@@ -219,6 +219,7 @@ _UMBRELLA_BARRIERS_LOG = _env_enabled("UMBRELLA_BARRIERS_LOG", True)
 _UMBRELLA_BARRIERS_WATCHDOG_INTERVAL_MS = max(
     _env_int("UMBRELLA_BARRIERS_WATCHDOG_INTERVAL_MS", 5000), 0
 )
+_UMBRELLA_BARRIERS_DEBOUNCE_MS = max(_env_int("UMBRELLA_BARRIERS_DEBOUNCE_MS", 300), 0)
 
 
 _STEP_CALL_COUNTS: dict[tuple[str, str, str, str], int] = defaultdict(int)
@@ -229,6 +230,8 @@ _WATCHDOG_LOOP: Optional[asyncio.AbstractEventLoop] = None
 _WATCHDOG_THREAD: Optional[threading.Thread] = None
 _WATCHDOG_FUTURES: dict[str, Future[Any]] = {}
 _WATCHDOG_LOCK = threading.Lock()
+_UMBRELLA_REFRESH_TIMERS: dict[str, tuple[threading.Timer, object]] = {}
+_UMBRELLA_REFRESH_LOCK = threading.Lock()
 
 _VALIDATION_AGGREGATE_KEYS = frozenset({"packs_total", "packs_completed", "packs_pending"})
 _REVIEW_AGGREGATE_KEYS = frozenset({"answers_received", "answers_required"})
@@ -855,14 +858,63 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
     return normalized_barriers
 
 
+def _debounced_barriers_refresh_worker(sid: str, token: object) -> None:
+    try:
+        runflow_barriers_refresh(sid)
+    except Exception:  # pragma: no cover - defensive logging
+        _LOG.debug(
+            "[Runflow] Debounced barriers refresh failed sid=%s", sid, exc_info=True
+        )
+    finally:
+        with _UMBRELLA_REFRESH_LOCK:
+            existing = _UMBRELLA_REFRESH_TIMERS.get(sid)
+            if existing and existing[1] is token:
+                _UMBRELLA_REFRESH_TIMERS.pop(sid, None)
+
+
+def _schedule_umbrella_barriers_refresh(sid: str) -> None:
+    if not _UMBRELLA_BARRIERS_ENABLED:
+        return
+
+    normalized_sid = str(sid or "").strip()
+    if not normalized_sid:
+        return
+
+    should_run_now = False
+    with _UMBRELLA_REFRESH_LOCK:
+        debounce_ms = _UMBRELLA_BARRIERS_DEBOUNCE_MS
+        if debounce_ms <= 0:
+            should_run_now = True
+            existing = _UMBRELLA_REFRESH_TIMERS.pop(normalized_sid, None)
+            if existing:
+                existing_timer, _ = existing
+                existing_timer.cancel()
+        else:
+            delay = debounce_ms / 1000.0
+            token = object()
+            timer = threading.Timer(
+                delay, _debounced_barriers_refresh_worker, args=(normalized_sid, token)
+            )
+            timer.daemon = True
+            existing = _UMBRELLA_REFRESH_TIMERS.get(normalized_sid)
+            if existing:
+                existing_timer, _ = existing
+                existing_timer.cancel()
+            _UMBRELLA_REFRESH_TIMERS[normalized_sid] = (timer, token)
+            timer.start()
+
+    if should_run_now:
+        runflow_barriers_refresh(normalized_sid)
+
+
 def _update_umbrella_barriers(sid: str) -> None:
-    runflow_barriers_refresh(sid)
+    _schedule_umbrella_barriers_refresh(sid)
 
 
 def runflow_refresh_umbrella_barriers(sid: str) -> None:
     """Re-evaluate umbrella readiness for ``sid``."""
 
-    runflow_barriers_refresh(sid)
+    _schedule_umbrella_barriers_refresh(sid)
 
 
 def _should_record_step(

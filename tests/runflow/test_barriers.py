@@ -131,7 +131,7 @@ def test_merge_stage_sets_only_merge_ready(tmp_path, monkeypatch):
         _prepare_runflow_files(run_dir, stages=stages)
 
         before = {entry.name for entry in run_dir.iterdir()}
-        runflow._update_umbrella_barriers(sid)
+        runflow.runflow_barriers_refresh(sid)
         after = {entry.name for entry in run_dir.iterdir()}
 
         assert before == after
@@ -212,7 +212,7 @@ def test_validation_stage_sets_validation_ready(tmp_path, monkeypatch):
         _prepare_runflow_files(run_dir, stages=stages)
         _prepare_validation_artifacts(run_dir, sid=sid, account_number=42)
 
-        runflow._update_umbrella_barriers(sid)
+        runflow.runflow_barriers_refresh(sid)
         payload = _load_runflow_payload(run_dir)
         umbrella = payload["umbrella_barriers"]
 
@@ -275,7 +275,7 @@ def test_validation_readiness_respects_env_overrides(tmp_path, monkeypatch):
 
         _write_json(external_dir / "index.json", index_payload)
 
-        runflow._update_umbrella_barriers(sid)
+        runflow.runflow_barriers_refresh(sid)
         payload = _load_runflow_payload(run_dir)
         umbrella = payload["umbrella_barriers"]
 
@@ -324,7 +324,7 @@ def test_all_stages_ready_marks_run_ready(tmp_path, monkeypatch):
         _prepare_review_manifest(run_dir, account_id)
         _write_review_response(run_dir, account_id)
 
-        runflow._update_umbrella_barriers(sid)
+        runflow.runflow_barriers_refresh(sid)
 
         payload = _load_runflow_payload(run_dir)
         umbrella = payload["umbrella_barriers"]
@@ -371,7 +371,7 @@ def test_review_readiness_updates_when_response_arrives(tmp_path, monkeypatch):
         account_id = "idx-021"
         _prepare_review_manifest(run_dir, account_id)
 
-        runflow._update_umbrella_barriers(sid)
+        runflow.runflow_barriers_refresh(sid)
 
         payload = _load_runflow_payload(run_dir)
         umbrella = payload["umbrella_barriers"]
@@ -393,7 +393,7 @@ def test_review_readiness_updates_when_response_arrives(tmp_path, monkeypatch):
         )
         metrics_payload["answers_received"] = 1
         _write_json(run_dir / "runflow.json", updated_snapshot)
-        runflow._update_umbrella_barriers(sid)
+        runflow.runflow_barriers_refresh(sid)
 
         updated_payload = _load_runflow_payload(run_dir)
         updated_umbrella = updated_payload["umbrella_barriers"]
@@ -427,7 +427,7 @@ def test_document_barrier_flag_emitted_when_enabled(tmp_path, monkeypatch):
         stages: dict[str, dict] = {}
         _prepare_runflow_files(run_dir, stages=stages)
 
-        runflow._update_umbrella_barriers(sid)
+        runflow.runflow_barriers_refresh(sid)
 
         payload = _load_runflow_payload(run_dir)
         umbrella = payload["umbrella_barriers"]

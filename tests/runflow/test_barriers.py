@@ -80,7 +80,7 @@ def _prepare_validation_artifacts(run_dir: Path, *, sid: str, account_number: in
                 "account_id": account_number,
                 "pack": f"packs/idx-{account_number:03d}.json",
                 "result_json": f"results/{result_filename}",
-                "status": "completed",
+                "status": "done",
                 "lines": 0,
             }
         ],
@@ -101,6 +101,7 @@ def _write_review_response(run_dir: Path, account_id: str) -> None:
     payload = {
         "received_at": "2024-01-01T00:00:00Z",
         "answers": {"explanation": "ready"},
+        "status": "done",
     }
     from backend.runflow.decider import _response_filename_for_account
 

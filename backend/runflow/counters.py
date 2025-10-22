@@ -286,6 +286,7 @@ def frontend_answers_counters(
     return {
         "answers_required": required,
         "answers_received": len(answered_ids),
+        "answered_accounts": sorted(answered_ids),
     }
 
 

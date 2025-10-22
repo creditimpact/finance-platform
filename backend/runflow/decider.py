@@ -18,10 +18,13 @@ from backend.core.runflow import (
     runflow_refresh_umbrella_barriers,
 )
 from backend.runflow.counters import (
+    _has_review_attachments as _frontend_has_review_attachments,
     frontend_answers_counters as _frontend_answers_counters,
     stage_counts as _stage_counts_from_disk,
 )
 from backend.validation.index_schema import load_validation_index
+
+from backend.frontend.packs.config import load_frontend_stage_config
 
 StageStatus = Literal["success", "error", "built", "published"]
 RunState = Literal[
@@ -37,6 +40,26 @@ StageName = Literal["merge", "validation", "frontend"]
 log = logging.getLogger(__name__)
 
 _RUNFLOW_FILENAME = "runflow.json"
+
+_STATUS_NORMALIZATION: Dict[str, str] = {
+    "completed": "completed",
+    "complete": "completed",
+    "done": "completed",
+    "success": "completed",
+    "succeeded": "completed",
+    "ok": "completed",
+    "finished": "completed",
+    "built": "completed",
+    "published": "completed",
+    "failed": "failed",
+    "failure": "failed",
+    "error": "failed",
+    "errored": "failed",
+    "aborted": "failed",
+    "rejected": "failed",
+}
+
+_UNKNOWN_STATUS_WARNINGS: set[tuple[str, str]] = set()
 
 
 def _env_enabled(name: str, default: bool = False) -> bool:
@@ -112,6 +135,54 @@ def _coerce_int(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _run_dir_sid(run_dir: Path) -> str:
+    name = run_dir.name
+    if name:
+        return name
+    stem = run_dir.stem
+    if stem:
+        return stem
+    return str(run_dir)
+
+
+def _warn_unknown_status(stage: str, run_dir: Path, status: str) -> None:
+    sid = _run_dir_sid(run_dir)
+    key = (stage, sid)
+    if key in _UNKNOWN_STATUS_WARNINGS:
+        return
+    _UNKNOWN_STATUS_WARNINGS.add(key)
+    log.warning(
+        "RUNFLOW_UNKNOWN_STATUS stage=%s sid=%s status=%s",
+        stage,
+        sid,
+        status,
+    )
+
+
+def _normalize_terminal_status(
+    status: Any, *, stage: str, run_dir: Path
+) -> Optional[str]:
+    if isinstance(status, str):
+        normalized = status.strip().lower()
+    elif isinstance(status, (bytes, bytearray)):
+        try:
+            normalized = bytes(status).decode("utf-8", errors="ignore").strip().lower()
+        except Exception:  # pragma: no cover - defensive
+            normalized = ""
+    else:
+        normalized = ""
+
+    if not normalized:
+        return None
+
+    mapped = _STATUS_NORMALIZATION.get(normalized)
+    if mapped is not None:
+        return mapped
+
+    _warn_unknown_status(stage, run_dir, normalized)
+    return None
 
 
 def _default_umbrella_barriers() -> dict[str, Any]:
@@ -761,11 +832,17 @@ def _validation_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
 
     for record in getattr(index, "packs", ()):  # type: ignore[attr-defined]
         total += 1
-        status = getattr(record, "status", "")
-        normalized_status = status.strip().lower() if isinstance(status, str) else ""
+        status_value = getattr(record, "status", None)
+        normalized_status = _normalize_terminal_status(
+            status_value, stage="validation", run_dir=run_dir
+        )
 
-        if normalized_status in {"failed", "error"}:
+        if normalized_status == "failed":
             failed += 1
+            ready = False
+            continue
+
+        if normalized_status != "completed":
             ready = False
             continue
 
@@ -845,10 +922,108 @@ def _frontend_responses_progress(run_dir: Path) -> tuple[int, int, bool]:
     )
 
     required = _coerce_int(counters.get("answers_required")) or 0
-    answered = _coerce_int(counters.get("answers_received")) or 0
-    ready = answered == required
+    answered_accounts_raw = counters.get("answered_accounts")
+
+    answered_accounts: set[str] = set()
+    if isinstance(answered_accounts_raw, Sequence) and not isinstance(
+        answered_accounts_raw, (str, bytes, bytearray)
+    ):
+        for entry in answered_accounts_raw:
+            if isinstance(entry, (str, int)):
+                text = str(entry).strip()
+                if text:
+                    answered_accounts.add(text)
+
+    config = load_frontend_stage_config(run_dir)
+    responses_dir = config.responses_dir
+
+    account_status_map: dict[str, str] = {}
+
+    try:
+        response_paths = sorted(
+            path
+            for path in responses_dir.iterdir()
+            if path.is_file() and path.name.endswith(".result.json")
+        )
+    except OSError:
+        response_paths = []
+
+    for path in response_paths:
+        payload = _load_json_mapping(path)
+        if not isinstance(payload, Mapping):
+            continue
+
+        answers = payload.get("answers")
+        if not isinstance(answers, Mapping):
+            continue
+
+        explanation = answers.get("explanation")
+        if not isinstance(explanation, str) or not explanation.strip():
+            continue
+
+        if attachments_required and not _frontend_has_review_attachments(answers):
+            continue
+
+        received_at = payload.get("received_at")
+        if not isinstance(received_at, str) or not received_at.strip():
+            continue
+
+        account_id = payload.get("account_id")
+        if isinstance(account_id, str) and account_id.strip():
+            account_key = account_id.strip()
+        else:
+            account_key = path.stem
+
+        normalized_status = _normalize_terminal_status(
+            payload.get("status"), stage="frontend", run_dir=run_dir
+        )
+
+        if normalized_status == "failed":
+            account_status_map[account_key] = "failed"
+            continue
+
+        if normalized_status == "completed":
+            account_status_map[account_key] = "completed"
+            continue
+
+        status_value = payload.get("status")
+        if status_value is None or (
+            isinstance(status_value, str) and not status_value.strip()
+        ):
+            account_status_map[account_key] = "completed"
+        else:
+            account_status_map[account_key] = "unknown"
+
+    if answered_accounts:
+        for account in answered_accounts:
+            account_status_map.setdefault(account, "unknown")
+        considered_accounts = set(answered_accounts)
+    else:
+        considered_accounts = set(account_status_map.keys())
+
+    completed_accounts = {
+        account
+        for account in considered_accounts
+        if account_status_map.get(account) == "completed"
+    }
+
+    failed_present = any(
+        account_status_map.get(account) == "failed"
+        for account in considered_accounts
+    )
+
+    unknown_present = any(
+        account_status_map.get(account) not in {"completed", "failed"}
+        for account in considered_accounts
+    )
+
+    answered = len(completed_accounts)
+
     if required == 0:
         ready = True
+    else:
+        ready = answered >= required and not failed_present and not unknown_present
+
     return (required, answered, ready)
 
 

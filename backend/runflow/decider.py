@@ -70,6 +70,10 @@ def _merge_required() -> bool:
     return _env_enabled("MERGE_REQUIRED", True)
 
 
+def _umbrella_require_merge() -> bool:
+    return _env_enabled("UMBRELLA_REQUIRE_MERGE", True)
+
+
 def _barrier_event_logging_enabled() -> bool:
     return _env_enabled("UMBRELLA_BARRIERS_LOG", True)
 
@@ -974,6 +978,7 @@ def _compute_umbrella_barriers(run_dir: Path) -> dict[str, bool]:
         return None
 
     merge_stage = _stage_mapping("merge")
+    has_merge_stage = isinstance(merge_stage, Mapping)
     merge_empty_ok = _stage_empty_ok(merge_stage)
     merge_stage_result_files: Optional[int] = None
     merge_ready = False
@@ -989,7 +994,7 @@ def _compute_umbrella_barriers(run_dir: Path) -> dict[str, bool]:
         elif result_files is not None:
             merge_ready = result_files >= 1
 
-    (
+    ( 
         merge_disk_result_files,
         _merge_disk_pack_files,
         _merge_expected,
@@ -1002,6 +1007,28 @@ def _compute_umbrella_barriers(run_dir: Path) -> dict[str, bool]:
             merge_ready = merge_empty_ok and merge_disk_result_files == 0
         else:
             merge_ready = merge_stage_result_files == merge_disk_result_files
+
+    if not _umbrella_require_merge():
+        if merge_stage_result_files is None:
+            merge_result_files_for_policy = merge_disk_result_files
+        else:
+            merge_result_files_for_policy = merge_stage_result_files
+
+        reason: Optional[str] = None
+        if not has_merge_stage:
+            reason = "no_merge_stage"
+        elif merge_result_files_for_policy == 0:
+            reason = "empty_merge_results"
+
+        if reason is not None:
+            log.info(
+                "UMBRELLA_MERGE_OPTIONAL sid=%s reason=%s was_ready=%s merge_files=%s require_merge=0",
+                run_dir.name,
+                reason,
+                merge_ready,
+                merge_result_files_for_policy,
+            )
+            merge_ready = True
 
     validation_stage = _stage_mapping("validation")
     validation_total, validation_completed, _validation_failed, validation_ready_disk = (

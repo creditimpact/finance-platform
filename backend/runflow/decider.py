@@ -217,6 +217,13 @@ def record_stage(
         "last_at": _now_iso(),
     }
 
+    stages_snapshot = data.get("stages")
+    existing_stage: Mapping[str, Any] | None
+    if isinstance(stages_snapshot, Mapping):
+        existing_stage = stages_snapshot.get(stage)
+    else:
+        existing_stage = None
+
     normalized_counts: dict[str, int] = {}
     for key, value in (counts or {}).items():
         coerced = _coerce_int(value)
@@ -330,7 +337,26 @@ def record_stage(
     if notes:
         summary_payload["notes"] = str(notes)
 
+    if stage == "merge":
+        result_files_value = _coerce_int(summary_payload.get("result_files"))
+        if result_files_value is None:
+            stage_result_files = _coerce_int(stage_payload.get("result_files"))
+            if stage_result_files is None and isinstance(existing_stage, Mapping):
+                stage_result_files = _coerce_int(existing_stage.get("result_files"))
+            if stage_result_files is not None:
+                summary_payload["result_files"] = stage_result_files
+
+    if isinstance(existing_stage, Mapping):
+        existing_summary = existing_stage.get("summary")
+        if isinstance(existing_summary, Mapping):
+            merged_summary = dict(existing_summary)
+            merged_summary.update(summary_payload)
+            summary_payload = merged_summary
+
     stage_status_override: Optional[str] = None
+    if summary_payload:
+        stage_payload["summary"] = dict(summary_payload)
+
     if stage == "frontend" and status != "error":
         packs_value: Optional[int] = None
         for key in ("packs_count", "packs"):
@@ -821,8 +847,6 @@ def _compute_umbrella_barriers(run_dir: Path) -> dict[str, bool]:
     merge_ready = False
     if _stage_status_success(merge_stage):
         result_files = _summary_value(merge_stage, "result_files")
-        if result_files is None:
-            result_files = _coerce_int(merge_stage.get("result_files"))
         merge_ready = (result_files or 0) >= 1
 
     validation_stage = _stage_mapping("validation")

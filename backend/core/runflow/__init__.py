@@ -398,6 +398,222 @@ def _clear_stage_counters(sid: str, *buckets: str) -> None:
         _STAGE_COUNTERS.pop(sid, None)
 
 
+def _stage_status_success(stage_info: Mapping[str, Any] | None) -> bool:
+    if not isinstance(stage_info, Mapping):
+        return False
+    status_value = stage_info.get("status")
+    if not isinstance(status_value, str):
+        return False
+    return status_value.strip().lower() == "success"
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    try:
+        if value is None or isinstance(value, bool):
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ensure_stage_dict(stages: dict[str, Any], stage_name: str) -> Optional[dict[str, Any]]:
+    candidate = stages.get(stage_name)
+    if not isinstance(candidate, Mapping):
+        return None
+    if not isinstance(candidate, dict):
+        candidate = dict(candidate)
+        stages[stage_name] = candidate
+    return candidate
+
+
+def _ensure_summary(stage: dict[str, Any]) -> dict[str, Any]:
+    summary_payload = stage.get("summary")
+    if isinstance(summary_payload, dict):
+        summary = summary_payload
+    elif isinstance(summary_payload, Mapping):
+        summary = dict(summary_payload)
+    else:
+        summary = {}
+    stage["summary"] = summary
+    return summary
+
+
+def _ensure_results(stage: dict[str, Any]) -> dict[str, Any]:
+    results_payload = stage.get("results")
+    if isinstance(results_payload, dict):
+        results = results_payload
+    elif isinstance(results_payload, Mapping):
+        results = dict(results_payload)
+    else:
+        results = {}
+    stage["results"] = results
+    return results
+
+
+def _ensure_metrics(stage: dict[str, Any]) -> dict[str, Any]:
+    metrics_payload = stage.get("metrics")
+    if isinstance(metrics_payload, dict):
+        metrics = metrics_payload
+    elif isinstance(metrics_payload, Mapping):
+        metrics = dict(metrics_payload)
+    else:
+        metrics = {}
+    stage["metrics"] = metrics
+    return metrics
+
+
+def _apply_umbrella_barriers(
+    payload_dict: dict[str, Any],
+    *,
+    sid: str,
+    timestamp: Optional[str] = None,
+) -> Optional[tuple[dict[str, Any], bool, bool, bool, bool, str]]:
+    if not _UMBRELLA_BARRIERS_ENABLED:
+        return None
+
+    normalized_sid = str(sid or "").strip()
+    if not normalized_sid:
+        existing_sid = payload_dict.get("sid")
+        if isinstance(existing_sid, str):
+            normalized_sid = existing_sid.strip()
+    if not normalized_sid:
+        return None
+
+    ts = timestamp or _utcnow_iso()
+
+    stages_payload = payload_dict.get("stages")
+    if isinstance(stages_payload, dict):
+        stages = stages_payload
+    elif isinstance(stages_payload, Mapping):
+        stages = dict(stages_payload)
+        payload_dict["stages"] = stages
+    else:
+        stages = {}
+        payload_dict["stages"] = stages
+
+    merge_stage = _ensure_stage_dict(stages, "merge")
+    validation_stage = _ensure_stage_dict(stages, "validation")
+    frontend_stage = _ensure_stage_dict(stages, "frontend")
+
+    merge_ready = False
+    if merge_stage and _stage_status_success(merge_stage):
+        summary = _ensure_summary(merge_stage)
+        result_files_value = _coerce_int(summary.get("result_files"))
+        if result_files_value is None:
+            fallback_result_files = _coerce_int(merge_stage.get("result_files"))
+            if fallback_result_files is not None:
+                summary["result_files"] = fallback_result_files
+                result_files_value = fallback_result_files
+        merge_ready = (result_files_value or 0) >= 1
+
+    validation_ready = False
+    if validation_stage and _stage_status_success(validation_stage):
+        results_data = _ensure_results(validation_stage)
+        summary = _ensure_summary(validation_stage)
+        summary_results_payload = summary.get("results")
+        if isinstance(summary_results_payload, dict):
+            summary_results = summary_results_payload
+        elif isinstance(summary_results_payload, Mapping):
+            summary_results = dict(summary_results_payload)
+        else:
+            summary_results = {}
+        results_missing = False
+        for key in ("results_total", "completed", "failed"):
+            value = _coerce_int(results_data.get(key))
+            if value is None:
+                fallback_value = _coerce_int(summary_results.get(key))
+                if fallback_value is not None:
+                    results_data[key] = fallback_value
+                    value = fallback_value
+                else:
+                    default_value = 0
+                    results_data[key] = default_value
+                    value = default_value
+                    if key in {"results_total", "completed"}:
+                        results_missing = True
+            summary_results[key] = value
+        if summary_results:
+            summary["results"] = summary_results
+        completed_value = _coerce_int(results_data.get("completed"))
+        total_value = _coerce_int(results_data.get("results_total"))
+        if (
+            completed_value is not None
+            and total_value is not None
+            and not results_missing
+        ):
+            validation_ready = completed_value == total_value
+
+    review_ready = False
+    if frontend_stage and _stage_status_success(frontend_stage):
+        metrics_data = _ensure_metrics(frontend_stage)
+        summary = _ensure_summary(frontend_stage)
+        summary_metrics_payload = summary.get("metrics")
+        if isinstance(summary_metrics_payload, dict):
+            summary_metrics = summary_metrics_payload
+        elif isinstance(summary_metrics_payload, Mapping):
+            summary_metrics = dict(summary_metrics_payload)
+        else:
+            summary_metrics = {}
+        metrics_missing = False
+        required_value = _coerce_int(metrics_data.get("answers_required"))
+        if required_value is None:
+            fallback_required = _coerce_int(summary_metrics.get("answers_required"))
+            if fallback_required is not None:
+                metrics_data["answers_required"] = fallback_required
+                required_value = fallback_required
+            else:
+                metrics_data["answers_required"] = 0
+                required_value = 0
+                metrics_missing = True
+        summary_metrics["answers_required"] = required_value
+        received_value = _coerce_int(metrics_data.get("answers_received"))
+        if received_value is None:
+            fallback_received = _coerce_int(summary_metrics.get("answers_received"))
+            if fallback_received is not None:
+                metrics_data["answers_received"] = fallback_received
+                received_value = fallback_received
+            else:
+                metrics_data["answers_received"] = 0
+                received_value = 0
+                metrics_missing = True
+        summary_metrics["answers_received"] = received_value
+        if summary_metrics:
+            summary["metrics"] = summary_metrics
+        if (
+            required_value is not None
+            and received_value is not None
+            and not metrics_missing
+        ):
+            review_ready = received_value == required_value
+
+    all_ready = merge_ready and validation_ready and review_ready
+
+    normalized_barriers: dict[str, Any] = {
+        "merge_ready": merge_ready,
+        "validation_ready": validation_ready,
+        "review_ready": review_ready,
+        "all_ready": all_ready,
+        "checked_at": ts,
+    }
+    if _document_verifier_enabled():
+        normalized_barriers.setdefault("document_ready", False)
+
+    existing_barriers = payload_dict.get("umbrella_barriers")
+    if isinstance(existing_barriers, Mapping):
+        barriers_payload = dict(existing_barriers)
+    else:
+        barriers_payload = {}
+
+    barriers_payload.update(normalized_barriers)
+    payload_dict["umbrella_barriers"] = barriers_payload
+    payload_dict["umbrella_ready"] = bool(all_ready)
+    payload_dict.setdefault("sid", normalized_sid)
+    payload_dict["updated_at"] = ts
+    payload_dict["stages"] = stages
+
+    return barriers_payload, merge_ready, validation_ready, review_ready, all_ready, ts
+
+
 def _reset_step_counters(sid: str, stage: str) -> None:
     if not _STEP_CALL_COUNTS:
         return
@@ -551,72 +767,12 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
 
     runflow_path = base_dir / "runflow.json"
 
-    def _stage_status_success(stage_info: Mapping[str, Any] | None) -> bool:
-        if not isinstance(stage_info, Mapping):
-            return False
-        status_value = stage_info.get("status")
-        if not isinstance(status_value, str):
-            return False
-        return status_value.strip().lower() == "success"
-
-    def _coerce_int(value: Any) -> Optional[int]:
-        try:
-            if value is None or isinstance(value, bool):
-                return None
-            return int(value)
-        except (TypeError, ValueError):
-            return None
-
-    def _ensure_stage_dict(
-        stages: dict[str, Any], stage_name: str
-    ) -> Optional[dict[str, Any]]:
-        candidate = stages.get(stage_name)
-        if not isinstance(candidate, Mapping):
-            return None
-        if not isinstance(candidate, dict):
-            candidate = dict(candidate)
-            stages[stage_name] = candidate
-        return candidate
-
-    def _ensure_summary(stage: dict[str, Any]) -> dict[str, Any]:
-        summary_payload = stage.get("summary")
-        if isinstance(summary_payload, dict):
-            summary = summary_payload
-        elif isinstance(summary_payload, Mapping):
-            summary = dict(summary_payload)
-        else:
-            summary = {}
-        stage["summary"] = summary
-        return summary
-
-    def _ensure_results(stage: dict[str, Any]) -> dict[str, Any]:
-        results_payload = stage.get("results")
-        if isinstance(results_payload, dict):
-            results = results_payload
-        elif isinstance(results_payload, Mapping):
-            results = dict(results_payload)
-        else:
-            results = {}
-        stage["results"] = results
-        return results
-
-    def _ensure_metrics(stage: dict[str, Any]) -> dict[str, Any]:
-        metrics_payload = stage.get("metrics")
-        if isinstance(metrics_payload, dict):
-            metrics = metrics_payload
-        elif isinstance(metrics_payload, Mapping):
-            metrics = dict(metrics_payload)
-        else:
-            metrics = {}
-        stage["metrics"] = metrics
-        return metrics
-
-    timestamp = _utcnow_iso()
-    normalized_barriers: dict[str, Any] = {}
+    normalized_barriers: Optional[dict[str, Any]] = None
     merge_ready_state = False
     validation_ready_state = False
     review_ready_state = False
     all_ready_state = False
+    barrier_timestamp: Optional[str] = None
 
     def _mutate(payload: Any) -> Any:
         nonlocal normalized_barriers
@@ -624,146 +780,38 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
         nonlocal validation_ready_state
         nonlocal review_ready_state
         nonlocal all_ready_state
+        nonlocal barrier_timestamp
 
-        if not isinstance(payload, dict):
-            payload_dict: dict[str, Any] = {}
+        if isinstance(payload, dict):
+            payload_dict: dict[str, Any] = payload
         else:
-            payload_dict = payload
+            payload_dict = {}
 
-        stages_payload = payload_dict.get("stages")
-        if isinstance(stages_payload, dict):
-            stages = stages_payload
-        elif isinstance(stages_payload, Mapping):
-            stages = dict(stages_payload)
-            payload_dict["stages"] = stages
-        else:
-            stages = {}
-            payload_dict["stages"] = stages
+        result = _apply_umbrella_barriers(payload_dict, sid=normalized_sid)
+        if result is None:
+            normalized_barriers = None
+            return payload_dict
 
-        merge_stage = _ensure_stage_dict(stages, "merge")
-        validation_stage = _ensure_stage_dict(stages, "validation")
-        frontend_stage = _ensure_stage_dict(stages, "frontend")
-
-        merge_ready = False
-        if merge_stage and _stage_status_success(merge_stage):
-            summary = _ensure_summary(merge_stage)
-            result_files_value = _coerce_int(summary.get("result_files"))
-            if result_files_value is None:
-                fallback_result_files = _coerce_int(merge_stage.get("result_files"))
-                if fallback_result_files is not None:
-                    summary["result_files"] = fallback_result_files
-                    result_files_value = fallback_result_files
-            merge_ready = (result_files_value or 0) >= 1
-
-        validation_ready = False
-        if validation_stage and _stage_status_success(validation_stage):
-            results_data = _ensure_results(validation_stage)
-            summary = _ensure_summary(validation_stage)
-            summary_results_payload = summary.get("results")
-            if isinstance(summary_results_payload, dict):
-                summary_results = summary_results_payload
-            elif isinstance(summary_results_payload, Mapping):
-                summary_results = dict(summary_results_payload)
-            else:
-                summary_results = {}
-            results_missing = False
-            for key in ("results_total", "completed", "failed"):
-                value = _coerce_int(results_data.get(key))
-                if value is None:
-                    fallback_value = _coerce_int(summary_results.get(key))
-                    if fallback_value is not None:
-                        results_data[key] = fallback_value
-                        value = fallback_value
-                    else:
-                        default_value = 0
-                        results_data[key] = default_value
-                        value = default_value
-                        if key in {"results_total", "completed"}:
-                            results_missing = True
-                summary_results[key] = value
-            if summary_results:
-                summary["results"] = summary_results
-            completed_value = _coerce_int(results_data.get("completed"))
-            total_value = _coerce_int(results_data.get("results_total"))
-            if (
-                completed_value is not None
-                and total_value is not None
-                and not results_missing
-            ):
-                validation_ready = completed_value == total_value
-
-        review_ready = False
-        if frontend_stage and _stage_status_success(frontend_stage):
-            metrics_data = _ensure_metrics(frontend_stage)
-            summary = _ensure_summary(frontend_stage)
-            summary_metrics_payload = summary.get("metrics")
-            if isinstance(summary_metrics_payload, dict):
-                summary_metrics = summary_metrics_payload
-            elif isinstance(summary_metrics_payload, Mapping):
-                summary_metrics = dict(summary_metrics_payload)
-            else:
-                summary_metrics = {}
-            metrics_missing = False
-            required_value = _coerce_int(metrics_data.get("answers_required"))
-            if required_value is None:
-                fallback_required = _coerce_int(summary_metrics.get("answers_required"))
-                if fallback_required is not None:
-                    metrics_data["answers_required"] = fallback_required
-                    required_value = fallback_required
-                else:
-                    metrics_data["answers_required"] = 0
-                    required_value = 0
-                    metrics_missing = True
-            summary_metrics["answers_required"] = required_value
-            received_value = _coerce_int(metrics_data.get("answers_received"))
-            if received_value is None:
-                fallback_received = _coerce_int(summary_metrics.get("answers_received"))
-                if fallback_received is not None:
-                    metrics_data["answers_received"] = fallback_received
-                    received_value = fallback_received
-                else:
-                    metrics_data["answers_received"] = 0
-                    received_value = 0
-                    metrics_missing = True
-            summary_metrics["answers_received"] = received_value
-            if summary_metrics:
-                summary["metrics"] = summary_metrics
-            if (
-                required_value is not None
-                and received_value is not None
-                and not metrics_missing
-            ):
-                review_ready = received_value == required_value
-
-        all_ready = merge_ready and validation_ready and review_ready
-
-        merge_ready_state = merge_ready
-        validation_ready_state = validation_ready
-        review_ready_state = review_ready
-        all_ready_state = all_ready
+        (
+            barriers_payload,
+            merge_ready_state,
+            validation_ready_state,
+            review_ready_state,
+            all_ready_state,
+            barrier_timestamp,
+        ) = result
 
         normalized_barriers = {
-            "merge_ready": merge_ready,
-            "validation_ready": validation_ready,
-            "review_ready": review_ready,
-            "all_ready": all_ready,
+            "merge_ready": merge_ready_state,
+            "validation_ready": validation_ready_state,
+            "review_ready": review_ready_state,
+            "all_ready": all_ready_state,
+            "checked_at": barriers_payload.get("checked_at"),
         }
         if _document_verifier_enabled():
-            normalized_barriers.setdefault("document_ready", False)
-        normalized_barriers["checked_at"] = timestamp
-
-        existing_barriers = payload_dict.get("umbrella_barriers")
-        if isinstance(existing_barriers, Mapping):
-            barriers_payload = dict(existing_barriers)
-        else:
-            barriers_payload = {}
-
-        barriers_payload.update(normalized_barriers)
-        payload_dict["umbrella_barriers"] = barriers_payload
-        payload_dict["umbrella_ready"] = bool(all_ready)
-        payload_dict.setdefault("sid", normalized_sid)
-        payload_dict["updated_at"] = timestamp
-        payload_dict["stages"] = stages
+            normalized_barriers.setdefault(
+                "document_ready", barriers_payload.get("document_ready", False)
+            )
 
         return payload_dict
 
@@ -771,6 +819,9 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
         update_json_in_place(runflow_path, _mutate)
     except Exception:
         return None
+
+    if normalized_barriers is None or barrier_timestamp is None:
+        return normalized_barriers
 
     if _UMBRELLA_BARRIERS_LOG:
         _LOG.info(
@@ -781,7 +832,7 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
             all_ready_state,
         )
         event_payload: dict[str, Any] = {
-            "ts": timestamp,
+            "ts": barrier_timestamp,
             "event": "barriers_reconciled",
             "merge_ready": merge_ready_state,
             "validation_ready": validation_ready_state,
@@ -789,7 +840,9 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
             "all_ready": all_ready_state,
         }
         if _document_verifier_enabled():
-            event_payload.setdefault("document_ready", False)
+            event_payload.setdefault(
+                "document_ready", bool(normalized_barriers.get("document_ready", False))
+            )
         try:
             _append_jsonl(_events_path(normalized_sid), event_payload)
         except Exception:
@@ -880,6 +933,9 @@ def runflow_end_stage(
     summary: Optional[Mapping[str, Any]] = None,
     stage_status: Optional[str] = None,
     empty_ok: bool = False,
+    barriers: Optional[Mapping[str, Any]] = None,
+    umbrella_ready: Optional[bool] = None,
+    refresh_barriers: bool = True,
 ) -> None:
     steps_enabled = _ENABLE_STEPS
     events_enabled = _ENABLE_EVENTS
@@ -901,12 +957,17 @@ def runflow_end_stage(
             event: dict[str, Any] = {"ts": ts, "stage": stage, "event": "end", "status": status}
             if summary:
                 event["summary"] = {str(k): v for k, v in summary.items()}
+            if barriers:
+                event["barriers"] = {str(k): v for k, v in barriers.items()}
+            if umbrella_ready is not None:
+                event["umbrella_ready"] = bool(umbrella_ready)
             _append_event(sid, event)
 
     _STARTED_STAGES.discard((sid, stage))
     _reset_step_counters(sid, stage)
 
-    _update_umbrella_barriers(sid)
+    if refresh_barriers:
+        _update_umbrella_barriers(sid)
 
     if stage == "validation":
         _clear_stage_counters(sid, "validation_build", "validation_results")

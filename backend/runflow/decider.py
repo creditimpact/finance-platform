@@ -12,6 +12,7 @@ from typing import Any, Dict, Literal, Mapping, Optional
 
 from backend.core.io.json_io import _atomic_write_json
 from backend.core.runflow import (
+    _apply_umbrella_barriers,
     runflow_decide_step,
     runflow_end_stage,
     runflow_refresh_umbrella_barriers,
@@ -317,7 +318,8 @@ def record_stage(
     elif stage == "validation" and data.get("run_state") == "INIT":
         data["run_state"] = "VALIDATING"
 
-    data["updated_at"] = _now_iso()
+    timestamp = _now_iso()
+    data["updated_at"] = timestamp
 
     log.info(
         "RUNFLOW_RECORD sid=%s stage=%s status=%s counts=%s empty_ok=%s",
@@ -366,6 +368,34 @@ def record_stage(
         if packs_value == 0:
             stage_status_override = "empty"
 
+    barrier_event: Optional[dict[str, Any]] = None
+    umbrella_ready_value: Optional[bool] = None
+    barrier_result = _apply_umbrella_barriers(
+        data,
+        sid=sid,
+        timestamp=timestamp,
+    )
+    if barrier_result is not None:
+        (
+            barriers_payload,
+            _merge_ready_state,
+            _validation_ready_state,
+            _review_ready_state,
+            all_ready_state,
+            _barrier_ts,
+        ) = barrier_result
+        barrier_event = dict(barriers_payload)
+        umbrella_ready_value = bool(all_ready_state)
+    else:
+        existing_barriers_payload = data.get("umbrella_barriers")
+        if isinstance(existing_barriers_payload, Mapping):
+            barrier_event = dict(existing_barriers_payload)
+        umbrella_ready_existing = data.get("umbrella_ready")
+        if isinstance(umbrella_ready_existing, bool):
+            umbrella_ready_value = umbrella_ready_existing
+
+    _atomic_write_json(path, data)
+
     runflow_end_stage(
         sid,
         stage,
@@ -373,10 +403,11 @@ def record_stage(
         summary=summary_payload if summary_payload else None,
         stage_status=stage_status_override,
         empty_ok=empty_ok,
+        barriers=barrier_event,
+        umbrella_ready=umbrella_ready_value,
+        refresh_barriers=False,
     )
 
-    _atomic_write_json(path, data)
-    runflow_refresh_umbrella_barriers(sid)
     return data
 
 

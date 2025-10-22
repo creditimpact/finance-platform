@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterator, Mapping
 
 
 _LOCK_POLL_INTERVAL = 0.05
+_LOCK_TIMEOUT = 0.25
 _WRITE_RETRY_DELAY = 0.1
 _WRITE_ATTEMPTS = 2
 
@@ -60,14 +61,20 @@ def _json_file_lock(path: Path) -> Iterator[None]:
     """Serialize writers for ``path`` using a simple lock file."""
 
     lock_path = path.with_suffix(path.suffix + ".lock")
+    timeout = max(_LOCK_TIMEOUT, 0.0)
+    deadline = time.monotonic() + timeout
+    fd: int | None = None
     while True:
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             break
         except FileExistsError:
+            if timeout == 0 or time.monotonic() >= deadline:
+                raise TimeoutError(f"Timed out acquiring lock for {lock_path}")
             time.sleep(_LOCK_POLL_INTERVAL)
     try:
-        os.close(fd)
+        if fd is not None:
+            os.close(fd)
         yield
     finally:
         try:

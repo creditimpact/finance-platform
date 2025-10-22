@@ -434,11 +434,35 @@ def finalize_merge_stage(
         scored_pairs_value = 0
         metrics["scored_pairs"] = 0
 
-    existing_created = metrics.get("created_packs")
-    candidate_created = [result_files_total, pack_files_total]
-    if isinstance(existing_created, int):
-        candidate_created.append(existing_created)
-    created_packs_value = max(candidate_created)
+    expected_candidates: list[int] = []
+    existing_created = _maybe_int(totals.get("created_packs"))
+    if existing_created is not None:
+        expected_candidates.append(existing_created)
+
+    fallback_created = _maybe_int(index_payload.get("created_packs"))
+    if fallback_created is not None:
+        expected_candidates.append(fallback_created)
+
+    if isinstance(pairs_payload, list):
+        expected_candidates.append(len(pairs_payload))
+
+    expected_total: Optional[int]
+    if expected_candidates:
+        expected_total = max(expected_candidates)
+    else:
+        expected_total = None
+
+    ready_counts_match = result_files_total == pack_files_total
+    if expected_total is not None:
+        ready_counts_match = ready_counts_match and result_files_total == expected_total
+
+    if not ready_counts_match:
+        raise RuntimeError(
+            "merge stage artifacts not ready: results=%s packs=%s expected=%s"
+            % (result_files_total, pack_files_total, expected_total)
+        )
+
+    created_packs_value = result_files_total
     metrics["created_packs"] = created_packs_value
 
     counts: dict[str, int] = {
@@ -847,6 +871,9 @@ def refresh_validation_stage_from_index(
     if not ready:
         return
 
+    if completed != total:
+        return
+
     data = _load_runflow(path, sid)
     stages = data.setdefault("stages", {})
     if not isinstance(stages, dict):
@@ -858,8 +885,9 @@ def refresh_validation_stage_from_index(
 
     stage_payload["status"] = "success"
     stage_payload["last_at"] = _now_iso()
-    if "empty_ok" not in stage_payload:
-        stage_payload["empty_ok"] = bool(total == 0)
+
+    empty_ok = total == 0
+    stage_payload.setdefault("empty_ok", bool(empty_ok))
 
     results_payload = {
         "results_total": total,
@@ -867,6 +895,46 @@ def refresh_validation_stage_from_index(
         "failed": failed,
     }
     stage_payload["results"] = results_payload
+
+    metrics_payload = stage_payload.get("metrics")
+    if isinstance(metrics_payload, Mapping):
+        metrics_data = dict(metrics_payload)
+    else:
+        metrics_data = {}
+
+    disk_counts = _stage_counts_from_disk("validation", run_dir)
+    summary_counts: dict[str, int] = {}
+    for key, value in disk_counts.items():
+        coerced = _coerce_int(value)
+        if coerced is None:
+            continue
+        stage_payload[key] = coerced
+        summary_counts[key] = coerced
+
+    summary_payload = stage_payload.get("summary")
+    if isinstance(summary_payload, Mapping):
+        summary = dict(summary_payload)
+    else:
+        summary = {}
+
+    summary.update(
+        {
+            "results_total": total,
+            "completed": completed,
+            "failed": failed,
+            "empty_ok": empty_ok,
+        }
+    )
+
+    if summary_counts:
+        summary.update(summary_counts)
+
+    if metrics_data:
+        stage_payload["metrics"] = metrics_data
+        summary["metrics"] = dict(metrics_data)
+
+    summary["results"] = dict(results_payload)
+    stage_payload["summary"] = summary
 
     stages["validation"] = stage_payload
     data["updated_at"] = _now_iso()
@@ -886,6 +954,9 @@ def refresh_frontend_stage_from_responses(
     if not ready:
         return
 
+    if answered != required:
+        return
+
     data = _load_runflow(path, sid)
     stages = data.setdefault("stages", {})
     if not isinstance(stages, dict):
@@ -897,8 +968,9 @@ def refresh_frontend_stage_from_responses(
 
     stage_payload["status"] = "success"
     stage_payload["last_at"] = _now_iso()
-    if "empty_ok" not in stage_payload:
-        stage_payload["empty_ok"] = bool(required == 0)
+
+    empty_ok = required == 0
+    stage_payload.setdefault("empty_ok", bool(empty_ok))
 
     metrics_payload = stage_payload.get("metrics")
     if isinstance(metrics_payload, Mapping):
@@ -909,6 +981,36 @@ def refresh_frontend_stage_from_responses(
     metrics_data["answers_required"] = required
     stage_payload["metrics"] = metrics_data
     stage_payload.pop("answers", None)
+
+    packs_counts = _stage_counts_from_disk("frontend", run_dir)
+    packs_count_value = _coerce_int(stage_payload.get("packs_count"))
+    disk_packs = _coerce_int(packs_counts.get("packs_count")) if packs_counts else None
+    if disk_packs is not None:
+        packs_count_value = disk_packs
+    if packs_count_value is not None:
+        stage_payload["packs_count"] = packs_count_value
+
+    summary_payload = stage_payload.get("summary")
+    if isinstance(summary_payload, Mapping):
+        summary = dict(summary_payload)
+    else:
+        summary = {}
+
+    summary.update(
+        {
+            "answers_received": answered,
+            "answers_required": required,
+            "empty_ok": empty_ok,
+        }
+    )
+
+    if packs_count_value is not None:
+        summary["packs_count"] = packs_count_value
+
+    if metrics_data:
+        summary["metrics"] = dict(metrics_data)
+
+    stage_payload["summary"] = summary
 
     stages["frontend"] = stage_payload
     data["updated_at"] = _now_iso()

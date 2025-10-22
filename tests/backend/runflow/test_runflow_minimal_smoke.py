@@ -88,7 +88,7 @@ def test_merge_empty_summary_has_no_packs(runflow_env: SimpleNamespace) -> None:
 
 
 def test_merge_pack_create_without_skips(runflow_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
-    from backend.core.ai.paths import ensure_merge_paths
+    from backend.core.ai.paths import ensure_merge_paths, pair_result_path
 
     sid = "SID-merge-pack"
     runs_root = runflow_env.runs_root
@@ -113,8 +113,13 @@ def test_merge_pack_create_without_skips(runflow_env: SimpleNamespace, monkeypat
             out={"path": str(pack_path)},
         )
 
+    def _fake_send_ai_packs(*_args, **_kwargs) -> None:
+        paths = ensure_merge_paths(Path(runs_root), sid, create=True)
+        result_path = pair_result_path(paths, 0, 1)
+        result_path.write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+
     monkeypatch.setattr(tasks, "_build_ai_packs", _fake_build_ai_packs)
-    monkeypatch.setattr(tasks, "_send_ai_packs", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tasks, "_send_ai_packs", _fake_send_ai_packs)
 
     payload: dict[str, object] = {"sid": sid}
     payload = tasks._merge_build_stage(payload)

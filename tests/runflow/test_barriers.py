@@ -166,6 +166,13 @@ def test_record_stage_updates_barriers_without_instrumentation(tmp_path, monkeyp
 
         importlib.reload(decider)
 
+        calls: list[str] = []
+
+        def _refresh_stub(value: str) -> None:
+            calls.append(value)
+
+        monkeypatch.setattr(decider, "runflow_refresh_umbrella_barriers", _refresh_stub)
+
         decider.record_stage(
             sid,
             "merge",
@@ -193,6 +200,52 @@ def test_record_stage_updates_barriers_without_instrumentation(tmp_path, monkeyp
         assert summary["packs_created"] == 1
         assert summary["result_files"] == 1
         assert not (run_dir / "runflow_steps.json").exists()
+        assert calls == [sid]
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_LOG", raising=False)
+        monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)
+        monkeypatch.delenv("RUNFLOW_EVENTS", raising=False)
+        _reload_runflow()
+
+
+def test_finalize_merge_stage_triggers_barrier_refresh(tmp_path, monkeypatch):
+    sid = "merge-finalize-refresh"
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("UMBRELLA_BARRIERS_ENABLED", "1")
+    monkeypatch.setenv("UMBRELLA_BARRIERS_LOG", "0")
+    monkeypatch.delenv("RUNFLOW_VERBOSE", raising=False)
+    monkeypatch.delenv("RUNFLOW_EVENTS", raising=False)
+    _reload_runflow()
+
+    try:
+        import backend.runflow.decider as decider
+
+        importlib.reload(decider)
+
+        calls: list[str] = []
+
+        def _refresh_stub(value: str) -> None:
+            calls.append(value)
+
+        monkeypatch.setattr(decider, "runflow_refresh_umbrella_barriers", _refresh_stub)
+
+        merge_dir = tmp_path / sid / "ai_packs" / "merge"
+        (merge_dir / "results").mkdir(parents=True, exist_ok=True)
+        (merge_dir / "packs").mkdir(parents=True, exist_ok=True)
+        index_payload = {
+            "schema_version": 2,
+            "sid": sid,
+            "root": ".",
+            "totals": {"scored_pairs": 0},
+            "pairs": [],
+        }
+        _write_json(merge_dir / "pairs_index.json", index_payload)
+
+        decider.finalize_merge_stage(sid, runs_root=tmp_path)
+
+        assert calls == [sid]
     finally:
         monkeypatch.delenv("RUNS_ROOT", raising=False)
         monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
@@ -485,6 +538,13 @@ def test_validation_zero_packs_marks_ready(tmp_path, monkeypatch):
 
         importlib.reload(decider)
 
+        calls: list[str] = []
+
+        def _refresh_stub(value: str) -> None:
+            calls.append(value)
+
+        monkeypatch.setattr(decider, "runflow_refresh_umbrella_barriers", _refresh_stub)
+
         decider.refresh_validation_stage_from_index(sid, runs_root=tmp_path)
         decider.reconcile_umbrella_barriers(sid, runs_root=tmp_path)
 
@@ -498,6 +558,7 @@ def test_validation_zero_packs_marks_ready(tmp_path, monkeypatch):
         assert summary["empty_ok"] is True
         umbrella = payload["umbrella_barriers"]
         assert umbrella["validation_ready"] is True
+        assert calls == [sid]
     finally:
         monkeypatch.delenv("RUNS_ROOT", raising=False)
         monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
@@ -575,6 +636,13 @@ def test_frontend_zero_required_marks_ready(tmp_path, monkeypatch):
 
         importlib.reload(decider)
 
+        calls: list[str] = []
+
+        def _refresh_stub(value: str) -> None:
+            calls.append(value)
+
+        monkeypatch.setattr(decider, "runflow_refresh_umbrella_barriers", _refresh_stub)
+
         decider.refresh_frontend_stage_from_responses(sid, runs_root=tmp_path)
         decider.reconcile_umbrella_barriers(sid, runs_root=tmp_path)
 
@@ -588,6 +656,7 @@ def test_frontend_zero_required_marks_ready(tmp_path, monkeypatch):
         assert summary["empty_ok"] is True
         umbrella = payload["umbrella_barriers"]
         assert umbrella["review_ready"] is True
+        assert calls == [sid]
     finally:
         monkeypatch.delenv("RUNS_ROOT", raising=False)
         monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)

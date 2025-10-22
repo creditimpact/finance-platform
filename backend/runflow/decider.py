@@ -213,6 +213,7 @@ def record_stage(
     metrics: Optional[Mapping[str, Any]] = None,
     results: Optional[Mapping[str, Any]] = None,
     runs_root: Optional[str | Path] = None,
+    refresh_barriers: bool = True,
 ) -> dict[str, Any]:
     """Persist ``stage`` information under ``runs/<sid>/runflow.json``."""
 
@@ -416,6 +417,9 @@ def record_stage(
         refresh_barriers=False,
     )
 
+    if refresh_barriers:
+        runflow_refresh_umbrella_barriers(sid)
+
     return data
 
 
@@ -550,7 +554,10 @@ def finalize_merge_stage(
         results=results_payload,
         runs_root=base_root,
         notes=notes,
+        refresh_barriers=False,
     )
+
+    runflow_refresh_umbrella_barriers(sid)
 
     return {
         "counts": counts,

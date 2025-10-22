@@ -506,6 +506,10 @@ def finalize_merge_stage(
     base_dir = base_root / sid
     merge_dir = base_dir / "ai_packs" / "merge"
 
+    runflow_path = base_root / sid / _RUNFLOW_FILENAME
+    existing_runflow = _load_runflow(runflow_path, sid)
+    previous_status = _stage_status(existing_runflow.get("stages"), "merge")
+
     index_path = merge_dir / "pairs_index.json"
     index_payload = _load_json_mapping(index_path)
     if not isinstance(index_payload, Mapping):
@@ -628,6 +632,9 @@ def finalize_merge_stage(
         refresh_barriers=False,
     )
 
+    if previous_status != "success":
+        log.info("MERGE_STAGE_PROMOTED sid=%s result_files=%s", sid, result_files_total)
+
     runflow_refresh_umbrella_barriers(sid)
 
     return {
@@ -717,6 +724,246 @@ def _stage_status(steps: Mapping[str, Any] | None, stage: str) -> str:
         return status.strip().lower()
 
     return ""
+
+
+def _ensure_stages_dict(data: Mapping[str, Any] | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(data, dict):
+        stages = data.get("stages")
+    else:
+        stages = data.get("stages") if isinstance(data, Mapping) else None
+
+    if isinstance(stages, dict):
+        return stages
+
+    if isinstance(stages, Mapping):
+        stage_mapping = dict(stages)
+    else:
+        stage_mapping = {}
+
+    if isinstance(data, dict):
+        data["stages"] = stage_mapping
+    return stage_mapping
+
+
+def _apply_merge_stage_promotion(
+    data: dict[str, Any], run_dir: Path
+) -> tuple[bool, bool, dict[str, int]]:
+    (
+        result_files_total,
+        pack_files_total,
+        expected_total,
+        ready,
+    ) = _merge_artifacts_progress(run_dir)
+
+    log_context = {"result_files": result_files_total}
+    if not ready:
+        return (False, False, log_context)
+
+    stages = _ensure_stages_dict(data)
+    existing = stages.get("merge") if isinstance(stages, Mapping) else None
+    stage_payload = dict(existing) if isinstance(existing, Mapping) else {}
+
+    previous_status = _stage_status(stages, "merge")
+
+    stage_payload["status"] = "success"
+    stage_payload["last_at"] = _now_iso()
+
+    empty_ok = result_files_total == 0 or expected_total == 0
+    stage_payload["empty_ok"] = bool(empty_ok)
+
+    stage_payload["result_files"] = result_files_total
+    stage_payload["pack_files"] = pack_files_total
+
+    if expected_total is not None:
+        stage_payload["expected_packs"] = expected_total
+
+    summary_payload = stage_payload.get("summary")
+    if isinstance(summary_payload, Mapping):
+        summary = dict(summary_payload)
+    else:
+        summary = {}
+
+    summary.update(
+        {
+            "result_files": result_files_total,
+            "pack_files": pack_files_total,
+            "empty_ok": bool(empty_ok),
+        }
+    )
+
+    if expected_total is not None:
+        summary["expected_packs"] = expected_total
+
+    disk_counts = _stage_counts_from_disk("merge", run_dir)
+    for key, value in disk_counts.items():
+        coerced = _coerce_int(value)
+        if coerced is None:
+            continue
+        stage_payload[str(key)] = coerced
+        summary[str(key)] = coerced
+
+    results_payload = stage_payload.get("results")
+    if isinstance(results_payload, Mapping):
+        results = dict(results_payload)
+    else:
+        results = {}
+    results["result_files"] = result_files_total
+    stage_payload["results"] = results
+
+    stage_payload["summary"] = summary
+
+    stages["merge"] = stage_payload
+
+    promoted = previous_status != "success"
+    return (True, promoted, log_context)
+
+
+def _apply_validation_stage_promotion(
+    data: dict[str, Any], run_dir: Path
+) -> tuple[bool, bool, dict[str, int]]:
+    total, completed, failed, ready = _validation_results_progress(run_dir)
+    log_context = {"total": total, "completed": completed, "failed": failed}
+
+    if not ready or completed != total:
+        return (False, False, log_context)
+
+    stages = _ensure_stages_dict(data)
+    existing = stages.get("validation") if isinstance(stages, Mapping) else None
+    stage_payload = dict(existing) if isinstance(existing, Mapping) else {}
+
+    previous_status = _stage_status(stages, "validation")
+
+    stage_payload["status"] = "success"
+    stage_payload["last_at"] = _now_iso()
+    stage_payload["empty_ok"] = bool(total == 0)
+
+    results_payload = {
+        "results_total": total,
+        "completed": completed,
+        "failed": failed,
+    }
+    stage_payload["results"] = results_payload
+
+    metrics_payload = stage_payload.get("metrics")
+    if isinstance(metrics_payload, Mapping):
+        metrics_data = dict(metrics_payload)
+    else:
+        metrics_data = {}
+
+    disk_counts = _stage_counts_from_disk("validation", run_dir)
+    summary_counts: dict[str, int] = {}
+    for key, value in disk_counts.items():
+        coerced = _coerce_int(value)
+        if coerced is None:
+            continue
+        stage_payload[str(key)] = coerced
+        summary_counts[str(key)] = coerced
+
+    summary_payload = stage_payload.get("summary")
+    if isinstance(summary_payload, Mapping):
+        summary = dict(summary_payload)
+    else:
+        summary = {}
+
+    summary.update(
+        {
+            "results_total": total,
+            "completed": completed,
+            "failed": failed,
+            "empty_ok": bool(total == 0),
+        }
+    )
+
+    if summary_counts:
+        summary.update(summary_counts)
+
+    if metrics_data:
+        stage_payload["metrics"] = metrics_data
+        summary["metrics"] = dict(metrics_data)
+
+    summary["results"] = dict(results_payload)
+    stage_payload["summary"] = summary
+
+    stages["validation"] = stage_payload
+
+    promoted = previous_status != "success"
+    return (True, promoted, log_context)
+
+
+def _apply_frontend_stage_promotion(
+    data: dict[str, Any], run_dir: Path
+) -> tuple[bool, bool, dict[str, int]]:
+    required, answered, ready = _frontend_responses_progress(run_dir)
+    empty_ok = required == 0
+    answers_recorded = 0 if empty_ok else answered
+    if empty_ok:
+        ready = True
+
+    log_context = {
+        "answers_required": required,
+        "answers_received": answers_recorded,
+    }
+
+    if not ready:
+        return (False, False, log_context)
+
+    if not empty_ok and answered != required:
+        return (False, False, log_context)
+
+    stages = _ensure_stages_dict(data)
+    existing = stages.get("frontend") if isinstance(stages, Mapping) else None
+    stage_payload = dict(existing) if isinstance(existing, Mapping) else {}
+
+    previous_status = _stage_status(stages, "frontend")
+
+    stage_payload["status"] = "success"
+    stage_payload["last_at"] = _now_iso()
+    stage_payload["empty_ok"] = bool(empty_ok)
+
+    metrics_payload = stage_payload.get("metrics")
+    if isinstance(metrics_payload, Mapping):
+        metrics_data = dict(metrics_payload)
+    else:
+        metrics_data = {}
+    metrics_data["answers_received"] = answers_recorded
+    metrics_data["answers_required"] = required
+    stage_payload["metrics"] = metrics_data
+    stage_payload.pop("answers", None)
+
+    packs_counts = _stage_counts_from_disk("frontend", run_dir)
+    packs_count_value = _coerce_int(stage_payload.get("packs_count"))
+    disk_packs = _coerce_int(packs_counts.get("packs_count")) if packs_counts else None
+    if disk_packs is not None:
+        packs_count_value = disk_packs
+    if packs_count_value is not None:
+        stage_payload["packs_count"] = packs_count_value
+
+    summary_payload = stage_payload.get("summary")
+    if isinstance(summary_payload, Mapping):
+        summary = dict(summary_payload)
+    else:
+        summary = {}
+
+    summary.update(
+        {
+            "answers_received": answers_recorded,
+            "answers_required": required,
+            "empty_ok": bool(empty_ok),
+        }
+    )
+
+    if packs_count_value is not None:
+        summary["packs_count"] = packs_count_value
+
+    if metrics_data:
+        summary["metrics"] = dict(metrics_data)
+
+    stage_payload["summary"] = summary
+
+    stages["frontend"] = stage_payload
+
+    promoted = previous_status != "success"
+    return (True, promoted, log_context)
 
 
 def _resolve_validation_index_path(run_dir: Path) -> Path:
@@ -1123,9 +1370,13 @@ def _merge_artifacts_progress(
     return (result_files_total, pack_files_total, expected_total, ready)
 
 
-def _compute_umbrella_barriers(run_dir: Path) -> dict[str, bool]:
-    runflow_path = run_dir / "runflow.json"
-    runflow_payload = _load_json_mapping(runflow_path)
+def _compute_umbrella_barriers(
+    run_dir: Path, runflow_payload: Mapping[str, Any] | None = None
+) -> dict[str, bool]:
+    if runflow_payload is None:
+        runflow_path = run_dir / "runflow.json"
+        runflow_payload = _load_json_mapping(runflow_path)
+
     stages_payload = (
         runflow_payload.get("stages")
         if isinstance(runflow_payload, Mapping)
@@ -1272,79 +1523,25 @@ def refresh_validation_stage_from_index(
 
     path = _runflow_path(sid, runs_root)
     run_dir = path.parent
-    total, completed, failed, ready = _validation_results_progress(run_dir)
-    if not ready:
-        return
-
-    if completed != total:
-        return
-
     data = _load_runflow(path, sid)
-    stages = data.setdefault("stages", {})
-    if not isinstance(stages, dict):
-        stages = {}
-        data["stages"] = stages
 
-    existing = stages.get("validation")
-    stage_payload = dict(existing) if isinstance(existing, Mapping) else {}
+    updated, promoted, log_context = _apply_validation_stage_promotion(data, run_dir)
+    if not updated:
+        return
 
-    stage_payload["status"] = "success"
-    stage_payload["last_at"] = _now_iso()
-
-    empty_ok = total == 0
-    stage_payload.setdefault("empty_ok", bool(empty_ok))
-
-    results_payload = {
-        "results_total": total,
-        "completed": completed,
-        "failed": failed,
-    }
-    stage_payload["results"] = results_payload
-
-    metrics_payload = stage_payload.get("metrics")
-    if isinstance(metrics_payload, Mapping):
-        metrics_data = dict(metrics_payload)
-    else:
-        metrics_data = {}
-
-    disk_counts = _stage_counts_from_disk("validation", run_dir)
-    summary_counts: dict[str, int] = {}
-    for key, value in disk_counts.items():
-        coerced = _coerce_int(value)
-        if coerced is None:
-            continue
-        stage_payload[key] = coerced
-        summary_counts[key] = coerced
-
-    summary_payload = stage_payload.get("summary")
-    if isinstance(summary_payload, Mapping):
-        summary = dict(summary_payload)
-    else:
-        summary = {}
-
-    summary.update(
-        {
-            "results_total": total,
-            "completed": completed,
-            "failed": failed,
-            "empty_ok": empty_ok,
-        }
-    )
-
-    if summary_counts:
-        summary.update(summary_counts)
-
-    if metrics_data:
-        stage_payload["metrics"] = metrics_data
-        summary["metrics"] = dict(metrics_data)
-
-    summary["results"] = dict(results_payload)
-    stage_payload["summary"] = summary
-
-    stages["validation"] = stage_payload
     data["updated_at"] = _now_iso()
 
     _atomic_write_json(path, data)
+
+    if promoted:
+        log.info(
+            "VALIDATION_STAGE_PROMOTED sid=%s total=%s completed=%s failed=%s",
+            sid,
+            log_context["total"],
+            log_context["completed"],
+            log_context["failed"],
+        )
+
     runflow_refresh_umbrella_barriers(sid)
 
 
@@ -1355,78 +1552,24 @@ def refresh_frontend_stage_from_responses(
 
     path = _runflow_path(sid, runs_root)
     run_dir = path.parent
-    required, answered, ready = _frontend_responses_progress(run_dir)
-    empty_ok = required == 0
-    if empty_ok:
-        answers_recorded = 0
-        ready = True
-    else:
-        answers_recorded = answered
-
-    if not ready:
-        return
-
-    if not empty_ok and answered != required:
-        return
-
     data = _load_runflow(path, sid)
-    stages = data.setdefault("stages", {})
-    if not isinstance(stages, dict):
-        stages = {}
-        data["stages"] = stages
 
-    existing = stages.get("frontend")
-    stage_payload = dict(existing) if isinstance(existing, Mapping) else {}
+    updated, promoted, log_context = _apply_frontend_stage_promotion(data, run_dir)
+    if not updated:
+        return
 
-    stage_payload["status"] = "success"
-    stage_payload["last_at"] = _now_iso()
-
-    stage_payload.setdefault("empty_ok", bool(empty_ok))
-
-    metrics_payload = stage_payload.get("metrics")
-    if isinstance(metrics_payload, Mapping):
-        metrics_data = dict(metrics_payload)
-    else:
-        metrics_data = {}
-    metrics_data["answers_received"] = answers_recorded
-    metrics_data["answers_required"] = required
-    stage_payload["metrics"] = metrics_data
-    stage_payload.pop("answers", None)
-
-    packs_counts = _stage_counts_from_disk("frontend", run_dir)
-    packs_count_value = _coerce_int(stage_payload.get("packs_count"))
-    disk_packs = _coerce_int(packs_counts.get("packs_count")) if packs_counts else None
-    if disk_packs is not None:
-        packs_count_value = disk_packs
-    if packs_count_value is not None:
-        stage_payload["packs_count"] = packs_count_value
-
-    summary_payload = stage_payload.get("summary")
-    if isinstance(summary_payload, Mapping):
-        summary = dict(summary_payload)
-    else:
-        summary = {}
-
-    summary.update(
-        {
-            "answers_received": answers_recorded,
-            "answers_required": required,
-            "empty_ok": bool(empty_ok),
-        }
-    )
-
-    if packs_count_value is not None:
-        summary["packs_count"] = packs_count_value
-
-    if metrics_data:
-        summary["metrics"] = dict(metrics_data)
-
-    stage_payload["summary"] = summary
-
-    stages["frontend"] = stage_payload
     data["updated_at"] = _now_iso()
 
     _atomic_write_json(path, data)
+
+    if promoted:
+        log.info(
+            "FRONTEND_STAGE_PROMOTED sid=%s answers_required=%s answers_received=%s",
+            sid,
+            log_context["answers_required"],
+            log_context["answers_received"],
+        )
+
     runflow_refresh_umbrella_barriers(sid)
 
 
@@ -1437,9 +1580,41 @@ def reconcile_umbrella_barriers(
 
     runflow_path = _runflow_path(sid, runs_root)
     run_dir = runflow_path.parent
-    statuses = _compute_umbrella_barriers(run_dir)
-
     data = _load_runflow(runflow_path, sid)
+
+    _merge_updated, merge_promoted, merge_log = _apply_merge_stage_promotion(data, run_dir)
+    if merge_promoted:
+        log.info(
+            "MERGE_STAGE_PROMOTED sid=%s result_files=%s",
+            sid,
+            merge_log["result_files"],
+        )
+
+    _validation_updated, validation_promoted, validation_log = _apply_validation_stage_promotion(
+        data, run_dir
+    )
+    if validation_promoted:
+        log.info(
+            "VALIDATION_STAGE_PROMOTED sid=%s total=%s completed=%s failed=%s",
+            sid,
+            validation_log["total"],
+            validation_log["completed"],
+            validation_log["failed"],
+        )
+
+    _frontend_updated, frontend_promoted, frontend_log = _apply_frontend_stage_promotion(
+        data, run_dir
+    )
+    if frontend_promoted:
+        log.info(
+            "FRONTEND_STAGE_PROMOTED sid=%s answers_required=%s answers_received=%s",
+            sid,
+            frontend_log["answers_required"],
+            frontend_log["answers_received"],
+        )
+
+    statuses = _compute_umbrella_barriers(run_dir, runflow_payload=data)
+
     existing = data.get("umbrella_barriers")
     if isinstance(existing, Mapping):
         umbrella = dict(existing)

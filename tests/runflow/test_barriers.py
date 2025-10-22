@@ -665,6 +665,52 @@ def test_frontend_zero_required_marks_ready(tmp_path, monkeypatch):
         _reload_runflow()
 
 
+def test_frontend_zero_required_ignores_extra_answers(tmp_path, monkeypatch):
+    sid = "frontend-ignore-extra"
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("UMBRELLA_BARRIERS_ENABLED", "1")
+    monkeypatch.setenv("UMBRELLA_BARRIERS_LOG", "0")
+    _ensure_requests_stub(monkeypatch)
+    _reload_runflow()
+
+    try:
+        import backend.runflow.decider as decider
+
+        importlib.reload(decider)
+
+        calls: list[str] = []
+
+        def _refresh_stub(value: str) -> None:
+            calls.append(value)
+
+        monkeypatch.setattr(decider, "runflow_refresh_umbrella_barriers", _refresh_stub)
+
+        def _progress_stub(_run_dir):
+            return (0, 3, True)
+
+        monkeypatch.setattr(decider, "_frontend_responses_progress", _progress_stub)
+
+        decider.refresh_frontend_stage_from_responses(sid, runs_root=tmp_path)
+
+        run_dir = tmp_path / sid
+        payload = _load_runflow_payload(run_dir)
+        frontend_stage = payload["stages"]["frontend"]
+        assert frontend_stage["status"] == "success"
+        metrics = frontend_stage["metrics"]
+        assert metrics["answers_required"] == 0
+        assert metrics["answers_received"] == 0
+        summary = frontend_stage["summary"]
+        assert summary["answers_required"] == 0
+        assert summary["answers_received"] == 0
+        assert summary["empty_ok"] is True
+        assert calls == [sid]
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_LOG", raising=False)
+        _reload_runflow()
+
+
 def test_merge_not_required_without_artifacts_marks_ready(tmp_path, monkeypatch):
     sid = "merge-optional"
     monkeypatch.setenv("RUNS_ROOT", str(tmp_path))

@@ -1356,10 +1356,17 @@ def refresh_frontend_stage_from_responses(
     path = _runflow_path(sid, runs_root)
     run_dir = path.parent
     required, answered, ready = _frontend_responses_progress(run_dir)
+    empty_ok = required == 0
+    if empty_ok:
+        answers_recorded = 0
+        ready = True
+    else:
+        answers_recorded = answered
+
     if not ready:
         return
 
-    if answered != required:
+    if not empty_ok and answered != required:
         return
 
     data = _load_runflow(path, sid)
@@ -1374,7 +1381,6 @@ def refresh_frontend_stage_from_responses(
     stage_payload["status"] = "success"
     stage_payload["last_at"] = _now_iso()
 
-    empty_ok = required == 0
     stage_payload.setdefault("empty_ok", bool(empty_ok))
 
     metrics_payload = stage_payload.get("metrics")
@@ -1382,7 +1388,7 @@ def refresh_frontend_stage_from_responses(
         metrics_data = dict(metrics_payload)
     else:
         metrics_data = {}
-    metrics_data["answers_received"] = answered
+    metrics_data["answers_received"] = answers_recorded
     metrics_data["answers_required"] = required
     stage_payload["metrics"] = metrics_data
     stage_payload.pop("answers", None)
@@ -1403,9 +1409,9 @@ def refresh_frontend_stage_from_responses(
 
     summary.update(
         {
-            "answers_received": answered,
+            "answers_received": answers_recorded,
             "answers_required": required,
-            "empty_ok": empty_ok,
+            "empty_ok": bool(empty_ok),
         }
     )
 

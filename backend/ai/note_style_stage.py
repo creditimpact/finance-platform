@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import threading
+import uuid
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,7 +21,6 @@ from backend.core.ai.paths import (
     ensure_note_style_account_paths,
     ensure_note_style_paths,
 )
-from backend.core.io.json_io import _atomic_write_json
 from backend.runflow.decider import record_stage
 
 
@@ -100,6 +100,31 @@ def _load_json_mapping(path: Path) -> Mapping[str, Any] | None:
     return None
 
 
+def _load_result_payload(path: Path) -> Mapping[str, Any] | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        log.warning("NOTE_STYLE_RESULT_READ_FAILED path=%s", path, exc_info=True)
+        return None
+
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    try:
+        payload = json.loads(lines[0])
+    except json.JSONDecodeError:
+        log.warning("NOTE_STYLE_RESULT_INVALID_JSON path=%s", path, exc_info=True)
+        return None
+
+    if isinstance(payload, Mapping):
+        return payload
+
+    return None
+
+
 def _write_jsonl(path: Path, row: Mapping[str, Any]) -> None:
     serialized = json.dumps(row, ensure_ascii=False)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -154,11 +179,20 @@ def _note_hash(source_hash: str, length: int = 12) -> str:
     return source_hash[:length]
 
 
-def _pack_messages(note_text: str, prompt_salt: str) -> list[dict[str, str]]:
+def _pack_messages(features: Mapping[str, Any], prompt_salt: str) -> list[dict[str, str]]:
     system_message = _NOTE_STYLE_SYSTEM_PROMPT.format(prompt_salt=prompt_salt)
+    payload: dict[str, Any] = {"prompt_salt": prompt_salt}
+
+    for key in ("tone", "context_hints", "emphasis"):
+        value = features.get(key) if isinstance(features, Mapping) else None
+        if isinstance(value, Mapping):
+            payload[key] = dict(value)
+
+    user_content = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
     return [
         {"role": "system", "content": system_message},
-        {"role": "user", "content": note_text},
+        {"role": "user", "content": user_content},
     ]
 
 
@@ -387,12 +421,12 @@ def _load_response_note(account_id: str, response_path: Path) -> _LoadedResponse
 def _index_items(payload: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     if not isinstance(payload, Mapping):
         return []
-    items = payload.get("items")
-    if isinstance(items, Sequence):
-        return [dict(entry) for entry in items if isinstance(entry, Mapping)]
     packs = payload.get("packs")
     if isinstance(packs, Sequence):
         return [dict(entry) for entry in packs if isinstance(entry, Mapping)]
+    items = payload.get("items")
+    if isinstance(items, Sequence):
+        return [dict(entry) for entry in items if isinstance(entry, Mapping)]
     return []
 
 
@@ -402,33 +436,18 @@ def _serialize_entry(
     account_id: str,
     paths: NoteStylePaths,
     account_paths: NoteStyleAccountPaths,
-    source_hash: str,
     note_hash: str,
-    features: Mapping[str, Any],
-    prompt_salt: str,
     status: str,
     timestamp: str,
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {
+    return {
         "account_id": account_id,
-        "sid": sid,
         "pack": _relativize(account_paths.pack_file, paths.base),
-        "result": _relativize(account_paths.result_file, paths.base),
-        "status": status,
-        "source_hash": source_hash,
-        "note_hash": note_hash,
-        "prompt_salt": prompt_salt,
+        "lines": 1,
         "built_at": timestamp,
-        "updated_at": timestamp,
-        "completed_at": timestamp,
+        "status": status,
+        "source_hash": note_hash,
     }
-
-    for key in ("tone", "context_hints", "emphasis"):
-        value = features.get(key)
-        if isinstance(value, Mapping):
-            payload[key] = dict(value)
-
-    return payload
 
 
 def _compute_totals(items: Sequence[Mapping[str, Any]]) -> dict[str, int]:
@@ -440,7 +459,7 @@ def _compute_totals(items: Sequence[Mapping[str, Any]]) -> dict[str, int]:
         if status in {"", "skipped"}:
             continue
         total += 1
-        if status in {"completed", "success"}:
+        if status in {"completed", "success", "built"}:
             completed += 1
         elif status in {"failed", "error"}:
             failed += 1
@@ -449,24 +468,57 @@ def _compute_totals(items: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     return {"total": total, "completed": completed, "failed": failed}
 
 
+def _fsync_directory(directory: Path) -> None:
+    try:
+        fd = os.open(str(directory), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _atomic_write_index(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + f".tmp.{uuid.uuid4().hex}")
+    try:
+        with tmp_path.open("w", encoding="utf-8", newline="") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+    _fsync_directory(path.parent)
+
+
 def _write_index(
     *,
     sid: str,
     paths: NoteStylePaths,
     items: Sequence[Mapping[str, Any]],
 ) -> None:
-    timestamp = _now_iso()
-    totals = _compute_totals(items)
     document = {
         "schema_version": _INDEX_SCHEMA_VERSION,
         "sid": sid,
-        "generated_at": timestamp,
+        "root": ".",
         "packs_dir": _relativize(paths.packs_dir, paths.base),
         "results_dir": _relativize(paths.results_dir, paths.base),
-        "items": list(items),
-        "totals": totals,
+        "packs": list(items),
     }
-    _atomic_write_json(paths.index_file, document)
+    _atomic_write_index(paths.index_file, document)
 
 
 def _remove_account_artifacts(account_paths: NoteStyleAccountPaths) -> None:
@@ -582,27 +634,37 @@ def build_note_style_pack_for_account(
     note_text = loaded_note.note_sanitized
     source_hash = loaded_note.source_hash
     note_hash = _note_hash(source_hash)
+    existing_index = _load_json_mapping(paths.index_file)
+    items = _index_items(existing_index)
+    existing_entry: Mapping[str, Any] | None = None
+    for item in items:
+        if str(item.get("account_id")) == str(account_id):
+            existing_entry = item
+            break
+
+    existing_result = _load_result_payload(account_paths.result_file)
+    if (
+        existing_entry is not None
+        and str(existing_entry.get("source_hash")) == note_hash
+        and isinstance(existing_result, Mapping)
+        and str(existing_result.get("source_hash")) == source_hash
+    ):
+        totals = _compute_totals(items)
+        _record_stage_progress(
+            sid=sid,
+            runs_root=runs_root_path,
+            totals=totals,
+            index_path=paths.index_file,
+        )
+        return {
+            "status": "unchanged",
+            "packs_total": totals.get("total", 0),
+            "packs_completed": totals.get("completed", 0),
+        }
+
     features = _extract_features(note_text)
     prompt_salt = _prompt_salt(sid, str(account_id), source_hash)
     timestamp = _now_iso()
-
-    existing_index = _load_json_mapping(paths.index_file)
-    items = _index_items(existing_index)
-    for item in items:
-        if str(item.get("account_id")) == str(account_id):
-            if item.get("source_hash") == source_hash:
-                totals = _compute_totals(items)
-                _record_stage_progress(
-                    sid=sid,
-                    runs_root=runs_root_path,
-                    totals=totals,
-                    index_path=paths.index_file,
-                )
-                return {
-                    "status": "unchanged",
-                    "packs_total": totals.get("total", 0),
-                    "packs_completed": totals.get("completed", 0),
-                }
 
     pack_payload = {
         "sid": sid,
@@ -615,7 +677,7 @@ def build_note_style_pack_for_account(
         "note_hash": note_hash,
         "model": _NOTE_STYLE_MODEL,
         "prompt_salt": prompt_salt,
-        "messages": _pack_messages(note_text, prompt_salt),
+        "messages": _pack_messages(features, prompt_salt),
         "built_at": timestamp,
     }
     result_payload = {
@@ -636,11 +698,8 @@ def build_note_style_pack_for_account(
         account_id=str(account_id),
         paths=paths,
         account_paths=account_paths,
-        source_hash=source_hash,
         note_hash=note_hash,
-        features=features,
-        prompt_salt=prompt_salt,
-        status="completed",
+        status="built",
         timestamp=timestamp,
     )
 

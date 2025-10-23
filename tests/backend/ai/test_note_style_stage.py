@@ -209,6 +209,8 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert first_entry["status"] == "built"
     expected_pack = account_paths.pack_file.relative_to(paths.base).as_posix()
     assert first_entry["pack"] == expected_pack
+    expected_result = account_paths.result_file.relative_to(paths.base).as_posix()
+    assert first_entry["result"] == expected_result
     assert first_entry["source_hash"] == expected_short_hash
     assert first_entry["lines"] == 1
     assert first_entry["built_at"]

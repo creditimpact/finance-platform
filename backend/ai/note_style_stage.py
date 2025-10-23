@@ -16,6 +16,7 @@ import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
@@ -517,6 +518,183 @@ def _collect_bureau_values(
     return _unique(values)
 
 
+_BUREAU_FIELD_ORDER: tuple[str, ...] = (
+    "reported_creditor",
+    "account_type",
+    "account_status",
+    "payment_status",
+    "creditor_type",
+    "date_opened",
+    "date_reported",
+    "date_of_last_activity",
+    "closed_date",
+    "last_verified",
+    "balance_owed",
+    "high_balance",
+    "past_due_amount",
+)
+
+_BUREAU_AMOUNT_FIELDS = {
+    "balance_owed",
+    "high_balance",
+    "past_due_amount",
+}
+
+_BUREAU_DATE_FIELDS = {
+    "date_opened",
+    "date_reported",
+    "date_of_last_activity",
+    "closed_date",
+    "last_verified",
+}
+
+
+def _normalize_amount_value(value: Any) -> str:
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return ""
+        decimal_value = Decimal(str(value))
+    elif isinstance(value, Decimal):
+        decimal_value = value
+    else:
+        text = _normalize_text(value)
+        if not text:
+            return ""
+        stripped = text.strip()
+        negative = False
+        if stripped.startswith("(") and stripped.endswith(")"):
+            negative = True
+            stripped = stripped[1:-1]
+        if stripped.startswith("-"):
+            negative = True
+            stripped = stripped[1:]
+        if stripped.endswith("-"):
+            negative = True
+            stripped = stripped[:-1]
+        stripped = stripped.replace(",", "").replace("$", "").strip()
+        if not stripped:
+            return ""
+        try:
+            decimal_value = Decimal(stripped)
+        except InvalidOperation:
+            filtered = re.sub(r"[^0-9.]", "", stripped)
+            if not filtered:
+                return ""
+            try:
+                decimal_value = Decimal(filtered)
+            except InvalidOperation:
+                return ""
+        if negative:
+            decimal_value = -decimal_value
+    normalized = format(decimal_value, "f")
+    if "." in normalized:
+        normalized = normalized.rstrip("0").rstrip(".")
+    if not normalized:
+        normalized = "0"
+    return normalized
+
+
+def _normalize_date_value(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    text = _normalize_text(value)
+    if not text:
+        return ""
+    stripped = text.strip()
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%m-%d-%Y", "%m.%d.%Y"):
+        try:
+            parsed = datetime.strptime(stripped, fmt)
+        except ValueError:
+            continue
+        return parsed.date().isoformat()
+    for fmt in ("%m/%d/%y", "%m-%d-%y", "%m.%d.%y"):
+        try:
+            parsed = datetime.strptime(stripped, fmt)
+        except ValueError:
+            continue
+        return parsed.date().isoformat()
+    try:
+        parsed = datetime.fromisoformat(stripped)
+    except ValueError:
+        return stripped
+    return parsed.date().isoformat()
+
+
+def _normalize_bureau_field(field: str, value: Any) -> str:
+    if isinstance(value, Mapping):
+        for key in ("value", "raw", "display", "text"):
+            if key in value:
+                candidate = _normalize_bureau_field(field, value[key])
+                if candidate:
+                    return candidate
+        return ""
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for entry in value:
+            candidate = _normalize_bureau_field(field, entry)
+            if candidate:
+                return candidate
+        return ""
+    if field in _BUREAU_AMOUNT_FIELDS:
+        return _normalize_amount_value(value)
+    if field in _BUREAU_DATE_FIELDS:
+        return _normalize_date_value(value)
+    return _clean_value(value)
+
+
+def _summarize_bureaus(
+    bureaus: Mapping[str, Mapping[str, Any]]
+) -> dict[str, Any]:
+    if not isinstance(bureaus, Mapping):
+        return {}
+
+    per_bureau: dict[str, dict[str, str]] = {}
+    field_counts: dict[str, dict[str, int]] = {}
+    field_bureau_values: dict[str, dict[str, str]] = {}
+
+    for bureau_name, payload in sorted(bureaus.items(), key=lambda item: item[0]):
+        if not isinstance(payload, Mapping):
+            continue
+        normalized_fields: dict[str, str] = {}
+        for field in _BUREAU_FIELD_ORDER:
+            normalized = _normalize_bureau_field(field, payload.get(field))
+            if not normalized:
+                continue
+            normalized_fields[field] = normalized
+            counts = field_counts.setdefault(field, {})
+            counts[normalized] = counts.get(normalized, 0) + 1
+            bureau_map = field_bureau_values.setdefault(field, {})
+            bureau_map[bureau_name] = normalized
+        if normalized_fields:
+            per_bureau[bureau_name] = dict(sorted(normalized_fields.items(), key=lambda item: _BUREAU_FIELD_ORDER.index(item[0])))
+
+    if not per_bureau:
+        return {}
+
+    majority_values: dict[str, str] = {}
+    for field in _BUREAU_FIELD_ORDER:
+        counts = field_counts.get(field)
+        if not counts:
+            continue
+        majority_value = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        if majority_value:
+            majority_values[field] = majority_value
+
+    disagreements: dict[str, dict[str, str]] = {}
+    for field in _BUREAU_FIELD_ORDER:
+        bureau_map = field_bureau_values.get(field)
+        if not bureau_map:
+            continue
+        unique_values = {value for value in bureau_map.values() if value}
+        if len(unique_values) > 1:
+            disagreements[field] = dict(sorted(bureau_map.items(), key=lambda item: item[0]))
+
+    return {
+        "per_bureau": per_bureau,
+        "majority_values": majority_values,
+        "disagreements": disagreements,
+    }
+
+
 def _extract_account_tail(
     meta: Mapping[str, Any], bureaus: Mapping[str, Mapping[str, Any]]
 ) -> str:
@@ -537,6 +715,7 @@ def _build_account_context(
     meta: Mapping[str, Any],
     bureaus: Mapping[str, Mapping[str, Any]],
     tags: Sequence[Mapping[str, Any]],
+    bureaus_summary: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     context: dict[str, Any] = {}
 
@@ -569,37 +748,10 @@ def _build_account_context(
     if tags_context:
         context["tags"] = tags_context
 
-    bureaus_context: dict[str, Any] = {}
-    account_types = _collect_bureau_values(bureaus, "account_type")
-    if account_types:
-        bureaus_context["account_type"] = account_types
-
-    statuses = _collect_bureau_values(bureaus, "account_status")
-    if statuses:
-        bureaus_context["status"] = statuses
-
-    balances = _collect_bureau_values(bureaus, "balance_owed")
-    if balances:
-        bureaus_context["balance_owed"] = balances
-
-    opened = _collect_bureau_values(bureaus, "date_opened")
-    if opened:
-        bureaus_context["date_opened"] = opened
-
-    closed = _collect_bureau_values(bureaus, "closed_date")
-    if closed:
-        bureaus_context["closed_date"] = closed
-
-    numbers = _collect_bureau_values(bureaus, "account_number_display")
-    if numbers:
-        bureaus_context["account_number"] = numbers
-
-    creditors = _collect_bureau_values(bureaus, "creditor_name")
-    if creditors:
-        bureaus_context["creditor_name"] = creditors
-
-    if bureaus_context:
-        context["bureaus"] = bureaus_context
+    if bureaus_summary is None:
+        bureaus_summary = _summarize_bureaus(bureaus)
+    if isinstance(bureaus_summary, Mapping) and bureaus_summary.get("per_bureau"):
+        context["bureaus"] = bureaus_summary
 
     return context
 
@@ -609,6 +761,7 @@ def _build_account_fingerprint(
     meta: Mapping[str, Any],
     bureaus: Mapping[str, Mapping[str, Any]],
     tags: Sequence[Mapping[str, Any]],
+    bureaus_summary: Mapping[str, Any] | None = None,
 ) -> str:
     components: list[str] = []
 
@@ -628,21 +781,33 @@ def _build_account_fingerprint(
     if issue_slugs:
         components.append(f"issues:{'+'.join(sorted(issue_slugs))}")
 
-    account_type_slugs = []
-    for value in _collect_bureau_values(bureaus, "account_type"):
-        slug = _slugify(value)
-        if slug:
-            account_type_slugs.append(slug)
-    if account_type_slugs:
-        components.append(f"type:{'+'.join(sorted(set(account_type_slugs)))}")
+    if bureaus_summary is None:
+        bureaus_summary = _summarize_bureaus(bureaus)
+    majority_values: Mapping[str, Any] = {}
+    if isinstance(bureaus_summary, Mapping):
+        majority_payload = bureaus_summary.get("majority_values")
+        if isinstance(majority_payload, Mapping):
+            majority_values = majority_payload
 
-    status_slugs = []
-    for value in _collect_bureau_values(bureaus, "account_status"):
-        slug = _slugify(value)
-        if slug:
-            status_slugs.append(slug)
-    if status_slugs:
-        components.append(f"status:{'+'.join(sorted(set(status_slugs)))}")
+    reported_creditor = _clean_value(majority_values.get("reported_creditor"))
+    if reported_creditor:
+        components.append(f"reported:{_slugify(reported_creditor)}")
+
+    account_type_value = _clean_value(majority_values.get("account_type"))
+    if account_type_value:
+        components.append(f"type:{_slugify(account_type_value)}")
+
+    account_status_value = _clean_value(majority_values.get("account_status"))
+    if account_status_value:
+        components.append(f"status:{_slugify(account_status_value)}")
+
+    payment_status_value = _clean_value(majority_values.get("payment_status"))
+    if payment_status_value:
+        components.append(f"payment:{_slugify(payment_status_value)}")
+
+    creditor_type_value = _clean_value(majority_values.get("creditor_type"))
+    if creditor_type_value:
+        components.append(f"creditor:{_slugify(creditor_type_value)}")
 
     tail = _extract_account_tail(meta, bureaus)
     if tail:
@@ -1934,12 +2099,19 @@ def build_note_style_pack_for_account(
         )
 
     meta_payload, bureaus_payload, tags_payload = _load_account_artifacts(account_dir)
-    account_context = _build_account_context(meta_payload, bureaus_payload, tags_payload)
+    bureaus_summary = _summarize_bureaus(bureaus_payload)
+    account_context = _build_account_context(
+        meta_payload,
+        bureaus_payload,
+        tags_payload,
+        bureaus_summary,
+    )
     fingerprint = _build_account_fingerprint(
         account_id_str,
         meta_payload,
         bureaus_payload,
         tags_payload,
+        bureaus_summary,
     )
 
     pack_payload = {

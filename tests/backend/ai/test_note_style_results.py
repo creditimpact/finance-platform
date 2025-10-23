@@ -90,12 +90,15 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
         if record.name == "backend.ai.note_style_results"
     ]
 
-    assert any("STYLE_RESULTS_WRITTEN" in message for message in messages)
+    assert any("NOTE_STYLE_RESULT_WRITTEN" in message for message in messages)
     assert any(
-        "STYLE_INDEX_UPDATED" in message and "status=completed" in message
+        "NOTE_STYLE_INDEX_UPDATED" in message and "status=completed" in message
         for message in messages
     )
-    assert any("STYLE_STAGE_REFRESH" in message for message in messages)
+    assert any("NOTE_STYLE_REFRESH" in message for message in messages)
+    assert any(
+        "NOTE_STYLE_STAGE_REFRESH_DETAIL" in message for message in messages
+    )
     assert any("[Runflow] Umbrella barriers:" in message for message in messages)
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)

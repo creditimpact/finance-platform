@@ -239,13 +239,18 @@ def discover_note_style_response_accounts(
     runs_root_path = _resolve_runs_root(runs_root)
     responses_dir = runs_root_path / sid / "frontend" / "review" / "responses"
     if not responses_dir.is_dir():
+        log.info("NOTE_STYLE_DISCOVERY sid=%s responses=%s usable=%s", sid, 0, 0)
         return []
 
     suffix = ".result.json"
     discovered: list[NoteStyleResponseAccount] = []
+    responses_total = 0
+    usable_total = 0
     for candidate in sorted(responses_dir.glob(f"*{suffix}"), key=lambda path: path.name):
         if not candidate.is_file():
             continue
+
+        responses_total += 1
 
         try:
             if candidate.stat().st_size == 0:
@@ -281,8 +286,15 @@ def discover_note_style_response_accounts(
                 result_filename=result_filename,
             )
         )
+        usable_total += 1
 
     discovered.sort(key=lambda entry: entry.account_id)
+    log.info(
+        "NOTE_STYLE_DISCOVERY sid=%s responses=%s usable=%s",
+        sid,
+        responses_total,
+        usable_total,
+    )
     return discovered
 
 
@@ -499,7 +511,7 @@ def _log_style_discovery(
         confidence_text = f"{confidence_value:.2f}"
 
     log.info(
-        "STYLE_DISCOVERY sid=%s account_id=%s response=%s status=%s note_hash=%s source_hash=%s chars=%s words=%s tone=%s topic=%s emphasis=%s confidence=%s risk_flags=%s prompt_salt=%s reason=%s",
+        "NOTE_STYLE_DISCOVERY_DETAIL sid=%s account_id=%s response=%s status=%s note_hash=%s source_hash=%s chars=%s words=%s tone=%s topic=%s emphasis=%s confidence=%s risk_flags=%s prompt_salt=%s reason=%s",
         sid,
         account_id,
         str(response),
@@ -1192,7 +1204,7 @@ def _update_index_for_account(
             or ""
         )
     log.info(
-        "STYLE_INDEX_UPDATED sid=%s account_id=%s action=%s status=%s packs_total=%s packs_completed=%s packs_failed=%s index=%s pack=%s result=%s note_hash=%s",
+        "NOTE_STYLE_INDEX_UPDATED sid=%s account_id=%s action=%s status=%s packs_total=%s packs_completed=%s packs_failed=%s index=%s pack=%s result=%s note_hash=%s",
         sid,
         account_id,
         action,
@@ -1209,10 +1221,10 @@ def _update_index_for_account(
     return totals
 
 
-def _note_style_index_progress(index_path: Path) -> tuple[int, int, int]:
+def _note_style_index_progress(index_path: Path) -> tuple[int, int, int, int]:
     document = _load_json_mapping(index_path)
     if not isinstance(document, Mapping):
-        return (0, 0, 0)
+        return (0, 0, 0, 0)
 
     entries: Sequence[Mapping[str, Any]] = ()
     packs_payload = document.get("packs")
@@ -1226,10 +1238,13 @@ def _note_style_index_progress(index_path: Path) -> tuple[int, int, int]:
     total = 0
     completed = 0
     failed = 0
+    skipped = 0
 
     for entry in entries:
         status_text = _normalize_text(entry.get("status")).lower()
         if status_text in {"", "skipped", "skipped_low_signal"}:
+            if status_text in {"skipped", "skipped_low_signal"}:
+                skipped += 1
             continue
         total += 1
         if status_text == "completed":
@@ -1244,22 +1259,25 @@ def _note_style_index_progress(index_path: Path) -> tuple[int, int, int]:
             completed = _coerce_int(totals_payload.get("completed")) or 0
             failed = _coerce_int(totals_payload.get("failed")) or 0
 
-    return (max(total, 0), max(completed, 0), max(failed, 0))
+    return (max(total, 0), max(completed, 0), max(failed, 0), max(skipped, 0))
 
 
 def _record_stage_progress(
     *, sid: str, runs_root: Path, totals: Mapping[str, int], index_path: Path
 ) -> None:
-    packs_total, packs_completed, packs_failed = _note_style_index_progress(index_path)
+    packs_total, packs_completed, packs_failed, packs_skipped = _note_style_index_progress(
+        index_path
+    )
 
     if packs_failed > 0 and packs_total > 0:
         status: str = "error"
-    elif packs_total == 0 or packs_completed == packs_total:
+    elif packs_total == 0 or packs_completed >= packs_total:
         status = "success"
     else:
         status = "built"
 
     empty_ok = packs_total == 0
+    ready = status == "success"
 
     counts = {"packs_total": packs_total}
     metrics = {"packs_total": packs_total}
@@ -1268,6 +1286,16 @@ def _record_stage_progress(
         "completed": packs_completed,
         "failed": packs_failed,
     }
+
+    log.info(
+        "NOTE_STYLE_REFRESH sid=%s ready=%s total=%s completed=%s failed=%s skipped=%s",
+        sid,
+        ready,
+        packs_total,
+        packs_completed,
+        packs_failed,
+        packs_skipped,
+    )
 
     record_stage(
         sid,
@@ -1346,6 +1374,14 @@ def build_note_style_pack_for_account(
         )
         _record_stage_progress(
             sid=sid, runs_root=runs_root_path, totals=totals, index_path=paths.index_file
+        )
+        log.info(
+            "NOTE_STYLE_PACK_SKIPPED_LOW_SIGNAL sid=%s acc=%s note_hash=%s char_len=%s word_len=%s",
+            sid,
+            account_id_str,
+            note_hash,
+            char_len,
+            word_len,
         )
         _log_style_discovery(
             sid=sid,
@@ -1466,16 +1502,16 @@ def build_note_style_pack_for_account(
     pack_relative = _relativize(account_paths.pack_file, paths.base)
     result_relative = _relativize(account_paths.result_file, paths.base)
     log.info(
-        "STYLE_PACK_BUILT sid=%s account_id=%s pack=%s result=%s char_len=%s word_len=%s prompt_salt=%s note_hash=%s source_hash=%s model=%s",
+        "NOTE_STYLE_PACK_BUILT sid=%s acc=%s pack=%s result=%s note_hash=%s prompt_salt=%s source_hash=%s char_len=%s word_len=%s model=%s",
         sid,
         account_id_str,
         pack_relative,
         result_relative,
+        note_hash,
+        prompt_salt,
+        source_hash,
         char_len,
         word_len,
-        prompt_salt,
-        note_hash,
-        source_hash,
         _NOTE_STYLE_MODEL,
     )
 

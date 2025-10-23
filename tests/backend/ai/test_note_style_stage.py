@@ -267,15 +267,17 @@ def test_note_style_stage_emits_structured_logs(
         if record.name == "backend.ai.note_style_stage"
     ]
 
-    assert any("STYLE_DISCOVERY" in message for message in messages)
+    assert any("NOTE_STYLE_DISCOVERY_DETAIL" in message for message in messages)
     assert any(
-        "STYLE_PACK_BUILT" in message and f"prompt_salt={result['prompt_salt']}" in message
+        "NOTE_STYLE_PACK_BUILT" in message
+        and f"prompt_salt={result['prompt_salt']}" in message
         for message in messages
     )
     assert any(
-        "STYLE_INDEX_UPDATED" in message and "status=built" in message
+        "NOTE_STYLE_INDEX_UPDATED" in message and "status=built" in message
         for message in messages
     )
+    assert any("NOTE_STYLE_REFRESH" in message for message in messages)
 
 
 def test_note_style_stage_refresh_promotes_on_results(

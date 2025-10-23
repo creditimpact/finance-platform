@@ -97,6 +97,10 @@ def _umbrella_require_merge() -> bool:
     return _env_enabled("UMBRELLA_REQUIRE_MERGE", True)
 
 
+def _umbrella_require_style() -> bool:
+    return _env_enabled("UMBRELLA_REQUIRE_STYLE", False)
+
+
 def _barrier_event_logging_enabled() -> bool:
     return _env_enabled("UMBRELLA_BARRIERS_LOG", True)
 
@@ -394,6 +398,7 @@ def _default_umbrella_barriers() -> dict[str, Any]:
         "merge_ready": False,
         "validation_ready": False,
         "review_ready": False,
+        "style_ready": False,
         "all_ready": False,
         "checked_at": None,
     }
@@ -407,7 +412,13 @@ def _default_umbrella_barriers() -> dict[str, Any]:
 def _normalise_umbrella_barriers(payload: Any) -> dict[str, Any]:
     result = _default_umbrella_barriers()
     if isinstance(payload, Mapping):
-        for key in ("merge_ready", "validation_ready", "review_ready", "all_ready"):
+        for key in (
+            "merge_ready",
+            "validation_ready",
+            "review_ready",
+            "style_ready",
+            "all_ready",
+        ):
             value = payload.get(key)
             if isinstance(value, bool):
                 result[key] = value
@@ -1947,6 +1958,7 @@ def _compute_umbrella_barriers(
             validation_ready = True
 
     frontend_stage = _stage_mapping("frontend")
+    note_style_stage = _stage_mapping("note_style")
     review_required, review_received, review_ready_disk = _frontend_responses_progress(
         run_dir
     )
@@ -1965,12 +1977,27 @@ def _compute_umbrella_barriers(
         if not review_ready and _stage_empty_ok(frontend_stage):
             review_ready = True
 
-    all_ready = merge_ready and validation_ready and review_ready
+    _style_total, _style_completed, _style_failed, style_ready_disk = (
+        _note_style_results_progress(run_dir)
+    )
+    style_ready = style_ready_disk
+    if not style_ready:
+        if _stage_status_success(note_style_stage):
+            style_ready = True
+        elif _stage_empty_ok(note_style_stage):
+            style_ready = True
+
+    all_ready_base = merge_ready and validation_ready and review_ready
+    if _umbrella_require_style():
+        all_ready = all_ready_base and style_ready
+    else:
+        all_ready = all_ready_base
 
     readiness: dict[str, bool] = {
         "merge_ready": merge_ready,
         "validation_ready": validation_ready,
         "review_ready": review_ready,
+        "style_ready": style_ready,
         "all_ready": all_ready,
     }
 
@@ -2278,6 +2305,7 @@ def evaluate_global_barriers(run_path: str) -> dict[str, bool]:
             "merge_ready": False,
             "validation_ready": False,
             "review_ready": False,
+            "style_ready": False,
             "all_ready": False,
         }
 

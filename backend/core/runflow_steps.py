@@ -6,6 +6,7 @@ from typing import Any, Mapping, MutableMapping, Optional
 
 import json
 import os
+import uuid
 
 from backend.core.io.json_io import _atomic_write_json as _shared_atomic_write_json
 from backend.runflow.counters import (

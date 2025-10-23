@@ -84,3 +84,4 @@ def test_backfill_validation_updates_index(tmp_path: Path, capsys: pytest.Captur
     assert validation_stage["status"] == "success"
     umbrella = runflow_payload["umbrella_barriers"]
     assert umbrella["validation_ready"] is True
+    assert umbrella["style_ready"] is True

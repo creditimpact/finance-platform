@@ -123,6 +123,7 @@ def test_runflow_steps_and_events(tmp_path, monkeypatch):
             "merge_ready": False,
             "validation_ready": False,
             "review_ready": False,
+            "style_ready": False,
             "all_ready": False,
         }
 
@@ -500,6 +501,7 @@ def test_runflow_atomic_writes_and_event_appends(tmp_path, monkeypatch):
             "merge_ready": False,
             "validation_ready": False,
             "review_ready": False,
+            "style_ready": False,
             "all_ready": False,
         }
     finally:

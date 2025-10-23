@@ -77,6 +77,10 @@ def _review_explanation_required() -> bool:
     return _env_enabled("UMBRELLA_BARRIERS_REVIEW_REQUIRE_EXPLANATION", True)
 
 
+def _umbrella_require_style() -> bool:
+    return _env_enabled("UMBRELLA_REQUIRE_STYLE", False)
+
+
 def _document_verifier_enabled() -> bool:
     return _env_enabled("DOCUMENT_VERIFIER_ENABLED", False)
 
@@ -497,6 +501,7 @@ def _apply_umbrella_barriers(
     merge_stage = _ensure_stage_dict(stages, "merge")
     validation_stage = _ensure_stage_dict(stages, "validation")
     frontend_stage = _ensure_stage_dict(stages, "frontend")
+    note_style_stage = _ensure_stage_dict(stages, "note_style")
 
     # ------------------------------------------------------------------
     # Fallback readiness based on the existing runflow snapshot.  This is
@@ -607,6 +612,15 @@ def _apply_umbrella_barriers(
         if empty_ok:
             review_ready = True
 
+    style_ready = False
+    if note_style_stage and _stage_status_success(note_style_stage):
+        style_ready = True
+    elif note_style_stage:
+        summary = _ensure_summary(note_style_stage)
+        empty_ok = bool(note_style_stage.get("empty_ok")) or bool(summary.get("empty_ok"))
+        if empty_ok:
+            style_ready = True
+
     # ------------------------------------------------------------------
     # Prefer authoritative readiness derived from disk artifacts.
     # ------------------------------------------------------------------
@@ -625,20 +639,26 @@ def _apply_umbrella_barriers(
 
     if isinstance(disk_statuses, Mapping) and disk_statuses:
         merge_ready = bool(disk_statuses.get("merge_ready", merge_ready))
-        validation_ready = bool(disk_statuses.get("validation_ready", validation_ready))
-        review_ready = bool(disk_statuses.get("review_ready", review_ready))
-        all_ready = bool(
-            disk_statuses.get(
-                "all_ready", merge_ready and validation_ready and review_ready
-            )
+        validation_ready = bool(
+            disk_statuses.get("validation_ready", validation_ready)
         )
+        review_ready = bool(disk_statuses.get("review_ready", review_ready))
+        style_ready = bool(disk_statuses.get("style_ready", style_ready))
+        default_all_ready = merge_ready and validation_ready and review_ready
+        if _umbrella_require_style():
+            default_all_ready = default_all_ready and style_ready
+        all_ready = bool(disk_statuses.get("all_ready", default_all_ready))
     else:
-        all_ready = merge_ready and validation_ready and review_ready
+        default_all_ready = merge_ready and validation_ready and review_ready
+        if _umbrella_require_style():
+            default_all_ready = default_all_ready and style_ready
+        all_ready = default_all_ready
 
     normalized_barriers: dict[str, Any] = {
         "merge_ready": merge_ready,
         "validation_ready": validation_ready,
         "review_ready": review_ready,
+        "style_ready": style_ready,
         "all_ready": all_ready,
         "checked_at": ts,
     }
@@ -1069,7 +1089,13 @@ def _stage_end_event_counters(
 
 
 def _normalize_barrier_flags(barriers: Optional[Mapping[str, Any]]) -> dict[str, bool]:
-    keys = ("merge_ready", "validation_ready", "review_ready", "all_ready")
+    keys = (
+        "merge_ready",
+        "validation_ready",
+        "review_ready",
+        "style_ready",
+        "all_ready",
+    )
     result: dict[str, bool] = {}
     for key in keys:
         value = False

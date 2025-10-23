@@ -311,6 +311,56 @@ def merge_scored_pairs_count(base_dir: Path) -> Optional[int]:
     return None
 
 
+def note_style_stage_counts(base_dir: Path) -> Optional[dict[str, int]]:
+    """Return aggregate counters for note_style stage artifacts."""
+
+    index_path = base_dir / "ai_packs" / "note_style" / "index.json"
+    document = _load_document(index_path)
+    if document is None:
+        return None
+
+    totals_payload = document.get("totals")
+    packs_total: Optional[int] = None
+    packs_completed: Optional[int] = None
+    packs_failed: Optional[int] = None
+
+    if isinstance(totals_payload, Mapping):
+        packs_total = _coerce_int(totals_payload.get("total"))
+        packs_completed = _coerce_int(totals_payload.get("completed"))
+        packs_failed = _coerce_int(totals_payload.get("failed"))
+
+    if packs_total is None or packs_completed is None:
+        items = document.get("items")
+        total = 0
+        completed = 0
+        failed = 0
+        if isinstance(items, Sequence):
+            for entry in items:
+                if not isinstance(entry, Mapping):
+                    continue
+                status_text = _normalize_entry_text(entry.get("status")).lower()
+                if status_text in {"", "skipped"}:
+                    continue
+                total += 1
+                if status_text in {"completed", "success"}:
+                    completed += 1
+                elif status_text in {"failed", "error"}:
+                    failed += 1
+        packs_total = total
+        packs_completed = completed
+        packs_failed = failed
+
+    result: dict[str, int] = {}
+    if packs_total is not None:
+        result["packs_total"] = max(packs_total, 0)
+    if packs_completed is not None:
+        result["packs_completed"] = max(packs_completed, 0)
+    if packs_failed is not None:
+        result["packs_failed"] = max(packs_failed, 0)
+
+    return result or None
+
+
 def runflow_validation_findings_total(base_dir: Path) -> Optional[int]:
     """Return the validation findings total recorded in ``runflow.json``."""
 
@@ -353,6 +403,9 @@ def stage_counts(stage: str, base_dir: Path) -> dict[str, int]:
     if stage_key == "merge":
         value = merge_scored_pairs_count(base_dir)
         return {"scored_pairs": value} if value is not None else {}
+    if stage_key == "note_style":
+        value = note_style_stage_counts(base_dir)
+        return value if value is not None else {}
     return {}
 
 
@@ -360,6 +413,7 @@ __all__ = [
     "frontend_answers_counters",
     "frontend_packs_count",
     "merge_scored_pairs_count",
+    "note_style_stage_counts",
     "stage_counts",
     "runflow_validation_findings_total",
     "validation_packs_count",

@@ -119,6 +119,17 @@ class RunManifest:
                         "last_built_at": None,
                         "logs": None,
                     },
+                    "note_style": {
+                        "base": None,
+                        "dir": None,
+                        "packs": None,
+                        "packs_dir": None,
+                        "results": None,
+                        "results_dir": None,
+                        "index": None,
+                        "last_built_at": None,
+                        "logs": None,
+                    },
                 },
                 "validation": {
                     "base": None,
@@ -141,6 +152,10 @@ class RunManifest:
                     "validation": {
                         "built": False,
                         "sent": False,
+                        "completed_at": None,
+                    },
+                    "note_style": {
+                        "built": False,
                         "completed_at": None,
                     },
                 },

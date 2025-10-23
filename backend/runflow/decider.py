@@ -34,7 +34,7 @@ RunState = Literal[
     "COMPLETE_NO_ACTION",
     "ERROR",
 ]
-StageName = Literal["merge", "validation", "frontend"]
+StageName = Literal["merge", "validation", "frontend", "note_style"]
 
 
 log = logging.getLogger(__name__)
@@ -621,6 +621,21 @@ def record_stage(
                 frontend_log.get("answers_received"),
             )
 
+    if "note_style" in stage_names:
+        (
+            _note_style_updated,
+            note_style_promoted,
+            note_style_log,
+        ) = _apply_note_style_stage_promotion(data, base_dir)
+        if note_style_promoted:
+            log.info(
+                "NOTE_STYLE_STAGE_PROMOTED sid=%s total=%s completed=%s failed=%s",
+                sid,
+                note_style_log.get("total"),
+                note_style_log.get("completed"),
+                note_style_log.get("failed"),
+            )
+
     latest_snapshot = _load_runflow(path, sid)
     data = _merge_runflow_snapshots(latest_snapshot, data)
 
@@ -1158,6 +1173,59 @@ def _apply_validation_stage_promotion(
     return (True, promoted, log_context)
 
 
+def _apply_note_style_stage_promotion(
+    data: dict[str, Any], run_dir: Path
+) -> tuple[bool, bool, dict[str, int]]:
+    total, completed, failed, ready = _note_style_results_progress(run_dir)
+    log_context = {"total": total, "completed": completed, "failed": failed}
+
+    if not ready:
+        return (False, False, log_context)
+
+    stages = _ensure_stages_dict(data)
+    existing = stages.get("note_style") if isinstance(stages, Mapping) else None
+    stage_payload = dict(existing) if isinstance(existing, Mapping) else {}
+
+    previous_status = _stage_status(stages, "note_style")
+
+    stage_payload["status"] = "success"
+    stage_payload["last_at"] = _now_iso()
+    stage_payload["empty_ok"] = bool(total == 0)
+
+    disk_counts = _stage_counts_from_disk("note_style", run_dir)
+    for key, value in disk_counts.items():
+        coerced = _coerce_int(value)
+        if coerced is not None:
+            stage_payload[str(key)] = coerced
+
+    summary_payload = stage_payload.get("summary")
+    if isinstance(summary_payload, Mapping):
+        summary = dict(summary_payload)
+    else:
+        summary = {}
+
+    summary.update(
+        {
+            "packs_total": total,
+            "packs_completed": completed,
+            "packs_failed": failed,
+            "empty_ok": bool(total == 0),
+        }
+    )
+
+    if disk_counts:
+        for key, value in disk_counts.items():
+            coerced = _coerce_int(value)
+            if coerced is not None:
+                summary[str(key)] = coerced
+
+    stage_payload["summary"] = summary
+    stages["note_style"] = stage_payload
+
+    promoted = previous_status != "success"
+    return (True, promoted, log_context)
+
+
 def _apply_frontend_stage_promotion(
     data: dict[str, Any], run_dir: Path
 ) -> tuple[bool, bool, dict[str, int]]:
@@ -1378,6 +1446,57 @@ def _validation_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
 
     ready = ready and completed == total
     return (total, completed, failed, ready)
+
+
+def _note_style_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
+    """Return (total, completed, failed, ready) for note_style results."""
+
+    index_path = run_dir / "ai_packs" / "note_style" / "index.json"
+    document = _load_json_mapping(index_path)
+    if not isinstance(document, Mapping):
+        return (0, 0, 0, False)
+
+    totals_payload = document.get("totals")
+    total = _coerce_int(totals_payload.get("total")) if isinstance(totals_payload, Mapping) else None
+    completed = _coerce_int(totals_payload.get("completed")) if isinstance(totals_payload, Mapping) else None
+    failed = _coerce_int(totals_payload.get("failed")) if isinstance(totals_payload, Mapping) else None
+
+    ready = True
+    if total is None or completed is None:
+        total = 0
+        completed = 0
+        failed = failed or 0
+        items = document.get("items")
+        if isinstance(items, Sequence):
+            for entry in items:
+                if not isinstance(entry, Mapping):
+                    continue
+                status = _normalize_terminal_status(
+                    entry.get("status"), stage="note_style", run_dir=run_dir
+                )
+                if status is None or status == "skipped":
+                    continue
+                total += 1
+                if status == "completed":
+                    completed += 1
+                elif status == "failed":
+                    failed += 1
+                    ready = False
+                else:
+                    ready = False
+        else:
+            ready = False
+    else:
+        total = total or 0
+        completed = completed or 0
+        failed = failed or 0
+        ready = completed == total and failed == 0
+
+    if total == 0:
+        return (0, 0, failed or 0, True)
+
+    ready = ready and completed == total and failed == 0
+    return (total, completed, failed or 0, ready)
 
 
 def _validation_stage_ready(
@@ -1895,6 +2014,18 @@ def reconcile_umbrella_barriers(
             sid,
             frontend_log["answers_required"],
             frontend_log["answers_received"],
+        )
+
+    _note_style_updated, note_style_promoted, note_style_log = _apply_note_style_stage_promotion(
+        data, run_dir
+    )
+    if note_style_promoted:
+        log.info(
+            "NOTE_STYLE_STAGE_PROMOTED sid=%s total=%s completed=%s failed=%s",
+            sid,
+            note_style_log["total"],
+            note_style_log["completed"],
+            note_style_log["failed"],
         )
 
     latest_snapshot = _load_runflow(runflow_path, sid)

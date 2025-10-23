@@ -161,6 +161,7 @@ def test_merge_stage_sets_only_merge_ready(tmp_path, monkeypatch):
         assert umbrella["merge_ready"] is True
         assert umbrella["validation_ready"] is False
         assert umbrella["review_ready"] is True
+        assert umbrella["style_ready"] is True
         assert umbrella["all_ready"] is False
         assert payload["umbrella_ready"] is False
         assert isinstance(umbrella["checked_at"], str)
@@ -220,6 +221,7 @@ def test_record_stage_updates_barriers_without_instrumentation(tmp_path, monkeyp
         assert umbrella["merge_ready"] is True
         assert umbrella["validation_ready"] is False
         assert umbrella["review_ready"] is False
+        assert umbrella["style_ready"] is False
         assert payload["umbrella_ready"] is False
         merge_stage = payload["stages"]["merge"]
         summary = merge_stage["summary"]
@@ -320,6 +322,7 @@ def test_reconcile_barriers_honors_legacy_result_files(tmp_path, monkeypatch):
         assert umbrella["merge_ready"] is True
         assert umbrella["validation_ready"] is False
         assert umbrella["review_ready"] is True
+        assert umbrella["style_ready"] is True
         assert umbrella["all_ready"] is False
         assert payload["umbrella_ready"] is False
     finally:
@@ -355,6 +358,7 @@ def test_validation_stage_sets_validation_ready(tmp_path, monkeypatch):
         assert umbrella["merge_ready"] is True
         assert umbrella["validation_ready"] is True
         assert umbrella["review_ready"] is True
+        assert umbrella["style_ready"] is True
         assert umbrella["all_ready"] is True
         assert payload["umbrella_ready"] is True
     finally:
@@ -418,6 +422,7 @@ def test_validation_readiness_respects_env_overrides(tmp_path, monkeypatch):
         assert umbrella["merge_ready"] is True
         assert umbrella["validation_ready"] is True
         assert umbrella["review_ready"] is True
+        assert umbrella["style_ready"] is True
         assert umbrella["all_ready"] is True
         assert payload["umbrella_ready"] is True
     finally:
@@ -471,6 +476,7 @@ def test_all_stages_ready_marks_run_ready(tmp_path, monkeypatch):
         assert umbrella["merge_ready"] is True
         assert umbrella["validation_ready"] is True
         assert umbrella["review_ready"] is True
+        assert umbrella["style_ready"] is True
         assert umbrella["all_ready"] is True
         assert payload["umbrella_ready"] is True
     finally:
@@ -521,6 +527,7 @@ def test_review_readiness_updates_when_response_arrives(tmp_path, monkeypatch):
         assert umbrella["merge_ready"] is True
         assert umbrella["validation_ready"] is True
         assert umbrella["review_ready"] is False
+        assert umbrella["style_ready"] is True
         assert umbrella["all_ready"] is False
         assert payload["umbrella_ready"] is False
 
@@ -543,6 +550,7 @@ def test_review_readiness_updates_when_response_arrives(tmp_path, monkeypatch):
         assert updated_umbrella["merge_ready"] is True
         assert updated_umbrella["validation_ready"] is True
         assert updated_umbrella["review_ready"] is True
+        assert updated_umbrella["style_ready"] is True
         assert updated_umbrella["all_ready"] is True
         assert updated_payload["umbrella_ready"] is True
 
@@ -600,6 +608,7 @@ def test_validation_zero_packs_marks_ready(tmp_path, monkeypatch):
         assert summary["empty_ok"] is True
         umbrella = payload["umbrella_barriers"]
         assert umbrella["validation_ready"] is True
+        assert umbrella["style_ready"] is True
         assert calls == [sid]
     finally:
         monkeypatch.delenv("RUNS_ROOT", raising=False)
@@ -658,6 +667,7 @@ def test_validation_results_ready_for_built_status(tmp_path, monkeypatch):
         assert summary["completed"] == 1
         umbrella = payload["umbrella_barriers"]
         assert umbrella["validation_ready"] is True
+        assert umbrella["style_ready"] is True
     finally:
         monkeypatch.delenv("RUNS_ROOT", raising=False)
         monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
@@ -768,10 +778,12 @@ def test_merge_not_required_without_artifacts_marks_ready(tmp_path, monkeypatch)
 
         statuses = decider.reconcile_umbrella_barriers(sid, runs_root=tmp_path)
         assert statuses["merge_ready"] is True
+        assert statuses["style_ready"] is True
 
         payload = _load_runflow_payload(tmp_path / sid)
         umbrella = payload["umbrella_barriers"]
         assert umbrella["merge_ready"] is True
+        assert umbrella["style_ready"] is True
     finally:
         monkeypatch.delenv("RUNS_ROOT", raising=False)
         monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
@@ -802,6 +814,7 @@ def test_document_barrier_flag_emitted_when_enabled(tmp_path, monkeypatch):
         assert umbrella["merge_ready"] is True
         assert umbrella["validation_ready"] is False
         assert umbrella["review_ready"] is True
+        assert umbrella["style_ready"] is True
         assert umbrella["all_ready"] is False
         assert umbrella["document_ready"] is False
         assert payload["umbrella_ready"] is False
@@ -810,4 +823,105 @@ def test_document_barrier_flag_emitted_when_enabled(tmp_path, monkeypatch):
         monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
         monkeypatch.delenv("UMBRELLA_BARRIERS_LOG", raising=False)
         monkeypatch.delenv("DOCUMENT_VERIFIER_ENABLED", raising=False)
+        _reload_runflow()
+
+
+def test_style_barrier_gates_all_ready(tmp_path, monkeypatch):
+    sid = "style-gating"
+    monkeypatch.setenv("RUNS_ROOT", str(tmp_path))
+    monkeypatch.setenv("UMBRELLA_BARRIERS_ENABLED", "1")
+    monkeypatch.setenv("UMBRELLA_BARRIERS_LOG", "0")
+    _ensure_requests_stub(monkeypatch)
+    _reload_runflow()
+
+    try:
+        run_dir = tmp_path / sid
+        stages = {
+            "merge": {"status": "success", "summary": {"result_files": 1}},
+            "validation": {
+                "status": "success",
+                "results": {"results_total": 1, "completed": 1},
+            },
+            "frontend": {
+                "status": "success",
+                "metrics": {"answers_required": 1, "answers_received": 1},
+            },
+        }
+        _prepare_runflow_files(run_dir, stages=stages)
+
+        merge_results_dir = run_dir / "ai_packs" / "merge" / "results"
+        merge_packs_dir = run_dir / "ai_packs" / "merge" / "packs"
+        merge_results_dir.mkdir(parents=True, exist_ok=True)
+        merge_packs_dir.mkdir(parents=True, exist_ok=True)
+        (merge_results_dir / "pair-000.result.json").write_text("{}", encoding="utf-8")
+        (merge_packs_dir / "pair_000.jsonl").write_text("[]", encoding="utf-8")
+
+        _prepare_validation_artifacts(run_dir, sid=sid, account_number=1)
+
+        account_id = "idx-001"
+        _prepare_review_manifest(run_dir, account_id)
+        config = load_frontend_stage_config(run_dir)
+        config.packs_dir.mkdir(parents=True, exist_ok=True)
+        (config.packs_dir / f"pack-{account_id}.json").write_text("{}", encoding="utf-8")
+        _write_review_response(run_dir, account_id)
+
+        note_style_dir = run_dir / "ai_packs" / "note_style"
+        note_style_dir.mkdir(parents=True, exist_ok=True)
+        _write_json(
+            note_style_dir / "index.json",
+            {
+                "schema_version": 1,
+                "sid": sid,
+                "root": ".",
+                "packs_dir": "packs",
+                "results_dir": "results",
+                "packs": [
+                    {
+                        "account_id": account_id,
+                        "status": "built",
+                        "pack": "packs/style_acc_idx-001.jsonl",
+                    }
+                ],
+            },
+        )
+
+        import backend.runflow.decider as decider
+
+        monkeypatch.setenv("UMBRELLA_REQUIRE_STYLE", "0")
+        statuses = decider.reconcile_umbrella_barriers(sid, runs_root=tmp_path)
+        assert statuses["style_ready"] is False
+        assert statuses["all_ready"] is True
+
+        monkeypatch.setenv("UMBRELLA_REQUIRE_STYLE", "1")
+        statuses = decider.reconcile_umbrella_barriers(sid, runs_root=tmp_path)
+        assert statuses["style_ready"] is False
+        assert statuses["all_ready"] is False
+
+        _write_json(
+            note_style_dir / "index.json",
+            {
+                "schema_version": 1,
+                "sid": sid,
+                "root": ".",
+                "packs_dir": "packs",
+                "results_dir": "results",
+                "packs": [
+                    {
+                        "account_id": account_id,
+                        "status": "completed",
+                        "pack": "packs/style_acc_idx-001.jsonl",
+                        "result": "results/acc_idx-001.result.jsonl",
+                    }
+                ],
+            },
+        )
+
+        statuses = decider.reconcile_umbrella_barriers(sid, runs_root=tmp_path)
+        assert statuses["style_ready"] is True
+        assert statuses["all_ready"] is True
+    finally:
+        monkeypatch.delenv("RUNS_ROOT", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
+        monkeypatch.delenv("UMBRELLA_BARRIERS_LOG", raising=False)
+        monkeypatch.delenv("UMBRELLA_REQUIRE_STYLE", raising=False)
         _reload_runflow()

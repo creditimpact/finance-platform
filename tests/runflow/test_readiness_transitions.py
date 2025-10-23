@@ -245,6 +245,7 @@ def test_umbrella_all_ready_requires_merge(tmp_path: Path, monkeypatch: pytest.M
     assert statuses["merge_ready"] is False
     assert statuses["validation_ready"] is True
     assert statuses["review_ready"] is True
+    assert statuses["style_ready"] is True
     assert statuses["all_ready"] is False
 
     results_dir = merge_dir / "results"
@@ -276,11 +277,13 @@ def test_umbrella_all_ready_requires_merge(tmp_path: Path, monkeypatch: pytest.M
     assert statuses["merge_ready"] is True
     assert statuses["validation_ready"] is True
     assert statuses["review_ready"] is True
+    assert statuses["style_ready"] is True
     assert statuses["all_ready"] is True
 
     payload = _load_runflow(run_dir)
     umbrella = payload["umbrella_barriers"]
     assert umbrella["merge_ready"] is True
+    assert umbrella["style_ready"] is True
     assert umbrella["all_ready"] is True
 
 
@@ -304,11 +307,13 @@ def test_umbrella_all_ready_without_merge_requirement(tmp_path: Path, monkeypatc
     assert statuses["merge_ready"] is True
     assert statuses["validation_ready"] is True
     assert statuses["review_ready"] is True
+    assert statuses["style_ready"] is True
     assert statuses["all_ready"] is True
 
     payload = _load_runflow(run_dir)
     assert payload["umbrella_ready"] is True
     umbrella = payload["umbrella_barriers"]
     assert umbrella["merge_ready"] is True
+    assert umbrella["style_ready"] is True
     assert umbrella["all_ready"] is True
 

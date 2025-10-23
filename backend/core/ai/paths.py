@@ -252,17 +252,23 @@ def _normalize_note_style_account_id(account_id: object) -> str:
     return sanitized or "account"
 
 
+def normalize_note_style_account_id(account_id: object) -> str:
+    """Return the sanitized note_style account identifier for ``account_id``."""
+
+    return _normalize_note_style_account_id(account_id)
+
+
 def note_style_pack_filename(account_id: object) -> str:
     """Return the canonical note_style pack filename for ``account_id``."""
 
-    normalized = _normalize_note_style_account_id(account_id)
+    normalized = normalize_note_style_account_id(account_id)
     return f"style_acc_{normalized}.jsonl"
 
 
 def note_style_result_filename(account_id: object) -> str:
     """Return the canonical note_style result filename for ``account_id``."""
 
-    normalized = _normalize_note_style_account_id(account_id)
+    normalized = normalize_note_style_account_id(account_id)
     return f"acc_{normalized}.result.jsonl"
 
 
@@ -271,7 +277,7 @@ def ensure_note_style_account_paths(
 ) -> NoteStyleAccountPaths:
     """Return filesystem locations for ``account_id`` under ``paths``."""
 
-    normalized = _normalize_note_style_account_id(account_id)
+    normalized = normalize_note_style_account_id(account_id)
     pack_path = paths.packs_dir / f"style_acc_{normalized}.jsonl"
     result_path = paths.results_dir / f"acc_{normalized}.result.jsonl"
 

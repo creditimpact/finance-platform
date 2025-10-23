@@ -76,14 +76,18 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     expected_hash = _normalized_hash(sanitized)
     expected_short_hash = expected_hash[:12]
 
+    expected_salt = _expected_salt(sid, account_id, note)
     pack_messages = pack_payload["messages"]
     assert isinstance(pack_messages, list)
     assert pack_messages[0]["role"] == "system"
     assert "tone" in pack_messages[0]["content"].lower()
     assert pack_messages[1]["role"] == "user"
-    assert pack_messages[1]["content"] == sanitized
+    user_content = pack_messages[1]["content"]
+    assert sanitized not in user_content
+    user_payload = json.loads(user_content)
+    assert user_payload["prompt_salt"] == expected_salt
+    assert user_payload["tone"]["value"] == "conciliatory"
 
-    expected_salt = _expected_salt(sid, account_id, note)
     assert pack_payload["prompt_salt"] == expected_salt
     assert expected_salt in pack_messages[0]["content"]
     assert result_payload["prompt_salt"] == expected_salt
@@ -104,14 +108,20 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert "support_request" in emphasis_values
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
-    totals = index_payload["totals"]
-    assert totals["total"] == 1
-    assert totals["completed"] == 1
-    assert totals["failed"] == 0
-    first_entry = index_payload["items"][0]
-    assert first_entry["prompt_salt"] == expected_salt
-    assert first_entry["source_hash"] == expected_hash
-    assert first_entry["note_hash"] == expected_short_hash
+    assert index_payload["schema_version"] == 1
+    assert index_payload["root"] == "."
+    assert index_payload["packs_dir"] == "packs"
+    assert index_payload["results_dir"] == "results"
+    packs = index_payload["packs"]
+    assert len(packs) == 1
+    first_entry = packs[0]
+    assert first_entry["account_id"] == account_id
+    assert first_entry["status"] == "built"
+    expected_pack = account_paths.pack_file.relative_to(paths.base).as_posix()
+    assert first_entry["pack"] == expected_pack
+    assert first_entry["source_hash"] == expected_short_hash
+    assert first_entry["lines"] == 1
+    assert first_entry["built_at"]
 
     runflow_payload = json.loads((run_dir / "runflow.json").read_text(encoding="utf-8"))
     note_style_stage = runflow_payload["stages"]["note_style"]
@@ -227,7 +237,9 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
 
     pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
     result_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
-    assert pack_payload["messages"][1]["content"] == sanitized
+    pack_user_payload = json.loads(pack_payload["messages"][1]["content"])
+    assert pack_user_payload["prompt_salt"] == expected_salt
+    assert sanitized not in pack_payload["messages"][1]["content"]
     assert pack_payload["note_hash"] == expected_short_hash
     assert result_payload["source_hash"] == expected_hash
     assert result_payload["note_hash"] == expected_short_hash
@@ -264,8 +276,8 @@ def test_note_style_stage_skips_when_note_sanitizes_empty(tmp_path: Path) -> Non
     assert not account_paths.result_file.exists()
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
-    assert index_payload["totals"] == {"total": 0, "completed": 0, "failed": 0}
-    assert index_payload["items"] == []
+    assert index_payload["packs"] == []
+    assert index_payload["root"] == "."
 
     runflow_payload = json.loads((run_dir / "runflow.json").read_text(encoding="utf-8"))
     note_style_stage = runflow_payload["stages"]["note_style"]

@@ -1456,41 +1456,44 @@ def _note_style_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
     if not isinstance(document, Mapping):
         return (0, 0, 0, False)
 
-    totals_payload = document.get("totals")
-    total = _coerce_int(totals_payload.get("total")) if isinstance(totals_payload, Mapping) else None
-    completed = _coerce_int(totals_payload.get("completed")) if isinstance(totals_payload, Mapping) else None
-    failed = _coerce_int(totals_payload.get("failed")) if isinstance(totals_payload, Mapping) else None
+    entries: Sequence[Mapping[str, Any]] = ()
+    packs_payload = document.get("packs")
+    if isinstance(packs_payload, Sequence):
+        entries = [entry for entry in packs_payload if isinstance(entry, Mapping)]
+    else:
+        items_payload = document.get("items")
+        if isinstance(items_payload, Sequence):
+            entries = [entry for entry in items_payload if isinstance(entry, Mapping)]
 
+    total = 0
+    completed = 0
+    failed = 0
     ready = True
-    if total is None or completed is None:
-        total = 0
-        completed = 0
-        failed = failed or 0
-        items = document.get("items")
-        if isinstance(items, Sequence):
-            for entry in items:
-                if not isinstance(entry, Mapping):
-                    continue
-                status = _normalize_terminal_status(
-                    entry.get("status"), stage="note_style", run_dir=run_dir
-                )
-                if status is None or status == "skipped":
-                    continue
-                total += 1
-                if status == "completed":
-                    completed += 1
-                elif status == "failed":
-                    failed += 1
-                    ready = False
-                else:
-                    ready = False
+
+    for entry in entries:
+        status = _normalize_terminal_status(
+            entry.get("status"), stage="note_style", run_dir=run_dir
+        )
+        if status is None or status == "skipped":
+            continue
+        total += 1
+        if status == "completed":
+            completed += 1
+        elif status == "failed":
+            failed += 1
+            ready = False
         else:
             ready = False
-    else:
-        total = total or 0
-        completed = completed or 0
-        failed = failed or 0
-        ready = completed == total and failed == 0
+
+    if not entries:
+        totals_payload = document.get("totals")
+        if isinstance(totals_payload, Mapping):
+            total = _coerce_int(totals_payload.get("total")) or 0
+            completed = _coerce_int(totals_payload.get("completed")) or 0
+            failed = _coerce_int(totals_payload.get("failed")) or 0
+            ready = completed == total and failed == 0
+        else:
+            return (0, 0, 0, True)
 
     if total == 0:
         return (0, 0, failed or 0, True)

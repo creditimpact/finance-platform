@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from backend.ai.note_style_results import store_note_style_result
 from backend.ai.note_style_stage import build_note_style_pack_for_account
 from backend.core.ai.paths import ensure_note_style_account_paths, ensure_note_style_paths
@@ -14,7 +16,7 @@ def _write_response(path: Path, payload: dict[str, object]) -> None:
 
 
 def test_store_note_style_result_updates_index_and_triggers_refresh(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     sid = "SID900"
     account_id = "idx-900"
@@ -30,7 +32,11 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
         },
     )
 
+    caplog.set_level("INFO", logger="backend.ai.note_style_stage")
+    caplog.set_level("INFO", logger="backend.ai.note_style_results")
     build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+    caplog.clear()
+    caplog.set_level("INFO", logger="backend.ai.note_style_results")
 
     stage_calls: list[tuple[str, Path | str | None]] = []
     barrier_calls: list[str] = []
@@ -76,6 +82,20 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
         runs_root=runs_root,
         completed_at=completed_at,
     )
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "backend.ai.note_style_results"
+    ]
+
+    assert any("STYLE_RESULTS_WRITTEN" in message for message in messages)
+    assert any(
+        "STYLE_INDEX_UPDATED" in message and "status=completed" in message
+        for message in messages
+    )
+    assert any("STYLE_STAGE_REFRESH" in message for message in messages)
+    assert any("[Runflow] Umbrella barriers:" in message for message in messages)
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)

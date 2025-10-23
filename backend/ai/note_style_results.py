@@ -35,6 +35,20 @@ def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _relative_to_base(path: Path, base: Path) -> str:
+    try:
+        return path.resolve().relative_to(base.resolve()).as_posix()
+    except ValueError:
+        return path.resolve().as_posix()
+
+
+def _structured_repr(payload: Any) -> str:
+    try:
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return str(payload)
+
+
 def _fsync_directory(directory: Path) -> None:
     try:
         fd = os.open(str(directory), os.O_RDONLY)
@@ -182,7 +196,7 @@ class NoteStyleIndexWriter:
         pack_path: Path | None,
         result_path: Path | None,
         completed_at: str | None = None,
-    ) -> Mapping[str, Any]:
+    ) -> tuple[Mapping[str, Any], dict[str, int]]:
         document = self._load_document()
         key, entries = self._extract_entries(document)
 
@@ -224,7 +238,26 @@ class NoteStyleIndexWriter:
         document["totals"] = _compute_totals(rewritten)
 
         self._atomic_write_index(document)
-        return updated_entry
+        totals = document["totals"]
+        index_relative = _relative_to_base(self._index_path, self._paths.base)
+        status_text = str(updated_entry.get("status") or "") if updated_entry else ""
+        pack_value = str(updated_entry.get("pack") or "") if updated_entry else ""
+        result_value = str(updated_entry.get("result") or "") if updated_entry else ""
+        source_hash_value = str(updated_entry.get("source_hash") or "") if updated_entry else ""
+        log.info(
+            "STYLE_INDEX_UPDATED sid=%s account_id=%s action=completed status=%s packs_total=%s packs_completed=%s packs_failed=%s index=%s pack=%s result=%s source_hash=%s",
+            self.sid,
+            normalized_account,
+            status_text,
+            totals.get("total", 0),
+            totals.get("completed", 0),
+            totals.get("failed", 0),
+            index_relative,
+            pack_value,
+            result_value,
+            source_hash_value,
+        )
+        return updated_entry, totals
 
 
 def store_note_style_result(
@@ -242,9 +275,18 @@ def store_note_style_result(
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
 
     _atomic_write_jsonl(account_paths.result_file, payload)
+    result_relative = _relative_to_base(account_paths.result_file, paths.base)
+    log.info(
+        "STYLE_RESULTS_WRITTEN sid=%s account_id=%s result=%s prompt_salt=%s source_hash=%s",
+        sid,
+        account_id,
+        result_relative,
+        str(payload.get("prompt_salt") or ""),
+        str(payload.get("source_hash") or ""),
+    )
 
     writer = NoteStyleIndexWriter(sid=sid, paths=paths)
-    writer.mark_completed(
+    updated_entry, totals = writer.mark_completed(
         account_id,
         pack_path=account_paths.pack_file,
         result_path=account_paths.result_file,
@@ -257,6 +299,17 @@ def store_note_style_result(
         log.warning(
             "NOTE_STYLE_STAGE_REFRESH_FAILED sid=%s", sid, exc_info=True
         )
+    else:
+        status_text = str(updated_entry.get("status") or "") if isinstance(updated_entry, Mapping) else ""
+        log.info(
+            "STYLE_STAGE_REFRESH sid=%s account_id=%s stage_status=%s packs_total=%s results_completed=%s results_failed=%s",
+            sid,
+            account_id,
+            status_text,
+            totals.get("total", 0),
+            totals.get("completed", 0),
+            totals.get("failed", 0),
+        )
 
     try:
         runflow_barriers_refresh(sid)
@@ -266,10 +319,16 @@ def store_note_style_result(
         )
 
     try:
-        reconcile_umbrella_barriers(sid, runs_root=runs_root_path)
+        barrier_state = reconcile_umbrella_barriers(sid, runs_root=runs_root_path)
     except Exception:  # pragma: no cover - defensive logging
         log.warning(
             "NOTE_STYLE_BARRIERS_RECONCILE_FAILED sid=%s", sid, exc_info=True
+        )
+    else:
+        log.info(
+            "[Runflow] Umbrella barriers: sid=%s stage=note_style state=%s",
+            sid,
+            _structured_repr(barrier_state),
         )
 
     return account_paths.result_file

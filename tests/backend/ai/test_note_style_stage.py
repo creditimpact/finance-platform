@@ -55,6 +55,7 @@ def test_discover_note_style_accounts_returns_sorted_entries(tmp_path: Path) -> 
     responses_dir = tmp_path / sid / "frontend" / "review" / "responses"
     responses_dir.mkdir(parents=True, exist_ok=True)
 
+    (responses_dir / "idx-000.result.json").touch()
     first = responses_dir / "idx-002.result.json"
     second = responses_dir / "Account 5!!.result.json"
     third = responses_dir / "idx-001.result.json"
@@ -81,6 +82,43 @@ def test_discover_note_style_accounts_returns_sorted_entries(tmp_path: Path) -> 
     assert account_entry.response_relative.as_posix() == (
         f"runs/{sid}/frontend/review/responses/{second.name}"
     )
+
+
+def test_note_style_stage_skips_zero_length_response(tmp_path: Path) -> None:
+    sid = "SID006"
+    account_id = "idx-006"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+    response_dir.mkdir(parents=True, exist_ok=True)
+
+    response_path = response_dir / f"{account_id}.result.json"
+    response_path.touch()
+
+    result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+    expected_note_hash = hashlib.sha256(b"").hexdigest()
+
+    assert result["status"] == "skipped_low_signal"
+    assert result["reason"] == "low_signal"
+    assert result["note_hash"] == expected_note_hash
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    assert not account_paths.pack_file.exists()
+    assert not account_paths.result_file.exists()
+
+    index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
+    packs = index_payload["packs"]
+    assert len(packs) == 1
+    entry = packs[0]
+    assert entry["status"] == "skipped_low_signal"
+    assert entry["note_hash"] == expected_note_hash
+
+    runflow_payload = json.loads((run_dir / "runflow.json").read_text(encoding="utf-8"))
+    note_style_stage = runflow_payload["stages"]["note_style"]
+    assert note_style_stage["status"] == "success"
+    assert note_style_stage["empty_ok"] is True
 
 def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     sid = "SID001"

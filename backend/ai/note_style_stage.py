@@ -247,6 +247,25 @@ def discover_note_style_response_accounts(
         if not candidate.is_file():
             continue
 
+        try:
+            if candidate.stat().st_size == 0:
+                log.info(
+                    "NOTE_STYLE_DISCOVERY_SKIP_EMPTY sid=%s path=%s",
+                    sid,
+                    candidate,
+                )
+                continue
+        except FileNotFoundError:
+            continue
+        except OSError:
+            log.warning(
+                "NOTE_STYLE_DISCOVERY_STAT_FAILED sid=%s path=%s",
+                sid,
+                candidate,
+                exc_info=True,
+            )
+            continue
+
         account_id = candidate.name[: -len(suffix)]
         normalized = normalize_note_style_account_id(account_id)
         pack_filename = note_style_pack_filename(account_id)
@@ -866,6 +885,26 @@ def _build_extractor(note: str) -> dict[str, Any]:
 
 
 def _load_response_note(account_id: str, response_path: Path) -> _LoadedResponseNote:
+    try:
+        stats = response_path.stat()
+    except FileNotFoundError:
+        raise NoteStyleSkip("missing_response") from None
+    except OSError:
+        log.warning(
+            "NOTE_STYLE_RESPONSE_STAT_FAILED path=%s", response_path, exc_info=True
+        )
+        raise NoteStyleSkip("response_read_failed") from None
+
+    if stats.st_size == 0:
+        empty = ""
+        return _LoadedResponseNote(
+            account_id=str(account_id),
+            note_raw=empty,
+            note_sanitized="",
+            source_path=response_path,
+            source_hash=_source_hash(empty),
+        )
+
     try:
         raw = response_path.read_text(encoding="utf-8")
     except FileNotFoundError:

@@ -10,7 +10,11 @@ import unicodedata
 import pytest
 
 from backend.ai.note_style_results import store_note_style_result
-from backend.ai.note_style_stage import build_note_style_pack_for_account
+from backend.ai.note_style_stage import (
+    NoteStyleResponseAccount,
+    build_note_style_pack_for_account,
+    discover_note_style_response_accounts,
+)
 from backend.core.ai.paths import ensure_note_style_account_paths, ensure_note_style_paths
 from backend.runflow.counters import note_style_stage_counts
 
@@ -120,6 +124,45 @@ def _write_response(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
+
+def test_discover_note_style_accounts_empty(tmp_path: Path) -> None:
+    sid = "SID100"
+    results = discover_note_style_response_accounts(sid, runs_root=tmp_path)
+
+    assert results == []
+
+
+def test_discover_note_style_accounts_returns_sorted_entries(tmp_path: Path) -> None:
+    sid = "SID101"
+    responses_dir = tmp_path / sid / "frontend" / "review" / "responses"
+    responses_dir.mkdir(parents=True, exist_ok=True)
+
+    first = responses_dir / "idx-002.result.json"
+    second = responses_dir / "Account 5!!.result.json"
+    third = responses_dir / "idx-001.result.json"
+    for path in (first, second, third):
+        path.write_text("{}", encoding="utf-8")
+
+    # Write a file that should be ignored by discovery
+    (responses_dir / "idx-003.summary.json").write_text("{}", encoding="utf-8")
+
+    results = discover_note_style_response_accounts(sid, runs_root=tmp_path)
+
+    assert [entry.account_id for entry in results] == [
+        "Account 5!!",
+        "idx-001",
+        "idx-002",
+    ]
+
+    account_entry = results[0]
+    assert isinstance(account_entry, NoteStyleResponseAccount)
+    assert account_entry.normalized_account_id == "Account_5__"
+    assert account_entry.pack_filename == "style_acc_Account_5__.jsonl"
+    assert account_entry.result_filename == "acc_Account_5__.result.jsonl"
+    assert account_entry.response_path == second.resolve()
+    assert account_entry.response_relative.as_posix() == (
+        f"runs/{sid}/frontend/review/responses/{second.name}"
+    )
 
 def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     sid = "SID001"

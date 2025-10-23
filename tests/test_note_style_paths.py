@@ -6,6 +6,7 @@ from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     ensure_note_style_account_paths,
     ensure_note_style_paths,
+    normalize_note_style_account_id,
     note_style_pack_filename,
     note_style_result_filename,
 )
@@ -63,3 +64,12 @@ def test_note_style_account_paths_match_expected(tmp_path: Path) -> None:
 def test_note_style_filename_defaults_to_account_when_empty() -> None:
     assert note_style_pack_filename("") == "style_acc_account.jsonl"
     assert note_style_result_filename(None) == "acc_account.result.jsonl"
+
+
+def test_normalize_note_style_account_id_matches_filename_normalization() -> None:
+    account_id = " Account/ID 007 "
+    normalized = normalize_note_style_account_id(account_id)
+
+    assert normalized == "Account_ID_007"
+    assert note_style_pack_filename(account_id) == f"style_acc_{normalized}.jsonl"
+    assert note_style_result_filename(account_id) == f"acc_{normalized}.result.jsonl"

@@ -30,6 +30,9 @@ from backend.core.ai.paths import (
     NoteStylePaths,
     ensure_note_style_account_paths,
     ensure_note_style_paths,
+    note_style_pack_filename,
+    note_style_result_filename,
+    normalize_note_style_account_id,
 )
 from backend.runflow.decider import record_stage
 
@@ -194,6 +197,59 @@ def _resolve_runs_root(runs_root: Path | str | None) -> Path:
         env_value = os.getenv("RUNS_ROOT")
         return Path(env_value) if env_value else Path("runs")
     return Path(runs_root)
+
+
+@dataclass(frozen=True)
+class NoteStyleResponseAccount:
+    """Metadata for a single response discovered for the note_style stage."""
+
+    account_id: str
+    normalized_account_id: str
+    response_path: Path
+    response_relative: PurePosixPath
+    pack_filename: str
+    result_filename: str
+
+
+def discover_note_style_response_accounts(
+    sid: str, *, runs_root: Path | str | None = None
+) -> list[NoteStyleResponseAccount]:
+    """Return discovered frontend response files for ``sid``.
+
+    The discovery process is read-only. Response files are mapped back to
+    their canonical account identifiers and the normalized filenames used by
+    the note_style stage are precomputed for convenience.
+    """
+
+    runs_root_path = _resolve_runs_root(runs_root)
+    responses_dir = runs_root_path / sid / "frontend" / "review" / "responses"
+    if not responses_dir.is_dir():
+        return []
+
+    suffix = ".result.json"
+    discovered: list[NoteStyleResponseAccount] = []
+    for candidate in sorted(responses_dir.glob(f"*{suffix}"), key=lambda path: path.name):
+        if not candidate.is_file():
+            continue
+
+        account_id = candidate.name[: -len(suffix)]
+        normalized = normalize_note_style_account_id(account_id)
+        pack_filename = note_style_pack_filename(account_id)
+        result_filename = note_style_result_filename(account_id)
+        relative = PurePosixPath("runs") / sid / "frontend" / "review" / "responses" / candidate.name
+        discovered.append(
+            NoteStyleResponseAccount(
+                account_id=account_id,
+                normalized_account_id=normalized,
+                response_path=candidate.resolve(),
+                response_relative=relative,
+                pack_filename=pack_filename,
+                result_filename=result_filename,
+            )
+        )
+
+    discovered.sort(key=lambda entry: entry.account_id)
+    return discovered
 
 
 def _load_json_mapping(path: Path) -> Mapping[str, Any] | None:
@@ -1428,6 +1484,8 @@ def schedule_note_style_refresh(
 
 
 __all__ = [
+    "NoteStyleResponseAccount",
+    "discover_note_style_response_accounts",
     "build_note_style_pack_for_account",
     "schedule_note_style_refresh",
 ]

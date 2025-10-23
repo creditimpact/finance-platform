@@ -101,6 +101,10 @@ def _barrier_event_logging_enabled() -> bool:
     return _env_enabled("UMBRELLA_BARRIERS_LOG", True)
 
 
+def _runflow_events_enabled() -> bool:
+    return _env_enabled("RUNFLOW_EVENTS", False)
+
+
 def _document_verifier_enabled() -> bool:
     return _env_enabled("DOCUMENT_VERIFIER_ENABLED", False)
 
@@ -1177,52 +1181,119 @@ def _apply_note_style_stage_promotion(
     data: dict[str, Any], run_dir: Path
 ) -> tuple[bool, bool, dict[str, int]]:
     total, completed, failed, ready = _note_style_results_progress(run_dir)
-    log_context = {"total": total, "completed": completed, "failed": failed}
-
-    if not ready:
-        return (False, False, log_context)
+    total_value = max(total, 0)
+    completed_value = max(min(completed, total_value), 0)
+    failed_value = max(failed, 0)
+    empty_ok = total_value == 0
 
     stages = _ensure_stages_dict(data)
     existing = stages.get("note_style") if isinstance(stages, Mapping) else None
-    stage_payload = dict(existing) if isinstance(existing, Mapping) else {}
-
     previous_status = _stage_status(stages, "note_style")
 
-    stage_payload["status"] = "success"
-    stage_payload["last_at"] = _now_iso()
-    stage_payload["empty_ok"] = bool(total == 0)
-
-    disk_counts = _stage_counts_from_disk("note_style", run_dir)
-    for key, value in disk_counts.items():
-        coerced = _coerce_int(value)
-        if coerced is not None:
-            stage_payload[str(key)] = coerced
-
-    summary_payload = stage_payload.get("summary")
-    if isinstance(summary_payload, Mapping):
-        summary = dict(summary_payload)
+    if failed_value > 0 and total_value > 0:
+        status_value = "error"
+    elif ready or empty_ok:
+        status_value = "success"
     else:
-        summary = {}
+        status_value = "built"
 
-    summary.update(
-        {
-            "packs_total": total,
-            "packs_completed": completed,
-            "packs_failed": failed,
-            "empty_ok": bool(total == 0),
-        }
+    metrics_payload = {"packs_total": total_value}
+    results_payload = {
+        "results_total": total_value,
+        "completed": completed_value,
+        "failed": failed_value,
+    }
+    summary_payload = {
+        "packs_total": total_value,
+        "results_total": total_value,
+        "completed": completed_value,
+        "failed": failed_value,
+        "empty_ok": empty_ok,
+        "metrics": dict(metrics_payload),
+        "results": dict(results_payload),
+    }
+
+    def _normalize_metrics(mapping: Any) -> dict[str, int]:
+        if not isinstance(mapping, Mapping):
+            return {}
+        value = _coerce_int(mapping.get("packs_total"))
+        if value is None:
+            return {}
+        return {"packs_total": value}
+
+    def _normalize_results(mapping: Any) -> dict[str, int]:
+        if not isinstance(mapping, Mapping):
+            return {}
+        normalized: dict[str, int] = {}
+        for key in ("results_total", "completed", "failed"):
+            value = _coerce_int(mapping.get(key))
+            if value is not None:
+                normalized[key] = value
+        return normalized
+
+    def _normalize_summary(summary: Any) -> dict[str, Any]:
+        if not isinstance(summary, Mapping):
+            return {}
+        normalized: dict[str, Any] = {}
+        empty_value = summary.get("empty_ok")
+        if isinstance(empty_value, bool):
+            normalized["empty_ok"] = empty_value
+        elif empty_value is not None:
+            normalized["empty_ok"] = bool(empty_value)
+        metrics_component = _normalize_metrics(summary.get("metrics"))
+        if metrics_component:
+            normalized["metrics"] = metrics_component
+        results_component = _normalize_results(summary.get("results"))
+        if results_component:
+            normalized["results"] = results_component
+        for key in ("packs_total", "results_total", "completed", "failed"):
+            value = _coerce_int(summary.get(key))
+            if value is not None:
+                normalized[key] = value
+        return normalized
+
+    existing_metrics = _normalize_metrics(existing.get("metrics")) if isinstance(existing, Mapping) else {}
+    existing_results = _normalize_results(existing.get("results")) if isinstance(existing, Mapping) else {}
+    existing_summary = _normalize_summary(existing.get("summary")) if isinstance(existing, Mapping) else {}
+    existing_empty_ok = bool(existing.get("empty_ok")) if isinstance(existing, Mapping) else False
+    existing_status = (
+        _normalize_stage_status_value(existing.get("status"))
+        if isinstance(existing, Mapping)
+        else ""
     )
 
-    if disk_counts:
-        for key, value in disk_counts.items():
-            coerced = _coerce_int(value)
-            if coerced is not None:
-                summary[str(key)] = coerced
+    update_required = True
+    if isinstance(existing, Mapping):
+        if (
+            existing_status == status_value
+            and existing_empty_ok == empty_ok
+            and existing_metrics == metrics_payload
+            and existing_results == results_payload
+            and existing_summary == summary_payload
+        ):
+            update_required = False
 
-    stage_payload["summary"] = summary
+    promoted = status_value == "success" and previous_status != "success"
+    log_context = {
+        "total": total_value,
+        "completed": completed_value,
+        "failed": failed_value,
+    }
+
+    if not update_required:
+        return (False, promoted, log_context)
+
+    timestamp = _now_iso()
+    stage_payload = {
+        "status": status_value,
+        "last_at": timestamp,
+        "empty_ok": empty_ok,
+        "metrics": dict(metrics_payload),
+        "results": dict(results_payload),
+        "summary": summary_payload,
+    }
+
     stages["note_style"] = stage_payload
-
-    promoted = previous_status != "success"
     return (True, promoted, log_context)
 
 
@@ -1471,9 +1542,12 @@ def _note_style_results_progress(run_dir: Path) -> tuple[int, int, int, bool]:
     ready = True
 
     for entry in entries:
+        raw_status = entry.get("status")
         status = _normalize_terminal_status(
-            entry.get("status"), stage="note_style", run_dir=run_dir
+            raw_status, stage="note_style", run_dir=run_dir
         )
+        if isinstance(raw_status, str) and raw_status.strip().lower() == "built":
+            status = "built"
         if status is None or status == "skipped":
             continue
         total += 1
@@ -1967,6 +2041,81 @@ def refresh_note_style_stage_from_index(
     data["updated_at"] = timestamp
 
     _atomic_write_json(path, data)
+
+    if _runflow_events_enabled():
+        stage_info: Mapping[str, Any] | None = None
+        stages_payload = data.get("stages")
+        if isinstance(stages_payload, Mapping):
+            candidate = stages_payload.get("note_style")
+            if isinstance(candidate, Mapping):
+                stage_info = candidate
+
+        event_ts = timestamp
+        status_text = ""
+        empty_ok_flag = False
+        metrics_event: dict[str, int] = {}
+        results_event: dict[str, int] = {}
+
+        if stage_info is not None:
+            last_at_value = stage_info.get("last_at")
+            if isinstance(last_at_value, str) and last_at_value:
+                event_ts = last_at_value
+            status_value = stage_info.get("status")
+            if isinstance(status_value, str):
+                status_text = status_value
+            empty_ok_flag = bool(stage_info.get("empty_ok"))
+
+            metrics_payload = stage_info.get("metrics")
+            if isinstance(metrics_payload, Mapping):
+                packs_total_value = _coerce_int(metrics_payload.get("packs_total"))
+                if packs_total_value is not None:
+                    metrics_event["packs_total"] = packs_total_value
+
+            results_payload = stage_info.get("results")
+            if isinstance(results_payload, Mapping):
+                for key in ("results_total", "completed", "failed"):
+                    value = _coerce_int(results_payload.get(key))
+                    if value is not None:
+                        results_event[key] = value
+
+        events_path = run_dir / "runflow_events.jsonl"
+        event_payload: dict[str, Any] = {
+            "ts": event_ts,
+            "event": "note_style_stage_refresh",
+            "sid": sid,
+            "stage": "note_style",
+            "status": status_text,
+            "empty_ok": empty_ok_flag,
+        }
+        if metrics_event:
+            event_payload["metrics"] = dict(metrics_event)
+            packs_total_value = metrics_event.get("packs_total")
+            if packs_total_value is not None:
+                event_payload["packs_total"] = packs_total_value
+        if results_event:
+            event_payload["results"] = dict(results_event)
+            results_total_value = results_event.get("results_total")
+            if results_total_value is not None:
+                event_payload["results_total"] = results_total_value
+            completed_value = results_event.get("completed")
+            if completed_value is not None:
+                event_payload["results_completed"] = completed_value
+            failed_value = results_event.get("failed")
+            if failed_value is not None:
+                event_payload["results_failed"] = failed_value
+
+        try:
+            events_path.parent.mkdir(parents=True, exist_ok=True)
+            with events_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event_payload, ensure_ascii=False))
+                handle.write("\n")
+        except OSError:
+            log.warning(
+                "NOTE_STYLE_STAGE_EVENT_WRITE_FAILED sid=%s path=%s",
+                sid,
+                events_path,
+                exc_info=True,
+            )
 
     if promoted:
         log.info(

@@ -158,6 +158,18 @@ _PERSONAL_DATA_PATTERNS = (
     re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE),
 )
 
+_NOTE_VALUE_PATHS: tuple[tuple[str, ...], ...] = (
+    ("data", "explain"),
+    ("answers", "explain"),
+    ("answers", "explanation"),
+    ("note",),
+    ("explain",),
+    ("explanation",),
+    ("answers", "note"),
+    ("answers", "notes"),
+    ("answers", "customer_note"),
+)
+
 _ZERO_WIDTH_WHITESPACE = {
     ord("\u200b"): " ",  # zero width space
     ord("\u200c"): " ",  # zero width non-joiner
@@ -536,10 +548,10 @@ def _prompt_salt(sid: str, account_id: str, extractor: Mapping[str, Any] | None)
     return hmac.new(_pepper_bytes(), message, hashlib.sha256).hexdigest()[:12]
 
 
-def _note_hash(source_hash: str, length: int = 12) -> str:
-    if length <= 0:
-        return ""
-    return source_hash[:length]
+def _note_hash(note_text: str) -> str:
+    digest = hashlib.sha256()
+    digest.update(note_text.encode("utf-8"))
+    return digest.hexdigest()
 
 
 def _pack_messages(extractor: Mapping[str, Any], prompt_salt: str) -> list[dict[str, str]]:
@@ -579,53 +591,59 @@ def _sanitize_note_value(value: Any) -> str:
     return _collapse_whitespace(normalized)
 
 
-def _collect_note_segments(payload: Mapping[str, Any]) -> list[str]:
-    segments: list[str] = []
-    seen: set[str] = set()
+def _extract_note_text(payload: Mapping[str, Any]) -> str:
+    def _resolve_candidates(root: Any, parts: Sequence[str]) -> list[Any]:
+        if root is None:
+            return []
+        if not parts:
+            return [root]
 
-    def _add(value: Any) -> None:
+        head, *tail = parts
+        results: list[Any] = []
+
+        if isinstance(root, Mapping):
+            value = root.get(head)
+            if isinstance(value, Sequence) and not isinstance(
+                value, (str, bytes, bytearray)
+            ):
+                for entry in value:
+                    results.extend(_resolve_candidates(entry, tail))
+            else:
+                results.extend(_resolve_candidates(value, tail))
+        elif isinstance(root, Sequence) and not isinstance(root, (str, bytes, bytearray)):
+            for entry in root:
+                results.extend(_resolve_candidates(entry, parts))
+
+        return results
+
+    def _flatten_candidate(value: Any) -> Iterator[str]:
+        if value is None:
+            return
         if isinstance(value, str):
             sanitized = _sanitize_note_value(value)
-            if not sanitized or sanitized in seen:
-                return
-            seen.add(sanitized)
-            segments.append(sanitized)
+            if sanitized:
+                yield sanitized
+            return
+        if isinstance(value, Mapping):
+            for entry in value.values():
+                yield from _flatten_candidate(entry)
             return
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
             for entry in value:
-                _add(entry)
+                yield from _flatten_candidate(entry)
+            return
+        sanitized = _sanitize_note_value(value)
+        if sanitized:
+            yield sanitized
 
-    for key in ("explanation", "note", "notes", "customer_note"):
-        _add(payload.get(key))
+    for path in _NOTE_VALUE_PATHS:
+        candidates = _resolve_candidates(payload, path)
+        for candidate in candidates:
+            for sanitized in _flatten_candidate(candidate):
+                if len(sanitized) > 0:
+                    return sanitized
 
-    answers = payload.get("answers")
-    if isinstance(answers, Mapping):
-        for key in ("explanation", "note", "notes", "customer_note"):
-            _add(answers.get(key))
-
-    items = payload.get("items")
-    if isinstance(items, Sequence):
-        for entry in items:
-            if not isinstance(entry, Mapping):
-                _add(entry)
-                continue
-            for key in ("explanation", "note", "notes", "customer_note"):
-                _add(entry.get(key))
-            entry_answers = entry.get("answers")
-            if isinstance(entry_answers, Mapping):
-                for key in ("explanation", "note", "notes", "customer_note"):
-                    _add(entry_answers.get(key))
-
-    return segments
-
-
-def _extract_note_text(payload: Mapping[str, Any]) -> str:
-    segments = _collect_note_segments(payload)
-    if not segments:
-        return ""
-    if len(segments) == 1:
-        return segments[0]
-    return _collapse_whitespace(" ".join(segments))
+    return ""
 
 
 def _tokens(note: str) -> set[str]:
@@ -894,9 +912,6 @@ def _load_response_note(account_id: str, response_path: Path) -> _LoadedResponse
         raise NoteStyleSkip("invalid_response")
 
     note_text = _extract_note_text(payload)
-    if not note_text:
-        raise NoteStyleSkip("empty_note")
-
     source_hash = _source_hash(note_text)
     return _LoadedResponseNote(
         account_id=str(account_id),
@@ -939,13 +954,27 @@ def _serialize_entry(
     }
 
 
+def _serialize_skip_entry(
+    *, account_id: str, note_hash: str, timestamp: str, status: str = "skipped_low_signal"
+) -> dict[str, Any]:
+    return {
+        "account_id": account_id,
+        "pack": "",
+        "result": "",
+        "lines": 0,
+        "built_at": timestamp,
+        "status": status,
+        "source_hash": note_hash,
+    }
+
+
 def _compute_totals(items: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     total = 0
     completed = 0
     failed = 0
     for entry in items:
         status = _normalize_text(entry.get("status")).lower()
-        if status in {"", "skipped"}:
+        if status in {"", "skipped", "skipped_low_signal"}:
             continue
         total += 1
         if status in {"completed", "success", "built"}:
@@ -1182,7 +1211,7 @@ def _note_style_index_progress(index_path: Path) -> tuple[int, int, int]:
 
     for entry in entries:
         status_text = _normalize_text(entry.get("status")).lower()
-        if status_text in {"", "skipped"}:
+        if status_text in {"", "skipped", "skipped_low_signal"}:
             continue
         total += 1
         if status_text == "completed":
@@ -1258,7 +1287,7 @@ def build_note_style_pack_for_account(
     try:
         loaded_note = _load_response_note(account_id, response_path)
     except NoteStyleSkip as exc:
-        reason = exc.reason or "empty_note"
+        reason = exc.reason or "error"
         totals = _update_index_for_account(sid=sid, paths=paths, account_id=account_id, entry=None)
         _remove_account_artifacts(account_paths)
         _record_stage_progress(
@@ -1280,9 +1309,43 @@ def build_note_style_pack_for_account(
 
     note_text = loaded_note.note_sanitized
     source_hash = loaded_note.source_hash
-    note_hash = _note_hash(source_hash)
+    note_hash = _note_hash(note_text)
     char_len = len(note_text)
     word_len = len(note_text.split())
+    if len(note_text) <= 3:
+        timestamp = _now_iso()
+        skip_status = "skipped_low_signal"
+        _remove_account_artifacts(account_paths)
+        entry = _serialize_skip_entry(
+            account_id=account_id_str,
+            note_hash=note_hash,
+            timestamp=timestamp,
+            status=skip_status,
+        )
+        totals = _update_index_for_account(
+            sid=sid, paths=paths, account_id=account_id, entry=entry
+        )
+        _record_stage_progress(
+            sid=sid, runs_root=runs_root_path, totals=totals, index_path=paths.index_file
+        )
+        _log_style_discovery(
+            sid=sid,
+            account_id=account_id_str,
+            response=response_rel,
+            status=skip_status,
+            note_hash=note_hash,
+            source_hash=source_hash,
+            char_len=char_len,
+            word_len=word_len,
+            reason="low_signal",
+        )
+        return {
+            "status": skip_status,
+            "reason": "low_signal",
+            "note_hash": note_hash,
+            "packs_total": totals.get("total", 0),
+            "packs_completed": totals.get("completed", 0),
+        }
     existing_index = _load_json_mapping(paths.index_file)
     items = _index_items(existing_index)
     existing_entry: Mapping[str, Any] | None = None

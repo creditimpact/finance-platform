@@ -333,7 +333,7 @@ def note_style_stage_counts(base_dir: Path) -> Optional[dict[str, int]]:
     failed = 0
     for entry in entries:
         status_text = _normalize_entry_text(entry.get("status")).lower()
-        if status_text in {"", "skipped"}:
+        if status_text in {"", "skipped", "skipped_low_signal"}:
             continue
         total += 1
         if status_text in {"completed", "success"}:

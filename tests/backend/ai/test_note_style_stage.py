@@ -182,8 +182,13 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
         },
     )
 
+    sanitized = _sanitize_note_text(note)
+    expected_hash = _normalized_hash(sanitized)
+    expected_note_hash = hashlib.sha256(sanitized.encode("utf-8")).hexdigest()
+
     result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
     assert result["status"] == "completed"
+    assert result["note_hash"] == expected_note_hash
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
@@ -192,10 +197,6 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert account_paths.result_file.is_file()
     pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
     result_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
-
-    sanitized = _sanitize_note_text(note)
-    expected_hash = _normalized_hash(sanitized)
-    expected_short_hash = expected_hash[:12]
 
     manifest_payload = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     note_style_manifest = (
@@ -233,14 +234,14 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert expected_salt in pack_messages[0]["content"]
     assert result_payload["prompt_salt"] == expected_salt
     assert len(expected_salt) == 12
-    assert pack_payload["note_hash"] == expected_short_hash
+    assert pack_payload["note_hash"] == expected_note_hash
     assert pack_payload["model"] == "gpt-4o-mini"
     assert (
         pack_payload["source_response_path"]
         == f"runs/{sid}/frontend/review/responses/{account_id}.result.json"
     )
     assert sanitized not in account_paths.result_file.read_text(encoding="utf-8")
-    assert result_payload["note_hash"] == expected_short_hash
+    assert result_payload["note_hash"] == expected_note_hash
     assert result_payload["source_hash"] == expected_hash
     assert result_payload["analysis"] == result_payload["extractor"]
     analysis_payload = result_payload["analysis"]
@@ -268,7 +269,7 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert first_entry["pack"] == expected_pack
     expected_result = account_paths.result_file.relative_to(paths.base).as_posix()
     assert first_entry["result"] == expected_result
-    assert first_entry["source_hash"] == expected_short_hash
+    assert first_entry["source_hash"] == expected_note_hash
     assert first_entry["lines"] == 1
     assert first_entry["built_at"]
 
@@ -515,12 +516,13 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
         },
     )
 
-    result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
-    assert result["status"] == "completed"
-
     sanitized = _sanitize_note_text(note)
     expected_hash = _normalized_hash(sanitized)
-    expected_short_hash = expected_hash[:12]
+    expected_note_hash = hashlib.sha256(sanitized.encode("utf-8")).hexdigest()
+
+    result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+    assert result["status"] == "completed"
+    assert result["note_hash"] == expected_note_hash
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
@@ -537,9 +539,9 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     assert extractor_payload["emphasis"] == ["paid_already"]
     assert extractor_payload["confidence"] >= 0.5
     assert sanitized not in pack_payload["messages"][1]["content"]
-    assert pack_payload["note_hash"] == expected_short_hash
+    assert pack_payload["note_hash"] == expected_note_hash
     assert result_payload["source_hash"] == expected_hash
-    assert result_payload["note_hash"] == expected_short_hash
+    assert result_payload["note_hash"] == expected_note_hash
     assert result_payload["prompt_salt"] == expected_salt
     assert result_payload["analysis"] == result_payload["extractor"]
     assert result_payload["analysis"]["context_hints"]["topic"] == "payment_dispute"
@@ -567,8 +569,11 @@ def test_note_style_stage_skips_when_note_sanitizes_empty(tmp_path: Path) -> Non
     )
 
     result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
-    assert result["status"] == "skipped"
-    assert result["reason"] == "empty_note"
+    sanitized = _sanitize_note_text(note)
+    expected_note_hash = hashlib.sha256(sanitized.encode("utf-8")).hexdigest()
+    assert result["status"] == "skipped_low_signal"
+    assert result["reason"] == "low_signal"
+    assert result["note_hash"] == expected_note_hash
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
@@ -577,7 +582,16 @@ def test_note_style_stage_skips_when_note_sanitizes_empty(tmp_path: Path) -> Non
     assert not account_paths.result_file.exists()
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
-    assert index_payload["packs"] == []
+    packs = index_payload["packs"]
+    assert len(packs) == 1
+    entry = packs[0]
+    assert entry["account_id"] == account_id
+    assert entry["status"] == "skipped_low_signal"
+    assert entry["pack"] == ""
+    assert entry["result"] == ""
+    assert entry["lines"] == 0
+    assert entry["source_hash"] == expected_note_hash
+    assert entry["built_at"]
     assert index_payload["root"] == "."
 
     runflow_payload = json.loads((run_dir / "runflow.json").read_text(encoding="utf-8"))

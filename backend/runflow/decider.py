@@ -1943,6 +1943,43 @@ def refresh_validation_stage_from_index(
     runflow_refresh_umbrella_barriers(sid)
 
 
+def refresh_note_style_stage_from_index(
+    sid: str, runs_root: Optional[str | Path] = None
+) -> None:
+    """Update the note_style stage entry when AI results are complete."""
+
+    path = _runflow_path(sid, runs_root)
+    run_dir = path.parent
+    data = _load_runflow(path, sid)
+
+    updated, promoted, log_context = _apply_note_style_stage_promotion(data, run_dir)
+    if not updated:
+        return
+
+    latest_snapshot = _load_runflow(path, sid)
+    data = _merge_runflow_snapshots(latest_snapshot, data)
+
+    timestamp = _now_iso()
+    data["snapshot_version"] = _next_snapshot_version(
+        latest_snapshot.get("snapshot_version"), data.get("snapshot_version")
+    )
+    data["last_writer"] = "refresh_note_style_stage"
+    data["updated_at"] = timestamp
+
+    _atomic_write_json(path, data)
+
+    if promoted:
+        log.info(
+            "NOTE_STYLE_STAGE_PROMOTED sid=%s total=%s completed=%s failed=%s",
+            sid,
+            log_context["total"],
+            log_context["completed"],
+            log_context["failed"],
+        )
+
+    runflow_refresh_umbrella_barriers(sid)
+
+
 def refresh_frontend_stage_from_responses(
     sid: str, runs_root: Optional[str | Path] = None
 ) -> None:
@@ -2300,6 +2337,7 @@ __all__ = [
     "StageStatus",
     "RunState",
     "refresh_validation_stage_from_index",
+    "refresh_note_style_stage_from_index",
     "refresh_frontend_stage_from_responses",
     "reconcile_umbrella_barriers",
 ]

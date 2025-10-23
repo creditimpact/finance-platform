@@ -238,6 +238,421 @@ class NoteStyleResponseAccount:
     response_relative: PurePosixPath
     pack_filename: str
     result_filename: str
+    account_dir: Path | None = None
+
+
+@dataclass(frozen=True)
+class _NoteStyleSourcePaths:
+    manifest: Mapping[str, Any] | None
+    accounts_dir: Path
+    responses_dir: Path
+
+
+_ACCOUNT_MAP_CACHE: dict[tuple[str, str], tuple[float, dict[str, Path]]] = {}
+_ACCOUNT_MAP_LOCK = threading.Lock()
+
+
+def _manifest_path_from_value(raw: Any, run_dir: Path) -> Path:
+    candidate = Path(str(raw))
+    if not candidate.is_absolute():
+        candidate = (run_dir / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+    return candidate
+
+
+def _load_manifest_payload(run_dir: Path) -> Mapping[str, Any] | None:
+    manifest_path = run_dir / "manifest.json"
+    payload = _load_json_mapping(manifest_path)
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _resolve_source_paths(sid: str, runs_root: Path) -> _NoteStyleSourcePaths:
+    run_dir = (runs_root / sid).resolve()
+    manifest_payload = _load_manifest_payload(run_dir)
+
+    accounts_dir = run_dir / "cases" / "accounts"
+    responses_dir = run_dir / "frontend" / "review" / "responses"
+
+    if isinstance(manifest_payload, Mapping):
+        base_dirs = manifest_payload.get("base_dirs")
+        if isinstance(base_dirs, Mapping):
+            accounts_raw = base_dirs.get("cases_accounts_dir")
+            if accounts_raw:
+                try:
+                    accounts_dir = _manifest_path_from_value(accounts_raw, run_dir)
+                except OSError:
+                    pass
+
+        frontend_section = manifest_payload.get("frontend")
+        if isinstance(frontend_section, Mapping):
+            responses_raw = (
+                frontend_section.get("responses_dir")
+                or frontend_section.get("results_dir")
+                or frontend_section.get("responses")
+                or frontend_section.get("results")
+            )
+            if responses_raw:
+                try:
+                    responses_dir = _manifest_path_from_value(responses_raw, run_dir)
+                except OSError:
+                    pass
+
+    return _NoteStyleSourcePaths(
+        manifest=manifest_payload,
+        accounts_dir=accounts_dir,
+        responses_dir=responses_dir,
+    )
+
+
+def _canonical_response_reference(
+    runs_root: Path, response_path: Path
+) -> PurePosixPath:
+    resolved_root = runs_root.resolve()
+    resolved_path = response_path.resolve()
+    try:
+        relative = resolved_path.relative_to(resolved_root)
+    except ValueError:
+        return PurePosixPath(resolved_path.as_posix())
+    relative_posix = PurePosixPath(relative.as_posix())
+    return PurePosixPath("runs") / relative_posix
+
+
+def _register_account_identifier(
+    mapping: dict[str, Path], identifier: str, entry: Path
+) -> None:
+    if not identifier:
+        return
+    if identifier not in mapping:
+        mapping[identifier] = entry
+    normalized = normalize_note_style_account_id(identifier)
+    if normalized and normalized not in mapping:
+        mapping[normalized] = entry
+
+
+def _build_account_directory_map(accounts_dir: Path) -> dict[str, Path]:
+    mapping: dict[str, Path] = {}
+    if not accounts_dir.is_dir():
+        return mapping
+
+    for entry in sorted(accounts_dir.iterdir(), key=lambda path: path.name):
+        if not entry.is_dir():
+            continue
+
+        resolved_entry = entry.resolve()
+        mapping.setdefault(entry.name, resolved_entry)
+
+        summary = _load_json_mapping(resolved_entry / "summary.json")
+        identifiers: list[str] = []
+        if isinstance(summary, Mapping):
+            for key in ("account_id", "account_key", "account_identifier"):
+                value = _normalize_text(summary.get(key))
+                if value:
+                    identifiers.append(value)
+
+        if not identifiers:
+            meta_payload = _load_json_mapping(resolved_entry / "meta.json")
+            if isinstance(meta_payload, Mapping):
+                candidate = _normalize_text(meta_payload.get("account_id"))
+                if candidate:
+                    identifiers.append(candidate)
+
+        for identifier in identifiers:
+            _register_account_identifier(mapping, identifier, resolved_entry)
+
+    return mapping
+
+
+def _resolve_account_dir_map(
+    sid: str, runs_root: Path, accounts_dir: Path
+) -> dict[str, Path]:
+    try:
+        marker = accounts_dir.stat().st_mtime
+    except OSError:
+        marker = -1.0
+
+    key = (runs_root.resolve().as_posix(), sid)
+    with _ACCOUNT_MAP_LOCK:
+        cached = _ACCOUNT_MAP_CACHE.get(key)
+        if cached and cached[0] == marker:
+            return cached[1]
+        mapping = _build_account_directory_map(accounts_dir)
+        _ACCOUNT_MAP_CACHE[key] = (marker, mapping)
+        return mapping
+
+
+_ACCOUNT_ID_DIGITS = re.compile(r"(\d+)")
+
+
+def _fallback_account_dir(account_id: str, accounts_dir: Path) -> Path | None:
+    match = _ACCOUNT_ID_DIGITS.search(account_id)
+    if match:
+        idx = match.group(1).lstrip("0") or "0"
+        candidate = accounts_dir / idx
+        if candidate.is_dir():
+            return candidate.resolve()
+
+    candidate = accounts_dir / account_id
+    if candidate.is_dir():
+        return candidate.resolve()
+
+    return None
+
+
+def _resolve_account_dir(
+    account_id: str,
+    accounts_dir: Path,
+    accounts_map: Mapping[str, Path],
+) -> Path | None:
+    normalized = normalize_note_style_account_id(account_id)
+    for key in (account_id, normalized):
+        if not key:
+            continue
+        candidate = accounts_map.get(key)
+        if candidate is not None:
+            return candidate
+    return _fallback_account_dir(account_id, accounts_dir)
+
+
+def _load_json_value(path: Path) -> Any | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        log.warning("NOTE_STYLE_JSON_READ_FAILED path=%s", path, exc_info=True)
+        return None
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        log.warning("NOTE_STYLE_JSON_PARSE_FAILED path=%s", path, exc_info=True)
+        return None
+
+
+def _load_account_artifacts(
+    account_dir: Path | None,
+) -> tuple[Mapping[str, Any], dict[str, Mapping[str, Any]], list[Mapping[str, Any]]]:
+    if account_dir is None:
+        return {}, {}, []
+
+    meta_payload = _load_json_mapping(account_dir / "meta.json")
+    if not isinstance(meta_payload, Mapping):
+        meta_payload = {}
+
+    raw_bureaus = _load_json_mapping(account_dir / "bureaus.json")
+    bureaus: dict[str, Mapping[str, Any]] = {}
+    if isinstance(raw_bureaus, Mapping):
+        for bureau, payload in raw_bureaus.items():
+            if isinstance(payload, Mapping):
+                bureaus[str(bureau)] = dict(payload)
+
+    raw_tags = _load_json_value(account_dir / "tags.json")
+    tags: list[Mapping[str, Any]] = []
+    if isinstance(raw_tags, Sequence):
+        tags = [entry for entry in raw_tags if isinstance(entry, Mapping)]
+
+    return meta_payload, bureaus, tags
+
+
+def _clean_value(value: Any) -> str:
+    text = _normalize_text(value)
+    if not text:
+        return ""
+    lowered = text.lower()
+    if lowered in {"--", "-", "n/a", "na", "none", "null", "unknown"}:
+        return ""
+    return text
+
+
+def _slugify(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", normalized).strip("-")
+    return slug
+
+
+def _collect_issue_tags(tags: Sequence[Mapping[str, Any]]) -> list[str]:
+    issues = [
+        _clean_value(tag.get("type"))
+        for tag in tags
+        if isinstance(tag, Mapping)
+        and _normalize_text(tag.get("kind")).lower() == "issue"
+    ]
+    return _unique(issue for issue in issues if issue)
+
+
+def _collect_other_tags(tags: Sequence[Mapping[str, Any]]) -> list[str]:
+    entries: list[str] = []
+    for tag in tags:
+        if not isinstance(tag, Mapping):
+            continue
+        kind = _normalize_text(tag.get("kind"))
+        if not kind or kind.lower() == "issue":
+            continue
+        tag_type = _clean_value(tag.get("type"))
+        if tag_type:
+            entries.append(f"{kind}:{tag_type}")
+        else:
+            entries.append(kind)
+    return _unique(entry for entry in entries if entry)
+
+
+def _collect_bureau_values(
+    bureaus: Mapping[str, Mapping[str, Any]], field: str
+) -> list[str]:
+    values: list[str] = []
+    for _, payload in sorted(bureaus.items(), key=lambda item: item[0]):
+        if not isinstance(payload, Mapping):
+            continue
+        raw_value = payload.get(field)
+        if isinstance(raw_value, Mapping):
+            for entry in raw_value.values():
+                cleaned = _clean_value(entry)
+                if cleaned:
+                    values.append(cleaned)
+        else:
+            cleaned = _clean_value(raw_value)
+            if cleaned:
+                values.append(cleaned)
+    return _unique(values)
+
+
+def _extract_account_tail(
+    meta: Mapping[str, Any], bureaus: Mapping[str, Mapping[str, Any]]
+) -> str:
+    tail = _clean_value(meta.get("account_number_tail"))
+    if tail:
+        digits = re.sub(r"\D", "", tail)
+        return digits[-4:] if digits else tail
+
+    numbers = _collect_bureau_values(bureaus, "account_number_display")
+    for number in numbers:
+        digits = re.sub(r"\D", "", number)
+        if digits:
+            return digits[-4:]
+    return ""
+
+
+def _build_account_context(
+    meta: Mapping[str, Any],
+    bureaus: Mapping[str, Mapping[str, Any]],
+    tags: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+
+    meta_context: dict[str, Any] = {}
+    for key in ("heading_guess", "issuer_canonical", "issuer_variant", "issuer_slug"):
+        value = _clean_value(meta.get(key))
+        if value:
+            meta_context[key] = value
+
+    tail = _clean_value(meta.get("account_number_tail"))
+    if tail:
+        meta_context["account_number_tail"] = tail
+
+    presence = meta.get("bureau_presence")
+    if isinstance(presence, Mapping):
+        meta_context["bureau_presence"] = {
+            str(bureau): bool(present) for bureau, present in presence.items()
+        }
+
+    if meta_context:
+        context["meta"] = meta_context
+
+    tags_context: dict[str, Any] = {}
+    issues = _collect_issue_tags(tags)
+    if issues:
+        tags_context["issues"] = issues
+    others = _collect_other_tags(tags)
+    if others:
+        tags_context["other"] = others
+    if tags_context:
+        context["tags"] = tags_context
+
+    bureaus_context: dict[str, Any] = {}
+    account_types = _collect_bureau_values(bureaus, "account_type")
+    if account_types:
+        bureaus_context["account_type"] = account_types
+
+    statuses = _collect_bureau_values(bureaus, "account_status")
+    if statuses:
+        bureaus_context["status"] = statuses
+
+    balances = _collect_bureau_values(bureaus, "balance_owed")
+    if balances:
+        bureaus_context["balance_owed"] = balances
+
+    opened = _collect_bureau_values(bureaus, "date_opened")
+    if opened:
+        bureaus_context["date_opened"] = opened
+
+    closed = _collect_bureau_values(bureaus, "closed_date")
+    if closed:
+        bureaus_context["closed_date"] = closed
+
+    numbers = _collect_bureau_values(bureaus, "account_number_display")
+    if numbers:
+        bureaus_context["account_number"] = numbers
+
+    creditors = _collect_bureau_values(bureaus, "creditor_name")
+    if creditors:
+        bureaus_context["creditor_name"] = creditors
+
+    if bureaus_context:
+        context["bureaus"] = bureaus_context
+
+    return context
+
+
+def _build_account_fingerprint(
+    account_id: str,
+    meta: Mapping[str, Any],
+    bureaus: Mapping[str, Mapping[str, Any]],
+    tags: Sequence[Mapping[str, Any]],
+) -> str:
+    components: list[str] = []
+
+    issuer = ""
+    for key in ("issuer_slug", "issuer_canonical", "heading_guess", "issuer_variant"):
+        issuer = _clean_value(meta.get(key))
+        if issuer:
+            break
+    if issuer:
+        components.append(f"issuer:{_slugify(issuer)}")
+
+    issue_slugs = []
+    for issue in _collect_issue_tags(tags):
+        slug = _slugify(issue)
+        if slug:
+            issue_slugs.append(slug)
+    if issue_slugs:
+        components.append(f"issues:{'+'.join(sorted(issue_slugs))}")
+
+    account_type_slugs = []
+    for value in _collect_bureau_values(bureaus, "account_type"):
+        slug = _slugify(value)
+        if slug:
+            account_type_slugs.append(slug)
+    if account_type_slugs:
+        components.append(f"type:{'+'.join(sorted(set(account_type_slugs)))}")
+
+    status_slugs = []
+    for value in _collect_bureau_values(bureaus, "account_status"):
+        slug = _slugify(value)
+        if slug:
+            status_slugs.append(slug)
+    if status_slugs:
+        components.append(f"status:{'+'.join(sorted(set(status_slugs)))}")
+
+    tail = _extract_account_tail(meta, bureaus)
+    if tail:
+        components.append(f"tail:{tail}")
+
+    if not components:
+        fallback = _slugify(account_id) or "unknown"
+        return f"account:{fallback}"
+
+    return "|".join(components)
 
 
 def discover_note_style_response_accounts(
@@ -251,7 +666,8 @@ def discover_note_style_response_accounts(
     """
 
     runs_root_path = _resolve_runs_root(runs_root)
-    responses_dir = runs_root_path / sid / "frontend" / "review" / "responses"
+    source_paths = _resolve_source_paths(sid, runs_root_path)
+    responses_dir = source_paths.responses_dir
     if not responses_dir.is_dir():
         log.info("NOTE_STYLE_DISCOVERY sid=%s responses=%s usable=%s", sid, 0, 0)
         return []
@@ -260,6 +676,7 @@ def discover_note_style_response_accounts(
     discovered: list[NoteStyleResponseAccount] = []
     responses_total = 0
     usable_total = 0
+    accounts_map = _resolve_account_dir_map(sid, runs_root_path, source_paths.accounts_dir)
     for candidate in sorted(responses_dir.glob(f"*{suffix}"), key=lambda path: path.name):
         if not candidate.is_file():
             continue
@@ -289,15 +706,21 @@ def discover_note_style_response_accounts(
         normalized = normalize_note_style_account_id(account_id)
         pack_filename = note_style_pack_filename(account_id)
         result_filename = note_style_result_filename(account_id)
-        relative = PurePosixPath("runs") / sid / "frontend" / "review" / "responses" / candidate.name
+        response_reference = _canonical_response_reference(runs_root_path, candidate)
+        account_dir = _resolve_account_dir(
+            account_id,
+            source_paths.accounts_dir,
+            accounts_map,
+        )
         discovered.append(
             NoteStyleResponseAccount(
                 account_id=account_id,
                 normalized_account_id=normalized,
                 response_path=candidate.resolve(),
-                response_relative=relative,
+                response_relative=response_reference,
                 pack_filename=pack_filename,
                 result_filename=result_filename,
+                account_dir=account_dir.resolve() if isinstance(account_dir, Path) else None,
             )
         )
         usable_total += 1
@@ -558,13 +981,21 @@ def _random_prompt_salt() -> str:
 
 
 def _pack_messages(
-    *, sid: str, account_id: str, note_text: str, prompt_salt: str
+    *,
+    sid: str,
+    account_id: str,
+    note_text: str,
+    prompt_salt: str,
+    fingerprint: str,
+    account_context: Mapping[str, Any],
 ) -> list[dict[str, str]]:
     system_message = _NOTE_STYLE_SYSTEM_PROMPT.format(prompt_salt=prompt_salt)
     payload: dict[str, Any] = {
         "sid": sid,
         "account_id": account_id,
         "note_text": note_text,
+        "fingerprint": fingerprint,
+        "account_context": account_context,
         "metadata": {"lang": "auto", "channel": "frontend_review"},
     }
     user_content = json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -1343,19 +1774,11 @@ def build_note_style_pack_for_account(
     sid: str, account_id: str, *, runs_root: Path | str | None = None
 ) -> Mapping[str, Any]:
     runs_root_path = _resolve_runs_root(runs_root)
-    run_dir = runs_root_path / sid
+    source_paths = _resolve_source_paths(sid, runs_root_path)
     ensure_note_style_section(sid, runs_root=runs_root_path)
     account_id_str = str(account_id)
-    response_rel = PurePosixPath(
-        f"runs/{sid}/frontend/review/responses/{account_id}.result.json"
-    )
-    response_path = (
-        run_dir
-        / "frontend"
-        / "review"
-        / "responses"
-        / f"{account_id}.result.json"
-    )
+    response_path = source_paths.responses_dir / f"{account_id}.result.json"
+    response_rel = _canonical_response_reference(runs_root_path, response_path)
 
     paths = ensure_note_style_paths(runs_root_path, sid, create=True)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
@@ -1501,6 +1924,24 @@ def build_note_style_pack_for_account(
     )
     timestamp = _now_iso()
 
+    accounts_map = _resolve_account_dir_map(sid, runs_root_path, source_paths.accounts_dir)
+    account_dir = _resolve_account_dir(account_id_str, source_paths.accounts_dir, accounts_map)
+    if account_dir is None:
+        log.info(
+            "NOTE_STYLE_ACCOUNT_DIR_MISSING sid=%s acc=%s",
+            sid,
+            account_id_str,
+        )
+
+    meta_payload, bureaus_payload, tags_payload = _load_account_artifacts(account_dir)
+    account_context = _build_account_context(meta_payload, bureaus_payload, tags_payload)
+    fingerprint = _build_account_fingerprint(
+        account_id_str,
+        meta_payload,
+        bureaus_payload,
+        tags_payload,
+    )
+
     pack_payload = {
         "sid": sid,
         "account_id": str(account_id),
@@ -1508,11 +1949,15 @@ def build_note_style_pack_for_account(
         "note_hash": note_hash,
         "model": _NOTE_STYLE_MODEL,
         "prompt_salt": prompt_salt,
+        "fingerprint": fingerprint,
+        "account_context": account_context,
         "messages": _pack_messages(
             sid=sid,
             account_id=str(account_id),
             note_text=note_raw,
             prompt_salt=prompt_salt,
+            fingerprint=fingerprint,
+            account_context=account_context,
         ),
         "built_at": timestamp,
     }
@@ -1524,6 +1969,8 @@ def build_note_style_pack_for_account(
         "note_hash": note_hash,
         "note_metrics": {"char_len": char_len, "word_len": word_len},
         "evaluated_at": timestamp,
+        "fingerprint": fingerprint,
+        "account_context": account_context,
     }
 
     _write_jsonl(account_paths.pack_file, pack_payload)
@@ -1532,7 +1979,7 @@ def build_note_style_pack_for_account(
     pack_relative = _relativize(account_paths.pack_file, paths.base)
     result_relative = _relativize(account_paths.result_file, paths.base)
     log.info(
-        "NOTE_STYLE_PACK_BUILT sid=%s acc=%s pack=%s result=%s note_hash=%s prompt_salt=%s source_hash=%s char_len=%s word_len=%s model=%s",
+        "NOTE_STYLE_PACK_BUILT sid=%s acc=%s pack=%s result=%s note_hash=%s prompt_salt=%s source_hash=%s char_len=%s word_len=%s model=%s fingerprint=%s",
         sid,
         account_id_str,
         pack_relative,
@@ -1543,6 +1990,7 @@ def build_note_style_pack_for_account(
         char_len,
         word_len,
         _NOTE_STYLE_MODEL,
+        fingerprint,
     )
 
     entry = _serialize_entry(

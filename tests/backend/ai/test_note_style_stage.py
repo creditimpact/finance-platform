@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
-import math
 from pathlib import Path
 import unicodedata
 
@@ -38,86 +36,6 @@ def _normalized_hash(text: str) -> str:
     normalized = " ".join(text.split()).strip().lower()
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
-
-def _expected_salt(sid: str, account_id: str, analysis: dict[str, object]) -> str:
-    tone_value = str(analysis.get("tone") or "").strip().lower()
-    if not tone_value:
-        tone_value = "neutral"
-
-    context = analysis.get("context_hints")
-    if not isinstance(context, dict):
-        context = {}
-
-    topic_value = str(context.get("topic") or "").strip().lower()
-    if not topic_value:
-        topic_value = "other"
-
-    timeframe = context.get("timeframe") if isinstance(context, dict) else None
-    if not isinstance(timeframe, dict):
-        timeframe = {}
-
-    relative = str(timeframe.get("relative") or "").strip().lower()
-    if relative:
-        timeframe_bucket = f"relative:{relative}"
-    else:
-        month_text = str(timeframe.get("month") or "").strip()
-        timeframe_bucket = f"month:{month_text}" if month_text else "none"
-
-    entities = context.get("entities") if isinstance(context, dict) else None
-    if not isinstance(entities, dict):
-        entities = {}
-
-    amount_band = "none"
-    amount_value = entities.get("amount")
-    try:
-        parsed_amount = float(amount_value)
-    except (TypeError, ValueError):
-        parsed_amount = None
-
-    if parsed_amount is not None and math.isfinite(parsed_amount):
-        absolute = abs(parsed_amount)
-        if absolute == 0:
-            amount_band = "zero"
-        elif absolute < 100:
-            amount_band = "lt_100"
-        elif absolute < 500:
-            amount_band = "100_499"
-        elif absolute < 1000:
-            amount_band = "500_999"
-        elif absolute < 5000:
-            amount_band = "1000_4999"
-        elif absolute < 10000:
-            amount_band = "5000_9999"
-        else:
-            amount_band = "gte_10000"
-
-    emphasis_values = analysis.get("emphasis")
-    emphasis_sorted: list[str] = []
-    if isinstance(emphasis_values, list):
-        seen: set[str] = set()
-        for entry in emphasis_values:
-            text = str(entry or "").strip()
-            if not text:
-                continue
-            seen.add(text)
-        emphasis_sorted = sorted(seen)
-
-    payload = {
-        "sid": sid,
-        "account_id": account_id,
-        "tone": tone_value,
-        "topic": topic_value,
-        "buckets": {
-            "timeframe_bucket": timeframe_bucket,
-            "amount_band": amount_band,
-            "emphasis_sorted": emphasis_sorted,
-        },
-    }
-
-    message = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
-    return hmac.new(b"tests-note-style-pepper", message, hashlib.sha256).hexdigest()[:12]
 
 
 def _write_response(path: Path, payload: dict[str, object]) -> None:
@@ -184,11 +102,12 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
 
     sanitized = _sanitize_note_text(note)
     expected_hash = _normalized_hash(sanitized)
-    expected_note_hash = hashlib.sha256(sanitized.encode("utf-8")).hexdigest()
+    expected_note_hash = hashlib.sha256(note.encode("utf-8")).hexdigest()
 
     result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
     assert result["status"] == "completed"
     assert result["note_hash"] == expected_note_hash
+    assert 8 <= len(result["prompt_salt"]) <= 12
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
@@ -211,49 +130,42 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert note_style_manifest["logs"].endswith("ai_packs/note_style/logs.txt")
     assert note_style_manifest.get("last_built_at") is None
 
+    assert pack_payload["prompt_salt"] == result_payload["prompt_salt"] == result["prompt_salt"]
     pack_messages = pack_payload["messages"]
     assert isinstance(pack_messages, list)
     assert pack_messages[0]["role"] == "system"
-    assert "tone" in pack_messages[0]["content"].lower()
-    assert pack_messages[1]["role"] == "user"
-    user_content = pack_messages[1]["content"]
-    assert sanitized not in user_content
-    user_payload = json.loads(user_content)
-    extractor_payload = user_payload["extractor"]
-    assert extractor_payload["tone"] == "empathetic"
-    assert extractor_payload["context_hints"]["topic"] == "payment_dispute"
-    assert set(["paid_already", "inaccurate_reporting"]).issubset(
-        set(extractor_payload["emphasis"])
+    assert pack_messages[0]["content"].startswith(
+        "You extract structured style from a customer's free-text note."
     )
-    assert extractor_payload["confidence"] >= 0.5
+    assert pack_messages[0]["content"].strip().endswith(
+        f"Prompt salt: {result['prompt_salt']}"
+    )
+    assert pack_messages[1]["role"] == "user"
+    user_payload = json.loads(pack_messages[1]["content"])
+    assert user_payload == {
+        "sid": sid,
+        "account_id": account_id,
+        "note_text": note,
+        "metadata": {"lang": "auto", "channel": "frontend_review"},
+    }
 
-    assert "prompt_salt" not in pack_payload
-    analysis_payload = result_payload["analysis"]
-    expected_salt = _expected_salt(sid, account_id, analysis_payload)
-    assert user_payload["prompt_salt"] == expected_salt
-    assert expected_salt in pack_messages[0]["content"]
-    assert result_payload["prompt_salt"] == expected_salt
-    assert len(expected_salt) == 12
+    assert 8 <= len(pack_payload["prompt_salt"]) <= 12
     assert pack_payload["note_hash"] == expected_note_hash
     assert pack_payload["model"] == "gpt-4o-mini"
     assert (
         pack_payload["source_response_path"]
         == f"runs/{sid}/frontend/review/responses/{account_id}.result.json"
     )
-    assert sanitized not in account_paths.result_file.read_text(encoding="utf-8")
+    assert "extractor" not in pack_payload
+    assert "analysis" not in result_payload
+    assert "extractor" not in result_payload
+    assert note not in account_paths.result_file.read_text(encoding="utf-8")
     assert result_payload["note_hash"] == expected_note_hash
     assert result_payload["source_hash"] == expected_hash
-    assert result_payload["analysis"] == result_payload["extractor"]
-    analysis_payload = result_payload["analysis"]
-    assert pack_payload["extractor"] == analysis_payload
-    assert analysis_payload["tone"] == "empathetic"
-    assert analysis_payload["context_hints"]["topic"] == "payment_dispute"
-    assert analysis_payload["context_hints"]["entities"]["creditor"] is None
-    assert set(["paid_already", "inaccurate_reporting", "support_request"]).issubset(
-        set(analysis_payload["emphasis"])
-    )
-    assert analysis_payload["confidence"] >= 0.5
-    assert analysis_payload["risk_flags"] == []
+    assert result_payload["note_metrics"] == {
+        "char_len": len(sanitized),
+        "word_len": len(sanitized.split()),
+    }
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
     assert index_payload["schema_version"] == 1
@@ -465,25 +377,28 @@ def test_note_style_stage_updates_on_modified_note(tmp_path: Path) -> None:
     response_dir = run_dir / "frontend" / "review" / "responses"
 
     response_path = response_dir / f"{account_id}.result.json"
+    original_note = "Please help correct this."
     _write_response(
         response_path,
         {
             "sid": sid,
             "account_id": account_id,
-            "answers": {"explanation": "Please help correct this."},
+            "answers": {"explanation": original_note},
             "received_at": "2024-01-03T00:00:00Z",
         },
     )
 
     first = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
     first_salt = first["prompt_salt"]
+    first_hash = first["note_hash"]
 
+    updated_note = "This is urgent and I dispute this account."
     _write_response(
         response_path,
         {
             "sid": sid,
             "account_id": account_id,
-            "answers": {"explanation": "This is urgent and I dispute this account."},
+            "answers": {"explanation": updated_note},
             "received_at": "2024-01-03T00:10:00Z",
         },
     )
@@ -491,12 +406,19 @@ def test_note_style_stage_updates_on_modified_note(tmp_path: Path) -> None:
     updated = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
     assert updated["status"] == "completed"
     assert updated["prompt_salt"] != first_salt
+    assert updated["note_hash"] != first_hash
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
     updated_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
-    assert updated_payload["analysis"]["tone"] == "assertive"
-    assert updated_payload["analysis"]["context_hints"]["topic"] == "payment_dispute"
+    expected_hash = hashlib.sha256(updated_note.encode("utf-8")).hexdigest()
+    expected_source = _normalized_hash(_sanitize_note_text(updated_note))
+    assert updated_payload["note_hash"] == expected_hash
+    assert updated_payload["source_hash"] == expected_source
+    assert updated_payload["prompt_salt"] == updated["prompt_salt"]
+    metrics = updated_payload["note_metrics"]
+    sanitized = _sanitize_note_text(updated_note)
+    assert metrics == {"char_len": len(sanitized), "word_len": len(sanitized.split())}
 
 def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     sid = "SID004"
@@ -518,7 +440,7 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
 
     sanitized = _sanitize_note_text(note)
     expected_hash = _normalized_hash(sanitized)
-    expected_note_hash = hashlib.sha256(sanitized.encode("utf-8")).hexdigest()
+    expected_note_hash = hashlib.sha256(note.encode("utf-8")).hexdigest()
 
     result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
     assert result["status"] == "completed"
@@ -529,25 +451,24 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
 
     pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
     result_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+    assert pack_payload["prompt_salt"] == result_payload["prompt_salt"] == result["prompt_salt"]
+
     pack_user_payload = json.loads(pack_payload["messages"][1]["content"])
-    assert "prompt_salt" not in pack_payload
-    analysis_payload = result_payload["analysis"]
-    expected_salt = _expected_salt(sid, account_id, analysis_payload)
-    assert pack_user_payload["prompt_salt"] == expected_salt
-    extractor_payload = pack_user_payload["extractor"]
-    assert extractor_payload["context_hints"]["topic"] == "payment_dispute"
-    assert extractor_payload["emphasis"] == ["paid_already"]
-    assert extractor_payload["confidence"] >= 0.5
-    assert sanitized not in pack_payload["messages"][1]["content"]
+    assert pack_user_payload == {
+        "sid": sid,
+        "account_id": account_id,
+        "note_text": note,
+        "metadata": {"lang": "auto", "channel": "frontend_review"},
+    }
+
     assert pack_payload["note_hash"] == expected_note_hash
-    assert result_payload["source_hash"] == expected_hash
     assert result_payload["note_hash"] == expected_note_hash
-    assert result_payload["prompt_salt"] == expected_salt
-    assert result_payload["analysis"] == result_payload["extractor"]
-    assert result_payload["analysis"]["context_hints"]["topic"] == "payment_dispute"
-    assert result_payload["analysis"]["emphasis"] == ["paid_already"]
-    assert result_payload["analysis"]["confidence"] >= 0.5
-    assert result["prompt_salt"] == expected_salt
+    assert result_payload["source_hash"] == expected_hash
+    assert result_payload["note_metrics"] == {
+        "char_len": len(sanitized),
+        "word_len": len(sanitized.split()),
+    }
+    assert note not in account_paths.result_file.read_text(encoding="utf-8")
 
 
 def test_note_style_stage_skips_when_note_sanitizes_empty(tmp_path: Path) -> None:
@@ -570,7 +491,7 @@ def test_note_style_stage_skips_when_note_sanitizes_empty(tmp_path: Path) -> Non
 
     result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
     sanitized = _sanitize_note_text(note)
-    expected_note_hash = hashlib.sha256(sanitized.encode("utf-8")).hexdigest()
+    expected_note_hash = hashlib.sha256(note.encode("utf-8")).hexdigest()
     assert result["status"] == "skipped_low_signal"
     assert result["reason"] == "low_signal"
     assert result["note_hash"] == expected_note_hash
@@ -748,9 +669,9 @@ def test_note_style_stage_ignores_summary_file(tmp_path: Path) -> None:
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
     result_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
-    analysis = result_payload["analysis"]
-    assert analysis["tone"] == "empathetic"
-    assert analysis["context_hints"]["topic"] == "payment_dispute"
+    assert "analysis" not in result_payload
+    sanitized = _sanitize_note_text(note)
+    assert result_payload["note_metrics"] == {"char_len": len(sanitized), "word_len": len(sanitized.split())}
 
     assert summary_path.read_text(encoding="utf-8") == json.dumps(
         summary_payload, ensure_ascii=False, indent=2

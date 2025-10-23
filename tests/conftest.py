@@ -46,5 +46,4 @@ except Exception:  # pragma: no cover - minimal stub
 @pytest.fixture(autouse=True)
 def _note_style_stage_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NOTE_STYLE_DEBOUNCE_MS", "0")
-    monkeypatch.setenv("NOTE_STYLE_PROMPT_PEPPER", "tests-note-style-pepper")
 

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import logging
 import math
 import os
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -40,20 +40,22 @@ from backend.runflow.decider import record_stage
 log = logging.getLogger(__name__)
 
 _INDEX_SCHEMA_VERSION = 1
-_PROMPT_PEPPER_ENV = "NOTE_STYLE_PROMPT_PEPPER"
 _DEBOUNCE_MS_ENV = "NOTE_STYLE_DEBOUNCE_MS"
 _DEFAULT_DEBOUNCE_MS = 750
 
-_DEFAULT_PEPPER = "finance-note-style"
 _NOTE_STYLE_MODEL = "gpt-4o-mini"
 _NOTE_STYLE_SYSTEM_PROMPT = (
-    "You are reviewing structured metadata that was derived from a customer's note. "
-    "Respond with JSON only using the schema: "
-    '{{"tone": <string>, "context_hints": {{"timeframe": {{"month": <string|null>, '
-    '"relative": <string|null>}}, "topic": <string>, "entities": {{"creditor": <string|null>, '
-    '"amount": <number|null>}}}}, "emphasis": [<string>...], "confidence": <float>, '
-    '"risk_flags": [<string>...]}}. Confidence must be between 0 and 1. Risk flags must be '
-    "lowercase snake_case strings. Do not add commentary. Prompt salt: {prompt_salt}."
+    "You extract structured style from a customer's free-text note.\n"
+    "Return JSON ONLY with schema: {{\"tone\": <string>, \"context_hints\": {{\"timeframe\": {{\"month\": <string|null>, "
+    "\"relative\": <string|null>}}, \"topic\": <string>, \"entities\": {{\"creditor\": <string|null>, \"amount\": <number|null>}}}}, "
+    "\"emphasis\": [<string>...], \"confidence\": <float>, \"risk_flags\": [<string>...]}}\n"
+    "Rules:\n"
+    "- Base output ONLY on the provided note text.\n"
+    "- Summarize to tags/short phrases; do not copy sentences verbatim.\n"
+    "- If note is empty/meaningless → tone=\"neutral\", topic=\"unspecified\", confidence<=0.2, add risk_flags [\"empty_note\"].\n"
+    "- If note asserts a legal claim but mentions no supporting docs → add [\"unsupported_claim\"].\n"
+    "- Calibrate confidence: short/ambiguous notes ≤0.5.\n"
+    "Prompt salt: {prompt_salt}"
 )
 
 _ALLOWED_TONES = {
@@ -186,6 +188,7 @@ _INDEX_LOCK_STALE_TIMEOUT = 30.0
 @dataclass(frozen=True)
 class _LoadedResponseNote:
     account_id: str
+    note_raw: str
     note_sanitized: str
     source_path: Path
     source_hash: str
@@ -353,12 +356,6 @@ def _unique(values: Iterable[str]) -> list[str]:
     return ordered
 
 
-def _pepper_bytes() -> bytes:
-    value = os.getenv(_PROMPT_PEPPER_ENV)
-    text = value if value else _DEFAULT_PEPPER
-    return text.encode("utf-8")
-
-
 def _source_hash(text: str) -> str:
     normalized = " ".join(text.split()).strip().lower()
     digest = hashlib.sha256()
@@ -502,65 +499,29 @@ def _log_style_discovery(
     )
 
 
-def _prompt_salt_payload(
-    sid: str, account_id: str, extractor: Mapping[str, Any] | None
-) -> Mapping[str, Any]:
-    tone = _normalize_text((extractor or {}).get("tone") if isinstance(extractor, Mapping) else None).lower()
-    if not tone:
-        tone = "neutral"
-
-    context = extractor.get("context_hints") if isinstance(extractor, Mapping) else None
-    if not isinstance(context, Mapping):
-        context = {}
-
-    topic = _normalize_text(context.get("topic")).lower()
-    if not topic:
-        topic = "other"
-
-    timeframe = context.get("timeframe") if isinstance(context, Mapping) else None
-    if not isinstance(timeframe, Mapping):
-        timeframe = {}
-
-    entities = context.get("entities") if isinstance(context, Mapping) else None
-    if not isinstance(entities, Mapping):
-        entities = {}
-
-    emphasis_sorted = _sorted_emphasis(extractor.get("emphasis") if isinstance(extractor, Mapping) else [])
-
-    buckets = {
-        "timeframe_bucket": _timeframe_bucket(timeframe),
-        "amount_band": _amount_band(entities),
-        "emphasis_sorted": emphasis_sorted,
-    }
-
-    return {
-        "sid": str(sid),
-        "account_id": str(account_id),
-        "tone": tone,
-        "topic": topic,
-        "buckets": buckets,
-    }
-
-
-def _prompt_salt(sid: str, account_id: str, extractor: Mapping[str, Any] | None) -> str:
-    payload = _prompt_salt_payload(sid, account_id, extractor)
-    message = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hmac.new(_pepper_bytes(), message, hashlib.sha256).hexdigest()[:12]
-
-
 def _note_hash(note_text: str) -> str:
     digest = hashlib.sha256()
     digest.update(note_text.encode("utf-8"))
     return digest.hexdigest()
 
 
-def _pack_messages(extractor: Mapping[str, Any], prompt_salt: str) -> list[dict[str, str]]:
+def _random_prompt_salt() -> str:
+    length = secrets.choice(range(8, 13))
+    bytes_needed = math.ceil(length / 2)
+    value = secrets.token_hex(bytes_needed)
+    return value[:length]
+
+
+def _pack_messages(
+    *, sid: str, account_id: str, note_text: str, prompt_salt: str
+) -> list[dict[str, str]]:
     system_message = _NOTE_STYLE_SYSTEM_PROMPT.format(prompt_salt=prompt_salt)
-    payload: dict[str, Any] = {"prompt_salt": prompt_salt}
-
-    if isinstance(extractor, Mapping):
-        payload["extractor"] = json.loads(json.dumps(extractor))
-
+    payload: dict[str, Any] = {
+        "sid": sid,
+        "account_id": account_id,
+        "note_text": note_text,
+        "metadata": {"lang": "auto", "channel": "frontend_review"},
+    }
     user_content = json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
     return [
@@ -591,7 +552,7 @@ def _sanitize_note_value(value: Any) -> str:
     return _collapse_whitespace(normalized)
 
 
-def _extract_note_text(payload: Mapping[str, Any]) -> str:
+def _extract_note_text(payload: Mapping[str, Any]) -> tuple[str, str]:
     def _resolve_candidates(root: Any, parts: Sequence[str]) -> list[Any]:
         if root is None:
             return []
@@ -616,13 +577,15 @@ def _extract_note_text(payload: Mapping[str, Any]) -> str:
 
         return results
 
-    def _flatten_candidate(value: Any) -> Iterator[str]:
+    def _flatten_candidate(value: Any) -> Iterator[tuple[str, str]]:
         if value is None:
             return
         if isinstance(value, str):
             sanitized = _sanitize_note_value(value)
             if sanitized:
-                yield sanitized
+                yield value, sanitized
+            else:
+                yield value, ""
             return
         if isinstance(value, Mapping):
             for entry in value.values():
@@ -633,17 +596,26 @@ def _extract_note_text(payload: Mapping[str, Any]) -> str:
                 yield from _flatten_candidate(entry)
             return
         sanitized = _sanitize_note_value(value)
+        raw_text = value if isinstance(value, str) else str(value)
         if sanitized:
-            yield sanitized
+            yield raw_text, sanitized
+        else:
+            yield raw_text, ""
 
+    fallback_raw: str | None = None
     for path in _NOTE_VALUE_PATHS:
         candidates = _resolve_candidates(payload, path)
         for candidate in candidates:
-            for sanitized in _flatten_candidate(candidate):
+            for raw_value, sanitized in _flatten_candidate(candidate):
                 if len(sanitized) > 0:
-                    return sanitized
+                    return raw_value, sanitized
+                if fallback_raw is None and isinstance(raw_value, str):
+                    fallback_raw = raw_value
 
-    return ""
+    if fallback_raw is not None:
+        return fallback_raw, ""
+
+    return "", ""
 
 
 def _tokens(note: str) -> set[str]:
@@ -911,11 +883,12 @@ def _load_response_note(account_id: str, response_path: Path) -> _LoadedResponse
     if not isinstance(payload, Mapping):
         raise NoteStyleSkip("invalid_response")
 
-    note_text = _extract_note_text(payload)
-    source_hash = _source_hash(note_text)
+    note_raw, note_sanitized = _extract_note_text(payload)
+    source_hash = _source_hash(note_sanitized)
     return _LoadedResponseNote(
         account_id=str(account_id),
-        note_sanitized=note_text,
+        note_raw=note_raw,
+        note_sanitized=note_sanitized,
         source_path=response_path,
         source_hash=source_hash,
     )
@@ -1307,12 +1280,13 @@ def build_note_style_pack_for_account(
             "packs_completed": totals.get("completed", 0),
         }
 
-    note_text = loaded_note.note_sanitized
+    note_raw = loaded_note.note_raw
+    note_sanitized = loaded_note.note_sanitized
     source_hash = loaded_note.source_hash
-    note_hash = _note_hash(note_text)
-    char_len = len(note_text)
-    word_len = len(note_text.split())
-    if len(note_text) <= 3:
+    note_hash = _note_hash(note_raw)
+    char_len = len(note_sanitized)
+    word_len = len(note_sanitized.split())
+    if len(note_sanitized) <= 3:
         timestamp = _now_iso()
         skip_status = "skipped_low_signal"
         _remove_account_artifacts(account_paths)
@@ -1368,14 +1342,6 @@ def build_note_style_pack_for_account(
             totals=totals,
             index_path=paths.index_file,
         )
-        existing_analysis: Mapping[str, Any] | None = None
-        if isinstance(existing_result, Mapping):
-            analysis_payload = existing_result.get("analysis")
-            extractor_payload = existing_result.get("extractor")
-            if isinstance(analysis_payload, Mapping):
-                existing_analysis = analysis_payload
-            elif isinstance(extractor_payload, Mapping):
-                existing_analysis = extractor_payload
         prompt_salt_existing = (
             str(existing_result.get("prompt_salt")) if isinstance(existing_result, Mapping) else ""
         )
@@ -1388,7 +1354,6 @@ def build_note_style_pack_for_account(
             source_hash=source_hash,
             char_len=char_len,
             word_len=word_len,
-            analysis=existing_analysis,
             prompt_salt=prompt_salt_existing,
         )
         return {
@@ -1397,8 +1362,7 @@ def build_note_style_pack_for_account(
             "packs_completed": totals.get("completed", 0),
         }
 
-    extractor = _build_extractor(note_text)
-    prompt_salt = _prompt_salt(sid, str(account_id), extractor)
+    prompt_salt = _random_prompt_salt()
     _log_style_discovery(
         sid=sid,
         account_id=account_id_str,
@@ -1408,7 +1372,6 @@ def build_note_style_pack_for_account(
         source_hash=source_hash,
         char_len=char_len,
         word_len=word_len,
-        analysis=extractor,
         prompt_salt=prompt_salt,
     )
     timestamp = _now_iso()
@@ -1419,41 +1382,38 @@ def build_note_style_pack_for_account(
         "source_response_path": str(response_rel),
         "note_hash": note_hash,
         "model": _NOTE_STYLE_MODEL,
-        "extractor": extractor,
-        "messages": _pack_messages(extractor, prompt_salt),
+        "prompt_salt": prompt_salt,
+        "messages": _pack_messages(
+            sid=sid,
+            account_id=str(account_id),
+            note_text=note_raw,
+            prompt_salt=prompt_salt,
+        ),
         "built_at": timestamp,
     }
     result_payload = {
         "sid": sid,
         "account_id": str(account_id),
-        "analysis": extractor,
-        "extractor": extractor,
         "prompt_salt": prompt_salt,
         "source_hash": source_hash,
         "note_hash": note_hash,
+        "note_metrics": {"char_len": char_len, "word_len": word_len},
         "evaluated_at": timestamp,
     }
 
     _write_jsonl(account_paths.pack_file, pack_payload)
     _write_jsonl(account_paths.result_file, result_payload)
 
-    tone_value, topic_value, emphasis_values, confidence_value, risk_values = _analysis_summary(extractor)
-    confidence_text = ""
-    if confidence_value is not None:
-        confidence_text = f"{confidence_value:.2f}"
     pack_relative = _relativize(account_paths.pack_file, paths.base)
     result_relative = _relativize(account_paths.result_file, paths.base)
     log.info(
-        "STYLE_PACK_BUILT sid=%s account_id=%s pack=%s result=%s tone=%s topic=%s emphasis=%s confidence=%s risk_flags=%s prompt_salt=%s note_hash=%s source_hash=%s model=%s",
+        "STYLE_PACK_BUILT sid=%s account_id=%s pack=%s result=%s char_len=%s word_len=%s prompt_salt=%s note_hash=%s source_hash=%s model=%s",
         sid,
         account_id_str,
         pack_relative,
         result_relative,
-        tone_value,
-        topic_value,
-        "|".join(emphasis_values),
-        confidence_text,
-        "|".join(risk_values),
+        char_len,
+        word_len,
         prompt_salt,
         note_hash,
         source_hash,

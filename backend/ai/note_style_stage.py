@@ -915,16 +915,19 @@ def _serialize_entry(
     note_hash: str,
     status: str,
     timestamp: str,
+    result_path: Path | None = None,
 ) -> dict[str, Any]:
-    return {
+    entry: dict[str, Any] = {
         "account_id": account_id,
         "pack": _relativize(account_paths.pack_file, paths.base),
-        "result": _relativize(account_paths.result_file, paths.base),
         "lines": 1,
         "built_at": timestamp,
         "status": status,
-        "source_hash": note_hash,
+        "note_hash": note_hash,
     }
+    if result_path is not None:
+        entry["result"] = _relativize(result_path, paths.base)
+    return entry
 
 
 def _serialize_skip_entry(
@@ -933,11 +936,10 @@ def _serialize_skip_entry(
     return {
         "account_id": account_id,
         "pack": "",
-        "result": "",
         "lines": 0,
         "built_at": timestamp,
         "status": status,
-        "source_hash": note_hash,
+        "note_hash": note_hash,
     }
 
 
@@ -1141,13 +1143,17 @@ def _update_index_for_account(
         result_value = str(entry.get("result") or "")
 
     index_relative = _relativize(paths.index_file, paths.base)
-    source_hash_value = ""
+    note_hash_value = ""
     if entry is not None and isinstance(entry, Mapping):
-        source_hash_value = str(entry.get("source_hash") or "")
+        note_hash_value = str(entry.get("note_hash") or entry.get("source_hash") or "")
     elif removed_entry is not None:
-        source_hash_value = str(removed_entry.get("source_hash") or "")
+        note_hash_value = str(
+            removed_entry.get("note_hash")
+            or removed_entry.get("source_hash")
+            or ""
+        )
     log.info(
-        "STYLE_INDEX_UPDATED sid=%s account_id=%s action=%s status=%s packs_total=%s packs_completed=%s packs_failed=%s index=%s pack=%s result=%s source_hash=%s",
+        "STYLE_INDEX_UPDATED sid=%s account_id=%s action=%s status=%s packs_total=%s packs_completed=%s packs_failed=%s index=%s pack=%s result=%s note_hash=%s",
         sid,
         account_id,
         action,
@@ -1158,7 +1164,7 @@ def _update_index_for_account(
         index_relative,
         pack_value,
         result_value,
-        source_hash_value,
+        note_hash_value,
     )
 
     return totals
@@ -1329,11 +1335,25 @@ def build_note_style_pack_for_account(
             break
 
     existing_result = _load_result_payload(account_paths.result_file)
+    existing_note_hash = ""
+    if isinstance(existing_entry, Mapping):
+        existing_note_hash = str(
+            existing_entry.get("note_hash")
+            or existing_entry.get("source_hash")
+            or ""
+        )
+    result_note_hash = ""
+    result_source_hash = ""
+    if isinstance(existing_result, Mapping):
+        result_note_hash = str(existing_result.get("note_hash") or "")
+        result_source_hash = str(existing_result.get("source_hash") or "")
     if (
-        existing_entry is not None
-        and str(existing_entry.get("source_hash")) == note_hash
+        existing_note_hash == note_hash
         and isinstance(existing_result, Mapping)
-        and str(existing_result.get("source_hash")) == source_hash
+        and (
+            result_note_hash == note_hash
+            or (result_source_hash and result_source_hash == source_hash)
+        )
     ):
         totals = _compute_totals(items)
         _record_stage_progress(

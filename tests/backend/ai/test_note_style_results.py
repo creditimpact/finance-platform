@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -117,6 +118,8 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
     assert entry["completed_at"] == completed_at
     assert entry["result"] == account_paths.result_file.relative_to(paths.base).as_posix()
     assert entry.get("pack") == account_paths.pack_file.relative_to(paths.base).as_posix()
+    expected_note_hash = hashlib.sha256("Please help, bank error".encode("utf-8")).hexdigest()
+    assert entry["note_hash"] == expected_note_hash
     totals = index_payload.get("totals")
     assert totals == {"total": 1, "completed": 1, "failed": 0}
 

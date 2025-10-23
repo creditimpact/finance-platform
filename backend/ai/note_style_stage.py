@@ -8,10 +8,11 @@ import json
 import logging
 import os
 import threading
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
@@ -31,6 +32,31 @@ _DEBOUNCE_MS_ENV = "NOTE_STYLE_DEBOUNCE_MS"
 _DEFAULT_DEBOUNCE_MS = 750
 
 _DEFAULT_PEPPER = "finance-note-style"
+
+_ZERO_WIDTH_WHITESPACE = {
+    ord("\u200b"): " ",  # zero width space
+    ord("\u200c"): " ",  # zero width non-joiner
+    ord("\u200d"): " ",  # zero width joiner
+    ord("\ufeff"): " ",  # byte order mark / zero width no-break space
+    ord("\u2060"): " ",  # word joiner
+}
+
+
+@dataclass(frozen=True)
+class _LoadedResponseNote:
+    account_id: str
+    note_sanitized: str
+    source_path: Path
+    source_hash: str
+
+
+class NoteStyleSkip(Exception):
+    """Raised when the note_style stage should soft-skip processing."""
+
+    def __init__(self, reason: str, *, detail: str | None = None) -> None:
+        super().__init__(detail or reason)
+        self.reason = reason
+        self.detail = detail
 
 
 def _now_iso() -> str:
@@ -119,6 +145,69 @@ def _normalize_text(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     return str(value).strip()
+
+
+def _collapse_whitespace(value: str) -> str:
+    translated = value.translate(_ZERO_WIDTH_WHITESPACE)
+    return " ".join(translated.split()).strip()
+
+
+def _sanitize_note_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        value = str(value)
+    normalized = unicodedata.normalize("NFKC", value)
+    return _collapse_whitespace(normalized)
+
+
+def _collect_note_segments(payload: Mapping[str, Any]) -> list[str]:
+    segments: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: Any) -> None:
+        if isinstance(value, str):
+            sanitized = _sanitize_note_value(value)
+            if not sanitized or sanitized in seen:
+                return
+            seen.add(sanitized)
+            segments.append(sanitized)
+            return
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            for entry in value:
+                _add(entry)
+
+    for key in ("explanation", "note", "notes", "customer_note"):
+        _add(payload.get(key))
+
+    answers = payload.get("answers")
+    if isinstance(answers, Mapping):
+        for key in ("explanation", "note", "notes", "customer_note"):
+            _add(answers.get(key))
+
+    items = payload.get("items")
+    if isinstance(items, Sequence):
+        for entry in items:
+            if not isinstance(entry, Mapping):
+                _add(entry)
+                continue
+            for key in ("explanation", "note", "notes", "customer_note"):
+                _add(entry.get(key))
+            entry_answers = entry.get("answers")
+            if isinstance(entry_answers, Mapping):
+                for key in ("explanation", "note", "notes", "customer_note"):
+                    _add(entry_answers.get(key))
+
+    return segments
+
+
+def _extract_note_text(payload: Mapping[str, Any]) -> str:
+    segments = _collect_note_segments(payload)
+    if not segments:
+        return ""
+    if len(segments) == 1:
+        return segments[0]
+    return _collapse_whitespace(" ".join(segments))
 
 
 def _tokens(note: str) -> set[str]:
@@ -241,30 +330,35 @@ def _extract_features(note: str) -> dict[str, Any]:
     }
 
 
-def _load_response_note(response_path: Path) -> tuple[str, Mapping[str, Any] | None]:
+def _load_response_note(account_id: str, response_path: Path) -> _LoadedResponseNote:
     try:
         raw = response_path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return "", None
+        raise NoteStyleSkip("missing_response") from None
     except OSError:
         log.warning("NOTE_STYLE_RESPONSE_READ_FAILED path=%s", response_path, exc_info=True)
-        return "", None
+        raise NoteStyleSkip("response_read_failed") from None
 
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
         log.warning("NOTE_STYLE_RESPONSE_INVALID_JSON path=%s", response_path, exc_info=True)
-        return "", None
+        raise NoteStyleSkip("invalid_response") from None
 
     if not isinstance(payload, Mapping):
-        return "", None
+        raise NoteStyleSkip("invalid_response")
 
-    answers = payload.get("answers")
-    if not isinstance(answers, Mapping):
-        return "", payload
+    note_text = _extract_note_text(payload)
+    if not note_text:
+        raise NoteStyleSkip("empty_note")
 
-    explanation = _normalize_text(answers.get("explanation"))
-    return explanation, payload
+    source_hash = _source_hash(note_text)
+    return _LoadedResponseNote(
+        account_id=str(account_id),
+        note_sanitized=note_text,
+        source_path=response_path,
+        source_hash=source_hash,
+    )
 
 
 def _index_items(payload: Mapping[str, Any] | None) -> list[dict[str, Any]]:
@@ -441,11 +535,13 @@ def build_note_style_pack_for_account(
         / f"{account_id}.result.json"
     )
 
-    note_text, response_payload = _load_response_note(response_path)
     paths = ensure_note_style_paths(runs_root_path, sid, create=True)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
 
-    if not note_text:
+    try:
+        loaded_note = _load_response_note(account_id, response_path)
+    except NoteStyleSkip as exc:
+        reason = exc.reason or "empty_note"
         totals = _update_index_for_account(sid=sid, paths=paths, account_id=account_id, entry=None)
         _remove_account_artifacts(account_paths)
         _record_stage_progress(
@@ -453,13 +549,14 @@ def build_note_style_pack_for_account(
         )
         return {
             "status": "skipped",
-            "reason": "empty_note",
+            "reason": reason,
             "packs_total": totals.get("total", 0),
             "packs_completed": totals.get("completed", 0),
         }
 
+    note_text = loaded_note.note_sanitized
+    source_hash = loaded_note.source_hash
     features = _extract_features(note_text)
-    source_hash = _source_hash(note_text)
     prompt_salt = _prompt_salt(sid, str(account_id), source_hash)
     timestamp = _now_iso()
 

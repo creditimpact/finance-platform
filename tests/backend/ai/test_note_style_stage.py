@@ -7,6 +7,7 @@ import unicodedata
 
 import pytest
 
+from backend.ai.note_style import prepare_and_send
 from backend.ai.note_style_results import store_note_style_result
 from backend.ai.note_style_stage import (
     NoteStyleResponseAccount,
@@ -119,6 +120,35 @@ def test_note_style_stage_skips_zero_length_response(tmp_path: Path) -> None:
     note_style_stage = runflow_payload["stages"]["note_style"]
     assert note_style_stage["status"] == "success"
     assert note_style_stage["empty_ok"] is True
+
+
+def test_prepare_and_send_without_responses_sets_empty_ok(tmp_path: Path) -> None:
+    sid = "SIDEMPTY"
+
+    result = prepare_and_send(sid, runs_root=tmp_path)
+
+    assert result["accounts_discovered"] == 0
+    assert result["packs_built"] == 0
+    assert result["skipped"] == 0
+    assert result["processed_accounts"] == []
+
+    run_dir = tmp_path / sid
+    runflow_payload = json.loads((run_dir / "runflow.json").read_text(encoding="utf-8"))
+    stage_payload = runflow_payload["stages"]["note_style"]
+
+    assert stage_payload["status"] == "success"
+    assert stage_payload["empty_ok"] is True
+    assert stage_payload["metrics"]["packs_total"] == 0
+    assert stage_payload["results"]["results_total"] == 0
+    assert stage_payload["results"]["completed"] == 0
+    assert stage_payload["results"]["failed"] == 0
+
+    summary = stage_payload["summary"]
+    assert summary["empty_ok"] is True
+    assert summary["packs_total"] == 0
+    assert summary["results_total"] == 0
+    assert summary["completed"] == 0
+    assert summary["failed"] == 0
 
 def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     sid = "SID001"

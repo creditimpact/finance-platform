@@ -57,6 +57,8 @@ _STATUS_NORMALIZATION: Dict[str, str] = {
     "errored": "failed",
     "aborted": "failed",
     "rejected": "failed",
+    "skipped": "skipped",
+    "skipped_low_signal": "skipped",
 }
 
 _UNKNOWN_STATUS_WARNINGS: set[tuple[str, str]] = set()

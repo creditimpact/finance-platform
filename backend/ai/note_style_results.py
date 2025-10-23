@@ -105,10 +105,10 @@ def _compute_totals(entries: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     failed = 0
     for entry in entries:
         status = str(entry.get("status") or "").strip().lower()
-        if not status or status == "skipped":
+        if status in {"", "skipped", "skipped_low_signal"}:
             continue
         total += 1
-        if status in {"completed", "success", "built"}:
+        if status in {"completed", "success"}:
             completed += 1
         elif status in {"failed", "error"}:
             failed += 1

@@ -126,3 +126,93 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
     assert stage_calls == [(sid, runs_root)]
     assert barrier_calls == [sid]
     assert reconcile_calls == [(sid, runs_root)]
+
+
+def test_store_note_style_result_requires_all_accounts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID901"
+    account_primary = "idx-901A"
+    account_secondary = "idx-901B"
+    runs_root = tmp_path / "runs"
+    response_dir = runs_root / sid / "frontend" / "review" / "responses"
+
+    _write_response(
+        response_dir / f"{account_primary}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_primary,
+            "answers": {"explanation": "We resolved this with the bank."},
+        },
+    )
+    _write_response(
+        response_dir / f"{account_secondary}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_secondary,
+            "answers": {"explanation": "Customer note requires follow-up."},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_primary, runs_root=runs_root)
+    build_note_style_pack_for_account(sid, account_secondary, runs_root=runs_root)
+
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.runflow_barriers_refresh", lambda _sid: None
+    )
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.reconcile_umbrella_barriers",
+        lambda _sid, runs_root=None: {},
+    )
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    primary_paths = ensure_note_style_account_paths(
+        paths, account_primary, create=False
+    )
+    secondary_paths = ensure_note_style_account_paths(
+        paths, account_secondary, create=False
+    )
+
+    primary_payload = json.loads(primary_paths.result_file.read_text(encoding="utf-8"))
+    primary_payload["analysis"] = {
+        "tone": {"value": "positive", "confidence": 0.9, "risk_flags": []}
+    }
+    store_note_style_result(
+        sid,
+        account_primary,
+        primary_payload,
+        runs_root=runs_root,
+    )
+
+    runflow_path = runs_root / sid / "runflow.json"
+    runflow_payload = json.loads(runflow_path.read_text(encoding="utf-8"))
+    stage_payload = runflow_payload["stages"]["note_style"]
+    assert stage_payload["status"] == "built"
+    assert stage_payload["results"]["results_total"] == 2
+    assert stage_payload["results"]["completed"] == 1
+    assert stage_payload["results"]["failed"] == 0
+
+    index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
+    statuses = {entry["account_id"]: entry["status"] for entry in index_payload["packs"]}
+    assert statuses[account_primary] == "completed"
+    assert statuses[account_secondary] == "built"
+
+    secondary_payload = json.loads(
+        secondary_paths.result_file.read_text(encoding="utf-8")
+    )
+    secondary_payload["analysis"] = {
+        "tone": {"value": "neutral", "confidence": 0.8, "risk_flags": []}
+    }
+    store_note_style_result(
+        sid,
+        account_secondary,
+        secondary_payload,
+        runs_root=runs_root,
+    )
+
+    updated_payload = json.loads(runflow_path.read_text(encoding="utf-8"))
+    updated_stage = updated_payload["stages"]["note_style"]
+    assert updated_stage["status"] == "success"
+    assert updated_stage["results"]["results_total"] == 2
+    assert updated_stage["results"]["completed"] == 2
+    assert updated_stage["results"]["failed"] == 0

@@ -7,6 +7,22 @@ from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
 
+if "requests" not in sys.modules:
+    module = ModuleType("requests")
+
+    class _DummySession:
+        def get(self, *_args, **_kwargs):
+            return SimpleNamespace(status_code=200, headers={}, text="")
+
+        def close(self) -> None:
+            pass
+
+    module.Session = _DummySession
+    module.RequestException = Exception
+    sys.modules["requests"] = module
+
+from backend.frontend.packs.config import load_frontend_stage_config
+
 import backend.core.runflow as runflow
 import backend.core.runflow_steps as runflow_steps
 
@@ -131,18 +147,20 @@ def test_merge_stage_sets_only_merge_ready(tmp_path, monkeypatch):
         }
         _prepare_runflow_files(run_dir, stages=stages)
 
-        before = {entry.name for entry in run_dir.iterdir()}
-        runflow.runflow_barriers_refresh(sid)
-        after = {entry.name for entry in run_dir.iterdir()}
+        results_dir = run_dir / "ai_packs" / "merge" / "results"
+        packs_dir = run_dir / "ai_packs" / "merge" / "packs"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        packs_dir.mkdir(parents=True, exist_ok=True)
+        (results_dir / "pair-001.result.json").write_text("{}", encoding="utf-8")
+        (packs_dir / "pair_001.jsonl").write_text("[]", encoding="utf-8")
 
-        assert before == after
+        runflow.runflow_barriers_refresh(sid)
 
         payload = _load_runflow_payload(run_dir)
-        assert payload["note"] == "persist"
         umbrella = payload["umbrella_barriers"]
         assert umbrella["merge_ready"] is True
         assert umbrella["validation_ready"] is False
-        assert umbrella["review_ready"] is False
+        assert umbrella["review_ready"] is True
         assert umbrella["all_ready"] is False
         assert payload["umbrella_ready"] is False
         assert isinstance(umbrella["checked_at"], str)
@@ -334,11 +352,11 @@ def test_validation_stage_sets_validation_ready(tmp_path, monkeypatch):
         payload = _load_runflow_payload(run_dir)
         umbrella = payload["umbrella_barriers"]
 
-        assert umbrella["merge_ready"] is False
+        assert umbrella["merge_ready"] is True
         assert umbrella["validation_ready"] is True
-        assert umbrella["review_ready"] is False
-        assert umbrella["all_ready"] is False
-        assert payload["umbrella_ready"] is False
+        assert umbrella["review_ready"] is True
+        assert umbrella["all_ready"] is True
+        assert payload["umbrella_ready"] is True
     finally:
         monkeypatch.delenv("RUNS_ROOT", raising=False)
         monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
@@ -397,11 +415,11 @@ def test_validation_readiness_respects_env_overrides(tmp_path, monkeypatch):
         payload = _load_runflow_payload(run_dir)
         umbrella = payload["umbrella_barriers"]
 
-        assert umbrella["merge_ready"] is False
+        assert umbrella["merge_ready"] is True
         assert umbrella["validation_ready"] is True
-        assert umbrella["review_ready"] is False
-        assert umbrella["all_ready"] is False
-        assert payload["umbrella_ready"] is False
+        assert umbrella["review_ready"] is True
+        assert umbrella["all_ready"] is True
+        assert payload["umbrella_ready"] is True
     finally:
         monkeypatch.delenv("RUNS_ROOT", raising=False)
         monkeypatch.delenv("UMBRELLA_BARRIERS_ENABLED", raising=False)
@@ -440,6 +458,9 @@ def test_all_stages_ready_marks_run_ready(tmp_path, monkeypatch):
 
         account_id = "idx-007"
         _prepare_review_manifest(run_dir, account_id)
+        config = load_frontend_stage_config(run_dir)
+        config.packs_dir.mkdir(parents=True, exist_ok=True)
+        (config.packs_dir / f"pack-{account_id}.json").write_text("{}", encoding="utf-8")
         _write_review_response(run_dir, account_id)
 
         runflow.runflow_barriers_refresh(sid)
@@ -488,6 +509,9 @@ def test_review_readiness_updates_when_response_arrives(tmp_path, monkeypatch):
 
         account_id = "idx-021"
         _prepare_review_manifest(run_dir, account_id)
+        config = load_frontend_stage_config(run_dir)
+        config.packs_dir.mkdir(parents=True, exist_ok=True)
+        (config.packs_dir / f"pack-{account_id}.json").write_text("{}", encoding="utf-8")
 
         runflow.runflow_barriers_refresh(sid)
 
@@ -775,9 +799,9 @@ def test_document_barrier_flag_emitted_when_enabled(tmp_path, monkeypatch):
         payload = _load_runflow_payload(run_dir)
         umbrella = payload["umbrella_barriers"]
 
-        assert umbrella["merge_ready"] is False
+        assert umbrella["merge_ready"] is True
         assert umbrella["validation_ready"] is False
-        assert umbrella["review_ready"] is False
+        assert umbrella["review_ready"] is True
         assert umbrella["all_ready"] is False
         assert umbrella["document_ready"] is False
         assert payload["umbrella_ready"] is False

@@ -498,6 +498,12 @@ def _apply_umbrella_barriers(
     validation_stage = _ensure_stage_dict(stages, "validation")
     frontend_stage = _ensure_stage_dict(stages, "frontend")
 
+    # ------------------------------------------------------------------
+    # Fallback readiness based on the existing runflow snapshot.  This is
+    # retained so that we still populate summaries/metrics when disk
+    # inspection fails for any reason.  The booleans are overridden with
+    # authoritative values computed from disk further below.
+    # ------------------------------------------------------------------
     merge_ready = False
     if merge_stage and _stage_status_success(merge_stage):
         summary = _ensure_summary(merge_stage)
@@ -507,7 +513,13 @@ def _apply_umbrella_barriers(
             if fallback_result_files is not None:
                 summary["result_files"] = fallback_result_files
                 result_files_value = fallback_result_files
-        merge_ready = (result_files_value or 0) >= 1
+        empty_ok = bool(merge_stage.get("empty_ok")) or bool(summary.get("empty_ok"))
+        if empty_ok and result_files_value is None:
+            result_files_value = 0
+        if empty_ok:
+            merge_ready = True
+        else:
+            merge_ready = (result_files_value or 0) >= 1
 
     validation_ready = False
     if validation_stage and _stage_status_success(validation_stage):
@@ -539,12 +551,15 @@ def _apply_umbrella_barriers(
             summary["results"] = summary_results
         completed_value = _coerce_int(results_data.get("completed"))
         total_value = _coerce_int(results_data.get("results_total"))
+        empty_ok = bool(validation_stage.get("empty_ok")) or bool(summary.get("empty_ok"))
         if (
             completed_value is not None
             and total_value is not None
             and not results_missing
         ):
             validation_ready = completed_value == total_value
+        if total_value == 0 and empty_ok:
+            validation_ready = True
 
     review_ready = False
     if frontend_stage and _stage_status_success(frontend_stage):
@@ -582,14 +597,43 @@ def _apply_umbrella_barriers(
         summary_metrics["answers_received"] = received_value
         if summary_metrics:
             summary["metrics"] = summary_metrics
+        empty_ok = bool(frontend_stage.get("empty_ok")) or bool(summary.get("empty_ok"))
         if (
             required_value is not None
             and received_value is not None
             and not metrics_missing
         ):
             review_ready = received_value == required_value
+        if empty_ok:
+            review_ready = True
 
-    all_ready = merge_ready and validation_ready and review_ready
+    # ------------------------------------------------------------------
+    # Prefer authoritative readiness derived from disk artifacts.
+    # ------------------------------------------------------------------
+    disk_statuses: Optional[Mapping[str, Any]] = None
+    run_dir = RUNS_ROOT / normalized_sid
+    try:  # pragma: no cover - exercised via higher-level tests
+        from backend.runflow.decider import evaluate_global_barriers
+    except Exception:  # pragma: no cover - defensive import fallback
+        evaluate_global_barriers = None  # type: ignore[assignment]
+
+    if evaluate_global_barriers is not None:
+        try:
+            disk_statuses = evaluate_global_barriers(str(run_dir))
+        except Exception:  # pragma: no cover - defensive
+            disk_statuses = None
+
+    if isinstance(disk_statuses, Mapping) and disk_statuses:
+        merge_ready = bool(disk_statuses.get("merge_ready", merge_ready))
+        validation_ready = bool(disk_statuses.get("validation_ready", validation_ready))
+        review_ready = bool(disk_statuses.get("review_ready", review_ready))
+        all_ready = bool(
+            disk_statuses.get(
+                "all_ready", merge_ready and validation_ready and review_ready
+            )
+        )
+    else:
+        all_ready = merge_ready and validation_ready and review_ready
 
     normalized_barriers: dict[str, Any] = {
         "merge_ready": merge_ready,
@@ -600,6 +644,11 @@ def _apply_umbrella_barriers(
     }
     if _document_verifier_enabled():
         normalized_barriers.setdefault("document_ready", False)
+    if isinstance(disk_statuses, Mapping):
+        if "document_ready" in disk_statuses:
+            normalized_barriers["document_ready"] = bool(
+                disk_statuses.get("document_ready")
+            )
 
     existing_barriers = payload_dict.get("umbrella_barriers")
     if isinstance(existing_barriers, Mapping):
@@ -769,93 +818,80 @@ def runflow_barriers_refresh(sid: str) -> Optional[dict[str, Any]]:
         return None
 
     runflow_path = base_dir / "runflow.json"
+    try:
+        from backend.runflow.decider import reconcile_umbrella_barriers
+    except Exception:  # pragma: no cover - defensive import
+        reconcile_umbrella_barriers = None  # type: ignore[assignment]
 
-    normalized_barriers: Optional[dict[str, Any]] = None
-    merge_ready_state = False
-    validation_ready_state = False
-    review_ready_state = False
-    all_ready_state = False
-    barrier_timestamp: Optional[str] = None
-
-    def _mutate(payload: Any) -> Any:
-        nonlocal normalized_barriers
-        nonlocal merge_ready_state
-        nonlocal validation_ready_state
-        nonlocal review_ready_state
-        nonlocal all_ready_state
-        nonlocal barrier_timestamp
-
-        if isinstance(payload, dict):
-            payload_dict: dict[str, Any] = payload
-        else:
-            payload_dict = {}
-
-        result = _apply_umbrella_barriers(payload_dict, sid=normalized_sid)
-        if result is None:
-            normalized_barriers = None
-            return payload_dict
-
-        (
-            barriers_payload,
-            merge_ready_state,
-            validation_ready_state,
-            review_ready_state,
-            all_ready_state,
-            barrier_timestamp,
-        ) = result
-
-        normalized_barriers = {
-            "merge_ready": merge_ready_state,
-            "validation_ready": validation_ready_state,
-            "review_ready": review_ready_state,
-            "all_ready": all_ready_state,
+    if reconcile_umbrella_barriers is None:
+        # Fall back to the legacy in-place computation.
+        normalized_barriers = _apply_umbrella_barriers(
+            {}, sid=normalized_sid
+        )  # type: ignore[arg-type]
+        if normalized_barriers is None:
+            return None
+        barriers_payload, *_rest = normalized_barriers
+        legacy_result: dict[str, Any] = {
+            "merge_ready": bool(barriers_payload.get("merge_ready")),
+            "validation_ready": bool(barriers_payload.get("validation_ready")),
+            "review_ready": bool(barriers_payload.get("review_ready")),
+            "all_ready": bool(barriers_payload.get("all_ready")),
             "checked_at": barriers_payload.get("checked_at"),
         }
         if _document_verifier_enabled():
-            normalized_barriers.setdefault(
-                "document_ready", barriers_payload.get("document_ready", False)
+            legacy_result.setdefault(
+                "document_ready", bool(barriers_payload.get("document_ready", False))
             )
+        return legacy_result
 
-        return payload_dict
-
+    statuses: Optional[Mapping[str, Any]]
     try:
-        update_json_in_place(runflow_path, _mutate)
+        statuses = reconcile_umbrella_barriers(normalized_sid)
     except Exception:
         return None
 
-    if normalized_barriers is None or barrier_timestamp is None:
-        return normalized_barriers
+    try:
+        payload = json.loads(runflow_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        payload = {}
 
-    if _UMBRELLA_BARRIERS_LOG:
+    if _UMBRELLA_BARRIERS_LOG and isinstance(statuses, Mapping):
         _LOG.info(
             "[Runflow] Umbrella barriers: merge=%s validation=%s review=%s all_ready=%s",
-            merge_ready_state,
-            validation_ready_state,
-            review_ready_state,
-            all_ready_state,
+            bool(statuses.get("merge_ready")),
+            bool(statuses.get("validation_ready")),
+            bool(statuses.get("review_ready")),
+            bool(statuses.get("all_ready")),
         )
-        event_payload: dict[str, Any] = {
-            "ts": barrier_timestamp,
-            "event": "barriers_reconciled",
-            "merge_ready": merge_ready_state,
-            "validation_ready": validation_ready_state,
-            "review_ready": review_ready_state,
-            "all_ready": all_ready_state,
-        }
-        if _document_verifier_enabled():
-            event_payload.setdefault(
-                "document_ready", bool(normalized_barriers.get("document_ready", False))
-            )
-        try:
-            _append_jsonl(_events_path(normalized_sid), event_payload)
-        except Exception:
-            _LOG.debug(
-                "[Runflow] Failed to append barriers event sid=%s",
-                normalized_sid,
-                exc_info=True,
-            )
 
-    return normalized_barriers
+    barriers_payload = payload.get("umbrella_barriers")
+    normalized: dict[str, Any] = {
+        "merge_ready": bool(statuses.get("merge_ready")) if statuses else False,
+        "validation_ready": bool(statuses.get("validation_ready")) if statuses else False,
+        "review_ready": bool(statuses.get("review_ready")) if statuses else False,
+        "all_ready": bool(statuses.get("all_ready")) if statuses else False,
+        "checked_at": None,
+    }
+
+    if isinstance(barriers_payload, Mapping):
+        normalized["merge_ready"] = bool(barriers_payload.get("merge_ready"))
+        normalized["validation_ready"] = bool(barriers_payload.get("validation_ready"))
+        normalized["review_ready"] = bool(barriers_payload.get("review_ready"))
+        normalized["all_ready"] = bool(barriers_payload.get("all_ready"))
+        normalized["checked_at"] = barriers_payload.get("checked_at")
+        if _document_verifier_enabled():
+            normalized["document_ready"] = bool(
+                barriers_payload.get("document_ready", False)
+            )
+    elif _document_verifier_enabled():
+        normalized["document_ready"] = bool(
+            statuses.get("document_ready") if statuses else False
+        )
+
+    if normalized.get("checked_at") is None and isinstance(barriers_payload, Mapping):
+        normalized["checked_at"] = barriers_payload.get("checked_at")
+
+    return normalized
 
 
 def _debounced_barriers_refresh_worker(sid: str, token: object) -> None:

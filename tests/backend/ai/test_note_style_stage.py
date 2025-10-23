@@ -86,7 +86,13 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert sanitized not in user_content
     user_payload = json.loads(user_content)
     assert user_payload["prompt_salt"] == expected_salt
-    assert user_payload["tone"]["value"] == "conciliatory"
+    extractor_payload = user_payload["extractor"]
+    assert extractor_payload["tone"] == "empathetic"
+    assert extractor_payload["context_hints"]["topic"] == "payment_dispute"
+    assert set(["paid_already", "inaccurate_reporting"]).issubset(
+        set(extractor_payload["emphasis"])
+    )
+    assert extractor_payload["confidence"] >= 0.5
 
     assert pack_payload["prompt_salt"] == expected_salt
     assert expected_salt in pack_messages[0]["content"]
@@ -100,12 +106,17 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert sanitized not in account_paths.result_file.read_text(encoding="utf-8")
     assert result_payload["note_hash"] == expected_short_hash
     assert result_payload["source_hash"] == expected_hash
-    assert result_payload["analysis"]["tone"]["value"] == "conciliatory"
-    context_values = result_payload["analysis"]["context_hints"]["values"]
-    assert "lender_fault" in context_values
-    assert "payment_dispute" in context_values
-    emphasis_values = result_payload["analysis"]["emphasis"]["values"]
-    assert "support_request" in emphasis_values
+    assert result_payload["analysis"] == result_payload["extractor"]
+    analysis_payload = result_payload["analysis"]
+    assert pack_payload["extractor"] == analysis_payload
+    assert analysis_payload["tone"] == "empathetic"
+    assert analysis_payload["context_hints"]["topic"] == "payment_dispute"
+    assert analysis_payload["context_hints"]["entities"]["creditor"] is None
+    assert set(["paid_already", "inaccurate_reporting", "support_request"]).issubset(
+        set(analysis_payload["emphasis"])
+    )
+    assert analysis_payload["confidence"] >= 0.5
+    assert analysis_payload["risk_flags"] == []
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
     assert index_payload["schema_version"] == 1
@@ -201,10 +212,9 @@ def test_note_style_stage_updates_on_modified_note(tmp_path: Path) -> None:
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
-    result_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
-    assert result_payload["analysis"]["tone"]["value"] == "urgent"
-    assert "dispute_resolution" in result_payload["analysis"]["emphasis"]["values"]
-
+    updated_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+    assert updated_payload["analysis"]["tone"] == "assertive"
+    assert updated_payload["analysis"]["context_hints"]["topic"] == "payment_dispute"
 
 def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     sid = "SID004"
@@ -239,11 +249,19 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     result_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
     pack_user_payload = json.loads(pack_payload["messages"][1]["content"])
     assert pack_user_payload["prompt_salt"] == expected_salt
+    extractor_payload = pack_user_payload["extractor"]
+    assert extractor_payload["context_hints"]["topic"] == "payment_dispute"
+    assert extractor_payload["emphasis"] == ["paid_already"]
+    assert extractor_payload["confidence"] >= 0.5
     assert sanitized not in pack_payload["messages"][1]["content"]
     assert pack_payload["note_hash"] == expected_short_hash
     assert result_payload["source_hash"] == expected_hash
     assert result_payload["note_hash"] == expected_short_hash
     assert result_payload["prompt_salt"] == expected_salt
+    assert result_payload["analysis"] == result_payload["extractor"]
+    assert result_payload["analysis"]["context_hints"]["topic"] == "payment_dispute"
+    assert result_payload["analysis"]["emphasis"] == ["paid_already"]
+    assert result_payload["analysis"]["confidence"] >= 0.5
     assert result["prompt_salt"] == expected_salt
 
 

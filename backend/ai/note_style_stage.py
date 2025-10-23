@@ -796,6 +796,15 @@ def _compute_totals(items: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     return {"total": total, "completed": completed, "failed": failed}
 
 
+def _coerce_int(value: Any) -> int | None:
+    try:
+        if value is None or isinstance(value, bool):
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _fsync_directory(directory: Path) -> None:
     try:
         fd = os.open(str(directory), os.O_RDONLY)
@@ -888,32 +897,65 @@ def _update_index_for_account(
     return _compute_totals(rewritten)
 
 
+def _note_style_index_progress(index_path: Path) -> tuple[int, int, int]:
+    document = _load_json_mapping(index_path)
+    if not isinstance(document, Mapping):
+        return (0, 0, 0)
+
+    entries: Sequence[Mapping[str, Any]] = ()
+    packs_payload = document.get("packs")
+    if isinstance(packs_payload, Sequence):
+        entries = [entry for entry in packs_payload if isinstance(entry, Mapping)]
+    else:
+        items_payload = document.get("items")
+        if isinstance(items_payload, Sequence):
+            entries = [entry for entry in items_payload if isinstance(entry, Mapping)]
+
+    total = 0
+    completed = 0
+    failed = 0
+
+    for entry in entries:
+        status_text = _normalize_text(entry.get("status")).lower()
+        if status_text in {"", "skipped"}:
+            continue
+        total += 1
+        if status_text == "completed":
+            completed += 1
+        elif status_text in {"failed", "error"}:
+            failed += 1
+
+    if not entries:
+        totals_payload = document.get("totals")
+        if isinstance(totals_payload, Mapping):
+            total = _coerce_int(totals_payload.get("total")) or 0
+            completed = _coerce_int(totals_payload.get("completed")) or 0
+            failed = _coerce_int(totals_payload.get("failed")) or 0
+
+    return (max(total, 0), max(completed, 0), max(failed, 0))
+
+
 def _record_stage_progress(
     *, sid: str, runs_root: Path, totals: Mapping[str, int], index_path: Path
 ) -> None:
-    packs_total = int(totals.get("total", 0))
-    packs_completed = int(totals.get("completed", 0))
-    packs_failed = int(totals.get("failed", 0))
+    packs_total, packs_completed, packs_failed = _note_style_index_progress(index_path)
 
-    if packs_total == packs_completed:
-        status: str = "success"
+    if packs_failed > 0 and packs_total > 0:
+        status: str = "error"
+    elif packs_total == 0 or packs_completed == packs_total:
+        status = "success"
     else:
-        status = "built" if packs_failed == 0 else "error"
+        status = "built"
 
     empty_ok = packs_total == 0
-    if empty_ok:
-        status = "success"
 
-    counts = {
-        "packs_total": packs_total,
-        "packs_completed": packs_completed,
-        "packs_failed": packs_failed,
+    counts = {"packs_total": packs_total}
+    metrics = {"packs_total": packs_total}
+    results = {
+        "results_total": packs_total,
+        "completed": packs_completed,
+        "failed": packs_failed,
     }
-    metrics = {
-        "packs_total": packs_total,
-        "packs_completed": packs_completed,
-    }
-    results = {"index_path": str(index_path)}
 
     record_stage(
         sid,

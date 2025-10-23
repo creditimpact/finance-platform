@@ -373,6 +373,144 @@ def test_note_style_stage_refresh_promotes_on_results(
     assert latest_event.get("results_failed", 0) == 0
 
 
+def test_note_style_stage_minimal_smoke(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID012"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    strong_account = "idx-strong"
+    low_signal_account = "idx-low"
+    casual_account = "idx-casual"
+
+    strong_note = "This account is not mine. I never opened it."
+    low_signal_note = "please fix"
+    casual_note = "I paid this off last year, please remove it."
+
+    _write_response(
+        response_dir / f"{strong_account}.result.json",
+        {
+            "sid": sid,
+            "account_id": strong_account,
+            "answers": {"explanation": strong_note},
+        },
+    )
+    _write_response(
+        response_dir / f"{low_signal_account}.result.json",
+        {
+            "sid": sid,
+            "account_id": low_signal_account,
+            "answers": {"explanation": low_signal_note},
+        },
+    )
+    _write_response(
+        response_dir / f"{casual_account}.result.json",
+        {
+            "sid": sid,
+            "account_id": casual_account,
+            "answers": {"explanation": casual_note},
+        },
+    )
+
+    strong_result = build_note_style_pack_for_account(
+        sid, strong_account, runs_root=runs_root
+    )
+    low_signal_result = build_note_style_pack_for_account(
+        sid, low_signal_account, runs_root=runs_root
+    )
+    casual_result = build_note_style_pack_for_account(
+        sid, casual_account, runs_root=runs_root
+    )
+
+    assert strong_result["status"] == "completed"
+    assert casual_result["status"] == "completed"
+    assert low_signal_result["status"] == "skipped_low_signal"
+
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.runflow_barriers_refresh", lambda _sid: None
+    )
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.reconcile_umbrella_barriers",
+        lambda _sid, runs_root=None: {},
+    )
+
+    strong_source_hash = _normalized_hash(_sanitize_note_text(strong_note))
+    casual_source_hash = _normalized_hash(_sanitize_note_text(casual_note))
+
+    store_note_style_result(
+        sid,
+        strong_account,
+        {
+            "sid": sid,
+            "account_id": strong_account,
+            "analysis": {
+                "tone": {"value": "assertive", "confidence": 0.8, "risk_flags": []},
+                "context_hints": {
+                    "timeframe": {"month": None, "relative": None},
+                    "topic": "not_mine",
+                    "entities": {"creditor": None, "amount": None},
+                },
+                "emphasis": ["ownership_dispute"],
+                "confidence": 0.78,
+                "risk_flags": [],
+            },
+            "prompt_salt": strong_result["prompt_salt"],
+            "note_hash": strong_result["note_hash"],
+            "source_hash": strong_source_hash,
+        },
+        runs_root=runs_root,
+        completed_at="2024-03-01T00:00:00Z",
+    )
+
+    store_note_style_result(
+        sid,
+        casual_account,
+        {
+            "sid": sid,
+            "account_id": casual_account,
+            "analysis": {
+                "tone": {"value": "conversational", "confidence": 0.7, "risk_flags": []},
+                "context_hints": {
+                    "timeframe": {"month": None, "relative": "last_year"},
+                    "topic": "payment_dispute",
+                    "entities": {"creditor": None, "amount": None},
+                },
+                "emphasis": ["paid_already", "update_requested"],
+                "confidence": 0.74,
+                "risk_flags": [],
+            },
+            "prompt_salt": casual_result["prompt_salt"],
+            "note_hash": casual_result["note_hash"],
+            "source_hash": casual_source_hash,
+        },
+        runs_root=runs_root,
+        completed_at="2024-03-01T00:05:00Z",
+    )
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
+    packs = sorted(index_payload["packs"], key=lambda item: item["account_id"])
+
+    assert {entry["account_id"] for entry in packs} == {
+        strong_account,
+        low_signal_account,
+        casual_account,
+    }
+    skipped_entry = next(
+        entry for entry in packs if entry["account_id"] == low_signal_account
+    )
+    assert skipped_entry["status"] == "skipped_low_signal"
+
+    runflow_payload = json.loads((run_dir / "runflow.json").read_text(encoding="utf-8"))
+    note_style_stage = runflow_payload["stages"]["note_style"]
+    assert note_style_stage["status"] == "success"
+    assert note_style_stage["results"]["results_total"] == 2
+    assert note_style_stage["results"]["completed"] == 2
+    assert note_style_stage["summary"]["results_total"] == 2
+
+
 def test_note_style_stage_idempotent_for_unchanged_response(tmp_path: Path) -> None:
     sid = "SID002"
     account_id = "idx-002"

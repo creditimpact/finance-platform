@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -272,9 +273,107 @@ def _source_hash(text: str) -> str:
     return digest.hexdigest()
 
 
-def _prompt_salt(sid: str, account_id: str, source_hash: str) -> str:
-    message = f"{sid}:{account_id}:{source_hash}".encode("utf-8")
-    return hmac.new(_pepper_bytes(), message, hashlib.sha256).hexdigest()[:16]
+def _timeframe_bucket(timeframe: Mapping[str, Any] | None) -> str:
+    if not isinstance(timeframe, Mapping):
+        return "none"
+
+    relative = _normalize_text(timeframe.get("relative")).lower()
+    if relative:
+        return f"relative:{relative}"
+
+    month = _normalize_text(timeframe.get("month"))
+    if month:
+        return f"month:{month}"
+
+    return "none"
+
+
+def _amount_band(entities: Mapping[str, Any] | None) -> str:
+    amount: Any | None = None
+    if isinstance(entities, Mapping):
+        amount = entities.get("amount")
+
+    try:
+        value = float(amount)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "none"
+
+    if not math.isfinite(value):
+        return "none"
+
+    absolute = abs(value)
+    if absolute == 0:
+        return "zero"
+    if absolute < 100:
+        return "lt_100"
+    if absolute < 500:
+        return "100_499"
+    if absolute < 1000:
+        return "500_999"
+    if absolute < 5000:
+        return "1000_4999"
+    if absolute < 10000:
+        return "5000_9999"
+    return "gte_10000"
+
+
+def _sorted_emphasis(values: Any) -> list[str]:
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+        return []
+
+    normalized: set[str] = set()
+    for entry in values:
+        text = _normalize_text(entry)
+        if text:
+            normalized.add(text)
+
+    return sorted(normalized)
+
+
+def _prompt_salt_payload(
+    sid: str, account_id: str, extractor: Mapping[str, Any] | None
+) -> Mapping[str, Any]:
+    tone = _normalize_text((extractor or {}).get("tone") if isinstance(extractor, Mapping) else None).lower()
+    if not tone:
+        tone = "neutral"
+
+    context = extractor.get("context_hints") if isinstance(extractor, Mapping) else None
+    if not isinstance(context, Mapping):
+        context = {}
+
+    topic = _normalize_text(context.get("topic")).lower()
+    if not topic:
+        topic = "other"
+
+    timeframe = context.get("timeframe") if isinstance(context, Mapping) else None
+    if not isinstance(timeframe, Mapping):
+        timeframe = {}
+
+    entities = context.get("entities") if isinstance(context, Mapping) else None
+    if not isinstance(entities, Mapping):
+        entities = {}
+
+    emphasis_sorted = _sorted_emphasis(extractor.get("emphasis") if isinstance(extractor, Mapping) else [])
+
+    buckets = {
+        "timeframe_bucket": _timeframe_bucket(timeframe),
+        "amount_band": _amount_band(entities),
+        "emphasis_sorted": emphasis_sorted,
+    }
+
+    return {
+        "sid": str(sid),
+        "account_id": str(account_id),
+        "tone": tone,
+        "topic": topic,
+        "buckets": buckets,
+    }
+
+
+def _prompt_salt(sid: str, account_id: str, extractor: Mapping[str, Any] | None) -> str:
+    payload = _prompt_salt_payload(sid, account_id, extractor)
+    message = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hmac.new(_pepper_bytes(), message, hashlib.sha256).hexdigest()[:12]
 
 
 def _note_hash(source_hash: str, length: int = 12) -> str:
@@ -892,7 +991,7 @@ def build_note_style_pack_for_account(
         }
 
     extractor = _build_extractor(note_text)
-    prompt_salt = _prompt_salt(sid, str(account_id), source_hash)
+    prompt_salt = _prompt_salt(sid, str(account_id), extractor)
     timestamp = _now_iso()
 
     pack_payload = {
@@ -905,7 +1004,6 @@ def build_note_style_pack_for_account(
         ),
         "note_hash": note_hash,
         "model": _NOTE_STYLE_MODEL,
-        "prompt_salt": prompt_salt,
         "extractor": extractor,
         "messages": _pack_messages(extractor, prompt_salt),
         "built_at": timestamp,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 from pathlib import Path
 import unicodedata
 
@@ -30,12 +31,85 @@ def _normalized_hash(text: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def _expected_salt(sid: str, account_id: str, note: str) -> str:
-    sanitized_note = _sanitize_note_text(note)
-    digest = _normalized_hash(sanitized_note)
-    pepper = b"tests-note-style-pepper"
-    message = f"{sid}:{account_id}:{digest}".encode("utf-8")
-    return hmac.new(pepper, message, hashlib.sha256).hexdigest()[:16]
+def _expected_salt(sid: str, account_id: str, analysis: dict[str, object]) -> str:
+    tone_value = str(analysis.get("tone") or "").strip().lower()
+    if not tone_value:
+        tone_value = "neutral"
+
+    context = analysis.get("context_hints")
+    if not isinstance(context, dict):
+        context = {}
+
+    topic_value = str(context.get("topic") or "").strip().lower()
+    if not topic_value:
+        topic_value = "other"
+
+    timeframe = context.get("timeframe") if isinstance(context, dict) else None
+    if not isinstance(timeframe, dict):
+        timeframe = {}
+
+    relative = str(timeframe.get("relative") or "").strip().lower()
+    if relative:
+        timeframe_bucket = f"relative:{relative}"
+    else:
+        month_text = str(timeframe.get("month") or "").strip()
+        timeframe_bucket = f"month:{month_text}" if month_text else "none"
+
+    entities = context.get("entities") if isinstance(context, dict) else None
+    if not isinstance(entities, dict):
+        entities = {}
+
+    amount_band = "none"
+    amount_value = entities.get("amount")
+    try:
+        parsed_amount = float(amount_value)
+    except (TypeError, ValueError):
+        parsed_amount = None
+
+    if parsed_amount is not None and math.isfinite(parsed_amount):
+        absolute = abs(parsed_amount)
+        if absolute == 0:
+            amount_band = "zero"
+        elif absolute < 100:
+            amount_band = "lt_100"
+        elif absolute < 500:
+            amount_band = "100_499"
+        elif absolute < 1000:
+            amount_band = "500_999"
+        elif absolute < 5000:
+            amount_band = "1000_4999"
+        elif absolute < 10000:
+            amount_band = "5000_9999"
+        else:
+            amount_band = "gte_10000"
+
+    emphasis_values = analysis.get("emphasis")
+    emphasis_sorted: list[str] = []
+    if isinstance(emphasis_values, list):
+        seen: set[str] = set()
+        for entry in emphasis_values:
+            text = str(entry or "").strip()
+            if not text:
+                continue
+            seen.add(text)
+        emphasis_sorted = sorted(seen)
+
+    payload = {
+        "sid": sid,
+        "account_id": account_id,
+        "tone": tone_value,
+        "topic": topic_value,
+        "buckets": {
+            "timeframe_bucket": timeframe_bucket,
+            "amount_band": amount_band,
+            "emphasis_sorted": emphasis_sorted,
+        },
+    }
+
+    message = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return hmac.new(b"tests-note-style-pepper", message, hashlib.sha256).hexdigest()[:12]
 
 
 def _write_response(path: Path, payload: dict[str, object]) -> None:
@@ -76,7 +150,6 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     expected_hash = _normalized_hash(sanitized)
     expected_short_hash = expected_hash[:12]
 
-    expected_salt = _expected_salt(sid, account_id, note)
     pack_messages = pack_payload["messages"]
     assert isinstance(pack_messages, list)
     assert pack_messages[0]["role"] == "system"
@@ -85,7 +158,6 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     user_content = pack_messages[1]["content"]
     assert sanitized not in user_content
     user_payload = json.loads(user_content)
-    assert user_payload["prompt_salt"] == expected_salt
     extractor_payload = user_payload["extractor"]
     assert extractor_payload["tone"] == "empathetic"
     assert extractor_payload["context_hints"]["topic"] == "payment_dispute"
@@ -94,9 +166,13 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     )
     assert extractor_payload["confidence"] >= 0.5
 
-    assert pack_payload["prompt_salt"] == expected_salt
+    assert "prompt_salt" not in pack_payload
+    analysis_payload = result_payload["analysis"]
+    expected_salt = _expected_salt(sid, account_id, analysis_payload)
+    assert user_payload["prompt_salt"] == expected_salt
     assert expected_salt in pack_messages[0]["content"]
     assert result_payload["prompt_salt"] == expected_salt
+    assert len(expected_salt) == 12
     assert pack_payload["note_hash"] == expected_short_hash
     assert pack_payload["model"] == "gpt-4o-mini"
     assert (
@@ -240,7 +316,6 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     sanitized = _sanitize_note_text(note)
     expected_hash = _normalized_hash(sanitized)
     expected_short_hash = expected_hash[:12]
-    expected_salt = _expected_salt(sid, account_id, sanitized)
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
@@ -248,6 +323,9 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
     result_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
     pack_user_payload = json.loads(pack_payload["messages"][1]["content"])
+    assert "prompt_salt" not in pack_payload
+    analysis_payload = result_payload["analysis"]
+    expected_salt = _expected_salt(sid, account_id, analysis_payload)
     assert pack_user_payload["prompt_salt"] == expected_salt
     extractor_payload = pack_user_payload["extractor"]
     assert extractor_payload["context_hints"]["topic"] == "payment_dispute"

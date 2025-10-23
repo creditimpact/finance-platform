@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 import unicodedata
 
 import pytest
@@ -158,6 +159,59 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     response_dir = run_dir / "frontend" / "review" / "responses"
     note = "Please help, the bank made an error and I already paid this account."
 
+    account_dir = run_dir / "cases" / "accounts" / "1"
+    account_dir.mkdir(parents=True, exist_ok=True)
+    summary_payload = {"account_id": account_id}
+    bureaus_payload = {
+        "transunion": {
+            "account_type": "Credit Card",
+            "account_status": "Closed",
+            "balance_owed": "$100",
+            "date_opened": "2021-01-01",
+            "account_number_display": "****1234",
+            "creditor_name": "Capital One",
+        },
+        "experian": {
+            "account_type": "Credit Card",
+            "account_status": "Closed",
+            "balance_owed": "$100",
+            "date_opened": "2021-01-01",
+            "account_number_display": "****1234",
+            "creditor_name": "Capital One",
+        },
+    }
+    meta_payload = {
+        "heading_guess": "Capital One",
+        "issuer_slug": "capital-one",
+        "account_number_tail": "1234",
+        "bureau_presence": {
+            "transunion": True,
+            "experian": True,
+            "equifax": False,
+        },
+    }
+    tags_payload = [
+        {"kind": "issue", "type": "late_payment"},
+        {"kind": "note", "type": "call_customer"},
+    ]
+
+    (account_dir / "summary.json").write_text(
+        json.dumps(summary_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (account_dir / "bureaus.json").write_text(
+        json.dumps(bureaus_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (account_dir / "meta.json").write_text(
+        json.dumps(meta_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (account_dir / "tags.json").write_text(
+        json.dumps(tags_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
     _write_response(
         response_dir / f"{account_id}.result.json",
         {
@@ -210,10 +264,39 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     )
     assert pack_messages[1]["role"] == "user"
     user_payload = json.loads(pack_messages[1]["content"])
+    expected_context = {
+        "meta": {
+            "heading_guess": "Capital One",
+            "issuer_slug": "capital-one",
+            "account_number_tail": "1234",
+            "bureau_presence": {
+                "transunion": True,
+                "experian": True,
+                "equifax": False,
+            },
+        },
+        "tags": {
+            "issues": ["late_payment"],
+            "other": ["note:call_customer"],
+        },
+        "bureaus": {
+            "account_type": ["Credit Card"],
+            "status": ["Closed"],
+            "balance_owed": ["$100"],
+            "date_opened": ["2021-01-01"],
+            "account_number": ["****1234"],
+            "creditor_name": ["Capital One"],
+        },
+    }
+    expected_fingerprint = (
+        "issuer:capital-one|issues:late-payment|type:credit-card|status:closed|tail:1234"
+    )
     assert user_payload == {
         "sid": sid,
         "account_id": account_id,
         "note_text": note,
+        "fingerprint": expected_fingerprint,
+        "account_context": expected_context,
         "metadata": {"lang": "auto", "channel": "frontend_review"},
     }
 
@@ -224,6 +307,8 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
         pack_payload["source_response_path"]
         == f"runs/{sid}/frontend/review/responses/{account_id}.result.json"
     )
+    assert pack_payload["fingerprint"] == expected_fingerprint
+    assert pack_payload["account_context"] == expected_context
     assert "extractor" not in pack_payload
     assert "analysis" not in result_payload
     assert "extractor" not in result_payload
@@ -234,6 +319,8 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
         "char_len": len(sanitized),
         "word_len": len(sanitized.split()),
     }
+    assert result_payload["fingerprint"] == expected_fingerprint
+    assert result_payload["account_context"] == expected_context
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
     assert index_payload["schema_version"] == 1
@@ -661,20 +748,28 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     assert pack_payload["prompt_salt"] == result_payload["prompt_salt"] == result["prompt_salt"]
 
     pack_user_payload = json.loads(pack_payload["messages"][1]["content"])
+    expected_fingerprint = "account:idx-004"
+    expected_context: dict[str, Any] = {}
     assert pack_user_payload == {
         "sid": sid,
         "account_id": account_id,
         "note_text": note,
+        "fingerprint": expected_fingerprint,
+        "account_context": expected_context,
         "metadata": {"lang": "auto", "channel": "frontend_review"},
     }
 
     assert pack_payload["note_hash"] == expected_note_hash
+    assert pack_payload["fingerprint"] == expected_fingerprint
+    assert pack_payload["account_context"] == expected_context
     assert result_payload["note_hash"] == expected_note_hash
     assert result_payload["source_hash"] == expected_hash
     assert result_payload["note_metrics"] == {
         "char_len": len(sanitized),
         "word_len": len(sanitized.split()),
     }
+    assert result_payload["fingerprint"] == expected_fingerprint
+    assert result_payload["account_context"] == expected_context
     assert note not in account_paths.result_file.read_text(encoding="utf-8")
 
 

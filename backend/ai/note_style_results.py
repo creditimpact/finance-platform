@@ -243,6 +243,12 @@ class NoteStyleIndexWriter:
         rewritten.sort(key=lambda item: str(item.get("account_id") or ""))
         document[key] = rewritten
         document["totals"] = _compute_totals(rewritten)
+        skipped_count = sum(
+            1
+            for entry in rewritten
+            if str(entry.get("status") or "").strip().lower()
+            in {"skipped", "skipped_low_signal"}
+        )
 
         self._atomic_write_index(document)
         totals = document["totals"]
@@ -252,19 +258,20 @@ class NoteStyleIndexWriter:
         result_value = str(updated_entry.get("result") or "") if updated_entry else ""
         note_hash_value = str(updated_entry.get("note_hash") or "") if updated_entry else ""
         log.info(
-            "STYLE_INDEX_UPDATED sid=%s account_id=%s action=completed status=%s packs_total=%s packs_completed=%s packs_failed=%s index=%s pack=%s result=%s note_hash=%s",
+            "NOTE_STYLE_INDEX_UPDATED sid=%s account_id=%s action=completed status=%s packs_total=%s packs_completed=%s packs_failed=%s skipped=%s index=%s pack=%s result=%s note_hash=%s",
             self.sid,
             normalized_account,
             status_text,
             totals.get("total", 0),
             totals.get("completed", 0),
             totals.get("failed", 0),
+            skipped_count,
             index_relative,
             pack_value,
             result_value,
             note_hash_value,
         )
-        return updated_entry, totals
+        return updated_entry, totals, skipped_count
 
 
 def store_note_style_result(
@@ -285,7 +292,7 @@ def store_note_style_result(
     _atomic_write_jsonl(account_paths.result_file, payload)
     result_relative = _relative_to_base(account_paths.result_file, paths.base)
     log.info(
-        "STYLE_RESULTS_WRITTEN sid=%s account_id=%s result=%s prompt_salt=%s source_hash=%s",
+        "NOTE_STYLE_RESULT_WRITTEN sid=%s acc=%s path=%s prompt_salt=%s source_hash=%s",
         sid,
         account_id,
         result_relative,
@@ -294,7 +301,7 @@ def store_note_style_result(
     )
 
     writer = NoteStyleIndexWriter(sid=sid, paths=paths)
-    updated_entry, totals = writer.mark_completed(
+    updated_entry, totals, skipped_count = writer.mark_completed(
         account_id,
         pack_path=account_paths.pack_file,
         result_path=account_paths.result_file,
@@ -314,6 +321,7 @@ def store_note_style_result(
         stage_status = "built"
 
     empty_ok = packs_total == 0
+    ready = stage_status == "success"
 
     counts = {"packs_total": packs_total}
     metrics = {"packs_total": packs_total}
@@ -322,6 +330,16 @@ def store_note_style_result(
         "completed": packs_completed,
         "failed": packs_failed,
     }
+
+    log.info(
+        "NOTE_STYLE_REFRESH sid=%s ready=%s total=%s completed=%s failed=%s skipped=%s",
+        sid,
+        ready,
+        packs_total,
+        packs_completed,
+        packs_failed,
+        skipped_count,
+    )
 
     try:
         refresh_note_style_stage_from_index(sid, runs_root=runs_root_path)
@@ -332,7 +350,7 @@ def store_note_style_result(
     else:
         status_text = str(updated_entry.get("status") or "") if isinstance(updated_entry, Mapping) else ""
         log.info(
-            "STYLE_STAGE_REFRESH sid=%s account_id=%s stage_status=%s packs_total=%s results_completed=%s results_failed=%s",
+            "NOTE_STYLE_STAGE_REFRESH_DETAIL sid=%s account_id=%s stage_status=%s packs_total=%s results_completed=%s results_failed=%s",
             sid,
             account_id,
             status_text,

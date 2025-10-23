@@ -154,6 +154,19 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     expected_hash = _normalized_hash(sanitized)
     expected_short_hash = expected_hash[:12]
 
+    manifest_payload = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    note_style_manifest = (
+        manifest_payload.get("ai", {})
+        .get("packs", {})
+        .get("note_style", {})
+    )
+    assert note_style_manifest["base"] == str(paths.base)
+    assert note_style_manifest["packs_dir"] == str(paths.packs_dir)
+    assert note_style_manifest["results_dir"] == str(paths.results_dir)
+    assert note_style_manifest["index"] == str(paths.index_file)
+    assert note_style_manifest["logs"].endswith("ai_packs/note_style/logs.txt")
+    assert note_style_manifest.get("last_built_at") is None
+
     pack_messages = pack_payload["messages"]
     assert isinstance(pack_messages, list)
     assert pack_messages[0]["role"] == "system"

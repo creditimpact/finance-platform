@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from backend.core.ai.paths import ensure_validation_paths
-from backend.pipeline.runs import RunManifest, persist_manifest
+from backend.core.ai.paths import ensure_note_style_paths, ensure_validation_paths
+from backend.pipeline.runs import RUNS_ROOT_ENV, RunManifest, persist_manifest
 
 
 @dataclass(frozen=True)
@@ -207,6 +207,107 @@ class Manifest:
 
         return dict(validation_section)
 
+    @staticmethod
+    def ensure_note_style_section(
+        sid: str, *, runs_root: Path | str | None = None
+    ) -> dict[str, Any]:
+        """Ensure the note_style packs section exists for ``sid``."""
+
+        sid_text = str(sid).strip()
+        if not sid_text:
+            raise ValueError("sid is required")
+
+        runs_root_path: Path | None
+        manifest: RunManifest
+        previous_runs_root = None
+        try:
+            if runs_root is not None:
+                runs_root_path = Path(runs_root).resolve()
+                manifest_path = runs_root_path / sid_text / "manifest.json"
+                previous_runs_root = os.getenv(RUNS_ROOT_ENV)
+                os.environ[RUNS_ROOT_ENV] = str(runs_root_path)
+                manifest = RunManifest.load_or_create(manifest_path, sid_text)
+            else:
+                manifest = RunManifest.for_sid(sid_text)
+                runs_root_path = manifest.path.parent.parent.resolve()
+        finally:
+            if runs_root is not None:
+                if previous_runs_root is None:
+                    os.environ.pop(RUNS_ROOT_ENV, None)
+                else:
+                    os.environ[RUNS_ROOT_ENV] = previous_runs_root
+
+        note_style_paths = ensure_note_style_paths(
+            runs_root_path, sid_text, create=True
+        )
+
+        data = manifest.data
+        if not isinstance(data, dict):
+            data = {}
+            manifest.data = data
+
+        ai_section = data.get("ai")
+        if not isinstance(ai_section, dict):
+            ai_section = {}
+            data["ai"] = ai_section
+
+        packs_section = ai_section.get("packs")
+        if not isinstance(packs_section, dict):
+            packs_section = {}
+            ai_section["packs"] = packs_section
+
+        note_style_section = packs_section.get("note_style")
+        if not isinstance(note_style_section, dict):
+            note_style_section = {}
+            packs_section["note_style"] = note_style_section
+
+        canonical_values = {
+            "base": str(note_style_paths.base),
+            "dir": str(note_style_paths.base),
+            "packs": str(note_style_paths.packs_dir),
+            "packs_dir": str(note_style_paths.packs_dir),
+            "results": str(note_style_paths.results_dir),
+            "results_dir": str(note_style_paths.results_dir),
+            "index": str(note_style_paths.index_file),
+            "logs": str(note_style_paths.base / "logs.txt"),
+        }
+
+        changed = False
+        for key, value in canonical_values.items():
+            current = note_style_section.get(key)
+            if not isinstance(current, str) or not current.strip():
+                note_style_section[key] = value
+                changed = True
+
+        if "last_built_at" not in note_style_section:
+            note_style_section["last_built_at"] = None
+            changed = True
+
+        if changed:
+            persist_manifest(manifest)
+
+        packs_dir = note_style_section.get("packs_dir") or canonical_values["packs_dir"]
+        results_dir = (
+            note_style_section.get("results_dir") or canonical_values["results_dir"]
+        )
+
+        log.info(
+            "NOTE_STYLE_MANIFEST_INJECTED sid=%s packs_dir=%s results_dir=%s",
+            sid_text,
+            packs_dir,
+            results_dir,
+        )
+
+        return dict(note_style_section)
+
+
+def ensure_note_style_section(
+    sid: str, *, runs_root: Path | str | None = None
+) -> dict[str, Any]:
+    """Ensure the note_style manifest section and directories exist for ``sid``."""
+
+    return Manifest.ensure_note_style_section(sid, runs_root=runs_root)
+
 
 def ensure_validation_section(
     sid: str, *, runs_root: Path | str | None = None
@@ -219,6 +320,7 @@ def ensure_validation_section(
 __all__ = [
     "Manifest",
     "StageManifestPaths",
+    "ensure_note_style_section",
     "ensure_validation_section",
     "extract_stage_manifest_paths",
 ]

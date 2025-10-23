@@ -12,6 +12,7 @@ import pytest
 from backend.ai.note_style_results import store_note_style_result
 from backend.ai.note_style_stage import build_note_style_pack_for_account
 from backend.core.ai.paths import ensure_note_style_account_paths, ensure_note_style_paths
+from backend.runflow.counters import note_style_stage_counts
 
 
 _ZERO_WIDTH_TRANSLATION = {
@@ -684,3 +685,35 @@ def test_note_style_stage_ignores_summary_file(tmp_path: Path) -> None:
     assert summary_path.read_text(encoding="utf-8") == json.dumps(
         summary_payload, ensure_ascii=False, indent=2
     )
+
+
+def test_note_style_stage_counts_track_completion(tmp_path: Path) -> None:
+    sid = "SID720"
+    account_id = "idx-720"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Already resolved with the bank."},
+        },
+    )
+
+    result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+    assert result["status"] == "completed"
+
+    counts_pending = note_style_stage_counts(run_dir)
+    assert counts_pending == {"packs_total": 1, "packs_completed": 0, "packs_failed": 0}
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+    payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+
+    store_note_style_result(sid, account_id, payload, runs_root=runs_root)
+
+    counts_completed = note_style_stage_counts(run_dir)
+    assert counts_completed == {"packs_total": 1, "packs_completed": 1, "packs_failed": 0}

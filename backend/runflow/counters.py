@@ -336,7 +336,7 @@ def note_style_stage_counts(base_dir: Path) -> Optional[dict[str, int]]:
         if status_text in {"", "skipped"}:
             continue
         total += 1
-        if status_text in {"completed", "success", "built"}:
+        if status_text in {"completed", "success"}:
             completed += 1
         elif status_text in {"failed", "error"}:
             failed += 1

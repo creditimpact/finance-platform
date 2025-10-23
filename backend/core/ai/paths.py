@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +31,25 @@ class ValidationPaths:
     results_dir: Path
     index_file: Path
     log_file: Path
+
+
+@dataclass(frozen=True)
+class NoteStyleAccountPaths:
+    """Resolved filesystem locations for a single note_style AI pack."""
+
+    account_id: str
+    pack_file: Path
+    result_file: Path
+
+
+@dataclass(frozen=True)
+class NoteStylePaths:
+    """Resolved filesystem locations for note_style AI packs."""
+
+    base: Path
+    packs_dir: Path
+    results_dir: Path
+    index_file: Path
 
 
 def ensure_validation_paths(
@@ -196,6 +216,74 @@ def get_merge_paths(runs_root: Path, sid: str, *, create: bool = True) -> MergeP
     """Return the resolved merge AI pack paths for ``sid``."""
 
     return ensure_merge_paths(runs_root, sid, create=create)
+
+
+def ensure_note_style_paths(
+    runs_root: Path | str, sid: str, *, create: bool = True
+) -> NoteStylePaths:
+    """Return the canonical note_style AI pack paths for ``sid``."""
+
+    runs_root_path = Path(runs_root).resolve()
+    base_path = (runs_root_path / sid / "ai_packs" / "note_style").resolve()
+    packs_dir = base_path / "packs"
+    results_dir = base_path / "results"
+
+    if create:
+        base_path.mkdir(parents=True, exist_ok=True)
+        packs_dir.mkdir(parents=True, exist_ok=True)
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+    return NoteStylePaths(
+        base=base_path,
+        packs_dir=packs_dir.resolve(),
+        results_dir=results_dir.resolve(),
+        index_file=(base_path / "index.json").resolve(strict=False),
+    )
+
+
+_NOTE_STYLE_ACCOUNT_PATTERN = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+def _normalize_note_style_account_id(account_id: object) -> str:
+    text = str(account_id).strip() if account_id is not None else ""
+    if not text:
+        return "account"
+    sanitized = _NOTE_STYLE_ACCOUNT_PATTERN.sub("_", text)
+    return sanitized or "account"
+
+
+def note_style_pack_filename(account_id: object) -> str:
+    """Return the canonical note_style pack filename for ``account_id``."""
+
+    normalized = _normalize_note_style_account_id(account_id)
+    return f"style_acc_{normalized}.jsonl"
+
+
+def note_style_result_filename(account_id: object) -> str:
+    """Return the canonical note_style result filename for ``account_id``."""
+
+    normalized = _normalize_note_style_account_id(account_id)
+    return f"acc_{normalized}.result.jsonl"
+
+
+def ensure_note_style_account_paths(
+    paths: NoteStylePaths, account_id: object, *, create: bool = True
+) -> NoteStyleAccountPaths:
+    """Return filesystem locations for ``account_id`` under ``paths``."""
+
+    normalized = _normalize_note_style_account_id(account_id)
+    pack_path = paths.packs_dir / f"style_acc_{normalized}.jsonl"
+    result_path = paths.results_dir / f"acc_{normalized}.result.jsonl"
+
+    if create:
+        pack_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+
+    return NoteStyleAccountPaths(
+        account_id=normalized,
+        pack_file=pack_path,
+        result_file=result_path,
+    )
 
 
 def probe_legacy_ai_packs(runs_root: Path, sid: str) -> Optional[Path]:

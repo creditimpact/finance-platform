@@ -181,6 +181,20 @@ _ZERO_WIDTH_WHITESPACE = {
 }
 
 
+_LOW_SIGNAL_PHRASES = {
+    "help",
+    "please help",
+    "need help",
+    "please fix",
+    "fix please",
+    "fix this",
+    "fix it",
+    "please assist",
+    "assist please",
+    "need assistance",
+}
+
+
 _INDEX_LOCK_POLL_INTERVAL = 0.05
 _INDEX_LOCK_STALE_TIMEOUT = 30.0
 
@@ -572,6 +586,22 @@ def _normalize_text(value: Any) -> str:
 def _collapse_whitespace(value: str) -> str:
     translated = value.translate(_ZERO_WIDTH_WHITESPACE)
     return " ".join(translated.split()).strip()
+
+
+def _normalize_low_signal_candidate(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value)
+    normalized = normalized.lower()
+    normalized = re.sub(r"[^a-z0-9\s]", " ", normalized)
+    return " ".join(normalized.split())
+
+
+def _is_low_signal_note(note: str) -> bool:
+    normalized = _normalize_low_signal_candidate(note)
+    if not normalized:
+        return True
+    if len(normalized) <= 3:
+        return True
+    return normalized in _LOW_SIGNAL_PHRASES
 
 
 def _sanitize_note_value(value: Any) -> str:
@@ -1359,7 +1389,7 @@ def build_note_style_pack_for_account(
     note_hash = _note_hash(note_raw)
     char_len = len(note_sanitized)
     word_len = len(note_sanitized.split())
-    if len(note_sanitized) <= 3:
+    if _is_low_signal_note(note_sanitized):
         timestamp = _now_iso()
         skip_status = "skipped_low_signal"
         _remove_account_artifacts(account_paths)

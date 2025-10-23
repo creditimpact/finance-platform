@@ -197,6 +197,7 @@ class NoteStyleIndexWriter:
         pack_path: Path | None,
         result_path: Path | None,
         completed_at: str | None = None,
+        note_hash: str | None = None,
     ) -> tuple[Mapping[str, Any], dict[str, int]]:
         document = self._load_document()
         key, entries = self._extract_entries(document)
@@ -217,6 +218,8 @@ class NoteStyleIndexWriter:
                     entry_payload.setdefault(
                         "pack", _relativize(pack_path, self._paths.base)
                     )
+                if note_hash:
+                    entry_payload.setdefault("note_hash", note_hash)
                 entry_payload.pop("error", None)
                 updated_entry = entry_payload
             rewritten.append(entry_payload)
@@ -231,6 +234,8 @@ class NoteStyleIndexWriter:
                 entry_payload["pack"] = _relativize(pack_path, self._paths.base)
             if result_path is not None:
                 entry_payload["result"] = _relativize(result_path, self._paths.base)
+            if note_hash:
+                entry_payload["note_hash"] = note_hash
             rewritten.append(entry_payload)
             updated_entry = entry_payload
 
@@ -244,9 +249,9 @@ class NoteStyleIndexWriter:
         status_text = str(updated_entry.get("status") or "") if updated_entry else ""
         pack_value = str(updated_entry.get("pack") or "") if updated_entry else ""
         result_value = str(updated_entry.get("result") or "") if updated_entry else ""
-        source_hash_value = str(updated_entry.get("source_hash") or "") if updated_entry else ""
+        note_hash_value = str(updated_entry.get("note_hash") or "") if updated_entry else ""
         log.info(
-            "STYLE_INDEX_UPDATED sid=%s account_id=%s action=completed status=%s packs_total=%s packs_completed=%s packs_failed=%s index=%s pack=%s result=%s source_hash=%s",
+            "STYLE_INDEX_UPDATED sid=%s account_id=%s action=completed status=%s packs_total=%s packs_completed=%s packs_failed=%s index=%s pack=%s result=%s note_hash=%s",
             self.sid,
             normalized_account,
             status_text,
@@ -256,7 +261,7 @@ class NoteStyleIndexWriter:
             index_relative,
             pack_value,
             result_value,
-            source_hash_value,
+            note_hash_value,
         )
         return updated_entry, totals
 
@@ -293,6 +298,7 @@ def store_note_style_result(
         pack_path=account_paths.pack_file,
         result_path=account_paths.result_file,
         completed_at=completed_at,
+        note_hash=str(payload.get("note_hash") or "") or None,
     )
 
     try:

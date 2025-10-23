@@ -7,6 +7,9 @@ import math
 from pathlib import Path
 import unicodedata
 
+import pytest
+
+from backend.ai.note_style_results import store_note_style_result
 from backend.ai.note_style_stage import build_note_style_pack_for_account
 from backend.core.ai.paths import ensure_note_style_account_paths, ensure_note_style_paths
 
@@ -212,8 +215,114 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
 
     runflow_payload = json.loads((run_dir / "runflow.json").read_text(encoding="utf-8"))
     note_style_stage = runflow_payload["stages"]["note_style"]
-    assert note_style_stage["status"] == "success"
-    assert note_style_stage["summary"]["packs_completed"] == 1
+    assert note_style_stage["status"] == "built"
+    assert note_style_stage["empty_ok"] is False
+    assert note_style_stage["metrics"]["packs_total"] == 1
+    assert note_style_stage["results"]["results_total"] == 1
+    assert note_style_stage["results"]["completed"] == 0
+    assert note_style_stage["results"]["failed"] == 0
+
+    summary = note_style_stage["summary"]
+    assert summary["empty_ok"] is False
+    assert summary["results_total"] == 1
+    assert summary["completed"] == 0
+    assert summary["failed"] == 0
+    assert summary["packs_total"] == 1
+    assert summary["metrics"]["packs_total"] == 1
+    assert summary["results"]["completed"] == 0
+
+
+def test_note_style_stage_refresh_promotes_on_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID001A"
+    account_id = "idx-001A"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+    note = "We appreciate the help but still need assistance."
+
+    response_path = response_dir / f"{account_id}.result.json"
+    _write_response(
+        response_path,
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": note},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    monkeypatch.setenv("RUNFLOW_EVENTS", "1")
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.runflow_barriers_refresh", lambda _: None
+    )
+    monkeypatch.setattr(
+        "backend.ai.note_style_results.reconcile_umbrella_barriers",
+        lambda _sid, runs_root=None: {},
+    )
+
+    result_payload = {
+        "sid": sid,
+        "account_id": account_id,
+        "analysis": {
+            "tone": {"value": "supportive", "confidence": 0.9, "risk_flags": []},
+            "context_hints": {
+                "values": ["lender_fault"],
+                "confidence": 0.8,
+                "risk_flags": [],
+            },
+            "emphasis": {
+                "values": ["help_request"],
+                "confidence": 0.7,
+                "risk_flags": [],
+            },
+        },
+        "prompt_salt": "salt-value",
+        "note_hash": "abc123",
+    }
+
+    store_note_style_result(
+        sid,
+        account_id,
+        result_payload,
+        runs_root=runs_root,
+        completed_at="2024-02-10T00:00:00Z",
+    )
+
+    runflow_payload = json.loads((run_dir / "runflow.json").read_text(encoding="utf-8"))
+    stage_payload = runflow_payload["stages"]["note_style"]
+    assert stage_payload["status"] == "success"
+    assert stage_payload["empty_ok"] is False
+    assert stage_payload["metrics"]["packs_total"] == 1
+    assert stage_payload["results"]["results_total"] == 1
+    assert stage_payload["results"]["completed"] == 1
+    assert stage_payload["results"]["failed"] == 0
+
+    summary = stage_payload["summary"]
+    assert summary["empty_ok"] is False
+    assert summary["packs_total"] == 1
+    assert summary["results_total"] == 1
+    assert summary["completed"] == 1
+    assert summary["failed"] == 0
+    assert summary["metrics"]["packs_total"] == 1
+    assert summary["results"]["completed"] == 1
+
+    events_path = run_dir / "runflow_events.jsonl"
+    assert events_path.exists()
+    events = [
+        json.loads(line)
+        for line in events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    refresh_events = [event for event in events if event.get("event") == "note_style_stage_refresh"]
+    assert refresh_events, events
+    latest_event = refresh_events[-1]
+    assert latest_event["status"] == "success"
+    assert latest_event["results_total"] == 1
+    assert latest_event["results_completed"] == 1
+    assert latest_event.get("results_failed", 0) == 0
 
 
 def test_note_style_stage_idempotent_for_unchanged_response(tmp_path: Path) -> None:
@@ -378,4 +487,17 @@ def test_note_style_stage_skips_when_note_sanitizes_empty(tmp_path: Path) -> Non
     runflow_payload = json.loads((run_dir / "runflow.json").read_text(encoding="utf-8"))
     note_style_stage = runflow_payload["stages"]["note_style"]
     assert note_style_stage["status"] == "success"
-    assert note_style_stage["summary"]["packs_completed"] == 0
+    assert note_style_stage["empty_ok"] is True
+    assert note_style_stage["metrics"]["packs_total"] == 0
+    assert note_style_stage["results"]["results_total"] == 0
+    assert note_style_stage["results"]["completed"] == 0
+    assert note_style_stage["results"]["failed"] == 0
+
+    summary = note_style_stage["summary"]
+    assert summary["empty_ok"] is True
+    assert summary["packs_total"] == 0
+    assert summary["results_total"] == 0
+    assert summary["completed"] == 0
+    assert summary["failed"] == 0
+    assert summary["metrics"]["packs_total"] == 0
+    assert summary["results"]["results_total"] == 0

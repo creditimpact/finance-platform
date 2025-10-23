@@ -18,6 +18,7 @@ from backend.core.ai.paths import (
 )
 from backend.core.runflow import runflow_barriers_refresh
 from backend.runflow.decider import (
+    record_stage,
     reconcile_umbrella_barriers,
     refresh_note_style_stage_from_index,
 )
@@ -301,6 +302,27 @@ def store_note_style_result(
         note_hash=str(payload.get("note_hash") or "") or None,
     )
 
+    packs_total = int(totals.get("total", 0))
+    packs_completed = int(totals.get("completed", 0))
+    packs_failed = int(totals.get("failed", 0))
+
+    if packs_failed > 0 and packs_total > 0:
+        stage_status = "error"
+    elif packs_total == 0 or packs_completed >= packs_total:
+        stage_status = "success"
+    else:
+        stage_status = "built"
+
+    empty_ok = packs_total == 0
+
+    counts = {"packs_total": packs_total}
+    metrics = {"packs_total": packs_total}
+    results_counts = {
+        "results_total": packs_total,
+        "completed": packs_completed,
+        "failed": packs_failed,
+    }
+
     try:
         refresh_note_style_stage_from_index(sid, runs_root=runs_root_path)
     except Exception:  # pragma: no cover - defensive logging
@@ -318,6 +340,20 @@ def store_note_style_result(
             totals.get("completed", 0),
             totals.get("failed", 0),
         )
+
+    try:
+        record_stage(
+            sid,
+            "note_style",
+            status=stage_status,
+            counts=counts,
+            empty_ok=empty_ok,
+            metrics=metrics,
+            results=results_counts,
+            runs_root=runs_root_path,
+        )
+    except Exception:  # pragma: no cover - defensive logging
+        log.warning("NOTE_STYLE_STAGE_RECORD_FAILED sid=%s", sid, exc_info=True)
 
     try:
         runflow_barriers_refresh(sid)

@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import time
-import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
@@ -26,10 +25,6 @@ def _resolve_runs_root(runs_root: Path | str | None) -> Path:
         env_value = os.getenv("RUNS_ROOT")
         return Path(env_value) if env_value else Path("runs")
     return Path(runs_root)
-
-
-def _now_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def _load_json_mapping(path: Path) -> Mapping[str, Any] | None:
@@ -122,38 +117,6 @@ def _relativize(path: Path, base: Path) -> str:
     return str(PurePosixPath(relative))
 
 
-def _atomic_write_index(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + f".tmp.{uuid.uuid4().hex}")
-    try:
-        with tmp_path.open("w", encoding="utf-8", newline="") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
-            handle.flush()
-            try:
-                os.fsync(handle.fileno())
-            except OSError:
-                pass
-        os.replace(tmp_path, path)
-    finally:
-        try:
-            tmp_path.unlink()
-        except FileNotFoundError:
-            pass
-    try:
-        fd = os.open(str(path.parent), os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(fd)
-    except OSError:
-        pass
-    finally:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-
-
 def _coerce_result_path(value: Any) -> Path | None:
     if value is None:
         return None
@@ -187,11 +150,11 @@ def send_note_style_packs_for_sid(
     if not isinstance(document, Mapping):
         return []
 
-    container_key, indexed_entries, container = _extract_entries(document)
+    container_key, indexed_entries, _ = _extract_entries(document)
     if container_key is None:
         return []
 
-    targets: list[tuple[str, str, int]] = []
+    targets: list[tuple[str, str]] = []
     for idx, entry in indexed_entries:
         status = _normalize_status(entry.get("status"))
         if status != "built":
@@ -200,7 +163,7 @@ def send_note_style_packs_for_sid(
         pack_rel = str(entry.get("pack") or "")
         if not account or not pack_rel:
             continue
-        targets.append((account, pack_rel, idx))
+        targets.append((account, pack_rel))
 
     if not targets:
         return []
@@ -208,7 +171,7 @@ def send_note_style_packs_for_sid(
     client = get_ai_client()
     processed: list[str] = []
 
-    for account_id, pack_rel, idx in targets:
+    for account_id, pack_rel in targets:
         account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
         pack_path = Path(pack_rel)
         if not pack_path.is_absolute():
@@ -272,14 +235,6 @@ def send_note_style_packs_for_sid(
             account_id,
             result_path,
         )
-
-        sent_at = _now_iso()
-        entry = dict(container[idx])
-        entry["status"] = "completed"
-        entry["sent_at"] = sent_at
-        entry["result"] = _relativize(result_path, paths.base)
-        container[idx] = entry
-        _atomic_write_index(paths.index_file, document)
 
         log.info(
             "STYLE_SEND_ACCOUNT_END sid=%s account_id=%s status=completed", sid, account_id

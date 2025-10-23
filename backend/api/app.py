@@ -70,6 +70,7 @@ from backend.runflow.decider import (
     reconcile_umbrella_barriers,
     refresh_frontend_stage_from_responses,
 )
+from backend.ai.note_style import schedule_prepare_and_send
 from backend.ai.note_style_stage import schedule_note_style_refresh
 from backend.domain.claims import (
     CLAIM_FIELD_LINK_MAP,
@@ -2106,6 +2107,16 @@ def api_frontend_review_answer(sid: str, account_id: str):
     except Exception:  # pragma: no cover - defensive logging
         logger.warning(
             "NOTE_STYLE_STAGE_SCHEDULE_FAILED sid=%s account_id=%s",
+            sid,
+            account_id,
+            exc_info=True,
+        )
+
+    try:
+        schedule_prepare_and_send(sid, runs_root=run_dir.parent)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.warning(
+            "NOTE_STYLE_PREPARE_SCHEDULE_FAILED sid=%s account_id=%s",
             sid,
             account_id,
             exc_info=True,

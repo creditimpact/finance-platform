@@ -470,6 +470,39 @@ def test_frontend_review_submit_writes_response_file(api_client):
     assert not legacy_dir.exists()
 
 
+def test_frontend_review_submit_schedules_note_style(api_client, monkeypatch):
+    client, runs_root = api_client
+    sid = "S780"
+    account_id = "idx-009"
+    (runs_root / sid).mkdir(parents=True, exist_ok=True)
+
+    refresh_calls: list[tuple[tuple, dict]] = []
+    prepare_calls: list[tuple[tuple, dict]] = []
+
+    monkeypatch.setattr(
+        "backend.api.app.schedule_note_style_refresh",
+        lambda *args, **kwargs: refresh_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        "backend.api.app.schedule_prepare_and_send",
+        lambda *args, **kwargs: prepare_calls.append((args, kwargs)),
+    )
+
+    payload = {"answers": {"explanation": "note text"}}
+
+    response = client.post(
+        f"/api/runs/{sid}/frontend/review/response/{account_id}",
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    assert len(refresh_calls) == 1
+    assert len(prepare_calls) == 1
+
+    _, prepare_kwargs = prepare_calls[0]
+    assert prepare_kwargs["runs_root"] == runs_root
+
+
 def test_frontend_review_submit_honors_stage_responses_override(api_client, monkeypatch):
     client, runs_root = api_client
     sid = "S778"

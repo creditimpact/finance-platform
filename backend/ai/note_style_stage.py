@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import threading
 import uuid
 import unicodedata
@@ -34,12 +35,115 @@ _DEFAULT_DEBOUNCE_MS = 750
 _DEFAULT_PEPPER = "finance-note-style"
 _NOTE_STYLE_MODEL = "gpt-4o-mini"
 _NOTE_STYLE_SYSTEM_PROMPT = (
-    "You are a structured data extraction assistant. Respond with JSON only using the schema: "
-    '{{"tone": {{"value": <string>, "confidence": <float>, "risk_flags": [<string>...]}}, '
-    '"context_hints": {{"values": [<string>...], "confidence": <float>, "risk_flags": [<string>...]}}, '
-    '"emphasis": {{"values": [<string>...], "confidence": <float>, "risk_flags": [<string>...]}}}}. '
-    "Confidence values must be between 0 and 1. Risk flags must be lowercase snake_case strings. "
-    "Do not add commentary. Prompt salt: {prompt_salt}."
+    "You are reviewing structured metadata that was derived from a customer's note. "
+    "Respond with JSON only using the schema: "
+    '{{"tone": <string>, "context_hints": {{"timeframe": {{"month": <string|null>, '
+    '"relative": <string|null>}}, "topic": <string>, "entities": {{"creditor": <string|null>, '
+    '"amount": <number|null>}}}}, "emphasis": [<string>...], "confidence": <float>, '
+    '"risk_flags": [<string>...]}}. Confidence must be between 0 and 1. Risk flags must be '
+    "lowercase snake_case strings. Do not add commentary. Prompt salt: {prompt_salt}."
+)
+
+_ALLOWED_TONES = {
+    "neutral",
+    "calm",
+    "confident",
+    "assertive",
+    "empathetic",
+    "formal",
+    "conversational",
+    "factual",
+}
+
+_ALLOWED_TOPICS = {
+    "payment_dispute",
+    "not_mine",
+    "billing_error",
+    "identity_theft",
+    "late_fee",
+    "other",
+}
+
+_ALLOWED_EMPHASIS = {
+    "paid_already",
+    "inaccurate_reporting",
+    "identity_concerns",
+    "support_request",
+    "fee_waiver",
+    "ownership_dispute",
+    "update_requested",
+    "evidence_provided",
+}
+
+_RELATIVE_TIMEFRAME_PATTERNS: dict[str, tuple[str, ...]] = {
+    "last_two_months": (
+        r"last\s+two\s+months",
+        r"past\s+two\s+months",
+        r"last\s+couple\s+of\s+months",
+        r"last\s+couple\s+months",
+    ),
+    "last_month": (r"last\s+month", r"previous\s+month", r"past\s+month"),
+    "current_month": (r"this\s+month", r"current\s+month"),
+    "next_month": (r"next\s+month",),
+    "last_year": (
+        r"last\s+year",
+        r"previous\s+year",
+        r"past\s+year",
+        r"past\s+twelve\s+months",
+    ),
+}
+
+_MONTH_NAME_MAP = {
+    "jan": "Jan",
+    "january": "Jan",
+    "feb": "Feb",
+    "february": "Feb",
+    "mar": "Mar",
+    "march": "Mar",
+    "apr": "Apr",
+    "april": "Apr",
+    "may": "May",
+    "jun": "Jun",
+    "june": "Jun",
+    "jul": "Jul",
+    "july": "Jul",
+    "aug": "Aug",
+    "august": "Aug",
+    "sep": "Sep",
+    "sept": "Sep",
+    "september": "Sep",
+    "oct": "Oct",
+    "october": "Oct",
+    "nov": "Nov",
+    "november": "Nov",
+    "dec": "Dec",
+    "december": "Dec",
+}
+
+_KNOWN_CREDITORS = {
+    "capital one": "Capital One",
+    "bank of america": "Bank of America",
+    "wells fargo": "Wells Fargo",
+    "chase": "Chase",
+    "discover": "Discover",
+    "synchrony": "Synchrony",
+    "citibank": "Citibank",
+    "navy federal": "Navy Federal",
+}
+
+_AMOUNT_PATTERN = re.compile(r"\$?\b\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\b")
+_CREDITOR_PATTERN = re.compile(
+    r"\b(?:with|from|at|to|by|for)\s+([A-Z][\w&]*(?:\s+[A-Z][\w&]*){0,3})"
+)
+_MONTH_PATTERN = re.compile(
+    r"\b(" + "|".join(sorted(_MONTH_NAME_MAP.keys(), key=len, reverse=True)) + r")\b(?:[-/,\s]*(\d{2,4}))?",
+    re.IGNORECASE,
+)
+_PERSONAL_DATA_PATTERNS = (
+    re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
+    re.compile(r"\b\d{3}[-\.\s]\d{3}[-\.\s]\d{4}\b"),
+    re.compile(r"\b\d{9}\b"),
+    re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE),
 )
 
 _ZERO_WIDTH_WHITESPACE = {
@@ -179,14 +283,12 @@ def _note_hash(source_hash: str, length: int = 12) -> str:
     return source_hash[:length]
 
 
-def _pack_messages(features: Mapping[str, Any], prompt_salt: str) -> list[dict[str, str]]:
+def _pack_messages(extractor: Mapping[str, Any], prompt_salt: str) -> list[dict[str, str]]:
     system_message = _NOTE_STYLE_SYSTEM_PROMPT.format(prompt_salt=prompt_salt)
     payload: dict[str, Any] = {"prompt_salt": prompt_salt}
 
-    for key in ("tone", "context_hints", "emphasis"):
-        value = features.get(key) if isinstance(features, Mapping) else None
-        if isinstance(value, Mapping):
-            payload[key] = dict(value)
+    if isinstance(extractor, Mapping):
+        payload["extractor"] = json.loads(json.dumps(extractor))
 
     user_content = json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
@@ -277,114 +379,241 @@ def _contains_phrase(text: str, *phrases: str) -> bool:
     return any(phrase in lowered for phrase in phrases)
 
 
-def _tone_features(note: str) -> tuple[str, float, list[str]]:
-    text = note.lower()
+def _normalize_month_value(name: str | None, year_text: str | None) -> str | None:
+    if not name:
+        return None
+    key = name.lower().strip(".")
+    month = _MONTH_NAME_MAP.get(key)
+    if not month:
+        return None
+    if not year_text:
+        return month
+    try:
+        year = int(year_text)
+        if year < 100:
+            year += 2000 if year < 50 else 1900
+        return f"{month}-{year}"
+    except ValueError:
+        return month
+
+
+def _extract_timeframe(note: str) -> dict[str, str | None]:
+    month: str | None = None
+    relative: str | None = None
+
+    match = _MONTH_PATTERN.search(note)
+    if match:
+        month = _normalize_month_value(match.group(1), match.group(2))
+
+    lowered = note.lower()
+    for key, patterns in _RELATIVE_TIMEFRAME_PATTERNS.items():
+        for pattern in patterns:
+            if re.search(pattern, lowered):
+                relative = key
+                break
+        if relative:
+            break
+
+    return {"month": month, "relative": relative}
+
+
+def _extract_entities(note: str) -> tuple[dict[str, Any], list[str]]:
+    entities: dict[str, Any] = {"creditor": None, "amount": None}
+    lowered = note.lower()
     risk_flags: list[str] = []
 
-    if any(word in text for word in ("angry", "frustrated", "furious", "upset")):
-        tone = "frustrated"
-        confidence = 0.85
-        risk_flags.append("escalation_risk")
-    elif any(word in text for word in ("urgent", "immediately", "asap", "right away")):
-        tone = "urgent"
-        confidence = 0.8
-    elif any(word in text for word in ("sorry", "apologize", "apologies")):
-        tone = "apologetic"
-        confidence = 0.75
-    elif any(word in text for word in ("please", "thank", "appreciate", "grateful")):
-        tone = "conciliatory"
+    for key, display in _KNOWN_CREDITORS.items():
+        if key in lowered:
+            entities["creditor"] = display
+            break
+
+    if entities["creditor"] is None:
+        match = _CREDITOR_PATTERN.search(note)
+        if match:
+            candidate = match.group(1).strip()
+            words = [word for word in candidate.split() if len(word) > 1]
+            if words:
+                entities["creditor"] = " ".join(word.strip().title() for word in words)
+
+    amount_match = _AMOUNT_PATTERN.search(note.replace(",", ""))
+    if amount_match:
+        amount_text = amount_match.group(0).replace("$", "")
+        try:
+            amount_value = float(amount_text)
+        except ValueError:
+            amount_value = None
+        if amount_value is not None:
+            entities["amount"] = round(amount_value, 2)
+            if amount_value >= 10000:
+                risk_flags.append("large_amount")
+
+    return entities, risk_flags
+
+
+def _detect_personal_data(note: str) -> bool:
+    lowered = note.lower()
+    if "social security" in lowered or "ssn" in lowered:
+        return True
+    if "date of birth" in lowered or "dob" in lowered:
+        return True
+    for pattern in _PERSONAL_DATA_PATTERNS:
+        if pattern.search(note):
+            return True
+    return False
+
+
+def _tone_from_note(note: str, tokens: set[str]) -> tuple[str, float, list[str]]:
+    text = note.lower()
+    exclamations = note.count("!")
+    risk_flags: list[str] = []
+
+    if any(word in tokens for word in {"urgent", "immediately", "asap", "now"}) or exclamations >= 2:
+        tone = "assertive"
+        confidence = 0.82
+    elif _contains_phrase(text, "please help", "please assist", "thank you") or {
+        "please",
+        "help",
+    }.issubset(tokens):
+        tone = "empathetic"
+        confidence = 0.74
+    elif _contains_phrase(text, "i dispute", "this is incorrect", "not accurate") or "dispute" in tokens:
+        tone = "confident"
+        confidence = 0.72
+    elif _contains_phrase(text, "i am requesting", "i am writing") or "sincerely" in tokens:
+        tone = "formal"
         confidence = 0.7
+    elif len(re.findall(r"\d", note)) >= 6 and exclamations == 0:
+        tone = "factual"
+        confidence = 0.68
+    elif _contains_phrase(text, "just wanted") or "hey" in tokens:
+        tone = "conversational"
+        confidence = 0.65
+    elif any(word in tokens for word in {"calm", "appreciate", "understand"}) and exclamations == 0:
+        tone = "calm"
+        confidence = 0.64
     else:
         tone = "neutral"
         confidence = 0.45
 
-    if any(word in text for word in ("lawsuit", "sue", "court", "legal action")):
+    if any(word in tokens for word in {"lawsuit", "court", "legal", "attorney"}):
         risk_flags.append("legal_threat")
+    if exclamations >= 3:
+        risk_flags.append("escalation_risk")
+
+    if tone not in _ALLOWED_TONES:
+        tone = "neutral"
 
     return tone, confidence, _unique(risk_flags)
 
 
-def _context_hints(note: str, words: set[str]) -> tuple[list[str], float, list[str]]:
-    lowered = note.lower()
-    hints: list[str] = []
-    risk_flags: list[str] = []
-
-    if _contains_phrase(lowered, "identity theft", "identity fraud"):
-        hints.append("identity_theft")
-        risk_flags.append("identity_theft_claim")
-    if "fraud" in words or "scam" in words:
-        hints.append("fraud_reported")
-        risk_flags.append("fraud_claim")
-    if _contains_phrase(lowered, "bank error", "bank mistake", "their error") or (
-        "bank" in words and "error" in words
+def _topic_from_note(note: str, tokens: set[str]) -> tuple[str, float]:
+    text = note.lower()
+    if _contains_phrase(text, "identity theft", "identity fraud"):
+        return "identity_theft", 0.85
+    if _contains_phrase(text, "not mine", "never opened", "unauthorized"):
+        return "not_mine", 0.82
+    if _contains_phrase(text, "billing error", "charged the wrong", "wrong amount") or (
+        "billing" in tokens and "error" in tokens
     ):
-        hints.append("lender_fault")
-    if _contains_phrase(lowered, "paid in full", "already paid") or (
-        "paid" in words and "proof" in words
+        return "billing_error", 0.8
+    if _contains_phrase(text, "late fee", "late fees"):
+        return "late_fee", 0.75
+    if any(
+        word in tokens
+        for word in {"paid", "payment", "balance", "settled", "already", "dispute", "disputed", "disputing"}
     ):
-        hints.append("payment_dispute")
-    if any(word in words for word in ("hardship", "unemployed", "layoff", "laid")):
-        hints.append("financial_hardship")
-    if any(word in words for word in ("military", "deployment", "service")):
-        hints.append("military_service")
-    if any(word in words for word in ("medical", "hospital", "surgery", "illness")):
-        hints.append("medical_event")
-    if any(word in words for word in ("divorce", "separated", "widow", "widowed")):
-        hints.append("family_change")
-
-    confidence = 0.4 if not hints else min(0.9, 0.55 + 0.1 * len(hints))
-    return _unique(hints), confidence, _unique(risk_flags)
+        return "payment_dispute", 0.78
+    return "other", 0.45
 
 
-def _emphasis(note: str, words: set[str]) -> tuple[list[str], float, list[str]]:
-    lowered = note.lower()
+def _emphasis_from_note(note: str, tokens: set[str]) -> tuple[list[str], float, list[str]]:
+    text = note.lower()
     emphasis: list[str] = []
     risk_flags: list[str] = []
 
-    if any(word in words for word in ("dispute", "investigate", "challenge")):
-        emphasis.append("dispute_resolution")
-    if any(word in words for word in ("remove", "delete", "correct", "update", "fix")):
-        emphasis.append("correct_record")
-    if _contains_phrase(lowered, "please help") or "assistance" in words:
+    if "paid" in tokens and ("already" in tokens or _contains_phrase(text, "already paid", "paid in full")):
+        emphasis.append("paid_already")
+    if any(word in tokens for word in {"incorrect", "inaccurate", "error", "wrong", "mistake"}):
+        emphasis.append("inaccurate_reporting")
+    if _contains_phrase(text, "identity theft", "identity fraud") or "fraud" in tokens:
+        emphasis.append("identity_concerns")
+        risk_flags.append("identity_theft_claim")
+    if _contains_phrase(text, "please help", "need assistance", "need help"):
         emphasis.append("support_request")
-    if _contains_phrase(lowered, "bank error") or (
-        "bank" in words and "error" in words
-    ):
-        emphasis.append("lender_error")
-    if _contains_phrase(lowered, "identity theft"):
-        emphasis.append("protect_identity")
-    if _contains_phrase(lowered, "already paid") or "receipt" in words:
-        emphasis.append("confirm_payment")
+    if ("late" in tokens and "fee" in tokens) or _contains_phrase(text, "late fee"):
+        emphasis.append("fee_waiver")
+    if _contains_phrase(text, "not mine", "never opened", "unauthorized"):
+        emphasis.append("ownership_dispute")
+    if any(word in tokens for word in {"update", "correct", "fix", "remove", "delete"}):
+        emphasis.append("update_requested")
+    if any(word in tokens for word in {"attached", "documents", "proof", "evidence"}):
+        emphasis.append("evidence_provided")
 
-    confidence = 0.4 if not emphasis else min(0.9, 0.6 + 0.08 * len(emphasis))
-    if "legal" in words or _contains_phrase(lowered, "legal action"):
-        risk_flags.append("legal_language")
-    return _unique(emphasis), confidence, _unique(risk_flags)
+    filtered = [value for value in _unique(emphasis) if value in _ALLOWED_EMPHASIS]
+    confidence = 0.4 if not filtered else min(0.85, 0.55 + 0.07 * len(filtered))
+    return filtered, confidence, _unique(risk_flags)
 
 
-def _extract_features(note: str) -> dict[str, Any]:
+def _build_extractor(note: str) -> dict[str, Any]:
     tokens = _tokens(note)
-    tone_value, tone_confidence, tone_risks = _tone_features(note)
-    hints, hints_confidence, hints_risks = _context_hints(note, tokens)
-    emphasis_values, emphasis_confidence, emphasis_risks = _emphasis(note, tokens)
+    tone, tone_confidence, tone_risks = _tone_from_note(note, tokens)
+    topic, topic_confidence = _topic_from_note(note, tokens)
+    emphasis_values, emphasis_confidence, emphasis_risks = _emphasis_from_note(note, tokens)
+    timeframe = _extract_timeframe(note)
+    entities, entity_risks = _extract_entities(note)
 
-    return {
-        "tone": {
-            "value": tone_value,
-            "confidence": round(tone_confidence, 3),
-            "risk_flags": tone_risks,
-        },
+    risk_flags = set(tone_risks) | set(emphasis_risks) | set(entity_risks)
+    if _detect_personal_data(note):
+        risk_flags.add("personal_data")
+
+    confidence = 0.3
+    if tone != "neutral":
+        confidence += min(0.25, tone_confidence * 0.3)
+    if topic != "other":
+        confidence += min(0.2, topic_confidence * 0.2)
+    if emphasis_values:
+        confidence += min(0.25, emphasis_confidence * 0.2 + 0.05 * len(emphasis_values))
+    if timeframe.get("month") or timeframe.get("relative"):
+        confidence += 0.05
+    if entities.get("amount") is not None or entities.get("creditor"):
+        confidence += 0.05
+
+    confidence = round(min(confidence, 0.95), 2)
+
+    if confidence < 0.5:
+        tone = "neutral"
+        emphasis_values = []
+        topic = "other"
+
+    if tone not in _ALLOWED_TONES:
+        tone = "neutral"
+    if topic not in _ALLOWED_TOPICS:
+        topic = "other"
+
+    emphasis_values = [value for value in emphasis_values if value in _ALLOWED_EMPHASIS]
+
+    if "personal_data" in risk_flags:
+        entities = {"creditor": None, "amount": None}
+
+    extractor = {
+        "tone": tone,
         "context_hints": {
-            "values": hints,
-            "confidence": round(hints_confidence, 3),
-            "risk_flags": hints_risks,
+            "timeframe": {
+                "month": timeframe.get("month"),
+                "relative": timeframe.get("relative"),
+            },
+            "topic": topic,
+            "entities": {
+                "creditor": entities.get("creditor"),
+                "amount": entities.get("amount"),
+            },
         },
-        "emphasis": {
-            "values": emphasis_values,
-            "confidence": round(emphasis_confidence, 3),
-            "risk_flags": emphasis_risks,
-        },
+        "emphasis": emphasis_values,
+        "confidence": confidence,
+        "risk_flags": sorted(risk_flags),
     }
+
+    return extractor
 
 
 def _load_response_note(account_id: str, response_path: Path) -> _LoadedResponseNote:
@@ -662,7 +891,7 @@ def build_note_style_pack_for_account(
             "packs_completed": totals.get("completed", 0),
         }
 
-    features = _extract_features(note_text)
+    extractor = _build_extractor(note_text)
     prompt_salt = _prompt_salt(sid, str(account_id), source_hash)
     timestamp = _now_iso()
 
@@ -677,13 +906,15 @@ def build_note_style_pack_for_account(
         "note_hash": note_hash,
         "model": _NOTE_STYLE_MODEL,
         "prompt_salt": prompt_salt,
-        "messages": _pack_messages(features, prompt_salt),
+        "extractor": extractor,
+        "messages": _pack_messages(extractor, prompt_salt),
         "built_at": timestamp,
     }
     result_payload = {
         "sid": sid,
         "account_id": str(account_id),
-        "analysis": features,
+        "analysis": extractor,
+        "extractor": extractor,
         "prompt_salt": prompt_salt,
         "source_hash": source_hash,
         "note_hash": note_hash,

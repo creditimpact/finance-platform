@@ -32,6 +32,15 @@ _DEBOUNCE_MS_ENV = "NOTE_STYLE_DEBOUNCE_MS"
 _DEFAULT_DEBOUNCE_MS = 750
 
 _DEFAULT_PEPPER = "finance-note-style"
+_NOTE_STYLE_MODEL = "gpt-4o-mini"
+_NOTE_STYLE_SYSTEM_PROMPT = (
+    "You are a structured data extraction assistant. Respond with JSON only using the schema: "
+    '{{"tone": {{"value": <string>, "confidence": <float>, "risk_flags": [<string>...]}}, '
+    '"context_hints": {{"values": [<string>...], "confidence": <float>, "risk_flags": [<string>...]}}, '
+    '"emphasis": {{"values": [<string>...], "confidence": <float>, "risk_flags": [<string>...]}}}}. '
+    "Confidence values must be between 0 and 1. Risk flags must be lowercase snake_case strings. "
+    "Do not add commentary. Prompt salt: {prompt_salt}."
+)
 
 _ZERO_WIDTH_WHITESPACE = {
     ord("\u200b"): " ",  # zero width space
@@ -137,6 +146,20 @@ def _source_hash(text: str) -> str:
 def _prompt_salt(sid: str, account_id: str, source_hash: str) -> str:
     message = f"{sid}:{account_id}:{source_hash}".encode("utf-8")
     return hmac.new(_pepper_bytes(), message, hashlib.sha256).hexdigest()[:16]
+
+
+def _note_hash(source_hash: str, length: int = 12) -> str:
+    if length <= 0:
+        return ""
+    return source_hash[:length]
+
+
+def _pack_messages(note_text: str, prompt_salt: str) -> list[dict[str, str]]:
+    system_message = _NOTE_STYLE_SYSTEM_PROMPT.format(prompt_salt=prompt_salt)
+    return [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": note_text},
+    ]
 
 
 def _normalize_text(value: Any) -> str:
@@ -380,6 +403,7 @@ def _serialize_entry(
     paths: NoteStylePaths,
     account_paths: NoteStyleAccountPaths,
     source_hash: str,
+    note_hash: str,
     features: Mapping[str, Any],
     prompt_salt: str,
     status: str,
@@ -392,6 +416,7 @@ def _serialize_entry(
         "result": _relativize(account_paths.result_file, paths.base),
         "status": status,
         "source_hash": source_hash,
+        "note_hash": note_hash,
         "prompt_salt": prompt_salt,
         "built_at": timestamp,
         "updated_at": timestamp,
@@ -556,6 +581,7 @@ def build_note_style_pack_for_account(
 
     note_text = loaded_note.note_sanitized
     source_hash = loaded_note.source_hash
+    note_hash = _note_hash(source_hash)
     features = _extract_features(note_text)
     prompt_salt = _prompt_salt(sid, str(account_id), source_hash)
     timestamp = _now_iso()
@@ -581,9 +607,15 @@ def build_note_style_pack_for_account(
     pack_payload = {
         "sid": sid,
         "account_id": str(account_id),
+        "source_response_path": str(
+            PurePosixPath(
+                f"runs/{sid}/frontend/review/responses/{account_id}.result.json"
+            )
+        ),
+        "note_hash": note_hash,
+        "model": _NOTE_STYLE_MODEL,
         "prompt_salt": prompt_salt,
-        "source_hash": source_hash,
-        "features": features,
+        "messages": _pack_messages(note_text, prompt_salt),
         "built_at": timestamp,
     }
     result_payload = {
@@ -592,6 +624,7 @@ def build_note_style_pack_for_account(
         "analysis": features,
         "prompt_salt": prompt_salt,
         "source_hash": source_hash,
+        "note_hash": note_hash,
         "evaluated_at": timestamp,
     }
 
@@ -604,6 +637,7 @@ def build_note_style_pack_for_account(
         paths=paths,
         account_paths=account_paths,
         source_hash=source_hash,
+        note_hash=note_hash,
         features=features,
         prompt_salt=prompt_salt,
         status="completed",
@@ -622,6 +656,7 @@ def build_note_style_pack_for_account(
         "packs_total": totals.get("total", 0),
         "packs_completed": totals.get("completed", 0),
         "prompt_salt": prompt_salt,
+        "note_hash": note_hash,
     }
 
 

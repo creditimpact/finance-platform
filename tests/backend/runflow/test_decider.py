@@ -108,6 +108,11 @@ def test_decide_next_runs_frontend_then_moves_to_await_input(tmp_path):
     data = _load_runflow(runs_root, sid)
     assert data["run_state"] == "VALIDATING"
 
+    packs_dir = runs_root / sid / "frontend" / "review" / "packs"
+    packs_dir.mkdir(parents=True, exist_ok=True)
+    for index in range(2):
+        (packs_dir / f"pack-{index}.json").write_text("{}", encoding="utf-8")
+
     runflow_decider.record_stage(
         sid,
         "frontend",

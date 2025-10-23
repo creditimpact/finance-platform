@@ -137,6 +137,206 @@ def _coerce_int(value: Any) -> Optional[int]:
         return None
 
 
+_STAGE_STATUS_PRIORITY: dict[str, int] = {
+    "error": 100,
+    "published": 90,
+    "success": 80,
+    "built": 10,
+}
+
+
+_RUN_STATE_PRIORITY: dict[str, int] = {
+    "ERROR": 100,
+    "AWAITING_CUSTOMER_INPUT": 80,
+    "COMPLETE_NO_ACTION": 70,
+    "VALIDATING": 60,
+    "INIT": 10,
+}
+
+
+def _normalize_stage_status_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip().lower()
+    return ""
+
+
+def _prefer_stage_status(existing: Any, candidate: Any) -> Any:
+    candidate_text = candidate if isinstance(candidate, str) else ""
+    existing_text = existing if isinstance(existing, str) else ""
+
+    candidate_normalized = _normalize_stage_status_value(candidate_text)
+    existing_normalized = _normalize_stage_status_value(existing_text)
+
+    candidate_rank = _STAGE_STATUS_PRIORITY.get(candidate_normalized, -1)
+    existing_rank = _STAGE_STATUS_PRIORITY.get(existing_normalized, -1)
+
+    if candidate_rank >= existing_rank:
+        return candidate if candidate_text else existing
+    return existing
+
+
+def _merge_nested_mapping(
+    existing: Mapping[str, Any] | None, incoming: Mapping[str, Any]
+) -> dict[str, Any]:
+    merged: dict[str, Any]
+    if isinstance(existing, Mapping):
+        merged = dict(existing)
+    else:
+        merged = {}
+
+    for key, value in incoming.items():
+        merged[str(key)] = value
+
+    return merged
+
+
+def _merge_stage_snapshot(
+    existing: Mapping[str, Any] | None, incoming: Mapping[str, Any]
+) -> dict[str, Any]:
+    merged: dict[str, Any]
+    if isinstance(existing, Mapping):
+        merged = dict(existing)
+    else:
+        merged = {}
+
+    for key, value in incoming.items():
+        if key == "status":
+            existing_status = merged.get("status")
+            merged["status"] = _prefer_stage_status(existing_status, value)
+            continue
+
+        if key in {"metrics", "results", "summary"} and isinstance(value, Mapping):
+            merged[key] = _merge_nested_mapping(
+                merged.get(key) if isinstance(merged.get(key), Mapping) else None, value
+            )
+            continue
+
+        if key == "empty_ok":
+            incoming_bool = bool(value) if isinstance(value, (bool, int, float)) else value
+            existing_value = merged.get("empty_ok")
+            if isinstance(incoming_bool, bool):
+                if isinstance(existing_value, (bool, int, float)):
+                    merged["empty_ok"] = bool(existing_value) or incoming_bool
+                else:
+                    merged["empty_ok"] = incoming_bool
+            else:
+                merged["empty_ok"] = incoming_bool
+            continue
+
+        if key == "last_at" and isinstance(value, str):
+            existing_last = merged.get("last_at")
+            if not isinstance(existing_last, str) or value >= existing_last:
+                merged["last_at"] = value
+            continue
+
+        merged[key] = value
+
+    return merged
+
+
+def _normalize_run_state(value: Any) -> str:
+    if isinstance(value, str):
+        normalized = value.strip().upper()
+        if normalized in _RUN_STATE_PRIORITY:
+            return normalized
+    return ""
+
+
+def _prefer_run_state(existing: Any, candidate: Any) -> str:
+    candidate_state = _normalize_run_state(candidate)
+    if not candidate_state:
+        normalized_existing = _normalize_run_state(existing)
+        return normalized_existing or "INIT"
+
+    existing_state = _normalize_run_state(existing)
+    if not existing_state:
+        return candidate_state
+
+    existing_rank = _RUN_STATE_PRIORITY.get(existing_state, -1)
+    candidate_rank = _RUN_STATE_PRIORITY.get(candidate_state, -1)
+
+    if candidate_rank >= existing_rank:
+        return candidate_state
+    return existing_state
+
+
+def _merge_runflow_snapshots(
+    existing: Mapping[str, Any] | None, incoming: Mapping[str, Any]
+) -> dict[str, Any]:
+    if isinstance(existing, Mapping):
+        merged: dict[str, Any] = dict(existing)
+    else:
+        merged = {}
+
+    for key, value in incoming.items():
+        if key == "stages" and isinstance(value, Mapping):
+            existing_stages = merged.get("stages")
+            if isinstance(existing_stages, Mapping):
+                stages: dict[str, Any] = dict(existing_stages)
+            else:
+                stages = {}
+
+            for stage_name, stage_payload in value.items():
+                if not isinstance(stage_name, str):
+                    continue
+                existing_stage = stages.get(stage_name)
+                if isinstance(stage_payload, Mapping):
+                    stages[stage_name] = _merge_stage_snapshot(existing_stage, stage_payload)
+                else:
+                    stages[stage_name] = stage_payload
+
+            merged["stages"] = stages
+            continue
+
+        if key == "umbrella_barriers" and isinstance(value, Mapping):
+            existing_barriers = merged.get("umbrella_barriers")
+            if isinstance(existing_barriers, Mapping):
+                barriers = dict(existing_barriers)
+            else:
+                barriers = {}
+            for barrier_key, barrier_value in value.items():
+                barriers[barrier_key] = barrier_value
+            merged["umbrella_barriers"] = barriers
+            continue
+
+        if key == "umbrella_ready":
+            if isinstance(value, bool):
+                merged["umbrella_ready"] = value
+            elif value is not None:
+                merged["umbrella_ready"] = bool(value)
+            continue
+
+        if key == "run_state":
+            merged["run_state"] = _prefer_run_state(merged.get("run_state"), value)
+            continue
+
+        if key == "updated_at" and isinstance(value, str):
+            existing_updated = merged.get("updated_at")
+            if not isinstance(existing_updated, str) or value >= existing_updated:
+                merged["updated_at"] = value
+            continue
+
+        merged[key] = value
+
+    if "sid" not in merged and isinstance(incoming.get("sid"), str):
+        merged["sid"] = incoming["sid"].strip()
+
+    return merged
+
+
+def _next_snapshot_version(*values: Any) -> int:
+    candidates: list[int] = []
+    for value in values:
+        coerced = _coerce_int(value)
+        if coerced is not None:
+            candidates.append(coerced)
+
+    if not candidates:
+        return 1
+
+    return max(candidates) + 1
+
+
 def _run_dir_sid(run_dir: Path) -> str:
     name = run_dir.name
     if name:
@@ -264,12 +464,27 @@ def _load_runflow(path: Path, sid: str) -> dict[str, Any]:
 
     umbrella_barriers = _normalise_umbrella_barriers(payload.get("umbrella_barriers"))
 
+    umbrella_ready_value = payload.get("umbrella_ready")
+    if isinstance(umbrella_ready_value, bool):
+        umbrella_ready = umbrella_ready_value
+    else:
+        umbrella_ready = bool(umbrella_barriers.get("all_ready"))
+
+    snapshot_version_value = _coerce_int(payload.get("snapshot_version"))
+    snapshot_version = snapshot_version_value if snapshot_version_value is not None else 0
+
+    last_writer_value = payload.get("last_writer")
+    last_writer = last_writer_value if isinstance(last_writer_value, str) else ""
+
     return {
         "sid": sid,
         "run_state": run_state,
         "stages": dict(stages),
         "updated_at": str(payload.get("updated_at") or _now_iso()),
         "umbrella_barriers": umbrella_barriers,
+        "umbrella_ready": umbrella_ready,
+        "snapshot_version": snapshot_version,
+        "last_writer": last_writer,
     }
 
 
@@ -366,37 +581,61 @@ def record_stage(
     if "umbrella_barriers" not in data or not isinstance(data["umbrella_barriers"], dict):
         data["umbrella_barriers"] = _default_umbrella_barriers()
 
-    # ``runflow_end_stage`` may update the on-disk payload (via
-    # ``_update_umbrella_barriers``) before we persist ``data``. Merge the
-    # latest umbrella readiness flags so stage writes do not clobber barrier
-    # evaluations that just ran.
-    try:
-        existing_raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        existing_payload: Mapping[str, Any] | None = None
-    except OSError:
-        existing_payload = None
-    else:
-        try:
-            parsed = json.loads(existing_raw)
-        except json.JSONDecodeError:
-            existing_payload = None
-        else:
-            existing_payload = parsed if isinstance(parsed, Mapping) else None
+    stage_names = set(stages.keys()) if isinstance(stages, dict) else set()
 
-    if existing_payload:
-        existing_barriers = existing_payload.get("umbrella_barriers")
-        if isinstance(existing_barriers, Mapping):
-            merged_barriers = dict(existing_barriers)
-            current_barriers = data.get("umbrella_barriers")
-            if isinstance(current_barriers, Mapping):
-                merged_barriers.update(current_barriers)
-            data["umbrella_barriers"] = merged_barriers
+    if "merge" in stage_names:
+        _merge_updated, merge_promoted, merge_log = _apply_merge_stage_promotion(data, base_dir)
+        if merge_promoted:
+            log.info(
+                "MERGE_STAGE_PROMOTED sid=%s result_files=%s",
+                sid,
+                merge_log.get("result_files"),
+            )
+
+    if "validation" in stage_names:
+        (
+            _validation_updated,
+            validation_promoted,
+            validation_log,
+        ) = _apply_validation_stage_promotion(data, base_dir)
+        if validation_promoted:
+            log.info(
+                "VALIDATION_STAGE_PROMOTED sid=%s total=%s completed=%s failed=%s",
+                sid,
+                validation_log.get("total"),
+                validation_log.get("completed"),
+                validation_log.get("failed"),
+            )
+
+    if "frontend" in stage_names:
+        (
+            _frontend_updated,
+            frontend_promoted,
+            frontend_log,
+        ) = _apply_frontend_stage_promotion(data, base_dir)
+        if frontend_promoted:
+            log.info(
+                "FRONTEND_STAGE_PROMOTED sid=%s answers_required=%s answers_received=%s",
+                sid,
+                frontend_log.get("answers_required"),
+                frontend_log.get("answers_received"),
+            )
+
+    latest_snapshot = _load_runflow(path, sid)
+    data = _merge_runflow_snapshots(latest_snapshot, data)
+
+    if "umbrella_barriers" not in data or not isinstance(data["umbrella_barriers"], Mapping):
+        data["umbrella_barriers"] = _default_umbrella_barriers()
 
     if status == "error":
         data["run_state"] = "ERROR"
     elif stage == "validation" and data.get("run_state") == "INIT":
         data["run_state"] = "VALIDATING"
+
+    data["snapshot_version"] = _next_snapshot_version(
+        latest_snapshot.get("snapshot_version"), data.get("snapshot_version")
+    )
+    data["last_writer"] = "record_stage"
 
     timestamp = _now_iso()
     data["updated_at"] = timestamp
@@ -448,6 +687,35 @@ def record_stage(
         if packs_value == 0:
             stage_status_override = "empty"
 
+    final_stage_info: dict[str, Any] | None = None
+    stages_after_merge = data.get("stages")
+    if isinstance(stages_after_merge, Mapping):
+        stage_entry = stages_after_merge.get(stage)
+        if isinstance(stage_entry, dict):
+            final_stage_info = stage_entry
+        elif isinstance(stage_entry, Mapping):
+            final_stage_info = dict(stage_entry)
+            if isinstance(stages_after_merge, dict):
+                stages_after_merge[stage] = final_stage_info
+
+    final_stage_status: str = status
+    if final_stage_info is not None:
+        status_candidate = final_stage_info.get("status")
+        if isinstance(status_candidate, str) and status_candidate.strip():
+            final_stage_status = status_candidate
+
+        existing_summary_payload = final_stage_info.get("summary")
+        if not isinstance(existing_summary_payload, Mapping) and summary_payload:
+            final_stage_info["summary"] = dict(summary_payload)
+            existing_summary_payload = final_stage_info.get("summary")
+
+        if isinstance(existing_summary_payload, Mapping) and existing_summary_payload:
+            summary_payload = dict(existing_summary_payload)
+
+        empty_ok_value = final_stage_info.get("empty_ok")
+        if isinstance(empty_ok_value, (bool, int, float)):
+            empty_ok = bool(empty_ok_value)
+
     barrier_event: Optional[dict[str, Any]] = None
     umbrella_ready_value: Optional[bool] = None
     barrier_result = _apply_umbrella_barriers(
@@ -479,7 +747,7 @@ def record_stage(
     runflow_end_stage(
         sid,
         stage,
-        status=status,
+        status=final_stage_status,
         summary=summary_payload if summary_payload else None,
         stage_status=stage_status_override,
         empty_ok=empty_ok,
@@ -1529,7 +1797,15 @@ def refresh_validation_stage_from_index(
     if not updated:
         return
 
-    data["updated_at"] = _now_iso()
+    latest_snapshot = _load_runflow(path, sid)
+    data = _merge_runflow_snapshots(latest_snapshot, data)
+
+    timestamp = _now_iso()
+    data["snapshot_version"] = _next_snapshot_version(
+        latest_snapshot.get("snapshot_version"), data.get("snapshot_version")
+    )
+    data["last_writer"] = "refresh_validation_stage"
+    data["updated_at"] = timestamp
 
     _atomic_write_json(path, data)
 
@@ -1558,7 +1834,15 @@ def refresh_frontend_stage_from_responses(
     if not updated:
         return
 
-    data["updated_at"] = _now_iso()
+    latest_snapshot = _load_runflow(path, sid)
+    data = _merge_runflow_snapshots(latest_snapshot, data)
+
+    timestamp = _now_iso()
+    data["snapshot_version"] = _next_snapshot_version(
+        latest_snapshot.get("snapshot_version"), data.get("snapshot_version")
+    )
+    data["last_writer"] = "refresh_frontend_stage"
+    data["updated_at"] = timestamp
 
     _atomic_write_json(path, data)
 
@@ -1612,6 +1896,17 @@ def reconcile_umbrella_barriers(
             frontend_log["answers_required"],
             frontend_log["answers_received"],
         )
+
+    latest_snapshot = _load_runflow(runflow_path, sid)
+    data = _merge_runflow_snapshots(latest_snapshot, data)
+
+    if "umbrella_barriers" not in data or not isinstance(data["umbrella_barriers"], Mapping):
+        data["umbrella_barriers"] = _default_umbrella_barriers()
+
+    data["snapshot_version"] = _next_snapshot_version(
+        latest_snapshot.get("snapshot_version"), data.get("snapshot_version")
+    )
+    data["last_writer"] = "reconcile_umbrella_barriers"
 
     statuses = _compute_umbrella_barriers(run_dir, runflow_payload=data)
 
@@ -1816,7 +2111,14 @@ def decide_next(sid: str, runs_root: Optional[str | Path] = None) -> dict[str, s
 
     if data.get("run_state") != new_state:
         data["run_state"] = new_state
-        data["updated_at"] = _now_iso()
+        latest_snapshot = _load_runflow(path, sid)
+        data = _merge_runflow_snapshots(latest_snapshot, data)
+        data["snapshot_version"] = _next_snapshot_version(
+            latest_snapshot.get("snapshot_version"), data.get("snapshot_version")
+        )
+        data["last_writer"] = "decide_next"
+        timestamp = _now_iso()
+        data["updated_at"] = timestamp
         _atomic_write_json(path, data)
         try:
             reconcile_umbrella_barriers(sid, runs_root=runs_root)

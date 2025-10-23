@@ -174,6 +174,14 @@ def test_record_stage_updates_barriers_without_instrumentation(tmp_path, monkeyp
 
         monkeypatch.setattr(decider, "runflow_refresh_umbrella_barriers", _refresh_stub)
 
+        run_dir = tmp_path / sid
+        results_dir = run_dir / "ai_packs" / "merge" / "results"
+        packs_dir = run_dir / "ai_packs" / "merge" / "packs"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        packs_dir.mkdir(parents=True, exist_ok=True)
+        (results_dir / "pair-001.result.json").write_text("{}", encoding="utf-8")
+        (packs_dir / "pair_001.jsonl").write_text("[]", encoding="utf-8")
+
         decider.record_stage(
             sid,
             "merge",
@@ -197,9 +205,10 @@ def test_record_stage_updates_barriers_without_instrumentation(tmp_path, monkeyp
         assert payload["umbrella_ready"] is False
         merge_stage = payload["stages"]["merge"]
         summary = merge_stage["summary"]
-        assert summary["pairs_scored"] == 1
-        assert summary["packs_created"] == 1
         assert summary["result_files"] == 1
+        assert summary["pack_files"] == 1
+        assert merge_stage["result_files"] == 1
+        assert merge_stage["pack_files"] == 1
         assert not (run_dir / "runflow_steps.json").exists()
         assert calls == [sid]
     finally:
@@ -273,6 +282,14 @@ def test_reconcile_barriers_honors_legacy_result_files(tmp_path, monkeypatch):
         }
         _prepare_runflow_files(run_dir, stages=stages)
 
+        results_dir = run_dir / "ai_packs" / "merge" / "results"
+        packs_dir = run_dir / "ai_packs" / "merge" / "packs"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        packs_dir.mkdir(parents=True, exist_ok=True)
+        for index in range(2):
+            (results_dir / f"pair-{index:03d}.result.json").write_text("{}", encoding="utf-8")
+            (packs_dir / f"pair_{index:03d}.jsonl").write_text("[]", encoding="utf-8")
+
         import backend.runflow.decider as decider
 
         importlib.reload(decider)
@@ -284,7 +301,7 @@ def test_reconcile_barriers_honors_legacy_result_files(tmp_path, monkeypatch):
 
         assert umbrella["merge_ready"] is True
         assert umbrella["validation_ready"] is False
-        assert umbrella["review_ready"] is False
+        assert umbrella["review_ready"] is True
         assert umbrella["all_ready"] is False
         assert payload["umbrella_ready"] is False
     finally:

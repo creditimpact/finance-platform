@@ -13,9 +13,16 @@ def _load_manifest(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_update_manifest_state_sets_status_and_run_state(tmp_path):
+def test_update_manifest_state_sets_status_and_run_state(tmp_path, monkeypatch):
     runs_root = tmp_path / "runs"
     sid = "S1000"
+
+    calls: list[tuple[str, object | None]] = []
+
+    monkeypatch.setattr(
+        "backend.runflow.manifest.schedule_prepare_and_send",
+        lambda sid_arg, runs_root=None: calls.append((sid_arg, runs_root)),
+    )
 
     manifest = update_manifest_state(
         sid,
@@ -30,6 +37,7 @@ def test_update_manifest_state_sets_status_and_run_state(tmp_path):
     assert payload["status"] == "AWAITING_CUSTOMER_INPUT"
     assert payload["run_state"] == "AWAITING_CUSTOMER_INPUT"
     assert manifest.data["run_state"] == "AWAITING_CUSTOMER_INPUT"
+    assert calls == [(sid, runs_root)]
 
 
 def test_update_manifest_frontend_persists_section(tmp_path):

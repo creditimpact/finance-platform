@@ -5,6 +5,7 @@ from .validation_builder import (
     build_validation_pack_for_account,
     build_validation_packs_for_run,
 )
+from .note_style import prepare_and_send, schedule_prepare_and_send
 from .note_style_reader import get_style_metadata
 from .note_style_results import store_note_style_result
 from .validation_results import (
@@ -18,6 +19,8 @@ __all__ = [
     "build_validation_packs_for_run",
     "mark_validation_pack_sent",
     "store_validation_result",
+    "prepare_and_send",
+    "schedule_prepare_and_send",
     "store_note_style_result",
     "get_style_metadata",
 ]

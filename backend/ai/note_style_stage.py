@@ -711,6 +711,21 @@ def _extract_account_tail(
     return ""
 
 
+def _build_account_identity(meta: Mapping[str, Any]) -> dict[str, Any] | None:
+    account_id = _clean_value(meta.get("account_id")) or None
+    reported_creditor = _clean_value(meta.get("heading_guess")) or None
+
+    identity: dict[str, Any] = {"primary_issue": None}
+    if account_id is not None:
+        identity["account_id"] = account_id
+    if reported_creditor is not None:
+        identity["reported_creditor"] = reported_creditor
+
+    if len(identity) > 1:
+        return identity
+    return None
+
+
 def _build_account_context(
     meta: Mapping[str, Any],
     bureaus: Mapping[str, Mapping[str, Any]],
@@ -718,6 +733,10 @@ def _build_account_context(
     bureaus_summary: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     context: dict[str, Any] = {}
+
+    identity = _build_account_identity(meta)
+    if identity is not None:
+        context["identity"] = identity
 
     meta_context: dict[str, Any] = {}
     for key in ("heading_guess", "issuer_canonical", "issuer_variant", "issuer_slug"):

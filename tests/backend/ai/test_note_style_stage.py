@@ -216,6 +216,7 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
         },
     }
     meta_payload = {
+        "account_id": account_id,
         "heading_guess": "Capital One",
         "issuer_slug": "capital-one",
         "account_number_tail": "1234",
@@ -300,6 +301,11 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert pack_messages[1]["role"] == "user"
     user_payload = json.loads(pack_messages[1]["content"])
     expected_context = {
+        "identity": {
+            "primary_issue": None,
+            "account_id": account_id,
+            "reported_creditor": "Capital One",
+        },
         "meta": {
             "heading_guess": "Capital One",
             "issuer_slug": "capital-one",

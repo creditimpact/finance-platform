@@ -232,6 +232,43 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert summary["results"]["completed"] == 0
 
 
+def test_note_style_stage_emits_structured_logs(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    sid = "SIDLOG1"
+    account_id = "idx-log"
+    runs_root = tmp_path
+    response_dir = runs_root / sid / "frontend" / "review" / "responses"
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Bank error, already resolved."},
+        },
+    )
+
+    caplog.set_level("INFO", logger="backend.ai.note_style_stage")
+    result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "backend.ai.note_style_stage"
+    ]
+
+    assert any("STYLE_DISCOVERY" in message for message in messages)
+    assert any(
+        "STYLE_PACK_BUILT" in message and f"prompt_salt={result['prompt_salt']}" in message
+        for message in messages
+    )
+    assert any(
+        "STYLE_INDEX_UPDATED" in message and "status=built" in message
+        for message in messages
+    )
+
+
 def test_note_style_stage_refresh_promotes_on_results(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

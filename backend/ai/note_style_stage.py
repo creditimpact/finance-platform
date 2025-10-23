@@ -354,6 +354,85 @@ def _sorted_emphasis(values: Any) -> list[str]:
     return sorted(normalized)
 
 
+def _analysis_summary(
+    payload: Mapping[str, Any] | None,
+) -> tuple[str, str, list[str], float | None, list[str]]:
+    tone = ""
+    topic = ""
+    emphasis: list[str] = []
+    confidence_value: float | None = None
+    risk_flags: list[str] = []
+
+    if isinstance(payload, Mapping):
+        tone = _normalize_text(payload.get("tone"))
+
+        context = payload.get("context_hints")
+        if isinstance(context, Mapping):
+            topic = _normalize_text(context.get("topic"))
+
+        emphasis_values = payload.get("emphasis")
+        if isinstance(emphasis_values, Sequence) and not isinstance(
+            emphasis_values, (str, bytes, bytearray)
+        ):
+            emphasis = _unique(_normalize_text(value) for value in emphasis_values)
+
+        confidence_raw = payload.get("confidence")
+        try:
+            confidence_candidate = float(confidence_raw)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            confidence_candidate = None
+        else:
+            if math.isfinite(confidence_candidate):
+                confidence_value = confidence_candidate
+
+        risk_values = payload.get("risk_flags")
+        if isinstance(risk_values, Sequence) and not isinstance(
+            risk_values, (str, bytes, bytearray)
+        ):
+            risk_flags = _unique(_normalize_text(value) for value in risk_values)
+
+    return tone, topic, emphasis, confidence_value, risk_flags
+
+
+def _log_style_discovery(
+    *,
+    sid: str,
+    account_id: str,
+    response: PurePosixPath,
+    status: str,
+    note_hash: str | None = None,
+    source_hash: str | None = None,
+    char_len: int | None = None,
+    word_len: int | None = None,
+    analysis: Mapping[str, Any] | None = None,
+    prompt_salt: str | None = None,
+    reason: str | None = None,
+) -> None:
+    tone, topic, emphasis_values, confidence_value, risk_flags = _analysis_summary(analysis)
+    confidence_text = ""
+    if confidence_value is not None:
+        confidence_text = f"{confidence_value:.2f}"
+
+    log.info(
+        "STYLE_DISCOVERY sid=%s account_id=%s response=%s status=%s note_hash=%s source_hash=%s chars=%s words=%s tone=%s topic=%s emphasis=%s confidence=%s risk_flags=%s prompt_salt=%s reason=%s",
+        sid,
+        account_id,
+        str(response),
+        status,
+        note_hash or "",
+        source_hash or "",
+        "" if char_len is None else char_len,
+        "" if word_len is None else word_len,
+        tone,
+        topic,
+        "|".join(emphasis_values),
+        confidence_text,
+        "|".join(risk_flags),
+        prompt_salt or "",
+        reason or "",
+    )
+
+
 def _prompt_salt_payload(
     sid: str, account_id: str, extractor: Mapping[str, Any] | None
 ) -> Mapping[str, Any]:
@@ -958,27 +1037,69 @@ def _update_index_for_account(
     entry: Mapping[str, Any] | None,
 ) -> dict[str, int]:
     index_path = paths.index_file
+    replaced_flag = False
+    created_flag = False
+    removed_flag = False
+    removed_entry: Mapping[str, Any] | None = None
     with _index_lock(index_path):
         existing = _load_json_mapping(index_path)
         items = _index_items(existing)
 
         normalized_account = str(account_id)
         rewritten: list[dict[str, Any]] = []
-        replaced = False
         for item in items:
             if str(item.get("account_id")) == normalized_account:
                 if entry is not None:
                     rewritten.append(dict(entry))
-                    replaced = True
+                    replaced_flag = True
+                else:
+                    removed_flag = True
+                    removed_entry = dict(item)
                 continue
             rewritten.append(item)
 
-        if not replaced and entry is not None:
+        if entry is not None and not replaced_flag:
             rewritten.append(dict(entry))
+            created_flag = True
 
         rewritten.sort(key=lambda item: str(item.get("account_id", "")))
         _write_index(sid=sid, paths=paths, items=rewritten)
         totals = _compute_totals(rewritten)
+
+    if entry is None:
+        if removed_flag:
+            action = "removed"
+        else:
+            action = "noop"
+        status_text = "removed" if removed_flag else ""
+        pack_value = str((removed_entry or {}).get("pack") or "")
+        result_value = str((removed_entry or {}).get("result") or "")
+    else:
+        action = "updated" if replaced_flag else "created" if created_flag else "noop"
+        status_text = _normalize_text(entry.get("status")) if isinstance(entry, Mapping) else ""
+        pack_value = str(entry.get("pack") or "")
+        result_value = str(entry.get("result") or "")
+
+    index_relative = _relativize(paths.index_file, paths.base)
+    source_hash_value = ""
+    if entry is not None and isinstance(entry, Mapping):
+        source_hash_value = str(entry.get("source_hash") or "")
+    elif removed_entry is not None:
+        source_hash_value = str(removed_entry.get("source_hash") or "")
+    log.info(
+        "STYLE_INDEX_UPDATED sid=%s account_id=%s action=%s status=%s packs_total=%s packs_completed=%s packs_failed=%s index=%s pack=%s result=%s source_hash=%s",
+        sid,
+        account_id,
+        action,
+        status_text,
+        totals.get("total", 0),
+        totals.get("completed", 0),
+        totals.get("failed", 0),
+        index_relative,
+        pack_value,
+        result_value,
+        source_hash_value,
+    )
 
     return totals
 
@@ -1060,6 +1181,10 @@ def build_note_style_pack_for_account(
 ) -> Mapping[str, Any]:
     runs_root_path = _resolve_runs_root(runs_root)
     run_dir = runs_root_path / sid
+    account_id_str = str(account_id)
+    response_rel = PurePosixPath(
+        f"runs/{sid}/frontend/review/responses/{account_id}.result.json"
+    )
     response_path = (
         run_dir
         / "frontend"
@@ -1080,6 +1205,13 @@ def build_note_style_pack_for_account(
         _record_stage_progress(
             sid=sid, runs_root=runs_root_path, totals=totals, index_path=paths.index_file
         )
+        _log_style_discovery(
+            sid=sid,
+            account_id=account_id_str,
+            response=response_rel,
+            status="skipped",
+            reason=reason,
+        )
         return {
             "status": "skipped",
             "reason": reason,
@@ -1090,6 +1222,8 @@ def build_note_style_pack_for_account(
     note_text = loaded_note.note_sanitized
     source_hash = loaded_note.source_hash
     note_hash = _note_hash(source_hash)
+    char_len = len(note_text)
+    word_len = len(note_text.split())
     existing_index = _load_json_mapping(paths.index_file)
     items = _index_items(existing_index)
     existing_entry: Mapping[str, Any] | None = None
@@ -1112,6 +1246,29 @@ def build_note_style_pack_for_account(
             totals=totals,
             index_path=paths.index_file,
         )
+        existing_analysis: Mapping[str, Any] | None = None
+        if isinstance(existing_result, Mapping):
+            analysis_payload = existing_result.get("analysis")
+            extractor_payload = existing_result.get("extractor")
+            if isinstance(analysis_payload, Mapping):
+                existing_analysis = analysis_payload
+            elif isinstance(extractor_payload, Mapping):
+                existing_analysis = extractor_payload
+        prompt_salt_existing = (
+            str(existing_result.get("prompt_salt")) if isinstance(existing_result, Mapping) else ""
+        )
+        _log_style_discovery(
+            sid=sid,
+            account_id=account_id_str,
+            response=response_rel,
+            status="unchanged",
+            note_hash=note_hash,
+            source_hash=source_hash,
+            char_len=char_len,
+            word_len=word_len,
+            analysis=existing_analysis,
+            prompt_salt=prompt_salt_existing,
+        )
         return {
             "status": "unchanged",
             "packs_total": totals.get("total", 0),
@@ -1120,16 +1277,24 @@ def build_note_style_pack_for_account(
 
     extractor = _build_extractor(note_text)
     prompt_salt = _prompt_salt(sid, str(account_id), extractor)
+    _log_style_discovery(
+        sid=sid,
+        account_id=account_id_str,
+        response=response_rel,
+        status="ready",
+        note_hash=note_hash,
+        source_hash=source_hash,
+        char_len=char_len,
+        word_len=word_len,
+        analysis=extractor,
+        prompt_salt=prompt_salt,
+    )
     timestamp = _now_iso()
 
     pack_payload = {
         "sid": sid,
         "account_id": str(account_id),
-        "source_response_path": str(
-            PurePosixPath(
-                f"runs/{sid}/frontend/review/responses/{account_id}.result.json"
-            )
-        ),
+        "source_response_path": str(response_rel),
         "note_hash": note_hash,
         "model": _NOTE_STYLE_MODEL,
         "extractor": extractor,
@@ -1149,6 +1314,29 @@ def build_note_style_pack_for_account(
 
     _write_jsonl(account_paths.pack_file, pack_payload)
     _write_jsonl(account_paths.result_file, result_payload)
+
+    tone_value, topic_value, emphasis_values, confidence_value, risk_values = _analysis_summary(extractor)
+    confidence_text = ""
+    if confidence_value is not None:
+        confidence_text = f"{confidence_value:.2f}"
+    pack_relative = _relativize(account_paths.pack_file, paths.base)
+    result_relative = _relativize(account_paths.result_file, paths.base)
+    log.info(
+        "STYLE_PACK_BUILT sid=%s account_id=%s pack=%s result=%s tone=%s topic=%s emphasis=%s confidence=%s risk_flags=%s prompt_salt=%s note_hash=%s source_hash=%s model=%s",
+        sid,
+        account_id_str,
+        pack_relative,
+        result_relative,
+        tone_value,
+        topic_value,
+        "|".join(emphasis_values),
+        confidence_text,
+        "|".join(risk_values),
+        prompt_salt,
+        note_hash,
+        source_hash,
+        _NOTE_STYLE_MODEL,
+    )
 
     entry = _serialize_entry(
         sid=sid,

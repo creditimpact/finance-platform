@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from backend.core.ai.paths import ensure_note_style_account_paths, ensure_note_style_paths
 from backend.validation.build_packs import (
     ValidationPackBuilder,
     _PROMPT_USER_TEMPLATE,
@@ -149,3 +150,76 @@ def test_builder_writes_single_pack_with_two_lines(tmp_path: Path) -> None:
         finding_json = json.dumps(payload["finding"], ensure_ascii=False, sort_keys=True)
         expected_user = _PROMPT_USER_TEMPLATE.replace("<finding blob here>", finding_json)
         assert payload["prompt"]["user"] == expected_user
+
+
+def test_builder_includes_style_metadata_when_available(tmp_path: Path) -> None:
+    sid = "SID"
+    manifest, accounts_dir, packs_dir, _ = _make_manifest(tmp_path, sid=sid)
+
+    account_dir = accounts_dir / "8"
+    account_dir.mkdir(parents=True, exist_ok=True)
+
+    summary_payload = {
+        "account_id": "idx-008",
+        "validation_requirements": {
+            "findings": [
+                {
+                    "field": "account_type",
+                    "strength": "weak",
+                    "send_to_ai": True,
+                    "reason_code": "C4_TWO_MATCH_ONE_DIFF",
+                }
+            ],
+            "field_consistency": {},
+        },
+    }
+
+    _write_json(account_dir / "summary.json", summary_payload)
+    _write_json(account_dir / "bureaus.json", {})
+
+    style_paths = ensure_note_style_paths(tmp_path, sid, create=True)
+    account_paths = ensure_note_style_account_paths(style_paths, "idx-008", create=True)
+    account_paths.result_file.write_text(
+        json.dumps(
+            {
+                "analysis": {
+                    "tone": "confident",
+                    "context_hints": {"topic": "billing_error"},
+                    "emphasis": ["paid_already", "support_request"],
+                },
+                "prompt_salt": "salt-value-123",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    builder = ValidationPackBuilder(manifest)
+    builder.build()
+
+    pack_path = packs_dir / "val_acc_008.jsonl"
+    assert pack_path.exists()
+
+    line = next(
+        json.loads(entry)
+        for entry in pack_path.read_text(encoding="utf-8").splitlines()
+        if entry.strip()
+    )
+
+    base_expected = _PROMPT_USER_TEMPLATE.replace(
+        "<finding blob here>",
+        json.dumps(line["finding"], ensure_ascii=False, sort_keys=True),
+    ).rstrip()
+    style_block = {
+        "tone": "confident",
+        "topic": "billing_error",
+        "emphasis": ["paid_already", "support_request"],
+        "prompt_salt": "salt-value-123",
+    }
+    expected_prompt = (
+        f"{base_expected}\n\nSTYLE_METADATA:\n"
+        f"{json.dumps(style_block, ensure_ascii=False, sort_keys=True)}"
+    )
+
+    assert line["prompt"]["user"] == expected_prompt

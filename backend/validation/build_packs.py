@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from backend.ai.note_style_reader import get_style_metadata
 from backend.core.ai.paths import (
     validation_pack_filename_for_account,
     validation_result_jsonl_filename_for_account,
@@ -201,6 +202,7 @@ class ValidationPackBuilder:
         self._pack_max_size_bytes = (
             int(self._pack_max_size_kb * 1024) if self._pack_max_size_kb is not None else None
         )
+        self._runs_root = self._infer_runs_root()
 
     # ------------------------------------------------------------------
     # Public API
@@ -386,6 +388,8 @@ class ValidationPackBuilder:
         else:
             bureaus_map = {}
 
+        style_metadata = self._style_metadata_for_account(summary)
+
         payloads: list[dict[str, Any]] = []
         weak_fields: list[str] = []
         included_findings: list[Mapping[str, Any]] = []
@@ -420,6 +424,7 @@ class ValidationPackBuilder:
                 normalized_strength,
                 bureaus_map,
                 field_consistency.get(str(field)),
+                style_metadata,
             )
             if line is not None:
                 payloads.append(line)
@@ -479,6 +484,7 @@ class ValidationPackBuilder:
         strength: str,
         bureaus: Mapping[str, Mapping[str, Any]],
         consistency: object,
+        style_metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         field = requirement.get("field")
         if not isinstance(field, str) or not field.strip():
@@ -508,6 +514,9 @@ class ValidationPackBuilder:
         finding_json = json.dumps(finding_clone, ensure_ascii=False, sort_keys=True)
 
         prompt_user = _PROMPT_USER_TEMPLATE.replace("<finding blob here>", finding_json)
+
+        if style_metadata:
+            prompt_user = self._append_style_metadata(prompt_user, style_metadata)
 
         payload: dict[str, Any] = {
             "sid": self.paths.sid,
@@ -543,6 +552,85 @@ class ValidationPackBuilder:
             payload["conditional_gate"] = True
 
         return payload
+
+    def _infer_runs_root(self) -> Path | None:
+        try:
+            return self.paths.packs_dir.parents[3]
+        except IndexError:
+            return None
+
+    def _style_metadata_for_account(
+        self, summary: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
+        account_label = summary.get("account_id")
+        if not isinstance(account_label, str) or not account_label.strip():
+            return None
+
+        try:
+            metadata = get_style_metadata(
+                self.paths.sid,
+                account_label.strip(),
+                runs_root=self._runs_root,
+            )
+        except Exception:
+            log.warning(
+                "VALIDATION_STYLE_METADATA_FETCH_FAILED sid=%s account_id=%s",
+                self.paths.sid,
+                account_label,
+                exc_info=True,
+            )
+            return None
+
+        return self._sanitize_style_metadata(metadata)
+
+    @staticmethod
+    def _sanitize_style_metadata(
+        metadata: Mapping[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not isinstance(metadata, Mapping):
+            return None
+
+        tone = str(metadata.get("tone") or "").strip() or "neutral"
+        topic = str(metadata.get("topic") or "").strip() or "other"
+
+        emphasis_raw = metadata.get("emphasis")
+        emphasis: list[str] = []
+        if isinstance(emphasis_raw, Sequence) and not isinstance(
+            emphasis_raw, (str, bytes, bytearray)
+        ):
+            seen: set[str] = set()
+            for entry in emphasis_raw:
+                text = str(entry or "").strip()
+                if not text or text in seen:
+                    continue
+                seen.add(text)
+                emphasis.append(text)
+
+        prompt_salt_raw = metadata.get("prompt_salt")
+        prompt_salt = (
+            str(prompt_salt_raw).strip()
+            if isinstance(prompt_salt_raw, str)
+            else ""
+        )
+
+        return {
+            "tone": tone,
+            "topic": topic,
+            "emphasis": emphasis,
+            "prompt_salt": prompt_salt,
+        }
+
+    @staticmethod
+    def _append_style_metadata(
+        prompt_user: str, metadata: Mapping[str, Any]
+    ) -> str:
+        try:
+            serialized = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):  # defensive guard
+            return prompt_user
+
+        base = prompt_user.rstrip()
+        return f"{base}\n\nSTYLE_METADATA:\n{serialized}"
 
     # ------------------------------------------------------------------
     # Serialisation helpers

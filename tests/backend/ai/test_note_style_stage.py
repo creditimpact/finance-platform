@@ -538,3 +538,147 @@ def test_note_style_stage_skips_when_note_sanitizes_empty(tmp_path: Path) -> Non
     assert summary["failed"] == 0
     assert summary["metrics"]["packs_total"] == 0
     assert summary["results"]["results_total"] == 0
+
+
+def test_note_style_prompt_salt_varies_by_sid_and_account(tmp_path: Path) -> None:
+    runs_root = tmp_path
+    sid = "SID600"
+    account_primary = "idx-600"
+    account_secondary = "idx-601"
+    sid_variant = "SID601"
+    note = "Please help, I already paid this account in full."
+
+    primary_response_dir = runs_root / sid / "frontend" / "review" / "responses"
+    _write_response(
+        primary_response_dir / f"{account_primary}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_primary,
+            "answers": {"explanation": note},
+        },
+    )
+
+    primary_result = build_note_style_pack_for_account(
+        sid, account_primary, runs_root=runs_root
+    )
+    assert primary_result["status"] == "completed"
+    primary_salt = primary_result["prompt_salt"]
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    primary_account_paths = ensure_note_style_account_paths(
+        paths, account_primary, create=False
+    )
+    payload = json.loads(primary_account_paths.result_file.read_text(encoding="utf-8"))
+    assert payload["prompt_salt"] == primary_salt
+
+    unchanged = build_note_style_pack_for_account(sid, account_primary, runs_root=runs_root)
+    assert unchanged["status"] == "unchanged"
+    payload_after = json.loads(
+        primary_account_paths.result_file.read_text(encoding="utf-8")
+    )
+    assert payload_after["prompt_salt"] == primary_salt
+
+    secondary_response_dir = primary_response_dir
+    _write_response(
+        secondary_response_dir / f"{account_secondary}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_secondary,
+            "answers": {"explanation": note},
+        },
+    )
+
+    secondary_result = build_note_style_pack_for_account(
+        sid, account_secondary, runs_root=runs_root
+    )
+    assert secondary_result["status"] == "completed"
+    secondary_salt = secondary_result["prompt_salt"]
+    assert secondary_salt != primary_salt
+
+    variant_response_dir = runs_root / sid_variant / "frontend" / "review" / "responses"
+    _write_response(
+        variant_response_dir / f"{account_primary}.result.json",
+        {
+            "sid": sid_variant,
+            "account_id": account_primary,
+            "answers": {"explanation": note},
+        },
+    )
+
+    variant_result = build_note_style_pack_for_account(
+        sid_variant, account_primary, runs_root=runs_root
+    )
+    assert variant_result["status"] == "completed"
+    variant_salt = variant_result["prompt_salt"]
+    assert variant_salt != primary_salt
+
+
+def test_note_style_stage_skips_invalid_response_json(tmp_path: Path) -> None:
+    sid = "SID700"
+    account_id = "idx-700"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+    response_path = response_dir / f"{account_id}.result.json"
+    response_path.parent.mkdir(parents=True, exist_ok=True)
+    response_path.write_text("{not-json", encoding="utf-8")
+
+    result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+    assert result["status"] == "skipped"
+    assert result["reason"] == "invalid_response"
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+    assert not account_paths.pack_file.exists()
+    assert not account_paths.result_file.exists()
+
+    index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
+    assert index_payload["packs"] == []
+
+    runflow_payload = json.loads((run_dir / "runflow.json").read_text(encoding="utf-8"))
+    note_style_stage = runflow_payload["stages"]["note_style"]
+    assert note_style_stage["status"] == "success"
+    assert note_style_stage["empty_ok"] is True
+
+
+def test_note_style_stage_ignores_summary_file(tmp_path: Path) -> None:
+    sid = "SID710"
+    account_id = "idx-710"
+    runs_root = tmp_path
+    response_dir = runs_root / sid / "frontend" / "review" / "responses"
+
+    note = "Please help, I already paid this account."
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": note},
+        },
+    )
+
+    summary_path = response_dir / f"{account_id}.summary.json"
+    summary_payload = {
+        "sid": sid,
+        "account_id": account_id,
+        "summary": {
+            "answers": {"explanation": "This summary is urgent!!!"},
+        },
+    }
+    summary_path.write_text(
+        json.dumps(summary_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+    assert result["status"] == "completed"
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+    result_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+    analysis = result_payload["analysis"]
+    assert analysis["tone"] == "empathetic"
+    assert analysis["context_hints"]["topic"] == "payment_dispute"
+
+    assert summary_path.read_text(encoding="utf-8") == json.dumps(
+        summary_payload, ensure_ascii=False, indent=2
+    )

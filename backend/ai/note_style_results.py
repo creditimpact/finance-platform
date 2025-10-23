@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
+from backend.ai.manifest import ensure_note_style_section
 from backend.core.ai.paths import (
     NoteStylePaths,
     ensure_note_style_account_paths,
@@ -271,6 +272,7 @@ def store_note_style_result(
     """Persist the model ``payload`` for ``account_id`` and update the index."""
 
     runs_root_path = _resolve_runs_root(runs_root)
+    ensure_note_style_section(sid, runs_root=runs_root_path)
     paths = ensure_note_style_paths(runs_root_path, sid, create=True)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
 

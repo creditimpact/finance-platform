@@ -24,6 +24,7 @@ try:  # pragma: no cover - platform dependent
 except ImportError:  # pragma: no cover - platform dependent
     fcntl = None  # type: ignore[assignment]
 
+from backend.ai.manifest import ensure_note_style_section
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     NoteStylePaths,
@@ -1182,6 +1183,7 @@ def build_note_style_pack_for_account(
 ) -> Mapping[str, Any]:
     runs_root_path = _resolve_runs_root(runs_root)
     run_dir = runs_root_path / sid
+    ensure_note_style_section(sid, runs_root=runs_root_path)
     account_id_str = str(account_id)
     response_rel = PurePosixPath(
         f"runs/{sid}/frontend/review/responses/{account_id}.result.json"

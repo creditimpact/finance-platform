@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, Mapping
 
 import pytest
 
@@ -16,12 +17,27 @@ def _write_response(path: Path, payload: dict[str, object]) -> None:
 
 
 class _StubClient:
-    def __init__(self) -> None:
+    def __init__(self, *, response: Mapping[str, Any] | None = None) -> None:
         self.calls: list[dict[str, object]] = []
+        self._response_payload = response or {
+            "tone": "Empathetic",
+            "context_hints": {
+                "timeframe": {"month": "April", "relative": "Last month"},
+                "topic": "Payment_Dispute",
+                "entities": {"creditor": "capital one", "amount": "$123.45 USD"},
+            },
+            "emphasis": ["paid_already", "Custom", "support_request"],
+            "confidence": 0.91,
+            "risk_flags": ["Follow_Up", "duplicate", "FOLLOW_UP"],
+        }
 
     def chat_completion(self, *, model, messages, temperature):  # type: ignore[override]
         self.calls.append({"model": model, "messages": messages, "temperature": temperature})
-        return {"choices": [{"message": {"content": "{}"}}]}
+        return {
+            "choices": [
+                {"message": {"content": json.dumps(self._response_payload)}}
+            ]
+        }
 
 
 def test_note_style_sender_sends_built_pack(
@@ -47,38 +63,54 @@ def test_note_style_sender_sends_built_pack(
     client = _StubClient()
     monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
 
-    ingested: list[dict[str, object]] = []
-
-    def _fake_ingest(**kwargs):
-        ingested.append(kwargs)
-        account_paths = kwargs["account_paths"]
-        result_path = account_paths.result_file
-        result_payload = {
-            "sid": kwargs["sid"],
-            "account_id": kwargs["account_id"],
-            "response": {"content": "ok"},
-        }
-        result_path.parent.mkdir(parents=True, exist_ok=True)
-        result_path.write_text(json.dumps(result_payload), encoding="utf-8")
-        return result_path
-
-    monkeypatch.setattr("backend.ai.note_style_sender.ingest_note_style_result", _fake_ingest)
-
     caplog.set_level("INFO", logger="backend.ai.note_style_sender")
 
     processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
     assert processed == [account_id]
     assert len(client.calls) == 1
-    assert len(ingested) == 1
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
 
+    result_lines = [
+        line
+        for line in account_paths.result_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(result_lines) == 1
+    stored_payload = json.loads(result_lines[0])
+    assert stored_payload["sid"] == sid
+    assert stored_payload["account_id"] == account_id
+    assert isinstance(stored_payload["evaluated_at"], str)
+
+    pack_payload = json.loads(
+        account_paths.pack_file.read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert stored_payload["prompt_salt"] == pack_payload["prompt_salt"]
+
+    analysis = stored_payload["analysis"]
+    assert analysis["tone"] == "empathetic"
+    assert analysis["emphasis"] == ["paid_already", "support_request"]
+    context = analysis["context_hints"]
+    assert context["topic"] == "payment_dispute"
+    timeframe = context["timeframe"]
+    assert timeframe == {"month": "April", "relative": "Last month"}
+    entities = context["entities"]
+    assert entities["creditor"] == "capital one"
+    assert entities["amount"] == pytest.approx(123.45)
+    assert analysis["risk_flags"] == ["follow_up", "duplicate"]
+
+    note_metrics = stored_payload.get("note_metrics")
+    assert isinstance(note_metrics, Mapping)
+    assert note_metrics.get("char_len") > 0
+    assert note_metrics.get("word_len") > 0
+
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
     packs = index_payload["packs"]
     assert packs[0]["status"] == "completed"
-    assert "sent_at" in packs[0]
+    assert "sent_at" not in packs[0]
     assert packs[0]["result"] == account_paths.result_file.relative_to(paths.base).as_posix()
+    assert packs[0]["completed_at"] == stored_payload["evaluated_at"]
 
     messages = [record.message for record in caplog.records if "STYLE_SEND" in record.message]
     assert any("STYLE_SEND_ACCOUNT_START" in message for message in messages)
@@ -109,11 +141,6 @@ def test_note_style_sender_skips_completed_entries(
 
     client = _StubClient()
     monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
-
-    def _fake_ingest(**kwargs):
-        return kwargs["account_paths"].result_file
-
-    monkeypatch.setattr("backend.ai.note_style_sender.ingest_note_style_result", _fake_ingest)
 
     processed_first = send_note_style_packs_for_sid(sid, runs_root=runs_root)
     assert processed_first == [account_id]
@@ -150,15 +177,9 @@ def test_note_style_sender_raises_when_pack_missing(
 
     client = _StubClient()
     monkeypatch.setattr("backend.ai.note_style_sender.get_ai_client", lambda: client)
-    monkeypatch.setattr(
-        "backend.ai.note_style_sender.ingest_note_style_result",
-        lambda **_: account_paths.result_file,
-    )
-
     with pytest.raises(FileNotFoundError):
         send_note_style_packs_for_sid(sid, runs_root=runs_root)
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
     packs = index_payload["packs"]
     assert packs[0]["status"] == "built"
-    assert "sent_at" not in packs[0]

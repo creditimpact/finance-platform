@@ -952,7 +952,7 @@ def _compute_totals(items: Sequence[Mapping[str, Any]]) -> dict[str, int]:
         if status in {"", "skipped", "skipped_low_signal"}:
             continue
         total += 1
-        if status in {"completed", "success", "built"}:
+        if status in {"completed", "success"}:
             completed += 1
         elif status in {"failed", "error"}:
             failed += 1

@@ -10,12 +10,19 @@ import math
 import os
 import re
 import threading
+import time
 import uuid
 import unicodedata
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
+
+try:  # pragma: no cover - platform dependent
+    import fcntl  # type: ignore[import]
+except ImportError:  # pragma: no cover - platform dependent
+    fcntl = None  # type: ignore[assignment]
 
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
@@ -156,6 +163,10 @@ _ZERO_WIDTH_WHITESPACE = {
 }
 
 
+_INDEX_LOCK_POLL_INTERVAL = 0.05
+_INDEX_LOCK_STALE_TIMEOUT = 30.0
+
+
 @dataclass(frozen=True)
 class _LoadedResponseNote:
     account_id: str
@@ -233,9 +244,22 @@ def _load_result_payload(path: Path) -> Mapping[str, Any] | None:
 def _write_jsonl(path: Path, row: Mapping[str, Any]) -> None:
     serialized = json.dumps(row, ensure_ascii=False)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(serialized + "\n", encoding="utf-8")
-    os.replace(tmp_path, path)
+    tmp_path = path.with_suffix(path.suffix + f".tmp.{uuid.uuid4().hex}")
+    try:
+        with tmp_path.open("w", encoding="utf-8", newline="") as handle:
+            handle.write(serialized + "\n")
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+    _fsync_directory(path.parent)
 
 
 def _relativize(path: Path, base: Path) -> str:
@@ -821,6 +845,64 @@ def _fsync_directory(directory: Path) -> None:
             pass
 
 
+@contextmanager
+def _index_lock(index_path: Path) -> Iterator[None]:
+    """Serialize index writers to avoid concurrent clobbering."""
+
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = index_path.with_suffix(index_path.suffix + ".lock")
+
+    if fcntl is not None:  # pragma: no branch - preferred path on POSIX
+        with lock_path.open("a+") as handle:
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                    break
+                except InterruptedError:
+                    continue
+            try:
+                yield
+            finally:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                finally:
+                    try:
+                        lock_path.unlink()
+                    except FileNotFoundError:
+                        pass
+        return
+
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            try:
+                stats = lock_path.stat()
+            except FileNotFoundError:
+                continue
+            if (time.time() - stats.st_mtime) > _INDEX_LOCK_STALE_TIMEOUT:
+                try:
+                    os.unlink(lock_path)
+                except FileNotFoundError:
+                    continue
+                continue
+            time.sleep(_INDEX_LOCK_POLL_INTERVAL)
+
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+    try:
+        yield
+    finally:
+        try:
+            os.unlink(lock_path)
+        except FileNotFoundError:
+            pass
+
+
 def _atomic_write_index(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + f".tmp.{uuid.uuid4().hex}")
@@ -875,26 +957,30 @@ def _update_index_for_account(
     account_id: str,
     entry: Mapping[str, Any] | None,
 ) -> dict[str, int]:
-    existing = _load_json_mapping(paths.index_file)
-    items = _index_items(existing)
+    index_path = paths.index_file
+    with _index_lock(index_path):
+        existing = _load_json_mapping(index_path)
+        items = _index_items(existing)
 
-    normalized_account = str(account_id)
-    rewritten: list[dict[str, Any]] = []
-    replaced = False
-    for item in items:
-        if str(item.get("account_id")) == normalized_account:
-            if entry is not None:
-                rewritten.append(dict(entry))
-                replaced = True
-            continue
-        rewritten.append(item)
+        normalized_account = str(account_id)
+        rewritten: list[dict[str, Any]] = []
+        replaced = False
+        for item in items:
+            if str(item.get("account_id")) == normalized_account:
+                if entry is not None:
+                    rewritten.append(dict(entry))
+                    replaced = True
+                continue
+            rewritten.append(item)
 
-    if not replaced and entry is not None:
-        rewritten.append(dict(entry))
+        if not replaced and entry is not None:
+            rewritten.append(dict(entry))
 
-    rewritten.sort(key=lambda item: str(item.get("account_id", "")))
-    _write_index(sid=sid, paths=paths, items=rewritten)
-    return _compute_totals(rewritten)
+        rewritten.sort(key=lambda item: str(item.get("account_id", "")))
+        _write_index(sid=sid, paths=paths, items=rewritten)
+        totals = _compute_totals(rewritten)
+
+    return totals
 
 
 def _note_style_index_progress(index_path: Path) -> tuple[int, int, int]:
@@ -1154,3 +1240,4 @@ __all__ = [
     "build_note_style_pack_for_account",
     "schedule_note_style_refresh",
 ]
+

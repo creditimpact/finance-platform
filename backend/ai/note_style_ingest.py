@@ -6,9 +6,11 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Any, Mapping, MutableMapping, Sequence
 
 from backend.ai.note_style_results import store_note_style_result
+
 from backend.core.ai.paths import NoteStyleAccountPaths
 
 
@@ -115,17 +117,30 @@ def _sanitize_emphasis(values: Any) -> list[str]:
     return sanitized
 
 
+_RISK_FLAG_SANITIZE_PATTERN = re.compile(r"[^a-z0-9]+")
+
+
+def _normalize_risk_flag(value: Any) -> str:
+    text = _coerce_str(value)
+    if not text:
+        return ""
+    sanitized = _RISK_FLAG_SANITIZE_PATTERN.sub("_", text)
+    sanitized = sanitized.strip("_")
+    sanitized = re.sub(r"_+", "_", sanitized)
+    return sanitized
+
+
 def _sanitize_risk_flags(values: Any) -> list[str]:
     if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
         return []
     seen: set[str] = set()
     flags: list[str] = []
     for entry in values:
-        text = _coerce_str(entry)
-        if not text or text in seen:
+        normalized = _normalize_risk_flag(entry)
+        if not normalized or normalized in seen:
             continue
-        seen.add(text)
-        flags.append(text)
+        seen.add(normalized)
+        flags.append(normalized)
     return flags
 
 

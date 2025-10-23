@@ -28,7 +28,15 @@ class _StubClient:
             },
             "emphasis": ["paid_already", "Custom", "support_request"],
             "confidence": 0.91,
-            "risk_flags": ["Follow_Up", "duplicate", "FOLLOW_UP"],
+            "risk_flags": [
+                "Follow_Up",
+                "duplicate",
+                "FOLLOW_UP",
+                "Mixed Language",
+                "ALL CAPS",
+                "possible-template copy",
+                " ",
+            ],
         }
 
     def chat_completion(self, *, model, messages, temperature):  # type: ignore[override]
@@ -98,7 +106,13 @@ def test_note_style_sender_sends_built_pack(
     entities = context["entities"]
     assert entities["creditor"] == "capital one"
     assert entities["amount"] == pytest.approx(123.45)
-    assert analysis["risk_flags"] == ["follow_up", "duplicate"]
+    assert analysis["risk_flags"] == [
+        "follow_up",
+        "duplicate",
+        "mixed_language",
+        "all_caps",
+        "possible_template_copy",
+    ]
 
     note_metrics = stored_payload.get("note_metrics")
     assert isinstance(note_metrics, Mapping)

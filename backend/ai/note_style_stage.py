@@ -874,6 +874,7 @@ def _serialize_entry(
     return {
         "account_id": account_id,
         "pack": _relativize(account_paths.pack_file, paths.base),
+        "result": _relativize(account_paths.result_file, paths.base),
         "lines": 1,
         "built_at": timestamp,
         "status": status,

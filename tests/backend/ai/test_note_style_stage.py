@@ -1336,6 +1336,12 @@ def test_note_style_stage_masks_contact_info(tmp_path: Path) -> None:
     assert "[redacted_email]" in note_text
     assert "[redacted_phone]" in note_text
 
+    assert account_paths.debug_file.is_file()
+    debug_payload = json.loads(account_paths.debug_file.read_text(encoding="utf-8"))
+    assert debug_payload["account_id"] == account_id
+    assert debug_payload.get("fingerprint_hash")
+    assert "meta" in debug_payload
+
 
 def test_note_style_stage_counts_track_completion(tmp_path: Path) -> None:
     sid = "SID720"

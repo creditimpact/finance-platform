@@ -871,6 +871,14 @@ def _build_account_context(
     return context
 
 
+def _resolve_meta_name(meta: Mapping[str, Any]) -> str | None:
+    for key in ("heading_guess", "issuer_canonical", "issuer_variant", "issuer_slug"):
+        candidate = _clean_value(meta.get(key))
+        if candidate:
+            return candidate
+    return None
+
+
 def _first_bureau_value(
     bureaus: Mapping[str, Mapping[str, Any]], field: str
 ) -> str:
@@ -1184,6 +1192,37 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     _fsync_directory(path.parent)
 
 
+def _load_result_payload(path: Path) -> Mapping[str, Any] | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        log.debug("NOTE_STYLE_RESULT_READ_FAILED path=%s", path, exc_info=True)
+        return None
+
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    try:
+        payload = json.loads(lines[-1])
+    except json.JSONDecodeError:
+        log.debug("NOTE_STYLE_RESULT_PARSE_FAILED path=%s", path, exc_info=True)
+        return None
+
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _result_has_analysis(payload: Mapping[str, Any] | None) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    analysis = payload.get("analysis")
+    if isinstance(analysis, Mapping):
+        return bool(analysis)
+    return False
+
+
 def _note_style_log_path(paths: NoteStylePaths) -> Path:
     return getattr(paths, "log_file", paths.base / "logs.txt")
 
@@ -1386,10 +1425,7 @@ def _prepare_note_text_for_model(note_text: str) -> tuple[str, bool]:
 
 def _pack_messages(
     *,
-    sid: str,
-    account_id: str,
-    note_text: str,
-    note_truncated: bool,
+    analysis_input: Mapping[str, Any],
     account_context: Mapping[str, Any] | None,
     bureaus_summary: Mapping[str, Any] | None,
 ) -> list[Mapping[str, Any]]:
@@ -1398,7 +1434,7 @@ def _pack_messages(
     if hint_text:
         system_message = f"{system_message}\n{hint_text}"
 
-    user_content: dict[str, Any] = {"note_text": note_text}
+    user_content = dict(analysis_input)
 
     return [
         {"role": "system", "content": system_message},
@@ -2274,6 +2310,42 @@ def build_note_style_pack_for_account(
         response_path=response_path,
     )
 
+    existing_result_payload = _load_result_payload(account_paths.result_file)
+    existing_result_has_analysis = _result_has_analysis(existing_result_payload)
+
+    if config.NOTE_STYLE_SKIP_IF_RESULT_EXISTS and existing_result_has_analysis:
+        timestamp = _now_iso()
+        entry = _serialize_skip_entry(
+            account_id=account_id_str,
+            timestamp=timestamp,
+            status="skipped_existing_analysis",
+        )
+        totals = _update_index_for_account(
+            sid=sid, paths=paths, account_id=account_id, entry=entry
+        )
+        _record_stage_progress(
+            sid=sid, runs_root=runs_root_path, totals=totals, index_path=paths.index_file
+        )
+        log.info(
+            "NOTE_STYLE_PACK_SKIP_EXISTING sid=%s acc=%s result=%s",
+            sid,
+            account_id_str,
+            account_paths.result_file,
+        )
+        _log_style_discovery(
+            sid=sid,
+            account_id=account_id_str,
+            response=response_rel,
+            status="skipped",
+            reason="existing_analysis",
+        )
+        return {
+            "status": "skipped_existing_analysis",
+            "reason": "existing_analysis",
+            "packs_total": totals.get("total", 0),
+            "packs_completed": totals.get("completed", 0),
+        }
+
     try:
         loaded_note = _load_response_note(account_id, response_path)
     except NoteStyleSkip as exc:
@@ -2299,7 +2371,6 @@ def build_note_style_pack_for_account(
 
     note_sanitized = loaded_note.note_sanitized
     note_text_for_model, note_truncated = _prepare_note_text_for_model(note_sanitized)
-    ui_allegations_selected = list(loaded_note.ui_allegations_selected)
     char_len = len(note_text_for_model)
     word_len = len(note_text_for_model.split())
     timestamp = _now_iso()
@@ -2356,10 +2427,8 @@ def build_note_style_pack_for_account(
         "sid": sid,
         "account_id": account_id_str,
         "collected_at": timestamp,
-        "fingerprint": None,
         "meta": meta_payload,
         "bureaus": bureaus_payload,
-        "bureaus_summary": None,
         "tags": tags_payload,
     }
 
@@ -2374,19 +2443,24 @@ def build_note_style_pack_for_account(
     account_context = _build_account_context(
         meta_payload, bureaus_payload, tags_payload, bureaus_summary
     )
-    fingerprint = _build_account_fingerprint(
-        account_id_str,
-        meta_payload,
-        bureaus_payload,
-        tags_payload,
-        bureaus_summary,
-    )
+    meta_name = _resolve_meta_name(meta_payload)
+    primary_issue = _select_primary_issue(tags_payload)
+
+    analysis_input: dict[str, Any] = {"customer_note": note_text_for_model}
+    if note_truncated:
+        analysis_input["note_truncated"] = True
+    if meta_name:
+        analysis_input["meta_name"] = meta_name
+    if primary_issue:
+        analysis_input["primary_issue"] = primary_issue
+    if isinstance(bureaus_summary, Mapping) and bureaus_summary:
+        analysis_input["bureaus"] = bureaus_summary
 
     debug_snapshot.update(
         {
-            "fingerprint": fingerprint,
             "bureaus_summary": bureaus_summary,
             "account_context": account_context,
+            "analysis_input": analysis_input,
         }
     )
     _write_json(account_paths.debug_file, debug_snapshot)
@@ -2394,17 +2468,12 @@ def build_note_style_pack_for_account(
     pack_payload = {
         "sid": sid,
         "account_id": str(account_id),
-        "source_response_path": str(response_rel),
         "model": _NOTE_STYLE_MODEL,
-        "fingerprint": fingerprint,
         "account_context": account_context,
         "bureaus_summary": bureaus_summary,
-        "note_metrics": {"char_len": char_len, "word_len": word_len},
+        "analysis_input": analysis_input,
         "messages": _pack_messages(
-            sid=sid,
-            account_id=str(account_id),
-            note_text=note_text_for_model,
-            note_truncated=note_truncated,
+            analysis_input=analysis_input,
             account_context=account_context,
             bureaus_summary=bureaus_summary,
         ),
@@ -2422,10 +2491,6 @@ def build_note_style_pack_for_account(
         "account_context": account_context,
         "bureaus_summary": bureaus_summary,
     }
-
-    if ui_allegations_selected:
-        pack_payload["ui_allegations_selected"] = ui_allegations_selected
-        result_payload["ui_allegations_selected"] = ui_allegations_selected
 
     _write_jsonl(account_paths.pack_file, pack_payload)
     _write_jsonl(account_paths.result_file, result_payload)

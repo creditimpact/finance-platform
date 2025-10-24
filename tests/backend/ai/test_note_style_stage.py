@@ -1,9 +1,6 @@
 import json
 import unicodedata
-from pathlib import Path
-
-import json
-import unicodedata
+import pytest
 from pathlib import Path
 
 import backend.ai.note_style_stage as note_style_stage_module
@@ -136,6 +133,80 @@ def test_note_style_stage_skips_zero_length_response(tmp_path: Path) -> None:
     assert entry["status"] == "skipped_low_signal"
     assert "note_hash" not in entry
 
+
+def test_note_style_stage_skips_when_result_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = "SID201"
+    account_id = "acct-201"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+    response_dir.mkdir(parents=True, exist_ok=True)
+
+    account_dir = run_dir / "cases" / "accounts" / account_id
+    account_dir.mkdir(parents=True, exist_ok=True)
+
+    meta_payload = {"heading_guess": "Existing Creditor"}
+    bureaus_payload = {
+        "experian": {"account_type": "Credit Card", "reported_creditor": "Existing"}
+    }
+    tags_payload = [{"kind": "issue", "type": "wrong_amount"}]
+
+    (account_dir / "meta.json").write_text(
+        json.dumps(meta_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (account_dir / "bureaus.json").write_text(
+        json.dumps(bureaus_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (account_dir / "tags.json").write_text(
+        json.dumps(tags_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    note_text = "This account was already fixed."
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {"answers": {"explanation": note_text}},
+    )
+
+    paths = ensure_note_style_paths(runs_root, sid, create=True)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
+
+    existing_result = {
+        "sid": sid,
+        "account_id": account_id,
+        "analysis": {
+            "tone": "confident",
+            "context_hints": {"topic": "billing"},
+            "emphasis": ["billing_error"],
+            "confidence": 0.9,
+            "risk_flags": [],
+        },
+    }
+    account_paths.result_file.write_text(
+        json.dumps(existing_result, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        note_style_stage_module.config,
+        "NOTE_STYLE_SKIP_IF_RESULT_EXISTS",
+        True,
+    )
+
+    outcome = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    assert outcome["status"] == "skipped_existing_analysis"
+    assert outcome["reason"] == "existing_analysis"
+
+    assert not account_paths.pack_file.exists()
+    assert account_paths.result_file.read_text(encoding="utf-8").strip().endswith("}")
+
+    index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
+    entry = index_payload["packs"][0]
+    assert entry["account_id"] == account_id
+    assert entry["status"] == "skipped_existing_analysis"
+
     runflow_payload = json.loads((run_dir / "runflow.json").read_text(encoding="utf-8"))
     note_style_stage = runflow_payload["stages"]["note_style"]
     assert note_style_stage["status"] == "success"
@@ -247,8 +318,20 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert pack_payload["model"]
     assert pack_payload["messages"][0]["role"] == "system"
     assert "Prompt salt" not in pack_payload["messages"][0]["content"]
-    assert pack_payload["messages"][1] == {"role": "user", "content": {"note_text": sanitized}}
-    assert pack_payload["note_metrics"]["char_len"] == len(sanitized)
+
+    user_message = pack_payload["messages"][1]
+    assert user_message["role"] == "user"
+    assert user_message["content"]["customer_note"] == sanitized
+    assert user_message["content"]["meta_name"] == "Capital One"
+    assert user_message["content"]["primary_issue"] == "late_payment"
+    assert "bureaus" in user_message["content"]
+
+    analysis_input = pack_payload["analysis_input"]
+    assert analysis_input["customer_note"] == sanitized
+    assert analysis_input["meta_name"] == "Capital One"
+    assert analysis_input["primary_issue"] == "late_payment"
+    assert "bureaus" in analysis_input
+    assert "note_metrics" not in pack_payload
     assert "note_hash" not in pack_payload
     assert "prompt_salt" not in pack_payload
     assert "fingerprint_hash" not in pack_payload

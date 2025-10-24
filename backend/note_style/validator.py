@@ -10,6 +10,7 @@ __all__ = ["validate_analysis_payload", "coerce_text"]
 
 _MAX_EMPHASIS_ITEMS = 6
 _RISK_FLAG_SANITIZE_PATTERN = re.compile(r"[^a-z0-9]+")
+_MAX_RISK_FLAGS = 6
 
 
 def coerce_text(value: Any, *, preserve_case: bool = False) -> str:
@@ -74,6 +75,8 @@ def _sanitize_risk_flags(values: Any) -> list[str]:
             continue
         seen.add(normalized)
         flags.append(normalized)
+        if len(flags) >= _MAX_RISK_FLAGS:
+            break
     return flags
 
 

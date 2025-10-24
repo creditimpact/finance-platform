@@ -35,7 +35,6 @@ class _StubClient:
                 "Mixed Language",
                 "ALL CAPS",
                 "possible-template copy",
-                " ",
             ],
         }
 
@@ -163,7 +162,7 @@ def test_note_style_sender_sends_built_pack(
     )
 
     call_kwargs = client.calls[0]["kwargs"]
-    assert call_kwargs.get("response_format") == {"type": "json_object"}
+    assert call_kwargs.get("response_format") == "json_object"
 
 
 def test_note_style_sender_skips_completed_entries(

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+import math
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
@@ -220,6 +221,56 @@ def _extract_response_text(response_payload: Any) -> str:
     return ""
 
 
+def _extract_response_json(response_payload: Any) -> Mapping[str, Any]:
+    text = _extract_response_text(response_payload)
+    if not text or not text.strip():
+        raise ValueError("Model response missing JSON content")
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Model response is not valid JSON") from exc
+
+    if not isinstance(parsed, Mapping):
+        raise ValueError("Model response payload must be an object")
+
+    return parsed
+
+
+def _validate_response_structure(payload: Mapping[str, Any]) -> None:
+    required_keys = {"tone", "context_hints", "emphasis", "confidence", "risk_flags"}
+    missing = sorted(required_keys.difference(payload.keys()))
+    if missing:
+        raise ValueError(f"Model response missing required fields: {', '.join(missing)}")
+
+    confidence = payload.get("confidence")
+    try:
+        numeric_confidence = float(confidence)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("confidence must be a number between 0 and 1") from exc
+    if math.isnan(numeric_confidence) or math.isinf(numeric_confidence):
+        raise ValueError("confidence must be a finite number between 0 and 1")
+    if numeric_confidence < 0 or numeric_confidence > 1:
+        raise ValueError("confidence must be between 0 and 1")
+
+    emphasis = payload.get("emphasis")
+    if not isinstance(emphasis, Sequence) or isinstance(emphasis, (str, bytes, bytearray)):
+        raise ValueError("emphasis must be an array")
+    if len(emphasis) > 6:
+        raise ValueError("emphasis must contain at most 6 items")
+
+    risk_flags = payload.get("risk_flags")
+    if not isinstance(risk_flags, Sequence) or isinstance(risk_flags, (str, bytes, bytearray)):
+        raise ValueError("risk_flags must be an array")
+    if len(risk_flags) > 6:
+        raise ValueError("risk_flags must contain at most 6 items")
+
+
+def _ensure_valid_json_response(response_payload: Any) -> None:
+    payload = _extract_response_json(response_payload)
+    _validate_response_structure(payload)
+
+
 def _write_raw_response(
     *,
     account_paths: NoteStyleAccountPaths,
@@ -280,6 +331,37 @@ def _write_invalid_result_marker(
         json.dump(marker, handle, ensure_ascii=False)
         handle.write("\n")
     return result_path
+
+
+def _handle_invalid_response(
+    *,
+    sid: str,
+    account_id: str,
+    account_paths: NoteStyleAccountPaths,
+    response_payload: Any,
+    runs_root_path: Path,
+    reason: str,
+) -> None:
+    raw_path = _write_raw_response(
+        account_paths=account_paths,
+        response_payload=response_payload,
+    )
+    marker_path = _write_invalid_result_marker(
+        account_paths=account_paths, reason=reason
+    )
+    log.warning(
+        "[NOTE_STYLE] RESULT_INVALID account=%s reason=%s raw_path=%s result_path=%s",
+        account_id,
+        reason,
+        raw_path.resolve().as_posix(),
+        marker_path.resolve().as_posix(),
+    )
+    record_note_style_failure(
+        sid,
+        account_id,
+        runs_root=runs_root_path,
+        error=reason,
+    )
 
 
 def send_note_style_packs_for_sid(
@@ -381,7 +463,7 @@ def send_note_style_packs_for_sid(
                     model=model or None,
                     messages=list(messages),
                     temperature=0,
-                    response_format={"type": "json_object"},
+                    response_format="json_object",
                 )
                 latency = time.perf_counter() - start
                 log.info(
@@ -403,6 +485,20 @@ def send_note_style_packs_for_sid(
                 raise
 
             try:
+                _ensure_valid_json_response(response)
+            except ValueError as exc:
+                reason_text = str(exc).strip() or exc.__class__.__name__
+                _handle_invalid_response(
+                    sid=sid,
+                    account_id=account_id,
+                    account_paths=account_paths,
+                    response_payload=response,
+                    runs_root_path=runs_root_path,
+                    reason=reason_text,
+                )
+                continue
+
+            try:
                 written_path = ingest_note_style_result(
                     sid=sid,
                     account_id=account_id,
@@ -418,26 +514,14 @@ def send_note_style_packs_for_sid(
                     account_id,
                     exc_info=True,
                 )
-                raw_path = _write_raw_response(
+                reason_text = str(exc).strip() or exc.__class__.__name__
+                _handle_invalid_response(
+                    sid=sid,
+                    account_id=account_id,
                     account_paths=account_paths,
                     response_payload=response,
-                )
-                reason_text = str(exc).strip() or exc.__class__.__name__
-                marker_path = _write_invalid_result_marker(
-                    account_paths=account_paths, reason=reason_text
-                )
-                log.warning(
-                    "[NOTE_STYLE] RESULT_INVALID account=%s reason=%s raw_path=%s result_path=%s",
-                    account_id,
-                    reason_text,
-                    raw_path.resolve().as_posix(),
-                    marker_path.resolve().as_posix(),
-                )
-                record_note_style_failure(
-                    sid,
-                    account_id,
-                    runs_root=runs_root_path,
-                    error=str(exc),
+                    runs_root_path=runs_root_path,
+                    reason=reason_text,
                 )
                 continue
             except NotImplementedError:

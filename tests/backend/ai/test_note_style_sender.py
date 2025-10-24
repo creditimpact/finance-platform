@@ -124,7 +124,10 @@ def test_note_style_sender_sends_built_pack(
     packs = index_payload["packs"]
     assert packs[0]["status"] == "completed"
     assert "sent_at" not in packs[0]
-    assert packs[0]["result"] == account_paths.result_file.relative_to(paths.base).as_posix()
+    assert (
+        packs[0]["result_path"]
+        == account_paths.result_file.relative_to(paths.base).as_posix()
+    )
     assert packs[0]["completed_at"] == stored_payload["evaluated_at"]
 
     messages = [record.message for record in caplog.records if "STYLE_SEND" in record.message]

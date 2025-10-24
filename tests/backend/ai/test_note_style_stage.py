@@ -519,7 +519,7 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert first_entry["status"] == "built"
     expected_pack = account_paths.pack_file.relative_to(paths.base).as_posix()
     assert first_entry["pack"] == expected_pack
-    assert "result" not in first_entry
+    assert first_entry["result_path"] == ""
     assert first_entry["note_hash"] == expected_note_hash
     assert first_entry["lines"] == 1
     assert first_entry["built_at"]
@@ -1120,7 +1120,7 @@ def test_note_style_stage_skips_when_note_sanitizes_empty(tmp_path: Path) -> Non
     assert entry["account_id"] == account_id
     assert entry["status"] == "skipped_low_signal"
     assert entry["pack"] == ""
-    assert "result" not in entry
+    assert entry["result_path"] == ""
     assert entry["lines"] == 0
     assert entry["note_hash"] == expected_note_hash
     assert entry["built_at"]

@@ -208,6 +208,7 @@ class _LoadedResponseNote:
     note_sanitized: str
     source_path: Path
     source_hash: str
+    ui_allegations_selected: tuple[str, ...] = ()
 
 
 class NoteStyleSkip(Exception):
@@ -1270,18 +1271,23 @@ def _pack_messages(
     prompt_salt: str,
     fingerprint: Mapping[str, Any],
     account_context: Mapping[str, Any],
+    ui_allegations_selected: Sequence[str] | None = None,
 ) -> list[Mapping[str, Any]]:
     system_message = _NOTE_STYLE_SYSTEM_PROMPT.format(prompt_salt=prompt_salt)
+    metadata: dict[str, Any] = {
+        "sid": sid,
+        "account_id": account_id,
+        "fingerprint": fingerprint,
+        "account_context": account_context,
+        "channel": "frontend_review",
+        "lang": "auto",
+    }
+    if ui_allegations_selected:
+        metadata["ui_allegations_selected"] = list(ui_allegations_selected)
+
     user_content: dict[str, Any] = {
         "note_text": note_text,
-        "metadata": {
-            "sid": sid,
-            "account_id": account_id,
-            "fingerprint": fingerprint,
-            "account_context": account_context,
-            "channel": "frontend_review",
-            "lang": "auto",
-        },
+        "metadata": metadata,
     }
 
     return [
@@ -1392,6 +1398,45 @@ def _extract_note_text(payload: Mapping[str, Any]) -> tuple[str, str]:
         return fallback_raw, ""
 
     return "", ""
+
+
+def _extract_ui_allegations_selected(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    results: list[str] = []
+    seen: set[str] = set()
+
+    def _register(value: Any) -> None:
+        if isinstance(value, str):
+            candidate = _normalize_text(value)
+            if not candidate:
+                return
+            normalized = candidate.lower()
+            if normalized in seen:
+                return
+            seen.add(normalized)
+            results.append(candidate)
+            return
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            for entry in value:
+                _register(entry)
+            return
+        if isinstance(value, Mapping):
+            for entry in value.values():
+                _register(entry)
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, Mapping):
+            for key, value in node.items():
+                if _normalize_text(key).lower() == "ui_allegations_selected":
+                    _register(value)
+                else:
+                    _walk(value)
+            return
+        if isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray)):
+            for entry in node:
+                _walk(entry)
+
+    _walk(payload)
+    return tuple(results)
 
 
 def _tokens(note: str) -> set[str]:
@@ -1660,6 +1705,7 @@ def _load_response_note(account_id: str, response_path: Path) -> _LoadedResponse
             note_sanitized="",
             source_path=response_path,
             source_hash=_source_hash(empty),
+            ui_allegations_selected=(),
         )
 
     try:
@@ -1680,6 +1726,7 @@ def _load_response_note(account_id: str, response_path: Path) -> _LoadedResponse
         raise NoteStyleSkip("invalid_response")
 
     note_raw, note_sanitized = _extract_note_text(payload)
+    ui_allegations_selected = _extract_ui_allegations_selected(payload)
     source_hash = _source_hash(note_sanitized)
     return _LoadedResponseNote(
         account_id=str(account_id),
@@ -1687,6 +1734,7 @@ def _load_response_note(account_id: str, response_path: Path) -> _LoadedResponse
         note_sanitized=note_sanitized,
         source_path=response_path,
         source_hash=source_hash,
+        ui_allegations_selected=ui_allegations_selected,
     )
 
 
@@ -2093,6 +2141,7 @@ def build_note_style_pack_for_account(
     note_raw = loaded_note.note_raw
     note_sanitized = loaded_note.note_sanitized
     source_hash = loaded_note.source_hash
+    ui_allegations_selected = list(loaded_note.ui_allegations_selected)
     note_hash = _note_hash(note_raw)
     char_len = len(note_sanitized)
     word_len = len(note_sanitized.split())
@@ -2249,6 +2298,7 @@ def build_note_style_pack_for_account(
             prompt_salt=prompt_salt,
             fingerprint=fingerprint,
             account_context=account_context,
+            ui_allegations_selected=ui_allegations_selected,
         ),
         "built_at": timestamp,
     }
@@ -2263,6 +2313,10 @@ def build_note_style_pack_for_account(
         "fingerprint": fingerprint,
         "account_context": account_context,
     }
+
+    if ui_allegations_selected:
+        pack_payload["ui_allegations_selected"] = ui_allegations_selected
+        result_payload["ui_allegations_selected"] = ui_allegations_selected
 
     _write_jsonl(account_paths.pack_file, pack_payload)
     _write_jsonl(account_paths.result_file, result_payload)

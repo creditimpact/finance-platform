@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
-from backend import config
 from backend.ai.note_style_ingest import ingest_note_style_result
 from backend.ai.note_style_results import record_note_style_failure
 from backend.ai.note_style_logging import log_structured_event
@@ -94,37 +93,6 @@ def _coerce_messages(payload: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:
             raise ValueError("Pack messages must be mapping objects")
         normalized.append(entry)
     return normalized
-
-
-def _load_existing_result(path: Path) -> Mapping[str, Any] | None:
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None
-    except OSError:
-        log.debug("STYLE_SEND_RESULT_READ_FAILED path=%s", path, exc_info=True)
-        return None
-
-    lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    if not lines:
-        return None
-
-    try:
-        payload = json.loads(lines[-1])
-    except json.JSONDecodeError:
-        log.debug("STYLE_SEND_RESULT_PARSE_FAILED path=%s", path, exc_info=True)
-        return None
-
-    return payload if isinstance(payload, Mapping) else None
-
-
-def _result_has_analysis(payload: Mapping[str, Any] | None) -> bool:
-    if not isinstance(payload, Mapping):
-        return False
-    analysis = payload.get("analysis")
-    if isinstance(analysis, Mapping):
-        return bool(analysis)
-    return False
 
 
 def _relativize(path: Path, base: Path) -> str:
@@ -278,47 +246,20 @@ def _write_raw_response(
 ) -> Path:
     """Persist the raw model content for debugging."""
 
-    base_path = account_paths.result_raw_file
-    base_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path = account_paths.result_raw_file
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
 
     text_content = _extract_response_text(response_payload)
-    text_to_write = text_content if isinstance(text_content, str) else ""
-    stripped = text_to_write.strip()
+    if isinstance(text_content, str) and text_content.strip():
+        to_write = text_content
+    else:
+        safe_payload = _safe_json_payload(response_payload)
+        to_write = json.dumps(safe_payload, ensure_ascii=False, indent=2)
+    if not to_write.endswith("\n"):
+        to_write = f"{to_write}\n"
 
-    target_path = base_path
-    if stripped:
-        try:
-            json.loads(stripped)
-        except json.JSONDecodeError:
-            pass
-        else:
-            target_path = base_path.with_suffix(".json")
-            if text_to_write and not text_to_write.endswith("\n"):
-                text_to_write = f"{text_to_write}\n"
-    if target_path == base_path:
-        if stripped:
-            if text_to_write and not text_to_write.endswith("\n"):
-                text_to_write = f"{text_to_write}\n"
-        else:
-            safe_payload = _safe_json_payload(response_payload)
-            target_path = base_path.with_suffix(".json")
-            text_to_write = json.dumps(safe_payload, ensure_ascii=False, indent=2)
-            text_to_write += "\n"
-
-    with target_path.open("w", encoding="utf-8") as handle:
-        handle.write(text_to_write)
-
-    alternate = base_path.with_suffix(".json")
-    for candidate in (base_path, alternate):
-        if candidate != target_path and candidate.exists():
-            try:
-                candidate.unlink()
-            except OSError:
-                log.debug(
-                    "STYLE_SEND_RAW_CLEANUP_FAILED path=%s", candidate, exc_info=True
-                )
-
-    return target_path
+    raw_path.write_text(to_write, encoding="utf-8")
+    return raw_path
 
 
 def _write_invalid_result_marker(
@@ -427,25 +368,6 @@ def send_note_style_packs_for_sid(
             account_paths = ensure_note_style_account_paths(
                 paths, account_id, create=True
             )
-
-            existing_result_payload = _load_existing_result(account_paths.result_file)
-            existing_result_has_analysis = _result_has_analysis(existing_result_payload)
-
-            if config.NOTE_STYLE_SKIP_IF_RESULT_EXISTS and existing_result_has_analysis:
-                log.info(
-                    "STYLE_SEND_SKIP_EXISTING sid=%s account_id=%s result=%s",
-                    sid,
-                    account_id,
-                    account_paths.result_file,
-                )
-                log_structured_event(
-                    "NOTE_STYLE_SEND_SKIP_EXISTING",
-                    logger=log,
-                    sid=sid,
-                    account_id=account_id,
-                    result_path=_relativize(account_paths.result_file, paths.base),
-                )
-                continue
 
             log.info(
                 "STYLE_SEND_ACCOUNT_START sid=%s account_id=%s pack=%s",

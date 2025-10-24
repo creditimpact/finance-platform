@@ -359,13 +359,12 @@ def build_note_style_pack_for_account(
     note_metrics = {
         "char_len": len(note_text),
         "word_len": len(note_text.split()),
-        "truncated": False,
     }
     result_payload = {
         "sid": sid,
         "account_id": account_id,
+        "analysis": None,
         "note_metrics": note_metrics,
-        "evaluated_at": None,
     }
 
     _write_jsonl(account_paths.pack_file, pack_payload)

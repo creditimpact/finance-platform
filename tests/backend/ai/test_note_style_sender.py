@@ -93,9 +93,9 @@ def test_note_style_sender_sends_built_pack(
     ]
     assert len(result_lines) == 1
     stored_payload = json.loads(result_lines[0])
+    assert set(stored_payload.keys()) == {"sid", "account_id", "analysis", "note_metrics"}
     assert stored_payload["sid"] == sid
     assert stored_payload["account_id"] == account_id
-    assert isinstance(stored_payload["evaluated_at"], str)
 
     pack_payload = json.loads(
         account_paths.pack_file.read_text(encoding="utf-8").splitlines()[0]
@@ -128,11 +128,11 @@ def test_note_style_sender_sends_built_pack(
     assert isinstance(note_metrics, Mapping)
     assert note_metrics.get("char_len") > 0
     assert note_metrics.get("word_len") > 0
-    assert note_metrics.get("truncated") is False
+    assert set(note_metrics.keys()) == {"char_len", "word_len"}
 
     assert "account_context" not in stored_payload
     assert "bureaus_summary" not in stored_payload
-    assert pack_payload["messages"][1]["content"]["note_text"]
+    assert pack_payload["context"]["note_text"]
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
     packs = index_payload["packs"]
@@ -142,7 +142,7 @@ def test_note_style_sender_sends_built_pack(
         packs[0]["result_path"]
         == account_paths.result_file.relative_to(paths.base).as_posix()
     )
-    assert packs[0]["completed_at"] == stored_payload["evaluated_at"]
+    assert isinstance(packs[0].get("completed_at"), str)
 
     messages = [record.message for record in caplog.records if "STYLE_SEND" in record.message]
     assert any("STYLE_SEND_ACCOUNT_START" in message for message in messages)
@@ -231,7 +231,6 @@ def test_note_style_sender_skips_when_existing_result_matches(
     final_result = dict(baseline_result)
     final_result.update(
         {
-            "evaluated_at": "2024-01-02T03:04:05Z",
             "analysis": {
                 "tone": "neutral",
                 "context_hints": {

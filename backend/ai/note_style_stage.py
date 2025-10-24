@@ -1417,6 +1417,9 @@ def _prepare_note_text_for_model(note_text: str) -> tuple[str, bool]:
 
 
 def _random_prompt_salt() -> str:
+    if config.NOTE_STYLE_DISABLE_SALT:
+        return ""
+
     length = secrets.choice(range(8, 13))
     bytes_needed = math.ceil(length / 2)
     value = secrets.token_hex(bytes_needed)
@@ -1429,12 +1432,12 @@ def _pack_messages(
     account_id: str,
     note_text: str,
     note_truncated: bool,
-    prompt_salt: str,
+    prompt_salt: str | None,
     fingerprint_hash: str,
     account_context: Mapping[str, Any] | None,
     bureaus_summary: Mapping[str, Any] | None,
 ) -> list[Mapping[str, Any]]:
-    system_message = _NOTE_STYLE_SYSTEM_PROMPT.format(prompt_salt=prompt_salt)
+    system_message = _NOTE_STYLE_SYSTEM_PROMPT.format(prompt_salt=prompt_salt or "")
     metadata: dict[str, Any] = {
         "sid": sid,
         "account_id": account_id,
@@ -2439,15 +2442,24 @@ def build_note_style_pack_for_account(
     if isinstance(existing_result, Mapping):
         result_note_hash = str(existing_result.get("note_hash") or "")
         result_source_hash = str(existing_result.get("source_hash") or "")
-    if (
-        existing_note_hash == note_hash
+    skip_by_note_hash = (
+        config.NOTE_STYLE_IDEMPOTENT_BY_NOTE_HASH
+        and existing_note_hash == note_hash
         and isinstance(existing_result, Mapping)
         and (
             result_note_hash == note_hash
             or (result_source_hash and result_source_hash == source_hash)
         )
-    ):
+    )
+    skip_by_existing_result = (
+        not skip_by_note_hash
+        and config.NOTE_STYLE_SKIP_IF_RESULT_EXISTS
+        and isinstance(existing_result, Mapping)
+    )
+
+    if skip_by_note_hash or skip_by_existing_result:
         totals = _compute_totals(items)
+        skip_status = "unchanged" if skip_by_note_hash else "existing_result"
         _record_stage_progress(
             sid=sid,
             runs_root=runs_root_path,
@@ -2461,7 +2473,7 @@ def build_note_style_pack_for_account(
             sid=sid,
             account_id=account_id_str,
             response=response_rel,
-            status="unchanged",
+            status=skip_status,
             note_hash=note_hash,
             source_hash=source_hash,
             char_len=char_len,
@@ -2470,7 +2482,7 @@ def build_note_style_pack_for_account(
             prompt_salt=prompt_salt_existing,
         )
         return {
-            "status": "unchanged",
+            "status": skip_status,
             "packs_total": totals.get("total", 0),
             "packs_completed": totals.get("completed", 0),
         }

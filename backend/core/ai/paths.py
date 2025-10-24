@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from backend import config
+
 
 @dataclass(frozen=True)
 class ValidationAccountPaths:
@@ -229,9 +231,9 @@ def ensure_note_style_paths(
     """Return the canonical note_style AI pack paths for ``sid``."""
 
     runs_root_path = Path(runs_root).resolve()
-    base_path = (runs_root_path / sid / "ai_packs" / "note_style").resolve()
-    packs_dir = base_path / "packs"
-    results_dir = base_path / "results"
+    base_path = (runs_root_path / sid / config.NOTE_STYLE_STAGE_DIR).resolve()
+    packs_dir = (runs_root_path / sid / config.NOTE_STYLE_PACKS_DIR).resolve()
+    results_dir = (runs_root_path / sid / config.NOTE_STYLE_RESULTS_DIR).resolve()
     results_raw_dir = base_path / "results_raw"
     debug_dir = base_path / "debug"
 
@@ -281,7 +283,12 @@ def note_style_result_filename(account_id: object) -> str:
     """Return the canonical note_style result filename for ``account_id``."""
 
     normalized = normalize_note_style_account_id(account_id)
-    return f"acc_{normalized}.result.jsonl"
+    template = config.NOTE_STYLE_RESULTS_BASENAME or "acc_{account}.result.jsonl"
+    try:
+        filename = template.format(account=normalized)
+    except KeyError:
+        filename = template
+    return filename
 
 
 def ensure_note_style_account_paths(
@@ -290,8 +297,8 @@ def ensure_note_style_account_paths(
     """Return filesystem locations for ``account_id`` under ``paths``."""
 
     normalized = normalize_note_style_account_id(account_id)
-    pack_path = paths.packs_dir / f"style_acc_{normalized}.jsonl"
-    result_path = paths.results_dir / f"acc_{normalized}.result.jsonl"
+    pack_path = paths.packs_dir / note_style_pack_filename(normalized)
+    result_path = paths.results_dir / note_style_result_filename(normalized)
     raw_result_path = paths.results_raw_dir / f"acc_{normalized}.raw.json"
     debug_path = paths.debug_dir / f"{normalized}.context.json"
 

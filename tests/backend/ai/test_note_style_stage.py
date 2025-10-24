@@ -9,6 +9,7 @@ import unicodedata
 import pytest
 
 import backend.ai.note_style_stage as note_style_stage_module
+from backend import config
 
 from backend.ai.note_style import prepare_and_send
 from backend.ai.note_style_results import store_note_style_result
@@ -17,7 +18,11 @@ from backend.ai.note_style_stage import (
     build_note_style_pack_for_account,
     discover_note_style_response_accounts,
 )
-from backend.core.ai.paths import ensure_note_style_account_paths, ensure_note_style_paths
+from backend.core.ai.paths import (
+    ensure_note_style_account_paths,
+    ensure_note_style_paths,
+    note_style_result_filename,
+)
 from backend.runflow.counters import note_style_stage_counts
 
 
@@ -87,7 +92,7 @@ def test_discover_note_style_accounts_returns_sorted_entries(tmp_path: Path) -> 
     assert isinstance(account_entry, NoteStyleResponseAccount)
     assert account_entry.normalized_account_id == "Account_5__"
     assert account_entry.pack_filename == "style_acc_Account_5__.jsonl"
-    assert account_entry.result_filename == "acc_Account_5__.result.jsonl"
+    assert account_entry.result_filename == note_style_result_filename("Account 5!!")
     assert account_entry.response_path == second.resolve()
     assert account_entry.response_relative.as_posix() == (
         f"runs/{sid}/frontend/review/responses/{second.name}"
@@ -928,6 +933,70 @@ def test_note_style_stage_idempotent_for_unchanged_response(tmp_path: Path) -> N
     assert paths.index_file.read_text(encoding="utf-8") == initial_index
 
 
+def test_note_style_stage_rebuilds_when_idempotency_disabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sid = "SID002A"
+    account_id = "idx-002"
+    runs_root = tmp_path
+    response_dir = runs_root / sid / "frontend" / "review" / "responses"
+
+    monkeypatch.setattr(config, "NOTE_STYLE_IDEMPOTENT_BY_NOTE_HASH", False)
+    monkeypatch.setattr(config, "NOTE_STYLE_SKIP_IF_RESULT_EXISTS", False)
+    monkeypatch.setattr(config, "NOTE_STYLE_DISABLE_SALT", True)
+
+    response_path = response_dir / f"{account_id}.result.json"
+    note = "Please help fix this error."
+    _write_response(
+        response_path,
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": note},
+            "received_at": "2024-01-02T00:00:00Z",
+        },
+    )
+
+    first = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+    assert first["status"] == "completed"
+
+    second = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+    assert second["status"] == "completed"
+
+
+def test_note_style_stage_disables_prompt_salt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    sid = "SID002B"
+    account_id = "idx-002"
+    runs_root = tmp_path
+    response_dir = runs_root / sid / "frontend" / "review" / "responses"
+
+    monkeypatch.setattr(config, "NOTE_STYLE_DISABLE_SALT", True)
+
+    response_path = response_dir / f"{account_id}.result.json"
+    note = "Please help fix this error."
+    _write_response(
+        response_path,
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": note},
+            "received_at": "2024-01-02T00:00:00Z",
+        },
+    )
+
+    result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+    assert result["status"] == "completed"
+    assert result["prompt_salt"] == ""
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+    pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
+    stored_result = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+
+    assert pack_payload.get("prompt_salt", "") == ""
+    assert stored_result.get("prompt_salt", "") == ""
+
+
 def test_note_style_stage_updates_on_modified_note(tmp_path: Path) -> None:
     sid = "SID003"
     account_id = "idx-003"
@@ -1420,7 +1489,7 @@ def test_build_note_style_pack_logs_missing_artifacts(
     original_write = note_style_stage_module._write_jsonl
 
     def _fake_write_jsonl(path: Path, row: dict[str, object]) -> None:
-        if path.name.endswith(".result.jsonl"):
+        if path.name == note_style_result_filename(account_id):
             return
         original_write(path, row)
 

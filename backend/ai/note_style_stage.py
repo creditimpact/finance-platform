@@ -49,17 +49,10 @@ _NOTE_STYLE_MODEL = config.NOTE_STYLE_MODEL
 _NOTE_TEXT_MAX_CHARS = config.NOTE_STYLE_MAX_NOTE_CHARS
 _NOTE_STYLE_SYSTEM_PROMPT = (
     "You extract structured style from a customer's free-text note.\n"
-    "Respond in JSON ONLY using EXACT schema: {{\"tone\": <string>, \"context_hints\": {{\"timeframe\": {{\"month\": <string|null>, \"relative\": <string|null>}}, \"topic\": <string>, \"entities\": {{\"creditor\": <string|null>, \"amount\": <number|null>}}}}, \"emphasis\": [<string>...], \"confidence\": <float>, \"risk_flags\": [<string>...]}}. No prose or markdown.\n"
-    "Rules:\n"
-    "- Base output only on note_text; treat all other fields as context hints, not facts to restate.\n"
-    "- Keep every value short; lists must contain no more than 6 items.\n"
-    "- Summarize to tags/short phrases; do not copy sentences verbatim.\n"
-    "- If note is empty/meaningless → tone=\"neutral\", topic=\"unspecified\", confidence<=0.2, add risk_flags [\"empty_note\"].\n"
-    "- If note asserts a legal claim but mentions no supporting docs → add [\"unsupported_claim\"].\n"
-    "- Calibrate confidence: short/ambiguous notes ≤0.5.\n"
-    "Examples:\n"
-    "  * note_text=\"\" → risk_flags [\"empty_note\"].\n"
-    "  * note_text=\"They owe me $500 but I have no documents\" → add [\"unsupported_claim\"].\n"
+    "Respond only in JSON using the exact schema:\n"
+    "{ \"tone\": string, \"context_hints\": { \"timeframe\": {\"month\": string|null, \"relative\": string|null}, \"topic\": string, \"entities\": {\"creditor\": string|null, \"amount\": number|null}}, \"emphasis\": [string ≤6], \"confidence\": float (0–1), \"risk_flags\": [string ≤6] }.\n"
+    "Treat all context fields as hints only — base your output solely on note_text.\n"
+    "Output must be valid JSON. No prose, no markdown."
 )
 
 _ALLOWED_TONES = {

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
+from typing import Mapping, Sequence
 
 
 def _ensure_requests_stub() -> None:
@@ -34,6 +35,22 @@ import backend.runflow.decider as runflow_decider
 def _load_runflow(tmp_root: Path, sid: str) -> dict:
     path = tmp_root / sid / "runflow.json"
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_note_style_index(
+    run_dir: Path, entries: Sequence[Mapping[str, object]], totals: Mapping[str, int] | None = None
+) -> None:
+    base = run_dir / "ai_packs" / "note_style"
+    base.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "packs": list(entries),
+    }
+    if totals is not None:
+        payload["totals"] = dict(totals)
+    (base / "index.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def test_decide_next_completes_when_no_accounts(tmp_path):
@@ -229,3 +246,116 @@ def test_decide_next_records_runflow_decide_step(tmp_path, monkeypatch):
     monkeypatch.delenv("RUNS_ROOT", raising=False)
     importlib.reload(runflow_module)
     importlib.reload(runflow_decider)
+
+
+def test_note_style_stage_promotion_requires_completed_results(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SID-note-style"
+    run_dir = runs_root / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    initial_entries = [
+        {"account_id": "idx-1", "status": "completed"},
+        {"account_id": "idx-2", "status": "built"},
+    ]
+    _write_note_style_index(run_dir, initial_entries)
+
+    data: dict[str, object] = {"sid": sid, "stages": {}}
+    updated, promoted, log_context = runflow_decider._apply_note_style_stage_promotion(
+        data, run_dir
+    )
+
+    assert updated is True
+    assert promoted is False
+    assert log_context == {"total": 2, "completed": 1, "failed": 0}
+
+    stage_payload = data["stages"]["note_style"]
+    assert stage_payload["status"] == "built"
+    assert stage_payload["empty_ok"] is False
+    assert stage_payload["metrics"] == {"packs_total": 2}
+    assert stage_payload["results"] == {"results_total": 2, "completed": 1, "failed": 0}
+    summary = stage_payload["summary"]
+    assert summary["packs_total"] == 2
+    assert summary["results_total"] == 2
+    assert summary["completed"] == 1
+    assert summary["failed"] == 0
+    assert summary["empty_ok"] is False
+
+    completed_entries = [
+        {"account_id": "idx-1", "status": "completed"},
+        {"account_id": "idx-2", "status": "completed"},
+    ]
+    _write_note_style_index(run_dir, completed_entries)
+
+    updated_again, promoted_again, log_context_again = (
+        runflow_decider._apply_note_style_stage_promotion(data, run_dir)
+    )
+
+    assert updated_again is True
+    assert promoted_again is True
+    assert log_context_again == {"total": 2, "completed": 2, "failed": 0}
+
+    final_stage = data["stages"]["note_style"]
+    assert final_stage["status"] == "success"
+    assert final_stage["empty_ok"] is False
+    assert final_stage["results"]["completed"] == 2
+    assert final_stage["results"]["failed"] == 0
+    assert final_stage["summary"]["completed"] == 2
+    assert final_stage["summary"]["empty_ok"] is False
+
+
+def test_note_style_stage_promotion_empty_index_marks_success(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SID-note-empty"
+    run_dir = runs_root / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    _write_note_style_index(run_dir, [], totals={"total": 0, "completed": 0, "failed": 0})
+
+    data: dict[str, object] = {"sid": sid, "stages": {}}
+    updated, promoted, log_context = runflow_decider._apply_note_style_stage_promotion(
+        data, run_dir
+    )
+
+    assert updated is True
+    assert promoted is True
+    assert log_context == {"total": 0, "completed": 0, "failed": 0}
+
+    stage_payload = data["stages"]["note_style"]
+    assert stage_payload["status"] == "success"
+    assert stage_payload["empty_ok"] is True
+    assert stage_payload["metrics"] == {"packs_total": 0}
+    assert stage_payload["results"] == {"results_total": 0, "completed": 0, "failed": 0}
+    assert stage_payload["summary"]["empty_ok"] is True
+    assert stage_payload["summary"]["results_total"] == 0
+    assert stage_payload["summary"]["completed"] == 0
+
+
+def test_note_style_stage_promotion_error_on_failed_result(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    sid = "SID-note-failure"
+    run_dir = runs_root / sid
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    entries = [
+        {"account_id": "idx-1", "status": "completed"},
+        {"account_id": "idx-2", "status": "failed"},
+    ]
+    _write_note_style_index(run_dir, entries)
+
+    data: dict[str, object] = {"sid": sid, "stages": {}}
+    updated, promoted, log_context = runflow_decider._apply_note_style_stage_promotion(
+        data, run_dir
+    )
+
+    assert updated is True
+    assert promoted is False
+    assert log_context == {"total": 2, "completed": 1, "failed": 1}
+
+    stage_payload = data["stages"]["note_style"]
+    assert stage_payload["status"] == "error"
+    assert stage_payload["empty_ok"] is False
+    assert stage_payload["metrics"] == {"packs_total": 2}
+    assert stage_payload["results"] == {"results_total": 2, "completed": 1, "failed": 1}
+    assert stage_payload["summary"]["failed"] == 1
+    assert stage_payload["summary"]["empty_ok"] is False

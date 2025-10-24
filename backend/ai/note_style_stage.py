@@ -25,6 +25,7 @@ try:  # pragma: no cover - platform dependent
 except ImportError:  # pragma: no cover - platform dependent
     fcntl = None  # type: ignore[assignment]
 
+from backend import config
 from backend.ai.manifest import ensure_note_style_section, register_note_style_build
 from backend.ai.note_style_logging import append_note_style_warning, log_structured_event
 from backend.core.ai.paths import (
@@ -46,8 +47,8 @@ _INDEX_SCHEMA_VERSION = 1
 _DEBOUNCE_MS_ENV = "NOTE_STYLE_DEBOUNCE_MS"
 _DEFAULT_DEBOUNCE_MS = 750
 
-_NOTE_STYLE_MODEL = "gpt-4o-mini"
-_NOTE_TEXT_MAX_CHARS = 2000
+_NOTE_STYLE_MODEL = config.NOTE_STYLE_MODEL
+_NOTE_TEXT_MAX_CHARS = config.NOTE_STYLE_MAX_NOTE_CHARS
 _NOTE_STYLE_SYSTEM_PROMPT = (
     "You extract structured style from a customer's free-text note.\n"
     "Respond in JSON ONLY using EXACT schema: {{\"tone\": <string>, \"context_hints\": {{\"timeframe\": {{\"month\": <string|null>, \"relative\": <string|null>}}, \"topic\": <string>, \"entities\": {{\"creditor\": <string|null>, \"amount\": <number|null>}}}}, \"emphasis\": [<string>...], \"confidence\": <float>, \"risk_flags\": [<string>...]}}. No prose or markdown.\n"
@@ -2593,6 +2594,12 @@ def _debounce_delay_seconds() -> float:
 def schedule_note_style_refresh(
     sid: str, account_id: str, *, runs_root: Path | str | None = None
 ) -> None:
+    if not config.NOTE_STYLE_ENABLED:
+        log.info(
+            "NOTE_STYLE_DISABLED sid=%s account_id=%s", sid, account_id
+        )
+        return
+
     delay = _debounce_delay_seconds()
 
     def _run() -> None:

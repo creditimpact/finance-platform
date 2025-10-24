@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from backend import config
 from backend.ai.note_style import schedule_prepare_and_send
 from backend.core.paths.frontend_review import ensure_frontend_review_dirs
 from backend.pipeline.runs import RunManifest, persist_manifest
@@ -78,15 +79,16 @@ def update_manifest_state(
 
         effective_runs_root = runs_root if runs_root is not None else base_dir
 
-        try:
-            schedule_prepare_and_send(sid, runs_root=effective_runs_root)
-        except Exception:  # pragma: no cover - defensive logging
-            log.warning(
-                "NOTE_STYLE_PREPARE_SCHEDULE_STATE_FAILED sid=%s state=%s",
-                sid,
-                state_text,
-                exc_info=True,
-            )
+        if config.NOTE_STYLE_ENABLED:
+            try:
+                schedule_prepare_and_send(sid, runs_root=effective_runs_root)
+            except Exception:  # pragma: no cover - defensive logging
+                log.warning(
+                    "NOTE_STYLE_PREPARE_SCHEDULE_STATE_FAILED sid=%s state=%s",
+                    sid,
+                    state_text,
+                    exc_info=True,
+                )
 
     return target_manifest
 

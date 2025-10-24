@@ -146,7 +146,7 @@ def build_pack(
         "bureaus_summary": bureaus_summary,
         "messages": [
             {"role": "system", "content": system_message},
-            {"role": "user", "content": {"note_text": note_text}},
+            {"role": "user", "content": note_text},
         ],
     }
 

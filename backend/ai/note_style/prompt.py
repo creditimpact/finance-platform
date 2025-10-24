@@ -7,18 +7,43 @@ from typing import Any, Iterable, Mapping
 
 
 _BASE_SYSTEM_PROMPT = (
-    "You extract structured style from a customer's free-text note. Return JSON ONLY with "
-    "schema: {\"tone\": <string>, \"context_hints\": {\"timeframe\": {\"month\": <string|null>, "
+    "You analyze a customer's note_text about a credit account and must respond with JSON only. "
+    "Base output only on note_text; treat context hints as orientation and do not restate them verbatim. "
+    "Output schema: {\"tone\": <string>, \"context_hints\": {\"timeframe\": {\"month\": <string|null>, "
     "\"relative\": <string|null>}, \"topic\": <string>, \"entities\": {\"creditor\": <string|null>, "
-    "\"amount\": <number|null>}}, \"emphasis\": [<string>...], \"confidence\": <float>, \"risk_flags\": [<string>...]}. "
-    "Rules: base decisions on note_text; treat all other fields as orientation only; keep values short; lists ≤6; add "
-    "[\"unsupported_claim\"] if the note asserts a legal claim with no supporting docs; for short/ambiguous notes set "
-    "confidence ≤0.5; respond with JSON only."
+    "\"amount\": <number|null>}}, \"emphasis\": [<string>], \"confidence\": <float>, \"risk_flags\": [<string>]}. "
+    "Rules: keep text concise, limit lists to ≤6 entries, set confidence ≤0.5 when the note is short or ambiguous, and "
+    "include [\"unsupported_claim\"] in risk_flags if the note alleges an unsupported legal claim."
 )
 
-_CONTEXT_HINT_PREFIX = "Context hints (orientation only): "
+_CONTEXT_HINT_PREFIX = "Context hints: "
 _MAX_HINTS = 6
 _MAX_HINT_LENGTH = 120
+_MAJORITY_FIELD_ORDER = (
+    ("account_type", "type"),
+    ("account_status", "status"),
+    ("payment_status", "payment"),
+    ("balance_owed", "balance"),
+    ("past_due_amount", "past_due"),
+    ("date_of_last_activity", "last_activity"),
+)
+_DISAGREEMENT_FIELD_ORDER = (
+    "account_status",
+    "payment_status",
+    "balance_owed",
+    "past_due_amount",
+    "date_of_last_activity",
+    "date_reported",
+)
+
+_BUREAU_FIELD_LABELS = {
+    "account_status": "status",
+    "payment_status": "payment",
+    "balance_owed": "balance",
+    "past_due_amount": "past_due",
+    "date_of_last_activity": "last_activity",
+    "date_reported": "reported",
+}
 
 
 def build_base_system_prompt() -> str:
@@ -37,8 +62,11 @@ def build_context_hint_text(
     payload. Values are trimmed aggressively to keep the prompt compact.
     """
 
-    hints = list(_iter_account_context_hints(account_context))
-    hints.extend(_iter_bureau_hints(bureaus_summary))
+    account_hints = list(_iter_account_context_hints(account_context))
+    majority_hints = list(_iter_bureau_hints(bureaus_summary))
+    disagreement_hints = list(_iter_disagreement_hints(bureaus_summary))
+
+    hints = _merge_hint_groups(account_hints, majority_hints, disagreement_hints)
 
     normalized: list[str] = []
     for hint in hints:
@@ -69,7 +97,7 @@ def _iter_account_context_hints(
 
     reported_creditor = _normalize_text(account_context.get("reported_creditor"))
     if reported_creditor:
-        hints.append(f"creditor={reported_creditor}")
+        hints.append(f"issuer={reported_creditor}")
 
     primary_issue = _normalize_text(account_context.get("primary_issue"))
     if primary_issue:
@@ -77,7 +105,7 @@ def _iter_account_context_hints(
 
     account_tail = _normalize_text(account_context.get("account_tail"))
     if account_tail:
-        hints.append(f"acct_tail=…{account_tail}")
+        hints.append(f"tail=…{account_tail}")
 
     tags = account_context.get("tags") if isinstance(account_context.get("tags"), Mapping) else None
     if isinstance(tags, Mapping):
@@ -104,27 +132,61 @@ def _iter_bureau_hints(
 
     hints: list[str] = []
 
-    account_type = _normalize_text(majority.get("account_type"))
-    if account_type:
-        hints.append(f"type={account_type}")
-
-    account_status = _normalize_text(majority.get("account_status"))
-    if account_status:
-        hints.append(f"status={account_status}")
-
-    payment_status = _normalize_text(majority.get("payment_status"))
-    if payment_status and payment_status != account_status:
-        hints.append(f"payment={payment_status}")
-
-    balance = _normalize_text(majority.get("balance_owed"))
-    if balance:
-        hints.append(f"balance={balance}")
-
-    past_due = _normalize_text(majority.get("past_due_amount"))
-    if past_due and past_due != balance:
-        hints.append(f"past_due={past_due}")
+    for field, label in _MAJORITY_FIELD_ORDER:
+        value = _normalize_text(majority.get(field))
+        if not value:
+            continue
+        hints.append(f"{label}={value}")
 
     return hints
+
+
+def _iter_disagreement_hints(
+    bureaus_summary: Mapping[str, Any] | None,
+) -> Iterable[str]:
+    if not isinstance(bureaus_summary, Mapping):
+        return []
+
+    disagreements = bureaus_summary.get("disagreements")
+    if not isinstance(disagreements, Mapping):
+        return []
+
+    hints: list[str] = []
+
+    for field in _DISAGREEMENT_FIELD_ORDER:
+        bureau_map = disagreements.get(field)
+        if not isinstance(bureau_map, Mapping):
+            continue
+        entries: list[str] = []
+        for bureau, value in sorted(bureau_map.items(), key=lambda item: item[0]):
+            clean = _normalize_text(value)
+            if not clean:
+                continue
+            abbr = bureau[:2].upper()
+            entries.append(f"{abbr}={clean}")
+            if len(entries) >= 3:
+                break
+        if not entries:
+            continue
+        label = _BUREAU_FIELD_LABELS.get(field, field)
+        hints.append(f"{label}_diff={'/'.join(entries)}")
+
+    return hints
+
+
+def _merge_hint_groups(*groups: Iterable[str]) -> list[str]:
+    sequences = [list(group) for group in groups if group]
+    if not sequences:
+        return []
+
+    merged: list[str] = []
+    max_len = max(len(group) for group in sequences)
+    for index in range(max_len):
+        for group in sequences:
+            if index < len(group):
+                merged.append(group[index])
+
+    return merged
 
 
 def _normalize_text(value: Any) -> str:

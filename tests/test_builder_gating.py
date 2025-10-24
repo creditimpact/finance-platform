@@ -186,8 +186,7 @@ def test_builder_includes_style_metadata_when_available(tmp_path: Path) -> None:
                     "tone": "confident",
                     "context_hints": {"topic": "billing_error"},
                     "emphasis": ["paid_already", "support_request"],
-                },
-                "prompt_salt": "salt-value-123",
+                }
             },
             ensure_ascii=False,
         )
@@ -215,7 +214,6 @@ def test_builder_includes_style_metadata_when_available(tmp_path: Path) -> None:
         "tone": "confident",
         "topic": "billing_error",
         "emphasis": ["paid_already", "support_request"],
-        "prompt_salt": "salt-value-123",
     }
     expected_prompt = (
         f"{base_expected}\n\nSTYLE_METADATA:\n"

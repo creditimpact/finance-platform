@@ -21,8 +21,7 @@ def test_get_style_metadata_returns_sanitized_payload(tmp_path: Path) -> None:
             "tone": "Empathetic",
             "context_hints": {"topic": "payment_dispute"},
             "emphasis": ["paid_already", "support_request", "paid_already"],
-        },
-        "prompt_salt": "abc123def456",
+        }
     }
     _write_result(account_paths.result_file, payload)
 
@@ -31,7 +30,6 @@ def test_get_style_metadata_returns_sanitized_payload(tmp_path: Path) -> None:
         "tone": "Empathetic",
         "topic": "payment_dispute",
         "emphasis": ["paid_already", "support_request"],
-        "prompt_salt": "abc123def456",
     }
 
 

@@ -606,18 +606,10 @@ class ValidationPackBuilder:
                 seen.add(text)
                 emphasis.append(text)
 
-        prompt_salt_raw = metadata.get("prompt_salt")
-        prompt_salt = (
-            str(prompt_salt_raw).strip()
-            if isinstance(prompt_salt_raw, str)
-            else ""
-        )
-
         return {
             "tone": tone,
             "topic": topic,
             "emphasis": emphasis,
-            "prompt_salt": prompt_salt,
         }
 
     @staticmethod

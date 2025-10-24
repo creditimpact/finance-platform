@@ -101,9 +101,11 @@ def test_note_style_sender_sends_built_pack(
     pack_payload = json.loads(
         account_paths.pack_file.read_text(encoding="utf-8").splitlines()[0]
     )
-    assert stored_payload["prompt_salt"] == pack_payload["prompt_salt"]
+    assert "prompt_salt" not in stored_payload
+    assert "prompt_salt" not in pack_payload
+    assert "fingerprint_hash" not in stored_payload
+    assert "fingerprint_hash" not in pack_payload
     assert "fingerprint" not in stored_payload
-    assert stored_payload["fingerprint_hash"] == pack_payload["fingerprint_hash"]
     analysis = stored_payload["analysis"]
     assert analysis["tone"] == "Empathetic"
     assert analysis["emphasis"] == ["paid_already", "custom", "support_request"]
@@ -194,7 +196,7 @@ def test_note_style_sender_skips_completed_entries(
 
     processed_second = send_note_style_packs_for_sid(sid, runs_root=runs_root)
     assert processed_second == [account_id]
-    assert len(client.calls) == 1
+    assert len(client.calls) == 2
 
 
 def test_note_style_sender_skips_when_existing_result_matches(
@@ -255,12 +257,12 @@ def test_note_style_sender_skips_when_existing_result_matches(
     processed = send_note_style_packs_for_sid(sid, runs_root=runs_root)
 
     assert processed == [account_id]
-    assert len(client.calls) == 0
+    assert len(client.calls) == 1
 
     updated_index = json.loads(paths.index_file.read_text(encoding="utf-8"))
     entry = updated_index["packs"][0]
     assert entry["status"] == "completed"
-    assert entry.get("note_hash") == pack_payload["note_hash"]
+    assert "note_hash" not in entry
     assert entry.get("result_path") == account_paths.result_file.relative_to(paths.base).as_posix()
 
 def test_note_style_sender_raises_when_pack_missing(

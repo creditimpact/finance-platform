@@ -109,14 +109,14 @@ def _fsync_directory(directory: Path) -> None:
             pass
 
 
-def _atomic_write_jsonl(path: Path, payload: Mapping[str, Any]) -> None:
+def _atomic_write_jsonl(path: Path, payload: Mapping[str, Any]) -> int:
     serialized = json.dumps(payload, ensure_ascii=False)
+    data = (serialized + "\n").encode("utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + f".tmp.{uuid.uuid4().hex}")
     try:
-        with tmp_path.open("w", encoding="utf-8", newline="") as handle:
-            handle.write(serialized)
-            handle.write("\n")
+        with tmp_path.open("wb") as handle:
+            handle.write(data)
             handle.flush()
             try:
                 os.fsync(handle.fileno())
@@ -129,6 +129,7 @@ def _atomic_write_jsonl(path: Path, payload: Mapping[str, Any]) -> None:
         except FileNotFoundError:
             pass
     _fsync_directory(path.parent)
+    return len(data)
 
 
 def _to_snake_case(value: Any) -> str:
@@ -793,14 +794,6 @@ def _validate_result_payload(
     field_text = ",".join(sorted(dict.fromkeys(missing_fields))) if missing_fields else ""
     artifact_text = ",".join(sorted(dict.fromkeys(missing_artifacts))) if missing_artifacts else ""
 
-    log.warning(
-        "NOTE_STYLE_RESULT_VALIDATION_FAILED sid=%s account_id=%s missing_fields=%s missing_artifacts=%s",
-        sid,
-        account_id,
-        field_text,
-        artifact_text,
-    )
-
     parts: list[str] = []
     if field_text:
         parts.append(f"missing_fields={field_text}")
@@ -808,6 +801,12 @@ def _validate_result_payload(
         parts.append(f"missing_artifacts={artifact_text}")
 
     detail = " ".join(parts) if parts else "validation_warning"
+    log.warning(
+        "[NOTE_STYLE] RESULT_INVALID account=%s reason=%s raw_path=%s",
+        account_id,
+        detail,
+        account_paths.result_raw_file.resolve().as_posix(),
+    )
     append_note_style_warning(
         _note_style_log_path(paths),
         f"sid={sid} account_id={account_id} {detail}".strip(),
@@ -1254,7 +1253,7 @@ def store_note_style_result(
         payload=normalized_payload,
     )
 
-    _atomic_write_jsonl(account_paths.result_file, normalized_payload)
+    bytes_written = _atomic_write_jsonl(account_paths.result_file, normalized_payload)
     _validate_result_payload(
         sid=sid,
         account_id=account_id,
@@ -1264,11 +1263,10 @@ def store_note_style_result(
     )
     result_relative = _relative_to_base(account_paths.result_file, paths.base)
     log.info(
-        "NOTE_STYLE_RESULT_WRITTEN sid=%s acc=%s path=%s prompt_salt=%s",
-        sid,
+        "[NOTE_STYLE] RESULT_WRITTEN account=%s path=%s bytes=%d",
         account_id,
         result_relative,
-        str(normalized_payload.get("prompt_salt") or ""),
+        bytes_written,
     )
 
     analysis_payload = normalized_payload.get("analysis")

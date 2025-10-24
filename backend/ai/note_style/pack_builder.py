@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import unicodedata
@@ -17,6 +18,9 @@ from backend.core.ai.paths import (
     ensure_note_style_account_paths,
     ensure_note_style_paths,
 )
+
+
+log = logging.getLogger(__name__)
 
 
 _NOTE_VALUE_PATHS: tuple[tuple[str, ...], ...] = (
@@ -145,7 +149,21 @@ def build_pack(
     paths = ensure_note_style_paths(runs_root_path, sid, create=True)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
 
-    _write_jsonl(account_paths.pack_file, pack_payload)
+    bytes_written = _write_jsonl(account_paths.pack_file, pack_payload)
+
+    try:
+        pack_relative = (
+            account_paths.pack_file.resolve().relative_to(paths.base.resolve()).as_posix()
+        )
+    except ValueError:
+        pack_relative = account_paths.pack_file.resolve().as_posix()
+
+    log.info(
+        "[NOTE_STYLE] PACK_WRITTEN account=%s path=%s bytes=%d",
+        account_id,
+        pack_relative,
+        bytes_written,
+    )
 
     if mirror_debug:
         _write_debug_snapshot(account_paths, pack_payload)
@@ -153,11 +171,13 @@ def build_pack(
     return pack_payload
 
 
-def _write_jsonl(path: Path, payload: Mapping[str, Any]) -> None:
+def _write_jsonl(path: Path, payload: Mapping[str, Any]) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False)
-        handle.write("\n")
+    text = json.dumps(payload, ensure_ascii=False)
+    data = (text + "\n").encode("utf-8")
+    with path.open("wb") as handle:
+        handle.write(data)
+    return len(data)
 
 
 def _write_debug_snapshot(account_paths: NoteStyleAccountPaths, payload: Mapping[str, Any]) -> None:

@@ -395,6 +395,13 @@ def send_note_style_packs_for_sid(
                     response_payload=response,
                     error=exc,
                 )
+                reason_text = str(exc).strip() or exc.__class__.__name__
+                log.warning(
+                    "[NOTE_STYLE] RESULT_INVALID account=%s reason=%s raw_path=%s",
+                    account_id,
+                    reason_text,
+                    account_paths.result_raw_file.resolve().as_posix(),
+                )
                 record_note_style_failure(
                     sid,
                     account_id,

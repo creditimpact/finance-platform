@@ -356,6 +356,14 @@ class RunManifest:
         cursor[str(name)] = resolved_path
         return self.save()
 
+    @staticmethod
+    def _stage_status_defaults(stage_key: str) -> dict[str, object]:
+        key = stage_key.strip().lower()
+        defaults: dict[str, object] = {"built": False, "completed_at": None}
+        if key != "note_style":
+            defaults["sent"] = False
+        return defaults
+
     def _ensure_ai_section(self) -> tuple[dict[str, object], dict[str, object]]:
         ai = self.data.setdefault("ai", {})
         packs = ai.setdefault(
@@ -456,18 +464,17 @@ class RunManifest:
             },
         )
         for stage_key in ("merge", "validation", "note_style"):
+            stage_defaults = self._stage_status_defaults(stage_key)
             stage_status = status.get(stage_key)
             if not isinstance(stage_status, dict):
-                stage_status = {
-                    "built": False,
-                    "sent": False,
-                    "completed_at": None,
-                }
-                status[stage_key] = stage_status
-            else:
-                stage_status.setdefault("built", False)
-                stage_status.setdefault("sent", False)
-                stage_status.setdefault("completed_at", None)
+                status[stage_key] = dict(stage_defaults)
+                continue
+
+            for key, value in stage_defaults.items():
+                stage_status.setdefault(key, value)
+
+            if stage_key == "note_style":
+                stage_status.pop("sent", None)
         return packs, status
 
     def ensure_ai_stage_status(self, stage: str) -> dict[str, object]:
@@ -477,18 +484,16 @@ class RunManifest:
         if not stage_key:
             raise ValueError("stage is required")
         _, status = self._ensure_ai_section()
+        stage_defaults = self._stage_status_defaults(stage_key)
         stage_status = status.get(stage_key)
         if not isinstance(stage_status, dict):
-            stage_status = {
-                "built": False,
-                "sent": False,
-                "completed_at": None,
-            }
+            stage_status = dict(stage_defaults)
             status[stage_key] = stage_status
         else:
-            stage_status.setdefault("built", False)
-            stage_status.setdefault("sent", False)
-            stage_status.setdefault("completed_at", None)
+            for key, value in stage_defaults.items():
+                stage_status.setdefault(key, value)
+            if stage_key == "note_style":
+                stage_status.pop("sent", None)
         return stage_status
 
     def get_ai_stage_status(self, stage: str) -> dict[str, object]:
@@ -498,19 +503,23 @@ class RunManifest:
         if not stage_key:
             raise ValueError("stage is required")
         ai = self.data.get("ai")
+        stage_defaults = self._stage_status_defaults(stage_key)
         if not isinstance(ai, Mapping):
-            return {"built": False, "sent": False, "completed_at": None}
+            return dict(stage_defaults)
         status = ai.get("status")
+        fallback = dict(stage_defaults)
         if not isinstance(status, Mapping):
-            return {"built": False, "sent": False, "completed_at": None}
+            return fallback
         stage_status = status.get(stage_key)
         if not isinstance(stage_status, Mapping):
-            return {"built": False, "sent": False, "completed_at": None}
-        return {
-            "built": bool(stage_status.get("built")),
-            "sent": bool(stage_status.get("sent")),
-            "completed_at": stage_status.get("completed_at"),
-        }
+            return fallback
+        payload: dict[str, object] = {}
+        for key in stage_defaults:
+            if key in {"built", "sent"}:
+                payload[key] = bool(stage_status.get(key))
+            else:
+                payload[key] = stage_status.get(key)
+        return payload
 
     def _ensure_ai_validation_pack_section(self) -> dict[str, object]:
         packs, _ = self._ensure_ai_section()
@@ -660,6 +669,7 @@ class RunManifest:
         else:
             status_payload.setdefault("built", False)
             status_payload.setdefault("completed_at", None)
+            status_payload.pop("sent", None)
         return note_style
 
     def upsert_note_style_packs_dir(
@@ -719,10 +729,10 @@ class RunManifest:
             note_style["status"] = status_payload
         status_payload["built"] = True
         status_payload["completed_at"] = timestamp
+        status_payload.pop("sent", None)
 
         stage_status = self.ensure_ai_stage_status("note_style")
         stage_status["built"] = True
-        stage_status["sent"] = False
         stage_status["completed_at"] = timestamp
 
         return self.save()

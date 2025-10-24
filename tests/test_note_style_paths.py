@@ -20,10 +20,12 @@ def test_ensure_note_style_paths_creates_directories(tmp_path: Path) -> None:
     assert paths.base == base
     assert paths.packs_dir == (base / "packs").resolve()
     assert paths.results_dir == (base / "results").resolve()
+    assert paths.debug_dir == (base / "debug").resolve()
     assert paths.index_file == (base / "index.json").resolve()
     assert paths.log_file == (base / "logs.txt").resolve()
     assert paths.packs_dir.is_dir()
     assert paths.results_dir.is_dir()
+    assert paths.debug_dir.is_dir()
 
 
 def test_ensure_note_style_paths_read_only(tmp_path: Path) -> None:
@@ -36,6 +38,7 @@ def test_ensure_note_style_paths_read_only(tmp_path: Path) -> None:
     assert not base.exists()
     assert not (base / "packs").exists()
     assert not (base / "results").exists()
+    assert paths.debug_dir == (base / "debug").resolve()
     assert paths.log_file == (base / "logs.txt").resolve()
 
 
@@ -55,12 +58,15 @@ def test_note_style_account_paths_match_expected(tmp_path: Path) -> None:
     assert isinstance(account_paths, NoteStyleAccountPaths)
     expected_pack = paths.packs_dir / "style_acc_idx-001.jsonl"
     expected_result = paths.results_dir / "acc_idx-001.result.jsonl"
+    expected_debug = paths.debug_dir / "idx-001.context.json"
 
     assert account_paths.account_id == "idx-001"
     assert account_paths.pack_file == expected_pack
     assert account_paths.result_file == expected_result
+    assert account_paths.debug_file == expected_debug
     assert account_paths.pack_file.parent.is_dir()
     assert account_paths.result_file.parent.is_dir()
+    assert account_paths.debug_file.parent.is_dir()
 
 
 def test_note_style_filename_defaults_to_account_when_empty() -> None:

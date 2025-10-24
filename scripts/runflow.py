@@ -15,16 +15,22 @@ import sys
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from backend.ai.note_style_stage import (
+    build_note_style_pack_for_account,
+    discover_note_style_response_accounts,
+)
 from backend.ai.validation_index import ValidationPackIndexWriter
 from backend.validation.index_schema import ValidationIndex, ValidationPackRecord, load_validation_index
 
 from backend.runflow.decider import (
     refresh_validation_stage_from_index,
+    refresh_note_style_stage_from_index,
     reconcile_umbrella_barriers,
     runflow_refresh_umbrella_barriers,
     _validation_record_has_results,
     _validation_record_result_paths,
 )
+from backend.runflow.counters import note_style_stage_counts
 
 
 def _resolve_runs_root(value: str | None) -> Path:
@@ -57,6 +63,32 @@ def _select_result_path(paths: Sequence[Path]) -> Path | None:
         if candidate.suffix.lower() == ".json":
             return candidate
     return paths[0]
+
+
+def _parse_account_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [entry.strip() for entry in value.split(",") if entry.strip()]
+
+
+def _load_note_style_stage_payload(runs_root: Path, sid: str) -> Mapping[str, object] | None:
+    run_dir = runs_root / sid
+    runflow_path = run_dir / "runflow.json"
+    try:
+        raw = runflow_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    stages_payload = payload.get("stages")
+    if not isinstance(stages_payload, Mapping):
+        return None
+    stage_payload = stages_payload.get("note_style")
+    return stage_payload if isinstance(stage_payload, Mapping) else None
 
 
 def _record_completed_result(
@@ -97,6 +129,91 @@ def _record_completed_result(
     )
 
     return updated is not None
+
+
+def _cmd_note_style_build(args: argparse.Namespace) -> int:
+    sid = (args.sid or "").strip()
+    if not sid:
+        print("error: SID is required", file=sys.stderr)
+        return 2
+
+    runs_root = _resolve_runs_root(getattr(args, "runs_root", None))
+    only_accounts = _parse_account_list(getattr(args, "only", None))
+
+    if only_accounts:
+        accounts = [account for account in only_accounts]
+    else:
+        discovered = discover_note_style_response_accounts(sid, runs_root=runs_root)
+        accounts = [entry.account_id for entry in discovered]
+
+    results: dict[str, Mapping[str, object]] = {}
+    status_counts: dict[str, int] = {}
+
+    for account_id in accounts:
+        result = build_note_style_pack_for_account(
+            sid, account_id, runs_root=runs_root
+        )
+        normalized_status = str(result.get("status") or "").lower()
+        status_counts[normalized_status] = status_counts.get(normalized_status, 0) + 1
+        results[account_id] = dict(result)
+
+    counts_payload = note_style_stage_counts(runs_root / sid) or {
+        "packs_total": 0,
+        "packs_completed": 0,
+        "packs_failed": 0,
+    }
+    stage_payload = _load_note_style_stage_payload(runs_root, sid)
+    stage_status = None
+    stage_results: Mapping[str, object] | None = None
+    if isinstance(stage_payload, Mapping):
+        stage_status = stage_payload.get("status")
+        results_payload = stage_payload.get("results")
+        if isinstance(results_payload, Mapping):
+            stage_results = dict(results_payload)
+
+    payload = {
+        "sid": sid,
+        "processed_accounts": accounts,
+        "status_counts": status_counts,
+        "stage_status": stage_status,
+        "stage_results": stage_results,
+        "counts": counts_payload,
+        "results": results,
+    }
+
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_note_style_refresh(args: argparse.Namespace) -> int:
+    sid = (args.sid or "").strip()
+    if not sid:
+        print("error: SID is required", file=sys.stderr)
+        return 2
+
+    runs_root = _resolve_runs_root(getattr(args, "runs_root", None))
+
+    refresh_note_style_stage_from_index(sid, runs_root=runs_root)
+    runflow_refresh_umbrella_barriers(sid)
+    reconcile_umbrella_barriers(sid, runs_root=runs_root)
+
+    counts_payload = note_style_stage_counts(runs_root / sid) or {
+        "packs_total": 0,
+        "packs_completed": 0,
+        "packs_failed": 0,
+    }
+    stage_payload = _load_note_style_stage_payload(runs_root, sid)
+
+    stage_dict = dict(stage_payload) if isinstance(stage_payload, Mapping) else None
+
+    payload = {
+        "sid": sid,
+        "counts": counts_payload,
+        "stage": stage_dict,
+    }
+
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
 
 
 def _cmd_backfill_validation(args: argparse.Namespace) -> int:
@@ -166,6 +283,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the runs root directory",
     )
     backfill.set_defaults(func=_cmd_backfill_validation)
+
+    note_style = sub.add_parser(
+        "note-style",
+        help="Manage note_style AI stage artifacts",
+    )
+    note_style_sub = note_style.add_subparsers(dest="note_style_command", required=True)
+
+    note_style_build = note_style_sub.add_parser(
+        "build",
+        help="Build note_style packs for response notes",
+    )
+    note_style_build.add_argument("--sid", required=True, help="Run identifier")
+    note_style_build.add_argument(
+        "--only",
+        help="Comma separated list of account IDs to rebuild",
+    )
+    note_style_build.add_argument(
+        "--runs-root",
+        dest="runs_root",
+        help="Override the runs root directory",
+    )
+    note_style_build.set_defaults(func=_cmd_note_style_build)
+
+    note_style_refresh = note_style_sub.add_parser(
+        "refresh",
+        help="Refresh note_style stage status from on-disk results",
+    )
+    note_style_refresh.add_argument("--sid", required=True, help="Run identifier")
+    note_style_refresh.add_argument(
+        "--runs-root",
+        dest="runs_root",
+        help="Override the runs root directory",
+    )
+    note_style_refresh.set_defaults(func=_cmd_note_style_refresh)
 
     return parser
 

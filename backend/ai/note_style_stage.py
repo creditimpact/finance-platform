@@ -1175,6 +1175,27 @@ def _write_jsonl(path: Path, row: Mapping[str, Any]) -> None:
     _fsync_directory(path.parent)
 
 
+def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + f".tmp.{uuid.uuid4().hex}")
+    try:
+        with tmp_path.open("w", encoding="utf-8", newline="") as handle:
+            handle.write(serialized)
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+    _fsync_directory(path.parent)
+
+
 def _note_style_log_path(paths: NoteStylePaths) -> Path:
     return getattr(paths, "log_file", paths.base / "logs.txt")
 
@@ -2077,7 +2098,11 @@ def _write_index(
 
 
 def _remove_account_artifacts(account_paths: NoteStyleAccountPaths) -> None:
-    for path in (account_paths.pack_file, account_paths.result_file):
+    for path in (
+        account_paths.pack_file,
+        account_paths.result_file,
+        account_paths.debug_file,
+    ):
         try:
             path.unlink()
         except FileNotFoundError:
@@ -2458,6 +2483,18 @@ def build_note_style_pack_for_account(
     )
     timestamp = _now_iso()
 
+    debug_snapshot = {
+        "sid": sid,
+        "account_id": account_id_str,
+        "collected_at": timestamp,
+        "fingerprint": None,
+        "fingerprint_hash": "",
+        "meta": meta_payload,
+        "bureaus": bureaus_payload,
+        "bureaus_summary": None,
+        "tags": tags_payload,
+    }
+
     if account_dir is None:
         log.info(
             "NOTE_STYLE_ACCOUNT_DIR_MISSING sid=%s acc=%s",
@@ -2474,6 +2511,15 @@ def build_note_style_pack_for_account(
         bureaus_summary,
     )
     fingerprint_hash = _compute_fingerprint_hash(fingerprint)
+
+    debug_snapshot.update(
+        {
+            "fingerprint": fingerprint,
+            "fingerprint_hash": fingerprint_hash,
+            "bureaus_summary": bureaus_summary,
+        }
+    )
+    _write_json(account_paths.debug_file, debug_snapshot)
 
     pack_payload = {
         "sid": sid,

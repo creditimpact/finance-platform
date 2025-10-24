@@ -40,6 +40,7 @@ class NoteStyleAccountPaths:
     account_id: str
     pack_file: Path
     result_file: Path
+    debug_file: Path
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,7 @@ class NoteStylePaths:
     base: Path
     packs_dir: Path
     results_dir: Path
+    debug_dir: Path
     index_file: Path
     log_file: Path
 
@@ -228,16 +230,19 @@ def ensure_note_style_paths(
     base_path = (runs_root_path / sid / "ai_packs" / "note_style").resolve()
     packs_dir = base_path / "packs"
     results_dir = base_path / "results"
+    debug_dir = base_path / "debug"
 
     if create:
         base_path.mkdir(parents=True, exist_ok=True)
         packs_dir.mkdir(parents=True, exist_ok=True)
         results_dir.mkdir(parents=True, exist_ok=True)
+        debug_dir.mkdir(parents=True, exist_ok=True)
 
     return NoteStylePaths(
         base=base_path,
         packs_dir=packs_dir.resolve(),
         results_dir=results_dir.resolve(),
+        debug_dir=debug_dir.resolve(),
         index_file=(base_path / "index.json").resolve(strict=False),
         log_file=(base_path / "logs.txt").resolve(strict=False),
     )
@@ -282,15 +287,18 @@ def ensure_note_style_account_paths(
     normalized = normalize_note_style_account_id(account_id)
     pack_path = paths.packs_dir / f"style_acc_{normalized}.jsonl"
     result_path = paths.results_dir / f"acc_{normalized}.result.jsonl"
+    debug_path = paths.debug_dir / f"{normalized}.context.json"
 
     if create:
         pack_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.parent.mkdir(parents=True, exist_ok=True)
+        debug_path.parent.mkdir(parents=True, exist_ok=True)
 
     return NoteStyleAccountPaths(
         account_id=normalized,
         pack_file=pack_path,
         result_file=result_path,
+        debug_file=debug_path,
     )
 
 

@@ -1384,23 +1384,16 @@ def _pack_messages(
     account_id: str,
     note_text: str,
     prompt_salt: str,
-    fingerprint: Mapping[str, Any],
     fingerprint_hash: str,
-    account_context: Mapping[str, Any],
-    ui_allegations_selected: Sequence[str] | None = None,
 ) -> list[Mapping[str, Any]]:
     system_message = _NOTE_STYLE_SYSTEM_PROMPT.format(prompt_salt=prompt_salt)
     metadata: dict[str, Any] = {
         "sid": sid,
         "account_id": account_id,
-        "fingerprint": fingerprint,
         "fingerprint_hash": fingerprint_hash,
-        "account_context": account_context,
         "channel": "frontend_review",
         "lang": "auto",
     }
-    if ui_allegations_selected:
-        metadata["ui_allegations_selected"] = list(ui_allegations_selected)
 
     user_content: dict[str, Any] = {
         "note_text": note_text,
@@ -2415,12 +2408,6 @@ def build_note_style_pack_for_account(
         )
 
     bureaus_summary = _summarize_bureaus(bureaus_payload)
-    account_context = _build_account_context(
-        meta_payload,
-        bureaus_payload,
-        tags_payload,
-        bureaus_summary,
-    )
     fingerprint = _build_account_fingerprint(
         account_id_str,
         meta_payload,
@@ -2439,16 +2426,12 @@ def build_note_style_pack_for_account(
         "prompt_salt": prompt_salt,
         "fingerprint": fingerprint,
         "fingerprint_hash": fingerprint_hash,
-        "account_context": account_context,
         "messages": _pack_messages(
             sid=sid,
             account_id=str(account_id),
             note_text=note_raw,
             prompt_salt=prompt_salt,
-            fingerprint=fingerprint,
             fingerprint_hash=fingerprint_hash,
-            account_context=account_context,
-            ui_allegations_selected=ui_allegations_selected,
         ),
         "built_at": timestamp,
     }
@@ -2462,7 +2445,6 @@ def build_note_style_pack_for_account(
         "evaluated_at": timestamp,
         "fingerprint": fingerprint,
         "fingerprint_hash": fingerprint_hash,
-        "account_context": account_context,
     }
 
     if ui_allegations_selected:

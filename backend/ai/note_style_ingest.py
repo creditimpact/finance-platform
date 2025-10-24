@@ -363,10 +363,6 @@ def ingest_note_style_result(
         if isinstance(fingerprint_hash, str) and fingerprint_hash.strip():
             result_payload["fingerprint_hash"] = fingerprint_hash.strip()
 
-        account_context = existing_payload.get("account_context")
-        if isinstance(account_context, Mapping):
-            result_payload["account_context"] = dict(account_context)
-
     log.info(
         "STYLE_INGEST_RESULT sid=%s account_id=%s prompt_salt=%s note_hash=%s",
         sid,

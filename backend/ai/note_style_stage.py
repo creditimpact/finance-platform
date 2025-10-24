@@ -1234,17 +1234,19 @@ def _pack_messages(
     prompt_salt: str,
     fingerprint: Mapping[str, Any],
     account_context: Mapping[str, Any],
-) -> list[dict[str, str]]:
+) -> list[Mapping[str, Any]]:
     system_message = _NOTE_STYLE_SYSTEM_PROMPT.format(prompt_salt=prompt_salt)
-    payload: dict[str, Any] = {
-        "sid": sid,
-        "account_id": account_id,
+    user_content: dict[str, Any] = {
         "note_text": note_text,
-        "fingerprint": fingerprint,
-        "account_context": account_context,
-        "metadata": {"lang": "auto", "channel": "frontend_review"},
+        "metadata": {
+            "sid": sid,
+            "account_id": account_id,
+            "fingerprint": fingerprint,
+            "account_context": account_context,
+            "channel": "frontend_review",
+            "lang": "auto",
+        },
     }
-    user_content = json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
     return [
         {"role": "system", "content": system_message},

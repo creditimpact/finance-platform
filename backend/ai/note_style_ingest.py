@@ -350,9 +350,18 @@ def ingest_note_style_result(
         source_hash = existing_payload.get("source_hash")
         if isinstance(source_hash, str) and source_hash.strip():
             result_payload["source_hash"] = source_hash.strip()
+
         note_metrics = existing_payload.get("note_metrics")
         if isinstance(note_metrics, Mapping):
             result_payload["note_metrics"] = dict(note_metrics)
+
+        fingerprint = existing_payload.get("fingerprint")
+        if isinstance(fingerprint, Mapping):
+            result_payload["fingerprint"] = dict(fingerprint)
+
+        account_context = existing_payload.get("account_context")
+        if isinstance(account_context, Mapping):
+            result_payload["account_context"] = dict(account_context)
 
     log.info(
         "STYLE_INGEST_RESULT sid=%s account_id=%s prompt_salt=%s note_hash=%s",

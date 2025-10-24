@@ -291,7 +291,8 @@ def _handle_invalid_response(
         account_paths=account_paths, reason=reason
     )
     log.warning(
-        "[NOTE_STYLE] RESULT_INVALID account=%s reason=%s raw_path=%s result_path=%s",
+        "NOTE_STYLE_RESULT_INVALID sid=%s account_id=%s reason=%s raw_path=%s result_path=%s",
+        sid,
         account_id,
         reason,
         raw_path.resolve().as_posix(),
@@ -468,7 +469,7 @@ def send_note_style_packs_for_sid(
 
             result_path = _coerce_result_path(written_path) or account_paths.result_file
             log.info(
-                "STYLE_SEND_RESULTS_WRITTEN sid=%s account_id=%s result=%s",
+                "NOTE_STYLE_SENT sid=%s account_id=%s result=%s",
                 sid,
                 account_id,
                 result_path,
@@ -477,7 +478,7 @@ def send_note_style_packs_for_sid(
             result_relative = _relativize(result_path, paths.base)
             pack_relative = _relativize(pack_path, paths.base)
             log_structured_event(
-                "NOTE_STYLE_SENT_OK",
+                "NOTE_STYLE_SENT",
                 logger=log,
                 sid=sid,
                 account_id=account_id,

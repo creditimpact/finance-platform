@@ -120,7 +120,7 @@ def ingest_note_style_result(
     if metrics_payload is not None:
         result_payload["note_metrics"] = metrics_payload
 
-    log.info("STYLE_INGEST_RESULT sid=%s account_id=%s", sid, account_id)
+    log.info("NOTE_STYLE_PARSED sid=%s account_id=%s", sid, account_id)
 
     return store_note_style_result(
         sid,

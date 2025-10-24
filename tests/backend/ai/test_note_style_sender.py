@@ -95,6 +95,8 @@ def test_note_style_sender_sends_built_pack(
         account_paths.pack_file.read_text(encoding="utf-8").splitlines()[0]
     )
     assert stored_payload["prompt_salt"] == pack_payload["prompt_salt"]
+    assert stored_payload["fingerprint"] == pack_payload["fingerprint"]
+    assert stored_payload["account_context"] == pack_payload["account_context"]
 
     analysis = stored_payload["analysis"]
     assert analysis["tone"] == "empathetic"
@@ -147,7 +149,9 @@ def test_note_style_sender_skips_completed_entries(
         {
             "sid": sid,
             "account_id": account_id,
-            "answers": {"explanation": "Please fix"},
+            "answers": {
+                "explanation": "Please fix the errors on this account."
+            },
         },
     )
 

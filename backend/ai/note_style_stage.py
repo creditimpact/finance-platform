@@ -36,6 +36,7 @@ from backend.core.ai.paths import (
     note_style_result_filename,
     normalize_note_style_account_id,
 )
+from backend.pipeline.runs import RunManifest
 from backend.runflow.decider import record_stage
 
 
@@ -456,6 +457,77 @@ def _load_account_artifacts(
         tags = [entry for entry in raw_tags if isinstance(entry, Mapping)]
 
     return meta_payload, bureaus, tags
+
+
+def _coerce_artifact_key(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _register_note_style_case_artifacts(
+    *,
+    sid: str,
+    runs_root: Path,
+    account_id: str,
+    account_dir: Path | None,
+    meta_payload: Mapping[str, Any],
+    response_path: Path,
+) -> None:
+    keys: set[str] = set()
+    for candidate in (
+        account_id,
+        account_dir.name if isinstance(account_dir, Path) else None,
+        meta_payload.get("account_id") if isinstance(meta_payload, Mapping) else None,
+        meta_payload.get("account_index") if isinstance(meta_payload, Mapping) else None,
+    ):
+        key = _coerce_artifact_key(candidate)
+        if key:
+            keys.add(key)
+
+    if not keys:
+        return
+
+    artifacts: dict[str, Path] = {
+        "note_style_response": response_path.resolve(),
+    }
+    if isinstance(account_dir, Path):
+        resolved_dir = account_dir.resolve()
+        artifacts.update(
+            {
+                "bureaus": resolved_dir / "bureaus.json",
+                "meta": resolved_dir / "meta.json",
+                "tags": resolved_dir / "tags.json",
+            }
+        )
+
+    manifest_path = runs_root / sid / "manifest.json"
+    try:
+        manifest = RunManifest.load_or_create(manifest_path, sid)
+    except Exception:  # pragma: no cover - defensive logging
+        log.debug(
+            "NOTE_STYLE_MANIFEST_ARTIFACT_LOAD_FAILED sid=%s path=%s",
+            sid,
+            manifest_path,
+            exc_info=True,
+        )
+        return
+
+    for key in sorted(keys):
+        group = f"cases.accounts.{key}"
+        for name, path in artifacts.items():
+            try:
+                manifest = manifest.set_artifact(group, name, path)
+            except Exception:  # pragma: no cover - defensive logging
+                log.debug(
+                    "NOTE_STYLE_MANIFEST_ARTIFACT_SET_FAILED sid=%s group=%s name=%s path=%s",
+                    sid,
+                    group,
+                    name,
+                    path,
+                    exc_info=True,
+                )
 
 
 def _clean_value(value: Any) -> str:
@@ -2129,6 +2201,24 @@ def build_note_style_pack_for_account(
     paths = ensure_note_style_paths(runs_root_path, sid, create=True)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
 
+    accounts_map = _resolve_account_dir_map(
+        sid, runs_root_path, source_paths.accounts_dir
+    )
+    account_dir = _resolve_account_dir(
+        account_id_str,
+        source_paths.accounts_dir,
+        accounts_map,
+    )
+    meta_payload, bureaus_payload, tags_payload = _load_account_artifacts(account_dir)
+    _register_note_style_case_artifacts(
+        sid=sid,
+        runs_root=runs_root_path,
+        account_id=account_id_str,
+        account_dir=account_dir,
+        meta_payload=meta_payload,
+        response_path=response_path,
+    )
+
     try:
         loaded_note = _load_response_note(account_id, response_path)
     except NoteStyleSkip as exc:
@@ -2271,8 +2361,6 @@ def build_note_style_pack_for_account(
     )
     timestamp = _now_iso()
 
-    accounts_map = _resolve_account_dir_map(sid, runs_root_path, source_paths.accounts_dir)
-    account_dir = _resolve_account_dir(account_id_str, source_paths.accounts_dir, accounts_map)
     if account_dir is None:
         log.info(
             "NOTE_STYLE_ACCOUNT_DIR_MISSING sid=%s acc=%s",
@@ -2280,7 +2368,6 @@ def build_note_style_pack_for_account(
             account_id_str,
         )
 
-    meta_payload, bureaus_payload, tags_payload = _load_account_artifacts(account_dir)
     bureaus_summary = _summarize_bureaus(bureaus_payload)
     account_context = _build_account_context(
         meta_payload,

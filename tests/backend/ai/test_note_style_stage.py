@@ -303,7 +303,7 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
         .get("note_style", {})
     )
     assert ai_status.get("built") is True
-    assert ai_status.get("sent") is False
+    assert "sent" not in ai_status
     assert ai_status.get("completed_at") == last_built_at
 
     assert pack_payload["prompt_salt"] == result_payload["prompt_salt"] == result["prompt_salt"]

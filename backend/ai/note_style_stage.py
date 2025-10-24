@@ -1022,6 +1022,41 @@ def discover_note_style_response_accounts(
             )
             continue
 
+        try:
+            raw_payload = candidate.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+        except OSError:
+            log.warning(
+                "NOTE_STYLE_DISCOVERY_READ_FAILED sid=%s path=%s",
+                sid,
+                candidate,
+                exc_info=True,
+            )
+            continue
+
+        try:
+            payload = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            log.warning(
+                "NOTE_STYLE_DISCOVERY_INVALID_JSON sid=%s path=%s",
+                sid,
+                candidate,
+                exc_info=True,
+            )
+            continue
+
+        if not isinstance(payload, Mapping):
+            continue
+
+        if not _has_response_note_field(payload):
+            log.info(
+                "NOTE_STYLE_DISCOVERY_SKIP_NO_NOTE sid=%s path=%s",
+                sid,
+                candidate,
+            )
+            continue
+
         account_id = candidate.name[: -len(suffix)]
         normalized = normalize_note_style_account_id(account_id)
         pack_filename = note_style_pack_filename(account_id)
@@ -1406,61 +1441,62 @@ def _sanitize_note_value(value: Any) -> str:
     return _collapse_whitespace(normalized)
 
 
-def _extract_note_text(payload: Mapping[str, Any]) -> tuple[str, str]:
-    def _resolve_candidates(root: Any, parts: Sequence[str]) -> list[Any]:
-        if root is None:
-            return []
-        if not parts:
-            return [root]
+def _iter_note_value_candidates(root: Any, parts: Sequence[str]) -> Iterator[Any]:
+    if root is None:
+        return
+    if not parts:
+        yield root
+        return
 
-        head, *tail = parts
-        results: list[Any] = []
-
-        if isinstance(root, Mapping):
-            value = root.get(head)
-            if isinstance(value, Sequence) and not isinstance(
-                value, (str, bytes, bytearray)
-            ):
-                for entry in value:
-                    results.extend(_resolve_candidates(entry, tail))
-            else:
-                results.extend(_resolve_candidates(value, tail))
-        elif isinstance(root, Sequence) and not isinstance(root, (str, bytes, bytearray)):
-            for entry in root:
-                results.extend(_resolve_candidates(entry, parts))
-
-        return results
-
-    def _flatten_candidate(value: Any) -> Iterator[tuple[str, str]]:
-        if value is None:
-            return
-        if isinstance(value, str):
-            sanitized = _sanitize_note_value(value)
-            if sanitized:
-                yield value, sanitized
-            else:
-                yield value, ""
-            return
-        if isinstance(value, Mapping):
-            for entry in value.values():
-                yield from _flatten_candidate(entry)
-            return
+    head, *tail = parts
+    if isinstance(root, Mapping):
+        value = root.get(head)
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
             for entry in value:
-                yield from _flatten_candidate(entry)
-            return
-        sanitized = _sanitize_note_value(value)
-        raw_text = value if isinstance(value, str) else str(value)
-        if sanitized:
-            yield raw_text, sanitized
+                yield from _iter_note_value_candidates(entry, tail)
         else:
-            yield raw_text, ""
+            yield from _iter_note_value_candidates(value, tail)
+        return
 
+    if isinstance(root, Sequence) and not isinstance(root, (str, bytes, bytearray)):
+        for entry in root:
+            yield from _iter_note_value_candidates(entry, parts)
+
+
+def _flatten_note_candidate(value: Any) -> Iterator[tuple[str, str]]:
+    if value is None:
+        return
+    if isinstance(value, str):
+        sanitized = _sanitize_note_value(value)
+        yield value, sanitized
+        return
+    if isinstance(value, Mapping):
+        for entry in value.values():
+            yield from _flatten_note_candidate(entry)
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for entry in value:
+            yield from _flatten_note_candidate(entry)
+        return
+
+    sanitized = _sanitize_note_value(value)
+    raw_text = value if isinstance(value, str) else str(value)
+    yield raw_text, sanitized
+
+
+def _has_response_note_field(payload: Mapping[str, Any]) -> bool:
+    for path in _NOTE_VALUE_PATHS:
+        for candidate in _iter_note_value_candidates(payload, path):
+            for _raw_value, _sanitized in _flatten_note_candidate(candidate):
+                return True
+    return False
+
+
+def _extract_note_text(payload: Mapping[str, Any]) -> tuple[str, str]:
     fallback_raw: str | None = None
     for path in _NOTE_VALUE_PATHS:
-        candidates = _resolve_candidates(payload, path)
-        for candidate in candidates:
-            for raw_value, sanitized in _flatten_candidate(candidate):
+        for candidate in _iter_note_value_candidates(payload, path):
+            for raw_value, sanitized in _flatten_note_candidate(candidate):
                 if len(sanitized) > 0:
                     return raw_value, sanitized
                 if fallback_raw is None and isinstance(raw_value, str):

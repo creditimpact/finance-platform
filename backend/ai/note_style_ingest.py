@@ -20,30 +20,6 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _load_existing_payload(path: Path) -> Mapping[str, Any] | None:
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None
-    except OSError:
-        log.warning("STYLE_INGEST_EXISTING_READ_FAILED path=%s", path, exc_info=True)
-        return None
-
-    lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    if not lines:
-        return None
-
-    try:
-        payload = json.loads(lines[-1])
-    except json.JSONDecodeError:
-        log.warning("STYLE_INGEST_EXISTING_PARSE_FAILED path=%s", path, exc_info=True)
-        return None
-
-    return payload if isinstance(payload, Mapping) else None
-
-
-
-
 def _extract_response_content(response_payload: Any) -> str:
     choices: Sequence[Any] | None = None
     if hasattr(response_payload, "choices"):
@@ -116,8 +92,6 @@ def ingest_note_style_result(
 ) -> Path:
     """Persist the normalized ``response_payload`` for ``account_id``."""
 
-    existing_payload = _load_existing_payload(account_paths.result_file)
-
     parsed = _parse_response_payload(response_payload)
     analysis_payload: Mapping[str, Any]
     if isinstance(parsed.get("analysis"), Mapping):
@@ -143,15 +117,29 @@ def ingest_note_style_result(
     if bureaus_summary_payload is not None:
         result_payload["bureaus_summary"] = bureaus_summary_payload
 
-    if isinstance(existing_payload, Mapping):
-        note_metrics = existing_payload.get("note_metrics")
-        if isinstance(note_metrics, Mapping):
-            result_payload["note_metrics"] = dict(note_metrics)
+    metrics_payload: MutableMapping[str, Any] | None = None
+    analysis_input = pack_payload.get("analysis_input")
+    if isinstance(analysis_input, Mapping):
+        note_candidate: Any = (
+            analysis_input.get("customer_note")
+            or analysis_input.get("note_text")
+            or analysis_input.get("note")
+        )
+        if isinstance(note_candidate, str):
+            truncated = bool(analysis_input.get("note_truncated"))
+            metrics_payload = {
+                "char_len": len(note_candidate),
+                "word_len": len(note_candidate.split()),
+                "truncated": truncated,
+            }
 
-    if "note_metrics" not in result_payload:
+    if metrics_payload is None:
         metrics = pack_payload.get("note_metrics")
         if isinstance(metrics, Mapping):
-            result_payload["note_metrics"] = dict(metrics)
+            metrics_payload = dict(metrics)
+
+    if metrics_payload is not None:
+        result_payload["note_metrics"] = metrics_payload
 
     log.info("STYLE_INGEST_RESULT sid=%s account_id=%s", sid, account_id)
 

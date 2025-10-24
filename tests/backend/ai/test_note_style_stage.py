@@ -212,6 +212,18 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert parsed_content["note_text"].startswith("Please help")
     assert parsed_content["meta_name"] == "Capital One"
 
+    # Debug context snapshots should never leak into the pack payload that will be
+    # forwarded to the AI model or the initial result stub.
+    assert "debug" not in pack_payload
+    assert "debug" not in result_payload
+
+    pack_text = account_paths.pack_file.read_text(encoding="utf-8")
+    result_text = account_paths.result_file.read_text(encoding="utf-8")
+    debug_filename = account_paths.debug_file.name
+
+    assert debug_filename not in pack_text
+    assert debug_filename not in result_text
+
     assert result_payload["sid"] == sid
     assert result_payload["account_id"] == account_id
     assert result_payload["note_metrics"]["char_len"] == len(note)

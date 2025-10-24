@@ -129,6 +129,7 @@ class RunManifest:
                         "index": None,
                         "last_built_at": None,
                         "logs": None,
+                        "status": {"built": False, "completed_at": None},
                     },
                 },
                 "validation": {
@@ -399,6 +400,41 @@ class RunManifest:
                 "logs",
             ):
                 validation_section.setdefault(key, None)
+        note_style_section = packs.get("note_style")
+        if not isinstance(note_style_section, dict):
+            note_style_section = {
+                "base": None,
+                "dir": None,
+                "packs": None,
+                "packs_dir": None,
+                "results": None,
+                "results_dir": None,
+                "index": None,
+                "last_built_at": None,
+                "logs": None,
+                "status": {"built": False, "completed_at": None},
+            }
+            packs["note_style"] = note_style_section
+        else:
+            for key in (
+                "base",
+                "dir",
+                "packs",
+                "packs_dir",
+                "results",
+                "results_dir",
+                "index",
+                "last_built_at",
+                "logs",
+            ):
+                note_style_section.setdefault(key, None)
+            status_payload = note_style_section.get("status")
+            if not isinstance(status_payload, dict):
+                status_payload = {"built": False, "completed_at": None}
+                note_style_section["status"] = status_payload
+            else:
+                status_payload.setdefault("built", False)
+                status_payload.setdefault("completed_at", None)
         ai.setdefault(
             "validation",
             {
@@ -419,7 +455,7 @@ class RunManifest:
                 "skipped_reason": None,
             },
         )
-        for stage_key in ("merge", "validation"):
+        for stage_key in ("merge", "validation", "note_style"):
             stage_status = status.get(stage_key)
             if not isinstance(stage_status, dict):
                 stage_status = {
@@ -595,6 +631,99 @@ class RunManifest:
         validation_stage_status["built"] = True
         validation_stage_status["sent"] = False
         validation_stage_status["completed_at"] = None
+
+        return self.save()
+
+    def _ensure_ai_note_style_pack_section(self) -> dict[str, object]:
+        packs, _ = self._ensure_ai_section()
+        note_style = packs.get("note_style")
+        if not isinstance(note_style, dict):
+            note_style = {
+                "base": None,
+                "dir": None,
+                "packs": None,
+                "packs_dir": None,
+                "results": None,
+                "results_dir": None,
+                "index": None,
+                "last_built_at": None,
+                "logs": None,
+                "status": {"built": False, "completed_at": None},
+            }
+            packs["note_style"] = note_style
+        status_payload = note_style.setdefault(
+            "status", {"built": False, "completed_at": None}
+        )
+        if not isinstance(status_payload, dict):
+            status_payload = {"built": False, "completed_at": None}
+            note_style["status"] = status_payload
+        else:
+            status_payload.setdefault("built", False)
+            status_payload.setdefault("completed_at", None)
+        return note_style
+
+    def upsert_note_style_packs_dir(
+        self,
+        base_dir: Path,
+        *,
+        packs_dir: Path | None = None,
+        results_dir: Path | None = None,
+        index_file: Path | None = None,
+        log_file: Path | None = None,
+        last_built_at: str | None = None,
+    ) -> "RunManifest":
+        note_style = self._ensure_ai_note_style_pack_section()
+        resolved_base = Path(base_dir).resolve()
+        resolved_str = str(resolved_base)
+        timestamp = last_built_at or _utc_now()
+
+        note_style["base"] = resolved_str
+        note_style["dir"] = resolved_str
+
+        packs_path = (
+            Path(packs_dir).resolve()
+            if packs_dir is not None
+            else (resolved_base / "packs").resolve()
+        )
+        note_style["packs"] = str(packs_path)
+        note_style["packs_dir"] = str(packs_path)
+
+        results_path = (
+            Path(results_dir).resolve()
+            if results_dir is not None
+            else (resolved_base / "results").resolve()
+        )
+        note_style["results"] = str(results_path)
+        note_style["results_dir"] = str(results_path)
+
+        index_path = (
+            Path(index_file).resolve(strict=False)
+            if index_file is not None
+            else (resolved_base / "index.json").resolve(strict=False)
+        )
+        note_style["index"] = str(index_path)
+
+        log_path = (
+            Path(log_file).resolve(strict=False)
+            if log_file is not None
+            else (resolved_base / "logs.txt").resolve(strict=False)
+        )
+        note_style["logs"] = str(log_path)
+        note_style["last_built_at"] = timestamp
+
+        status_payload = note_style.setdefault(
+            "status", {"built": False, "completed_at": None}
+        )
+        if not isinstance(status_payload, dict):
+            status_payload = {}
+            note_style["status"] = status_payload
+        status_payload["built"] = True
+        status_payload["completed_at"] = timestamp
+
+        stage_status = self.ensure_ai_stage_status("note_style")
+        stage_status["built"] = True
+        stage_status["sent"] = False
+        stage_status["completed_at"] = timestamp
 
         return self.save()
 

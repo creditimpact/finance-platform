@@ -25,7 +25,7 @@ try:  # pragma: no cover - platform dependent
 except ImportError:  # pragma: no cover - platform dependent
     fcntl = None  # type: ignore[assignment]
 
-from backend.ai.manifest import ensure_note_style_section
+from backend.ai.manifest import ensure_note_style_section, register_note_style_build
 from backend.ai.note_style_logging import append_note_style_warning
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
@@ -2079,6 +2079,20 @@ def _record_stage_progress(
         "completed": packs_completed,
         "failed": packs_failed,
     }
+
+    manifest_timestamp: str | None = None
+    if status in {"built", "success"}:
+        manifest_timestamp = _now_iso()
+        try:
+            register_note_style_build(
+                sid,
+                runs_root=runs_root,
+                timestamp=manifest_timestamp,
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            log.warning(
+                "NOTE_STYLE_MANIFEST_UPDATE_FAILED sid=%s", sid, exc_info=True
+            )
 
     log.info(
         "NOTE_STYLE_REFRESH sid=%s ready=%s total=%s completed=%s failed=%s skipped=%s",

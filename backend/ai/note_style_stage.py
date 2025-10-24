@@ -2439,11 +2439,9 @@ def build_note_style_pack_for_account(
         "sid": sid,
         "account_id": str(account_id),
         "prompt_salt": prompt_salt,
-        "source_hash": source_hash,
         "note_hash": note_hash,
         "note_metrics": {"char_len": char_len, "word_len": word_len},
         "evaluated_at": timestamp,
-        "fingerprint": fingerprint,
         "fingerprint_hash": fingerprint_hash,
     }
 

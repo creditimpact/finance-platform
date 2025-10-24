@@ -288,7 +288,7 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
 
     sanitized = _sanitize_note_text(note)
     expected_hash = _normalized_hash(sanitized)
-    expected_note_hash = hashlib.sha256(note.encode("utf-8")).hexdigest()
+    expected_note_hash = hashlib.sha256(sanitized.encode("utf-8")).hexdigest()
 
     result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
     assert result["status"] == "completed"
@@ -477,7 +477,8 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
         "channel": "frontend_review",
         "lang": "auto",
     }
-    assert user_payload["note_text"] == note
+    assert user_payload["note_text"] == sanitized
+    assert user_payload["note_truncated"] is False
 
     assert 8 <= len(pack_payload["prompt_salt"]) <= 12
     assert pack_payload["note_hash"] == expected_note_hash
@@ -499,6 +500,7 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert result_payload["note_metrics"] == {
         "char_len": len(sanitized),
         "word_len": len(sanitized.split()),
+        "truncated": False,
     }
     assert result_payload["fingerprint_hash"] == expected_fingerprint_hash
     assert "fingerprint" not in result_payload
@@ -947,13 +949,17 @@ def test_note_style_stage_updates_on_modified_note(tmp_path: Path) -> None:
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
     updated_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
-    expected_hash = hashlib.sha256(updated_note.encode("utf-8")).hexdigest()
+    sanitized = _sanitize_note_text(updated_note)
+    expected_hash = hashlib.sha256(sanitized.encode("utf-8")).hexdigest()
     assert updated_payload["note_hash"] == expected_hash
     assert "source_hash" not in updated_payload
     assert updated_payload["prompt_salt"] == updated["prompt_salt"]
     metrics = updated_payload["note_metrics"]
-    sanitized = _sanitize_note_text(updated_note)
-    assert metrics == {"char_len": len(sanitized), "word_len": len(sanitized.split())}
+    assert metrics == {
+        "char_len": len(sanitized),
+        "word_len": len(sanitized.split()),
+        "truncated": False,
+    }
 
 def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     sid = "SID004"
@@ -975,7 +981,7 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
 
     sanitized = _sanitize_note_text(note)
     expected_hash = _normalized_hash(sanitized)
-    expected_note_hash = hashlib.sha256(note.encode("utf-8")).hexdigest()
+    expected_note_hash = hashlib.sha256(sanitized.encode("utf-8")).hexdigest()
 
     result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
     assert result["status"] == "completed"
@@ -1001,7 +1007,8 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-    assert pack_user_payload["note_text"] == note
+    assert pack_user_payload["note_text"] == sanitized
+    assert pack_user_payload["note_truncated"] is False
     metadata_payload = pack_user_payload.get("metadata")
     assert metadata_payload == {
         "sid": sid,
@@ -1020,11 +1027,59 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     assert result_payload["note_metrics"] == {
         "char_len": len(sanitized),
         "word_len": len(sanitized.split()),
+        "truncated": False,
     }
     assert result_payload["fingerprint_hash"] == expected_fingerprint_hash
     assert "fingerprint" not in result_payload
     assert "account_context" not in result_payload
     assert note not in account_paths.result_file.read_text(encoding="utf-8")
+
+
+def test_note_style_stage_truncates_long_note(tmp_path: Path) -> None:
+    sid = "SID004_LONG"
+    account_id = "idx-004-long"
+    runs_root = tmp_path
+    run_dir = runs_root / sid
+    response_dir = run_dir / "frontend" / "review" / "responses"
+
+    note = "Word " + "x" * 2100
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": note},
+        },
+    )
+
+    sanitized = _sanitize_note_text(note)
+    truncated_expected = sanitized[:2000]
+    expected_note_hash = hashlib.sha256(sanitized.encode("utf-8")).hexdigest()
+
+    result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+    assert result["status"] == "completed"
+    assert result["note_hash"] == expected_note_hash
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
+    result_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
+
+    user_payload = pack_payload["messages"][1]["content"]
+    assert user_payload["note_truncated"] is True
+    assert user_payload["note_text"] == truncated_expected
+    assert len(user_payload["note_text"]) == 2000
+
+    metrics = result_payload["note_metrics"]
+    assert metrics == {
+        "char_len": len(truncated_expected),
+        "word_len": len(truncated_expected.split()),
+        "truncated": True,
+    }
+
+    assert result_payload["note_hash"] == expected_note_hash
 
 
 def test_note_style_stage_skips_when_note_sanitizes_empty(tmp_path: Path) -> None:
@@ -1047,7 +1102,7 @@ def test_note_style_stage_skips_when_note_sanitizes_empty(tmp_path: Path) -> Non
 
     result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
     sanitized = _sanitize_note_text(note)
-    expected_note_hash = hashlib.sha256(note.encode("utf-8")).hexdigest()
+    expected_note_hash = hashlib.sha256(sanitized.encode("utf-8")).hexdigest()
     assert result["status"] == "skipped_low_signal"
     assert result["reason"] == "low_signal"
     assert result["note_hash"] == expected_note_hash
@@ -1227,7 +1282,11 @@ def test_note_style_stage_ignores_summary_file(tmp_path: Path) -> None:
     result_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
     assert "analysis" not in result_payload
     sanitized = _sanitize_note_text(note)
-    assert result_payload["note_metrics"] == {"char_len": len(sanitized), "word_len": len(sanitized.split())}
+    assert result_payload["note_metrics"] == {
+        "char_len": len(sanitized),
+        "word_len": len(sanitized.split()),
+        "truncated": False,
+    }
 
     assert summary_path.read_text(encoding="utf-8") == json.dumps(
         summary_payload, ensure_ascii=False, indent=2

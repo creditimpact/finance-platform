@@ -47,6 +47,7 @@ _DEBOUNCE_MS_ENV = "NOTE_STYLE_DEBOUNCE_MS"
 _DEFAULT_DEBOUNCE_MS = 750
 
 _NOTE_STYLE_MODEL = "gpt-4o-mini"
+_NOTE_TEXT_MAX_CHARS = 2000
 _NOTE_STYLE_SYSTEM_PROMPT = (
     "You extract structured style from a customer's free-text note.\n"
     "Respond in JSON ONLY using EXACT schema: {{\"tone\": <string>, \"context_hints\": {{\"timeframe\": {{\"month\": <string|null>, \"relative\": <string|null>}}, \"topic\": <string>, \"entities\": {{\"creditor\": <string|null>, \"amount\": <number|null>}}}}, \"emphasis\": [<string>...], \"confidence\": <float>, \"risk_flags\": [<string>...]}}. No prose or markdown.\n"
@@ -1338,6 +1339,7 @@ def _log_style_discovery(
     source_hash: str | None = None,
     char_len: int | None = None,
     word_len: int | None = None,
+    truncated: bool | None = None,
     analysis: Mapping[str, Any] | None = None,
     prompt_salt: str | None = None,
     reason: str | None = None,
@@ -1348,7 +1350,7 @@ def _log_style_discovery(
         confidence_text = f"{confidence_value:.2f}"
 
     log.info(
-        "NOTE_STYLE_DISCOVERY_DETAIL sid=%s account_id=%s response=%s status=%s note_hash=%s source_hash=%s chars=%s words=%s tone=%s topic=%s emphasis=%s confidence=%s risk_flags=%s prompt_salt=%s reason=%s",
+        "NOTE_STYLE_DISCOVERY_DETAIL sid=%s account_id=%s response=%s status=%s note_hash=%s source_hash=%s chars=%s words=%s truncated=%s tone=%s topic=%s emphasis=%s confidence=%s risk_flags=%s prompt_salt=%s reason=%s",
         sid,
         account_id,
         str(response),
@@ -1357,6 +1359,7 @@ def _log_style_discovery(
         source_hash or "",
         "" if char_len is None else char_len,
         "" if word_len is None else word_len,
+        "" if truncated is None else truncated,
         tone,
         topic,
         "|".join(emphasis_values),
@@ -1368,9 +1371,19 @@ def _log_style_discovery(
 
 
 def _note_hash(note_text: str) -> str:
+    normalized = _collapse_whitespace(unicodedata.normalize("NFKC", note_text))
     digest = hashlib.sha256()
-    digest.update(note_text.encode("utf-8"))
+    digest.update(normalized.encode("utf-8"))
     return digest.hexdigest()
+
+
+def _prepare_note_text_for_model(note_text: str) -> tuple[str, bool]:
+    sanitized = _collapse_whitespace(unicodedata.normalize("NFKC", note_text))
+    truncated = False
+    if len(sanitized) > _NOTE_TEXT_MAX_CHARS:
+        sanitized = sanitized[:_NOTE_TEXT_MAX_CHARS]
+        truncated = True
+    return sanitized, truncated
 
 
 def _random_prompt_salt() -> str:
@@ -1385,6 +1398,7 @@ def _pack_messages(
     sid: str,
     account_id: str,
     note_text: str,
+    note_truncated: bool,
     prompt_salt: str,
     fingerprint_hash: str,
 ) -> list[Mapping[str, Any]]:
@@ -1399,6 +1413,7 @@ def _pack_messages(
 
     user_content: dict[str, Any] = {
         "note_text": note_text,
+        "note_truncated": note_truncated,
         "metadata": metadata,
     }
 
@@ -2283,14 +2298,14 @@ def build_note_style_pack_for_account(
             "packs_completed": totals.get("completed", 0),
         }
 
-    note_raw = loaded_note.note_raw
     note_sanitized = loaded_note.note_sanitized
+    note_text_for_model, note_truncated = _prepare_note_text_for_model(note_sanitized)
     source_hash = loaded_note.source_hash
     ui_allegations_selected = list(loaded_note.ui_allegations_selected)
-    note_hash = _note_hash(note_raw)
-    char_len = len(note_sanitized)
-    word_len = len(note_sanitized.split())
-    if _is_low_signal_note(note_sanitized):
+    note_hash = _note_hash(note_sanitized)
+    char_len = len(note_text_for_model)
+    word_len = len(note_text_for_model.split())
+    if _is_low_signal_note(note_text_for_model):
         timestamp = _now_iso()
         skip_status = "skipped_low_signal"
         _remove_account_artifacts(account_paths)
@@ -2307,12 +2322,13 @@ def build_note_style_pack_for_account(
             sid=sid, runs_root=runs_root_path, totals=totals, index_path=paths.index_file
         )
         log.info(
-            "NOTE_STYLE_PACK_SKIPPED_LOW_SIGNAL sid=%s acc=%s note_hash=%s char_len=%s word_len=%s",
+            "NOTE_STYLE_PACK_SKIPPED_LOW_SIGNAL sid=%s acc=%s note_hash=%s char_len=%s word_len=%s truncated=%s",
             sid,
             account_id_str,
             note_hash,
             char_len,
             word_len,
+            note_truncated,
         )
         _log_style_discovery(
             sid=sid,
@@ -2323,6 +2339,7 @@ def build_note_style_pack_for_account(
             source_hash=source_hash,
             char_len=char_len,
             word_len=word_len,
+            truncated=note_truncated,
             reason="low_signal",
         )
         return {
@@ -2380,6 +2397,7 @@ def build_note_style_pack_for_account(
             source_hash=source_hash,
             char_len=char_len,
             word_len=word_len,
+            truncated=note_truncated,
             prompt_salt=prompt_salt_existing,
         )
         return {
@@ -2398,6 +2416,7 @@ def build_note_style_pack_for_account(
         source_hash=source_hash,
         char_len=char_len,
         word_len=word_len,
+        truncated=note_truncated,
         prompt_salt=prompt_salt,
     )
     timestamp = _now_iso()
@@ -2431,7 +2450,8 @@ def build_note_style_pack_for_account(
         "messages": _pack_messages(
             sid=sid,
             account_id=str(account_id),
-            note_text=note_raw,
+            note_text=note_text_for_model,
+            note_truncated=note_truncated,
             prompt_salt=prompt_salt,
             fingerprint_hash=fingerprint_hash,
         ),
@@ -2442,7 +2462,11 @@ def build_note_style_pack_for_account(
         "account_id": str(account_id),
         "prompt_salt": prompt_salt,
         "note_hash": note_hash,
-        "note_metrics": {"char_len": char_len, "word_len": word_len},
+        "note_metrics": {
+            "char_len": char_len,
+            "word_len": word_len,
+            "truncated": note_truncated,
+        },
         "evaluated_at": timestamp,
         "fingerprint_hash": fingerprint_hash,
     }
@@ -2465,7 +2489,7 @@ def build_note_style_pack_for_account(
     pack_relative = _relativize(account_paths.pack_file, paths.base)
     result_relative = _relativize(account_paths.result_file, paths.base)
     log.info(
-        "NOTE_STYLE_PACK_BUILT sid=%s acc=%s pack=%s result=%s note_hash=%s prompt_salt=%s source_hash=%s char_len=%s word_len=%s model=%s fingerprint=%s",
+        "NOTE_STYLE_PACK_BUILT sid=%s acc=%s pack=%s result=%s note_hash=%s prompt_salt=%s source_hash=%s char_len=%s word_len=%s truncated=%s model=%s fingerprint=%s",
         sid,
         account_id_str,
         pack_relative,
@@ -2475,6 +2499,7 @@ def build_note_style_pack_for_account(
         source_hash,
         char_len,
         word_len,
+        note_truncated,
         _NOTE_STYLE_MODEL,
         fingerprint,
     )

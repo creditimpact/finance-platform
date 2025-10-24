@@ -495,13 +495,13 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert "extractor" not in result_payload
     assert note not in account_paths.result_file.read_text(encoding="utf-8")
     assert result_payload["note_hash"] == expected_note_hash
-    assert result_payload["source_hash"] == expected_hash
+    assert "source_hash" not in result_payload
     assert result_payload["note_metrics"] == {
         "char_len": len(sanitized),
         "word_len": len(sanitized.split()),
     }
-    assert result_payload["fingerprint"] == expected_fingerprint
     assert result_payload["fingerprint_hash"] == expected_fingerprint_hash
+    assert "fingerprint" not in result_payload
     assert "account_context" not in result_payload
     assert result_payload["ui_allegations_selected"] == ["not_mine", "wrong_amount"]
 
@@ -948,9 +948,8 @@ def test_note_style_stage_updates_on_modified_note(tmp_path: Path) -> None:
     account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
     updated_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
     expected_hash = hashlib.sha256(updated_note.encode("utf-8")).hexdigest()
-    expected_source = _normalized_hash(_sanitize_note_text(updated_note))
     assert updated_payload["note_hash"] == expected_hash
-    assert updated_payload["source_hash"] == expected_source
+    assert "source_hash" not in updated_payload
     assert updated_payload["prompt_salt"] == updated["prompt_salt"]
     metrics = updated_payload["note_metrics"]
     sanitized = _sanitize_note_text(updated_note)
@@ -1017,13 +1016,13 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     assert pack_payload["fingerprint_hash"] == expected_fingerprint_hash
     assert "account_context" not in pack_payload
     assert result_payload["note_hash"] == expected_note_hash
-    assert result_payload["source_hash"] == expected_hash
+    assert "source_hash" not in result_payload
     assert result_payload["note_metrics"] == {
         "char_len": len(sanitized),
         "word_len": len(sanitized.split()),
     }
-    assert result_payload["fingerprint"] == expected_fingerprint
     assert result_payload["fingerprint_hash"] == expected_fingerprint_hash
+    assert "fingerprint" not in result_payload
     assert "account_context" not in result_payload
     assert note not in account_paths.result_file.read_text(encoding="utf-8")
 

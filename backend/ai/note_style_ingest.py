@@ -327,6 +327,14 @@ def ingest_note_style_result(
             existing_payload.get("note_hash"), preserve_case=True
         )
 
+    fingerprint_hash = _coerce_str(
+        pack_payload.get("fingerprint_hash"), preserve_case=True
+    )
+    if not fingerprint_hash and isinstance(existing_payload, Mapping):
+        fingerprint_hash = _coerce_str(
+            existing_payload.get("fingerprint_hash"), preserve_case=True
+        )
+
     parsed = _parse_response_payload(response_payload)
     analysis_payload: Mapping[str, Any]
     if isinstance(parsed.get("analysis"), Mapping):
@@ -344,24 +352,18 @@ def ingest_note_style_result(
         "note_hash": note_hash,
         "analysis": normalized_analysis,
         "evaluated_at": evaluated_at,
+        "fingerprint_hash": fingerprint_hash,
     }
 
     if isinstance(existing_payload, Mapping):
-        source_hash = existing_payload.get("source_hash")
-        if isinstance(source_hash, str) and source_hash.strip():
-            result_payload["source_hash"] = source_hash.strip()
-
         note_metrics = existing_payload.get("note_metrics")
         if isinstance(note_metrics, Mapping):
             result_payload["note_metrics"] = dict(note_metrics)
 
-        fingerprint = existing_payload.get("fingerprint")
-        if isinstance(fingerprint, Mapping):
-            result_payload["fingerprint"] = dict(fingerprint)
-
-        fingerprint_hash = existing_payload.get("fingerprint_hash")
-        if isinstance(fingerprint_hash, str) and fingerprint_hash.strip():
-            result_payload["fingerprint_hash"] = fingerprint_hash.strip()
+    if "note_metrics" not in result_payload:
+        metrics = pack_payload.get("note_metrics")
+        if isinstance(metrics, Mapping):
+            result_payload["note_metrics"] = dict(metrics)
 
     log.info(
         "STYLE_INGEST_RESULT sid=%s account_id=%s prompt_salt=%s note_hash=%s",

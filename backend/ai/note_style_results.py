@@ -132,6 +132,25 @@ def _validate_result_payload(
     missing_fields: list[str] = []
     analysis_payload = payload.get("analysis")
 
+    fingerprint_hash = str(payload.get("fingerprint_hash") or "").strip()
+    if not fingerprint_hash:
+        missing_fields.append("fingerprint_hash")
+
+    evaluated_at = str(payload.get("evaluated_at") or "").strip()
+    if not evaluated_at:
+        missing_fields.append("evaluated_at")
+
+    note_metrics = payload.get("note_metrics")
+    if isinstance(note_metrics, Mapping):
+        char_len = note_metrics.get("char_len")
+        word_len = note_metrics.get("word_len")
+        if not isinstance(char_len, (int, float)):
+            missing_fields.append("note_metrics.char_len")
+        if not isinstance(word_len, (int, float)):
+            missing_fields.append("note_metrics.word_len")
+    else:
+        missing_fields.append("note_metrics")
+
     if isinstance(analysis_payload, Mapping):
         tone = str(analysis_payload.get("tone") or "").strip()
         if not tone:
@@ -141,11 +160,43 @@ def _validate_result_payload(
         context_payload = analysis_payload.get("context_hints")
         if isinstance(context_payload, Mapping):
             topic_value = str(context_payload.get("topic") or "").strip()
+            timeframe = context_payload.get("timeframe")
+            if isinstance(timeframe, Mapping):
+                month_value = timeframe.get("month")
+                if month_value is not None and not isinstance(month_value, str):
+                    missing_fields.append("timeframe.month")
+                relative_value = timeframe.get("relative")
+                if relative_value is not None and not isinstance(relative_value, str):
+                    missing_fields.append("timeframe.relative")
+            else:
+                missing_fields.append("timeframe")
+
+            entities_payload = context_payload.get("entities")
+            if isinstance(entities_payload, Mapping):
+                creditor_value = entities_payload.get("creditor")
+                if creditor_value is not None and not isinstance(creditor_value, str):
+                    missing_fields.append("entities.creditor")
+                amount_value = entities_payload.get("amount")
+                if amount_value is not None and not isinstance(amount_value, (int, float)):
+                    missing_fields.append("entities.amount")
+            else:
+                missing_fields.append("entities")
+        else:
+            missing_fields.append("context_hints")
+
         if not topic_value:
             missing_fields.append("topic")
 
         if analysis_payload.get("confidence") is None:
             missing_fields.append("confidence")
+
+        emphasis = analysis_payload.get("emphasis")
+        if emphasis is None:
+            missing_fields.append("emphasis")
+
+        risk_flags = analysis_payload.get("risk_flags")
+        if risk_flags is None:
+            missing_fields.append("risk_flags")
     else:
         missing_fields.append("analysis")
 
@@ -366,12 +417,11 @@ def store_note_style_result(
     )
     result_relative = _relative_to_base(account_paths.result_file, paths.base)
     log.info(
-        "NOTE_STYLE_RESULT_WRITTEN sid=%s acc=%s path=%s prompt_salt=%s source_hash=%s",
+        "NOTE_STYLE_RESULT_WRITTEN sid=%s acc=%s path=%s prompt_salt=%s",
         sid,
         account_id,
         result_relative,
         str(payload.get("prompt_salt") or ""),
-        str(payload.get("source_hash") or ""),
     )
 
     writer = NoteStyleIndexWriter(sid=sid, paths=paths)

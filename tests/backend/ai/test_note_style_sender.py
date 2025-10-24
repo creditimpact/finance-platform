@@ -95,7 +95,7 @@ def test_note_style_sender_sends_built_pack(
         account_paths.pack_file.read_text(encoding="utf-8").splitlines()[0]
     )
     assert stored_payload["prompt_salt"] == pack_payload["prompt_salt"]
-    assert stored_payload["fingerprint"] == pack_payload["fingerprint"]
+    assert "fingerprint" not in stored_payload
     assert stored_payload["fingerprint_hash"] == pack_payload["fingerprint_hash"]
     analysis = stored_payload["analysis"]
     assert analysis["tone"] == "empathetic"

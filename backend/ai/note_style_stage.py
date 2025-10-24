@@ -167,6 +167,12 @@ _PERSONAL_DATA_PATTERNS = (
     re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE),
 )
 
+_EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+_PHONE_PATTERNS = (
+    re.compile(r"(?<!\d)(?:\+?1[-\.\s]*)?(?:\(\d{3}\)|\d{3})[-\.\s]*\d{3}[-\.\s]*\d{4}(?!\d)"),
+    re.compile(r"\b\d{3}[-\.\s]\d{3}[-\.\s]\d{4}\b"),
+)
+
 _NOTE_VALUE_PATHS: tuple[tuple[str, ...], ...] = (
     ("data", "explain"),
     ("answers", "explain"),
@@ -837,7 +843,7 @@ def _build_account_context(
         if value:
             meta_context[key] = value
 
-    tail = _clean_value(meta.get("account_number_tail"))
+    tail = _extract_account_tail(meta, bureaus)
     if tail:
         meta_context["account_number_tail"] = tail
 
@@ -1379,7 +1385,9 @@ def _note_hash(note_text: str) -> str:
 
 
 def _prepare_note_text_for_model(note_text: str) -> tuple[str, bool]:
-    sanitized = _collapse_whitespace(unicodedata.normalize("NFKC", note_text))
+    normalized = unicodedata.normalize("NFKC", note_text)
+    masked = _mask_contact_info(normalized)
+    sanitized = _collapse_whitespace(masked)
     truncated = False
     if len(sanitized) > _NOTE_TEXT_MAX_CHARS:
         sanitized = sanitized[:_NOTE_TEXT_MAX_CHARS]
@@ -1437,6 +1445,16 @@ def _collapse_whitespace(value: str) -> str:
     return " ".join(translated.split()).strip()
 
 
+def _mask_contact_info(value: str) -> str:
+    if not value:
+        return value
+
+    masked = _EMAIL_PATTERN.sub("[redacted_email]", value)
+    for pattern in _PHONE_PATTERNS:
+        masked = pattern.sub("[redacted_phone]", masked)
+    return masked
+
+
 def _normalize_low_signal_candidate(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value)
     normalized = normalized.lower()
@@ -1459,7 +1477,8 @@ def _sanitize_note_value(value: Any) -> str:
     if not isinstance(value, str):
         value = str(value)
     normalized = unicodedata.normalize("NFKC", value)
-    return _collapse_whitespace(normalized)
+    masked = _mask_contact_info(normalized)
+    return _collapse_whitespace(masked)
 
 
 def _iter_note_value_candidates(root: Any, parts: Sequence[str]) -> Iterator[Any]:

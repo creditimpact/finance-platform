@@ -796,62 +796,109 @@ def _build_account_fingerprint(
     bureaus: Mapping[str, Mapping[str, Any]],
     tags: Sequence[Mapping[str, Any]],
     bureaus_summary: Mapping[str, Any] | None = None,
-) -> str:
-    components: list[str] = []
+) -> dict[str, Any]:
+    if bureaus_summary is None:
+        bureaus_summary = _summarize_bureaus(bureaus)
 
-    issuer = ""
+    majority_values: Mapping[str, Any] = {}
+    disagreements_payload: Mapping[str, Mapping[str, str]] = {}
+    if isinstance(bureaus_summary, Mapping):
+        majority_payload = bureaus_summary.get("majority_values")
+        if isinstance(majority_payload, Mapping):
+            majority_values = majority_payload
+        disagreements_candidate = bureaus_summary.get("disagreements")
+        if isinstance(disagreements_candidate, Mapping):
+            disagreements_payload = {
+                str(field): {
+                    str(bureau): str(value)
+                    for bureau, value in mapping.items()
+                    if str(value)
+                }
+                for field, mapping in disagreements_candidate.items()
+                if isinstance(mapping, Mapping)
+            }
+
+    fingerprint: dict[str, Any] = {}
+
+    normalized_account_id = _clean_value(meta.get("account_id")) or account_id
+    account_id_slug = _slugify(normalized_account_id) or "unknown"
+    fingerprint["account_id"] = account_id_slug
+
+    identity_section: dict[str, Any] = {}
+    issuer_value = ""
     for key in ("issuer_slug", "issuer_canonical", "heading_guess", "issuer_variant"):
-        issuer = _clean_value(meta.get(key))
-        if issuer:
+        candidate = _clean_value(meta.get(key))
+        if candidate:
+            issuer_value = _slugify(candidate)
             break
-    if issuer:
-        components.append(f"issuer:{_slugify(issuer)}")
+    if issuer_value:
+        identity_section["issuer"] = issuer_value
 
-    issue_slugs = []
+    reported_creditor = _clean_value(majority_values.get("reported_creditor"))
+    if not reported_creditor:
+        reported_creditor = _clean_value(meta.get("heading_guess"))
+    if reported_creditor:
+        identity_section["reported_creditor"] = _slugify(reported_creditor)
+
+    tail = _extract_account_tail(meta, bureaus)
+    if tail:
+        identity_section["account_tail"] = tail
+
+    if identity_section:
+        fingerprint["identity"] = identity_section
+
+    issue_section: dict[str, Any] = {}
+    primary_issue = _select_primary_issue(tags)
+    if primary_issue:
+        issue_section["primary"] = _slugify(primary_issue)
+    issue_slugs: list[str] = []
     for issue in _collect_issue_tags(tags):
         slug = _slugify(issue)
         if slug:
             issue_slugs.append(slug)
     if issue_slugs:
-        components.append(f"issues:{'+'.join(sorted(issue_slugs))}")
+        issue_section["all"] = sorted(set(issue_slugs))
+    if issue_section:
+        fingerprint["core_issue"] = issue_section
 
-    if bureaus_summary is None:
-        bureaus_summary = _summarize_bureaus(bureaus)
-    majority_values: Mapping[str, Any] = {}
-    if isinstance(bureaus_summary, Mapping):
-        majority_payload = bureaus_summary.get("majority_values")
-        if isinstance(majority_payload, Mapping):
-            majority_values = majority_payload
+    financial_section: dict[str, Any] = {}
+    for field in ("account_type", "account_status", "payment_status", "creditor_type"):
+        value = _clean_value(majority_values.get(field))
+        if value:
+            financial_section[field] = _slugify(value)
+    for field in ("balance_owed", "high_balance", "past_due_amount"):
+        value = _clean_value(majority_values.get(field))
+        if value:
+            financial_section[field] = value
+    if financial_section:
+        fingerprint["financial"] = financial_section
 
-    reported_creditor = _clean_value(majority_values.get("reported_creditor"))
-    if reported_creditor:
-        components.append(f"reported:{_slugify(reported_creditor)}")
+    dates_section: dict[str, Any] = {}
+    date_fields = {
+        "date_opened": "opened",
+        "date_reported": "reported",
+        "date_of_last_activity": "last_activity",
+        "closed_date": "closed",
+        "last_verified": "last_verified",
+    }
+    for source_field, target_field in date_fields.items():
+        value = _clean_value(majority_values.get(source_field))
+        if value:
+            dates_section[target_field] = value
+    if dates_section:
+        fingerprint["dates"] = dates_section
 
-    account_type_value = _clean_value(majority_values.get("account_type"))
-    if account_type_value:
-        components.append(f"type:{_slugify(account_type_value)}")
+    disagreements_section = {
+        "has_disagreements": bool(disagreements_payload),
+        "fields": {
+            field: dict(sorted(values.items(), key=lambda item: item[0]))
+            for field, values in disagreements_payload.items()
+            if values
+        },
+    }
+    fingerprint["disagreements"] = disagreements_section
 
-    account_status_value = _clean_value(majority_values.get("account_status"))
-    if account_status_value:
-        components.append(f"status:{_slugify(account_status_value)}")
-
-    payment_status_value = _clean_value(majority_values.get("payment_status"))
-    if payment_status_value:
-        components.append(f"payment:{_slugify(payment_status_value)}")
-
-    creditor_type_value = _clean_value(majority_values.get("creditor_type"))
-    if creditor_type_value:
-        components.append(f"creditor:{_slugify(creditor_type_value)}")
-
-    tail = _extract_account_tail(meta, bureaus)
-    if tail:
-        components.append(f"tail:{tail}")
-
-    if not components:
-        fallback = _slugify(account_id) or "unknown"
-        return f"account:{fallback}"
-
-    return "|".join(components)
+    return fingerprint
 
 
 def discover_note_style_response_accounts(
@@ -1185,7 +1232,7 @@ def _pack_messages(
     account_id: str,
     note_text: str,
     prompt_salt: str,
-    fingerprint: str,
+    fingerprint: Mapping[str, Any],
     account_context: Mapping[str, Any],
 ) -> list[dict[str, str]]:
     system_message = _NOTE_STYLE_SYSTEM_PROMPT.format(prompt_salt=prompt_salt)

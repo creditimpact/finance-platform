@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -32,6 +33,38 @@ from backend.runflow.decider import (
 )
 
 log = logging.getLogger(__name__)
+
+
+_SHORT_NOTE_WORD_LIMIT = 12
+_SHORT_NOTE_CHAR_LIMIT = 90
+_UNSUPPORTED_CLAIM_KEYWORDS = (
+    "legal",  # general legal language
+    "lawsuit",
+    "attorney",
+    "court",
+    "legal claim",
+    "sue",
+    "filing",
+    "owe me",
+    "owe us",
+    "owed me",
+    "owed us",
+)
+_NO_DOCUMENT_PATTERNS = (
+    "no documents",
+    "no document",
+    "no documentation",
+    "without documents",
+    "without documentation",
+    "no proof",
+    "without proof",
+    "no evidence",
+    "without evidence",
+    "don't have documents",
+    "do not have documents",
+    "don't have proof",
+    "do not have proof",
+)
 
 
 def _resolve_runs_root(runs_root: Path | str | None) -> Path:
@@ -196,6 +229,29 @@ def _normalize_risk_flags_list(values: Any) -> list[str]:
     return normalized
 
 
+def _coerce_positive_int(value: Any) -> int | None:
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError):
+        try:
+            numeric = int(float(value))
+        except (TypeError, ValueError):
+            return None
+    if numeric < 0:
+        return None
+    return numeric
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(numeric) or math.isinf(numeric):
+        return None
+    return numeric
+
+
 def _normalize_context_section(context: MutableMapping[str, Any]) -> None:
     if "risk_flags" in context:
         context["risk_flags"] = _normalize_risk_flags_list(context.get("risk_flags"))
@@ -333,6 +389,107 @@ def _load_pack_note_metrics(pack_path: Path) -> Mapping[str, Any] | None:
         if isinstance(metrics, Mapping):
             return dict(metrics)
     return None
+
+
+def _load_pack_note_text(pack_path: Path) -> str | None:
+    payload = _load_pack_payload_for_logging(pack_path)
+    if not isinstance(payload, Mapping):
+        return None
+    messages = payload.get("messages")
+    if not isinstance(messages, Sequence):
+        return None
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        role = str(message.get("role") or "").strip().lower()
+        if role != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, Mapping):
+            note_text = content.get("note_text")
+            if isinstance(note_text, str):
+                return note_text
+        elif isinstance(content, str):
+            return content
+    return None
+
+
+def _is_short_note_metrics(note_metrics: Mapping[str, Any] | None) -> bool:
+    if not isinstance(note_metrics, Mapping):
+        return False
+    word_len = _coerce_positive_int(note_metrics.get("word_len"))
+    if word_len is not None and word_len <= _SHORT_NOTE_WORD_LIMIT:
+        return True
+    char_len = _coerce_positive_int(note_metrics.get("char_len"))
+    if char_len is not None and char_len <= _SHORT_NOTE_CHAR_LIMIT:
+        return True
+    return False
+
+
+def _enforce_confidence_cap(analysis: MutableMapping[str, Any], limit: float) -> None:
+    confidence_value = _coerce_float(analysis.get("confidence"))
+    if confidence_value is None:
+        return
+    capped = min(max(confidence_value, 0.0), limit)
+    analysis["confidence"] = round(capped, 2)
+
+
+def _append_risk_flag(analysis: MutableMapping[str, Any], flag: str) -> None:
+    existing = _normalize_risk_flags_list(analysis.get("risk_flags"))
+    addition = _normalize_risk_flags_list([flag])
+    for entry in addition:
+        if entry not in existing:
+            existing.append(entry)
+    if existing:
+        analysis["risk_flags"] = existing
+
+
+def _detect_unsupported_claim(note_text: str) -> bool:
+    normalized = " ".join(note_text.lower().split())
+    if not normalized:
+        return False
+    if not any(keyword in normalized for keyword in _UNSUPPORTED_CLAIM_KEYWORDS):
+        return False
+    return any(pattern in normalized for pattern in _NO_DOCUMENT_PATTERNS)
+
+
+def _resolve_note_metrics(
+    payload: MutableMapping[str, Any],
+    *,
+    existing_note_metrics: Mapping[str, Any] | None,
+    pack_path: Path,
+) -> Mapping[str, Any] | None:
+    note_metrics_candidate = payload.get("note_metrics")
+    if isinstance(note_metrics_candidate, Mapping):
+        return dict(note_metrics_candidate)
+    if isinstance(existing_note_metrics, Mapping):
+        metrics_copy = dict(existing_note_metrics)
+        payload["note_metrics"] = metrics_copy
+        return metrics_copy
+    pack_metrics = _load_pack_note_metrics(pack_path)
+    if isinstance(pack_metrics, Mapping):
+        metrics_copy = dict(pack_metrics)
+        payload["note_metrics"] = metrics_copy
+        return metrics_copy
+    return None
+
+
+def _apply_result_enhancements(
+    payload: MutableMapping[str, Any],
+    *,
+    note_metrics: Mapping[str, Any] | None,
+    pack_path: Path,
+) -> None:
+    analysis_payload = payload.get("analysis")
+    if not isinstance(analysis_payload, Mapping):
+        return
+    analysis_mutable = _ensure_mutable_mapping(analysis_payload)
+    if _is_short_note_metrics(note_metrics):
+        _enforce_confidence_cap(analysis_mutable, 0.5)
+    note_text = _load_pack_note_text(pack_path)
+    if note_text and _detect_unsupported_claim(note_text):
+        _append_risk_flag(analysis_mutable, "unsupported_claim")
+    payload["analysis"] = analysis_mutable
 
 
 def _validate_result_payload(
@@ -653,6 +810,18 @@ def store_note_style_result(
 
     normalized_payload = _normalize_result_payload(payload)
 
+    note_metrics_payload = _resolve_note_metrics(
+        normalized_payload,
+        existing_note_metrics=existing_note_metrics,
+        pack_path=account_paths.pack_file,
+    )
+
+    _apply_result_enhancements(
+        normalized_payload,
+        note_metrics=note_metrics_payload,
+        pack_path=account_paths.pack_file,
+    )
+
     _atomic_write_jsonl(account_paths.result_file, normalized_payload)
     _validate_result_payload(
         sid=sid,
@@ -684,15 +853,6 @@ def store_note_style_result(
             risk_flags_payload = list(candidate_flags)
         elif candidate_flags is None:
             risk_flags_payload = []
-
-    note_metrics_payload = None
-    note_metrics_candidate = normalized_payload.get("note_metrics")
-    if isinstance(note_metrics_candidate, Mapping):
-        note_metrics_payload = dict(note_metrics_candidate)
-    if note_metrics_payload is None and isinstance(existing_note_metrics, Mapping):
-        note_metrics_payload = dict(existing_note_metrics)
-    if note_metrics_payload is None:
-        note_metrics_payload = _load_pack_note_metrics(account_paths.pack_file)
 
     log_structured_event(
         "NOTE_STYLE_RESULTS_WRITTEN",

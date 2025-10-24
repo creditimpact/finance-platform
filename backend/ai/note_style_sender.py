@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
 from backend.ai.note_style_ingest import ingest_note_style_result
+from backend.ai.note_style_logging import log_structured_event
 from backend.core.ai.paths import (
     ensure_note_style_account_paths,
     ensure_note_style_paths,
@@ -234,6 +235,19 @@ def send_note_style_packs_for_sid(
             sid,
             account_id,
             result_path,
+        )
+
+        result_relative = _relativize(result_path, paths.base)
+        pack_relative = _relativize(pack_path, paths.base)
+        log_structured_event(
+            "NOTE_STYLE_SENT_OK",
+            logger=log,
+            sid=sid,
+            account_id=account_id,
+            model=model or "",
+            latency_seconds=latency,
+            pack_path=pack_relative,
+            result_path=result_relative,
         )
 
         log.info(

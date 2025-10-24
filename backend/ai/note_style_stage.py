@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover - platform dependent
     fcntl = None  # type: ignore[assignment]
 
 from backend.ai.manifest import ensure_note_style_section, register_note_style_build
-from backend.ai.note_style_logging import append_note_style_warning
+from backend.ai.note_style_logging import append_note_style_warning, log_structured_event
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     NoteStylePaths,
@@ -2236,6 +2236,18 @@ def _record_stage_progress(
         packs_failed,
         packs_skipped,
     )
+    log_structured_event(
+        "NOTE_STYLE_REFRESH",
+        logger=log,
+        sid=sid,
+        ready=ready,
+        status=status,
+        packs_total=packs_total,
+        packs_completed=packs_completed,
+        packs_failed=packs_failed,
+        packs_skipped=packs_skipped,
+        manifest_timestamp=manifest_timestamp,
+    )
 
     record_stage(
         sid,
@@ -2507,6 +2519,20 @@ def build_note_style_pack_for_account(
         note_truncated,
         _NOTE_STYLE_MODEL,
         fingerprint,
+    )
+    log_structured_event(
+        "NOTE_STYLE_PACK_BUILT",
+        logger=log,
+        sid=sid,
+        account_id=account_id_str,
+        pack_path=pack_relative,
+        result_path=result_relative,
+        note_hash=note_hash,
+        prompt_salt=prompt_salt,
+        source_hash=source_hash,
+        model=_NOTE_STYLE_MODEL,
+        note_metrics=result_payload.get("note_metrics"),
+        fingerprint_hash=fingerprint_hash,
     )
 
     entry = _serialize_entry(

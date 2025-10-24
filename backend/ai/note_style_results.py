@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
 from backend.ai.manifest import ensure_note_style_section
-from backend.ai.note_style_logging import append_note_style_warning
+from backend.ai.note_style_logging import (
+    append_note_style_warning,
+    log_structured_event,
+)
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     NoteStylePaths,
@@ -289,6 +292,47 @@ def _compute_totals(entries: Sequence[Mapping[str, Any]]) -> dict[str, int]:
 
 def _note_style_log_path(paths: NoteStylePaths) -> Path:
     return getattr(paths, "log_file", paths.base / "logs.txt")
+
+
+def _load_pack_payload_for_logging(pack_path: Path) -> Mapping[str, Any] | None:
+    try:
+        raw = pack_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        log.warning("NOTE_STYLE_PACK_READ_FAILED path=%s", pack_path, exc_info=True)
+        return None
+
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            log.warning("NOTE_STYLE_PACK_PARSE_FAILED path=%s", pack_path, exc_info=True)
+            return None
+        if isinstance(payload, Mapping):
+            return payload
+        break
+    return None
+
+
+def _load_pack_fingerprint_hash(pack_path: Path) -> str | None:
+    payload = _load_pack_payload_for_logging(pack_path)
+    if isinstance(payload, Mapping):
+        fingerprint_hash = payload.get("fingerprint_hash")
+        if fingerprint_hash:
+            return str(fingerprint_hash)
+    return None
+
+
+def _load_pack_note_metrics(pack_path: Path) -> Mapping[str, Any] | None:
+    payload = _load_pack_payload_for_logging(pack_path)
+    if isinstance(payload, Mapping):
+        metrics = payload.get("note_metrics")
+        if isinstance(metrics, Mapping):
+            return dict(metrics)
+    return None
 
 
 def _validate_result_payload(
@@ -587,6 +631,26 @@ def store_note_style_result(
     paths = ensure_note_style_paths(runs_root_path, sid, create=True)
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
 
+    existing_note_metrics: Mapping[str, Any] | None = None
+    try:
+        existing_raw = account_paths.result_file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        existing_raw = ""
+    if existing_raw:
+        for line in existing_raw.splitlines():
+            candidate = line.strip()
+            if not candidate:
+                continue
+            try:
+                existing_payload = json.loads(candidate)
+            except json.JSONDecodeError:
+                existing_payload = None
+            if isinstance(existing_payload, Mapping):
+                metrics = existing_payload.get("note_metrics")
+                if isinstance(metrics, Mapping):
+                    existing_note_metrics = dict(metrics)
+            break
+
     normalized_payload = _normalize_result_payload(payload)
 
     _atomic_write_jsonl(account_paths.result_file, normalized_payload)
@@ -605,6 +669,64 @@ def store_note_style_result(
         result_relative,
         str(normalized_payload.get("prompt_salt") or ""),
     )
+
+    analysis_payload = normalized_payload.get("analysis")
+    tone_value: Any | None = None
+    confidence_value: Any | None = None
+    risk_flags_payload: list[Any] | None = None
+    if isinstance(analysis_payload, Mapping):
+        tone_value = analysis_payload.get("tone")
+        confidence_value = analysis_payload.get("confidence")
+        candidate_flags = analysis_payload.get("risk_flags")
+        if isinstance(candidate_flags, Sequence) and not isinstance(
+            candidate_flags, (str, bytes, bytearray)
+        ):
+            risk_flags_payload = list(candidate_flags)
+        elif candidate_flags is None:
+            risk_flags_payload = []
+
+    note_metrics_payload = None
+    note_metrics_candidate = normalized_payload.get("note_metrics")
+    if isinstance(note_metrics_candidate, Mapping):
+        note_metrics_payload = dict(note_metrics_candidate)
+    if note_metrics_payload is None and isinstance(existing_note_metrics, Mapping):
+        note_metrics_payload = dict(existing_note_metrics)
+    if note_metrics_payload is None:
+        note_metrics_payload = _load_pack_note_metrics(account_paths.pack_file)
+
+    log_structured_event(
+        "NOTE_STYLE_RESULTS_WRITTEN",
+        logger=log,
+        sid=sid,
+        account_id=account_id,
+        result_path=result_relative,
+        prompt_salt=str(normalized_payload.get("prompt_salt") or ""),
+        note_metrics=note_metrics_payload,
+        tone=tone_value,
+        confidence=confidence_value,
+        risk_flags=risk_flags_payload,
+        fingerprint_hash=str(normalized_payload.get("fingerprint_hash") or ""),
+    )
+
+    pack_fingerprint_hash = _load_pack_fingerprint_hash(account_paths.pack_file)
+    result_fingerprint_hash = str(normalized_payload.get("fingerprint_hash") or "").strip()
+    if (
+        pack_fingerprint_hash
+        and result_fingerprint_hash
+        and pack_fingerprint_hash != result_fingerprint_hash
+    ):
+        pack_relative = _relative_to_base(account_paths.pack_file, paths.base)
+        log_structured_event(
+            "NOTE_STYLE_FINGERPRINT_MISMATCH",
+            level=logging.WARNING,
+            logger=log,
+            sid=sid,
+            account_id=account_id,
+            pack_path=pack_relative,
+            result_path=result_relative,
+            pack_fingerprint_hash=pack_fingerprint_hash,
+            result_fingerprint_hash=result_fingerprint_hash,
+        )
 
     writer = NoteStyleIndexWriter(sid=sid, paths=paths)
     updated_entry, totals, skipped_count = writer.mark_completed(
@@ -647,6 +769,17 @@ def store_note_style_result(
         packs_completed,
         packs_failed,
         skipped_count,
+    )
+    log_structured_event(
+        "NOTE_STYLE_REFRESH",
+        logger=log,
+        sid=sid,
+        ready=ready,
+        status=stage_status,
+        packs_total=packs_total,
+        packs_completed=packs_completed,
+        packs_failed=packs_failed,
+        packs_skipped=skipped_count,
     )
 
     try:

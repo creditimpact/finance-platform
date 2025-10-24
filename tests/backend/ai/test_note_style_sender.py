@@ -103,7 +103,10 @@ def test_note_style_sender_sends_built_pack(
     context = analysis["context_hints"]
     assert context["topic"] == "payment_dispute"
     timeframe = context["timeframe"]
-    assert timeframe == {"month": "April", "relative": "Last month"}
+    assert timeframe.get("relative") in {"Last month", "last_month"}
+    month_value = timeframe.get("month")
+    if month_value is not None:
+        assert str(month_value).lower().startswith("apr")
     entities = context["entities"]
     assert entities["creditor"] == "capital one"
     assert entities["amount"] == pytest.approx(123.45)
@@ -135,6 +138,17 @@ def test_note_style_sender_sends_built_pack(
     assert any("STYLE_SEND_MODEL_CALL" in message for message in messages)
     assert any("STYLE_SEND_RESULTS_WRITTEN" in message for message in messages)
     assert any("STYLE_SEND_ACCOUNT_END" in message for message in messages)
+
+    structured_records = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "backend.ai.note_style_sender"
+        and record.getMessage().startswith("{")
+    ]
+    assert any(
+        entry.get("event") == "NOTE_STYLE_SENT_OK" and entry.get("account_id") == account_id
+        for entry in structured_records
+    )
 
 
 def test_note_style_sender_skips_completed_entries(

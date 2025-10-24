@@ -60,10 +60,12 @@ _DATE_FIELDS = {
 _BUREAU_PRIORITY = ("transunion", "experian", "equifax")
 
 _SYSTEM_MESSAGE = (
-    "You analyze customer notes and return a concise style extract. "
-    "Focus on tone, contextual hints, and emphasis. "
-    "Use account_context and bureaus_summary as background; do not restate them verbatim. "
-    "Respond with valid JSON that includes tone, context, and emphasis details."
+    "You extract structured style from a customer's free-text note. Return JSON ONLY with schema: {\"tone\": <string>, "
+    "\"context_hints\": {\"timeframe\": {\"month\": <string|null>, \"relative\": <string|null>}, \"topic\": <string>, "
+    "\"entities\": {\"creditor\": <string|null>, \"amount\": <number|null>}}, \"emphasis\": [<string>...], \"confidence\": <float>, "
+    "\"risk_flags\": [<string>...]}. Rules: base decisions on note_text; use account_context and bureaus_summary only for orientation; "
+    "keep values short; lists ≤6; add [\"unsupported_claim\"] if the note asserts a legal claim with no supporting docs; for "
+    "short/ambiguous notes set confidence ≤0.5; respond with JSON only."
 )
 
 

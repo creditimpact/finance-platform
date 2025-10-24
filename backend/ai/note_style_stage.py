@@ -1431,6 +1431,8 @@ def _pack_messages(
     note_truncated: bool,
     prompt_salt: str,
     fingerprint_hash: str,
+    account_context: Mapping[str, Any] | None,
+    bureaus_summary: Mapping[str, Any] | None,
 ) -> list[Mapping[str, Any]]:
     system_message = _NOTE_STYLE_SYSTEM_PROMPT.format(prompt_salt=prompt_salt)
     metadata: dict[str, Any] = {
@@ -1446,6 +1448,11 @@ def _pack_messages(
         "note_truncated": note_truncated,
         "metadata": metadata,
     }
+
+    if account_context:
+        user_content["account_context"] = account_context
+    if bureaus_summary:
+        user_content["bureaus_summary"] = bureaus_summary
 
     return [
         {"role": "system", "content": system_message},
@@ -2503,6 +2510,9 @@ def build_note_style_pack_for_account(
         )
 
     bureaus_summary = _summarize_bureaus(bureaus_payload)
+    account_context = _build_account_context(
+        meta_payload, bureaus_payload, tags_payload, bureaus_summary
+    )
     fingerprint = _build_account_fingerprint(
         account_id_str,
         meta_payload,
@@ -2517,6 +2527,7 @@ def build_note_style_pack_for_account(
             "fingerprint": fingerprint,
             "fingerprint_hash": fingerprint_hash,
             "bureaus_summary": bureaus_summary,
+            "account_context": account_context,
         }
     )
     _write_json(account_paths.debug_file, debug_snapshot)
@@ -2530,6 +2541,9 @@ def build_note_style_pack_for_account(
         "prompt_salt": prompt_salt,
         "fingerprint": fingerprint,
         "fingerprint_hash": fingerprint_hash,
+        "account_context": account_context,
+        "bureaus_summary": bureaus_summary,
+        "note_metrics": {"char_len": char_len, "word_len": word_len},
         "messages": _pack_messages(
             sid=sid,
             account_id=str(account_id),
@@ -2537,6 +2551,8 @@ def build_note_style_pack_for_account(
             note_truncated=note_truncated,
             prompt_salt=prompt_salt,
             fingerprint_hash=fingerprint_hash,
+            account_context=account_context,
+            bureaus_summary=bureaus_summary,
         ),
         "built_at": timestamp,
     }
@@ -2552,6 +2568,8 @@ def build_note_style_pack_for_account(
         },
         "evaluated_at": timestamp,
         "fingerprint_hash": fingerprint_hash,
+        "account_context": account_context,
+        "bureaus_summary": bureaus_summary,
     }
 
     if ui_allegations_selected:

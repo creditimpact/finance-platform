@@ -110,18 +110,33 @@ def build_pack(
     meta_payload = _ensure_mapping(_load_json(account_dir / "meta.json"))
 
     bureaus_summary = _summarize_bureaus(bureaus_payload)
-    account_context = _build_account_context(meta_payload, bureaus_payload, tags_payload, bureaus_summary)
+    account_context = _build_account_context(
+        meta_payload, bureaus_payload, tags_payload, bureaus_summary
+    )
+
+    note_metrics = {
+        "char_len": len(note_text),
+        "word_len": len(note_text.split()),
+    }
 
     pack_payload = {
         "sid": sid,
         "account_id": account_id,
         "channel": "frontend_review",
         "note_text": note_text,
+        "note_metrics": note_metrics,
         "account_context": account_context,
         "bureaus_summary": bureaus_summary,
         "messages": [
             {"role": "system", "content": _SYSTEM_MESSAGE},
-            {"role": "user", "content": {"note_text": note_text}},
+            {
+                "role": "user",
+                "content": {
+                    "note_text": note_text,
+                    "account_context": account_context,
+                    "bureaus_summary": bureaus_summary,
+                },
+            },
         ],
     }
 

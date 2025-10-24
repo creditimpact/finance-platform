@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import json
 import logging
+import math
+import re
 from datetime import datetime, timezone
 from pathlib import Path
-import re
 from typing import Any, Mapping, MutableMapping, Sequence
 
 from backend.ai.note_style_results import store_note_style_result
@@ -16,36 +18,8 @@ from backend.core.ai.paths import NoteStyleAccountPaths
 
 log = logging.getLogger(__name__)
 
-_ALLOWED_TONES = {
-    "neutral",
-    "calm",
-    "confident",
-    "assertive",
-    "empathetic",
-    "formal",
-    "conversational",
-    "factual",
-}
-
-_ALLOWED_TOPICS = {
-    "payment_dispute",
-    "not_mine",
-    "billing_error",
-    "identity_theft",
-    "late_fee",
-    "other",
-}
-
-_ALLOWED_EMPHASIS = {
-    "paid_already",
-    "inaccurate_reporting",
-    "identity_concerns",
-    "support_request",
-    "fee_waiver",
-    "ownership_dispute",
-    "update_requested",
-    "evidence_provided",
-}
+_LOWER_SNAKE_PATTERN = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
+_MAX_EMPHASIS_ITEMS = 6
 
 
 def _now_iso() -> str:
@@ -88,18 +62,11 @@ def _coerce_str(value: Any, *, preserve_case: bool = False) -> str:
     return text if preserve_case else text.lower()
 
 
-def _sanitize_tone(value: Any) -> str:
-    tone = _coerce_str(value)
-    if tone in _ALLOWED_TONES:
-        return tone
-    return "neutral"
-
-
-def _sanitize_topic(value: Any) -> str:
-    topic = _coerce_str(value)
-    if topic in _ALLOWED_TOPICS:
-        return topic
-    return "other"
+def _require_string(value: Any, *, field: str) -> str:
+    text = _coerce_str(value, preserve_case=True)
+    if not text:
+        raise ValueError(f"{field} must be a non-empty string")
+    return text
 
 
 def _sanitize_emphasis(values: Any) -> list[str]:
@@ -108,12 +75,15 @@ def _sanitize_emphasis(values: Any) -> list[str]:
     seen: set[str] = set()
     sanitized: list[str] = []
     for entry in values:
-        text = _coerce_str(entry)
-        if not text or text in seen:
+        text = _coerce_str(entry, preserve_case=True)
+        if not text:
             continue
-        if text in _ALLOWED_EMPHASIS:
-            seen.add(text)
-            sanitized.append(text)
+        if text in seen:
+            continue
+        sanitized.append(text)
+        seen.add(text)
+        if len(sanitized) >= _MAX_EMPHASIS_ITEMS:
+            break
     return sanitized
 
 
@@ -147,75 +117,82 @@ def _sanitize_risk_flags(values: Any) -> list[str]:
 def _sanitize_confidence(value: Any) -> float:
     try:
         numeric = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    if numeric < 0:
-        numeric = 0.0
-    if numeric > 1:
-        numeric = 1.0
-    return round(numeric, 2)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("confidence must be a number between 0 and 1") from exc
+    if math.isnan(numeric) or math.isinf(numeric):
+        raise ValueError("confidence must be a finite number")
+    if numeric < 0 or numeric > 1:
+        raise ValueError("confidence must be within [0, 1]")
+    return round(numeric, 3)
 
 
-def _sanitize_amount(value: Any) -> float | None:
+def _sanitize_amount(value: Any) -> float | str | None:
     if value is None:
         return None
     if isinstance(value, (int, float)):
-        return float(value)
+        numeric = float(value)
+        if math.isnan(numeric) or math.isinf(numeric):
+            raise ValueError("context_hints.entities.amount must be finite")
+        return numeric
     text = _coerce_str(value, preserve_case=True)
-    if not text:
-        return None
-    lowered = text.lower().replace("usd", "")
-    cleaned = lowered.replace("$", "").replace(",", "").strip()
-    try:
-        return float(cleaned)
-    except (TypeError, ValueError):
-        return None
+    return text or None
 
 
-def _sanitize_context(context: Any) -> tuple[dict[str, Any], str, dict[str, Any]]:
-    timeframe: dict[str, Any] = {"month": None, "relative": None}
-    topic = "other"
-    entities: dict[str, Any] = {"creditor": None, "amount": None}
-
+def _sanitize_context(context: Any) -> dict[str, Any]:
     if not isinstance(context, Mapping):
-        return timeframe, topic, entities
+        raise ValueError("context_hints must be an object")
 
     timeframe_payload = context.get("timeframe")
-    if isinstance(timeframe_payload, Mapping):
-        month = _coerce_str(timeframe_payload.get("month"), preserve_case=True)
+    timeframe: dict[str, Any] = {"month": None, "relative": None}
+    if timeframe_payload is not None:
+        if not isinstance(timeframe_payload, Mapping):
+            raise ValueError("context_hints.timeframe must be an object")
+        month = _coerce_str(
+            timeframe_payload.get("month"), preserve_case=True
+        )
         relative = _coerce_str(
             timeframe_payload.get("relative"), preserve_case=True
         )
         timeframe["month"] = month or None
         timeframe["relative"] = relative or None
 
-    topic = _sanitize_topic(context.get("topic"))
+    topic = _require_string(context.get("topic"), field="context_hints.topic")
 
     entities_payload = context.get("entities")
-    if isinstance(entities_payload, Mapping):
+    entities: dict[str, Any] = {"creditor": None, "amount": None}
+    if entities_payload is not None:
+        if not isinstance(entities_payload, Mapping):
+            raise ValueError("context_hints.entities must be an object")
         creditor = _coerce_str(
             entities_payload.get("creditor"), preserve_case=True
         )
         entities["creditor"] = creditor or None
-        entities["amount"] = _sanitize_amount(entities_payload.get("amount"))
+        amount_value = _sanitize_amount(entities_payload.get("amount"))
+        entities["amount"] = amount_value
 
-    return timeframe, topic, entities
+    return {
+        "timeframe": timeframe,
+        "topic": topic,
+        "entities": entities,
+    }
 
 
 def _normalize_analysis(payload: Mapping[str, Any]) -> dict[str, Any]:
-    tone = _sanitize_tone(payload.get("tone"))
-    timeframe, topic, entities = _sanitize_context(payload.get("context_hints"))
+    if not isinstance(payload, Mapping):
+        raise ValueError("analysis payload must be an object")
+
+    tone = _require_string(payload.get("tone"), field="tone")
+    context = _sanitize_context(payload.get("context_hints"))
     emphasis = _sanitize_emphasis(payload.get("emphasis"))
+
+    if "confidence" not in payload:
+        raise ValueError("confidence is required")
     confidence = _sanitize_confidence(payload.get("confidence"))
     risk_flags = _sanitize_risk_flags(payload.get("risk_flags"))
 
     return {
         "tone": tone,
-        "context_hints": {
-            "timeframe": timeframe,
-            "topic": topic,
-            "entities": entities,
-        },
+        "context_hints": context,
         "emphasis": emphasis,
         "confidence": confidence,
         "risk_flags": risk_flags,
@@ -354,6 +331,14 @@ def ingest_note_style_result(
         "evaluated_at": evaluated_at,
         "fingerprint_hash": fingerprint_hash,
     }
+
+    account_context_payload = pack_payload.get("account_context")
+    if account_context_payload is not None:
+        result_payload["account_context"] = account_context_payload
+
+    bureaus_summary_payload = pack_payload.get("bureaus_summary")
+    if bureaus_summary_payload is not None:
+        result_payload["bureaus_summary"] = bureaus_summary_payload
 
     if isinstance(existing_payload, Mapping):
         note_metrics = existing_payload.get("note_metrics")

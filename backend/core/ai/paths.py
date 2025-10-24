@@ -40,6 +40,7 @@ class NoteStyleAccountPaths:
     account_id: str
     pack_file: Path
     result_file: Path
+    result_raw_file: Path
     debug_file: Path
 
 
@@ -50,6 +51,7 @@ class NoteStylePaths:
     base: Path
     packs_dir: Path
     results_dir: Path
+    results_raw_dir: Path
     debug_dir: Path
     index_file: Path
     log_file: Path
@@ -230,18 +232,21 @@ def ensure_note_style_paths(
     base_path = (runs_root_path / sid / "ai_packs" / "note_style").resolve()
     packs_dir = base_path / "packs"
     results_dir = base_path / "results"
+    results_raw_dir = base_path / "results_raw"
     debug_dir = base_path / "debug"
 
     if create:
         base_path.mkdir(parents=True, exist_ok=True)
         packs_dir.mkdir(parents=True, exist_ok=True)
         results_dir.mkdir(parents=True, exist_ok=True)
+        results_raw_dir.mkdir(parents=True, exist_ok=True)
         debug_dir.mkdir(parents=True, exist_ok=True)
 
     return NoteStylePaths(
         base=base_path,
         packs_dir=packs_dir.resolve(),
         results_dir=results_dir.resolve(),
+        results_raw_dir=results_raw_dir.resolve(),
         debug_dir=debug_dir.resolve(),
         index_file=(base_path / "index.json").resolve(strict=False),
         log_file=(base_path / "logs.txt").resolve(strict=False),
@@ -287,17 +292,20 @@ def ensure_note_style_account_paths(
     normalized = normalize_note_style_account_id(account_id)
     pack_path = paths.packs_dir / f"style_acc_{normalized}.jsonl"
     result_path = paths.results_dir / f"acc_{normalized}.result.jsonl"
+    raw_result_path = paths.results_raw_dir / f"acc_{normalized}.raw.json"
     debug_path = paths.debug_dir / f"{normalized}.context.json"
 
     if create:
         pack_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_result_path.parent.mkdir(parents=True, exist_ok=True)
         debug_path.parent.mkdir(parents=True, exist_ok=True)
 
     return NoteStyleAccountPaths(
         account_id=normalized,
         pack_file=pack_path,
         result_file=result_path,
+        result_raw_file=raw_result_path,
         debug_file=debug_path,
     )
 

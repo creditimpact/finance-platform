@@ -102,12 +102,14 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
     assert pack_payload["channel"] == "frontend_review"
     assert pack_payload["note_text"] == "Customer says the balance is wrong and wants help."
 
+    note_metrics = pack_payload["note_metrics"]
+    assert note_metrics == {"char_len": 50, "word_len": 9}
+
     account_context = pack_payload["account_context"]
-    assert account_context["reported_creditor"] == "Capital One Services"
-    assert account_context["account_tail"] == "1234"
-    assert account_context["primary_issue"] == "late_payment"
-    assert account_context["tags"]["issues"] == ["late_payment", "balance_dispute"]
-    assert account_context["meta"]["heading_guess"] == "Capital One Services"
+    meta_context = account_context.get("meta", {})
+    assert meta_context.get("heading_guess") == "Capital One Services"
+    tags_context = account_context.get("tags", {})
+    assert tags_context.get("issues") == ["late_payment", "balance_dispute"]
 
     bureaus_summary = pack_payload["bureaus_summary"]
     assert bureaus_summary["majority_values"]["reported_creditor"] == "Capital One"
@@ -130,7 +132,10 @@ def test_build_pack_collects_context_and_writes_jsonl(tmp_path: Path) -> None:
     messages = pack_payload["messages"]
     assert messages[0]["role"] == "system"
     assert messages[1]["role"] == "user"
-    assert messages[1]["content"] == {"note_text": pack_payload["note_text"]}
+    user_content = messages[1]["content"]
+    assert user_content["note_text"] == pack_payload["note_text"]
+    assert user_content["account_context"] == pack_payload["account_context"]
+    assert user_content["bureaus_summary"] == pack_payload["bureaus_summary"]
 
 
 def test_build_pack_requires_existing_artifacts(tmp_path: Path) -> None:

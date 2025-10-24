@@ -480,6 +480,8 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     }
     assert user_payload["note_text"] == sanitized
     assert user_payload["note_truncated"] is False
+    assert user_payload["account_context"] == expected_context
+    assert user_payload["bureaus_summary"] == expected_context["bureaus"]
 
     assert 8 <= len(pack_payload["prompt_salt"]) <= 12
     assert pack_payload["note_hash"] == expected_note_hash
@@ -490,7 +492,12 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     )
     assert pack_payload["fingerprint"] == expected_fingerprint
     assert pack_payload["fingerprint_hash"] == expected_fingerprint_hash
-    assert "account_context" not in pack_payload
+    assert pack_payload["account_context"] == expected_context
+    assert pack_payload["bureaus_summary"] == expected_context["bureaus"]
+    assert pack_payload["note_metrics"] == {
+        "char_len": len(sanitized),
+        "word_len": len(sanitized.split()),
+    }
     assert pack_payload["ui_allegations_selected"] == ["not_mine", "wrong_amount"]
     assert "extractor" not in pack_payload
     assert "analysis" not in result_payload
@@ -505,7 +512,8 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     }
     assert result_payload["fingerprint_hash"] == expected_fingerprint_hash
     assert "fingerprint" not in result_payload
-    assert "account_context" not in result_payload
+    assert result_payload["account_context"] == expected_context
+    assert result_payload["bureaus_summary"] == expected_context["bureaus"]
     assert result_payload["ui_allegations_selected"] == ["not_mine", "wrong_amount"]
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
@@ -1034,7 +1042,12 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     assert pack_payload["note_hash"] == expected_note_hash
     assert pack_payload["fingerprint"] == expected_fingerprint
     assert pack_payload["fingerprint_hash"] == expected_fingerprint_hash
-    assert "account_context" not in pack_payload
+    assert isinstance(pack_payload.get("account_context"), dict)
+    assert isinstance(pack_payload.get("bureaus_summary"), dict)
+    assert pack_payload["note_metrics"] == {
+        "char_len": len(sanitized),
+        "word_len": len(sanitized.split()),
+    }
     assert result_payload["note_hash"] == expected_note_hash
     assert "source_hash" not in result_payload
     assert result_payload["note_metrics"] == {
@@ -1044,7 +1057,8 @@ def test_note_style_stage_sanitizes_note_text(tmp_path: Path) -> None:
     }
     assert result_payload["fingerprint_hash"] == expected_fingerprint_hash
     assert "fingerprint" not in result_payload
-    assert "account_context" not in result_payload
+    assert isinstance(result_payload.get("account_context"), dict)
+    assert isinstance(result_payload.get("bureaus_summary"), dict)
     assert note not in account_paths.result_file.read_text(encoding="utf-8")
 
 

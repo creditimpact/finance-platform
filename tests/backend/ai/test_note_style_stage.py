@@ -291,7 +291,20 @@ def test_note_style_stage_builds_artifacts(tmp_path: Path) -> None:
     assert note_style_manifest["results_dir"] == str(paths.results_dir)
     assert note_style_manifest["index"] == str(paths.index_file)
     assert note_style_manifest["logs"].endswith("ai_packs/note_style/logs.txt")
-    assert note_style_manifest.get("last_built_at") is None
+    last_built_at = note_style_manifest.get("last_built_at")
+    assert isinstance(last_built_at, str)
+    status_manifest = note_style_manifest.get("status")
+    assert isinstance(status_manifest, dict)
+    assert status_manifest.get("built") is True
+    assert status_manifest.get("completed_at") == last_built_at
+    ai_status = (
+        manifest_payload.get("ai", {})
+        .get("status", {})
+        .get("note_style", {})
+    )
+    assert ai_status.get("built") is True
+    assert ai_status.get("sent") is False
+    assert ai_status.get("completed_at") == last_built_at
 
     assert pack_payload["prompt_salt"] == result_payload["prompt_salt"] == result["prompt_salt"]
     pack_messages = pack_payload["messages"]

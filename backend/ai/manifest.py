@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -119,6 +120,12 @@ def extract_stage_manifest_paths(
 
 
 log = logging.getLogger(__name__)
+
+
+def _now_iso_utc() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00", "Z"
+    )
 
 
 class Manifest:
@@ -283,6 +290,20 @@ class Manifest:
             note_style_section["last_built_at"] = None
             changed = True
 
+        status_payload = note_style_section.get("status")
+        if not isinstance(status_payload, Mapping):
+            note_style_section["status"] = {"built": False, "completed_at": None}
+            changed = True
+        else:
+            built_changed = False
+            if "built" not in status_payload:
+                status_payload["built"] = False
+                built_changed = True
+            if "completed_at" not in status_payload:
+                status_payload["completed_at"] = None
+                built_changed = True
+            changed = changed or built_changed
+
         if changed:
             persist_manifest(manifest)
 
@@ -300,6 +321,74 @@ class Manifest:
 
         return dict(note_style_section)
 
+    @staticmethod
+    def register_note_style_build(
+        sid: str,
+        *,
+        runs_root: Path | str | None = None,
+        timestamp: str | None = None,
+    ) -> dict[str, Any]:
+        """Record a successful note_style build inside ``manifest.json``."""
+
+        sid_text = str(sid).strip()
+        if not sid_text:
+            raise ValueError("sid is required")
+
+        timestamp_text = str(timestamp).strip() if timestamp else ""
+        if not timestamp_text:
+            timestamp_text = _now_iso_utc()
+
+        runs_root_path: Path | None
+        manifest: RunManifest
+        previous_runs_root = None
+        try:
+            if runs_root is not None:
+                runs_root_path = Path(runs_root).resolve()
+                manifest_path = runs_root_path / sid_text / "manifest.json"
+                previous_runs_root = os.getenv(RUNS_ROOT_ENV)
+                os.environ[RUNS_ROOT_ENV] = str(runs_root_path)
+                manifest = RunManifest.load_or_create(manifest_path, sid_text)
+            else:
+                manifest = RunManifest.for_sid(sid_text)
+                runs_root_path = manifest.path.parent.parent.resolve()
+        finally:
+            if runs_root is not None:
+                if previous_runs_root is None:
+                    os.environ.pop(RUNS_ROOT_ENV, None)
+                else:
+                    os.environ[RUNS_ROOT_ENV] = previous_runs_root
+
+        note_style_paths = ensure_note_style_paths(
+            runs_root_path, sid_text, create=True
+        )
+
+        manifest.upsert_note_style_packs_dir(
+            note_style_paths.base,
+            packs_dir=note_style_paths.packs_dir,
+            results_dir=note_style_paths.results_dir,
+            index_file=note_style_paths.index_file,
+            log_file=note_style_paths.log_file,
+            last_built_at=timestamp_text,
+        )
+
+        data = manifest.data if isinstance(manifest.data, Mapping) else {}
+        ai_section = data.get("ai") if isinstance(data, Mapping) else {}
+        packs_section = ai_section.get("packs") if isinstance(ai_section, Mapping) else {}
+        note_style_section: Mapping[str, Any] | None = None
+        if isinstance(packs_section, Mapping):
+            candidate = packs_section.get("note_style")
+            if isinstance(candidate, Mapping):
+                note_style_section = candidate
+
+        log.info(
+            "NOTE_STYLE_MANIFEST_BUILT sid=%s packs_dir=%s results_dir=%s",
+            sid_text,
+            str(note_style_paths.packs_dir),
+            str(note_style_paths.results_dir),
+        )
+
+        return dict(note_style_section or {})
+
 
 def ensure_note_style_section(
     sid: str, *, runs_root: Path | str | None = None
@@ -307,6 +396,19 @@ def ensure_note_style_section(
     """Ensure the note_style manifest section and directories exist for ``sid``."""
 
     return Manifest.ensure_note_style_section(sid, runs_root=runs_root)
+
+
+def register_note_style_build(
+    sid: str,
+    *,
+    runs_root: Path | str | None = None,
+    timestamp: str | None = None,
+) -> dict[str, Any]:
+    """Register note_style build completion in the run manifest."""
+
+    return Manifest.register_note_style_build(
+        sid, runs_root=runs_root, timestamp=timestamp
+    )
 
 
 def ensure_validation_section(
@@ -321,6 +423,7 @@ __all__ = [
     "Manifest",
     "StageManifestPaths",
     "ensure_note_style_section",
+    "register_note_style_build",
     "ensure_validation_section",
     "extract_stage_manifest_paths",
 ]

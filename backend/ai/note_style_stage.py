@@ -711,11 +711,26 @@ def _extract_account_tail(
     return ""
 
 
-def _build_account_identity(meta: Mapping[str, Any]) -> dict[str, Any] | None:
+def _select_primary_issue(tags: Sequence[Mapping[str, Any]]) -> str | None:
+    for tag in tags:
+        if not isinstance(tag, Mapping):
+            continue
+        kind = _normalize_text(tag.get("kind"))
+        if not kind or kind.lower() != "issue":
+            continue
+        issue_value = _clean_value(tag.get("type"))
+        if issue_value:
+            return issue_value
+    return None
+
+
+def _build_account_identity(
+    meta: Mapping[str, Any], tags: Sequence[Mapping[str, Any]]
+) -> dict[str, Any] | None:
     account_id = _clean_value(meta.get("account_id")) or None
     reported_creditor = _clean_value(meta.get("heading_guess")) or None
 
-    identity: dict[str, Any] = {"primary_issue": None}
+    identity: dict[str, Any] = {"primary_issue": _select_primary_issue(tags)}
     if account_id is not None:
         identity["account_id"] = account_id
     if reported_creditor is not None:
@@ -734,7 +749,7 @@ def _build_account_context(
 ) -> dict[str, Any]:
     context: dict[str, Any] = {}
 
-    identity = _build_account_identity(meta)
+    identity = _build_account_identity(meta, tags)
     if identity is not None:
         context["identity"] = identity
 

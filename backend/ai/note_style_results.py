@@ -37,6 +37,7 @@ log = logging.getLogger(__name__)
 
 _SHORT_NOTE_WORD_LIMIT = 12
 _SHORT_NOTE_CHAR_LIMIT = 90
+_MAX_ANALYSIS_LIST_ITEMS = 6
 _UNSUPPORTED_CLAIM_KEYWORDS = (
     "legal",  # general legal language
     "lawsuit",
@@ -222,6 +223,25 @@ def _normalize_risk_flags_list(values: Any) -> list[str]:
     seen: set[str] = set()
     for value in values:
         candidate = _to_snake_case(value)
+        if not candidate or candidate in seen:
+            continue
+        normalized.append(candidate)
+        seen.add(candidate)
+    return normalized
+
+
+def _coerce_sequence(values: Any) -> list[Any]:
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes, bytearray)):
+        return []
+    return list(values)
+
+
+def _normalize_emphasis_values(values: Any) -> list[str]:
+    raw_items = _coerce_sequence(values)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        candidate = _to_snake_case(item)
         if not candidate or candidate in seen:
             continue
         normalized.append(candidate)
@@ -490,6 +510,196 @@ def _apply_result_enhancements(
     if note_text and _detect_unsupported_claim(note_text):
         _append_risk_flag(analysis_mutable, "unsupported_claim")
     payload["analysis"] = analysis_mutable
+
+
+def _guard_result_analysis(
+    *,
+    sid: str,
+    account_id: str,
+    paths: NoteStylePaths,
+    payload: MutableMapping[str, Any],
+) -> None:
+    analysis_payload = payload.get("analysis")
+    if analysis_payload is None:
+        return
+
+    if not isinstance(analysis_payload, Mapping):
+        detail = "analysis_not_mapping"
+        log.warning(
+            "NOTE_STYLE_RESULT_GUARD_FAILED sid=%s account_id=%s issues=%s",
+            sid,
+            account_id,
+            detail,
+        )
+        append_note_style_warning(
+            _note_style_log_path(paths),
+            f"sid={sid} account_id={account_id} guard_failed issues={detail}",
+        )
+        raise ValueError("analysis payload must be an object")
+
+    allowed_keys = {"tone", "context_hints", "emphasis", "confidence", "risk_flags"}
+    sanitized: dict[str, Any] = {}
+    adjustments: list[str] = []
+    fatal: list[str] = []
+
+    extra_keys = sorted(
+        key for key in analysis_payload.keys() if key not in allowed_keys
+    )
+    if extra_keys:
+        adjustments.append(
+            "extra_keys_removed=" + ":".join(extra_keys)
+        )
+
+    tone_value = analysis_payload.get("tone")
+    if isinstance(tone_value, Mapping):
+        tone_text = str(tone_value.get("value") or "").strip()
+    else:
+        tone_text = str(tone_value or "").strip()
+    if tone_text:
+        sanitized["tone"] = tone_text
+    else:
+        fatal.append("tone")
+
+    context_payload = analysis_payload.get("context_hints")
+    if isinstance(context_payload, Mapping):
+        context_sanitized: dict[str, Any] = {
+            "timeframe": {"month": None, "relative": None},
+            "topic": None,
+            "entities": {"creditor": None, "amount": None},
+        }
+
+        timeframe_payload = context_payload.get("timeframe")
+        if isinstance(timeframe_payload, Mapping):
+            month_raw = timeframe_payload.get("month")
+            month_value: str | None = None
+            if month_raw is not None:
+                month_text = str(month_raw).strip()
+                normalized_month = _normalize_date_field(month_text)
+                if normalized_month:
+                    month_value = normalized_month
+                    if normalized_month != month_text:
+                        adjustments.append("context.timeframe.month_normalized")
+                else:
+                    month_value = month_text or None
+                    if month_value != month_text:
+                        adjustments.append("context.timeframe.month_cleared")
+            context_sanitized["timeframe"]["month"] = month_value
+
+            relative_raw = timeframe_payload.get("relative")
+            if relative_raw is None:
+                relative_value = None
+            else:
+                relative_value = _to_snake_case(relative_raw) or None
+                original_relative = str(relative_raw).strip()
+                if relative_value is None and original_relative:
+                    adjustments.append("context.timeframe.relative_cleared")
+                elif relative_value is not None and relative_value != original_relative:
+                    adjustments.append("context.timeframe.relative_normalized")
+            context_sanitized["timeframe"]["relative"] = relative_value
+        elif timeframe_payload is not None:
+            adjustments.append("context.timeframe_reset")
+
+        topic_raw = context_payload.get("topic")
+        topic_value = None
+        if topic_raw is not None:
+            topic_value = _to_snake_case(topic_raw) or None
+            original_topic = str(topic_raw).strip()
+            if topic_value is None and original_topic:
+                adjustments.append("context.topic_cleared")
+            elif topic_value is not None and topic_value != original_topic:
+                adjustments.append("context.topic_normalized")
+        context_sanitized["topic"] = topic_value
+
+        entities_payload = context_payload.get("entities")
+        if isinstance(entities_payload, Mapping):
+            creditor_raw = entities_payload.get("creditor")
+            if creditor_raw is None:
+                creditor_value = None
+            else:
+                creditor_text = str(creditor_raw).strip()
+                creditor_value = creditor_text or None
+                if creditor_value is None and creditor_text:
+                    adjustments.append("context.entities.creditor_cleared")
+            amount_raw = entities_payload.get("amount")
+            amount_value: float | None = None
+            if amount_raw not in (None, ""):
+                numeric = _coerce_float(amount_raw)
+                if numeric is None:
+                    adjustments.append("context.entities.amount_cleared")
+                else:
+                    amount_value = round(numeric, 2)
+                    if amount_value != numeric:
+                        adjustments.append("context.entities.amount_rounded")
+            context_sanitized["entities"]["creditor"] = creditor_value
+            context_sanitized["entities"]["amount"] = amount_value
+        elif entities_payload is not None:
+            adjustments.append("context.entities_reset")
+
+        sanitized["context_hints"] = context_sanitized
+    else:
+        fatal.append("context_hints")
+
+    emphasis_payload = analysis_payload.get("emphasis")
+    emphasis_source: Any
+    if isinstance(emphasis_payload, Mapping):
+        emphasis_source = emphasis_payload.get("values")
+    else:
+        emphasis_source = emphasis_payload
+    emphasis_original = _coerce_sequence(emphasis_source)
+    emphasis_values = _normalize_emphasis_values(emphasis_source)
+    if len(emphasis_values) < len(emphasis_original):
+        adjustments.append("emphasis_normalized")
+    if len(emphasis_values) > _MAX_ANALYSIS_LIST_ITEMS:
+        adjustments.append("emphasis_truncated")
+    sanitized["emphasis"] = emphasis_values[:_MAX_ANALYSIS_LIST_ITEMS]
+
+    confidence_raw = analysis_payload.get("confidence")
+    confidence_value = _coerce_float(confidence_raw)
+    if confidence_value is None:
+        fatal.append("confidence")
+    else:
+        clamped = max(0.0, min(1.0, confidence_value))
+        if clamped != confidence_value:
+            adjustments.append("confidence_clamped")
+        sanitized["confidence"] = round(clamped, 3)
+
+    risk_flags_raw = analysis_payload.get("risk_flags")
+    risk_flags_original = _coerce_sequence(risk_flags_raw)
+    risk_flags_values = _normalize_risk_flags_list(risk_flags_raw)
+    if len(risk_flags_values) < len(risk_flags_original):
+        adjustments.append("risk_flags_normalized")
+    if len(risk_flags_values) > _MAX_ANALYSIS_LIST_ITEMS:
+        adjustments.append("risk_flags_truncated")
+    sanitized["risk_flags"] = risk_flags_values[:_MAX_ANALYSIS_LIST_ITEMS]
+
+    if fatal:
+        detail = ",".join(sorted(dict.fromkeys(fatal)))
+        log.warning(
+            "NOTE_STYLE_RESULT_GUARD_FAILED sid=%s account_id=%s issues=%s",
+            sid,
+            account_id,
+            detail,
+        )
+        append_note_style_warning(
+            _note_style_log_path(paths),
+            f"sid={sid} account_id={account_id} guard_failed issues={detail}",
+        )
+        raise ValueError("analysis payload missing required fields")
+
+    if adjustments:
+        detail = ",".join(sorted(dict.fromkeys(adjustments)))
+        log.warning(
+            "NOTE_STYLE_RESULT_GUARD_ADJUSTED sid=%s account_id=%s adjustments=%s",
+            sid,
+            account_id,
+            detail,
+        )
+        append_note_style_warning(
+            _note_style_log_path(paths),
+            f"sid={sid} account_id={account_id} guard_adjustments={detail}",
+        )
+
+    payload["analysis"] = sanitized
 
 
 def _validate_result_payload(
@@ -1011,6 +1221,13 @@ def store_note_style_result(
         normalized_payload,
         note_metrics=note_metrics_payload,
         pack_path=account_paths.pack_file,
+    )
+
+    _guard_result_analysis(
+        sid=sid,
+        account_id=account_id,
+        paths=paths,
+        payload=normalized_payload,
     )
 
     _atomic_write_jsonl(account_paths.result_file, normalized_payload)

@@ -106,7 +106,7 @@ def test_note_style_sender_sends_built_pack(
     assert stored_payload["fingerprint_hash"] == pack_payload["fingerprint_hash"]
     analysis = stored_payload["analysis"]
     assert analysis["tone"] == "Empathetic"
-    assert analysis["emphasis"] == ["paid_already", "Custom", "support_request"]
+    assert analysis["emphasis"] == ["paid_already", "custom", "support_request"]
     context = analysis["context_hints"]
     assert context["topic"] == "payment_dispute"
     timeframe = context["timeframe"]
@@ -114,7 +114,7 @@ def test_note_style_sender_sends_built_pack(
     assert timeframe.get("month") in {None, "2024-04-01"}
     entities = context["entities"]
     assert entities["creditor"] == "capital one"
-    assert entities["amount"] == "$123.45 USD"
+    assert entities["amount"] is None
     assert analysis["risk_flags"] == [
         "follow_up",
         "duplicate",

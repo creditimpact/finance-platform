@@ -73,9 +73,15 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
         "sid": sid,
         "account_id": account_id,
         "analysis": {
-            "tone": {"value": "conciliatory", "confidence": 0.7, "risk_flags": []},
-            "context_hints": {"values": ["lender_fault"], "confidence": 0.5, "risk_flags": []},
-            "emphasis": {"values": ["support_request"], "confidence": 0.6, "risk_flags": []},
+            "tone": "Empathetic",
+            "context_hints": {
+                "timeframe": {"month": "2024-01-01", "relative": "Last Year"},
+                "topic": "Billing Error",
+                "entities": {"creditor": "Capital Bank", "amount": "123.45"},
+            },
+            "emphasis": ["Support Request", "Evidence Provided"],
+            "confidence": 0.82,
+            "risk_flags": ["Needs Review", "Follow Up"],
         },
         "prompt_salt": "salt123",
         "note_hash": "deadbeef",
@@ -137,10 +143,15 @@ def test_store_note_style_result_updates_index_and_triggers_refresh(
     assert stored_payload["sid"] == sid
     assert stored_payload["account_id"] == account_id
     assert stored_payload["note_hash"] == result_payload["note_hash"]
-    assert (
-        stored_payload["analysis"]["context_hints"].get("topic")
-        is None
-    )
+    analysis = stored_payload["analysis"]
+    assert analysis["tone"] == "Empathetic"
+    assert analysis["confidence"] == 0.5
+    assert analysis["emphasis"] == ["support_request", "evidence_provided"]
+    context = analysis["context_hints"]
+    assert context["topic"] == "billing_error"
+    assert context["timeframe"] == {"month": "2024-01-01", "relative": "last_year"}
+    assert context["entities"] == {"creditor": "Capital Bank", "amount": 123.45}
+    assert analysis["risk_flags"] == ["needs_review", "follow_up"]
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
     packs = index_payload["packs"]
@@ -202,23 +213,27 @@ def test_store_note_style_result_normalizes_analysis_fields(
         "sid": sid,
         "account_id": account_id,
         "analysis": {
-            "tone": {
-                "value": "Assertive",
-                "confidence": 0.82,
-                "risk_flags": ["Legal Threat"],
-            },
+            "tone": {"value": "Assertive", "confidence": 1.2, "risk_flags": ["Legal Threat"]},
             "context_hints": {
                 "topic": "Billing Error",
                 "timeframe": {"month": "March 5, 2024", "relative": "Last Year"},
-                "entities": {"creditor": "Capital Bank", "amount": 120.0},
+                "entities": {"creditor": "Capital Bank", "amount": "120"},
                 "risk_flags": ["Needs Review"],
             },
             "emphasis": {
-                "values": ["Support Request"],
+                "values": [
+                    "Support Request",
+                    "Fee Waiver",
+                    "Identity Concerns",
+                    "Paid Already",
+                    "Ownership Dispute",
+                    "Evidence Provided",
+                    "Extra Item",
+                ],
                 "risk_flags": ["Personal Data"],
             },
-            "confidence": 0.91,
-            "risk_flags": ["Escalation Risk", "Escalation Risk"],
+            "confidence": 1.25,
+            "risk_flags": ["Escalation Risk", "Escalation Risk", "Needs Review"],
         },
         "prompt_salt": baseline_payload["prompt_salt"],
         "note_hash": baseline_payload["note_hash"],
@@ -237,18 +252,26 @@ def test_store_note_style_result_normalizes_analysis_fields(
     stored_payload = json.loads(account_paths.result_file.read_text(encoding="utf-8"))
     analysis = stored_payload["analysis"]
 
-    assert analysis["risk_flags"] == ["escalation_risk"]
-    assert analysis["tone"]["risk_flags"] == ["legal_threat"]
+    assert analysis["tone"] == "Assertive"
+    assert analysis["confidence"] == 0.5
+    assert analysis["risk_flags"] == ["escalation_risk", "needs_review"]
 
     context = analysis["context_hints"]
     assert context["topic"] == "billing_error"
-    assert context["risk_flags"] == ["needs_review"]
     timeframe = context["timeframe"]
     assert timeframe["month"] == "2024-03-05"
     assert timeframe["relative"] == "last_year"
+    assert context["entities"] == {"creditor": "Capital Bank", "amount": 120.0}
 
     emphasis = analysis["emphasis"]
-    assert emphasis["risk_flags"] == ["personal_data"]
+    assert emphasis == [
+        "support_request",
+        "fee_waiver",
+        "identity_concerns",
+        "paid_already",
+        "ownership_dispute",
+        "evidence_provided",
+    ]
 
 
 def test_store_note_style_result_requires_all_accounts(
@@ -298,7 +321,15 @@ def test_store_note_style_result_requires_all_accounts(
 
     primary_payload = json.loads(primary_paths.result_file.read_text(encoding="utf-8"))
     primary_payload["analysis"] = {
-        "tone": {"value": "positive", "confidence": 0.9, "risk_flags": []}
+        "tone": "positive",
+        "context_hints": {
+            "timeframe": {"month": None, "relative": None},
+            "topic": "other",
+            "entities": {"creditor": None, "amount": None},
+        },
+        "emphasis": [],
+        "confidence": 0.9,
+        "risk_flags": [],
     }
     store_note_style_result(
         sid,
@@ -324,7 +355,15 @@ def test_store_note_style_result_requires_all_accounts(
         secondary_paths.result_file.read_text(encoding="utf-8")
     )
     secondary_payload["analysis"] = {
-        "tone": {"value": "neutral", "confidence": 0.8, "risk_flags": []}
+        "tone": "neutral",
+        "context_hints": {
+            "timeframe": {"month": None, "relative": None},
+            "topic": "other",
+            "entities": {"creditor": None, "amount": None},
+        },
+        "emphasis": [],
+        "confidence": 0.8,
+        "risk_flags": [],
     }
     store_note_style_result(
         sid,
@@ -374,17 +413,14 @@ def test_store_note_style_result_logs_missing_fields(
         "note_hash": "hash",
     }
 
-    store_note_style_result(sid, account_id, result_payload, runs_root=runs_root)
+    with pytest.raises(ValueError):
+        store_note_style_result(sid, account_id, result_payload, runs_root=runs_root)
 
     paths = ensure_note_style_paths(runs_root, sid, create=False)
     log_path = paths.log_file
     assert log_path.exists()
     contents = log_path.read_text(encoding="utf-8")
-    assert (
-        "missing_fields="
-        "confidence,emphasis,entities,evaluated_at,fingerprint_hash," 
-        "risk_flags,timeframe,tone,topic"
-    ) in contents
+    assert "guard_failed" in contents
     assert account_id in contents
 
     warnings = [
@@ -392,7 +428,7 @@ def test_store_note_style_result_logs_missing_fields(
         for record in caplog.records
         if record.name == "backend.ai.note_style_results"
     ]
-    assert any("NOTE_STYLE_RESULT_VALIDATION_FAILED" in message for message in warnings)
+    assert any("NOTE_STYLE_RESULT_GUARD_FAILED" in message for message in warnings)
 
 
 def test_store_note_style_result_warns_on_fingerprint_mismatch(

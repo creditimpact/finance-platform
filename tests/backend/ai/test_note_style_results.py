@@ -219,3 +219,53 @@ def test_store_note_style_result_requires_all_accounts(
     assert updated_stage["results"]["results_total"] == 2
     assert updated_stage["results"]["completed"] == 2
     assert updated_stage["results"]["failed"] == 0
+
+
+def test_store_note_style_result_logs_missing_fields(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    sid = "SID990"
+    account_id = "idx-990"
+    runs_root = tmp_path / "runs"
+    response_dir = runs_root / sid / "frontend" / "review" / "responses"
+
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": "Short note"},
+        },
+    )
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    caplog.set_level("WARNING", logger="backend.ai.note_style_results")
+
+    result_payload = {
+        "sid": sid,
+        "account_id": account_id,
+        "analysis": {
+            "tone": "",
+            "context_hints": {},
+            "confidence": None,
+        },
+        "prompt_salt": "salt",
+        "note_hash": "hash",
+    }
+
+    store_note_style_result(sid, account_id, result_payload, runs_root=runs_root)
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    log_path = paths.log_file
+    assert log_path.exists()
+    contents = log_path.read_text(encoding="utf-8")
+    assert "missing_fields=confidence,tone,topic" in contents
+    assert account_id in contents
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "backend.ai.note_style_results"
+    ]
+    assert any("NOTE_STYLE_RESULT_VALIDATION_FAILED" in message for message in warnings)

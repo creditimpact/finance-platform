@@ -50,6 +50,7 @@ class NoteStylePaths:
     packs_dir: Path
     results_dir: Path
     index_file: Path
+    log_file: Path
 
 
 def ensure_validation_paths(
@@ -238,6 +239,7 @@ def ensure_note_style_paths(
         packs_dir=packs_dir.resolve(),
         results_dir=results_dir.resolve(),
         index_file=(base_path / "index.json").resolve(strict=False),
+        log_file=(base_path / "logs.txt").resolve(strict=False),
     )
 
 

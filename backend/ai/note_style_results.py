@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
 from backend.ai.manifest import ensure_note_style_section
+from backend.ai.note_style_logging import append_note_style_warning
 from backend.core.ai.paths import (
+    NoteStyleAccountPaths,
     NoteStylePaths,
     ensure_note_style_account_paths,
     ensure_note_style_paths,
@@ -113,6 +115,71 @@ def _compute_totals(entries: Sequence[Mapping[str, Any]]) -> dict[str, int]:
         elif status in {"failed", "error"}:
             failed += 1
     return {"total": total, "completed": completed, "failed": failed}
+
+
+def _note_style_log_path(paths: NoteStylePaths) -> Path:
+    return getattr(paths, "log_file", paths.base / "logs.txt")
+
+
+def _validate_result_payload(
+    *,
+    sid: str,
+    account_id: str,
+    paths: NoteStylePaths,
+    account_paths: NoteStyleAccountPaths,
+    payload: Mapping[str, Any],
+) -> None:
+    missing_fields: list[str] = []
+    analysis_payload = payload.get("analysis")
+
+    if isinstance(analysis_payload, Mapping):
+        tone = str(analysis_payload.get("tone") or "").strip()
+        if not tone:
+            missing_fields.append("tone")
+
+        topic_value = ""
+        context_payload = analysis_payload.get("context_hints")
+        if isinstance(context_payload, Mapping):
+            topic_value = str(context_payload.get("topic") or "").strip()
+        if not topic_value:
+            missing_fields.append("topic")
+
+        if analysis_payload.get("confidence") is None:
+            missing_fields.append("confidence")
+    else:
+        missing_fields.append("analysis")
+
+    missing_artifacts: list[str] = []
+    if not account_paths.pack_file.exists():
+        missing_artifacts.append("pack")
+    if not account_paths.result_file.exists():
+        missing_artifacts.append("result")
+
+    if not missing_fields and not missing_artifacts:
+        return
+
+    field_text = ",".join(sorted(dict.fromkeys(missing_fields))) if missing_fields else ""
+    artifact_text = ",".join(sorted(dict.fromkeys(missing_artifacts))) if missing_artifacts else ""
+
+    log.warning(
+        "NOTE_STYLE_RESULT_VALIDATION_FAILED sid=%s account_id=%s missing_fields=%s missing_artifacts=%s",
+        sid,
+        account_id,
+        field_text,
+        artifact_text,
+    )
+
+    parts: list[str] = []
+    if field_text:
+        parts.append(f"missing_fields={field_text}")
+    if artifact_text:
+        parts.append(f"missing_artifacts={artifact_text}")
+
+    detail = " ".join(parts) if parts else "validation_warning"
+    append_note_style_warning(
+        _note_style_log_path(paths),
+        f"sid={sid} account_id={account_id} {detail}".strip(),
+    )
 
 
 class NoteStyleIndexWriter:
@@ -290,6 +357,13 @@ def store_note_style_result(
     account_paths = ensure_note_style_account_paths(paths, account_id, create=True)
 
     _atomic_write_jsonl(account_paths.result_file, payload)
+    _validate_result_payload(
+        sid=sid,
+        account_id=account_id,
+        paths=paths,
+        account_paths=account_paths,
+        payload=payload,
+    )
     result_relative = _relative_to_base(account_paths.result_file, paths.base)
     log.info(
         "NOTE_STYLE_RESULT_WRITTEN sid=%s acc=%s path=%s prompt_salt=%s source_hash=%s",

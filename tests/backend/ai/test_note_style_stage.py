@@ -8,6 +8,8 @@ import unicodedata
 
 import pytest
 
+import backend.ai.note_style_stage as note_style_stage_module
+
 from backend.ai.note_style import prepare_and_send
 from backend.ai.note_style_results import store_note_style_result
 from backend.ai.note_style_stage import (
@@ -1230,3 +1232,62 @@ def test_note_style_stage_counts_track_completion(tmp_path: Path) -> None:
 
     counts_completed = note_style_stage_counts(run_dir)
     assert counts_completed == {"packs_total": 1, "packs_completed": 1, "packs_failed": 0}
+
+
+def test_build_note_style_pack_logs_missing_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sid = "SID777"
+    account_id = "idx-777"
+    runs_root = tmp_path / "runs"
+    run_dir = runs_root / sid
+    account_dir = run_dir / "cases" / "accounts" / "0"
+    account_dir.mkdir(parents=True, exist_ok=True)
+
+    (account_dir / "meta.json").write_text("{}", encoding="utf-8")
+    (account_dir / "bureaus.json").write_text("{}", encoding="utf-8")
+    (account_dir / "tags.json").write_text("[]", encoding="utf-8")
+
+    response_dir = run_dir / "frontend" / "review" / "responses"
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {
+                "explanation": "Bank error remains unresolved despite multiple payments."
+            },
+        },
+    )
+
+    original_write = note_style_stage_module._write_jsonl
+
+    def _fake_write_jsonl(path: Path, row: dict[str, object]) -> None:
+        if path.name.endswith(".result.jsonl"):
+            return
+        original_write(path, row)
+
+    monkeypatch.setattr(note_style_stage_module, "_write_jsonl", _fake_write_jsonl)
+
+    caplog.set_level("WARNING", logger="backend.ai.note_style_stage")
+
+    build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    log_path = paths.log_file
+    assert log_path.exists()
+    log_contents = log_path.read_text(encoding="utf-8")
+    assert "missing_artifacts=result" in log_contents
+    assert account_id in log_contents
+
+    warning_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "backend.ai.note_style_stage"
+    ]
+    assert any(
+        "NOTE_STYLE_ARTIFACT_VALIDATION_FAILED" in message
+        for message in warning_messages
+    )

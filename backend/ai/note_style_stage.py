@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover - platform dependent
     fcntl = None  # type: ignore[assignment]
 
 from backend.ai.manifest import ensure_note_style_section
+from backend.ai.note_style_logging import append_note_style_warning
 from backend.core.ai.paths import (
     NoteStyleAccountPaths,
     NoteStylePaths,
@@ -1046,6 +1047,41 @@ def _write_jsonl(path: Path, row: Mapping[str, Any]) -> None:
         except FileNotFoundError:
             pass
     _fsync_directory(path.parent)
+
+
+def _note_style_log_path(paths: NoteStylePaths) -> Path:
+    return getattr(paths, "log_file", paths.base / "logs.txt")
+
+
+def _validate_account_artifacts(
+    *,
+    sid: str,
+    account_id: str,
+    paths: NoteStylePaths,
+    account_paths: NoteStyleAccountPaths,
+    response: PurePosixPath,
+) -> None:
+    missing: list[str] = []
+    if not account_paths.pack_file.is_file():
+        missing.append("pack")
+    if not account_paths.result_file.is_file():
+        missing.append("result")
+
+    if not missing:
+        return
+
+    issues = ",".join(sorted(missing))
+    log.warning(
+        "NOTE_STYLE_ARTIFACT_VALIDATION_FAILED sid=%s account_id=%s response=%s missing=%s",
+        sid,
+        account_id,
+        response,
+        issues,
+    )
+    append_note_style_warning(
+        _note_style_log_path(paths),
+        f"sid={sid} account_id={account_id} response={response} missing_artifacts={issues}",
+    )
 
 
 def _relativize(path: Path, base: Path) -> str:
@@ -2230,6 +2266,14 @@ def build_note_style_pack_for_account(
 
     _write_jsonl(account_paths.pack_file, pack_payload)
     _write_jsonl(account_paths.result_file, result_payload)
+
+    _validate_account_artifacts(
+        sid=sid,
+        account_id=account_id_str,
+        paths=paths,
+        account_paths=account_paths,
+        response=response_rel,
+    )
 
     pack_relative = _relativize(account_paths.pack_file, paths.base)
     result_relative = _relativize(account_paths.result_file, paths.base)

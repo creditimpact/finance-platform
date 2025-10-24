@@ -21,6 +21,7 @@ def test_ensure_note_style_paths_creates_directories(tmp_path: Path) -> None:
     assert paths.packs_dir == (base / "packs").resolve()
     assert paths.results_dir == (base / "results").resolve()
     assert paths.index_file == (base / "index.json").resolve()
+    assert paths.log_file == (base / "logs.txt").resolve()
     assert paths.packs_dir.is_dir()
     assert paths.results_dir.is_dir()
 
@@ -35,6 +36,7 @@ def test_ensure_note_style_paths_read_only(tmp_path: Path) -> None:
     assert not base.exists()
     assert not (base / "packs").exists()
     assert not (base / "results").exists()
+    assert paths.log_file == (base / "logs.txt").resolve()
 
 
 def test_note_style_filename_sanitizes_account_id() -> None:

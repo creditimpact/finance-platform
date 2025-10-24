@@ -32,7 +32,8 @@ _ZERO_WIDTH_TRANSLATION = {
 
 def _sanitize_note_text(note: str) -> str:
     normalized = unicodedata.normalize("NFKC", note)
-    translated = normalized.translate(_ZERO_WIDTH_TRANSLATION)
+    masked = note_style_stage_module._mask_contact_info(normalized)
+    translated = masked.translate(_ZERO_WIDTH_TRANSLATION)
     return " ".join(translated.split()).strip()
 
 
@@ -1299,10 +1300,41 @@ def test_note_style_stage_ignores_summary_file(tmp_path: Path) -> None:
         "word_len": len(sanitized.split()),
         "truncated": False,
     }
-
     assert summary_path.read_text(encoding="utf-8") == json.dumps(
         summary_payload, ensure_ascii=False, indent=2
     )
+
+
+def test_note_style_stage_masks_contact_info(tmp_path: Path) -> None:
+    sid = "SID004A"
+    account_id = "acct-777"
+    runs_root = tmp_path
+    note = "Contact me at user.name+alerts@example.com or (555) 321-7654 asap."
+
+    response_dir = runs_root / sid / "frontend" / "review" / "responses"
+    _write_response(
+        response_dir / f"{account_id}.result.json",
+        {
+            "sid": sid,
+            "account_id": account_id,
+            "answers": {"explanation": note},
+            "received_at": "2024-02-01T00:00:00Z",
+        },
+    )
+
+    result = build_note_style_pack_for_account(sid, account_id, runs_root=runs_root)
+    assert result["status"] == "completed"
+
+    paths = ensure_note_style_paths(runs_root, sid, create=False)
+    account_paths = ensure_note_style_account_paths(paths, account_id, create=False)
+
+    pack_payload = json.loads(account_paths.pack_file.read_text(encoding="utf-8"))
+    user_payload = pack_payload["messages"][1]["content"]
+    note_text = user_payload["note_text"]
+    assert "example.com" not in note_text
+    assert "321-7654" not in note_text
+    assert "[redacted_email]" in note_text
+    assert "[redacted_phone]" in note_text
 
 
 def test_note_style_stage_counts_track_completion(tmp_path: Path) -> None:

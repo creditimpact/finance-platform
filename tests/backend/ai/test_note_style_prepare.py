@@ -94,8 +94,9 @@ def test_prepare_and_send_builds_and_sends(tmp_path: Path, monkeypatch: pytest.M
     assert stored_payload["account_id"] == account_id
     assert stored_payload["analysis"]["tone"] == "Empathetic"
     pack_payload = json.loads(pack_lines[0])
-    assert stored_payload["account_context"] == pack_payload["account_context"]
-    assert stored_payload["bureaus_summary"] == pack_payload["bureaus_summary"]
+    assert "account_context" not in stored_payload
+    assert "bureaus_summary" not in stored_payload
+    assert pack_payload["messages"][1]["content"]["note_text"]
     assert client.calls[0]["kwargs"].get("response_format") == {"type": "json_object"}
 
     runflow_path = run_dir / "runflow.json"

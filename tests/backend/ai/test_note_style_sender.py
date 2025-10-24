@@ -131,8 +131,9 @@ def test_note_style_sender_sends_built_pack(
     assert note_metrics.get("word_len") > 0
     assert note_metrics.get("truncated") is False
 
-    assert stored_payload["account_context"] == pack_payload["account_context"]
-    assert stored_payload["bureaus_summary"] == pack_payload["bureaus_summary"]
+    assert "account_context" not in stored_payload
+    assert "bureaus_summary" not in stored_payload
+    assert pack_payload["messages"][1]["content"]["note_text"]
 
     index_payload = json.loads(paths.index_file.read_text(encoding="utf-8"))
     packs = index_payload["packs"]
@@ -245,8 +246,6 @@ def test_note_style_sender_skips_when_existing_result_matches(
             },
         }
     )
-    final_result["account_context"] = pack_payload["account_context"]
-    final_result["bureaus_summary"] = pack_payload["bureaus_summary"]
     account_paths.result_file.write_text(
         json.dumps(final_result, ensure_ascii=False) + "\n", encoding="utf-8"
     )
